@@ -587,7 +587,11 @@ checks the connection from a shell. Re-running replaces the entry, which is
 how the server's flags (`--allow-mutating`, `--export-dir`, `--viewer-url`,
 all accepted by `install`) are changed. Without `claude` on `PATH`, project
 scope writes `.mcp.json` directly and user scope prints the command to run.
-A skill file that is not this skill is never overwritten.
+A skill file that is not this skill, or a symlink, is never overwritten.
+Claude Code resolves a server name local, then project, then user; when
+another scope's `rezolus` entry would win, `install` says so and prints the
+`claude mcp remove` command. A project-scope server is approved in Claude
+Code the first time it opens in that directory.
 
 ```bash
 rezolus mcp                                                  # stdio server

@@ -193,7 +193,7 @@ fn read_tools() -> Vec<Value> {
         },
         {
             "name": "query",
-            "description": "Execute a PromQL query and return results as JSON in the Prometheus format (resultType vector/matrix/scalar and result). rate() values carry an uncertainty band from the acquisition window.",
+            "description": "Execute a PromQL query and return results as JSON in the Prometheus format (resultType vector/matrix/scalar and result). Metric names come from describe_metrics. rate() values carry an uncertainty band from the acquisition window.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

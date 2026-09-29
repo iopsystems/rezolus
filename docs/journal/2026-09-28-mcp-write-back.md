@@ -224,9 +224,17 @@ and user scope prints the command to run. The server flags given to
 starts has the operator's tiers and directories.
 
 The skill is `src/mcp/skill/SKILL.md`, embedded with `include_str!`, written
-to `~/.claude/skills/rezolus-mcp/` (user) or `.claude/skills/rezolus-mcp/`
-(project). A file already there is replaced only when its frontmatter names
-this skill; anything else is refused. It carries the workflow that lived in
+to `~/.claude/skills/rezolus-mcp/` (user; `$CLAUDE_CONFIG_DIR/skills/` when
+set) or `.claude/skills/rezolus-mcp/` (project). A file already there is
+replaced only when its frontmatter names this skill; anything else is
+refused, and so is a symlink at that path, which every read and write would
+otherwise follow (review found a symlink into a checkout being overwritten).
+
+Claude Code resolves a name local > project > user, and `claude mcp
+remove --scope <s>` only touches one scope, so an install to user scope can
+be shadowed by an older local entry and the client keeps starting the old
+binary. After `add`, install reads `claude mcp get rezolus` and warns with
+the removal command when the resolved scope is another one. It carries the workflow that lived in
 the tool descriptions (discovery before query, features before hypotheses,
 one series for a check or anomaly detection, the selector), the rules
 (a missing metric is not zero, a rate band is the resolution, correlation

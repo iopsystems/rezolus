@@ -1638,9 +1638,13 @@ pub fn command() -> Command {
                      server flags is the way to change it. Without `claude` on PATH, project scope\n\
                      writes .mcp.json directly (merged into any existing one) and user scope prints\n\
                      the command to run.\n\n\
-                     The skill goes to ~/.claude/skills/rezolus-mcp/SKILL.md (user) or\n\
-                     .claude/skills/rezolus-mcp/SKILL.md (project). A file already there is replaced\n\
-                     only when it is this skill; anything else is refused.\n\n\
+                     The skill goes to ~/.claude/skills/rezolus-mcp/SKILL.md (user; under\n\
+                     $CLAUDE_CONFIG_DIR/skills/ when that is set) or .claude/skills/rezolus-mcp/SKILL.md\n\
+                     (project). A file already there is replaced only when it is this skill; anything\n\
+                     else, including a symlink, is refused.\n\n\
+                     Claude Code resolves a server name local > project > user. When another scope's\n\
+                     rezolus entry would win over the one written, install says so and names the\n\
+                     command that removes it.\n\n\
                      The server flags given here (--allow-mutating, --export-dir, --viewer-url) are\n\
                      baked into the registered command, so the server the client starts has them.\n\n\
                      EXAMPLES:\n    \

@@ -170,6 +170,21 @@ fn project_dir(opts: &InstallOptions) -> Result<PathBuf, String> {
 pub(crate) fn install_skill(opts: &InstallOptions) -> Result<String, String> {
     let dir = skill_dir(opts)?;
     let path = dir.join("SKILL.md");
+    // A symlink is refused, dangling or not: every read and write below
+    // would follow it, and the file it names (a checkout's copy of this
+    // skill, say) is not ours to replace.
+    if let Ok(meta) = std::fs::symlink_metadata(&path) {
+        if meta.file_type().is_symlink() {
+            let target = std::fs::read_link(&path)
+                .map(|t| t.display().to_string())
+                .unwrap_or_else(|_| "?".into());
+            return Err(format!(
+                "{} is a symlink (to {target}); refusing to write through it. \
+                 Remove the link or update its target yourself",
+                path.display()
+            ));
+        }
+    }
     if path.exists() {
         let existing = std::fs::read_to_string(&path)
             .map_err(|e| format!("reading {}: {e}", path.display()))?;
@@ -226,7 +241,11 @@ pub(crate) fn register(opts: &InstallOptions) -> Result<Vec<String>, String> {
             bin.display().to_string(),
         ];
         add.extend(args.iter().cloned());
-        let shown = format!("{} {}", cli.display(), add.join(" "));
+        let shown = std::iter::once(cli.display().to_string())
+            .chain(add.iter().cloned())
+            .map(|a| shell_quote(&a))
+            .collect::<Vec<_>>()
+            .join(" ");
         if opts.dry_run {
             out.push(format!("would run: {shown}"));
             return Ok(out);
@@ -253,10 +272,18 @@ pub(crate) fn register(opts: &InstallOptions) -> Result<Vec<String>, String> {
             .map_err(|e| format!("running {}: {e}", cli.display()))?;
         if !result.status.success() {
             return Err(format!(
-                "`{shown}` failed ({}):\n{}{}",
+                "`{shown}` failed ({}):\n{}{}{}",
                 result.status,
                 String::from_utf8_lossy(&result.stdout),
-                String::from_utf8_lossy(&result.stderr)
+                String::from_utf8_lossy(&result.stderr),
+                if removed {
+                    format!(
+                        "\nthe previous {SERVER_NAME} entry in {} scope was already removed",
+                        opts.scope.as_str()
+                    )
+                } else {
+                    String::new()
+                }
             ));
         }
         out.push(format!(
@@ -264,6 +291,27 @@ pub(crate) fn register(opts: &InstallOptions) -> Result<Vec<String>, String> {
             opts.scope.as_str(),
             String::from_utf8_lossy(&result.stdout).trim()
         ));
+        if opts.scope == Scope::Project {
+            out.push(
+                "a project-scope server waits for approval: Claude Code asks the first time \
+                 it opens in this directory"
+                    .to_string(),
+            );
+        }
+        // Claude Code resolves a name local > project > user, and `remove`
+        // above only touched the scope being installed. Ask the client which
+        // entry it now resolves to, and say so when it is another one.
+        let mut get = Command::new(&cli);
+        get.args(["mcp", "get", SERVER_NAME]);
+        if let Some(d) = &opts.project_dir {
+            get.current_dir(d);
+        }
+        if let Ok(o) = get.output() {
+            let text = String::from_utf8_lossy(&o.stdout);
+            if let Some(w) = shadow_warning(&text, opts.scope) {
+                out.push(w);
+            }
+        }
         return Ok(out);
     }
 
@@ -286,7 +334,8 @@ pub(crate) fn register(opts: &InstallOptions) -> Result<Vec<String>, String> {
             std::fs::write(&path, merged)
                 .map_err(|e| format!("writing {}: {e}", path.display()))?;
             out.push(format!(
-                "wrote {} (no `claude` on PATH; Claude Code reads it when opened in this directory)",
+                "wrote {} (no `claude` on PATH; Claude Code reads it when opened in this directory \
+                 and asks to approve the server the first time)",
                 path.display()
             ));
             Ok(out)
@@ -295,10 +344,55 @@ pub(crate) fn register(opts: &InstallOptions) -> Result<Vec<String>, String> {
             "no `claude` on PATH, and the user-scope configuration is Claude Code's own file. \
              Install Claude Code, or run this from a terminal where `claude` is on PATH:\n  \
              claude mcp add --scope user {SERVER_NAME} -- {} {}",
-            bin.display(),
-            args.join(" ")
+            shell_quote(&bin.display().to_string()),
+            args.iter()
+                .map(|a| shell_quote(a))
+                .collect::<Vec<_>>()
+                .join(" ")
         )),
     }
+}
+
+/// Quote an argument for a POSIX shell when it needs it, so a printed
+/// command can be pasted even with a space in a path.
+pub(crate) fn shell_quote(s: &str) -> String {
+    let safe = !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:=@%+,".contains(c));
+    if safe {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
+/// From `claude mcp get <name>` output: a warning when the entry the
+/// client resolves is not in the scope just installed to (a local or
+/// project entry shadows a user one), with the command that removes it.
+pub(crate) fn shadow_warning(get_output: &str, installed: Scope) -> Option<String> {
+    let line = get_output
+        .lines()
+        .find(|l| l.trim_start().starts_with("Scope:"))?;
+    let resolved = line.trim_start()["Scope:".len()..].trim();
+    let lower = resolved.to_ascii_lowercase();
+    let other = if lower.starts_with("local") {
+        "local"
+    } else if lower.starts_with("project") {
+        "project"
+    } else if lower.starts_with("user") {
+        "user"
+    } else {
+        return None;
+    };
+    if other == installed.as_str() {
+        return None;
+    }
+    Some(format!(
+        "warning: Claude Code resolves {SERVER_NAME} to a {other}-scope entry ({resolved}), which \
+         takes precedence over the {} entry just written; remove it with \
+         `claude mcp remove {SERVER_NAME} -s {other}` for this one to be used",
+        installed.as_str()
+    ))
 }
 
 /// The whole install: register, then the skill. Prints the report; returns
@@ -443,6 +537,57 @@ mod tests {
         };
         assert!(install_skill(&d).unwrap().starts_with("would write"));
         assert!(!dir.path().join("dry").exists());
+    }
+
+    #[test]
+    fn a_shadowing_entry_is_reported_with_the_command_that_removes_it() {
+        let local =
+            "rezolus:\n  Scope: Local config (private to you in this project)\n  Status: ok\n";
+        let w = shadow_warning(local, Scope::User).unwrap();
+        assert!(
+            w.contains("local-scope") && w.contains("claude mcp remove rezolus -s local"),
+            "{w}"
+        );
+        let user = "rezolus:\n  Scope: User config (available in all your projects)\n";
+        assert_eq!(shadow_warning(user, Scope::User), None);
+        let proj = "rezolus:\n  Scope: Project config (shared via .mcp.json)\n";
+        assert!(shadow_warning(proj, Scope::User)
+            .unwrap()
+            .contains("-s project"));
+        assert_eq!(shadow_warning(proj, Scope::Project), None);
+        assert_eq!(
+            shadow_warning("No MCP server named rezolus", Scope::User),
+            None
+        );
+    }
+
+    #[test]
+    fn printed_commands_are_shell_quoted() {
+        assert_eq!(shell_quote("/opt/rezolus"), "/opt/rezolus");
+        assert_eq!(shell_quote("/Users/a b/rez"), "'/Users/a b/rez'");
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_skill_file_is_refused_not_written_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let o = opts(Scope::Project, dir.path());
+        let skills = dir.path().join(".claude/skills/rezolus-mcp");
+        std::fs::create_dir_all(&skills).unwrap();
+        let target = dir.path().join("checkout-SKILL.md");
+        std::fs::write(&target, "---\nname: rezolus-mcp\n---\nmine\n").unwrap();
+        std::os::unix::fs::symlink(&target, skills.join("SKILL.md")).unwrap();
+        let err = install_skill(&o).err().unwrap();
+        assert!(err.contains("symlink"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "---\nname: rezolus-mcp\n---\nmine\n"
+        );
+        // Dangling: refused the same way, not a confusing write error.
+        std::fs::remove_file(&target).unwrap();
+        assert!(install_skill(&o).err().unwrap().contains("symlink"));
     }
 
     #[test]
