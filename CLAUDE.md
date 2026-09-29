@@ -142,6 +142,11 @@ target/release/rezolus status web-01                # bare host/host:port is nor
 target/release/rezolus status --json
 
 target/release/rezolus mcp                                                    # stdio server
+target/release/rezolus mcp install [--scope user|project] [--dry-run] [--no-skill]
+#   registers `rezolus mcp` with Claude Code via `claude mcp add` (project scope writes .mcp.json
+#   when `claude` is absent) and installs the rezolus-mcp skill (src/mcp/skill/SKILL.md, embedded;
+#   replaced only when the file there is ours). src/mcp/install.rs. Backported from 6.0 without
+#   the server flags, since 5.x has only the read tools.
 target/release/rezolus mcp describe-recording file.parquet                    # describe recording
 target/release/rezolus mcp describe-metrics file.parquet                      # list all metrics
 target/release/rezolus mcp detect-anomalies file.parquet                      # exhaustive anomaly detection

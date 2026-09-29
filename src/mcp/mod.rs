@@ -11,6 +11,7 @@ pub(crate) use recording_selector::{
 pub mod anomaly_detection;
 pub mod correlation;
 mod describe_metrics;
+mod install;
 mod server;
 
 use chrono::{DateTime, Utc};
@@ -560,6 +561,7 @@ pub fn run(config: Config) {
         Mode::DetectAnomalies { file, query } => run_detect_anomalies(file, query, &recording),
         Mode::Query { file, query } => run_query(file, query, &recording),
         Mode::ExtractFeatures { file } => run_extract_features(file, &recording),
+        Mode::Install(opts) => std::process::exit(install::run(&opts)),
     }
 }
 
@@ -1162,6 +1164,8 @@ pub enum Mode {
     ExtractFeatures {
         file: PathBuf,
     },
+    /// Register the stdio server with a client and install the skill.
+    Install(install::InstallOptions),
 }
 
 /// MCP server configuration
@@ -1270,6 +1274,20 @@ impl TryFrom<ArgMatches> for Config {
                     .clone();
                 Mode::ExtractFeatures { file }
             }
+            Some(("install", sub_args)) => Mode::Install(install::InstallOptions {
+                scope: install::Scope::parse(
+                    sub_args
+                        .get_one::<String>("SCOPE")
+                        .map(String::as_str)
+                        .unwrap_or("user"),
+                )?,
+                skill: !sub_args.get_flag("NO_SKILL"),
+                dry_run: sub_args.get_flag("DRY_RUN"),
+                binary: None,
+                project_dir: None,
+                home: None,
+                cli: None,
+            }),
             _ => Mode::Server,
         };
 
@@ -1326,7 +1344,8 @@ pub fn command() -> Command {
              query                Run a PromQL query against a recording\n    \
              detect-anomalies     Flag anomalies for one metric, or exhaustively across all\n    \
              analyze-correlation  Correlate two PromQL series over the recording\n    \
-             extract-features     Extract structured features from a recording as JSON\n\n\
+             extract-features     Extract structured features from a recording as JSON\n    \
+             install              Register the server with Claude Code and install its skill\n\n\
              A good workflow is describe-metrics (see what's there) → query / detect-anomalies\n\
              (dig in). Run `rezolus mcp <subcommand> --help` for per-subcommand examples.\n\n\
              EXAMPLES:\n    \
@@ -1335,7 +1354,9 @@ pub fn command() -> Command {
              # One-shot: list the metrics in a recording\n    \
              rezolus mcp describe-metrics file.parquet\n\n    \
              # One-shot: run a PromQL query\n    \
-             rezolus mcp query file.parquet \"sum(rate(cpu_cycles[1m]))\"",
+             rezolus mcp query file.parquet \"sum(rate(cpu_cycles[1m]))\"\n\n    \
+             # Register with Claude Code (user scope) and install the skill\n    \
+             rezolus mcp install",
         )
         .arg(
             clap::Arg::new("VERBOSE")
@@ -1507,6 +1528,51 @@ pub fn command() -> Command {
                         .index(1),
                 )
                 .arg(recording_arg()),
+        )
+        .subcommand(
+            Command::new("install")
+                .about("Register the stdio server with Claude Code and install its skill")
+                .long_about(
+                    "Register this binary as the `rezolus` MCP server with Claude Code and install\n\
+                     the `rezolus-mcp` skill, which tells the client how to investigate a recording\n\
+                     (discovery before query, features before hypotheses, the recording selector).\n\n\
+                     Registration runs `claude mcp add` when `claude` is on PATH, in the scope given\n\
+                     (user by default: every project; project: this directory's .mcp.json). An\n\
+                     existing rezolus entry in that scope is replaced, so re-running after an upgrade\n\
+                     is the way to update it. Without `claude` on PATH, project scope writes .mcp.json\n\
+                     directly (merged into any existing one) and user scope prints the command to run.\n\n\
+                     The skill goes to ~/.claude/skills/rezolus-mcp/SKILL.md (user; under\n\
+                     $CLAUDE_CONFIG_DIR/skills/ when that is set) or .claude/skills/rezolus-mcp/SKILL.md\n\
+                     (project). A file already there is replaced only when it is this skill; anything\n\
+                     else, including a symlink, is refused.\n\n\
+                     Claude Code resolves a server name local > project > user. When another scope's\n\
+                     rezolus entry would win over the one written, install says so and names the\n\
+                     command that removes it.\n\n\
+                     EXAMPLES:\n    \
+                     rezolus mcp install\n    \
+                     rezolus mcp install --scope project\n    \
+                     rezolus mcp install --dry-run",
+                )
+                .arg(
+                    clap::Arg::new("SCOPE")
+                        .long("scope")
+                        .value_name("SCOPE")
+                        .value_parser(["user", "project"])
+                        .default_value("user")
+                        .help("Where to register and where the skill goes: user (every project) or project (this directory)"),
+                )
+                .arg(
+                    clap::Arg::new("NO_SKILL")
+                        .long("no-skill")
+                        .help("Register the server only; do not install the skill")
+                        .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    clap::Arg::new("DRY_RUN")
+                        .long("dry-run")
+                        .help("Report what would be done and change nothing")
+                        .action(clap::ArgAction::SetTrue),
+                ),
         )
 }
 
