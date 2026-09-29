@@ -180,6 +180,10 @@ pub fn run(config: Config) {
         error!("failed to open destination file: {e}");
         std::process::exit(1);
     }
+    // A `.dendro` output selects a dendro buffer, written through
+    // metriken-archive; anything else is a `.rez` buffer, as before. Opt-in,
+    // as for `record -o out.dendro`.
+    let dendro = output.extension().is_some_and(|e| e == "dendro");
     if output.extension().is_some_and(|e| e == "parquet") {
         warn!(
             "{} will be written as a .rez archive, not parquet — hindsight snapshots \
@@ -215,7 +219,11 @@ pub fn run(config: Config) {
             std::process::exit(1);
         }
     };
-    let buffer_path = staging.path().join("hindsight.rez");
+    let buffer_path = staging.path().join(if dendro {
+        "hindsight.dendro"
+    } else {
+        "hindsight.rez"
+    });
 
     // Probe the endpoint once: it must exist, and the sampling interval has to
     // leave room for the scrape it implies.
@@ -276,7 +284,12 @@ pub fn run(config: Config) {
         policy.max_rows = rows.max(1);
     }
 
-    let mut buffer = match HindsightBuffer::create(&buffer_path, seed, lookback, policy) {
+    let created = if dendro {
+        HindsightBuffer::create_dendro(&buffer_path, seed, lookback, policy)
+    } else {
+        HindsightBuffer::create(&buffer_path, seed, lookback, policy)
+    };
+    let mut buffer = match created {
         Ok(b) => b,
         Err(e) => {
             error!("failed to create the hindsight buffer: {e}");

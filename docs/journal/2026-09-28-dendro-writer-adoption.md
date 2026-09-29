@@ -1,7 +1,7 @@
 # Recording to dendro archives: `record`, then hindsight, then the default
 
 - **Opened:** 2026-09-28
-- **Status:** OPEN — stage A built (`record -o out.dendro`); B–E not.
+- **Status:** OPEN — stages A (`record -o out.dendro`) and B (hindsight) built; C–E not.
 
 ## Goal
 
@@ -90,6 +90,41 @@ sends the `.rez` writer the whole metadata map, which it replaces, and
 the dendro writer a patch of the `events` key alone, which it merges.
 `RezStream` keeps each recording's last map, outside the `Sink`, for
 both.
+
+## B: built
+
+`src/hindsight/`:
+
+- An `output` ending in `.dendro` selects a dendro buffer
+  (`hindsight.dendro`); anything else keeps the `.rez` buffer. The buffer's
+  `Writer` is `Rez` or `Dendro` (`buffer.rs`); ingest stages and commits one
+  tick, and `maintain` seals then evicts, the occupant streams one
+  restatement period behind their data (`SourceRecorder::evict_before`).
+  `segment_rows` sets the row cap on either.
+- `/status` (`summarize`) recognizes the container by content and reads
+  dendro's catalog: page statistics, and per stream the sealed and live
+  spans. A long table's occupant stream is listed as a table of its own.
+- A dump, whole or ranged, is dendro's `copy_sources_into` from the read
+  handle, with `Encoder::for_streams` (metriken-archive 0.2.4) encoding the
+  live tail into a final segment per stream; segments, clock offsets and
+  caller rows are copied as they are. The dump is fully sealed, so a reader
+  has no WAL tail to rebuild on every open, which a `VACUUM INTO` copy would
+  carry over unsealed (decided 2026-09-28). The copy is then marked
+  complete, as a `.rez` dump is. dendro's `vacuum_into` also fails on the
+  read handle today, because `Archive::open` sets `query_only`; see the
+  backlog.
+- A ranged dump of a buffer with long tables starts one restatement period
+  (300 s) early. An occupant's labels are written at first sight and
+  restated every period, so one first seen before the range is named only
+  by a restatement up to a period before it. The test for it fails without
+  the lead.
+- `GET /dump` names its download after the buffer's container.
+
+Tests: `a_dendro_buffer_evicts_whole_segments_and_quiet_wal_rows`,
+`a_dendro_dump_is_complete_and_readable`,
+`a_ranged_dendro_dump_keeps_labels_of_an_occupant_seen_before_it`, and
+`a_dendro_buffer_dumps_a_dendro_archive` through the binary
+(`tests/hindsight_dump.rs`).
 
 ## Not in scope
 

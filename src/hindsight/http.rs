@@ -283,6 +283,15 @@ async fn dump(State(state): State<Arc<AppState>>, Query(params): Query<DumpParam
     };
 
     let shared = Arc::clone(&state.shared);
+    // The dump is the buffer's container: `rez` or `dendro`.
+    let ext = shared
+        .buffer_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("rez")
+        .to_string();
+    let name = format!("dump.{ext}");
+    let staged_name = name.clone();
     let built = tokio::task::spawn_blocking(move || {
         let dir = shared
             .output_path
@@ -291,7 +300,7 @@ async fn dump(State(state): State<Arc<AppState>>, Query(params): Query<DumpParam
             .map(tempfile::TempDir::new_in)
             .unwrap_or_else(tempfile::TempDir::new)
             .map_err(|e| format!("failed to stage the dump: {e}"))?;
-        let staged = dir.path().join("dump.rez");
+        let staged = dir.path().join(&staged_name);
         buffer::dump(&shared.buffer_path, &staged, &time_range)?;
         std::fs::read(&staged).map_err(|e| format!("failed to read the dump: {e}"))
     })
@@ -311,7 +320,10 @@ async fn dump(State(state): State<Arc<AppState>>, Query(params): Query<DumpParam
 
     Response::builder()
         .header("Content-Type", "application/octet-stream")
-        .header("Content-Disposition", "attachment; filename=\"dump.rez\"")
+        .header(
+            "Content-Disposition",
+            format!("attachment; filename=\"{name}\""),
+        )
         .body(axum::body::Body::from(bytes))
         .unwrap()
 }

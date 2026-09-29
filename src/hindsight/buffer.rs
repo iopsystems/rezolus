@@ -32,23 +32,10 @@ use crate::recorder::rez_sqlite::RezDb;
 use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
 use crate::recorder::seal_policy::SealPolicy;
 
-/// The rolling buffer. One `.rez` recording, fed a row per tick, trimmed to
-/// the configured lookback every tick.
+/// The rolling buffer. One recording, fed a row per tick, trimmed to the
+/// configured lookback every tick.
 pub struct HindsightBuffer {
-    rec: StreamRecorderV3,
-    /// The archive `rec` writes into.
-    ///
-    /// **Declared after `rec` deliberately.** Fields drop in declaration order,
-    /// and `RezArchive::drop` joins the writer thread. Dropping the archive
-    /// first would not hang — `join` sends `Msg::Shutdown` before releasing its
-    /// own sender, so the writer stops whoever still holds a clone — but it
-    /// would stop the writer while `rec` could still queue a final seal, and
-    /// that work would be dropped.
-    ///
-    /// Hindsight opens exactly one recording; the archive can hold several, and
-    /// does for a multi-endpoint `record` run.
-    #[allow(dead_code)]
-    archive: RezArchive,
+    writer: Writer,
     /// How far back the buffer reaches — `[general] duration`.
     lookback: Duration,
     /// The newest row stamp ingested so far. Retention is measured from THIS,
@@ -64,7 +51,73 @@ pub struct HindsightBuffer {
     first_ts: Option<u64>,
 }
 
+/// The container the buffer is written in.
+///
+/// In both, the recorder is **declared before the archive deliberately.**
+/// Fields drop in declaration order, and dropping the archive joins the
+/// writer thread. Dropping it first would not hang — `join` sends a shutdown
+/// before releasing its own sender, so the writer stops whoever still holds
+/// a clone — but it would stop the writer while the recorder could still
+/// queue a final seal, and that work would be dropped.
+///
+/// Hindsight opens exactly one recording; an archive can hold several, and
+/// does for a multi-endpoint `record` run.
+enum Writer {
+    /// A `.rez` v3 archive.
+    Rez {
+        rec: StreamRecorderV3,
+        #[allow(dead_code)]
+        archive: RezArchive,
+    },
+    /// A dendro archive through metriken-archive's writer.
+    Dendro {
+        rec: metriken_archive::SourceRecorder,
+        writer: metriken_archive::ArchiveWriter,
+    },
+}
+
+/// Row time the dendro writer lets pass between restatements of a long
+/// table's live occupants: the writer's default, which the buffer uses.
+fn restate_every_ns() -> u64 {
+    metriken_archive::WriterConfig::default().restate_every_ns
+}
+
+fn archive_err(e: Box<dyn std::error::Error + Send + Sync>) -> String {
+    e.to_string()
+}
+
 impl HindsightBuffer {
+    /// Create a dendro buffer at `path`, which must not exist. As
+    /// [`create`](Self::create), through metriken-archive's writer: groups
+    /// with slots are written long.
+    pub fn create_dendro(
+        path: &Path,
+        seed: ManifestSeed,
+        lookback: Duration,
+        policy: SealPolicy,
+    ) -> Result<Self, String> {
+        let config = metriken_archive::WriterConfig {
+            seal: dendro::seal::SealPolicy {
+                max_bytes: policy.max_bytes,
+                max_rows: policy.max_rows,
+                max_age: policy.max_age,
+                align: None,
+            },
+            ..metriken_archive::WriterConfig::default()
+        };
+        let mut writer = metriken_archive::ArchiveWriter::create(path, config)
+            .map_err(|e| format!("failed to create {}: {e}", path.display()))?;
+        let rec = writer
+            .add_source(seed.labels, seed.metadata, seed.clock_anchor_wall_ns)
+            .map_err(archive_err)?;
+        Ok(Self {
+            writer: Writer::Dendro { rec, writer },
+            lookback,
+            newest_ts: None,
+            first_ts: None,
+        })
+    }
+
     /// Create the buffer at `path`, which must not exist.
     ///
     /// The seal policy is a parameter rather than a constant because segment
@@ -80,8 +133,10 @@ impl HindsightBuffer {
         let mut archive = RezArchive::create(path)?;
         let writer = archive.add_recording(seed)?;
         Ok(Self {
-            rec: StreamRecorderV3::with_policy(writer, policy),
-            archive,
+            writer: Writer::Rez {
+                rec: StreamRecorderV3::with_policy(writer, policy),
+                archive,
+            },
             lookback,
             newest_ts: None,
             first_ts: None,
@@ -96,7 +151,15 @@ impl HindsightBuffer {
         anchored_ts: u64,
         wall_offset_ns: i64,
     ) -> Result<(), String> {
-        self.rec.ingest(snapshot, anchored_ts, wall_offset_ns)?;
+        match &mut self.writer {
+            Writer::Rez { rec, .. } => rec.ingest(snapshot, anchored_ts, wall_offset_ns)?,
+            Writer::Dendro { rec, writer } => {
+                let staged = rec
+                    .stage(snapshot, anchored_ts, wall_offset_ns)
+                    .map_err(archive_err)?;
+                writer.commit(vec![staged]).map_err(archive_err)?;
+            }
+        }
         self.newest_ts = Some(self.newest_ts.map_or(anchored_ts, |t| t.max(anchored_ts)));
         self.first_ts.get_or_insert(anchored_ts);
         Ok(())
@@ -129,9 +192,23 @@ impl HindsightBuffer {
     /// only ever sees committed data — rows still sitting in an open builder
     /// are evicted when their segment seals and later ages out.
     pub fn maintain(&mut self) -> Result<(), String> {
-        self.rec.maybe_seal()?;
-        if let Some(cutoff) = self.cutoff() {
-            self.rec.evict_before(cutoff)?;
+        let cutoff = self.cutoff();
+        match &mut self.writer {
+            Writer::Rez { rec, .. } => {
+                rec.maybe_seal()?;
+                if let Some(cutoff) = cutoff {
+                    rec.evict_before(cutoff)?;
+                }
+            }
+            // Occupant streams are evicted one restatement period behind
+            // their data (`SourceRecorder::evict_before`), so the oldest rows
+            // kept can still find their occupants' labels.
+            Writer::Dendro { rec, .. } => {
+                rec.maybe_seal().map_err(archive_err)?;
+                if let Some(cutoff) = cutoff {
+                    rec.evict_before(cutoff).map_err(archive_err)?;
+                }
+            }
         }
         Ok(())
     }
@@ -144,7 +221,10 @@ impl HindsightBuffer {
     /// to see its own last tick, rather than the state from before it.
     #[cfg(test)]
     pub fn sync(&mut self) -> Result<(), String> {
-        self.rec.sync()
+        match &mut self.writer {
+            Writer::Rez { rec, .. } => rec.sync(),
+            Writer::Dendro { rec, .. } => rec.sync().map_err(archive_err),
+        }
     }
 
     /// The retention cutoff: everything wholly older than this goes. `None`
@@ -210,9 +290,60 @@ impl Summary {
 /// Summarize a `.rez` at `path` without disturbing whoever is writing it. In
 /// WAL mode this reader never blocks the writer and is never blocked by it.
 pub fn summarize(path: &Path) -> Result<Summary, String> {
-    let db = RezDb::open(path)?;
-    let mut out = summarize_db(&db)?;
+    let mut out = if is_dendro(path) {
+        summarize_dendro(&dendro::archive::Archive::open(path).map_err(|e| e.to_string())?)?
+    } else {
+        summarize_db(&RezDb::open(path)?)?
+    };
     out.bytes = bytes_on_disk(path);
+    Ok(out)
+}
+
+/// Whether `path` is a dendro archive, by its header, as the readers decide.
+fn is_dendro(path: &Path) -> bool {
+    metriken_archive::DendroCatalog::is_archive(path).unwrap_or(false)
+}
+
+/// [`summarize_db`] for a dendro archive: the same figures from dendro's
+/// catalog. A long table's occupant stream (`<table>/occupants`) is listed
+/// as a table of its own, as it is stored.
+fn summarize_dendro(db: &dendro::archive::Archive) -> Result<Summary, String> {
+    let err = |e: dendro::Error| e.to_string();
+    let pages = db.page_stats().map_err(err)?;
+    let mut out = Summary {
+        free_pages: pages.free,
+        pages: pages.pages,
+        ..Summary::default()
+    };
+    let widen = |out: &mut Summary, first: Option<i64>, last: Option<i64>| {
+        let (first, last) = (
+            first.and_then(|t| u64::try_from(t).ok()),
+            last.and_then(|t| u64::try_from(t).ok()),
+        );
+        out.first_ts = match (out.first_ts, first) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        out.last_ts = match (out.last_ts, last) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        };
+    };
+    for source in db.read_sources().map_err(err)? {
+        for stream in db.all_streams(source.id).map_err(err)? {
+            let (segments, span) = db.segment_span(source.id, &stream).map_err(err)?;
+            let live = db.live_wal_span(source.id, &stream).map_err(err)?;
+            widen(&mut out, span.first_ts, span.last_ts);
+            widen(&mut out, live.first_ts, live.last_ts);
+            out.rows += span.rows + live.rows;
+            out.tables.push(TableSummary {
+                sampler: stream,
+                rows: span.rows + live.rows,
+                segments,
+                live_wal_rows: live.rows,
+            });
+        }
+    }
     Ok(out)
 }
 
@@ -286,6 +417,21 @@ pub fn dump(buffer: &Path, dest: &Path, range: &TimeRange) -> Result<Summary, St
         None => tempfile::tempdir(),
     }
     .map_err(|e| format!("failed to stage the dump beside {}: {e}", dest.display()))?;
+    if is_dendro(buffer) {
+        let staged = staging.path().join("dump.dendro");
+        // Summarized before the rename, through the write handle `dump_dendro`
+        // closes; reopening the output read-only would leave `-wal`/`-shm`
+        // sidecars beside it, which only a write handle's close removes.
+        let mut summary = dump_dendro(buffer, &staged, range)?;
+        std::fs::rename(&staged, dest).map_err(|e| {
+            format!(
+                "failed to move the dump into place at {}: {e}",
+                dest.display()
+            )
+        })?;
+        summary.bytes = bytes_on_disk(dest);
+        return Ok(summary);
+    }
     let staged = staging.path().join("dump.rez");
 
     // A second connection, deliberately: the writer thread owns its own and
@@ -329,6 +475,75 @@ pub fn dump(buffer: &Path, dest: &Path, range: &TimeRange) -> Result<Summary, St
         )
     })?;
     summary.bytes = bytes_on_disk(dest);
+    Ok(summary)
+}
+
+/// [`dump`] of a dendro buffer into `staged`, which is then complete.
+///
+/// Both the whole buffer and a range go through dendro's
+/// `copy_sources_into`: whole segments overlapping the range, copied as they
+/// are, the live WAL tail encoded into a final segment through
+/// metriken-archive's encoder, and the clock offsets, all in one read
+/// snapshot of the buffer. The dump is therefore fully sealed: a reader
+/// opening it has no WAL tail to rebuild, which a `VACUUM INTO` copy would
+/// carry over unsealed. (dendro's `vacuum_into` also fails on the read
+/// handle today: `query_only`, which `Archive::open` sets, refuses it.)
+///
+/// A range starts one restatement period early when the buffer has long
+/// tables. An occupant's labels are written when it is first seen and
+/// restated every period; one first seen before `start` is named only by a
+/// restatement at most a period before it. The dump reaches further than
+/// asked at each edge anyway (whole segments), and reports what it holds.
+fn dump_dendro(buffer: &Path, staged: &Path, range: &TimeRange) -> Result<Summary, String> {
+    use dendro::archive::{Archive, ArchiveMut};
+    use dendro::rewrite::{copy_sources_into, CopySpec};
+    let err = |e: dendro::Error| e.to_string();
+
+    // A second connection, deliberately: the writer thread owns its own.
+    let src = Archive::open(buffer).map_err(err)?;
+    let mut streams = Vec::new();
+    for source in src.read_sources().map_err(err)? {
+        streams.extend(src.all_streams(source.id).map_err(err)?);
+    }
+    let spec = match (range.start_ns(), range.end_ns()) {
+        (None, None) => CopySpec::everything(),
+        (start, end) => {
+            let long = streams
+                .iter()
+                .any(|s| ::rez::occupants::table_of(s).is_some());
+            let lead = if long { restate_every_ns() } else { 0 };
+            let start = start.unwrap_or(0).saturating_sub(lead);
+            CopySpec {
+                start: i64::try_from(start).unwrap_or(i64::MAX),
+                end: end.map_or(i64::MAX, |e| i64::try_from(e).unwrap_or(i64::MAX)),
+                ..CopySpec::everything()
+            }
+        }
+    };
+    let encoder =
+        metriken_archive::writer::Encoder::for_streams(streams.iter().map(String::as_str));
+    let mut dst = ArchiveMut::create(staged).map_err(err)?;
+    dst.transaction(|tx| copy_sources_into(&src, tx, &spec, &encoder))
+        .map_err(err)?;
+    drop(dst);
+    drop(src);
+
+    // The buffer's source is still running and so is never complete; this
+    // copy of it is finished by definition (see `dump`).
+    let mut db = ArchiveMut::open(staged).map_err(err)?;
+    let ids: Vec<i64> = db
+        .read_sources()
+        .map_err(err)?
+        .iter()
+        .map(|s| s.id)
+        .collect();
+    for id in ids {
+        db.mark_complete(id).map_err(err)?;
+    }
+    let summary = summarize_dendro(&db)?;
+    // Dropping the write handle folds its sidecar into the file and removes
+    // it, so what gets renamed is the whole archive and nothing beside it.
+    drop(db);
     Ok(summary)
 }
 
@@ -1097,5 +1312,204 @@ mod tests {
         assert_eq!(summary.last_ts, Some(ANCHOR + 7 * SECOND));
         // The untrimmed buffer is not what got trimmed.
         assert_eq!(summarize(&path).unwrap().rows, 12);
+    }
+
+    /// A `.dendro` buffer, the same ticks as the `.rez` tests. dendro's first
+    /// segment is staggered by a hash of the stream, so the assertions are
+    /// on what retention guarantees rather than on exact segment edges.
+    #[test]
+    fn a_dendro_buffer_evicts_whole_segments_and_quiet_wal_rows() {
+        use metriken_archive::Catalog;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("buffer.dendro");
+        let mut buf =
+            HindsightBuffer::create_dendro(&path, seed(), Duration::from_secs(5), seal_every(4))
+                .unwrap();
+        for i in 0..12u64 {
+            let samplers: &[&str] = if i % 5 == 0 {
+                &["cpu_usage", "drivehealth"]
+            } else {
+                &["cpu_usage"]
+            };
+            let (s, ts) = tick(samplers, i);
+            buf.ingest(&s, ts, 0).unwrap();
+            buf.maintain().unwrap();
+        }
+        buf.sync().unwrap();
+        let cutoff = ANCHOR + 6 * SECOND;
+
+        let db = metriken_archive::DendroCatalog::open(&path).unwrap();
+        let id = db.sources().unwrap()[0].id;
+        let segments = db.segment_meta(id, "cpu_usage").unwrap();
+        assert!(!segments.is_empty(), "cpu_usage sealed");
+        for (_, m) in &segments {
+            assert!(
+                m.last_ts >= cutoff,
+                "a segment wholly older than the cutoff survived: {m:?}"
+            );
+        }
+        let wal: Vec<u64> = db
+            .live_wal(id, "drivehealth")
+            .unwrap()
+            .iter()
+            .map(|r| r.ts)
+            .collect();
+        assert_eq!(
+            wal,
+            vec![ANCHOR + 10 * SECOND],
+            "drivehealth's WAL rows before the cutoff are evicted"
+        );
+        let summary = summarize(&path).unwrap();
+        assert_eq!(summary.last_ts, Some(ANCHOR + 11 * SECOND));
+        assert!(summary.first_ts.unwrap() <= cutoff);
+        assert!(summary
+            .tables
+            .iter()
+            .any(|t| t.sampler == "drivehealth" && t.live_wal_rows == 1 && t.segments == 0));
+        assert!(summary.pages > 0 && summary.bytes > 0);
+    }
+
+    /// A whole-buffer dump of a live `.dendro` buffer is a complete dendro
+    /// archive that reads back through the viewer's reader.
+    #[test]
+    fn a_dendro_dump_is_complete_and_readable() {
+        use metriken_query::MetricsSource;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("buffer.dendro");
+        let mut buf =
+            HindsightBuffer::create_dendro(&path, seed(), Duration::from_secs(3600), seal_every(4))
+                .unwrap();
+        for i in 0..10u64 {
+            let (s, ts) = tick(&["cpu_usage"], i);
+            buf.ingest(&s, ts, 0).unwrap();
+            buf.maintain().unwrap();
+        }
+        buf.sync().unwrap();
+
+        let dest = dir.path().join("dump.dendro");
+        let summary = dump(&path, &dest, &TimeRange::new(None, None)).unwrap();
+        assert_eq!(summary.rows, 10);
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = dir.path().join(format!("dump.dendro{suffix}"));
+            assert!(
+                !sidecar.exists(),
+                "the dump leaves no {suffix} sidecar beside the output"
+            );
+        }
+        let reader = crate::rez_reader::RezReader::open_recordings(
+            &dest,
+            metriken_query::BufferPool::new(64 * 1024 * 1024),
+        )
+        .unwrap()
+        .remove(0)
+        .1;
+        assert!(reader.complete(), "a dump is a finished artifact");
+        let (start, end) = reader.time_range().unwrap();
+        let metriken_query::QueryResult::Matrix { result } = reader
+            .query_range("rate(cpu_usage_ops[3s])", start, end + 1.0, 1.0)
+            .unwrap()
+        else {
+            panic!("a matrix");
+        };
+        let points: Vec<f64> = result
+            .iter()
+            .flat_map(|s| s.values.iter().map(|v| v.1))
+            .collect();
+        assert!(
+            !points.is_empty() && points.iter().all(|v| (v - 1.0).abs() < 1e-6),
+            "{points:?}"
+        );
+    }
+
+    /// A V3 snapshot of one slotted group, `threads/tasks`: the given
+    /// `(slot, comm)` members, each a counter at `value`.
+    fn slotted(ts: u64, members: &[(u64, &str)], value: u64) -> (Snapshot, u64) {
+        use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, SnapshotV3};
+        let mut schema = GroupSchema::default();
+        for (slot, comm) in members {
+            schema.counters.push(MetricDesc {
+                name: format!("0x{slot}"),
+                metadata: [
+                    ("metric", "task_ops"),
+                    ("sampler", "threads"),
+                    ("id", &slot.to_string()),
+                    ("comm", comm),
+                ]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            });
+        }
+        let group = GroupSnapshot {
+            name: "threads/tasks".to_string(),
+            schema_hash: schema.hash(),
+            counters: vec![Some(value); members.len()],
+            schema: Some(std::sync::Arc::new(schema)),
+            window: Some(metriken::Window::new(ts - SECOND / 2, ts)),
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        };
+        (
+            Snapshot::V3(SnapshotV3 {
+                systemtime: std::time::UNIX_EPOCH + Duration::from_nanos(ts),
+                duration: Duration::ZERO,
+                metadata: Default::default(),
+                groups: vec![group],
+            }),
+            ts,
+        )
+    }
+
+    /// A ranged dump of a long table keeps the labels of an occupant first
+    /// seen long before the range. Its labels were written at first sight
+    /// (tick 0) and restated at tick 300; the dump of [350 s, 400 s] reaches
+    /// back one restatement period, to the restatement.
+    #[test]
+    fn a_ranged_dendro_dump_keeps_labels_of_an_occupant_seen_before_it() {
+        use metriken_query::MetricsSource;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("buffer.dendro");
+        let mut buf = HindsightBuffer::create_dendro(
+            &path,
+            seed(),
+            Duration::from_secs(3600),
+            seal_every(64),
+        )
+        .unwrap();
+        for i in 0..400u64 {
+            let (s, ts) = slotted(ANCHOR + i * SECOND, &[(0, "nginx")], i);
+            buf.ingest(&s, ts, 0).unwrap();
+            buf.maintain().unwrap();
+        }
+        buf.sync().unwrap();
+
+        let range = TimeRange::new(
+            Some(std::time::UNIX_EPOCH + Duration::from_nanos(ANCHOR + 350 * SECOND)),
+            Some(std::time::UNIX_EPOCH + Duration::from_nanos(ANCHOR + 399 * SECOND)),
+        );
+        let dest = dir.path().join("dump.dendro");
+        dump(&path, &dest, &range).unwrap();
+        let reader = crate::rez_reader::RezReader::open_recordings(
+            &dest,
+            metriken_query::BufferPool::new(64 * 1024 * 1024),
+        )
+        .unwrap()
+        .remove(0)
+        .1;
+        let (start, end) = reader.time_range().unwrap();
+        let metriken_query::QueryResult::Matrix { result } = reader
+            .query_range("rate(task_ops{comm=\"nginx\"}[3s])", start, end + 1.0, 1.0)
+            .unwrap()
+        else {
+            panic!("a matrix");
+        };
+        assert_eq!(result.len(), 1, "the occupant is found by its label");
+        assert!(
+            result[0]
+                .values
+                .iter()
+                .any(|(t, _)| *t >= (ANCHOR + 350 * SECOND) as f64 / 1e9),
+            "and has values inside the range"
+        );
     }
 }
