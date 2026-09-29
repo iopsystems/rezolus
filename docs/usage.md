@@ -292,6 +292,24 @@ step, shifting one capture by the whole number of steps between the two
 anchors; when the anchors differ by a fraction of a step, no cells line up
 and those views show the two captures side by side instead and say why.
 
+### A baseline made of many recordings
+
+With three or more captures open (a multi-recording `.rez`, or one assembled
+with `recording combine`), the compare badge's **Baseline** menu can switch
+from a single capture to a family: every capture except the experiment
+becomes one baseline, drawn as a band, mean ± kσ (the menu offers k of 1,
+2 or 3; a link may carry any positive k) or min..max, with its mean as a
+line, and the experiment as the one line over it. Each member is aligned
+by its own anchor, resampled onto the first member's grid so each
+contributes one value per bucket whatever its cadence, and the legend
+names the member count. The family applies to the line overlays; the
+per-CPU, per-cgroup and percentile split charts, and the heatmap views,
+still draw one series per capture. This is the nightly-run
+question: is tonight's run outside where the last twenty landed. The
+setting rides in the link as `family=sigma:2` or `family=envelope`. The
+band is a spread over runs, not the acquisition-window measurement band;
+the two are never drawn on one chart.
+
 ### Linking to a view
 
 A viewer URL reproduces the view it was copied from. The section lives in

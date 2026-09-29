@@ -8,7 +8,7 @@ import { compareToggle } from '../ui/chart_controls.js';
 import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
 import { notify, showSaveModal } from '../ui/overlays.js';
 import { isHistogramPlot } from '../charts/metric_types.js';
-import { migrateSelection, normalizeAnchor, SELECTION_SCHEMA_VERSION } from './selection_migration.js';
+import { migrateSelection, normalizeAnchor, normalizeFamily, SELECTION_SCHEMA_VERSION } from './selection_migration.js';
 import { composeAbReportPrefix } from './ab_filename.js';
 import { writeViewState } from '../ui/url_state.js';
 import { ViewerApi } from '../viewer_api.js';
@@ -47,7 +47,8 @@ const notebookStore = {
     entries: [],
     zoom: null,
     stepOverride: null,   // query step in seconds (null = auto)
-    anchors: { baseline: 0, experiment: 0 }, // compare-mode offsets in ms
+    anchors: { baseline: 0, experiment: 0 }, // compare-mode offsets in ms, or { kind }
+    family: null,          // family baseline: { kind: 'sigma'|'envelope', k } or null
     chartToggles: {},      // per-chart compare-mode toggles, e.g. { chartId: { diff: true } }
     compare: null,         // { baseline_alias, experiment_alias } when set in compare mode
 };
@@ -58,6 +59,7 @@ const reportStore = {
     zoom: null,
     stepOverride: null,   // query step in seconds (null = auto)
     anchors: { baseline: 0, experiment: 0 },
+    family: null,
     chartToggles: {},
     compare: null,         // { baseline_alias, experiment_alias } when set in compare mode
     loadedFrom: null,    // filename of the imported JSON
@@ -75,6 +77,7 @@ const loadedSelectionStore = {
     zoom: null,
     stepOverride: null,
     anchors: { baseline: 0, experiment: 0 },
+    family: null,
     chartToggles: {},
     compare: null,
     loadedFrom: null,  // filename of the dropped JSON
@@ -254,6 +257,7 @@ const persistStore = (key, store) => {
             zoom: store.zoom,
             stepOverride: store.stepOverride ?? undefined,
             anchors: store.anchors || { baseline: 0, experiment: 0 },
+            family: store.family || null,
             chartToggles: store.chartToggles || {},
             compare: store.compare || undefined,
             loadedFrom: store.loadedFrom || undefined,
@@ -293,6 +297,7 @@ const restoreStore = (key, store) => {
         store.zoom = data.zoom || null;
         store.stepOverride = data.stepOverride ?? null;
         store.anchors = data.anchors || { baseline: 0, experiment: 0 };
+        store.family = normalizeFamily(data.family);
         store.chartToggles = data.chartToggles || {};
         if (data.compare !== undefined) store.compare = data.compare;
         if (data.loadedFrom !== undefined) store.loadedFrom = data.loadedFrom;
@@ -332,6 +337,18 @@ const setAnchor = (captureId, value) => {
     persistNotebook();
     // The anchor also rides in the link; a zero is "no shift" and drops the key.
     writeViewState({ anchors: { [captureId]: notebookStore.anchors[captureId] } });
+    if (typeof m !== 'undefined' && typeof m.redraw === 'function') m.redraw();
+};
+
+/**
+ * Set the family-baseline mode: `{ kind, k }` to draw every capture but the
+ * experiment as one statistic band, `null` for a plain A/B. Persists,
+ * updates the link, redraws.
+ */
+const setFamily = (value) => {
+    notebookStore.family = normalizeFamily(value);
+    persistNotebook();
+    writeViewState({ family: notebookStore.family });
     if (typeof m !== 'undefined' && typeof m.redraw === 'function') m.redraw();
 };
 
@@ -546,6 +563,7 @@ const resetStoreState = (store) => {
     store.zoom = null;
     store.stepOverride = null;
     store.anchors = { baseline: 0, experiment: 0 };
+    store.family = null;
     store.chartToggles = {};
     store.compare = null;
     if (store === reportStore) {
@@ -594,6 +612,7 @@ const openInNotebook = (sourceStore, kindLabel) => {
     resetStoreState(notebookStore);
     notebookStore.tagline = sourceStore.tagline || '';
     notebookStore.anchors = { ...(sourceStore.anchors || { baseline: 0, experiment: 0 }) };
+    notebookStore.family = sourceStore.family ? { ...sourceStore.family } : null;
     notebookStore.chartToggles = { ...(sourceStore.chartToggles || {}) };
     notebookStore.compare = sourceStore.compare ? { ...sourceStore.compare } : null;
     notebookStore.entries = sourceStore.entries.map(e => ({ ...e, id: crypto.randomUUID() }));
@@ -625,6 +644,7 @@ const buildPayload = (store, attrs, { includeNotes = true } = {}) => ({
     zoom: attrs.chartsState?.zoomLevel || null,
     step_override: attrs.stepOverride ?? null,
     anchors: store.anchors || { baseline: 0, experiment: 0 },
+    family: store.family || null,
     chartToggles: store.chartToggles || {},
     compare: store.compare || undefined,
     tagline: store.tagline,
@@ -674,6 +694,7 @@ const loadPayloadIntoStore = (store, payload) => {
         store.zoom = migrated.zoom || null;
         store.stepOverride = migrated.step_override ?? migrated.stepOverride ?? null;
         store.anchors = migrated.anchors || { baseline: 0, experiment: 0 };
+        store.family = migrated.family || null;
         store.chartToggles = migrated.chartToggles || {};
         store.compare = migrated.compare || null;
         store.entries = entriesFromPayload(payload.entries);
@@ -737,6 +758,7 @@ const loadJsonIntoSelection = (json, filename) => {
         resetStoreState(loadedSelectionStore);
         loadedSelectionStore.tagline = migrated.tagline || '';
         loadedSelectionStore.anchors = migrated.anchors || { baseline: 0, experiment: 0 };
+        loadedSelectionStore.family = migrated.family || null;
         loadedSelectionStore.chartToggles = migrated.chartToggles || {};
         loadedSelectionStore.compare = migrated.compare || null;
         loadedSelectionStore.entries = entriesFromPayload(migrated.entries);
@@ -1350,6 +1372,7 @@ export {
     loadJsonIntoSelection,
     setAnchor,
     setAlignmentKind,
+    setFamily,
     setChartToggle,
     NotebookView,
     ReportView,
