@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+### Removed
+
+- **Ubuntu 20.04 (focal) packages are no longer built.** Focal ships clang 10,
+  and the `memory_writeback` sampler's CO-RE enum relocations
+  (`bpf_core_enum_value`) need clang 12, so the focal package no longer
+  compiles. Focal's standard support ended in May 2025 and its GA kernel
+  (5.4) is below the 5.8 minimum. Its repository keeps serving 5.22.1, the
+  last focal release; `install.sh` still installs it there, with a warning.
+
 ### Changed
 
 - Slot identity and the producer epoch come from metriken 0.11.2
