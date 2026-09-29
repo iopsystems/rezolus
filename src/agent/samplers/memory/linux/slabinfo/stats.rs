@@ -24,6 +24,9 @@ static SLABINFO_ACQ_REG: &'static AcquisitionGroup = &SLABINFO_ACQ;
 /// three gauges filled from its line. The list is fixed at the caches whose
 /// size answers a question the agent's other samplers raise; a cache the
 /// running kernel does not have leaves its gauges never set, so absent.
+// Read by the Linux sweep only; this file is also `include!`d on other
+// platforms for metric registration.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub struct Cache {
     pub name: &'static str,
     pub active_objects: &'static LazyGauge,
@@ -114,6 +117,7 @@ cache!(
 );
 
 /// The caches followed, in `/proc/slabinfo` name order of no significance.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub static CACHES: &[Cache] = &[
     Cache {
         name: "dentry",

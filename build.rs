@@ -125,6 +125,7 @@ mod bpf {
         ("cpu", "usage"),
         ("ext4", "alloc"),
         ("ext4", "journal"),
+        ("ext4", "ops"),
         ("memory", "writeback"),
         ("network", "interfaces"),
         ("network", "traffic"),
