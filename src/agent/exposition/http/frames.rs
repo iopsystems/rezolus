@@ -2,8 +2,16 @@
 //!
 //! The agent is one dendro *source*: one clock domain, one identity, one
 //! sequence of observations. This turns a tick into the frames that say so —
-//! a [`Frame::Handshake`] once, a [`Frame::Index`] per group whose slots moved,
-//! and one [`Frame::Rows`] per interval.
+//! a [`Frame::Handshake`] once and one [`Frame::Rows`] per interval.
+//!
+//! # No identity index
+//!
+//! The agent sends no [`Frame::Index`]. What a slot means travels in the
+//! group's schema (each member's labels, including its `__uid__`), which the
+//! payload carries whenever it changes. Every rows frame therefore names
+//! dendro's [`NO_INDEX_STATE`], which a subscriber always treats as
+//! resolvable. `.rez --stream`, the one consumer of an index, was removed in
+//! 6.0.
 //!
 //! # Time is the producer's
 //!
@@ -51,9 +59,8 @@
 use std::collections::BTreeMap;
 
 use dendro::archive::WalRow;
-use dendro::replicate::{Frame, IndexState};
+use dendro::replicate::{Frame, NO_INDEX_STATE};
 
-use crate::recorder::index::IndexEntry;
 use crate::recorder::wire::AgentRows;
 
 /// The ordinal the agent's own source takes. One agent is one source, so it is
@@ -114,14 +121,7 @@ impl FrameProducer {
         }
     }
 
-    /// One interval's frames: the index entries whose slots moved, then the
-    /// rows they describe.
-    ///
-    /// The order is the covenant, not an implementation detail: within an
-    /// interval metadata precedes data, so a row can never reference identity
-    /// the subscriber has not already received. `index_state` is the state
-    /// after every entry here has been applied, which is what the subscriber
-    /// will hold by the time it reaches the rows.
+    /// One interval's rows frame.
     ///
     /// `seq` is the subscription's interval index rather than a count of
     /// frames. dendro documents `seq` as counting from zero per connection and
@@ -131,11 +131,9 @@ impl FrameProducer {
     pub(crate) fn interval(
         &mut self,
         rows: &AgentRows,
-        entries: Vec<(String, IndexEntry)>,
-        index_state: IndexState,
         seq: u64,
         mut keep: impl FnMut(&crate::recorder::wire::AgentRow) -> bool,
-    ) -> Vec<Frame> {
+    ) -> Frame {
         // The pass's own stamp, carried through rather than re-read here. A
         // frame emitted now can describe a pass that ran up to a TTL ago —
         // the snapshot is cached and a subscriber's interval does not drive
@@ -143,18 +141,6 @@ impl FrameProducer {
         // moment it was sent.
         let ts = rows.ts;
         let wall_offset = rows.wall_offset;
-
-        let mut frames = Vec::with_capacity(entries.len() + 1);
-        for (stream, entry) in entries {
-            frames.push(Frame::Index {
-                source: SOURCE,
-                stream,
-                ts,
-                kind: entry.kind.into(),
-                state: entry.state,
-                blob: entry.encode(),
-            });
-        }
 
         let wal_rows = rows
             .rows
@@ -193,23 +179,22 @@ impl FrameProducer {
             })
             .collect();
 
-        frames.push(Frame::Rows {
+        Frame::Rows {
             source: SOURCE,
             seq,
-            index_state,
+            index_state: NO_INDEX_STATE,
             rows: wal_rows,
-        });
-        frames
+        }
     }
 
     /// An interval that produced no new reading: the empty frame, which is
     /// both the "your interval elapsed, nothing is new" signal and the
     /// keepalive.
-    pub(crate) fn empty_interval(&self, index_state: IndexState, seq: u64) -> Frame {
+    pub(crate) fn empty_interval(&self, seq: u64) -> Frame {
         Frame::Rows {
             source: SOURCE,
             seq,
-            index_state,
+            index_state: NO_INDEX_STATE,
             rows: Vec::new(),
         }
     }
@@ -242,7 +227,6 @@ fn with_schema(payload: &[u8], schema: crate::recorder::schema::GroupSchema) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recorder::index::SourceIndex;
     use crate::recorder::wire::{AgentRow, AgentRows};
 
     pub(super) const STREAM: &str = "cpu_usage/cpu_usage_task";
@@ -309,9 +293,9 @@ mod tests {
     #[test]
     fn the_first_row_of_a_stream_carries_its_schema_inside_the_payload() {
         let mut p = producer();
-        let frames = p.interval(&rows(3, 2_000), Vec::new(), (0, 0), 7, |_| true);
+        let frame = p.interval(&rows(3, 2_000), 7, |_| true);
 
-        let Some(Frame::Rows { rows, .. }) = frames.last() else {
+        let Frame::Rows { rows, .. } = &frame else {
             panic!("a rows frame closes the interval")
         };
         let decoded = crate::recorder::wal::decode_wal_group_row(&rows[0].row).unwrap();
@@ -333,10 +317,10 @@ mod tests {
     #[test]
     fn a_schema_already_sent_is_not_sent_again() {
         let mut p = producer();
-        p.interval(&rows(3, 2_000), Vec::new(), (0, 0), 7, |_| true);
-        let frames = p.interval(&rows(3, 3_000), Vec::new(), (0, 0), 8, |_| true);
+        p.interval(&rows(3, 2_000), 7, |_| true);
+        let frame = p.interval(&rows(3, 3_000), 8, |_| true);
 
-        let Some(Frame::Rows { rows, .. }) = frames.last() else {
+        let Frame::Rows { rows, .. } = &frame else {
             panic!("a rows frame")
         };
         let decoded = crate::recorder::wal::decode_wal_group_row(&rows[0].row).unwrap();
@@ -353,46 +337,14 @@ mod tests {
     #[test]
     fn a_changed_schema_is_sent_again() {
         let mut p = producer();
-        p.interval(&rows(3, 2_000), Vec::new(), (0, 0), 7, |_| true);
-        let frames = p.interval(&rows(4, 3_000), Vec::new(), (0, 0), 8, |_| true);
+        p.interval(&rows(3, 2_000), 7, |_| true);
+        let frame = p.interval(&rows(4, 3_000), 8, |_| true);
 
-        let Some(Frame::Rows { rows, .. }) = frames.last() else {
+        let Frame::Rows { rows, .. } = &frame else {
             panic!("a rows frame")
         };
         let decoded = crate::recorder::wal::decode_wal_group_row(&rows[0].row).unwrap();
         assert_eq!(decoded.schema.map(|s| s.counters.len()), Some(4));
-    }
-
-    /// Metadata precedes data within an interval, so a row can never reference
-    /// identity the subscriber has not received. Order is the covenant that
-    /// makes one connection enough.
-    #[test]
-    fn index_entries_come_before_the_rows_they_describe() {
-        let mut p = producer();
-        let mut index = SourceIndex::new();
-        let entry = index
-            .observe(
-                STREAM,
-                vec![(
-                    0u32,
-                    [("comm".to_string(), "redis".to_string())]
-                        .into_iter()
-                        .collect(),
-                )],
-            )
-            .unwrap();
-
-        let frames = p.interval(
-            &rows(3, 2_000),
-            vec![(STREAM.to_string(), entry)],
-            index.state(),
-            7,
-            |_| true,
-        );
-
-        assert!(matches!(frames[0], Frame::Index { .. }), "index first");
-        assert!(matches!(frames[1], Frame::Rows { .. }), "then rows");
-        assert_eq!(frames.len(), 2);
     }
 
     /// A frame carries the stamp of the PASS it describes, not the moment it
@@ -420,9 +372,9 @@ mod tests {
         tick.ts = pass_ts;
         tick.wall_offset = pass_offset;
 
-        let frames = p.interval(&tick, Vec::new(), (0, 0), 7, |_| true);
+        let frame = p.interval(&tick, 7, |_| true);
 
-        let Some(Frame::Rows { rows, .. }) = frames.last() else {
+        let Frame::Rows { rows, .. } = &frame else {
             panic!("a rows frame")
         };
         let row = &rows[0];
@@ -467,27 +419,7 @@ mod tests {
         }
 
         let mut p = producer();
-        let mut index = SourceIndex::new();
-        let entry = index
-            .observe(
-                STREAM,
-                vec![(
-                    0u32,
-                    [("comm".to_string(), "redis".to_string())]
-                        .into_iter()
-                        .collect(),
-                )],
-            )
-            .unwrap();
-
-        let mut sent = vec![p.handshake()];
-        sent.extend(p.interval(
-            &rows(3, 2_000),
-            vec![(STREAM.to_string(), entry)],
-            index.state(),
-            7,
-            |_| true,
-        ));
+        let sent = vec![p.handshake(), p.interval(&rows(3, 2_000), 7, |_| true)];
 
         let mut stream = Vec::new();
         wire::write_preamble(&mut stream).unwrap();
@@ -507,7 +439,7 @@ mod tests {
         }
         drop(subscriber);
 
-        assert_eq!(skipped, 0, "every row resolved against the index it named");
+        assert_eq!(skipped, 0, "rows naming NO_INDEX_STATE always resolve");
         assert_eq!(applied_rows, 1);
 
         let archive = dendro::archive::Archive::open(&path).unwrap();
@@ -522,28 +454,29 @@ mod tests {
         let stored = archive
             .read_caller_rows(sources[0].id, STREAM, i64::MIN, i64::MAX)
             .unwrap();
-        assert_eq!(stored.len(), 1, "the index entry landed in caller_rows");
-        let decoded = crate::recorder::index::IndexEntry::decode(&stored[0].blob).unwrap();
-        assert_eq!(decoded.slots[0].labels.get("comm").unwrap(), "redis");
+        assert!(stored.is_empty(), "no index, so no caller rows");
     }
 
-    /// Rows built against an index state the subscriber does not hold are
-    /// skipped rather than attributed. The producer's job is to never create
-    /// that situation; this is what happens when the wire does.
+    /// The agent keeps no identity index, so every rows frame says so with
+    /// dendro's `NO_INDEX_STATE`, which a subscriber always resolves.
     #[test]
-    fn rows_naming_a_state_the_subscriber_lacks_are_skipped() {
+    fn a_rows_frame_names_no_index_state() {
         let mut p = producer();
-        let frames = p.interval(&rows(3, 2_000), Vec::new(), (0xdead, 0xbeef), 7, |_| true);
-        let Some(Frame::Rows { index_state, .. }) = frames.last() else {
+        let frame = p.interval(&rows(3, 2_000), 7, |_| true);
+        let Frame::Rows { index_state, .. } = frame else {
             panic!("a rows frame")
         };
-        assert_eq!(*index_state, (0xdead, 0xbeef));
+        assert_eq!(index_state, NO_INDEX_STATE);
+        let Frame::Rows { index_state, .. } = p.empty_interval(8) else {
+            panic!("a rows frame")
+        };
+        assert_eq!(index_state, NO_INDEX_STATE);
     }
 
     #[test]
     fn an_empty_interval_is_a_rows_frame_with_no_rows() {
         let p = producer();
-        let Frame::Rows { seq, rows, .. } = p.empty_interval((1, 2), 99) else {
+        let Frame::Rows { seq, rows, .. } = p.empty_interval(99) else {
             panic!("a rows frame")
         };
         assert_eq!(seq, 99, "the interval index, so a gap is still visible");
@@ -588,30 +521,16 @@ mod tests {
     /// checks the rules but not the agreement. This drives the AGENT's
     /// `FrameProducer`, encodes what it emits with dendro's wire, reads it back
     /// with dendro's reader, and applies it — so a producer and a consumer that
-    /// disagreed about the index state, the frame order, or the encoding would
+    /// disagreed about the frame order or the encoding would
     /// fail here rather than in the field.
     #[test]
     fn what_the_agent_produces_is_what_this_consumes() {
-        use crate::recorder::index::SourceIndex;
         use crate::recorder::stream::StreamSubscriber;
 
         // This module's own fixtures: one counter group with a schema and
         // an encoded payload, the same shape every other test here uses.
         let rows = rows(1, 2_000);
 
-        // The agent side: an index entry and the rows built against it.
-        let mut producer_index = SourceIndex::new();
-        let entry = producer_index
-            .observe(
-                STREAM,
-                vec![(
-                    0u32,
-                    [("comm".to_string(), "redis".to_string())]
-                        .into_iter()
-                        .collect::<BTreeMap<String, String>>(),
-                )],
-            )
-            .unwrap();
         let mut producer = FrameProducer::new(
             "epoch-1".to_string(),
             [("source".to_string(), "rezolus".to_string())]
@@ -620,14 +539,7 @@ mod tests {
             BTreeMap::new(),
         );
 
-        let mut sent = vec![producer.handshake()];
-        sent.extend(producer.interval(
-            &rows,
-            vec![(STREAM.to_string(), entry)],
-            producer_index.state(),
-            7,
-            |_| true,
-        ));
+        let sent = vec![producer.handshake(), producer.interval(&rows, 7, |_| true)];
 
         // Through the actual bytes, not the values.
         let mut bytes = Vec::new();
@@ -645,17 +557,8 @@ mod tests {
         let mut sub = StreamSubscriber::new();
         let applied = sub.apply(received).unwrap();
 
-        assert_eq!(
-            applied.rows_skipped, 0,
-            "the state the producer stamped is the state the consumer accumulated"
-        );
         assert_eq!(applied.rows.len(), 1);
         assert_eq!(applied.seq, 7);
-        assert_eq!(
-            sub.index().stream(STREAM).unwrap().labels(0).unwrap()["comm"],
-            "redis",
-            "and the identity came through the blob intact"
-        );
 
         // The payload reaching the recording is the producer's own bytes, with
         // its schema anchored inside — which is what makes this a passthrough
@@ -670,121 +573,6 @@ mod tests {
             decoded.schema.map(|s| s.counters.len()),
             Some(1),
             "the first row of a stream anchors its schema"
-        );
-    }
-
-    /// What an interval costs, steady-state against the tick that re-sends.
-    ///
-    /// **A model of `delta`, not `delta`.** The measured numbers this is built
-    /// to resemble — 49 rows, 45,350 B against 158,360 B depending only on
-    /// schema resend, `cpu_usage/cpu_usage_task` at 638 descriptors churning on
-    /// 59 of 60 scrapes — came from that host. The acceptance number for
-    /// #1224 Phase 2 has to come from there too, once the endpoint serves
-    /// these. What this shows is that the mechanism does what it was built to:
-    /// the churning group's per-tick cost stops scaling with its size.
-    #[test]
-    fn an_interval_costs_a_resend_once_and_a_delta_afterwards() {
-        const GROUPS: usize = 49;
-        const TASKS: u32 = 319;
-
-        let task_labels = |slot: u32, generation: u32| {
-            let comm = if slot == 0 && generation == 1 {
-                "new_task".to_string()
-            } else {
-                format!("task_{slot}")
-            };
-            (
-                slot,
-                [
-                    ("comm".to_string(), comm),
-                    ("cgroup".to_string(), "/system.slice".to_string()),
-                ]
-                .into_iter()
-                .collect::<BTreeMap<String, String>>(),
-            )
-        };
-
-        // One wide churning group plus 48 ordinary ones, which is the shape of
-        // a scrape: churn is concentrated, not spread.
-        let tick = |generation: u32| {
-            let mut rows = vec![AgentRow {
-                stream: STREAM.to_string(),
-                window: Some((1_000, 2_000)),
-                schema_hash: schema(638).hash(),
-                schema: Some(schema(638)),
-                arity: (638, 0, 0),
-                approx_bytes: 8_192,
-                row: payload(638),
-            }];
-            for g in 1..GROUPS {
-                rows.push(AgentRow {
-                    stream: format!("sampler_{g}/group"),
-                    window: Some((1_000, 2_000)),
-                    schema_hash: schema(8).hash(),
-                    schema: Some(schema(8)),
-                    arity: (8, 0, 0),
-                    approx_bytes: 256,
-                    row: payload(8),
-                });
-            }
-            let _ = generation;
-            AgentRows {
-                wall_ns: 2_000,
-                duration_ns: 1_000,
-                ts: 2_000,
-                wall_offset: 0,
-                rows,
-            }
-        };
-
-        let encoded = |frames: &[Frame]| -> usize {
-            let mut out = Vec::new();
-            for f in frames {
-                dendro::replicate::wire::encode_frame(f, &mut out).unwrap();
-            }
-            out.len()
-        };
-
-        let mut p = producer();
-        let mut index = SourceIndex::new();
-
-        let opening_entry = index
-            .observe(STREAM, (0..TASKS).map(|s| task_labels(s, 0)))
-            .unwrap();
-        let opening = p.interval(
-            &tick(0),
-            vec![(STREAM.to_string(), opening_entry)],
-            index.state(),
-            7,
-            |_| true,
-        );
-        let opening_bytes = encoded(&opening);
-
-        // A tick where one task was recycled and nothing else moved: the
-        // measured common case.
-        let churn_entry = index
-            .observe(STREAM, (0..TASKS).map(|s| task_labels(s, 1)))
-            .unwrap();
-        let steady = p.interval(
-            &tick(1),
-            vec![(STREAM.to_string(), churn_entry)],
-            index.state(),
-            8,
-            |_| true,
-        );
-        let steady_bytes = encoded(&steady);
-
-        println!(
-            "\n  {GROUPS} rows, {TASKS} tasks, one recycled\n\
-               \x20   opening interval (schemas + index Full): {opening_bytes:>7} B\n\
-               \x20   steady interval  (one index Delta):      {steady_bytes:>7} B\n"
-        );
-
-        assert!(
-            steady_bytes * 4 < opening_bytes,
-            "a steady interval ({steady_bytes} B) should be a small fraction of the \
-             opening one ({opening_bytes} B); identity and schemas are both stated \
-             once and then referenced"
         );
     }
 
@@ -911,9 +699,9 @@ mod archive_as_a_source {
         for seq in 0..TICKS {
             let t = tick();
             let start = std::time::Instant::now();
-            let frames = p.interval(&t, Vec::new(), (0, 0), seq as u64, |_| true);
+            let frame = p.interval(&t, seq as u64, |_| true);
             direct.push(start.elapsed());
-            direct_bytes += encoded(&frames);
+            direct_bytes += encoded(std::slice::from_ref(&frame));
         }
 
         // --- archive --------------------------------------------------------

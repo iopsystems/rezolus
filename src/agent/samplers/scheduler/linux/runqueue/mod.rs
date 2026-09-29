@@ -30,14 +30,10 @@ impl_cgroup_info!(bpf::types::cgroup_info);
 
 /// Every group a cgroup id reaches, paired with the metrics carrying it.
 ///
-/// One id spans several streams, and a subscriber keeps identity per
-/// stream — so each needs its own entry. Pairing them here is what stops a
-/// call site publishing one group's identity under another's name.
+/// One id spans several groups, and each group's schema carries its own copy
+/// of the labels, so each group's metrics need their own entry.
 static CGROUP_IDENTITY: crate::agent::identity::SlotIdentity =
     crate::agent::identity::SlotIdentity::new(CGROUP_IDENTITY_GROUPS);
-
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static CGROUP_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &CGROUP_IDENTITY;
 
 static CGROUP_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[
     (

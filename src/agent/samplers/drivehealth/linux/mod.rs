@@ -71,17 +71,11 @@ fn drive_labels(drive: &Drive) -> std::collections::BTreeMap<String, String> {
 static SWEEP_IDENTITY: crate::agent::identity::SlotIdentity =
     crate::agent::identity::SlotIdentity::new(SWEEP_IDENTITY_GROUPS);
 
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static SWEEP_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &SWEEP_IDENTITY;
-
 static SWEEP_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] =
     &[(&DRIVEHEALTH_SWEEP_ACQ, &[&DRIVE_TEMPERATURE])];
 
 static NVME_IDENTITY: crate::agent::identity::SlotIdentity =
     crate::agent::identity::SlotIdentity::new(NVME_IDENTITY_GROUPS);
-
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static NVME_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &NVME_IDENTITY;
 
 static NVME_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] =
     &[(&DRIVEHEALTH_NVME_ACQ, NVME_COUNTER_GROUPS)];

@@ -92,9 +92,9 @@ impl Occupants {
     /// described fall back to their column's labels.
     pub fn replay(entries: &[(u64, Vec<u8>)]) -> Result<Self, String> {
         // Slot -> (since, labels) for every slot currently occupied. Kept
-        // directly rather than behind `SlotIndex`: the reader needs the spans,
-        // not the state hash, and the hash costs a serialization per slot per
-        // change. Measured before this: 248k entries of a churning task
+        // directly rather than in the producer's old `SlotIndex`: the reader
+        // needs the spans, not the state hash, and the hash costs a
+        // serialization per slot per change. Measured before this: 248k entries of a churning task
         // stream (414/s over ten minutes) took 20 s to replay, against 0.4 s
         // for the parquet path on the same rows, because every entry also
         // diffed the whole live set.

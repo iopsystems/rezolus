@@ -70,9 +70,6 @@ const TRACEPOINTS: &[&str] = &[
 static FS_IDENTITY: crate::agent::identity::SlotIdentity =
     crate::agent::identity::SlotIdentity::new(FS_IDENTITY_GROUPS);
 
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static FS_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &FS_IDENTITY;
-
 static FS_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
     &COUNTERS_ACQ,
     &[
@@ -95,9 +92,6 @@ static FS_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
 /// What a cgroup slot means, published as the BPF side discovers cgroups.
 static CGROUP_IDENTITY: crate::agent::identity::SlotIdentity =
     crate::agent::identity::SlotIdentity::new(CGROUP_IDENTITY_GROUPS);
-
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static CGROUP_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &CGROUP_IDENTITY;
 
 static CGROUP_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
     &CGROUP_ACQ,

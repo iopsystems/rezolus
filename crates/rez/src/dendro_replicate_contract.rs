@@ -18,7 +18,7 @@
 mod tests {
     use dendro::archive::{Archive, WalRow};
     use dendro::replicate::wire::{self, FrameReader};
-    use dendro::replicate::{Frame, IndexKind, Subscriber, NO_INDEX_STATE};
+    use dendro::replicate::{Frame, Subscriber, NO_INDEX_STATE};
     use dendro::segment::SegmentEncoder;
     use dendro::writer::Writer;
     use std::collections::BTreeMap;
@@ -39,8 +39,8 @@ mod tests {
         }
     }
 
-    /// One tick, the way rezolus would emit it: identity first, then rows that
-    /// name the state they were built against.
+    /// One tick, the way rezolus emits it: a handshake, then rows naming
+    /// `NO_INDEX_STATE`, since the agent keeps no identity index.
     #[test]
     fn a_rezolus_shaped_tick_survives_the_frames_the_codec_and_a_subscriber() {
         let dir = tempfile::tempdir().unwrap();
@@ -58,25 +58,12 @@ mod tests {
             complete: false,
         };
 
-        // An index entry. The blob is rezolus's to define and dendro never
-        // decodes it, so any bytes stand in here.
-        let index_blob = rmp_serde::to_vec(&vec![(17u32, "cpu=11")]).unwrap();
-        let state = (0xfeed_u64, 0xface_u64);
-        let index = Frame::Index {
-            source: 0,
-            stream: "cpu_usage/usage".to_string(),
-            ts: ANCHOR,
-            kind: IndexKind::Full,
-            state,
-            blob: index_blob.clone(),
-        };
-
         // Rows in exactly the shape `stage_rows` already produces: a group
         // name as the stream, an opaque msgpack payload.
         let rows = Frame::Rows {
             source: 0,
             seq: 0,
-            index_state: state,
+            index_state: NO_INDEX_STATE,
             rows: vec![WalRow {
                 stream: "cpu_usage/usage".to_string(),
                 ts: ANCHOR,
@@ -88,7 +75,7 @@ mod tests {
         // Through the actual wire — preamble and framing — not merely through
         // the types. A frame that failed to round-trip would still apply if we
         // handed the subscriber the value we had just built.
-        let sent = [handshake, index, rows];
+        let sent = [handshake, rows];
         let mut stream = Vec::new();
         wire::write_preamble(&mut stream).expect("preamble");
         for frame in &sent {
@@ -99,11 +86,15 @@ mod tests {
             Subscriber::new(Writer::create(&path, Box::new(NoSegments)).expect("create"));
         let mut reader = FrameReader::new(std::io::Cursor::new(stream)).expect("preamble reads");
         let mut received = 0usize;
+        let mut applied_rows = 0usize;
         while let Some(frame) = reader.next_frame().expect("decode") {
             assert_eq!(frame, sent[received], "a frame changed shape on the wire");
-            subscriber.apply(frame).expect("apply");
+            let applied = subscriber.apply(frame).expect("apply");
+            assert_eq!(applied.rows_skipped, 0, "NO_INDEX_STATE always resolves");
+            applied_rows += applied.rows;
             received += 1;
         }
+        assert_eq!(applied_rows, 1, "the row was written");
         assert_eq!(received, sent.len(), "every frame came back");
         drop(subscriber);
 
@@ -116,124 +107,6 @@ mod tests {
         let stored = archive
             .read_caller_rows(sources[0].id, "cpu_usage/usage", i64::MIN, i64::MAX)
             .expect("caller rows");
-        assert_eq!(stored.len(), 1, "the index entry landed in caller_rows");
-        assert_eq!(stored[0].blob, index_blob, "and it was stored verbatim");
-    }
-
-    /// An index whose first `Full` is **empty** must still count as having
-    /// arrived.
-    ///
-    /// This is the shape rezolus will be in on first connect: the agent
-    /// attaches, and its first index batch has nothing in it yet because no
-    /// cgroup or task has been assigned a slot. dendro found and fixed a
-    /// defect here while reviewing its own #4 — an empty opening batch was
-    /// treated as not having sent its `Full`, so every later entry was a
-    /// `Delta` and the subscriber skipped every row for the life of the
-    /// connection, visible only as a rising `rows_skipped`.
-    ///
-    /// Kept because "the failure is invisible unless you look at a counter" is
-    /// exactly the kind of regression a version bump reintroduces quietly.
-    #[test]
-    fn an_empty_opening_index_still_admits_rows() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("empty-first-index.dendro");
-        let mut subscriber =
-            Subscriber::new(Writer::create(&path, Box::new(NoSegments)).expect("create"));
-
-        subscriber
-            .apply(Frame::Handshake {
-                source: 0,
-                uuid: None,
-                labels: BTreeMap::new(),
-                metadata: BTreeMap::new(),
-                clock_anchor_wall_ns: ANCHOR,
-                complete: false,
-            })
-            .expect("handshake");
-
-        // An agent with nothing assigned yet: a Full carrying no slots.
-        let empty_state = (1, 0);
-        subscriber
-            .apply(Frame::Index {
-                source: 0,
-                stream: "cpu_usage/usage".to_string(),
-                ts: ANCHOR,
-                kind: IndexKind::Full,
-                state: empty_state,
-                blob: rmp_serde::to_vec(&Vec::<(u32, String)>::new()).unwrap(),
-            })
-            .expect("empty full");
-
-        // Rows built against that same empty state must be accepted. Before
-        // dendro's fix they were skipped, and would have gone on being skipped
-        // for every later state too.
-        let applied = subscriber
-            .apply(Frame::Rows {
-                source: 0,
-                seq: 0,
-                index_state: empty_state,
-                rows: vec![WalRow {
-                    stream: "cpu_usage/usage".to_string(),
-                    ts: ANCHOR,
-                    wall_offset: 0,
-                    row: vec![0x91, 0x01],
-                }],
-            })
-            .expect("rows");
-
-        assert_eq!(
-            applied.rows_skipped, 0,
-            "an empty opening Full is still a Full; rows against it must not be skipped"
-        );
-        assert_eq!(applied.rows, 1, "the row should have been written");
-    }
-
-    /// The safety rule rezolus depends on: rows built against index state the
-    /// subscriber does not hold must be refused rather than attributed to
-    /// whatever it does hold.
-    #[test]
-    fn rows_naming_an_index_state_the_subscriber_lacks_are_not_applied() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("mismatch.dendro");
-        let mut subscriber =
-            Subscriber::new(Writer::create(&path, Box::new(NoSegments)).expect("create"));
-
-        subscriber
-            .apply(Frame::Handshake {
-                source: 0,
-                uuid: None,
-                labels: BTreeMap::new(),
-                metadata: BTreeMap::new(),
-                clock_anchor_wall_ns: ANCHOR,
-                complete: false,
-            })
-            .expect("handshake");
-
-        // No Index frame was sent, so the subscriber's state is NO_INDEX_STATE.
-        let applied = subscriber.apply(Frame::Rows {
-            source: 0,
-            seq: 0,
-            index_state: (0xdead, 0xbeef),
-            rows: vec![WalRow {
-                stream: "cpu_usage/usage".to_string(),
-                ts: ANCHOR,
-                wall_offset: 0,
-                row: vec![0xc0],
-            }],
-        });
-
-        // Not an error, and not silently applied: `Applied` reports the
-        // disposition, which is what lets a consumer notice a gap rather than
-        // discover it later in the data.
-        let applied = applied.expect("a mismatch is a skip, not a transport error");
-        assert_eq!(
-            applied.rows, 0,
-            "nothing may be written against unknown state"
-        );
-        assert_eq!(
-            applied.rows_skipped, 1,
-            "and the skip has to be reported, not swallowed"
-        );
-        assert_ne!(NO_INDEX_STATE, (0xdead, 0xbeef));
+        assert!(stored.is_empty(), "no index frame, so no caller rows");
     }
 }

@@ -280,11 +280,6 @@ fn rows_frames(
     wall_now: impl Fn() -> u64,
 ) -> impl futures::Stream<Item = Result<bytes::Bytes, std::io::Error>> {
     async_stream::try_stream! {
-        // Held for the life of this subscription. Identity is published and
-        // folded into the index only while something wants it; without this the
-        // agent maintains one for nobody, which measured at ~0.3 ms a scrape on
-        // a host with busy task churn.
-        let _identity = crate::agent::identity::Demand::register();
         let interval = subscription.interval();
         // Per group, the end of the acquisition window this connection has
         // already been told about. A snapshot carries every group the agent
@@ -296,10 +291,6 @@ fn rows_frames(
             std::collections::HashMap::new();
         let mut last_sent_wall: Option<u64> = None;
         let mut last_index: Option<u64> = None;
-        // The index state this connection has been brought to. `None` until
-        // the opening `Full`, which is what rule 3 requires: a subscriber
-        // starts complete or not at all.
-        let mut last_state: Option<crate::recorder::index::IndexState> = None;
 
         let mut producer = frames::FrameProducer::new(
             crate::agent::epoch::producer_epoch().to_string(),
@@ -350,32 +341,7 @@ fn rows_frames(
                 );
             }
 
-            // Ask for a snapshot, then take the index in the SAME lock. Two
-            // locks would let a sampling pass land between them, and the rows
-            // would name a state built from a walk they were not part of.
-            let reading = {
-                let mut builder = builder.lock().await;
-                match builder.rows_at(Instant::now()).await {
-                    Some(rows) => {
-                        let state = builder.index_state();
-                        // What this connection needs to reach `state`. `None` means it
-                        // fell out of the history — see `IndexHistory` — and only the
-                        // whole set will do.
-                        let entries = match last_state {
-                            Some(held) => builder.index_since(held).unwrap_or_else(|| {
-                                warn!(
-                                    "stream subscriber at {interval:?} fell out of the index history; \
-                                     resending the whole slot set"
-                                );
-                                builder.index_full()
-                            }),
-                            None => builder.index_full(),
-                        };
-                        Some((rows, entries, state))
-                    }
-                    None => None,
-                }
-            };
+            let reading = builder.lock().await.rows_at(Instant::now()).await;
 
             if let Some(previous) = last_index {
                 if index > previous + 1 {
@@ -391,10 +357,8 @@ fn rows_frames(
             }
             last_index = Some(index);
 
-            let produced = match reading {
-                Some((rows, entries, state)) => {
-                    last_state = Some(state);
-
+            let frame = match reading {
+                Some(rows) => {
                     // The same reading as last time — reached when the interval asked
                     // for is shorter than the TTL, which is the case the TTL exists to
                     // bound. Nothing in this snapshot can have advanced, so every row
@@ -405,8 +369,6 @@ fn rows_frames(
 
                     producer.interval(
                         &rows,
-                        entries,
-                        state,
                         index,
                         |row| {
                             // The whole snapshot is one this connection already has, so
@@ -436,28 +398,19 @@ fn rows_frames(
                 // so it still gets a frame, the empty one. Skipping it would
                 // leave a gap in `seq`, which a subscriber reads as intervals
                 // it did not receive, and a subscriber waiting on its first
-                // interval would wait for the next one instead. The frame
-                // names the index state this connection already holds, and
-                // before the opening `Full` the no-index state, which every
-                // subscriber treats as resolvable; it carries no rows, so no
-                // row can be attributed against it either way.
+                // interval would wait for the next one instead.
                 None => {
                     warn!(
                         "stream subscriber at {interval:?}: no snapshot to send for \
                          interval {index}; sending an empty frame"
                     );
-                    vec![producer.empty_interval(
-                        last_state.unwrap_or(dendro::replicate::NO_INDEX_STATE),
-                        index,
-                    )]
+                    producer.empty_interval(index)
                 }
             };
 
             let mut body = Vec::new();
-            for frame in &produced {
-                dendro::replicate::wire::encode_frame(frame, &mut body)
-                    .map_err(std::io::Error::other)?;
-            }
+            dendro::replicate::wire::encode_frame(&frame, &mut body)
+                .map_err(std::io::Error::other)?;
             yield bytes::Bytes::from(body);
         }
     }
@@ -510,7 +463,6 @@ async fn status(
         ttl_seconds: STATUS_TTL_SECONDS.get().copied().unwrap_or(0),
         sample_interval_ms: state.subscribers.fastest().map(|d| d.as_millis() as u64),
         subscribers: state.subscribers.count(),
-        index_resyncs: state.builder.lock().await.index_resyncs(),
         samplers: crate::agent::sampler_status::snapshot(),
     })
 }
@@ -540,11 +492,6 @@ mod stream_tests {
     /// decoder — so a content type, a route, a header or a framing mistake
     /// fails here rather than the first time a recorder is pointed at an
     /// agent.
-    ///
-    /// It also covers the empty-index case specifically: with no samplers the
-    /// agent has no slots, so it sends no index frames at all and its rows name
-    /// the empty state. A subscriber that required an index entry before
-    /// attributing anything would skip every row of this stream.
     #[tokio::test]
     async fn a_recorder_can_subscribe_to_a_real_agent_over_http() {
         use crate::recorder::stream::Subscription;
@@ -593,17 +540,12 @@ mod stream_tests {
              recording on its anchor before the first interval"
         );
 
-        let applied = tokio::time::timeout(Duration::from_secs(10), sub.next_interval())
+        tokio::time::timeout(Duration::from_secs(10), sub.next_interval())
             .await
             .expect("an interval arrives inside the timeout")
             .expect("the stream is well formed")
             .expect("the stream did not end");
 
-        assert_eq!(
-            applied.rows_skipped, 0,
-            "an agent with no slots names the empty state, which is the state a fresh \
-             subscriber holds"
-        );
         assert_eq!(
             sub.source()
                 .and_then(|s| s.labels.get("source"))
@@ -611,7 +553,6 @@ mod stream_tests {
             Some("rezolus"),
             "the handshake arrived and identified the source"
         );
-        assert_eq!(sub.skipped_total(), 0);
     }
 
     /// An interval with no reading to send still gets a frame: the empty one,
@@ -677,7 +618,8 @@ mod stream_tests {
             assert_eq!(
                 *index_state,
                 dendro::replicate::NO_INDEX_STATE,
-                "before any index was sent, the frame names the no-index state (seq {seq})"
+                "the agent keeps no identity index, so every frame names the no-index state \
+                 (seq {seq})"
             );
         }
         for pair in rows_frames_seen.windows(2) {
@@ -1066,12 +1008,11 @@ mod stream_tests {
             }
         }
 
-        let applied = next_matching(&mut rx, |e| match e {
+        next_matching(&mut rx, |e| match e {
             StreamEvent::Interval(a) => Some(a),
             _ => None,
         })
         .await;
-        assert_eq!(applied.rows_skipped, 0);
 
         let addr = agent.kill();
         let reason = next_matching(&mut rx, |e| match e {
@@ -1097,11 +1038,10 @@ mod stream_tests {
         );
 
         // And it is flowing again.
-        let again = next_matching(&mut rx, |e| match e {
+        next_matching(&mut rx, |e| match e {
             StreamEvent::Interval(a) => Some(a),
             _ => None,
         })
         .await;
-        assert_eq!(again.rows_skipped, 0);
     }
 }

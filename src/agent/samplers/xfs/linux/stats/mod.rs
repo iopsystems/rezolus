@@ -116,9 +116,6 @@ static GROUPS: &[&CounterGroup] = &[
 static IDENTITY: crate::agent::identity::SlotIdentity =
     crate::agent::identity::SlotIdentity::new(IDENTITY_GROUPS);
 
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &IDENTITY;
-
 static IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
     &XFS_STATS_ACQ,
     &[
