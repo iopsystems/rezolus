@@ -2,6 +2,17 @@
 
 ### Added
 
+- `ext4_alloc` sampler: BPF on ext4's block allocator and the metadata reads
+  around it. Per extent allocation, requested versus returned blocks, groups
+  scanned and the criterion reached (`ext4_allocations`,
+  `ext4_allocation_blocks{kind}`, `ext4_allocation_groups_scanned`,
+  `ext4_allocations_by_criterion{criterion}`, `ext4_allocation_size`);
+  blocks freed; inodes allocated and freed; writeback passes with pages
+  written, skipped and errors; discarded blocks and preallocation releases;
+  and the synchronous inode-table and bitmap reads (`ext4_inode_loads`,
+  `ext4_bitmap_loads{kind}`). Host-wide. The viewer's ext4 section gains
+  Allocator, Inodes, Writeback and Metadata Reads groups.
+
 - `memory_writeback` sampler: BPF on the page-cache writeback tracepoints.
   `writeback_throttle_latency`, `writeback_throttle_checks`,
   `writeback_throttle_events` and `writeback_throttled_time` from

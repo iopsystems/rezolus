@@ -228,6 +228,11 @@ enabled = true
 [samplers.drivehealth]
 # interval = "60s"
 
+# BPF sampler on ext4's block allocator, inode allocation, writeback results,
+# discard, and the synchronous inode-table and bitmap reads that land on a
+# request's own thread. Host-wide. See docs/metrics.md#ext4_alloc.
+[samplers.ext4_alloc]
+
 # BPF sampler on the ext4 journal (jbd2) and ext4 tracepoints: every phase of
 # each journal commit, checkpoint cost, lock-buffer stalls, fsync counts and
 # errors, and filesystem errors. Host-wide. See docs/metrics.md#ext4_journal.
