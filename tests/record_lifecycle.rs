@@ -803,14 +803,16 @@ fn assert_run_events(events: &[dashboard::Event]) -> (dashboard::Event, dashboar
     assert_eq!(end_id, format!("run:{uuid}:end"));
     assert_eq!(uuid.len(), 36, "a canonical v4 uuid: {uuid}");
 
-    // The child slept 500ms. The lower bound is exact: the start stamp was
-    // taken as the spawn returned and the end stamp when the exit was seen.
-    // The upper bound is loose on purpose: a loaded CI host can delay the
-    // shell's start and the exit's delivery, and a tight window here was a
-    // flake waiting to happen.
+    // The child slept 500ms. Neither bound is exact. The start stamp is
+    // taken when `spawn()` returns to the recorder, and the kernel may run
+    // the child first: the shell can already be inside its `sleep` by then,
+    // so the measured span can fall a few milliseconds short of the sleep
+    // (CI measured 499.2 ms). The upper bound is loose on purpose: a loaded
+    // host can delay the shell's start and the exit's delivery, and a tight
+    // window here was a flake waiting to happen.
     let span = Duration::from_nanos(end.timestamp - start.timestamp);
     assert!(
-        span >= Duration::from_millis(500) && span <= Duration::from_millis(2500),
+        span >= Duration::from_millis(450) && span <= Duration::from_millis(2500),
         "run_end - run_start must be the command's runtime, got {span:?}"
     );
     (start, end)
