@@ -60,3 +60,21 @@ pub static FILESYSTEM_INODES_FREE: GaugeGroup = GaugeGroup::new(MAX_MOUNTS);
     metadata = { acq_group = "filesystem_sweep" }
 )]
 pub static FILESYSTEM_READONLY: GaugeGroup = GaugeGroup::new(MAX_MOUNTS);
+
+// ext4-only, from /sys/fs/ext4/<block_device>/; absent on every other type.
+// Read on the same sweep as statvfs: docs/journal/2026-09-28-ext4-sampler.md
+// ("Errors: count with the tracepoint, and also read the sysfs gauge").
+
+#[metric(
+    name = "filesystem_errors",
+    description = "Errors an ext4 filesystem has recorded in its superblock (sysfs errors_count). The count persists across remounts and reboots until e2fsck clears it, so a non-zero value means the filesystem has hit an error since its last check, whether or not it has since gone read-only. Absent on other filesystem types.",
+    metadata = { acq_group = "filesystem_sweep" }
+)]
+pub static FILESYSTEM_ERRORS: GaugeGroup = GaugeGroup::new(MAX_MOUNTS);
+
+#[metric(
+    name = "filesystem_written_bytes",
+    description = "Bytes written to the block device beneath an ext4 filesystem over the filesystem's lifetime, journal included (sysfs lifetime_write_kbytes: the total the superblock persists plus the device's write sectors since mount). Its rate is the write bandwidth the filesystem puts on the device, the last term of write amplification. Absent on other filesystem types.",
+    metadata = { unit = "bytes", acq_group = "filesystem_sweep" }
+)]
+pub static FILESYSTEM_WRITTEN_BYTES: CounterGroup = CounterGroup::new(MAX_MOUNTS);

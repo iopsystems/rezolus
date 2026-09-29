@@ -458,6 +458,21 @@ block device and carry no `block_device`; `devnum` is always present.
 | `filesystem_inodes_total` | Inodes the filesystem reports it can hold; absent on btrfs and vfat, which report no inode limit | `mount`, `fstype`, `devnum`, `block_device` |
 | `filesystem_inodes_free` | Free inodes | `mount`, `fstype`, `devnum`, `block_device` |
 | `filesystem_readonly` | 1 when the filesystem is read-only as a whole: superblock `ro`, or ext4 `emergency_ro` | `mount`, `fstype`, `devnum`, `block_device` |
+| `filesystem_errors` | ext4 only: errors recorded in the superblock (sysfs `errors_count`), persisting until e2fsck clears them; absent on other types | `mount`, `fstype`, `devnum`, `block_device` |
+| `filesystem_written_bytes` | ext4 only: bytes written to the block device over the filesystem's lifetime, journal included (sysfs `lifetime_write_kbytes`); a counter, so its rate is the filesystem's write bandwidth on the device; absent on other types | `mount`, `fstype`, `devnum`, `block_device` |
+
+The two ext4 series come from `/sys/fs/ext4/<block_device>/`, read on the same
+sweep. `errors_count` is the count the superblock persists (`s_error_count`),
+so it survives a remount and a reboot and is cleared only by `e2fsck`; a
+non-zero value says the filesystem has hit an error since its last check, and a
+step says one just happened, whether or not `errors=remount-ro` then set
+`filesystem_readonly`. `lifetime_write_kbytes` is the superblock's persisted
+write total plus the device's write sectors since mount, so it counts every
+write the filesystem issued, journal commits included; against the bytes
+applications wrote it is the filesystem's term of write amplification. Both are
+sysfs text reads on the 60 s off-cycle sweep, the same principle 15 exception
+the sweep itself received, and they work on kernels the ext4 BPF samplers
+cannot run on.
 
 ## GPU
 

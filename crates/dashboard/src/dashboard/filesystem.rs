@@ -7,6 +7,10 @@ fn by_mount(metric: &str) -> String {
     format!("sum by (mount) ({metric})")
 }
 
+fn rate_by_mount(metric: &str) -> String {
+    format!("sum by (mount) (irate({metric}[5m]))")
+}
+
 pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
@@ -75,20 +79,54 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         view.group(inodes);
     }
 
-    if has_metric(data, "filesystem_readonly") {
+    if has_metric(data, "filesystem_written_bytes") {
+        let mut writes = Group::new("Writes", "writes");
+
+        let device = writes.subgroup("Device Writes");
+        device.describe(
+            "Bytes per second each ext4 filesystem writes to its block device, journal \
+             included, from the lifetime total ext4 keeps in sysfs. Compared with the bytes \
+             applications write, this is the filesystem's share of write amplification. Sampled \
+             once per sweep (60s by default), so the rate is a per-minute average.",
+        );
+        device.plot_promql(
+            PlotOpts::counter("Device Writes", "device-writes", Unit::Datarate),
+            rate_by_mount("filesystem_written_bytes"),
+        );
+
+        view.group(writes);
+    }
+
+    if has_metric(data, "filesystem_readonly") || has_metric(data, "filesystem_errors") {
         let mut state = Group::new("State", "state");
 
-        let readonly = state.subgroup("Read-only");
-        readonly.describe(
-            "1 while a filesystem is read-only as a whole: mounted that way, or after an error \
-             (ext4 emergency_ro, btrfs forced read-only). 0 does not prove it is writable: an XFS \
-             shutdown does not show here, and a full filesystem stays writable while its writes \
-             fail.",
-        );
-        readonly.plot_promql(
-            PlotOpts::gauge("Read-only", "readonly", Unit::Count),
-            by_mount("filesystem_readonly"),
-        );
+        if has_metric(data, "filesystem_readonly") {
+            let readonly = state.subgroup("Read-only");
+            readonly.describe(
+                "1 while a filesystem is read-only as a whole: mounted that way, or after an \
+                 error (ext4 emergency_ro, btrfs forced read-only). 0 does not prove it is \
+                 writable: an XFS shutdown does not show here, and a full filesystem stays \
+                 writable while its writes fail.",
+            );
+            readonly.plot_promql(
+                PlotOpts::gauge("Read-only", "readonly", Unit::Count),
+                by_mount("filesystem_readonly"),
+            );
+        }
+
+        if has_metric(data, "filesystem_errors") {
+            let errors = state.subgroup("Errors");
+            errors.describe(
+                "Errors each ext4 filesystem has recorded in its superblock. The count survives \
+                 remounts and reboots until e2fsck clears it, so any non-zero value means the \
+                 filesystem has hit an error since its last check; a step means one just \
+                 happened.",
+            );
+            errors.plot_promql(
+                PlotOpts::gauge("Errors", "errors", Unit::Count),
+                by_mount("filesystem_errors"),
+            );
+        }
 
         view.group(state);
     }
@@ -169,6 +207,30 @@ mod tests {
         assert!(json(&with).contains(
             "sum by (mount) (filesystem_inodes_free) / sum by (mount) (filesystem_inodes_total)"
         ));
+    }
+
+    #[test]
+    fn ext4_sysfs_cards_appear_only_when_the_recording_has_their_metrics() {
+        let without = generate(&store_with(&["filesystem_total"]), vec![]);
+        let j = json(&without);
+        assert!(!j.contains("filesystem_written_bytes"));
+        assert!(!j.contains("filesystem_errors"));
+        assert!(!j.contains("\"State\""));
+
+        let with = generate(
+            &store_with(&[
+                "filesystem_total",
+                "filesystem_written_bytes",
+                "filesystem_errors",
+            ]),
+            vec![],
+        );
+        let j = json(&with);
+        assert!(j.contains("sum by (mount) (irate(filesystem_written_bytes[5m]))"));
+        assert!(j.contains("sum by (mount) (filesystem_errors)"));
+        // The State group exists for errors even with no read-only metric.
+        assert!(j.contains("\"State\""));
+        assert!(!j.contains("filesystem_readonly"));
     }
 
     #[test]
