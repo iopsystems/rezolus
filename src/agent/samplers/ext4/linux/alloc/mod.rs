@@ -109,36 +109,33 @@ const HOOKS: &[(&str, &str, &str, &str)] = &[
 ];
 
 /// What a filesystem slot means, published when the mount table changes.
-static FS_IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(FS_IDENTITY_GROUPS);
+static FS_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(FS_IDENTITY_GROUPS);
 
-static FS_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
-    &COUNTERS_ACQ,
-    &[
-        &EXT4_ALLOCATIONS,
-        &EXT4_ALLOCATION_BLOCKS_REQUESTED,
-        &EXT4_ALLOCATION_BLOCKS_ALLOCATED,
-        &EXT4_ALLOCATION_GROUPS_SCANNED,
-        &EXT4_ALLOCATIONS_CR0,
-        &EXT4_ALLOCATIONS_CR1,
-        &EXT4_ALLOCATIONS_CR2,
-        &EXT4_ALLOCATIONS_CR3,
-        &EXT4_ALLOCATIONS_CR4,
-        &EXT4_FREED_BLOCKS,
-        &EXT4_INODES_ALLOCATED,
-        &EXT4_INODES_FREED,
-        &EXT4_WRITEPAGES,
-        &EXT4_WRITEPAGES_PAGES_WRITTEN,
-        &EXT4_WRITEPAGES_PAGES_SKIPPED,
-        &EXT4_WRITEPAGES_ERRORS,
-        &EXT4_TRIMMED_BLOCKS,
-        &EXT4_PREALLOCATION_DISCARDS,
-        &EXT4_PREALLOCATION_DISCARDED_BLOCKS,
-        &EXT4_INODE_LOADS,
-        &EXT4_BITMAP_LOADS_BLOCK,
-        &EXT4_BITMAP_LOADS_INODE,
-    ],
-)];
+static FS_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[&[
+    &EXT4_ALLOCATIONS,
+    &EXT4_ALLOCATION_BLOCKS_REQUESTED,
+    &EXT4_ALLOCATION_BLOCKS_ALLOCATED,
+    &EXT4_ALLOCATION_GROUPS_SCANNED,
+    &EXT4_ALLOCATIONS_CR0,
+    &EXT4_ALLOCATIONS_CR1,
+    &EXT4_ALLOCATIONS_CR2,
+    &EXT4_ALLOCATIONS_CR3,
+    &EXT4_ALLOCATIONS_CR4,
+    &EXT4_FREED_BLOCKS,
+    &EXT4_INODES_ALLOCATED,
+    &EXT4_INODES_FREED,
+    &EXT4_WRITEPAGES,
+    &EXT4_WRITEPAGES_PAGES_WRITTEN,
+    &EXT4_WRITEPAGES_PAGES_SKIPPED,
+    &EXT4_WRITEPAGES_ERRORS,
+    &EXT4_TRIMMED_BLOCKS,
+    &EXT4_PREALLOCATION_DISCARDS,
+    &EXT4_PREALLOCATION_DISCARDED_BLOCKS,
+    &EXT4_INODE_LOADS,
+    &EXT4_BITMAP_LOADS_BLOCK,
+    &EXT4_BITMAP_LOADS_INODE,
+]];
 
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {

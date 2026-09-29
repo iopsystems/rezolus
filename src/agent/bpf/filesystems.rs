@@ -41,7 +41,7 @@
 //! device is never moved. A device that goes away frees its slot and the
 //! slot's counters are zeroed before another device takes it, so the next
 //! occupant starts from zero (its identity is a new uid to subscribers either
-//! way, via [`SlotIdentity`](crate::agent::identity::SlotIdentity)).
+//! way, via [`SlotIdentity`](metriken::group::SlotIdentity)).
 //!
 //! # Which mounts
 //!

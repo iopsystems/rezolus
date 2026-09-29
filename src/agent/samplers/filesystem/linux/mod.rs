@@ -110,22 +110,19 @@ static COUNTER_GROUPS: &[&CounterGroup] = &[&FILESYSTEM_WRITTEN_BYTES];
 /// at runtime — a mount appears, a filesystem is unmounted and its slot is
 /// reused — so labels written only at startup would be wrong within
 /// minutes.
-static MOUNT_IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(MOUNT_IDENTITY_GROUPS);
+static MOUNT_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(MOUNT_IDENTITY_GROUPS);
 
-static MOUNT_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
-    &FILESYSTEM_SWEEP_ACQ,
-    &[
-        &FILESYSTEM_TOTAL,
-        &FILESYSTEM_FREE,
-        &FILESYSTEM_AVAILABLE,
-        &FILESYSTEM_INODES_TOTAL,
-        &FILESYSTEM_INODES_FREE,
-        &FILESYSTEM_READONLY,
-        &FILESYSTEM_ERRORS,
-        &FILESYSTEM_WRITTEN_BYTES,
-    ],
-)];
+static MOUNT_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[&[
+    &FILESYSTEM_TOTAL,
+    &FILESYSTEM_FREE,
+    &FILESYSTEM_AVAILABLE,
+    &FILESYSTEM_INODES_TOTAL,
+    &FILESYSTEM_INODES_FREE,
+    &FILESYSTEM_READONLY,
+    &FILESYSTEM_ERRORS,
+    &FILESYSTEM_WRITTEN_BYTES,
+]];
 
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
@@ -395,7 +392,7 @@ fn vacate(slot: usize) {
     unset(slot);
     // And clear its labels. Left in place, they would name a filesystem that
     // is no longer mounted, and the slot is reusable immediately.
-    MOUNT_IDENTITY.clear(slot);
+    MOUNT_IDENTITY.release(slot);
 }
 
 /// Every value family reads absent for `slot`; labels and identity stay.
@@ -418,7 +415,7 @@ fn label(slot: usize, mount: &MountEntry, block_device: Option<&str>) {
     if let Some(name) = block_device {
         labels.insert("block_device".to_string(), name.to_string());
     }
-    MOUNT_IDENTITY.set(slot, labels);
+    MOUNT_IDENTITY.assign(slot, labels);
 }
 
 /// The kernel's name for block device `devnum` (`nvme0n1p5`, `dm-0`), from its

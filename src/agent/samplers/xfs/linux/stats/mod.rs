@@ -113,55 +113,52 @@ static GROUPS: &[&CounterGroup] = &[
 /// What a filesystem slot means here, published when it changes. The same
 /// slot numbering as the ext4 samplers' (one registry), a separate identity
 /// because these are this sampler's metrics.
-static IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(IDENTITY_GROUPS);
+static IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(IDENTITY_GROUPS);
 
-static IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
-    &XFS_STATS_ACQ,
-    &[
-        &XFS_LOG_WRITES,
-        &XFS_LOG_BLOCKS_WRITTEN,
-        &XFS_LOG_ICLOG_STALLS,
-        &XFS_LOG_FORCES,
-        &XFS_LOG_FORCE_SLEEPS,
-        &XFS_LOG_SPACE_REQUESTS,
-        &XFS_LOG_SPACE_SLEEPS,
-        &XFS_AIL_PUSHES,
-        &XFS_AIL_PUSH_SUCCESS,
-        &XFS_AIL_PUSH_PUSHBUF,
-        &XFS_AIL_PUSH_PINNED,
-        &XFS_AIL_PUSH_LOCKED,
-        &XFS_AIL_PUSH_FLUSHING,
-        &XFS_AIL_PUSH_RESTARTS,
-        &XFS_AIL_FLUSHES,
-        &XFS_TRANSACTIONS_SYNC,
-        &XFS_TRANSACTIONS_ASYNC,
-        &XFS_TRANSACTIONS_EMPTY,
-        &XFS_INODE_CACHE_FOUND,
-        &XFS_INODE_CACHE_MISSED,
-        &XFS_INODE_CACHE_RECYCLED,
-        &XFS_INODE_CACHE_DUPLICATE,
-        &XFS_INODE_RECLAIMS,
-        &XFS_EXTENTS_ALLOCATED,
-        &XFS_EXTENTS_FREED,
-        &XFS_EXTENT_BLOCKS_ALLOCATED,
-        &XFS_EXTENT_BLOCKS_FREED,
-        &XFS_DIRECTORY_LOOKUPS,
-        &XFS_DIRECTORY_CREATES,
-        &XFS_DIRECTORY_REMOVES,
-        &XFS_DIRECTORY_GETDENTS,
-        &XFS_FILE_WRITE_CALLS,
-        &XFS_FILE_READ_CALLS,
-        &XFS_FILE_BYTES_WRITTEN,
-        &XFS_FILE_BYTES_READ,
-        &XFS_BUFFER_LOOKUPS,
-        &XFS_BUFFER_CREATES,
-        &XFS_BUFFER_LOCK_WAITS,
-        &XFS_BUFFER_BUSY_LOCKS,
-        &XFS_BUFFER_MISSES,
-        &XFS_BUFFER_READS,
-    ],
-)];
+static IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[&[
+    &XFS_LOG_WRITES,
+    &XFS_LOG_BLOCKS_WRITTEN,
+    &XFS_LOG_ICLOG_STALLS,
+    &XFS_LOG_FORCES,
+    &XFS_LOG_FORCE_SLEEPS,
+    &XFS_LOG_SPACE_REQUESTS,
+    &XFS_LOG_SPACE_SLEEPS,
+    &XFS_AIL_PUSHES,
+    &XFS_AIL_PUSH_SUCCESS,
+    &XFS_AIL_PUSH_PUSHBUF,
+    &XFS_AIL_PUSH_PINNED,
+    &XFS_AIL_PUSH_LOCKED,
+    &XFS_AIL_PUSH_FLUSHING,
+    &XFS_AIL_PUSH_RESTARTS,
+    &XFS_AIL_FLUSHES,
+    &XFS_TRANSACTIONS_SYNC,
+    &XFS_TRANSACTIONS_ASYNC,
+    &XFS_TRANSACTIONS_EMPTY,
+    &XFS_INODE_CACHE_FOUND,
+    &XFS_INODE_CACHE_MISSED,
+    &XFS_INODE_CACHE_RECYCLED,
+    &XFS_INODE_CACHE_DUPLICATE,
+    &XFS_INODE_RECLAIMS,
+    &XFS_EXTENTS_ALLOCATED,
+    &XFS_EXTENTS_FREED,
+    &XFS_EXTENT_BLOCKS_ALLOCATED,
+    &XFS_EXTENT_BLOCKS_FREED,
+    &XFS_DIRECTORY_LOOKUPS,
+    &XFS_DIRECTORY_CREATES,
+    &XFS_DIRECTORY_REMOVES,
+    &XFS_DIRECTORY_GETDENTS,
+    &XFS_FILE_WRITE_CALLS,
+    &XFS_FILE_READ_CALLS,
+    &XFS_FILE_BYTES_WRITTEN,
+    &XFS_FILE_BYTES_READ,
+    &XFS_BUFFER_LOOKUPS,
+    &XFS_BUFFER_CREATES,
+    &XFS_BUFFER_LOCK_WAITS,
+    &XFS_BUFFER_BUSY_LOCKS,
+    &XFS_BUFFER_MISSES,
+    &XFS_BUFFER_READS,
+]];
 
 /// Where each counter comes from: the stats line, the 0-based field on it,
 /// and the group it fills. The field order is the kernel's `xfsstats`
@@ -356,12 +353,12 @@ fn sweep(state: &mut SweepState, sys_fs_xfs: &Path, assignment: &Assignment) -> 
         match text {
             Some((fs, text)) => {
                 if !state.labeled[slot] {
-                    IDENTITY.set(slot, fs.labels());
+                    IDENTITY.assign(slot, fs.labels());
                     state.labeled[slot] = true;
                 } else {
                     // A relabel (same device, moved mount point) is a set too;
                     // SlotIdentity ignores a re-announcement of the same labels.
-                    IDENTITY.set(slot, fs.labels());
+                    IDENTITY.assign(slot, fs.labels());
                 }
                 if publish(slot, &text) > 0 {
                     published += 1;
@@ -370,7 +367,7 @@ fn sweep(state: &mut SweepState, sys_fs_xfs: &Path, assignment: &Assignment) -> 
             }
             None => {
                 if state.labeled[slot] {
-                    IDENTITY.clear(slot);
+                    IDENTITY.release(slot);
                     state.labeled[slot] = false;
                     unset(slot);
                 }
