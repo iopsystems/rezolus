@@ -288,7 +288,7 @@ impl ReportSink {
         match self {
             Self::Capture(cell) => {
                 let lines = cell.borrow();
-                (!lines.is_empty()).then(|| lines.join("; "))
+                (!lines.is_empty()).then(|| lines.join("\n"))
             }
             _ => None,
         }

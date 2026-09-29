@@ -300,12 +300,13 @@ pub(crate) fn remove_events_selected(
         .into_iter()
         .filter(|e| !filter.matches(e))
         .collect();
-    let removed = before - kept.len();
     // Every writer stores a normalized payload, so the kept subset already
     // is one; normalizing again costs nothing and holds for a payload some
-    // other tool wrote unsorted.
+    // other tool wrote unsorted. `removed` is counted after it so that
+    // `removed + total` is what was there before.
     let mut payload = Events::new(kept);
     payload.normalize();
+    let removed = before - payload.events.len();
     if format == crate::recorder::rez::RezFormat::NotRez {
         write_events(path, &payload)?;
         return Ok(RemoveReport {

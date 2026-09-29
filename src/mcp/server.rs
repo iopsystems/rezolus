@@ -337,8 +337,9 @@ fn tool_reply(
 }
 
 /// Unix seconds past this are milliseconds or nanoseconds sent by mistake:
-/// 1e11 s is the year 5138.
-const MAX_UNIX_SECONDS: f64 = 1e11;
+/// 1e10 s is the year 2286. It also has to sit under `u64::MAX / 1e9`
+/// (about 1.8e10 s), past which the ns cast saturates silently.
+const MAX_UNIX_SECONDS: f64 = 1e10;
 /// A duration past this (about 31 years) is nanoseconds sent as seconds.
 const MAX_DURATION_SECONDS: f64 = 1e9;
 
@@ -349,6 +350,7 @@ const MAX_DURATION_SECONDS: f64 = 1e9;
 /// apart with no error in between.
 fn timestamp_ns_of(v: &Value) -> Result<u64, String> {
     match v {
+        Value::String(s) if s.trim().is_empty() => Err("timestamp is empty".into()),
         Value::String(s) if s.trim().chars().all(|c| c.is_ascii_digit()) => Err(format!(
             "timestamp {s:?} is a digit-only string, which is ambiguous (seconds or \
              nanoseconds?); send Unix seconds as a number or an RFC 3339 string"
@@ -361,7 +363,7 @@ fn timestamp_ns_of(v: &Value) -> Result<u64, String> {
             }
             if secs > MAX_UNIX_SECONDS {
                 return Err(format!(
-                    "timestamp {secs} is past the year 5138; send Unix seconds, not \
+                    "timestamp {secs} is past the year 2286; send Unix seconds, not \
                      milliseconds or nanoseconds"
                 ));
             }
@@ -376,6 +378,7 @@ fn timestamp_ns_of(v: &Value) -> Result<u64, String> {
 /// `timestamp_ns_of`.
 fn duration_ns_of(v: &Value) -> Result<u64, String> {
     match v {
+        Value::String(s) if s.trim().is_empty() => Err("duration is empty".into()),
         Value::String(s) if s.trim().chars().all(|c| c.is_ascii_digit()) => Err(format!(
             "duration {s:?} is a digit-only string, which is ambiguous (seconds or \
              nanoseconds?); send seconds as a number or humantime such as \"30s\""
@@ -1917,7 +1920,10 @@ mod tests {
         };
         for (ts, dur, needle) in [
             (json!("1776804000"), None, "digit-only"),
-            (json!(1_776_804_000_000_000_000u64), None, "year 5138"),
+            (json!(1_776_804_000_000_000_000u64), None, "year 2286"),
+            // Between the old 1e11 bound and u64::MAX / 1e9 the cast saturated.
+            (json!(20_000_000_000u64), None, "year 2286"),
+            (json!(""), None, "empty"),
             (json!(1_776_804_000.0), Some(json!("30")), "digit-only"),
             (json!(1_776_804_000.0), Some(json!(2e9)), "31 years"),
             (json!(1_776_804_000.0), Some(json!(0)), "positive"),
