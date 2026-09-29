@@ -268,6 +268,21 @@ optimizing workloads.
 | `cgroup_cpu_usage` | The amount of CPU time spent in different CPU states on a per-cgroup basis | `state={user,nice,system,softirq,irq,steal,guest,guest_nice}`, `name`: the name of the cgroup |
 | `softirq` | The count of softirqs | `kind={hi,timer,net_tx,net_rx,block,irq_poll,tasklet,sched,hrtimer,rcu}` |
 | `softirq_time` | The time spent in softirq handlers | `kind={hi,timer,net_tx,net_rx,block,irq_poll,tasklet,sched,hrtimer,rcu}` |
+| `cpu_usage_exited_tasks` | CPU time of tasks that have exited, per CPU the exit ran on | `id` |
+| `cgroup_cpu_usage_exited_tasks` | CPU time of a cgroup's tasks that have exited | `name` |
+| `task_cpu_usage` | CPU time (user and system) per thread; only with `task_attribution = true` | `pid`, `tgid`, `comm`, `cgroup` |
+
+The sampler accounts CPU per task in every configuration: the per-CPU and
+per-cgroup deltas are computed from each thread's `utime`/`stime` whether
+or not per-task series are exported, so turning the export off does not
+change the host or cgroup totals. Exporting that per-task accounting as
+`task_cpu_usage` is the option `task_attribution`, **off by default**. On, it
+costs a task-metadata event per new thread (comm and three cgroup names),
+an exit event per thread, a walk of the per-pid map's populated slots each
+time a snapshot is served, and one series per thread in every recording,
+which on a host with thread
+churn is most of the recording. Set `task_attribution = true` in
+`[samplers.cpu_usage]` (or `[defaults]`) to get it.
 
 ## Drive
 

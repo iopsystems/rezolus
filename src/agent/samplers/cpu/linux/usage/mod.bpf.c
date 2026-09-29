@@ -220,6 +220,19 @@ struct {
  */
 u64 attach_ns = 0;
 
+/*
+ * Per-task export is the config option `task_attribution`, off by default.
+ * The accounting below runs either way -- the per-CPU and per-cgroup deltas
+ * are computed from each task's utime/stime baseline, and exited tasks' CPU
+ * is folded from task_cpu_usage into the exited counters -- so what the
+ * switch removes is only what exists for the per-task series: the task_info
+ * event (a ringbuf reserve and four string reads per new task) and the
+ * task_exit event. Userspace does not read task_cpu_usage or drain either
+ * ringbuf when it is off. Written into read-only data before load, so the
+ * verifier removes the sends rather than testing a flag per event.
+ */
+const volatile __u8 task_attribution = 0;
+
 /**
  * send_task_info - Send one task's metadata to userspace
  * @task: The task_struct to describe
@@ -227,6 +240,11 @@ u64 attach_ns = 0;
  * Returns 1 when the event was submitted, 0 when the ringbuf was full.
  */
 static __always_inline int send_task_info(struct task_struct* task) {
+    // Not exporting: nothing to deliver, so count it as delivered and never
+    // leave METADATA_PENDING set.
+    if (!task_attribution)
+        return 1;
+
     struct task_info* info = bpf_ringbuf_reserve(&task_info, sizeof(struct task_info), 0);
     if (!info)
         return 0;
@@ -504,6 +522,9 @@ static __always_inline int account__sched_process_exit(u64* ctx) {
     // 0 (the value stays zeroed, never re-incremented for a pid that no
     // longer exists) — stale labels attached to a dead value, not a wrong
     // value.
+    if (!task_attribution)
+        return 0;
+
     struct task_exit* exit_event = bpf_ringbuf_reserve(&task_exit, sizeof(struct task_exit), 0);
     if (exit_event) {
         exit_event->pid = pid;

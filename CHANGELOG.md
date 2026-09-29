@@ -2,6 +2,12 @@
 
 ### Changed
 
+- `cpu_usage` no longer exports `task_cpu_usage` unless its section (or
+  `[defaults]`) sets `task_attribution = true`. The per-task accounting the
+  host and cgroup totals are computed from still runs; what is dropped by
+  default is the export: the task-metadata and task-exit events, the walk of
+  the per-pid map's populated slots each time a snapshot is served, and one
+  series per thread in recordings.
 - Slot identity and the producer epoch come from metriken 0.11.2
   (`metriken::group::SlotIdentity`, `metriken::epoch`), which took them from
   the agent; `__uid__` minting, the no-op on a re-announced label set, and
