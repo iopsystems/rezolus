@@ -107,15 +107,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # `latest` follows the highest stable tag, so a patch pushed from a
+      # maintenance branch (release/5.x) after a newer major shipped gets its
+      # version tags but leaves `latest` where it is.
+      - name: Is this the highest stable tag?
+        id: latest
+        if: github.event_name == 'push'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          HIGHEST=$(git ls-remote --tags --refs "https://github.com/${{ github.repository }}" 'refs/tags/v[0-9]*' \
+            | sed 's#.*refs/tags/##' | grep -vE '[-+]' | sort -V | tail -1)
+          if [ "$TAG" = "$HIGHEST" ]; then
+            echo "is_latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_latest=false" >> "$GITHUB_OUTPUT"
+            echo "Not moving latest: the highest stable tag is $HIGHEST"
+          fi
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # `latest` only from the explicit rule below, never implied by a
+          # semver tag.
+          flavor: |
+            latest=false
           tags: |
             type=semver,pattern={{version}},enable=${{ github.event_name == 'push' }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'push' }}
-            type=raw,value=latest,enable=${{ github.event_name == 'push' }}
+            type=raw,value=latest,enable=${{ steps.latest.outputs.is_latest == 'true' }}
             type=raw,value=${{ inputs.tag || 'dev' }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Create manifest list and push

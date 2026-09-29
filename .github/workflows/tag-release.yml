@@ -4,7 +4,8 @@ name: Tag Release
 
 on:
   push:
-    branches: [main]
+    # release/5.x carries 5.x after main moved to 6.0 (#1346).
+    branches: [main, release/5.x]
 
 jobs:
   tag-release:
@@ -17,7 +18,9 @@ jobs:
       RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
     with:
       # rezolus pushes the next development version straight to main rather
-      # than opening a bump PR for it.
-      dev-bump: direct
+      # than opening a bump PR for it. The shared workflow pushes that bump to
+      # main whichever branch was tagged, so a maintenance branch skips it and
+      # keeps its released version until its next release PR.
+      dev-bump: ${{ github.ref_name == 'main' && 'direct' || 'none' }}
       # A fork's main must not tag.
       only-repository: iopsystems/rezolus
