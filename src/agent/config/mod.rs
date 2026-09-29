@@ -175,6 +175,8 @@ mod tests {
         // A normal sampler does follow defaults=true.
         assert!(c.enabled("cpu_usage"));
         assert!(!c.enabled("hw_sensors"));
+        // The request-path ext4 sampler is opt-in for its probe cost.
+        assert!(!c.enabled("ext4_ops"));
     }
 
     #[test]
