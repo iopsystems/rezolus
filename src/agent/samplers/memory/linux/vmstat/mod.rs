@@ -181,7 +181,7 @@ impl VmstatInner {
 
         // SAFETY: sysconf has no preconditions.
         let page_size = match unsafe { libc::sysconf(libc::_SC_PAGESIZE) } {
-            n if n > 0 => n as i64,
+            n if n > 0 => n,
             _ => 4096,
         };
 
