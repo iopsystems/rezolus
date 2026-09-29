@@ -1,38 +1,9 @@
 ## [Unreleased]
 
-### Changed
+## [5.24.0] - 2026-09-29
 
-- `cpu_perf` honours `cgroup_attribution` (on by default for this
-  sampler). With `cgroup_attribution = false` its `sched_switch` program is
-  not loaded, so nothing reads the PMU per context switch; `cpu_cycles` and
-  `cpu_instructions` are read per CPU at scrape time and the `cgroup_cpu_*`
-  series are absent. On a KVM guest with an emulated PMU the program's two
-  counter reads measured 20 µs per context switch. A `[defaults]
-  cgroup_attribution = false` reaches `cpu_perf` too.
-- `cpu_usage` no longer exports `task_cpu_usage` unless its section (or
-  `[defaults]`) sets `task_attribution = true`. The per-task accounting the
-  host and cgroup totals are computed from still runs; what is dropped by
-  default is the export: the task-metadata and task-exit events, the walk of
-  the per-pid map's populated slots each time a snapshot is served, and one
-  series per thread in recordings. Measured under 27 K short threads/s:
-  refresh p50 78 µs off against 3,690 µs on, host totals unchanged.
-- `ext4_journal` and `ext4_alloc` counters are per filesystem: every counter
-  carries `mount`, `fstype`, `devnum` and `block_device`, the labels the
-  `filesystem` sampler gives the same mount, with `mount="other"` for a
-  device the agent's mount table does not know yet. The BPF programs look the
-  device up in a `dev_t → slot` map the agent keeps in step with
-  `/proc/self/mountinfo` (rescanned every 10 s, and sooner when `other`
-  moves); counter banks are per CPU and per slot, 8 MiB and 12 MiB of
-  eagerly allocated map for the two samplers. jbd2 events from an ocfs2
-  mount get their own slot rather than being folded into the ext4 totals.
-  Histograms stay host-wide. The ext4 dashboard draws one line per mount.
-  Queries that sum these counters are unaffected; anything matching their
-  exact label set sees the new labels.
-- `ext4_ops` and `xfs_log` attribute to cgroups only when their section (or
-  `[defaults]`) sets `cgroup_attribution = true`. The per-cgroup path was
-  measured at half the end hook's cost (265 of 535 ns), so it is off by
-  default; when off, the `cgroup_ext4_*` and `cgroup_xfs_log_*` series are
-  absent and the path is folded out of the loaded program.
+The filesystem telemetry and the attribution options from 6.0, backported in
+#1376.
 
 ### Added
 
@@ -74,6 +45,40 @@
   Write Path group that puts application bytes, writeback bytes, journal
   bytes and device bytes on one axis; the cgroup dashboards gain ext4 Blocked
   Time.
+
+### Changed
+
+- `cpu_perf` honours `cgroup_attribution` (on by default for this
+  sampler). With `cgroup_attribution = false` its `sched_switch` program is
+  not loaded, so nothing reads the PMU per context switch; `cpu_cycles` and
+  `cpu_instructions` are read per CPU at scrape time and the `cgroup_cpu_*`
+  series are absent. On a KVM guest with an emulated PMU the program's two
+  counter reads measured 20 µs per context switch. A `[defaults]
+  cgroup_attribution = false` reaches `cpu_perf` too.
+- `cpu_usage` no longer exports `task_cpu_usage` unless its section (or
+  `[defaults]`) sets `task_attribution = true`. The per-task accounting the
+  host and cgroup totals are computed from still runs; what is dropped by
+  default is the export: the task-metadata and task-exit events, the walk of
+  the per-pid map's populated slots each time a snapshot is served, and one
+  series per thread in recordings. Measured under 27 K short threads/s:
+  refresh p50 78 µs off against 3,690 µs on, host totals unchanged.
+- `ext4_journal` and `ext4_alloc` counters are per filesystem: every counter
+  carries `mount`, `fstype`, `devnum` and `block_device`, the labels the
+  `filesystem` sampler gives the same mount, with `mount="other"` for a
+  device the agent's mount table does not know yet. The BPF programs look the
+  device up in a `dev_t → slot` map the agent keeps in step with
+  `/proc/self/mountinfo` (rescanned every 10 s, and sooner when `other`
+  moves); counter banks are per CPU and per slot, 8 MiB and 12 MiB of
+  eagerly allocated map for the two samplers. jbd2 events from an ocfs2
+  mount get their own slot rather than being folded into the ext4 totals.
+  Histograms stay host-wide. The ext4 dashboard draws one line per mount.
+  Queries that sum these counters are unaffected; anything matching their
+  exact label set sees the new labels.
+- `ext4_ops` and `xfs_log` attribute to cgroups only when their section (or
+  `[defaults]`) sets `cgroup_attribution = true`. The per-cgroup path was
+  measured at half the end hook's cost (265 of 535 ns), so it is off by
+  default; when off, the `cgroup_ext4_*` and `cgroup_xfs_log_*` series are
+  absent and the path is folded out of the loaded program.
 
 ## [5.23.1] - 2026-09-29
 
@@ -1823,7 +1828,8 @@ focal.
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.23.1...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.24.0...HEAD
+[5.24.0]: https://github.com/iopsystems/rezolus/compare/v5.23.1...v5.24.0
 [5.23.1]: https://github.com/iopsystems/rezolus/compare/v5.22.1...v5.23.1
 [5.22.1]: https://github.com/iopsystems/rezolus/compare/v5.22.0...v5.22.1
 [5.22.0]: https://github.com/iopsystems/rezolus/compare/v5.21.0...v5.22.0
