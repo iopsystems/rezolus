@@ -7,6 +7,10 @@ mod stats {
         include!("./linux/meminfo/stats.rs");
     }
 
+    mod slabinfo {
+        include!("./linux/slabinfo/stats.rs");
+    }
+
     mod vmstat {
         include!("./linux/vmstat/stats.rs");
     }

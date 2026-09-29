@@ -2,6 +2,15 @@
 
 ### Added
 
+- `memory_slabinfo` sampler: sizes of the dentry, VFS/ext4/XFS inode,
+  ext4 extent-status, jbd2 journal-head, buffer-head and page-cache-index
+  slab caches from `/proc/slabinfo` (`memory_slab_cache_objects{cache,state}`,
+  `memory_slab_cache_bytes{cache}`), read at most once per `interval`
+  (60 s default) off the scrape cycle. Answers whether the metadata caches
+  fit; `ext4_inode_cache` here is the cause behind `ext4_inode_loads`.
+  Caches the kernel lacks are absent. The Memory dashboard's Kernel subgroup
+  shows the caches when the recording has them.
+
 - `filesystem` sampler: for each ext4 filesystem, `filesystem_errors` (the
   superblock's persisted error count, from sysfs `errors_count`) and
   `filesystem_written_bytes` (lifetime bytes written to the block device,

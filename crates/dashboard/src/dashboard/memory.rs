@@ -184,6 +184,20 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             PlotOpts::gauge("Kernel Stacks", "kernel-stack", Unit::Bytes),
             "memory_kernel_stack".to_string(),
         );
+        if has_metric(data, "memory_slab_cache_bytes") {
+            kernel.plot_promql(
+                PlotOpts::gauge("Slab Caches", "slab-caches", Unit::Bytes),
+                "sum by (cache) (memory_slab_cache_bytes)".to_string(),
+            );
+            kernel.plot_promql(
+                PlotOpts::gauge(
+                    "Slab Cache Objects (active)",
+                    "slab-cache-objects",
+                    Unit::Count,
+                ),
+                "sum by (cache) (memory_slab_cache_objects{state=\"active\"})".to_string(),
+            );
+        }
     }
 
     if has_metric(data, "memory_swap_total") {
@@ -421,6 +435,19 @@ mod tests {
         let without = generate(&store_with(&["memory_total", "memory_dirty"]), vec![]);
         assert!(!json(&without).contains("memory_reclaim"));
         assert!(!json(&without).contains("memory_dirty_threshold"));
+    }
+
+    #[test]
+    fn slab_caches_appear_under_kernel_when_the_recording_has_them() {
+        let with = generate(
+            &store_with(&["memory_total", "memory_slab", "memory_slab_cache_bytes"]),
+            vec![],
+        );
+        let j = json(&with);
+        assert!(j.contains("sum by (cache) (memory_slab_cache_bytes)"));
+        assert!(j.contains("sum by (cache) (memory_slab_cache_objects{state=\"active\"})"));
+        let without = generate(&store_with(&["memory_total", "memory_slab"]), vec![]);
+        assert!(!json(&without).contains("memory_slab_cache"));
     }
 
     #[test]

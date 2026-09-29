@@ -305,6 +305,12 @@ enabled = false
 # Memory NUMA metrics from /proc/vmstat
 [samplers.memory_vmstat]
 
+# Sizes of the dentry, inode (VFS, ext4, XFS), extent-status, journal-head,
+# buffer-head and page-cache-index slab caches from /proc/slabinfo, read at
+# `interval` (default 60s) off the scrape cycle. See docs/metrics.md#memory_slabinfo.
+[samplers.memory_slabinfo]
+# interval = "60s"
+
 # BPF sampler on the page-cache writeback tracepoints: how long writers were
 # made to sleep by the dirty-page throttle, flusher runs by reason, and pages
 # written back. Filesystem-agnostic. See docs/metrics.md#memory_writeback.
