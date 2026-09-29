@@ -1,7 +1,7 @@
 # Recording to dendro archives: `record`, then hindsight, then the default
 
 - **Opened:** 2026-09-28
-- **Status:** OPEN — stages A (`record -o out.dendro`), B (hindsight), C (`record --stream`) D1 (`recording` metadata, annotate, check, snapshot) and D2 (`filter`) built; D3–D4 and E not.
+- **Status:** OPEN — stages A (`record -o out.dendro`), B (hindsight), C (`record --stream`) D1 (`recording` metadata, annotate, check, snapshot), D2 (`filter`) and D3 (`combine`) built; D4 and E not.
 
 ## Goal
 
@@ -196,9 +196,7 @@ table through the real writer (`dendro_copy::fixtures::recorded`).
 Still to do in D:
 
 - **D2, `filter`:** built (below).
-- **D3, `combine`:** dendro inputs through `copy_sources_into` into one
-  transaction, refusing a duplicate source (`shared_sources`); `.rez` and
-  parquet inputs need converting first.
+- **D3, `combine`:** built (below).
 - **D4, Save-as-Report:** the same projection as D2, built for the browser
   viewer too.
 
@@ -230,6 +228,29 @@ Tests: `filter_dendro_by_sampler_keeps_the_occupant_stream_with_its_table`,
 the same by `comm`),
 `filter_dendro_refuses_an_unknown_sampler_and_an_empty_result`; in
 metriken, `keep_metrics_trims_a_long_table_and_keeps_it_long`.
+
+## D3: built
+
+`recording combine` into a `.dendro` output (`combine_dendro`):
+
+- The output's extension picks the container. `.dendro` inputs are copied
+  as they are; a `.rez` input (either container) is first converted as
+  `recording upgrade --to dendro` converts it, into the staging directory.
+  Parquet inputs are refused with a pointer (combine them into a `.rez`,
+  then convert); there is no parquet-to-dendro ingest.
+- Every input is copied into one transaction through `copy_sources_into`,
+  each in its own read snapshot with its live tail sealed; a source keeps
+  its uuid. The same source given twice (the same uuid: a file and its
+  snapshot, say) is refused through dendro's `shared_sources`, since it
+  would count every value twice. The output is refused if it exists, and
+  is staged and renamed.
+- A dendro input with a `.rez` output is refused before anything is
+  created. The `.rez` path creates its output before opening the inputs,
+  so a dendro input used to leave a half-made `.rez` behind.
+
+Tests: `combine_assembles_dendro_archives` (two sources, each still long,
+readable as two recordings), `combine_refuses_the_same_dendro_source_twice`,
+`combine_into_dendro_converts_a_rez_and_refuses_the_rest`.
 
 ## Seal policy
 

@@ -796,7 +796,7 @@ pub fn command() -> Command {
 ///
 /// A v1/v2 tar archive has no sidecar and no writer that appends in place, so
 /// there the honest implementation is a plain copy.
-fn snapshot_rez(
+pub(crate) fn snapshot_rez(
     path: &std::path::Path,
     output: &std::path::Path,
 ) -> Result<(), Box<dyn std::error::Error>> {

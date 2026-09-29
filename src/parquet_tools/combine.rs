@@ -200,6 +200,30 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
             .map(|f| crate::recorder::rez::detect_rez_format(f).unwrap_or(RezFormat::NotRez))
             .collect();
 
+        let dendro_out = output.extension().and_then(|e| e.to_str()) == Some("dendro");
+        let dendro_in: Vec<bool> = files
+            .iter()
+            .map(|f| metriken_archive::DendroCatalog::is_archive(f).unwrap_or(false))
+            .collect();
+        if dendro_out {
+            if formats.contains(&RezFormat::NotRez) {
+                return Err(
+                    "combine into a .dendro takes .rez and .dendro inputs; combine \
+                     parquet inputs into a .rez first, then convert it with `recording \
+                     upgrade --to dendro`"
+                        .into(),
+                );
+            }
+            return combine_dendro(&files, &formats, &dendro_in, output);
+        }
+        if let Some(i) = dendro_in.iter().position(|d| *d) {
+            return Err(format!(
+                "{} is a dendro archive; combine dendro inputs into a .dendro output",
+                files[i].display()
+            )
+            .into());
+        }
+
         if formats.iter().any(|f| *f != RezFormat::NotRez) {
             if !formats.iter().all(|f| *f != RezFormat::NotRez) {
                 return Err("cannot mix .rez and .parquet inputs in combine".into());
@@ -364,6 +388,106 @@ fn combine_rez_v3(
         "wrote {} with {} recording(s) from {} input(s)",
         output.display(),
         recordings,
+        files.len()
+    );
+    Ok(())
+}
+
+/// Assemble one dendro archive from `.dendro` and `.rez` inputs, a source
+/// per input recording, in one transaction: the output holds every input or
+/// does not exist.
+///
+/// A `.rez` input (either container) is converted first, as `recording
+/// upgrade --to dendro` converts it, into the staging directory. Each input
+/// is then copied through `copy_sources_into` in its own read snapshot, its
+/// live tail sealed (`crate::dendro_copy`), and each source keeps its uuid.
+/// The same source given twice (the same uuid, e.g. a file and its
+/// snapshot) is refused: it would double every value it holds.
+fn combine_dendro(
+    files: &[PathBuf],
+    formats: &[crate::recorder::rez::RezFormat],
+    dendro_in: &[bool],
+    output: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::recorder::rez::RezFormat;
+    use dendro::archive::{Archive, ArchiveMut};
+    use dendro::rewrite::{copy_sources_into, shared_sources, CopySpec};
+
+    if output.exists() {
+        return Err(format!(
+            "{} already exists; refusing to replace it",
+            output.display()
+        )
+        .into());
+    }
+    let dir = output.parent().filter(|p| !p.as_os_str().is_empty());
+    let staging = match dir {
+        Some(dir) => tempfile::tempdir_in(dir),
+        None => tempfile::tempdir(),
+    }?;
+
+    let mut inputs: Vec<PathBuf> = Vec::with_capacity(files.len());
+    let mut converted = 0usize;
+    for (i, ((file, format), dendro)) in files.iter().zip(formats).zip(dendro_in).enumerate() {
+        if *dendro {
+            inputs.push(file.clone());
+            continue;
+        }
+        let v3 = match format {
+            RezFormat::V2Tar => {
+                let upgraded = staging.path().join(format!("upgraded-{i}.rez"));
+                crate::recorder::rez_v3_rewrite::upgrade_tar_to_v3(file, &upgraded)?;
+                upgraded
+            }
+            _ => file.clone(),
+        };
+        let staged = staging.path().join(format!("converted-{i}.dendro"));
+        ::rez::to_dendro::convert_v3_to_dendro(&v3, &staged)?;
+        converted += 1;
+        inputs.push(staged);
+    }
+    if converted > 0 {
+        println!("converted {converted} .rez input(s) to dendro for the assembly");
+    }
+
+    let archives: Vec<Archive> = inputs
+        .iter()
+        .map(|p| Archive::open(p))
+        .collect::<Result<_, _>>()?;
+    for a in 0..archives.len() {
+        for b in a + 1..archives.len() {
+            let shared = shared_sources(&archives[a], &archives[b])?;
+            if !shared.is_empty() {
+                return Err(format!(
+                    "{} and {} hold the same source ({}); combining them would count it twice",
+                    files[a].display(),
+                    files[b].display(),
+                    shared.join(", ")
+                )
+                .into());
+            }
+        }
+    }
+
+    let staged = staging.path().join("combined.dendro");
+    let mut dst = ArchiveMut::create(&staged)?;
+    let mut sources = 0usize;
+    dst.transaction(|tx| {
+        for src in &archives {
+            let names = crate::dendro_copy::streams(src).map_err(dendro::Error::Message)?;
+            let encoder =
+                metriken_archive::writer::Encoder::for_streams(names.iter().map(String::as_str));
+            sources += copy_sources_into(src, tx, &CopySpec::everything(), &encoder)?;
+        }
+        Ok(())
+    })?;
+    drop(dst);
+    drop(archives);
+    std::fs::rename(&staged, output)?;
+    println!(
+        "wrote {} with {} recording(s) from {} input(s)",
+        output.display(),
+        sources,
         files.len()
     );
     Ok(())
@@ -3080,6 +3204,90 @@ mod tests {
         assert!(
             err.contains("already exists"),
             "explains the refusal: {err}"
+        );
+    }
+
+    /// Two dendro archives become one with a source each, still long and
+    /// readable, each recording answering as it did alone.
+    #[test]
+    fn combine_assembles_dendro_archives() {
+        use metriken_query::MetricsSource;
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.dendro"), dir.path().join("b.dendro"));
+        crate::dendro_copy::fixtures::recorded(&a, 8, true);
+        crate::dendro_copy::fixtures::recorded(&b, 6, true);
+        let out = dir.path().join("ab.dendro");
+        run_combine(&[a.clone(), b.clone()], &out).unwrap();
+
+        let db = dendro::archive::Archive::open(&out).unwrap();
+        let sources = db.read_sources().unwrap();
+        assert_eq!(sources.len(), 2);
+        for s in &sources {
+            assert!(db
+                .all_streams(s.id)
+                .unwrap()
+                .contains(&"threads/tasks/occupants".to_string()));
+        }
+        drop(db);
+        let readers = crate::rez_reader::RezReader::open_recordings(
+            &out,
+            metriken_query::BufferPool::new(64 * 1024 * 1024),
+        )
+        .unwrap();
+        assert_eq!(readers.len(), 2);
+        let spans: Vec<f64> = readers
+            .iter()
+            .map(|(_, r)| {
+                let (s, e) = r.time_range().unwrap();
+                e - s
+            })
+            .collect();
+        assert!(spans.contains(&7.0) && spans.contains(&5.0), "{spans:?}");
+    }
+
+    /// The same source twice would count every value twice: refused, and
+    /// nothing is left at the output.
+    #[test]
+    fn combine_refuses_the_same_dendro_source_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.dendro");
+        crate::dendro_copy::fixtures::recorded(&a, 4, true);
+        let copy = dir.path().join("copy.dendro");
+        crate::parquet_tools::snapshot_rez(&a, &copy).unwrap();
+        let out = dir.path().join("twice.dendro");
+        let err = run_combine(&[a, copy], &out).unwrap_err();
+        assert!(err.to_string().contains("same source"), "{err}");
+        assert!(!out.exists());
+    }
+
+    /// A `.rez` input joins a `.dendro` output by conversion; a dendro input
+    /// with a `.rez` output, and a parquet input with a `.dendro` output, are
+    /// refused before anything is created.
+    #[test]
+    fn combine_into_dendro_converts_a_rez_and_refuses_the_rest() {
+        use crate::recorder::rez::recorder_tests_support::populated_v3_rez;
+        let dir = tempfile::tempdir().unwrap();
+        let rez = dir.path().join("a.rez");
+        populated_v3_rez(&rez, "baseline", &["cpu_usage"], 6);
+        let d = dir.path().join("b.dendro");
+        crate::dendro_copy::fixtures::recorded(&d, 4, true);
+
+        let out = dir.path().join("mixed.dendro");
+        run_combine(&[rez.clone(), d.clone()], &out).unwrap();
+        let db = dendro::archive::Archive::open(&out).unwrap();
+        assert_eq!(db.read_sources().unwrap().len(), 2);
+
+        let rez_out = dir.path().join("out.rez");
+        let err = run_combine(&[rez.clone(), d.clone()], &rez_out).unwrap_err();
+        assert!(err.to_string().contains("is a dendro archive"), "{err}");
+        assert!(!rez_out.exists(), "refused before the output was created");
+
+        let parquet = dir.path().join("x.parquet");
+        std::fs::write(&parquet, b"PAR1").unwrap();
+        let err = run_combine(&[parquet, d], &dir.path().join("p.dendro")).unwrap_err();
+        assert!(
+            err.to_string().contains("takes .rez and .dendro inputs"),
+            "{err}"
         );
     }
 }
