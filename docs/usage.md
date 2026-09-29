@@ -58,8 +58,7 @@ pausing the recording — however it is triggered, by signal or over HTTP.
 An `output` ending in `.dendro` keeps the buffer and its snapshots as dendro
 archives instead (opt-in): several times smaller where threads and cgroups
 come and go, and readable by `rezolus view`, the MCP tools and `rezolus
-recording` `metadata`, `annotate`, `check`, `snapshot` and `filter` (not yet
-`combine`).
+recording` subcommands (`combine` into a `.dendro` output).
 
 Hindsight is **disabled by default**. Review the config before enabling it.
 
@@ -116,7 +115,7 @@ play, which by default means `rezolus.rez`.
 | Extension | What it is | When |
 | --- | --- | --- |
 | `.rez` | **Default.** An archive with separate acquisition groups and their cadences/windows. Holds one *recording* per endpoint. | One or more Rezolus or Prometheus endpoints, including mixed inputs. |
-| `.dendro` | The same recordings in a dendro archive. Groups whose members come and go (threads, cgroups, CPUs) are stored one row per member, several times smaller than a `.rez`. Opt-in until it becomes the default. | Where size matters. `rezolus view`, `rezolus mcp` and `recording` `metadata`, `annotate`, `check`, `snapshot` and `filter` read it; `combine` does not yet. `--stream` records to it. |
+| `.dendro` | The same recordings in a dendro archive. Groups whose members come and go (threads, cgroups, CPUs) are stored one row per member, several times smaller than a `.rez`. Opt-in until it becomes the default. | Where size matters. `rezolus view`, `rezolus mcp` and the `recording` subcommands read it (`combine` assembles one from `.rez` and `.dendro` inputs into a `.dendro` output). `--stream` records to it. |
 | `.parquet` | One columnar table on a single uniform clock. | Uniform tabular export or other Parquet tooling. |
 | `.raw` | The msgpack snapshots as scraped, concatenated. | Capture now, decide later — convert with `rezolus recording convert`. |
 

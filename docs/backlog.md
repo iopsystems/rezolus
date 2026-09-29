@@ -626,11 +626,8 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
 - **Recording to dendro archives** — Open, in stages
   ([entry](journal/2026-09-28-dendro-writer-adoption.md)). A, `record -o
   out.dendro`, B, hindsight, C, `record --stream`, D1, `recording`
-  metadata/annotate/check/snapshot, and D2, `recording filter`, are built.
-  Remaining:
-  - **D3. `recording combine` on dendro**: `copy_sources_into` per input
-    into one transaction, refusing duplicates (`shared_sources`); `.rez` and
-    parquet inputs converted first.
+  metadata/annotate/check/snapshot, D2, `recording filter`, and D3,
+  `recording combine`, are built. Remaining:
   - **D4. Save-as-Report on dendro**: `KeepMetrics` (metriken-archive,
     outside `write`), also for the wasm viewer; the tail encoder is behind
     `write`, so the report needs another way to seal it.

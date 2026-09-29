@@ -118,7 +118,7 @@ target/release/rezolus recording upgrade old.rez -o new.rez            # ...or t
 target/release/rezolus recording upgrade --to dendro in.rez -o out.dendro  # any .rez -> dendro archive (new file only;
 #   `view` and `mcp` read it through crates/rez/src/catalog.rs, long tables and their `<table>/occupants`
 #   streams included (format: metriken-segment; relabel: metriken_query::long); `recording` metadata, annotate,
-#   check, snapshot and filter read it too; combine and RezDb::open refuse one by name). Segment/WAL/caller-row bytes are
+#   check, snapshot, filter and combine (into a .dendro) read it too; RezDb::open refuses one by name). Segment/WAL/caller-row bytes are
 #   copied verbatim, only live WAL rows, u64 timestamps checked into i64. crates/rez/src/to_dendro.rs.
 target/release/rezolus recording snapshot live.rez -o incident.rez     # complete copy of an archive still being written
 # .rez archives: metadata describes the manifest (recordings, labels, tables + cadence; V3 group
