@@ -569,6 +569,26 @@ Protocol, with tools for querying metrics via PromQL, detecting anomalies, and
 analyzing correlations — useful for AI-guided performance investigation. Runs as
 a stdio MCP server or as one-shot CLI commands.
 
+### Setup with Claude Code
+
+```bash
+rezolus mcp install                                    # user scope: every project
+rezolus mcp install --scope project --export-dir ./exports   # this directory's .mcp.json
+rezolus mcp install --dry-run                          # say what would be done
+```
+
+`install` registers this binary as the `rezolus` server through `claude mcp
+add` and installs the `rezolus-mcp` skill (`~/.claude/skills/rezolus-mcp/` or
+`.claude/skills/rezolus-mcp/`), which carries the workflow: describe the
+recording and its metrics before querying, extract features before forming
+hypotheses, the recording selector, and what to write back. In Claude Code,
+`/mcp` lists the server and `/rezolus-mcp` loads the skill; `claude mcp list`
+checks the connection from a shell. Re-running replaces the entry, which is
+how the server's flags (`--allow-mutating`, `--export-dir`, `--viewer-url`,
+all accepted by `install`) are changed. Without `claude` on `PATH`, project
+scope writes `.mcp.json` directly and user scope prints the command to run.
+A skill file that is not this skill is never overwritten.
+
 ```bash
 rezolus mcp                                                  # stdio server
 rezolus mcp detect-anomalies run.rez                 # anomaly detection

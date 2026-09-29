@@ -170,7 +170,7 @@ fn read_tools() -> Vec<Value> {
         },
         {
             "name": "detect_anomalies",
-            "description": "Detect anomalies in time series data using MAD, CUSUM, and FFT analysis. IMPORTANT: Call describe_metrics first to see available metrics and labels before constructing your query. The query must result in a SINGLE time series - use sum() to aggregate multiple series.",
+            "description": "Detect anomalies in one time series using MAD, CUSUM, and FFT analysis. The query must produce a SINGLE series: aggregate with sum() or add label matchers.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -193,7 +193,7 @@ fn read_tools() -> Vec<Value> {
         },
         {
             "name": "query",
-            "description": "Execute a PromQL query and return results as JSON. Returns Prometheus-compatible format with resultType (vector/matrix/scalar) and result data. Use describe_metrics first to see available metrics and their types. Results can be used programmatically by other tools.",
+            "description": "Execute a PromQL query and return results as JSON in the Prometheus format (resultType vector/matrix/scalar and result). rate() values carry an uncertainty band from the acquisition window.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
