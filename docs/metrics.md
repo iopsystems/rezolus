@@ -378,7 +378,7 @@ metadata reads a cold inode cache imposes on `stat` and atime updates.
 | `ext4_allocations` | Extent allocations (`ext4_mballoc_alloc`); more than one per file created is a file split across extents | |
 | `ext4_allocation_blocks` | Blocks requested of and returned by the allocator, summed; returned falling short of requested is fragmentation | `kind={requested,allocated}` |
 | `ext4_allocation_groups_scanned` | Block groups scanned, summed over allocations; per allocation it is the allocator's effort | |
-| `ext4_allocations_by_criterion` | Allocations by the criterion the allocator finished at: 0 and 1 are the fast paths, 3 scans every group's bitmaps, 4 is the last resort (kernels from 6.5) | `criterion={0,1,2,3,4}` |
+| `ext4_allocations_by_criterion` | Allocations by the criterion the allocator finished at. 0 and 1 are the fast paths on every kernel. From 6.5: 2 trims to the best available length, 3 scans every group, 4 takes any free block; before 6.5: 2 scans every group, 3 takes any free block, and 4 never occurs. A rising share at 2 or above is fragmentation | `criterion={0,1,2,3,4}` |
 | `ext4_freed_blocks` | Blocks returned to the free pool (`ext4_free_blocks`) | |
 | `ext4_inodes` | Inodes allocated and freed | `op={allocated,freed}` |
 | `ext4_writepages` | Writeback passes over an inode's dirty pages (`ext4_writepages_result`) | |
@@ -387,7 +387,7 @@ metadata reads a cold inode cache imposes on `stat` and atime updates.
 | `ext4_trimmed_blocks` | Blocks discarded to the device by fstrim or online discard | |
 | `ext4_preallocation_discards` | Times an inode's preallocated blocks were released (close, truncate, unlink) | |
 | `ext4_preallocation_discarded_blocks` | Preallocated blocks released, summed | |
-| `ext4_inode_loads` | Inode-table blocks read from the device because the inode was not cached (`ext4_load_inode`): one synchronous 4 KiB read each | |
+| `ext4_inode_loads` | Inode-table reads from the device because an inode was not cached (`ext4_load_inode`), each a synchronous read of up to `inode_readahead_blks` blocks (32 by default), so 20,000 cold `stat`s cost about 40 reads on a fresh filesystem | |
 | `ext4_bitmap_loads` | Block-allocation bitmaps (including the allocator's prefetches) and inode-allocation bitmaps read from the device | `kind={block,inode}` |
 
 ## Filesystem

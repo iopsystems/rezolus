@@ -92,35 +92,35 @@ pub static EXT4_ALLOCATION_GROUPS_SCANNED: LazyCounter = LazyCounter::new(Counte
 
 #[metric(
     name = "ext4_allocations_by_criterion",
-    description = "Allocations satisfied at criterion 0, the allocator's first and cheapest pass (power-of-two aligned free extents)",
+    description = "Allocations satisfied at criterion 0, the allocator's first and cheapest pass: a power-of-two aligned free extent of the goal length",
     metadata = { unit = "operations", criterion = "0", acq_group = "ext4_alloc_counters" }
 )]
 pub static EXT4_ALLOCATIONS_CR0: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "ext4_allocations_by_criterion",
-    description = "Allocations satisfied at criterion 1 (goal-length free extents found through the group's free-extent lists)",
+    description = "Allocations satisfied at criterion 1: a free extent of the goal length found through the groups' free-extent lists. Where a healthy filesystem's allocations land",
     metadata = { unit = "operations", criterion = "1", acq_group = "ext4_alloc_counters" }
 )]
 pub static EXT4_ALLOCATIONS_CR1: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "ext4_allocations_by_criterion",
-    description = "Allocations satisfied at criterion 2 (a best-effort scan of groups with any free extent large enough)",
+    description = "Allocations satisfied at criterion 2. On kernels from 6.5 this is the best-available-length pass, which trims the request to fit; before 6.5 it is the slow scan of every group",
     metadata = { unit = "operations", criterion = "2", acq_group = "ext4_alloc_counters" }
 )]
 pub static EXT4_ALLOCATIONS_CR2: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "ext4_allocations_by_criterion",
-    description = "Allocations satisfied at criterion 3, the allocator's slow path that scans the free-space bitmaps of every group. A rising share here is free space too fragmented for the fast paths",
+    description = "Allocations satisfied at criterion 3. On kernels from 6.5 this is the slow scan of every group's bitmaps; before 6.5 it is the last resort that takes any free block. A rising share at 2 or above is free space too fragmented for the fast paths",
     metadata = { unit = "operations", criterion = "3", acq_group = "ext4_alloc_counters" }
 )]
 pub static EXT4_ALLOCATIONS_CR3: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "ext4_allocations_by_criterion",
-    description = "Allocations satisfied at criterion 4 or higher, the last-resort passes that accept any free block (kernels from 6.5 have five criteria)",
+    description = "Allocations satisfied at criterion 4 or higher: on kernels from 6.5, the last resort that takes any free block. Older kernels have four criteria and never report this",
     metadata = { unit = "operations", criterion = "4", acq_group = "ext4_alloc_counters" }
 )]
 pub static EXT4_ALLOCATIONS_CR4: LazyCounter = LazyCounter::new(Counter::default);
@@ -213,7 +213,7 @@ pub static EXT4_PREALLOCATION_DISCARDED_BLOCKS: LazyCounter = LazyCounter::new(C
 
 #[metric(
     name = "ext4_inode_loads",
-    description = "Inode-table blocks read from the device because the inode was not cached (ext4_load_inode). Each is a synchronous 4 KiB read on the calling thread; on a filesystem with tens of millions of files this is the atime and stat cost, and vm.vfs_cache_pressure is the knob that moves it",
+    description = "Inode-table reads from the device because an inode was not cached (ext4_load_inode). Each is a synchronous read on the calling thread of up to inode_readahead_blks blocks (32 by default), so one read serves the neighbouring inodes too. On a filesystem with tens of millions of files this is the atime and stat cost, and vm.vfs_cache_pressure is the knob that moves it",
     metadata = { unit = "operations", acq_group = "ext4_alloc_counters" }
 )]
 pub static EXT4_INODE_LOADS: LazyCounter = LazyCounter::new(Counter::default);
