@@ -115,7 +115,7 @@ play, which by default means `rezolus.rez`.
 | Extension | What it is | When |
 | --- | --- | --- |
 | `.rez` | **Default.** An archive with separate acquisition groups and their cadences/windows. Holds one *recording* per endpoint. | One or more Rezolus or Prometheus endpoints, including mixed inputs. |
-| `.dendro` | The same recordings in a dendro archive. Groups whose members come and go (threads, cgroups, CPUs) are stored one row per member, several times smaller than a `.rez`. Opt-in until it becomes the default. | Where size matters. `rezolus view` and `rezolus mcp` read it; the other `recording` subcommands and `--stream` do not yet. |
+| `.dendro` | The same recordings in a dendro archive. Groups whose members come and go (threads, cgroups, CPUs) are stored one row per member, several times smaller than a `.rez`. Opt-in until it becomes the default. | Where size matters. `rezolus view` and `rezolus mcp` read it; the other `recording` subcommands do not yet. `--stream` records to it. |
 | `.parquet` | One columnar table on a single uniform clock. | Uniform tabular export or other Parquet tooling. |
 | `.raw` | The msgpack snapshots as scraped, concatenated. | Capture now, decide later — convert with `rezolus recording convert`. |
 
@@ -221,8 +221,9 @@ one to the current container — as does rewriting it with `combine`, `filter` o
 instead of scraping it. The agent pushes one frame per `--interval`, carrying
 only the acquisition groups it re-read since the last frame, stamped when the
 agent sampled rather than when the recorder asked. The identity index — which
-task or cgroup each slot means — arrives on the same stream and is committed in
-the same transaction as the rows it describes.
+task or cgroup each slot means — arrives on the same stream; a `.rez` commits it
+in the same transaction as the rows it describes, and a `.dendro` takes the
+same identity from the rows' schemas into its occupant streams.
 
 ```bash
 rezolus record --stream --url http://localhost:4241 -o run.rez
@@ -230,7 +231,7 @@ rezolus record --stream --endpoint http://web-01:4241 --endpoint http://web-02:4
 ```
 
 Scraping stays the default and the transport is never auto-detected. `--stream`
-records to `.rez` only, and every endpoint must be a rezolus agent that serves
+records to `.rez` or `.dendro`, and every endpoint must be a rezolus agent that serves
 the stream: an endpoint that cannot (a Prometheus exporter, a V2 agent, an agent
 from before `/metrics/stream`) fails the run rather than being scraped. An
 endpoint that is merely unreachable is retried each tick. A stream that drops
