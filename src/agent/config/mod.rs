@@ -134,10 +134,11 @@ impl Config {
 
     /// Whether `name` attributes its events to the calling thread's cgroup
     /// (per-sampler override, falling back to the `defaults` section, then
-    /// off). Consumed by the request-path BPF samplers whose per-cgroup path
-    /// is a measured share of the probe cost (`ext4_ops`, `xfs_log`): with it
-    /// off, the `cgroup_*` series are absent and the path is not in the
-    /// loaded program.
+    /// off). Consumed by the samplers whose per-cgroup path is a measured
+    /// share of their probe cost (`ext4_ops`, `xfs_log`, `memory_pagecache`):
+    /// with it off, the `cgroup_*` series are absent and the path is not in
+    /// the loaded program. `cpu_perf` defaults it on; see
+    /// `cgroup_attribution_or`.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn cgroup_attribution(&self, name: &str) -> bool {
         self.cgroup_attribution_or(name, false)
