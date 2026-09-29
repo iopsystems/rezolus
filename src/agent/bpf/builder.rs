@@ -488,6 +488,13 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     /// Optional human capability labels per program, for readable health
     /// reasons. Intent stays whatever `program_intents` says (default Required).
     program_labels: HashMap<&'static str, &'static str>,
+    /// Closures run on the open skeleton after program selection and before
+    /// `load()`: the one place a sampler can set read-only data
+    /// (`const volatile` globals) that the verifier then folds into the
+    /// program, so a feature switched off costs nothing at run time. See
+    /// `pre_load`.
+    #[allow(clippy::type_complexity)]
+    pre_load: Vec<Box<dyn FnOnce(&mut <T as SkelBuilder<'static>>::Output) + Send>>,
 }
 
 impl<T: 'static> Builder<T>
@@ -520,6 +527,7 @@ where
             disabled_programs: None,
             program_intents: HashMap::new(),
             program_labels: HashMap::new(),
+            pre_load: Vec::new(),
         }
     }
 
@@ -638,6 +646,10 @@ where
                         );
                     }
                 }
+            }
+
+            for f in self.pre_load {
+                f(&mut open_skel);
             }
 
             let skel = match open_skel.load() {
@@ -1257,6 +1269,20 @@ where
 
     pub fn ringbuf_handler(mut self, name: &'static str, handler: fn(&[u8]) -> i32) -> Self {
         self.ringbuf_handler.push((name, handler));
+        self
+    }
+
+    /// Run `f` on the open skeleton after program selection and before
+    /// `load()`. Meant for read-only data: a `const volatile` global in the
+    /// program appears in the skeleton's `maps.rodata_data`, and a value
+    /// written here is what the verifier sees at load, so a branch on it is
+    /// removed from the loaded program rather than tested on every run. The
+    /// closure runs on the sampler's initialization thread.
+    pub fn pre_load(
+        mut self,
+        f: impl FnOnce(&mut <T as SkelBuilder<'static>>::Output) + Send + 'static,
+    ) -> Self {
+        self.pre_load.push(Box::new(f));
         self
     }
 
