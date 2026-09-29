@@ -10,12 +10,11 @@ duration = "15m"
 # Specify the address of the Rezolus Agent
 source = "127.0.0.1:4241"
 
-# Specify the path for the snapshot output file. Snapshots are `.rez` archives
-# (readable by `rezolus view`, `rezolus mcp` and `rezolus recording metadata`).
-# A `.dendro` path keeps the buffer and its snapshots as dendro archives
-# instead: several times smaller, readable by `rezolus view`, `rezolus mcp` and
-# the `rezolus recording` subcommands (combine into a `.dendro`). Opt-in until it becomes the default.
-output = "/var/lib/rezolus/rezolus.rez"
+# Specify the path for the snapshot output file. Snapshots are dendro archives,
+# readable by `rezolus view`, `rezolus mcp` and the `rezolus recording`
+# subcommands. A path ending in `.rez` keeps the buffer and its snapshots in the
+# archive format before 6.0, several times larger.
+output = "/var/lib/rezolus/rezolus.dendro"
 
 # Specify the directory the rolling buffer is kept in. It needs room for the
 # whole lookback period above, which can be gigabytes.
@@ -41,7 +40,7 @@ output = "/var/lib/rezolus/rezolus.rez"
 # Supports endpoints:
 #   GET  /status     - Buffer status: retained time range, per-sampler rows and
 #                      segments, on-disk size, and whether retention has started
-#   GET  /dump       - Download the buffer as a .rez archive (query params:
+#   GET  /dump       - Download the buffer as an archive (query params:
 #                      start, end, last — selection is by whole segment)
 #   POST /dump/file  - Write the buffer to the output file
 # listen = "127.0.0.1:4242"

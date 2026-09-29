@@ -2,7 +2,7 @@
 //!
 //! Every one of them is stated in v3 terms. `/status` used to report the ring's
 //! geometry — slot count, writes so far, and the fill fraction derived from
-//! them — and none of that survives: the buffer is a `.rez` file, not a fixed
+//! them — and none of that survives: the buffer is an archive file, not a fixed
 //! array of slots. What replaces it is what the file's own catalog can answer
 //! (`buffer::summarize`), which is both truer and cheaper: no segment or WAL
 //! payload is read to produce it.
@@ -222,7 +222,7 @@ async fn root() -> String {
          For information, see: https://rezolus.com\n\n\
          Endpoints:\n\
          - GET /status - Buffer status\n\
-         - GET /dump - Download the buffer as a .rez archive\n\
+         - GET /dump - Download the buffer as an archive (.dendro, or .rez for a .rez buffer)\n\
          - POST /dump/file - Write the buffer to the configured output file\n"
     )
 }
@@ -270,11 +270,11 @@ async fn status(State(state): State<Arc<AppState>>) -> Response {
     .into_response()
 }
 
-/// Download the buffer as a standalone `.rez`.
+/// Download the buffer as a standalone archive, in the buffer's container.
 ///
 /// Built the same way `/dump/file` builds it — a consistent copy taken while
 /// the recording continues — into a temporary file that is served and removed.
-/// It is a `.rez` archive now, not a parquet file: the buffer holds one table
+/// It is an archive, not a parquet file: the buffer holds one table
 /// per sampler at its own cadence, which no single parquet schema represents.
 async fn dump(State(state): State<Arc<AppState>>, Query(params): Query<DumpParams>) -> Response {
     let time_range = match params.resolve_time_range() {

@@ -27,9 +27,9 @@ fn duration() -> String {
 /// `/var/lib/rezolus`, per FHS "variable state information" — the conventional
 /// home for a daemon's own data, as `/var/lib/prometheus` is. It was
 /// `/tmp/rezolus.rez`, which is tmpfs on most modern distributions and cleared
-/// at boot.
+/// at boot. A dendro archive since 6.0.
 fn output() -> String {
-    format!("{DEFAULT_STATE_DIR}/rezolus.rez")
+    format!("{DEFAULT_STATE_DIR}/rezolus.dendro")
 }
 
 /// The directory the rolling buffer lives in.

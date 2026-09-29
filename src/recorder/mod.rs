@@ -76,33 +76,31 @@ pub fn command() -> Command {
              the events; raw output has no metadata to carry them in.\n\n\
              WHAT IT WRITES: the output path is -o/--output, and its extension picks the\n\
              format, so --format is rarely needed. With no -o at all the recording goes to\n\
-             rezolus.<ext> for the format in play — by default rezolus.rez. (A \"sampler\" below\n\
+             rezolus.<ext> for the format in play — by default rezolus.dendro. (A \"sampler\" below\n\
              is one metric collector — cpu_usage, scheduler, blockio — and each reads on its\n\
              own schedule rather than on one global clock.)\n\n    \
-             .rez      (default) A per-sampler archive: one table per sampler, each at its own\n    \
-             \x20         cadence, carrying the window each read covered so PromQL rate()\n    \
-             \x20         queries in `rezolus view` and `rezolus mcp` can report uncertainty\n    \
-             \x20         bounds instead of a bare number. Rezolus and Prometheus endpoints\n    \
-             \x20         are supported; several of them become one archive holding a\n    \
-             \x20         recording each, which is what `rezolus view` reads as an A/B or\n    \
-             \x20         multi-host comparison. Prefer it.\n    \
-             .dendro   The same recordings in a dendro archive (opt-in until it becomes\n    \
-             \x20         the default). Groups whose members come and go (threads,\n    \
-             \x20         cgroups, CPUs) are stored one row per member, so it is several\n    \
-             \x20         times smaller than a .rez. `rezolus view` and `rezolus mcp` read\n    \
-             \x20         it, as do the `recording` subcommands (`combine` into a\n    \
-             \x20         .dendro output).\n    \
+             .dendro   (default) A per-sampler archive: one table per acquisition group,\n    \
+             \x20         each at its own cadence, carrying the window each read covered so\n    \
+             \x20         PromQL rate() queries in `rezolus view` and `rezolus mcp` can\n    \
+             \x20         report uncertainty bounds instead of a bare number. Groups whose\n    \
+             \x20         members come and go (threads, cgroups, CPUs) are stored one row\n    \
+             \x20         per member. Rezolus and Prometheus endpoints are supported; several\n    \
+             \x20         of them become one archive holding a recording each, which is what\n    \
+             \x20         `rezolus view` reads as an A/B or multi-host comparison. Prefer it.\n    \
+             .rez      The same recordings in the archive format before 6.0, several\n    \
+             \x20         times larger. Every tool still reads and writes it; choose it\n    \
+             \x20         only for a consumer that has not moved to .dendro.\n    \
              .parquet  One columnar table on a single uniform clock. Use it for a uniform\n    \
              \x20         tabular export or other parquet tooling.\n    \
              \x20         (Multiple endpoints, including Prometheus, do NOT need\n    \
-             \x20         parquet — .rez holds them as separate recordings.)\n    \
+             \x20         parquet — .dendro holds them as separate recordings.)\n    \
              .raw      The msgpack snapshots as scraped, concatenated (a Prometheus source\n    \
              \x20         is converted to snapshots on the way in, so either source works).\n    \
              \x20         Cheapest thing the recorder can do: it appends and never rewrites.\n    \
              \x20         Turn it into parquet later with `rezolus recording convert` — which\n    \
              \x20         you can redo, re-stamping metadata, since the raw input is kept.\n\n\
              Any other extension (-o capture.dat, or no extension at all) is not an error and\n\
-             not .rez: it means parquet, unless --format says otherwise. A --format that\n\
+             not .dendro: it means parquet, unless --format says otherwise. A --format that\n\
              contradicts the extension (say --format parquet with -o out.rez) IS an error,\n\
              rather than a silent choice between them.\n\n\
              A Prometheus endpoint records into a .rez or .dendro like any other. One\n\
@@ -115,29 +113,29 @@ pub fn command() -> Command {
              goes and has no staging file. A parquet or raw output IS overwritten. There is\n\
              no --force; remove the old file or pick a new path.\n\n\
              EXAMPLES:\n    \
-             # Record the local agent until ctrl-c (defaults: localhost:4241 -> rezolus.rez)\n    \
+             # Record the local agent until ctrl-c (defaults: localhost:4241 -> rezolus.dendro)\n    \
              rezolus record\n\n    \
              # Record a local agent for 5 minutes\n    \
-             rezolus record --url http://localhost:4241 -o out.rez --duration 5m\n\n    \
+             rezolus record --url http://localhost:4241 -o out.dendro --duration 5m\n\n    \
              # Record only while a benchmark runs, then stop\n    \
-             rezolus record -o bench.rez -- ./bench.sh --iters 100\n\n    \
+             rezolus record -o bench.dendro -- ./bench.sh --iters 100\n\n    \
              # Tag a recording as one arm of an A/B comparison\n    \
-             rezolus record -o redis.rez --label arm=redis -- ./bench.sh\n\n    \
+             rezolus record -o redis.dendro --label arm=redis -- ./bench.sh\n\n    \
              # High-resolution capture: sample every 100ms for 30 seconds\n    \
-             rezolus record -o out.rez --interval 100ms --duration 30s\n\n    \
+             rezolus record -o out.dendro --interval 100ms --duration 30s\n\n    \
              # Record a Prometheus endpoint to parquet, tagging the source in the metadata\n    \
              rezolus record --url http://host:9090/metrics -o out.parquet --metadata source=llm-perf\n\n    \
-             # Record two agents into ONE .rez holding a recording each (multi-host / A/B)\n    \
-             rezolus record --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.rez\n\n    \
+             # Record two agents into ONE archive holding a recording each (multi-host / A/B)\n    \
+             rezolus record --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.dendro\n\n    \
              # Same host, two agents: give each a source= so the recordings are tellable apart\n    \
-             rezolus record --endpoint http://localhost:4241,source=redis --endpoint http://localhost:4242,source=valkey -o ab.rez\n\n    \
+             rezolus record --endpoint http://localhost:4241,source=redis --endpoint http://localhost:4242,source=valkey -o ab.dendro\n\n    \
              # Record several endpoints into ONE combined parquet file (uniform tabular export)\n    \
              rezolus record --endpoint http://localhost:4241 --endpoint http://svc:9090/metrics,source=svc -o run.parquet\n\n    \
              # ...or one file per endpoint: writes run_rezolus.parquet and run_svc.parquet\n    \
              rezolus record --separate --endpoint http://localhost:4241 --endpoint http://svc:9090/metrics,source=svc -o run.parquet\n\n    \
              # Capture raw msgpack now, convert later\n    \
              rezolus record -o run.raw --duration 1m && rezolus recording convert run.raw\n\n    \
-             # Explicitly select the .rez format\n    \
+             # Write the pre-6.0 .rez format\n    \
              rezolus record --url http://host:4241 --format rez --duration 5m\n\n    \
              # Take the endpoints and the output from a file\n    \
              rezolus record --config rec.toml\n    \
@@ -153,7 +151,7 @@ pub fn command() -> Command {
              TAGGING: -m/--metadata k=v writes file-level metadata and applies to EVERY\n\
              format. -l/--label k=v applies to .rez and .dendro (it is dropped for parquet and raw):\n\
              it tags the recordings inside the archive, source and host are auto-populated,\n\
-             and a two-recording .rez drives the viewer\'s A/B comparison, which aliases the\n\
+             and a two-recording archive drives the viewer\'s A/B comparison, which aliases the\n\
              arms off each recording\'s arm/host labels.\n\n\
              --label applies to EVERY recording the run produces, so it names the run, not\n\
              one endpoint in it: --label arm=redis is how you tag a whole single-endpoint\n\
@@ -167,17 +165,17 @@ pub fn command() -> Command {
              combine`, set the metadata keys it reads: --metadata node=web-01 and\n\
              --metadata instance=0. (`record --node` / `--instance` were removed: they were\n\
              never wired to anything, and these are what they were meant to set.)\n\n\
-             ABOUT .rez:\n\n\
-             .rez recordings are written to disk as they run, so stopping costs the same\n\
+             ABOUT .dendro AND .rez:\n\n\
+             Archive recordings are written to disk as they run, so stopping costs the same\n\
              whether the recording ran for a minute or a day. Ctrl-c and SIGTERM (e.g. a\n\
              docker stop) are clean stops: the signal interrupts the wait between samples\n\
              straight away, so finalizing costs only the write of the still-open segments —\n\
              at any --interval, comfortably inside a container\'s stop grace, and never\n\
              proportional to the recording\'s length.\n\n\
-             A .rez is a single SQLite file, valid at every instant. There is no .partial,\n\
+             An archive is a single SQLite file, valid at every instant. There is no .partial,\n\
              so the output path must not already exist, and every sample is committed as it\n\
              is taken: a SIGKILL or a power loss costs at most one sampling interval, for\n\
-             every sampler. `rezolus recording metadata -i out.rez` reports an interrupted\n\
+             every sampler. `rezolus recording metadata -i out.dendro` reports an interrupted\n\
              recording as \"not cleanly finalized\" and how many samples are still in its\n\
              write-ahead log.\n\n\
              STREAMING INSTEAD OF SCRAPING:\n\n\
@@ -255,7 +253,7 @@ pub fn command() -> Command {
             clap::Arg::new("FORMAT")
                 .long("format")
                 .short('f')
-                .help("Output format: rez (per-sampler archive, the default), parquet (one columnar table), or raw (concatenated msgpack snapshots). Usually unnecessary — the -o extension picks the format, and giving both a --format and a conflicting extension is an error. rez takes any number of endpoints, rezolus or Prometheus, each as its own recording")
+                .help("Output format: dendro (per-sampler archive, the default), rez (the archive format before 6.0), parquet (one columnar table), or raw (concatenated msgpack snapshots). Usually unnecessary — the -o extension picks the format, and giving both a --format and a conflicting extension is an error. An archive takes any number of endpoints, rezolus or Prometheus, each as its own recording")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(Format)),
         )
@@ -291,7 +289,7 @@ pub fn command() -> Command {
             clap::Arg::new("OUTPUT_FLAG")
                 .long("output")
                 .short('o')
-                .help("Path to the output file; its extension picks the format (.rez, .dendro, .parquet, .raw). Defaults to rezolus.<format>, i.e. rezolus.rez")
+                .help("Path to the output file; its extension picks the format (.rez, .dendro, .parquet, .raw). Defaults to rezolus.<format>, i.e. rezolus.dendro")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(PathBuf))
                 .conflicts_with("OUTPUT"),
@@ -1876,17 +1874,18 @@ fn tick_timeout(interval: Duration) -> Duration {
 /// on the socket rather than growing without limit.
 const STREAM_QUEUE_PER_ENDPOINT: usize = 16;
 
-/// Handle a run that asked for (or defaulted to) `.rez` output that this
+/// Handle a run that asked for (or defaulted to) archive output that this
 /// endpoint set cannot produce: either rewrite `config` to record parquet and
 /// carry on, or exit non-zero.
 ///
-/// The distinction is who chose `.rez`. `--format rez` or an `-o out.rez` is a
-/// request the recorder must not quietly substitute — a pipeline that goes on
-/// to read `out.rez` would find a parquet file, or nothing. But `.rez` is also
-/// what a bare `rezolus record` picks with nothing to go on, and demanding a
-/// flag before it will record a Prometheus endpoint (which worked before `.rez`
-/// became the default) is a regression for no gain: nothing downstream has been
-/// promised a filename yet, so the recorder picks the format that fits.
+/// The distinction is who chose the archive. `--format dendro` or an
+/// `-o out.dendro` is a request the recorder must not quietly substitute — a
+/// pipeline that goes on to read `out.dendro` would find a parquet file, or
+/// nothing. But an archive is also what a bare `rezolus record` picks with
+/// nothing to go on, and demanding a flag before it will record a run it
+/// recorded before archives became the default is a regression for no gain:
+/// nothing downstream has been promised a filename yet, so the recorder picks
+/// the format that fits.
 ///
 /// The refusal exits 1 rather than returning, because a `record && analyze`
 /// pipeline sees only the exit code: this used to print the error and exit 0,
@@ -1897,6 +1896,7 @@ fn demote_from_rez(config: &mut RecordingConfig, reason: &str) {
         eprintln!("error: {reason}");
         std::process::exit(1);
     }
+    let name = config::format_name(config.format);
     config.format = Format::Parquet;
     config.output = PathBuf::from("rezolus.parquet");
     // `--separate` finalizes through `separate_output_path`, so the run writes
@@ -1916,7 +1916,7 @@ fn demote_from_rez(config: &mut RecordingConfig, reason: &str) {
         config.output.display().to_string()
     };
     eprintln!(
-        "note: {reason}; recording parquet to {written} instead (pass --format rez to require a .rez archive)"
+        "note: {reason}; recording parquet to {written} instead (pass --format {name} to require a .{name} archive)"
     );
 }
 
@@ -1982,7 +1982,7 @@ pub fn run(mut config: RecordingConfig) {
         // acquisition, which is what the group models.
         //
         // `--separate` is what remains: it writes a file per endpoint, which
-        // one archive cannot do. An explicit `.rez` was already rejected at
+        // one archive cannot do. An explicit archive was already rejected at
         // parse time; reaching here means the format was merely defaulted, so
         // demote to the parquet-per-endpoint run the flag asked for rather
         // than erroring on a format nobody chose.
@@ -1991,9 +1991,11 @@ pub fn run(mut config: RecordingConfig) {
             // separate, and `main`'s multi-endpoint blocker never fired
             // on a single-endpoint run either.
             (config.separate && config.endpoints.len() > 1).then(|| {
-                "--separate writes one file per endpoint, which a .rez cannot do (every \
-                     endpoint is a recording inside the one archive)"
-                    .to_string()
+                format!(
+                    "--separate writes one file per endpoint, which a .{} cannot do (every \
+                     endpoint is a recording inside the one archive)",
+                    config::format_name(config.format)
+                )
             })
         });
 
@@ -2007,7 +2009,7 @@ pub fn run(mut config: RecordingConfig) {
 
     // `--stream` was refused at parse time for every format but `.rez`, and
     // the one demotion that can still flip the format (`--separate` with
-    // several endpoints on a defaulted `.rez`) was refused alongside it. So
+    // several endpoints on a defaulted archive) was refused alongside it. So
     // this cannot fire; it is the backstop that turns a future gap into an
     // error rather than a stream fed to a writer that is not there.
     if config.stream && !rez_mode {
@@ -3312,8 +3314,8 @@ mod tests {
             Some(vec!["echo".to_string(), "hello".to_string()])
         );
         // Defaults apply when no --url/-o are given.
-        assert_eq!(config.output, PathBuf::from("rezolus.rez"));
-        assert_eq!(config.format, Format::Rez);
+        assert_eq!(config.output, PathBuf::from("rezolus.dendro"));
+        assert_eq!(config.format, Format::Dendro);
         assert_eq!(config.endpoints.len(), 1);
         assert_eq!(config.endpoints[0].url.as_str(), "http://localhost:4241/");
     }

@@ -329,9 +329,13 @@ jobs:
           sleep 15
           ./target/release/rezolus record --duration 30s --url http://127.0.0.1:4241 -o rezolus.parquet
           test -s rezolus.parquet
-          # default output format: no -o means rezolus.rez, which exercises the
-          # v3 SQLite writer, finalization, and reading the archive back
+          # default output format: no -o means rezolus.dendro, which exercises
+          # the archive writer, finalization, and reading the archive back
           ./target/release/rezolus record --duration 10s --url http://127.0.0.1:4241
+          test -s rezolus.dendro
+          ./target/release/rezolus recording metadata -i rezolus.dendro
+          # the .rez v3 writer, still selected by its extension
+          ./target/release/rezolus record --duration 10s --url http://127.0.0.1:4241 -o rezolus.rez
           test -s rezolus.rez
           ./target/release/rezolus recording metadata -i rezolus.rez
           # wrap mode: record a command against the live agent for its lifetime
@@ -356,9 +360,13 @@ jobs:
           sleep 15
           ./target/debug/rezolus record --duration 30s --url http://127.0.0.1:4241 -o rezolus.parquet
           test -s rezolus.parquet
-          # default output format: no -o means rezolus.rez, which exercises the
-          # v3 SQLite writer, finalization, and reading the archive back
+          # default output format: no -o means rezolus.dendro, which exercises
+          # the archive writer, finalization, and reading the archive back
           ./target/debug/rezolus record --duration 10s --url http://127.0.0.1:4241
+          test -s rezolus.dendro
+          ./target/debug/rezolus recording metadata -i rezolus.dendro
+          # the .rez v3 writer, still selected by its extension
+          ./target/debug/rezolus record --duration 10s --url http://127.0.0.1:4241 -o rezolus.rez
           test -s rezolus.rez
           ./target/debug/rezolus recording metadata -i rezolus.rez
           # wrap mode: record a command against the live agent for its lifetime

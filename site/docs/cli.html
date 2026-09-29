@@ -143,14 +143,14 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record [OPTIONS] [-- &lt;COMMAND&gt;...]</code></div>
 </div>
 </div>
-<p class="text-sm text-slate-400 mt-2">With no arguments at all this records the local agent (<code>http://localhost:4241</code>) into <code>rezolus.rez</code> until ctrl-c. The output extension picks the format, so <code>--format</code> is rarely needed.</p>
+<p class="text-sm text-slate-400 mt-2">With no arguments at all this records the local agent (<code>http://localhost:4241</code>) into <code>rezolus.dendro</code> until ctrl-c. The output extension picks the format, so <code>--format</code> is rarely needed.</p>
 <div class="mt-3 space-y-1 text-sm text-slate-500 font-mono">
 <div><span class="text-slate-400">    --url</span> &lt;URL&gt;               <span class="text-slate-600">Endpoint to record [default: http://localhost:4241]</span></div>
-<div><span class="text-slate-400">-o, --output</span> &lt;PATH&gt;           <span class="text-slate-600">Output path; .rez | .parquet | .raw picks the format [default: rezolus.rez]</span></div>
+<div><span class="text-slate-400">-o, --output</span> &lt;PATH&gt;           <span class="text-slate-600">Output path; .dendro | .rez | .parquet | .raw picks the format [default: rezolus.dendro]</span></div>
 <div><span class="text-slate-400">-i, --interval</span> &lt;INTERVAL&gt;     <span class="text-slate-600">Collection interval [default: 1s]</span></div>
 <div><span class="text-slate-400">-d, --duration</span> &lt;DURATION&gt;     <span class="text-slate-600">Record for a fixed window, then stop</span></div>
-<div><span class="text-slate-400">-f, --format</span> &lt;FORMAT&gt;         <span class="text-slate-600">rez|parquet|raw &mdash; only needed when the path cannot say</span></div>
-<div><span class="text-slate-400">-l, --label</span> &lt;KEY=VALUE&gt;       <span class="text-slate-600">Tag a .rez recording (repeatable); source/host auto-filled</span></div>
+<div><span class="text-slate-400">-f, --format</span> &lt;FORMAT&gt;         <span class="text-slate-600">dendro|rez|parquet|raw &mdash; only needed when the path cannot say</span></div>
+<div><span class="text-slate-400">-l, --label</span> &lt;KEY=VALUE&gt;       <span class="text-slate-600">Tag an archive recording (repeatable); source/host auto-filled</span></div>
 <div><span class="text-slate-400">-m, --metadata</span> &lt;KEY=VALUE&gt;    <span class="text-slate-600">File-level metadata, any format (repeatable)</span></div>
 <div><span class="text-slate-400">    --config</span> &lt;FILE&gt;           <span class="text-slate-600">TOML config for multi-endpoint recording</span></div>
 <div><span class="text-slate-400">    --endpoint</span> &lt;URL&gt;          <span class="text-slate-600">Endpoint with options (repeatable), url[,source=][,role=][,protocol=]</span></div>
@@ -159,12 +159,12 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 </div>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
 <div class="p-5 font-mono text-base leading-8">
-<div class="text-slate-600 text-sm"># Record the local agent until ctrl-c &rarr; rezolus.rez</div>
+<div class="text-slate-600 text-sm"># Record the local agent until ctrl-c &rarr; rezolus.dendro</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record</code></div>
 <div class="text-slate-600 text-sm mt-3"># Record 30s at 100ms intervals</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record -o run.rez -i 100ms -d 30s</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record -o run.dendro -i 100ms -d 30s</code></div>
 <div class="text-slate-600 text-sm mt-3"># Record only while a benchmark runs (perf-record style)</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record -o bench.rez -- ./bench.sh --iters 100</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record -o bench.dendro -- ./bench.sh --iters 100</code></div>
 <div class="text-slate-600 text-sm mt-3"># A Prometheus source needs parquet</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record --url http://host:9090/metrics -o svc.parquet -d 5m</code></div>
 </div>
@@ -217,7 +217,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 </div>
 </div>
 <div class="mt-3 space-y-1 text-sm text-slate-500 font-mono">
-<div><span class="text-slate-400">INPUT</span>                          <span class="text-slate-600">First capture: parquet, .rez archive, agent URL, or alias=parquet</span></div>
+<div><span class="text-slate-400">INPUT</span>                          <span class="text-slate-600">First capture: parquet, .dendro or .rez archive, agent URL, or alias=parquet</span></div>
 <div><span class="text-slate-400">EXPERIMENT</span>                     <span class="text-slate-600">Optional second capture for A/B comparison</span></div>
 <div><span class="text-slate-400">-l, --listen</span> &lt;ADDR&gt;           <span class="text-slate-600">Viewer listen address (e.g. 127.0.0.1:8080)</span></div>
 <div><span class="text-slate-400">    --templates</span> &lt;DIR&gt;         <span class="text-slate-600">Directory of service-extension template JSON</span></div>
@@ -232,12 +232,12 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div class="p-5 font-mono text-base">
 <div class="text-slate-600 text-sm mb-2"># View a recording</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view output.parquet</code></div>
-<div class="text-slate-600 text-sm mt-3 mb-2"># View a .rez archive (a 2-recording .rez renders as A/B)</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view out.rez</code></div>
+<div class="text-slate-600 text-sm mt-3 mb-2"># View an archive (a 2-recording archive renders as A/B)</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view out.dendro</code></div>
 <div class="text-slate-600 text-sm mt-3 mb-2"># View live agent</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view http://localhost:4241</code></div>
 <div class="text-slate-600 text-sm mt-3 mb-2"># Explore in the terminal, no browser</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view --tui out.rez</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view --tui out.dendro</code></div>
 </div>
 </div>
 </div>
@@ -258,13 +258,13 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div><span class="text-slate-400">query</span> &lt;FILE&gt; &lt;QUERY&gt;</div>
 <div><span class="text-slate-400">extract-features</span> &lt;FILE&gt;</div>
 </div>
-<p class="text-sm text-slate-400 mt-3">Every &lt;FILE&gt; may be a <code>.parquet</code> or a <code>.rez</code>; the format is detected by content. With no subcommand, <code>rezolus mcp</code> runs as a stdio MCP server for an LLM client.</p>
+<p class="text-sm text-slate-400 mt-3">Every &lt;FILE&gt; may be a <code>.parquet</code>, a <code>.dendro</code> or a <code>.rez</code>; the format is detected by content. With no subcommand, <code>rezolus mcp</code> runs as a stdio MCP server for an LLM client.</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
 <div class="p-5 font-mono text-base leading-8">
 <div class="text-slate-500 text-sm"># One-shot PromQL against a recording</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp query out.rez 'sum(rate(cpu_cycles[1m]))'</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp query out.dendro 'sum(rate(cpu_cycles[1m]))'</code></div>
 <div class="text-slate-600 text-sm mt-3"># Sweep every metric for anomalies</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp detect-anomalies out.rez</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp detect-anomalies out.dendro</code></div>
 </div>
 </div>
 </div>

@@ -1,7 +1,7 @@
 # Recording to dendro archives: `record`, then hindsight, then the default
 
 - **Opened:** 2026-09-28
-- **Status:** OPEN — stages A (`record -o out.dendro`), B (hindsight), C (`record --stream`), D1 (`recording` metadata, annotate, check, snapshot), D2 (`filter`), D3 (`combine`) and D4 (Save-as-Report) built; E not.
+- **Status:** DONE — stages A (`record -o out.dendro`), B (hindsight), C (`record --stream`), D1 (`recording` metadata, annotate, check, snapshot), D2 (`filter`), D3 (`combine`), D4 (Save-as-Report) and E (the default) built.
 
 ## Goal
 
@@ -280,6 +280,29 @@ report opens from its bytes and the kept metric answers the same by
 `comm`), `a_dendro_report_drops_the_occupant_stream_of_a_dropped_table`
 (fails with the eviction removed), and
 `an_untrimmed_dendro_report_keeps_every_stream`.
+## E: built
+
+`record` and `hindsight` write dendro by default:
+
+- `record` with no `-o` and no `--format` writes `rezolus.dendro`
+  (`resolve_format_and_output`). The one demotion left, `--separate` with
+  several endpoints on a defaulted format, still records parquet; its note
+  now names the format the run defaulted to.
+- Hindsight's buffer is dendro for every `output` except one ending in
+  `.rez` (`hindsight::writes_dendro`); the default `output` and
+  `config/hindsight.toml` name `/var/lib/rezolus/rezolus.dendro`. An
+  existing config that names a `.rez` keeps writing one.
+- `.rez` stays selectable by extension or `--format rez`, and every tool
+  still reads it. CI's smoke test records the default (`.dendro`) and an
+  explicit `.rez`, and reads both back with `recording metadata`.
+- The README's A/B example ran `rezolus view baseline.rez experiment.rez`,
+  which ignores the second file for an archive; it now combines the two
+  into one archive and views that.
+
+Tests: `no_output_and_no_format_defaults_to_dendro`,
+`separate_with_a_defaulted_archive_is_not_an_error`,
+`from_args_populates_command_from_trailing_args`,
+`only_a_rez_output_keeps_a_rez_buffer`.
 
 ## Seal policy
 

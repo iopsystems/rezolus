@@ -87,9 +87,9 @@ pub struct OutputPlan {
     pub format: Format,
     pub output: PathBuf,
     /// True only when nothing pinned the format: no `--format`, and no output
-    /// path to read an extension off. Those runs default to `.rez`, and only
-    /// those may be demoted to parquet when the endpoint cannot be recorded
-    /// into a `.rez` (see `recorder::run`).
+    /// path to read an extension off. Those runs default to `.dendro`, and
+    /// only those may be demoted to parquet when the run cannot be recorded
+    /// into an archive (see `recorder::run`).
     pub defaulted: bool,
 }
 
@@ -105,7 +105,7 @@ fn resolve_format_and_output(
     output: Option<&Path>,
 ) -> Result<OutputPlan, String> {
     let Some(path) = output else {
-        let format = explicit_format.unwrap_or(Format::Rez);
+        let format = explicit_format.unwrap_or(Format::Dendro);
         return Ok(OutputPlan {
             format,
             output: default_output_for(format),
@@ -228,7 +228,7 @@ fn reject_separate_with_rez(
 /// choice, and the recorder's rule is that an explicit choice is never
 /// silently substituted (see `demote_from_rez`).
 ///
-/// `--separate` with several endpoints is the one way a defaulted `.rez` can
+/// `--separate` with several endpoints is the one way a defaulted archive can
 /// still turn into parquet at startup, so that combination is refused here
 /// too rather than letting the demotion discover the conflict a moment later.
 fn reject_stream_without_rez(
@@ -555,7 +555,7 @@ mod tests {
             assert!(err.contains(".rez"), "{args:?}: {err}");
         }
 
-        // --separate with several endpoints is the one way a defaulted .rez
+        // --separate with several endpoints is the one way a defaulted archive
         // can still become parquet at startup; refused up front instead.
         let err = parse(&[
             "--stream",
@@ -679,14 +679,14 @@ mod tests {
         assert!(!dep);
     }
 
-    /// A bare `rezolus record` writes a `.rez` archive, and marks the run as
-    /// defaulted so the recorder may fall back to parquet if the endpoint
-    /// turns out to be one `.rez` cannot record.
+    /// A bare `rezolus record` writes a dendro archive (since 6.0; `.rez`
+    /// before), and marks the run as defaulted so the recorder may fall back
+    /// to parquet when the run cannot be written into one archive.
     #[test]
-    fn no_output_and_no_format_defaults_to_rez() {
+    fn no_output_and_no_format_defaults_to_dendro() {
         let plan = resolve_format_and_output(None, None).unwrap();
-        assert_eq!(plan.format, Format::Rez);
-        assert_eq!(plan.output, PathBuf::from("rezolus.rez"));
+        assert_eq!(plan.format, Format::Dendro);
+        assert_eq!(plan.output, PathBuf::from("rezolus.dendro"));
         assert!(plan.defaulted);
     }
 
@@ -879,17 +879,17 @@ mod tests {
     }
 
     #[test]
-    fn separate_with_a_defaulted_rez_is_not_an_error() {
+    fn separate_with_a_defaulted_archive_is_not_an_error() {
         // `record --separate --endpoint a --endpoint b` picks no format at
-        // all. Before `.rez` could hold several recordings this demoted to
-        // parquet and wrote a file per endpoint; erroring on it here would
+        // all. Before an archive could hold several recordings this demoted
+        // to parquet and wrote a file per endpoint; erroring on it here would
         // regress that, so the run is left to demote at startup instead.
         let plan = resolve_format_and_output(None, None).unwrap();
-        assert_eq!(plan.format, Format::Rez);
+        assert_eq!(plan.format, Format::Dendro);
         assert!(plan.defaulted, "a bare run defaults the format");
         assert!(
             reject_separate_with_rez(true, plan.format, plan.defaulted, 2).is_ok(),
-            "a defaulted .rez must demote for --separate, not error"
+            "a defaulted archive must demote for --separate, not error"
         );
     }
 }

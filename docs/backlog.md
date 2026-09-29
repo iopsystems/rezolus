@@ -623,14 +623,11 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   slots set it through `SlotIdentity` (`src/agent/bpf/mod.rs:339`).
 - ~~**A rezolus reader for dendro archives, on dendro's API**~~ — Done
   (#1312, #1315; the reader moved to metriken-archive in #1320).
-- **Recording to dendro archives** — Open, in stages
-  ([entry](journal/2026-09-28-dendro-writer-adoption.md)). A, `record -o
-  out.dendro`, B, hindsight, C, `record --stream`, D1, `recording`
-  metadata/annotate/check/snapshot, D2, `recording filter`, D3,
-  `recording combine`, and D4, Save-as-Report (both viewers), are built.
-  Remaining:
-  - **E. 6.0 default**: `record` and `hindsight` write dendro by default,
-    after D.
+- ~~**Recording to dendro archives**~~ — Done
+  ([entry](journal/2026-09-28-dendro-writer-adoption.md)): `record` and
+  `hindsight` write dendro by default (stage E), and the `recording`
+  subcommands and Save-as-Report accept it (#1326, #1329, #1336, #1339,
+  #1340, #1342, #1345, and E).
 - ~~**dendro's `vacuum_into` fails on the read handle**~~ — Done (dendro
   #25, released in 0.3.2): `vacuum_into` lifts `query_only` for the one
   statement.
