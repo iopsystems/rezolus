@@ -24,6 +24,15 @@ pub struct Sampler {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     cgroup_attribution: Option<bool>,
+    /// Whether a sampler that keeps per-task accounting also exports it as
+    /// per-task series (`cpu_usage`'s `task_cpu_usage`). Off by default: the
+    /// accounting stays (host and cgroup totals are computed from it), and
+    /// what is dropped is the export — a task-metadata event per new task, a
+    /// read of the sparse per-pid map every refresh, and one series per
+    /// thread in every recording. `None` means the default.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[serde(default)]
+    task_attribution: Option<bool>,
 }
 
 impl Sampler {
@@ -44,6 +53,11 @@ impl Sampler {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn cgroup_attribution(&self) -> Option<bool> {
         self.cgroup_attribution
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn task_attribution(&self) -> Option<bool> {
+        self.task_attribution
     }
 
     pub fn check(&self, name: &str) {

@@ -767,6 +767,9 @@ separate mechanisms account for the rest:
   because analyses do not use it or cannot trust it, make it opt-in rather than
   removing it. Fix 1 comes first either way: until it lands, per-task
   telemetry can make host and cgroup CPU totals wrong on high-churn hosts.
+  **Done: export is opt-in** (`task_attribution`, off by default). The
+  accounting still runs, since the totals depend on it; the export (events,
+  refresh read, series) is what costs, and it is off unless asked for.
 
 Also found on these runs, separate from the sampler:
 

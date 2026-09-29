@@ -2,6 +2,14 @@
 
 ### Changed
 
+- `cpu_usage` no longer exports `task_cpu_usage` unless its section (or
+  `[defaults]`) sets `task_attribution = true`. The per-task accounting the
+  host and cgroup totals are computed from still runs; what is dropped by
+  default is the export: the task-metadata and task-exit events, the refresh
+  read of the sparse per-pid map, and one series per thread in recordings.
+
+### Changed
+
 - `ext4_ops` and `xfs_log` attribute to cgroups only when their section (or
   `[defaults]`) sets `cgroup_attribution = true`. The per-cgroup path was
   measured at half the end hook's cost (265 of 535 ns), so it is off by

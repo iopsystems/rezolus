@@ -216,8 +216,11 @@ enabled = true
 [samplers.cpu_tlb_flush]
 
 # Instruments CPU usage by state with BPF on linux. On macos
-# host_processor_info() is used
+# host_processor_info() is used. Per-thread series (task_cpu_usage) are off by
+# default; the per-task accounting behind the host and cgroup totals runs
+# either way. See docs/metrics.md#cpu_usage.
 [samplers.cpu_usage]
+# task_attribution = true   # export task_cpu_usage, one series per thread
 
 # Reports per-drive temperature for NVMe and SATA drives via read-only
 # pass-through ioctls (like smartctl) — no kernel module required. Drives are

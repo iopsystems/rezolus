@@ -141,6 +141,20 @@ impl Config {
             .unwrap_or(false)
     }
 
+    /// Whether `name` exports its per-task accounting as per-task series
+    /// (per-sampler override, falling back to the `defaults` section, then
+    /// off). Consumed by `cpu_usage`: with it off, `task_cpu_usage` is absent
+    /// and the task-metadata and task-exit events are not sent, while the
+    /// per-task accounting the host and cgroup totals rely on still runs.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn task_attribution(&self, name: &str) -> bool {
+        self.samplers
+            .get(name)
+            .and_then(|v| v.task_attribution())
+            .or_else(|| self.defaults.task_attribution())
+            .unwrap_or(false)
+    }
+
     pub fn enabled(&self, name: &str) -> bool {
         // Opt-in-only samplers are never turned on by the `[defaults]` fallback:
         // they require explicit `enabled = true` in their own section. These are
@@ -192,6 +206,18 @@ mod tests {
         );
         assert!(c.cgroup_attribution("ext4_ops"));
         assert!(!c.cgroup_attribution("xfs_log"));
+    }
+
+    #[test]
+    fn task_attribution_is_off_unless_asked_for() {
+        let c = config("[samplers.cpu_usage]\n");
+        assert!(!c.task_attribution("cpu_usage"), "off by default");
+        let c = config("[samplers.cpu_usage]\ntask_attribution = true\n");
+        assert!(c.task_attribution("cpu_usage"));
+        let c = config("[defaults]\ntask_attribution = true\n");
+        assert!(c.task_attribution("cpu_usage"), "defaults fallback");
+        // Independent of cgroup attribution.
+        assert!(!c.cgroup_attribution("cpu_usage"));
     }
 
     #[test]
