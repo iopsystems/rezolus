@@ -11,6 +11,15 @@
 //!
 //! These stats can be used to calculate the IPC and IPNS in post-processing or
 //! in an observability stack.
+//!
+//! The per-cgroup series need a program on `sched_switch` that reads both
+//! counters at every context switch and credits the difference to the
+//! outgoing task's cgroup. That program is the sampler's only per-event cost,
+//! and on a guest whose PMU is emulated by the hypervisor each counter read
+//! is a VM exit (1-11 us measured on KVM; 20 us per switch for the two). With
+//! `cgroup_attribution = false` the program is not loaded: `cpu_cycles` and
+//! `cpu_instructions` are read per CPU at scrape time as before, and the
+//! `cgroup_cpu_*` series are absent. On by default for this sampler.
 
 const NAME: &str = "cpu_perf";
 
@@ -50,7 +59,22 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    let bpf = BpfBuilder::new(
+    let cgroup_attribution = config.cgroup_attribution_or(NAME, true);
+    if !cgroup_attribution {
+        info!("{NAME}: cgroup_attribution is off; no sched_switch program, per-CPU counters only");
+    }
+
+    // The sched_switch twin that matches the kernel's BTF, or neither when
+    // cgroup attribution is off: then nothing runs per context switch.
+    let disabled: &[&str] = if !cgroup_attribution {
+        &["handle__sched_switch_raw", "handle__sched_switch_btf"]
+    } else if kernel_has_btf() {
+        &["handle__sched_switch_raw"]
+    } else {
+        &["handle__sched_switch_btf"]
+    };
+
+    let mut builder = BpfBuilder::new(
         &config,
         NAME,
         BpfProgStats {
@@ -71,19 +95,20 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &CPU_INSTRUCTIONS,
         &CPU_PERF_ACQ,
     )
-    .packed_counters("cgroup_cycles", &CGROUP_CPU_CYCLES, &CGROUP_CYCLES_ACQ)
-    .packed_counters(
-        "cgroup_instructions",
-        &CGROUP_CPU_INSTRUCTIONS,
-        &CGROUP_INSTRUCTIONS_ACQ,
-    )
-    .ringbuf_handler("cgroup_info", handle_event)
-    .disabled_programs(if kernel_has_btf() {
-        &["handle__sched_switch_raw"]
-    } else {
-        &["handle__sched_switch_btf"]
-    })
-    .build()?;
+    .disabled_programs(disabled);
+
+    if cgroup_attribution {
+        builder = builder
+            .packed_counters("cgroup_cycles", &CGROUP_CPU_CYCLES, &CGROUP_CYCLES_ACQ)
+            .packed_counters(
+                "cgroup_instructions",
+                &CGROUP_CPU_INSTRUCTIONS,
+                &CGROUP_INSTRUCTIONS_ACQ,
+            )
+            .ringbuf_handler("cgroup_info", handle_event);
+    }
+
+    let bpf = builder.build()?;
 
     Ok(Some(Box::new(bpf)))
 }

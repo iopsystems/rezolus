@@ -140,11 +140,20 @@ impl Config {
     /// loaded program.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn cgroup_attribution(&self, name: &str) -> bool {
+        self.cgroup_attribution_or(name, false)
+    }
+
+    /// `cgroup_attribution` for a sampler whose own default is `default`
+    /// when neither its section nor `[defaults]` says: `cpu_perf` keeps its
+    /// per-cgroup series on unless asked, since the cgroups dashboard's IPC
+    /// comes from them.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn cgroup_attribution_or(&self, name: &str, default: bool) -> bool {
         self.samplers
             .get(name)
             .and_then(|v| v.cgroup_attribution())
             .or_else(|| self.defaults.cgroup_attribution())
-            .unwrap_or(false)
+            .unwrap_or(default)
     }
 
     /// Whether `name` exports its per-task accounting as per-task series
@@ -212,6 +221,19 @@ mod tests {
         );
         assert!(c.cgroup_attribution("ext4_ops"));
         assert!(!c.cgroup_attribution("xfs_log"));
+    }
+
+    #[test]
+    fn a_sampler_can_default_cgroup_attribution_on() {
+        let c = config("[samplers.cpu_perf]\n");
+        assert!(c.cgroup_attribution_or("cpu_perf", true), "its own default");
+        let c = config("[samplers.cpu_perf]\ncgroup_attribution = false\n");
+        assert!(!c.cgroup_attribution_or("cpu_perf", true), "section wins");
+        let c = config("[defaults]\ncgroup_attribution = false\n");
+        assert!(
+            !c.cgroup_attribution_or("cpu_perf", true),
+            "defaults win over the sampler's own"
+        );
     }
 
     #[test]

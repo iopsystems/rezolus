@@ -166,7 +166,16 @@ IPC = Instructions / Cycles
 | `cpu_cycles` | The number of elapsed CPU cycles | |
 | `cpu_instructions` | The number of instructions retired | |
 | `cgroup_cpu_cycles` | The number of elapsed CPU cycles on a per-cgroup basis | name: the name of the cgroup |
-| `cgroup_cpu_instructions` | The number of elapsed CPU cycles on a per-cgroup basis | name: the name of the cgroup |
+| `cgroup_cpu_instructions` | The number of instructions retired on a per-cgroup basis | name: the name of the cgroup |
+
+The per-cgroup series come from a program on `sched_switch` that reads both
+counters at every context switch. On bare metal a counter read costs tens of
+nanoseconds; in a virtual machine whose PMU the hypervisor emulates, each
+read is a VM exit, measured at 1-11 µs on KVM and 20 µs per context switch
+for the pair. Set `cgroup_attribution = false` in `[samplers.cpu_perf]` to
+leave the program unloaded: `cpu_cycles` and `cpu_instructions` are still
+read per CPU at scrape time, and the `cgroup_cpu_*` series are absent. On by
+default for this sampler.
 
 ### cpu_power
 
