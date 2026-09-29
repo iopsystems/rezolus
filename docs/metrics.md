@@ -23,6 +23,7 @@ This guide walks you through all the available metrics, organized by category.
 - [Drive](#drive)
   - [drivehealth](#drivehealth)
 - [ext4](#ext4)
+  - [ext4_alloc](#ext4_alloc)
   - [ext4_journal](#ext4_journal)
 - [Filesystem](#filesystem)
   - [filesystem](#filesystem-1)
@@ -351,6 +352,43 @@ degraded and the rest of the metrics are unaffected.
 
 Host-wide fsync *latency* is not here: it is the `sync` class of
 `syscall_latency`, which already holds the per-thread start timestamp.
+
+### ext4_alloc
+
+BPF sampler on ext4's block allocator and the metadata reads around it.
+Reports each extent allocation's requested versus returned length, the block
+groups scanned and the criterion the allocator finished at, blocks freed,
+inodes allocated and freed, writeback passes with their pages written and
+skipped, discards and preallocation releases, and the synchronous inode-table
+and bitmap reads that land on the calling thread. **Host-wide**, like
+`ext4_journal`, with the same kernel-support rule: the allocator hook reads
+`struct ext4_allocation_context` through CO-RE, which needs ext4's types in
+vmlinux or module BTF.
+
+The allocator signals are the always-on form of what `e2freefrag` reports
+offline: free space fragmenting shows as allocations returning fewer blocks
+than requested, more block groups scanned per allocation, and a rising share
+of allocations finishing at the slow criteria. `ext4_inode_loads` fires once
+per inode-table block read from the device, so it is the rate of synchronous
+metadata reads a cold inode cache imposes on `stat` and atime updates.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `ext4_allocation_size` | Distribution of the length of each extent the allocator returned, in filesystem blocks | |
+| `ext4_allocations` | Extent allocations (`ext4_mballoc_alloc`); more than one per file created is a file split across extents | |
+| `ext4_allocation_blocks` | Blocks requested of and returned by the allocator, summed; returned falling short of requested is fragmentation | `kind={requested,allocated}` |
+| `ext4_allocation_groups_scanned` | Block groups scanned, summed over allocations; per allocation it is the allocator's effort | |
+| `ext4_allocations_by_criterion` | Allocations by the criterion the allocator finished at. 0 and 1 are the fast paths on every kernel. From 6.5: 2 trims to the best available length, 3 scans every group, 4 takes any free block; before 6.5: 2 scans every group, 3 takes any free block, and 4 never occurs. A rising share at 2 or above is fragmentation | `criterion={0,1,2,3,4}` |
+| `ext4_freed_blocks` | Blocks returned to the free pool (`ext4_free_blocks`) | |
+| `ext4_inodes` | Inodes allocated and freed | `op={allocated,freed}` |
+| `ext4_writepages` | Writeback passes over an inode's dirty pages (`ext4_writepages_result`) | |
+| `ext4_writepages_pages` | Pages those passes wrote, or skipped and left for later | `outcome={written,skipped}` |
+| `ext4_writepages_errors` | Passes that ended in an error | |
+| `ext4_trimmed_blocks` | Blocks discarded to the device by fstrim or online discard | |
+| `ext4_preallocation_discards` | Times an inode's preallocated blocks were released (close, truncate, unlink) | |
+| `ext4_preallocation_discarded_blocks` | Preallocated blocks released, summed | |
+| `ext4_inode_loads` | Inode-table reads from the device because an inode was not cached (`ext4_load_inode`), each a synchronous read of up to `inode_readahead_blks` blocks (32 by default), so 20,000 cold `stat`s cost about 40 reads on a fresh filesystem | |
+| `ext4_bitmap_loads` | Block-allocation bitmaps (including the allocator's prefetches) and inode-allocation bitmaps read from the device | `kind={block,inode}` |
 
 ## Filesystem
 

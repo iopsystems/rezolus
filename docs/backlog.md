@@ -907,9 +907,10 @@ The entry specifies `ext4_journal` (phase 1, implemented and measured),
 - **Counter sweep at `MAX_CPUS`** — Idea. `Counters::refresh` walks 1,024
   banks whatever the CPU count; bounding it to possible CPUs is a
   `bpf/counters.rs` change shared by every `Counters` sampler.
-- **`ext4_alloc` (phase 2)** — Roadmap. `ext4_mballoc_alloc`,
-  `ext4_writepages_result`, inode and free-block counters, trim; its own
-  bench on a write-heavy fio run since allocations track write throughput.
+- **`ext4_alloc` (phase 2)** — DONE. Ten hooks including the gaps entry's
+  metadata reads; every counter exact against tracefs on the Debian 13
+  module-ext4 guest; refresh 151–301 µs. Not probe-cost benched: allocations
+  run at write-batch rate, far below the fsync rate phase 1 benched.
 - **`sync` class in `syscall_latency`** — Open. `fsync`, `fdatasync`, `sync`,
   `syncfs`, `msync` leave class 9 (`src/agent/samplers/syscall/linux/mod.rs`)
   for their own histogram. Independent of the ext4 samplers and delivers
@@ -962,8 +963,8 @@ bare-metal probe-cost bench for anything at request rate).
 - **`balance_dirty_pages` arity** — By design. 12 arguments on every kernel
   seen; the 8-argument form is written but untested until a kernel with it
   is on the rack. `kernel_btf_tracepoint_arg_count` picks; unknown disables.
-- **`ext4_alloc` with metadata reads** — Roadmap (was phase 2 of the ext4
-  entry). Adds an allocated-extent-length histogram, preallocation discard
+- **`ext4_alloc` with metadata reads** — DONE (see the ext4 entry's phase 2
+  results). Was: adds an allocated-extent-length histogram, preallocation discard
   counts, and `ext4_load_inode` / bitmap-load counters for synchronous
   metadata reads on the request path.
 - **Slab gauges** — Open. `ext4_inode_cache`, `dentry`, `buffer_head` from

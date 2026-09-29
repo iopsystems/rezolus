@@ -1,1 +1,2 @@
+mod alloc;
 mod journal;

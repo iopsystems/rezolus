@@ -123,6 +123,7 @@ mod bpf {
         ("cpu", "perf"),
         ("cpu", "tlb_flush"),
         ("cpu", "usage"),
+        ("ext4", "alloc"),
         ("ext4", "journal"),
         ("memory", "writeback"),
         ("network", "interfaces"),
