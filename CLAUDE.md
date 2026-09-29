@@ -154,10 +154,20 @@ target/release/rezolus mcp analyze-correlation file.parquet "metric1" "metric2"
 target/release/rezolus mcp extract-features file.parquet             # structured feature record (JSON)
 target/release/rezolus mcp describe-recording multi.rez              # lists the recordings + their selectors, not an error
 target/release/rezolus mcp query multi.rez "sum(rate(cpu_cycles[1m]))" --recording source=redis  # pick one recording
-# --recording key=value (repeatable, ANDed) is on all six subcommands, and the stdio server's six
+# --recording key=value (repeatable, ANDed) is on all six subcommands, and the stdio server's
 #   tools take an optional recording object, e.g. {"source": "redis"}, same semantics;
 # it must name exactly one recording: none or several is an error listing the candidates, never a
 #   first match.
+# The stdio server also has write tools with no CLI form, in tiers by what they can destroy:
+#   add_event (an instant or range event, source=mcp by default, id returned) and run_checks
+#   (KPI checks -> verdicts JSON; annotate=true writes them as kind=check events) are always on;
+#   remove_events (by ids/kind/source, empty filter refused) needs `rezolus mcp --allow-mutating`
+#   and is otherwise neither listed nor callable. add_event/remove_events refuse a multi-recording
+#   .rez without a selector (never stamp every arm); run_checks without one evaluates every
+#   recording, as the CLI does. timestamp/duration: RFC 3339 or humantime strings, or numbers in
+#   seconds; digit-only strings are refused as ambiguous. Handlers: src/mcp/server.rs; the write
+#   path is parquet_tools::events::{add_events_selected, remove_events_selected} over the annotate
+#   writer, whose report line the reply carries (a v2 tar is upgraded to v3 on the way and says so).
 ```
 
 ## Architecture

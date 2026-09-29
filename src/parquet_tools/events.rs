@@ -67,8 +67,8 @@ pub(super) fn apply_event_ops(
 }
 
 /// What [`append_events`] did with a batch, for the report line.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(super) struct AppendCounts {
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct AppendCounts {
     /// Events whose id was not present (or that carry no id).
     pub new: usize,
     /// `kind=check` events whose id was present with different content;
@@ -112,7 +112,7 @@ impl AppendCounts {
     }
 }
 
-pub(super) struct Appended {
+pub(crate) struct Appended {
     pub events: Events,
     pub counts: AppendCounts,
 }
@@ -126,7 +126,7 @@ pub(super) struct Appended {
 /// that a `kind=check` event replaces a stored one with the same id, so a
 /// violation window that grew since the last run is rewritten rather than
 /// left at its old `duration_ns`. An id-less event is always added.
-pub(super) fn append_events(existing: Option<Events>, new: Vec<Event>) -> Appended {
+pub(crate) fn append_events(existing: Option<Events>, new: Vec<Event>) -> Appended {
     let mut events = existing.unwrap_or_default();
     let mut counts = AppendCounts::default();
     let mut seen_in_batch = std::collections::HashSet::new();
@@ -168,13 +168,209 @@ pub(super) fn append_events(existing: Option<Events>, new: Vec<Event>) -> Append
 }
 
 /// Append `new` to a parquet file's `events` payload.
-pub(super) fn append_to_parquet(
+pub(crate) fn append_to_parquet(
     path: &Path,
     new: Vec<Event>,
 ) -> Result<Appended, Box<dyn std::error::Error>> {
     let appended = append_events(read_events(path)?, new);
     write_events(path, &appended.events)?;
     Ok(appended)
+}
+
+/// What a selector-scoped write did, for the caller's own report.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct WriteReport {
+    /// The recording written, as its label set; `None` for a parquet file.
+    pub recording: Option<BTreeMap<String, String>>,
+    pub counts: AppendCounts,
+    /// Events the recording holds after the write.
+    pub total: usize,
+    /// The annotation writer's own report, when there was one: it says,
+    /// among other things, when a v1/v2 tar archive was upgraded to v3 on
+    /// the way, which a caller must not hide.
+    pub report: Option<String>,
+}
+
+/// Append `new` to the recording `selector` names in `path`: a parquet
+/// file (the selector must then be empty), or one recording of a `.rez` or
+/// dendro archive. A multi-recording archive with no selector is refused
+/// with the listing the read tools give, never written to every recording:
+/// that is `recording annotate`'s behavior, and an agent adding a mark
+/// it saw in one arm must not stamp the other arms with it.
+pub(crate) fn add_events_selected(
+    path: &Path,
+    selector: &crate::mcp::RecordingSelector,
+    new: Vec<Event>,
+) -> Result<WriteReport, Box<dyn std::error::Error>> {
+    let (format, target, total) = one_target(path, selector)?;
+    if format == crate::recorder::rez::RezFormat::NotRez {
+        let appended = append_to_parquet(path, new)?;
+        return Ok(WriteReport {
+            recording: None,
+            counts: appended.counts,
+            total: appended.events.events.len(),
+            report: None,
+        });
+    }
+    // The same append the writer applies, run here first so the counts
+    // and the resulting total can be reported; the writer repeats it
+    // against what is stored, which is what was just read.
+    let preview = append_events(stored_events(target.reader.as_ref())?, new.clone());
+    let mut per: Vec<Vec<Event>> = vec![Vec::new(); total];
+    per[target.index] = new;
+    let annotation = super::annotate::RezAnnotation {
+        ext_json: None,
+        events: None,
+        per_recording_events: Some(per),
+        per_recording_replace: None,
+        report: super::annotate::ReportSink::capture(),
+    };
+    super::annotate::annotate_rez_any(path, format, &annotation)?;
+    Ok(WriteReport {
+        recording: target.labels,
+        counts: preview.counts,
+        total: preview.events.events.len(),
+        report: annotation.report.captured(),
+    })
+}
+
+/// Which events `remove_events_selected` drops. Every given field must
+/// match; an event matches `ids` when its id is one of them.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct RemoveFilter {
+    pub ids: Vec<String>,
+    pub kind: Option<String>,
+    pub source: Option<String>,
+}
+
+impl RemoveFilter {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.ids.is_empty() && self.kind.is_none() && self.source.is_none()
+    }
+
+    fn matches(&self, e: &Event) -> bool {
+        (self.ids.is_empty()
+            || e.id
+                .as_deref()
+                .is_some_and(|id| self.ids.iter().any(|w| w == id)))
+            && self
+                .kind
+                .as_deref()
+                .is_none_or(|k| e.kind.as_deref() == Some(k))
+            && self
+                .source
+                .as_deref()
+                .is_none_or(|s| e.source.as_deref() == Some(s))
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct RemoveReport {
+    pub recording: Option<BTreeMap<String, String>>,
+    pub removed: usize,
+    /// Events the recording holds after the write.
+    pub total: usize,
+    /// The annotation writer's own report, when there was one.
+    pub report: Option<String>,
+}
+
+/// Drop every event matching `filter` from the recording `selector` names.
+/// An empty filter is refused: "remove everything" is `annotate
+/// --clear-events`, typed by a person.
+pub(crate) fn remove_events_selected(
+    path: &Path,
+    selector: &crate::mcp::RecordingSelector,
+    filter: &RemoveFilter,
+) -> Result<RemoveReport, Box<dyn std::error::Error>> {
+    if filter.is_empty() {
+        return Err("remove_events needs at least one of ids, kind or source; \
+                    clearing every event is `recording annotate --clear-events`"
+            .into());
+    }
+    let (format, target, total) = one_target(path, selector)?;
+    let existing = if format == crate::recorder::rez::RezFormat::NotRez {
+        read_events(path)?
+    } else {
+        stored_events(target.reader.as_ref())?
+    }
+    .unwrap_or_default();
+    let before = existing.events.len();
+    let kept: Vec<Event> = existing
+        .events
+        .into_iter()
+        .filter(|e| !filter.matches(e))
+        .collect();
+    // Every writer stores a normalized payload, so the kept subset already
+    // is one; normalizing again costs nothing and holds for a payload some
+    // other tool wrote unsorted. `removed` is counted after it so that
+    // `removed + total` is what was there before.
+    let mut payload = Events::new(kept);
+    payload.normalize();
+    let removed = before - payload.events.len();
+    if format == crate::recorder::rez::RezFormat::NotRez {
+        write_events(path, &payload)?;
+        return Ok(RemoveReport {
+            recording: None,
+            removed,
+            total: payload.events.len(),
+            report: None,
+        });
+    }
+    let remaining = payload.events.len();
+    let mut per: Vec<Option<Events>> = vec![None; total];
+    per[target.index] = Some(payload);
+    let annotation = super::annotate::RezAnnotation {
+        ext_json: None,
+        events: None,
+        per_recording_events: None,
+        per_recording_replace: Some(per),
+        report: super::annotate::ReportSink::capture(),
+    };
+    super::annotate::annotate_rez_any(path, format, &annotation)?;
+    Ok(RemoveReport {
+        recording: target.labels,
+        removed,
+        total: remaining,
+        report: annotation.report.captured(),
+    })
+}
+
+/// The one recording a selector names, through the check runner's open
+/// (`ParquetReader` or `RezReader::open_recordings`, refusing a selector on
+/// a parquet file). Unlike `check`, an empty selector over a multi-recording
+/// archive is an error here, with the same listing the read tools give.
+fn one_target(
+    path: &Path,
+    selector: &crate::mcp::RecordingSelector,
+) -> Result<
+    (crate::recorder::rez::RezFormat, super::check::Target, usize),
+    Box<dyn std::error::Error>,
+> {
+    let (format, mut targets, total) = super::check::open_targets(path, selector)?;
+    if targets.len() != 1 {
+        let all: Vec<BTreeMap<String, String>> =
+            targets.iter().filter_map(|t| t.labels.clone()).collect();
+        return Err(format!(
+            "{} holds {} recordings; name one with a recording selector:\n{}",
+            path.display(),
+            targets.len(),
+            crate::mcp::describe_candidates(&all, &[], crate::mcp::SelectorSyntax::Json)
+        )
+        .into());
+    }
+    Ok((format, targets.remove(0), total))
+}
+
+/// A recording's stored events, as its reader reports them.
+fn stored_events(
+    reader: &dyn metriken_query::MetricsSource,
+) -> Result<Option<Events>, Box<dyn std::error::Error>> {
+    reader
+        .file_metadata()
+        .get(KEY_EVENTS)
+        .map(|s| serde_json::from_str::<Events>(s))
+        .transpose()
+        .map_err(|e| format!("recording has an invalid events payload: {e}").into())
 }
 
 /// Apply event-related operations to a parquet file in the order
@@ -245,7 +441,7 @@ pub(super) fn run(
 }
 
 /// Read the existing `events` payload from a parquet file's footer.
-pub(super) fn read_events(path: &Path) -> Result<Option<Events>, Box<dyn std::error::Error>> {
+pub(crate) fn read_events(path: &Path) -> Result<Option<Events>, Box<dyn std::error::Error>> {
     let kv_meta = super::read_file_metadata(path)?;
     let Some(raw) = kv_meta
         .iter()
@@ -419,7 +615,7 @@ fn normalize_duration(v: &mut serde_json::Value) -> Result<(), String> {
 /// naive strings are treated as UTC), the short `YYYY-MM-DDTHH:MMZ`
 /// "seconds-omitted" form, and bare integer strings (interpreted as
 /// nanoseconds).
-pub(super) fn parse_timestamp_str(s: &str) -> Result<u64, String> {
+pub(crate) fn parse_timestamp_str(s: &str) -> Result<u64, String> {
     if let Ok(n) = s.parse::<u64>() {
         return Ok(n);
     }
@@ -473,7 +669,7 @@ fn try_patch_seconds(s: &str) -> Option<String> {
 
 /// Parse a duration string. Accepts bare integer strings (ns) and
 /// humantime strings like `30s`, `1m30s`, `2h`.
-fn parse_duration_str(s: &str) -> Result<u64, String> {
+pub(crate) fn parse_duration_str(s: &str) -> Result<u64, String> {
     if let Ok(n) = s.parse::<u64>() {
         return Ok(n);
     }

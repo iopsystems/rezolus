@@ -586,12 +586,56 @@ rankings, and subsystem coverage. Requires a recording of at least 10 seconds:
 rezolus mcp extract-features run.rez   # parquet or .rez recordings
 ```
 
-The six stdio tools are `describe_recording`, `describe_metrics`,
+The six read tools are `describe_recording`, `describe_metrics`,
 `extract_features`, `detect_anomalies`, `analyze_correlation`, and `query`.
 CLI names use hyphens. For an investigation, describe the recording and metrics
 first, confirm the source and time range, extract features, then query specific
 hypotheses. Missing metrics are not zero, and correlations do not establish
 causation.
+
+### Write tools
+
+The stdio server also writes, in two tiers decided by what a tool can
+destroy. The additive tools are always on: the worst a wrong call does is add
+an event.
+
+- `add_event` marks an instant or a range in the recording. It takes
+  `timestamp` (RFC 3339, or Unix seconds as a JSON number; a digit-only
+  string is refused as ambiguous), `description`, and optionally `kind`,
+  `duration` (`30s`, or seconds as a number), `details`,
+  `node`, `instance` and `id`. `source` defaults to `mcp`, so agent-written
+  events can be filtered or removed as a group later. The event lands through
+  the same manifest update `recording annotate --event` uses and the viewer
+  draws it on the next open. Adding an event whose `id` is already present is
+  a no-op (a `kind=check` event replaces a stored check event with the same
+  id, so a verdict that grew is rewritten); the reply carries the id (minted
+  as `mcp:<uuid>` when not given).
+- `run_checks` evaluates the recording's KPI checks, the `check` blocks that
+  `recording annotate --queries` embeds, or a ServiceExtension object passed
+  as `queries`, and returns every verdict with its violation windows and a
+  summary. With `annotate: true` the windows are written into the recording
+  as `kind=check` events, exactly as `rezolus recording check --annotate`.
+
+The mutating tools can take another person's events out of a shared
+recording, so they are off unless the operator starting the server says
+otherwise:
+
+```bash
+rezolus mcp --allow-mutating
+```
+
+- `remove_events` drops events by `ids`, `kind` and/or `source` (every given
+  field must match; `source: "mcp"` removes everything an agent wrote). An
+  empty filter is refused, since clearing every event is `recording annotate
+  --clear-events`, typed by a person.
+
+Without the flag `remove_events` is neither listed nor callable; a call
+answers with the flag's name. On a multi-recording `.rez`, `add_event` and
+`remove_events` need the `recording` selector below and refuse to write to
+every arm; `run_checks` without a selector evaluates every recording and
+gives each its own verdicts, as `recording check` does. The reply of a
+write carries the writer's report line, which is where a v1/v2 tar archive
+says it was upgraded to v3 on the way.
 
 ### Multi-recording archives
 
@@ -620,8 +664,9 @@ rezolus mcp query ab.rez "sum(rate(cpu_cycles[1m]))" --recording source=valkey
 
 A selector must name exactly one recording: matching none or several is an
 error that lists the candidates, never a guess at which one you meant. The
-stdio server's six tools take the same selector as an optional `recording`
-object instead of repeated flags, e.g. `{"source": "valkey"}`.
+stdio server's tools, read and write alike, take the same selector as an
+optional `recording` object instead of repeated flags, e.g.
+`{"source": "valkey"}`.
 
 
 ## HTTP endpoint (optional)
