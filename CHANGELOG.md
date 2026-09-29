@@ -2,6 +2,13 @@
 
 ### Changed
 
+- `cpu_usage` no longer exports `task_cpu_usage` unless its section (or
+  `[defaults]`) sets `task_attribution = true`. The per-task accounting the
+  host and cgroup totals are computed from still runs; what is dropped by
+  default is the export: the task-metadata and task-exit events, the walk of
+  the per-pid map's populated slots each time a snapshot is served, and one
+  series per thread in recordings. Measured under 27 K short threads/s:
+  refresh p50 78 µs off against 3,690 µs on, host totals unchanged.
 - `ext4_journal` and `ext4_alloc` counters are per filesystem: every counter
   carries `mount`, `fstype`, `devnum` and `block_device`, the labels the
   `filesystem` sampler gives the same mount, with `mount="other"` for a
