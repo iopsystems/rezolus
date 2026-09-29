@@ -77,6 +77,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "gpu_nvidia",
     "hw_sensors",
     "memory_meminfo",
+    "memory_pagecache",
     "memory_slabinfo",
     "memory_vmstat",
     "memory_writeback",
@@ -155,6 +156,9 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("cgroup_cpu_usage_exited_tasks", "cpu_usage"),
     ("cgroup_ext4_op_time", "ext4_ops"),
     ("cgroup_ext4_ops", "ext4_ops"),
+    ("cgroup_pagecache_pages_added", "memory_pagecache"),
+    ("cgroup_pagecache_read_bytes", "memory_pagecache"),
+    ("cgroup_pagecache_reads", "memory_pagecache"),
     ("cgroup_scheduler_context_switch", "scheduler_runqueue"),
     ("cgroup_scheduler_offcpu", "scheduler_runqueue"),
     ("cgroup_scheduler_runqueue_wait", "scheduler_runqueue"),
@@ -355,6 +359,13 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("tcp_packets", "tcp_traffic"),
     ("tcp_size", "tcp_traffic"),
     ("tcp_srtt", "tcp_receive"),
+    // The `memory_pagecache` sampler's metrics carry the subsystem's own
+    // prefix, not the sampler's.
+    ("pagecache_faults", "memory_pagecache"),
+    ("pagecache_pages_added", "memory_pagecache"),
+    ("pagecache_pages_evicted", "memory_pagecache"),
+    ("pagecache_read_bytes", "memory_pagecache"),
+    ("pagecache_reads", "memory_pagecache"),
     // The `memory_writeback` sampler's metrics carry the subsystem's own
     // prefix, not the sampler's.
     ("writeback_pages_written", "memory_writeback"),
@@ -415,6 +426,7 @@ const BPF_SAMPLERS: &[&str] = &[
     "ext4_alloc",
     "ext4_journal",
     "ext4_ops",
+    "memory_pagecache",
     "memory_writeback",
     "network_interfaces",
     "network_traffic",

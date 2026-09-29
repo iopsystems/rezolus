@@ -27,7 +27,13 @@ fn enabled() -> bool {
 /// explicitly opted into with `enabled = true` in their own `[samplers.<name>]`
 /// section. Reserved for samplers whose cost makes accidental activation
 /// (e.g. via an absent/commented config) unacceptable.
-const OPT_IN_SAMPLERS: &[&str] = &["ext4_ops", "gpu_amd_pmu", "hw_sensors", "xfs_log"];
+const OPT_IN_SAMPLERS: &[&str] = &[
+    "ext4_ops",
+    "gpu_amd_pmu",
+    "hw_sensors",
+    "memory_pagecache",
+    "xfs_log",
+];
 
 fn listen() -> String {
     "0.0.0.0:4241".into()

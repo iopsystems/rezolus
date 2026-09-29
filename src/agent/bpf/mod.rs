@@ -397,6 +397,27 @@ mod btf_tests {
 /// without `bpf()` included: on such a host this returns `true` and the
 /// sampler goes on to fail at load with the real error, which is what it did
 /// before the probe existed.
+/// Whether tracing programs can call `bpf_task_pt_regs` (5.15+): the saved
+/// register set of a task, from which `memory_pagecache` reads the syscall
+/// number that classifies a page-cache fill. Probed as task storage is,
+/// through the `kprobe` program type (see `probe_task_storage_helper`).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn kernel_tracing_has_task_pt_regs() -> bool {
+    // SAFETY: FFI call with plain enum arguments and a null options pointer,
+    // which libbpf documents as "default options".
+    let ret = unsafe {
+        libbpf_sys::libbpf_probe_bpf_helper(
+            libbpf_sys::BPF_PROG_TYPE_KPROBE,
+            libbpf_sys::BPF_FUNC_task_pt_regs,
+            std::ptr::null(),
+        )
+    };
+    if ret != 1 {
+        debug!("kernel BPF helper probe for bpf_task_pt_regs from tracing programs returned {ret}");
+    }
+    ret == 1
+}
+
 pub fn kernel_tracing_has_task_storage() -> bool {
     let ret = probe_task_storage_helper();
     if ret != 1 {
