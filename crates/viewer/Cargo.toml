@@ -30,6 +30,8 @@ dashboard.workspace = true
 # `metriken`, whose registry declares a `linkme` distributed slice, and
 # `linkme` has no wasm32 implementation.
 rez = { path = "../rez", default-features = false }
+# Recognizing a dendro source by its bytes, to name a report `.dendro`.
+metriken-archive.workspace = true
 wasm-bindgen.workspace = true
 serde.workspace = true
 serde_json.workspace = true

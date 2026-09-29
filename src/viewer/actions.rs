@@ -855,7 +855,8 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                 }
             })
             .await;
-            return finalize_rez_report(result);
+            let dendro = metriken_archive::DendroCatalog::is_archive(&path).unwrap_or(false);
+            return finalize_rez_report(result, dendro);
         }
 
         // Compare mode (two parquet sources): assemble a 2-recording `.rez`
@@ -916,7 +917,7 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                 }
             })
             .await;
-            return finalize_rez_report(result);
+            return finalize_rez_report(result, false);
         }
 
         // Single-capture save.
@@ -971,11 +972,19 @@ fn finalize_report_attachment(
     finalize_attachment(result, "rezolus-report.parquet", parquet_attachment)
 }
 
+/// A report archive: `.dendro` when built from a dendro source, `.rez`
+/// otherwise.
 fn finalize_rez_report(
     result: Result<Result<Vec<u8>, String>, tokio::task::JoinError>,
+    dendro: bool,
 ) -> Response {
-    // A `.rez` is an opaque binary blob, same content-type as the parquet path.
-    finalize_attachment(result, "rezolus-report.rez", parquet_attachment)
+    // An archive is an opaque binary blob, same content-type as the parquet path.
+    let name = if dendro {
+        "rezolus-report.dendro"
+    } else {
+        "rezolus-report.rez"
+    };
+    finalize_attachment(result, name, parquet_attachment)
 }
 
 /// Convert a `spawn_blocking` outcome into a download Response, logging

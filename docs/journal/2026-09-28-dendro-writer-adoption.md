@@ -1,7 +1,7 @@
 # Recording to dendro archives: `record`, then hindsight, then the default
 
 - **Opened:** 2026-09-28
-- **Status:** OPEN — stages A (`record -o out.dendro`), B (hindsight), C (`record --stream`) D1 (`recording` metadata, annotate, check, snapshot), D2 (`filter`) and D3 (`combine`) built; D4 and E not.
+- **Status:** OPEN — stages A (`record -o out.dendro`), B (hindsight), C (`record --stream`), D1 (`recording` metadata, annotate, check, snapshot), D2 (`filter`), D3 (`combine`) and D4 (Save-as-Report) built; E not.
 
 ## Goal
 
@@ -197,8 +197,7 @@ Still to do in D:
 
 - **D2, `filter`:** built (below).
 - **D3, `combine`:** built (below).
-- **D4, Save-as-Report:** the same projection as D2, built for the browser
-  viewer too.
+- **D4, Save-as-Report:** built (below).
 
 ## D2: built
 
@@ -251,6 +250,36 @@ metriken, `keep_metrics_trims_a_long_table_and_keeps_it_long`.
 Tests: `combine_assembles_dendro_archives` (two sources, each still long,
 readable as two recordings), `combine_refuses_the_same_dendro_source_twice`,
 `combine_into_dendro_converts_a_rez_and_refuses_the_rest`.
+
+## D4: built
+
+Save-as-Report on a dendro source writes a dendro report
+(`report_save::build_dendro_report`), in the server viewer and the browser
+viewer alike, since both call `build_rez_report_from_rez`, which now
+recognizes a dendro source by its bytes:
+
+- The copy is D2's: `copy_sources_into` into an in-memory archive, with
+  `KeepMetrics` when the save is trimmed, segments re-encoded with
+  `segment_props` (zstd-3), and occupant streams whose table was dropped
+  evicted afterwards.
+- The source's live tail is sealed into the report, so a report of a
+  running recording carries its last rows as segments. The tail encoder
+  (`Encoder`) was behind metriken-archive's `write` feature, which the
+  browser build cannot enable; metriken-archive 0.2.7 moves it outside
+  (metriken #196), since it uses only metriken-segment.
+- The selection, report and events keys go on the report's first source,
+  where the `.rez` report puts them on its first recording.
+- The download is named `rezolus-report.dendro`: the server names it from
+  the source path, the browser from `report_extension()`. The server
+  frontend took any name other than `.rez` for `.parquet`, and now keeps
+  the name's extension; the upload picker accepts `.dendro`.
+
+Tests: `a_dendro_source_saves_a_trimmed_dendro_report` (an unfinalized
+source; the long table stays long, the markers are on the source, the
+report opens from its bytes and the kept metric answers the same by
+`comm`), `a_dendro_report_drops_the_occupant_stream_of_a_dropped_table`
+(fails with the eviction removed), and
+`an_untrimmed_dendro_report_keeps_every_stream`.
 
 ## Seal policy
 

@@ -1103,10 +1103,17 @@ impl WasmCaptureRegistry {
     }
 
     /// The download extension a Save-as-Report produces for the loaded dataset:
-    /// `.rez` for a `.rez` source or a parquet compare, `.parquet` for a single
-    /// parquet. The JS adapter uses it to name the download.
+    /// `.dendro` for a dendro source, `.rez` for a `.rez` source or a parquet
+    /// compare, `.parquet` for a single parquet. The JS adapter uses it to
+    /// name the download.
     pub fn report_extension(&self) -> String {
-        if self.rez_source.is_some() || !self.others.is_empty() {
+        if self
+            .rez_source
+            .as_ref()
+            .is_some_and(|b| metriken_archive::DendroCatalog::is_archive_bytes(b))
+        {
+            ".dendro".to_string()
+        } else if self.rez_source.is_some() || !self.others.is_empty() {
             ".rez".to_string()
         } else {
             ".parquet".to_string()

@@ -256,12 +256,13 @@ const ViewerApi = {
             throw new Error(`save failed (HTTP ${resp.status})${detail ? `: ${detail}` : ''}`);
         }
         const mime = resp.headers.get('content-type') || 'application/octet-stream';
-        // The server names the download (rezolus-report.rez for a .rez source
-        // or a compare, .parquet for a single parquet); trust its extension
-        // rather than guessing from the MIME, which is octet-stream for both.
+        // The server names the download (rezolus-report.dendro for a dendro
+        // source, .rez for a .rez source or a compare, .parquet for a single
+        // parquet); trust its extension rather than guessing from the MIME,
+        // which is octet-stream for all three.
         const disposition = resp.headers.get('content-disposition') || '';
         const named = /filename="?([^"]+)"?/.exec(disposition)?.[1] || '';
-        const extension = named.endsWith('.rez') ? '.rez' : '.parquet';
+        const extension = ['.dendro', '.rez'].find((e) => named.endsWith(e)) || '.parquet';
         const bytes = new Uint8Array(await resp.arrayBuffer());
         return { bytes, mime, extension };
     },
