@@ -989,13 +989,17 @@ bare-metal probe-cost bench for anything at request rate).
   completion, which the sampler does not hook, so `ext4_write_bytes` misses
   them and the write latency is submission time. Reopen with an
   `iomap_dio_complete`-side hook if a direct-IO workload needs the term.
-- **`ext4_ops` on by default** — Open, NO-GO as measured: +2.26 µs per
-  write+fsync pair (four probes) end to end on the phase 1 `null_blk` bench,
-  12% at 450 K ops/s. Profiled per program with `kernel.bpf_stats_enabled`:
-  begin hooks 269–339 ns, end hooks 538–651 ns per run, 1.67 µs of program
-  time per pair. The end hook's per-cgroup path is the first candidate to
-  cut; reopen if a variant without it halves the end hook. Gaps entry,
-  Deferred, "`ext4_ops` probe cost".
+- **`ext4_ops` on by default** — Reopened, decision pending. Measured end
+  to end at +2.26 µs per write+fsync pair (four probes), 12% at 450 K ops/s.
+  Per program with `kernel.bpf_stats_enabled`: begin hooks 270–325 ns, end
+  hooks 531–537 ns; a variant without the per-cgroup path has end hooks of
+  266–271 ns, so **the cgroup accounting is 265 ns, half the end hook**, and
+  the bench ran 15% more fsyncs per second without it (one slot per cgroup,
+  eight threads adding to the same cache lines). The per-filesystem counters
+  cost under 15 ns and the histogram about 30 ns. Options: drop per-cgroup
+  attribution from `ext4_ops` and `xfs_log`, make it cheaper (per-CPU cgroup
+  banks, or cache the cgroup id and serial in the task's start slot), or
+  keep it and stay opt-in. Gaps entry, Deferred, "`ext4_ops` probe cost".
 - **Write-amplification decomposition dashboard** — DONE as the ext4
   dashboard's Write Path group: application bytes (`ext4_write_bytes`),
   writeback bytes, journal bytes, device bytes on one axis, each term drawn
