@@ -989,11 +989,13 @@ bare-metal probe-cost bench for anything at request rate).
   completion, which the sampler does not hook, so `ext4_write_bytes` misses
   them and the write latency is submission time. Reopen with an
   `iomap_dio_complete`-side hook if a direct-IO workload needs the term.
-- **`ext4_ops` on by default** — Open, NO-GO as measured: +4,070 instructions
-  and +2.26 µs per write+fsync pair (four probes) on the phase 1 `null_blk`
-  bench, 12% at 450 K ops/s. Profile per program (`bpftool prog profile`), the
-  per-cgroup atomics and the two task-storage lookups first; reopen when a
-  probe is under ~300 instructions. Gaps entry, "Results — C5 and C6".
+- **`ext4_ops` on by default** — Open, NO-GO as measured: +2.26 µs per
+  write+fsync pair (four probes) end to end on the phase 1 `null_blk` bench,
+  12% at 450 K ops/s. Profiled per program with `kernel.bpf_stats_enabled`:
+  begin hooks 269–339 ns, end hooks 538–651 ns per run, 1.67 µs of program
+  time per pair. The end hook's per-cgroup path is the first candidate to
+  cut; reopen if a variant without it halves the end hook. Gaps entry,
+  Deferred, "`ext4_ops` probe cost".
 - **Write-amplification decomposition dashboard** — DONE as the ext4
   dashboard's Write Path group: application bytes (`ext4_write_bytes`),
   writeback bytes, journal bytes, device bytes on one axis, each term drawn
@@ -1108,6 +1110,32 @@ recording (single iGPU, 55 min at 1 s).
   "deliberately not read" from "the sampler broke". `SamplerState::Unsupported`
   (`src/agent/sampler_status.rs`) is whole-sampler only; there is no per-metric
   equivalent today. *Reopen:* if per-metric status machinery lands.
+
+## Agent — `cpu_perf` under virtualization
+
+Source: [XFS telemetry](journal/2026-09-29-xfs-samplers.md), Results — step
+2, "Also observed". Found by reading the kernel's per-program statistics on
+the CI guest while profiling `ext4_ops` and `xfs_log`.
+
+- **`cpu_perf`'s `sched_switch` program costs 20.5 µs per run on a KVM
+  guest** — Open. rezolus 5.20.0 (the image's agent; the program is
+  unchanged on `main`): 8,235,630 runs, 169 s of program time over a 247 s
+  `perf bench sched pipe`, 0.68 of a core at 33 K switches/s, against 114 ns
+  and 665 ns for the other two programs on the same tracepoint. The two
+  `bpf_perf_event_read` calls in `cpu/linux/perf/mod.bpf.c` read the
+  virtualized PMU through the hypervisor. To do: measure the same program
+  on bare metal (expected hundreds of ns) to confirm the mechanism; then
+  either detect a virtualized PMU at init (`/sys/devices/cpu/caps`, the
+  hypervisor CPUID bit, or a timed probe read) and refuse `cpu_perf` as
+  unsupported on guests, or read the counters at a bounded rate instead of
+  every switch. `rezolus status` says nothing today: the sampler is
+  "active healthy" while costing most of a core.
+- **A second agent's PMU reservations starve the first** — Observation.
+  With the image's `cpu_perf` holding the counters, every agent started
+  beside it reported `cpu_branch`, `cpu_dtlb` and `cpu_perf` pmu-starved
+  ("needs 2/cpu, 1 free"). Expected, but the status line does not say who
+  holds them; a hint ("another perf user holds N counters") would save the
+  diagnosis. Stop the image's service before a VM bench.
 
 ## Agent — per-cgroup I/O attribution
 
