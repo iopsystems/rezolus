@@ -137,6 +137,28 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             PlotOpts::gauge("Mapped", "mapped", Unit::Bytes),
             "memory_mapped".to_string(),
         );
+
+        let anon = usage.subgroup("Anonymous");
+        anon.describe(
+            "Process heaps, stacks and private data by LRU list, plus memory the kernel cannot \
+             reclaim at all.",
+        );
+        anon.plot_promql(
+            PlotOpts::gauge("Anonymous", "anon", Unit::Bytes),
+            "memory_anon".to_string(),
+        );
+        anon.plot_promql(
+            PlotOpts::gauge("Active (anon)", "active-anon", Unit::Bytes),
+            "memory_active{kind=\"anon\"}".to_string(),
+        );
+        anon.plot_promql(
+            PlotOpts::gauge("Inactive (anon)", "inactive-anon", Unit::Bytes),
+            "memory_inactive{kind=\"anon\"}".to_string(),
+        );
+        anon.plot_promql(
+            PlotOpts::gauge("Unevictable", "unevictable", Unit::Bytes),
+            "memory_unevictable".to_string(),
+        );
     }
 
     if has_metric(data, "pagecache_reads") {
@@ -173,28 +195,6 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         traffic.plot_promql(
             PlotOpts::counter("mmap Faults", "pagecache-faults", Unit::Rate),
             "sum by (mount) (irate(pagecache_faults[5m]))".to_string(),
-        );
-
-        let anon = usage.subgroup("Anonymous");
-        anon.describe(
-            "Process heaps, stacks and private data by LRU list, plus memory the kernel cannot \
-             reclaim at all.",
-        );
-        anon.plot_promql(
-            PlotOpts::gauge("Anonymous", "anon", Unit::Bytes),
-            "memory_anon".to_string(),
-        );
-        anon.plot_promql(
-            PlotOpts::gauge("Active (anon)", "active-anon", Unit::Bytes),
-            "memory_active{kind=\"anon\"}".to_string(),
-        );
-        anon.plot_promql(
-            PlotOpts::gauge("Inactive (anon)", "inactive-anon", Unit::Bytes),
-            "memory_inactive{kind=\"anon\"}".to_string(),
-        );
-        anon.plot_promql(
-            PlotOpts::gauge("Unevictable", "unevictable", Unit::Bytes),
-            "memory_unevictable".to_string(),
         );
     }
 

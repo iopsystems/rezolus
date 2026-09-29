@@ -52,10 +52,13 @@
 // read-only data before load, so with it off the verifier removes the path.
 const volatile __u8 cgroup_attribution = 0;
 
-// syscall number -> LUT_READ / LUT_WRITE / 0, written by userspace before
-// attach from the running architecture's syscall table.
+// syscall number -> LUT_READ / LUT_WRITE / 0, written by userspace from the
+// running architecture's syscall table. Mmapable because that is how
+// BpfBuilder::map writes it; the builder writes it after the programs attach,
+// so fills in the first instant classify as `other`.
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
     __uint(max_entries, MAX_SYSCALL_ID);
@@ -149,12 +152,25 @@ static __always_inline u32 folio_dev(struct folio* folio) {
     return BPF_CORE_READ(page, mapping, host, i_sb, s_dev);
 }
 
-// Pages in a folio: 1 << order for a large folio (PG_head set), read from the
-// order byte of `_flags_1` on kernels that keep it there (6.6+); on the
-// kernels between folios (5.16) and that, a large folio counts as one page,
-// and before folios every page-cache page is one page.
+// Where a large folio's order lives has moved three times; these flavors
+// name the older shapes (libbpf strips the ___suffix when relocating):
+// 6.1-6.5 keep it in `folio->_folio_order`, 5.16-6.0 in the second page's
+// `compound_order`. From 6.6 it is the low byte of `folio->_flags_1`, which
+// 6.1-6.5 also have (holding second-page flags), so `_folio_order` is tested
+// first.
+struct folio___order_field {
+    unsigned char _folio_order;
+} __attribute__((preserve_access_index));
+
+struct page___compound_order {
+    unsigned char compound_order;
+} __attribute__((preserve_access_index));
+
+// Pages in a folio: 1 << order for a large folio (PG_head set), 1 otherwise.
+// Before folios (5.16) every page-cache page is one page. An order past any
+// the page cache allocates is treated as a misread and counted as one.
 static __always_inline u64 folio_pages(struct folio* folio) {
-    if (!bpf_core_type_exists(struct folio) || !bpf_core_field_exists(folio->_flags_1)) {
+    if (!bpf_core_type_exists(struct folio)) {
         return 1;
     }
 
@@ -163,7 +179,24 @@ static __always_inline u64 folio_pages(struct folio* folio) {
         return 1;
     }
 
-    return 1ULL << (BPF_CORE_READ(folio, _flags_1) & 0xff);
+    struct folio___order_field* f61 = (void*)folio;
+    struct page___compound_order* tail =
+        (void*)((unsigned long)folio + bpf_core_type_size(struct page));
+    u32 order = 0;
+
+    if (bpf_core_field_exists(f61->_folio_order)) {
+        order = BPF_CORE_READ(f61, _folio_order);
+    } else if (bpf_core_field_exists(folio->_flags_1)) {
+        order = BPF_CORE_READ(folio, _flags_1) & 0xff;
+    } else if (bpf_core_field_exists(tail->compound_order)) {
+        order = BPF_CORE_READ(tail, compound_order);
+    }
+
+    if (order > 20) {
+        return 1;
+    }
+
+    return 1ULL << order;
 }
 
 // What the current task was doing when it added a page: the syscall it is
@@ -244,12 +277,25 @@ static __always_inline u32 cgroup_slot(void) {
     return cgroup_id;
 }
 
-// One buffered read call: the filesystem it is against and the bytes it asks
-// for. filemap_read(iocb, iter, already_read) is the entry on 5.12+;
-// generic_file_buffered_read had the same arguments before it.
+// One buffered read call: the filesystem it is against and the bytes it can
+// return, which is what it asks for clamped at end of file. Unclamped, a
+// `cat` of a cold 4 KiB file would count a 128 KiB request against one page
+// filled and understate the miss ratio 32-fold. filemap_read(iocb, iter,
+// already_read) is the entry on 5.12+; generic_file_buffered_read had the
+// same arguments before it.
 static __always_inline int read_call(struct kiocb* iocb, struct iov_iter* iter) {
     u32 slot = fs_slot(kiocb_dev(iocb));
     u64 bytes = BPF_CORE_READ(iter, count);
+
+    if (iocb) {
+        long long pos = BPF_CORE_READ(iocb, ki_pos);
+        long long size = BPF_CORE_READ(iocb, ki_filp, f_inode, i_size);
+        if (pos >= size) {
+            bytes = 0;
+        } else if (bytes > (u64)(size - pos)) {
+            bytes = size - pos;
+        }
+    }
 
     counter_add(slot, C_READS, 1);
     counter_add(slot, C_READ_BYTES, bytes);

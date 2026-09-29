@@ -65,7 +65,7 @@ pub static PAGECACHE_READS: CounterGroup = CounterGroup::new(MAX_FILESYSTEMS);
 
 #[metric(
     name = "pagecache_read_bytes",
-    description = "Bytes those read calls asked for; pages filled during reads times the page size over this is the page-level miss ratio, readahead included",
+    description = "Bytes those read calls could return: requested, clamped at end of file. Pages filled during reads times the page size over this is the page-level miss ratio, readahead included",
     metadata = { unit = "bytes", acq_group = "memory_pagecache_counters" }
 )]
 pub static PAGECACHE_READ_BYTES: CounterGroup = CounterGroup::new(MAX_FILESYSTEMS);

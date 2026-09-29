@@ -860,18 +860,22 @@ adds the per-cgroup series at the cost measured for `ext4_ops`.
 Per filesystem means the slot registry's mounts (ext4, ext3, ext2, ocfs2,
 xfs): every other filesystem, and the block devices' own page cache (inode
 tables and directory blocks read through the buffer cache), lands in
-`mount="other"`. A large folio counts as its pages on 6.6+ and as one page
-on 5.16–6.5.
+`mount="other"`. A large folio counts as its pages on every kernel with
+folios, wherever that kernel keeps the order. Read bytes are what each call
+could return, clamped at end of file, so a `cat` of a 4 KiB file counts 4
+KiB, not its 128 KiB buffer. The syscall table that classifies fills is
+written after the programs attach, so fills in the agent's first instant are
+`other`.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
 | `pagecache_reads` | Buffered read calls into the page cache, hits and misses alike | `mount`, `fstype`, `devnum`, `block_device` |
-| `pagecache_read_bytes` | Bytes those calls asked for | `mount`, ... |
+| `pagecache_read_bytes` | Bytes those calls could return: requested, clamped at end of file | `mount`, ... |
 | `pagecache_pages_added` | Pages added, by the adding task's context: `read` (misses and their readahead), `write` (buffered writes of uncached pages), `fault` (mmap), `other` | `reason={read,write,fault,other}`, `mount`, ... |
 | `pagecache_pages_evicted` | Pages removed: reclaim, truncation, invalidation | `mount`, ... |
 | `pagecache_faults` | mmap faults served by the page cache, resident or not | `mount`, ... |
 | `cgroup_pagecache_reads` | Read calls by the reading task's cgroup (`cgroup_attribution = true`) | `name` |
-| `cgroup_pagecache_read_bytes` | Bytes a cgroup's reads asked for | `name` |
+| `cgroup_pagecache_read_bytes` | Bytes a cgroup's reads could return | `name` |
 | `cgroup_pagecache_pages_added` | Pages a cgroup's tasks filled, every reason | `name` |
 
 ### memory_slabinfo

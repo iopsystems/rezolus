@@ -28,8 +28,12 @@
 //! is 5.12+ and `generic_file_buffered_read` serves before it, selected from
 //! BTF; a kernel with neither reports the sampler unsupported. Classifying a
 //! fill needs `bpf_task_pt_regs` (5.15+): before it the plain twin loads and
-//! every fill is `reason="other"`. Folio sizes come from the order byte in
-//! `_flags_1` (6.6+); on 5.16–6.5 a large folio counts as one page.
+//! every fill is `reason="other"`. Folio sizes come from the folio order,
+//! wherever the running kernel keeps it (`_flags_1` from 6.6,
+//! `_folio_order` on 6.1–6.5, the second page's `compound_order` on
+//! 5.16–6.0), so a large folio counts as its pages on every kernel with
+//! folios. Bytes read are clamped at end of file, so a short read of a small
+//! file counts the bytes it could return, not the buffer it passed.
 
 const NAME: &str = "memory_pagecache";
 

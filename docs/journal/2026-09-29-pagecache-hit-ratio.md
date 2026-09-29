@@ -175,7 +175,9 @@ question became whether it could be had for less than the bracket. It can,
 by giving up the per-call hit/miss and the latency by outcome:
 
 - **Reads**: one `fentry` on `filemap_read` (`generic_file_buffered_read`
-  on 5.9–5.11), calls and `iter->count` bytes per mount. No `fexit`, no task
+  before 5.12), calls and bytes per mount, the bytes being `iter->count`
+  clamped at end of file (`ki_pos` against `i_size`: unclamped, a `cat` of a
+  4 KiB file counts its 128 KiB buffer). No `fexit`, no task
   storage: one crossing per read instead of two plus a storage lookup each.
 - **Fills**: `tp_btf/mm_filemap_add_to_page_cache`, pages per folio, per
   mount, classified by what the filling task was doing from its saved
