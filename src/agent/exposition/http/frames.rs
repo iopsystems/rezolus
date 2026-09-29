@@ -2,14 +2,17 @@
 //!
 //! The agent is one dendro *source*: one clock domain, one identity, one
 //! sequence of observations. This turns a tick into the frames that say so —
-//! a [`Frame::Handshake`] once and one [`Frame::Rows`] per interval.
+//! a [`Frame::Handshake`](dendro::replicate::Frame::Handshake) once and one
+//! [`Frame::Rows`](dendro::replicate::Frame::Rows) per interval.
 //!
 //! # No identity index
 //!
-//! The agent sends no [`Frame::Index`]. What a slot means travels in the
+//! The agent sends no [`Frame::Index`](dendro::replicate::Frame::Index). What
+//! a slot means travels in the
 //! group's schema (each member's labels, including its `__uid__`), which the
 //! payload carries whenever it changes. Every rows frame therefore names
-//! dendro's [`NO_INDEX_STATE`], which a subscriber always treats as
+//! dendro's [`NO_INDEX_STATE`](dendro::replicate::NO_INDEX_STATE), which a
+//! subscriber always treats as
 //! resolvable. `.rez --stream`, the one consumer of an index, was removed in
 //! 6.0.
 //!
@@ -35,199 +38,61 @@
 //! the divergence is visible rather than absorbed.
 //!
 //! The anchor comes from [`crate::agent::epoch`], where it is minted with the
-//! `producer_epoch` and is therefore one per PROCESS. It used to be minted
-//! here, per connection, which made the handshake advertise a different
-//! `clock_anchor_wall_ns` for each subscriber while naming the same source
-//! uuid: two subscribers to one agent were told the same source had two
-//! timelines, differing by however far the wall clock moved between their
-//! connections.
+//! `producer_epoch` and is therefore one per PROCESS, so every subscription
+//! is told the same timeline.
 //!
 //! # The schema travels inside the payload
 //!
 //! `/metrics/rows` carries a group's schema in the row ENVELOPE
-//! ([`AgentRow::schema`]), which is what lets `build_rows` strip one the agent
-//! has already sent. A [`WalRow`] has no envelope — `stream`, `ts`,
-//! `wall_offset`, and an opaque payload. So the schema goes inside the payload,
-//! which [`WalGroupRow`](crate::recorder::wal::WalGroupRow) already has a field
-//! for and which the writer's schema ring already resolves. Same rule about
-//! when to send it, a different place to put it.
+//! ([`AgentRow::schema`](crate::recorder::wire::AgentRow::schema)). A
+//! [`WalRow`](dendro::archive::WalRow) has no envelope, so on a stream the
+//! schema goes inside the payload, on a group's first row and whenever its
+//! hash changes.
 //!
-//! `arity` and `approx_bytes` do not survive the move, and are not missed: both
-//! were envelope fields, and `approx_bytes` was the seal policy's size meter,
-//! which under replication is the subscriber's business.
+//! # What is metriken's and what is the agent's
+//!
+//! Building the frames is metriken-archive's
+//! [`FrameProducer`](metriken_archive::stream::FrameProducer), which reads
+//! the agent's [`AgentRow`](crate::recorder::wire::AgentRow)s directly (they
+//! implement its `StreamRow`). The agent keeps the transport: the HTTP route,
+//! the content type, each subscription's timer and interval index, and the
+//! rules for which rows a subscriber is sent.
 
 use std::collections::BTreeMap;
 
-use dendro::archive::WalRow;
-use dendro::replicate::{Frame, NO_INDEX_STATE};
+pub(crate) use metriken_archive::stream::FrameProducer;
 
-use crate::recorder::wire::AgentRows;
-
-/// The ordinal the agent's own source takes. One agent is one source, so it is
-/// always this; the field exists because a connection may carry several.
-const SOURCE: u32 = 0;
-
-/// Builds one subscription's frames.
+/// A producer for one subscription to this agent.
 ///
-/// One per subscription rather than one per agent, because the schema state it
-/// keeps is "what THIS subscriber has been sent". Two subscribers that
-/// connected at different times hold different schemas, and a producer shared
-/// between them would tell the newer one a schema it had never seen was
-/// already known.
-pub(crate) struct FrameProducer {
-    uuid: String,
-    labels: BTreeMap<String, String>,
-    metadata: BTreeMap<String, String>,
-    /// Schemas this subscriber has been sent, by stream. The same rule
-    /// `SnapshotBuilder::emitted_schemas` follows, kept per subscription
-    /// because a stream is only self-describing to someone who has the schema
-    /// its `schema_hash` names.
-    sent_schemas: BTreeMap<String, (u64, u64)>,
-    handshake_sent: bool,
-}
-
-impl FrameProducer {
-    /// `epoch` is the agent's `producer_epoch`. It is the source uuid because
-    /// the two mean the same thing — this producer until its counters restart
-    /// — and using one value for both means a subscriber cannot see them
-    /// disagree.
-    pub(crate) fn new(
-        epoch: String,
-        labels: BTreeMap<String, String>,
-        metadata: BTreeMap<String, String>,
-    ) -> Self {
-        Self {
-            uuid: epoch,
-            labels,
-            metadata,
-            sent_schemas: BTreeMap::new(),
-            handshake_sent: false,
-        }
-    }
-
-    /// The opening frame. Sent once per connection, before anything else.
-    pub(crate) fn handshake(&mut self) -> Frame {
-        self.handshake_sent = true;
-        Frame::Handshake {
-            source: SOURCE,
-            uuid: Some(self.uuid.clone()),
-            labels: self.labels.clone(),
-            metadata: self.metadata.clone(),
-            clock_anchor_wall_ns: crate::agent::epoch::clock_anchor_wall_ns(),
-            // A live agent's source is open for as long as it is running.
-            // `finish()` on the subscriber is what closes its copy, and it
-            // must not be told the source ended when it has not.
-            complete: false,
-        }
-    }
-
-    /// One interval's rows frame.
-    ///
-    /// `seq` is the subscription's interval index rather than a count of
-    /// frames. dendro documents `seq` as counting from zero per connection and
-    /// uses it only for `seq > last + 1`, which an interval index satisfies
-    /// identically — and it says the thing worth knowing when there is a gap:
-    /// an interval the subscriber asked for produced no reading.
-    pub(crate) fn interval(
-        &mut self,
-        rows: &AgentRows,
-        seq: u64,
-        mut keep: impl FnMut(&crate::recorder::wire::AgentRow) -> bool,
-    ) -> Frame {
-        // The pass's own stamp, carried through rather than re-read here. A
-        // frame emitted now can describe a pass that ran up to a TTL ago —
-        // the snapshot is cached and a subscriber's interval does not drive
-        // sampling — so stamping at emission would date every reading to the
-        // moment it was sent.
-        let ts = rows.ts;
-        let wall_offset = rows.wall_offset;
-
-        let wal_rows = rows
-            .rows
-            .iter()
-            // Filtered BEFORE the schema decision below, not after. The other
-            // way round would record a schema as taught on a row that was then
-            // dropped, and the group would go on referencing a generation this
-            // subscriber never received.
-            .filter(|row| keep(row))
-            .map(|row| {
-                // The schema rides in the payload, so the payload has to be
-                // rebuilt when it is included — the bytes `encode_group`
-                // produced always say `None`.
-                let payload = match self.sent_schemas.get(&row.stream) {
-                    Some(hash) if *hash == row.schema_hash => row.row.clone(),
-                    _ => {
-                        self.sent_schemas
-                            .insert(row.stream.clone(), row.schema_hash);
-                        match &row.schema {
-                            Some(schema) => with_schema(&row.row, schema.clone()),
-                            // A producer that missed its own schema cache and
-                            // still sent no schema has nothing to anchor with;
-                            // pass the payload through and let the subscriber
-                            // skip a row it cannot decode, which is what it
-                            // does with an unresolvable hash anyway.
-                            None => row.row.clone(),
-                        }
-                    }
-                };
-                WalRow {
-                    stream: row.stream.clone(),
-                    ts,
-                    wall_offset,
-                    row: payload,
-                }
-            })
-            .collect();
-
-        Frame::Rows {
-            source: SOURCE,
-            seq,
-            index_state: NO_INDEX_STATE,
-            rows: wal_rows,
-        }
-    }
-
-    /// An interval that produced no new reading: the empty frame, which is
-    /// both the "your interval elapsed, nothing is new" signal and the
-    /// keepalive.
-    pub(crate) fn empty_interval(&self, seq: u64) -> Frame {
-        Frame::Rows {
-            source: SOURCE,
-            seq,
-            index_state: NO_INDEX_STATE,
-            rows: Vec::new(),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn has_sent_handshake(&self) -> bool {
-        self.handshake_sent
-    }
+/// `FrameProducer::new` takes the source uuid and the anchor from
+/// `metriken::epoch`, which is what [`crate::agent::epoch`] re-exports: the
+/// uuid is the agent's `producer_epoch` (the two mean the same thing, this
+/// producer until its counters restart), and the handshake metadata carries
+/// it again under dendro's `PRODUCER_EPOCH` key. The anchor is the timeline
+/// every row's `ts` and every acquisition window is on.
+pub(crate) fn agent_producer() -> FrameProducer {
+    FrameProducer::new(
+        [("source".to_string(), env!("CARGO_BIN_NAME").to_string())]
+            .into_iter()
+            .collect(),
+        BTreeMap::new(),
+    )
 }
 
 /// The `Content-Type` of a replication stream: dendro's own framing, a
 /// preamble and then length-prefixed frames.
 pub(crate) const CONTENT_TYPE: &str = crate::agent::REPLICATION_CONTENT_TYPE;
 
-/// Put `schema` into an encoded `WalGroupRow`, leaving everything else alone.
-///
-/// Decode-and-re-encode rather than a second construction from the snapshot:
-/// the values are already encoded and re-deriving them would be a second
-/// chance to disagree with what the row endpoint produces. On a payload that
-/// will not decode, the original bytes are returned — the subscriber skips a
-/// row it cannot read, and losing one row beats aborting a subscription.
-fn with_schema(payload: &[u8], schema: crate::recorder::schema::GroupSchema) -> Vec<u8> {
-    let Ok(mut row) = crate::recorder::wal::decode_wal_group_row(payload) else {
-        return payload.to_vec();
-    };
-    row.schema = Some(schema);
-    crate::recorder::wal::encode_wal_group_row(&row).unwrap_or_else(|_| payload.to_vec())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::recorder::wire::{AgentRow, AgentRows};
+    use dendro::replicate::{Frame, NO_INDEX_STATE};
+
+    /// One interval of `rows`, every row kept, at the pass's own stamp.
+    pub(super) fn interval(p: &mut FrameProducer, rows: &AgentRows, seq: u64) -> Frame {
+        p.interval(&rows.rows, rows.ts, rows.wall_offset, seq)
+    }
 
     pub(super) const STREAM: &str = "cpu_usage/cpu_usage_task";
 
@@ -277,8 +142,9 @@ mod tests {
     }
 
     pub(super) fn producer() -> FrameProducer {
-        FrameProducer::new(
+        FrameProducer::for_source(
             "11111111-2222-4333-8444-555555555555".to_string(),
+            crate::agent::epoch::clock_anchor_wall_ns(),
             [("source".to_string(), "rezolus".to_string())]
                 .into_iter()
                 .collect(),
@@ -293,7 +159,7 @@ mod tests {
     #[test]
     fn the_first_row_of_a_stream_carries_its_schema_inside_the_payload() {
         let mut p = producer();
-        let frame = p.interval(&rows(3, 2_000), 7, |_| true);
+        let frame = interval(&mut p, &rows(3, 2_000), 7);
 
         let Frame::Rows { rows, .. } = &frame else {
             panic!("a rows frame closes the interval")
@@ -317,8 +183,8 @@ mod tests {
     #[test]
     fn a_schema_already_sent_is_not_sent_again() {
         let mut p = producer();
-        p.interval(&rows(3, 2_000), 7, |_| true);
-        let frame = p.interval(&rows(3, 3_000), 8, |_| true);
+        interval(&mut p, &rows(3, 2_000), 7);
+        let frame = interval(&mut p, &rows(3, 3_000), 8);
 
         let Frame::Rows { rows, .. } = &frame else {
             panic!("a rows frame")
@@ -337,8 +203,8 @@ mod tests {
     #[test]
     fn a_changed_schema_is_sent_again() {
         let mut p = producer();
-        p.interval(&rows(3, 2_000), 7, |_| true);
-        let frame = p.interval(&rows(4, 3_000), 8, |_| true);
+        interval(&mut p, &rows(3, 2_000), 7);
+        let frame = interval(&mut p, &rows(4, 3_000), 8);
 
         let Frame::Rows { rows, .. } = &frame else {
             panic!("a rows frame")
@@ -372,7 +238,7 @@ mod tests {
         tick.ts = pass_ts;
         tick.wall_offset = pass_offset;
 
-        let frame = p.interval(&tick, 7, |_| true);
+        let frame = interval(&mut p, &tick, 7);
 
         let Frame::Rows { rows, .. } = &frame else {
             panic!("a rows frame")
@@ -419,7 +285,7 @@ mod tests {
         }
 
         let mut p = producer();
-        let sent = vec![p.handshake(), p.interval(&rows(3, 2_000), 7, |_| true)];
+        let sent = vec![p.handshake(), interval(&mut p, &rows(3, 2_000), 7)];
 
         let mut stream = Vec::new();
         wire::write_preamble(&mut stream).unwrap();
@@ -462,7 +328,7 @@ mod tests {
     #[test]
     fn a_rows_frame_names_no_index_state() {
         let mut p = producer();
-        let frame = p.interval(&rows(3, 2_000), 7, |_| true);
+        let frame = interval(&mut p, &rows(3, 2_000), 7);
         let Frame::Rows { index_state, .. } = frame else {
             panic!("a rows frame")
         };
@@ -531,15 +397,16 @@ mod tests {
         // an encoded payload, the same shape every other test here uses.
         let rows = rows(1, 2_000);
 
-        let mut producer = FrameProducer::new(
+        let mut producer = FrameProducer::for_source(
             "epoch-1".to_string(),
+            crate::agent::epoch::clock_anchor_wall_ns(),
             [("source".to_string(), "rezolus".to_string())]
                 .into_iter()
                 .collect(),
             BTreeMap::new(),
         );
 
-        let sent = vec![producer.handshake(), producer.interval(&rows, 7, |_| true)];
+        let sent = vec![producer.handshake(), interval(&mut producer, &rows, 7)];
 
         // Through the actual bytes, not the values.
         let mut bytes = Vec::new();
@@ -626,6 +493,7 @@ mod archive_as_a_source {
     use crate::recorder::wire::{AgentRow, AgentRows};
     use dendro::archive::{Archive, CallerRow, SourceMeta};
     use dendro::replicate::ArchivePublisher;
+    use dendro::replicate::Frame;
     use dendro::segment::SegmentEncoder;
     use dendro::writer::Writer;
     use std::time::Duration;
@@ -699,7 +567,7 @@ mod archive_as_a_source {
         for seq in 0..TICKS {
             let t = tick();
             let start = std::time::Instant::now();
-            let frame = p.interval(&t, seq as u64, |_| true);
+            let frame = interval(&mut p, &t, seq as u64);
             direct.push(start.elapsed());
             direct_bytes += encoded(std::slice::from_ref(&frame));
         }

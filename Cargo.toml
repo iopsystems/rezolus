@@ -16,10 +16,10 @@ libc = "0.2.186"
 libloading = "0.8"
 log = "0.4.29"
 metriken = "0.11.2"
-metriken-exposition = "0.21.1"
-metriken-query = { version = "0.33.2", default-features = false }
+metriken-exposition = "0.21.2"
+metriken-query = { version = "0.33.3", default-features = false }
 metriken-segment = { version = "0.1.5", default-features = false }
-metriken-archive = { version = "0.2.8", default-features = false }
+metriken-archive = { version = "0.2.9", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
@@ -55,7 +55,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "6.0.0-alpha.12"
+version = "6.0.0-alpha.13"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true
@@ -103,8 +103,9 @@ memmap2 = "0.9.10"
 metriken.workspace = true
 metriken-exposition.workspace = true
 metriken-query = { workspace = true, features = ["ingest"] }
-# The archive writer `record -o out.dendro` writes through.
-metriken-archive = { workspace = true, features = ["write"] }
+# The archive writer `record -o out.dendro` writes through, and (`stream`) the
+# frame producer behind the agent's `/metrics/stream`.
+metriken-archive = { workspace = true, features = ["write", "stream"] }
 notify = "8.2.0"
 open = "5.3.4"
 ouroboros = "0.18.5"
