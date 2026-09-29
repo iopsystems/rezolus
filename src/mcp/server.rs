@@ -257,22 +257,22 @@ fn additive_tools() -> Vec<Value> {
                 "properties": {
                     "parquet_file": {"type": "string", "description": "Path to the recording (parquet or .rez)"},
                     "recording": recording_property(),
-                    "timestamp": {"type": ["string", "number"], "description": "When the event starts: an RFC 3339 string (e.g. 2026-09-28T14:03:11Z), or Unix seconds as a number."},
+                    "timestamp": {"type": ["string", "number"], "description": "When the event starts: an RFC 3339 string (e.g. 2026-09-28T14:03:11Z), or Unix seconds as a JSON number (never as a string: a digit-only string is refused as ambiguous)."},
                     "description": {"type": "string", "description": "One line, what happened. Shown on the timeline."},
                     "kind": {"type": "string", "description": "A short category such as deploy, incident, spike, or finding. Alignment and filters key on it."},
-                    "duration": {"type": ["string", "number"], "description": "Makes the event a range: humantime (30s, 2m) or seconds as a number. Omit for an instant."},
+                    "duration": {"type": ["string", "number"], "description": "Makes the event a range: humantime (30s, 2m) or seconds as a JSON number (never a digit-only string). Omit for an instant."},
                     "details": {"type": "string", "description": "Longer text shown when the event is opened: what was observed, the query that found it."},
                     "source": {"type": "string", "description": "Who or what authored the event. Defaults to \"mcp\" so agent-written events can be filtered later."},
                     "node": {"type": "string", "description": "Scope the event to one node of a multi-node recording."},
                     "instance": {"type": "string", "description": "Scope the event to one service instance."},
-                    "id": {"type": "string", "description": "A stable id. Adding an event whose id is already present is a no-op. Minted as mcp:<uuid> when omitted."}
+                    "id": {"type": "string", "description": "A stable id. Adding an event whose id is already present is a no-op (except that a kind=check event replaces a stored check event with the same id). Minted as mcp:<uuid> when omitted."}
                 },
                 "required": ["parquet_file", "timestamp", "description"]
             }
         }),
         json!({
             "name": "run_checks",
-            "description": "Evaluate the recording's KPI checks (the `check` blocks embedded by `recording annotate --queries`, or the ones in `queries`) and return each verdict with its violation windows. With annotate=true the violation windows are also written into the recording as kind=check events, the same as `rezolus recording check --annotate`.",
+            "description": "Evaluate the recording's KPI checks (the `check` blocks embedded by `recording annotate --queries`, or the ones in `queries`) and return each verdict with its violation windows. With annotate=true the violation windows are also written into the recording as kind=check events, the same as `rezolus recording check --annotate`. On a multi-recording .rez with no `recording` selector every recording is evaluated and each gets its own verdicts, as the CLI does.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -336,15 +336,34 @@ fn tool_reply(
     }
 }
 
-/// `timestamp` as a tool argument: an RFC 3339 string (or a ns integer as
-/// a string, as `annotate --event` takes), or Unix seconds as a number.
+/// Unix seconds past this are milliseconds or nanoseconds sent by mistake:
+/// 1e11 s is the year 5138.
+const MAX_UNIX_SECONDS: f64 = 1e11;
+/// A duration past this (about 31 years) is nanoseconds sent as seconds.
+const MAX_DURATION_SECONDS: f64 = 1e9;
+
+/// `timestamp` as a tool argument: an RFC 3339 string, or Unix seconds as
+/// a number. A digit-only string is refused rather than read as
+/// nanoseconds (`annotate --event`'s convention): the same digits an agent
+/// sends as a number mean seconds, and the two readings are a billion
+/// apart with no error in between.
 fn timestamp_ns_of(v: &Value) -> Result<u64, String> {
     match v {
+        Value::String(s) if s.trim().chars().all(|c| c.is_ascii_digit()) => Err(format!(
+            "timestamp {s:?} is a digit-only string, which is ambiguous (seconds or \
+             nanoseconds?); send Unix seconds as a number or an RFC 3339 string"
+        )),
         Value::String(s) => crate::parquet_tools::events::parse_timestamp_str(s),
         Value::Number(n) => {
             let secs = n.as_f64().ok_or("timestamp is not a finite number")?;
             if !secs.is_finite() || secs < 0.0 {
                 return Err("timestamp must be non-negative Unix seconds".into());
+            }
+            if secs > MAX_UNIX_SECONDS {
+                return Err(format!(
+                    "timestamp {secs} is past the year 5138; send Unix seconds, not \
+                     milliseconds or nanoseconds"
+                ));
             }
             Ok((secs * 1e9).round() as u64)
         }
@@ -352,20 +371,42 @@ fn timestamp_ns_of(v: &Value) -> Result<u64, String> {
     }
 }
 
-/// `duration` as a tool argument: humantime or a ns integer as a string, or
-/// seconds as a number.
+/// `duration` as a tool argument: humantime (`30s`, `2m`) or seconds as a
+/// number. A digit-only string is refused for the same reason as in
+/// `timestamp_ns_of`.
 fn duration_ns_of(v: &Value) -> Result<u64, String> {
     match v {
+        Value::String(s) if s.trim().chars().all(|c| c.is_ascii_digit()) => Err(format!(
+            "duration {s:?} is a digit-only string, which is ambiguous (seconds or \
+             nanoseconds?); send seconds as a number or humantime such as \"30s\""
+        )),
         Value::String(s) => crate::parquet_tools::events::parse_duration_str(s),
         Value::Number(n) => {
             let secs = n.as_f64().ok_or("duration is not a finite number")?;
             if !secs.is_finite() || secs <= 0.0 {
                 return Err("duration must be a positive number of seconds".into());
             }
+            if secs > MAX_DURATION_SECONDS {
+                return Err(format!(
+                    "duration {secs} s is over 31 years; send seconds, not nanoseconds"
+                ));
+            }
             Ok((secs * 1e9).round() as u64)
         }
         _ => Err("duration must be a humantime string or seconds".into()),
     }
+}
+
+/// The reader cache's path key: canonical when the file exists, so a
+/// write through one spelling of the path evicts a reader opened through
+/// another. `ParquetSource` keeps its footer offsets from open time, and
+/// the footer path rewrites the file in place, so a stale reader would
+/// decode the new bytes at the old offsets.
+fn cache_path(parquet_file: &str) -> String {
+    std::fs::canonicalize(parquet_file)
+        .ok()
+        .and_then(|p| p.to_str().map(str::to_string))
+        .unwrap_or_else(|| parquet_file.to_string())
 }
 
 fn opt_str(arguments: &Value, key: &str) -> Result<Option<String>, String> {
@@ -869,7 +910,8 @@ impl Server {
         ),
         Box<dyn std::error::Error>,
     > {
-        let key = (parquet_file.to_string(), selector.clone());
+        let path_key = cache_path(parquet_file);
+        let key = (path_key.clone(), selector.clone());
         {
             let cache = self.reader_cache.read().unwrap();
             if let Some(hit) = cache.get(&key) {
@@ -909,7 +951,7 @@ impl Server {
         // an archive with no labels at all has the empty map as its identity.
         let source = cache
             .iter()
-            .find(|((p, _), c)| p == parquet_file && c.identity == identity)
+            .find(|((p, _), c)| *p == path_key && c.identity == identity)
             .map(|(_, c)| Arc::clone(&c.source))
             .unwrap_or(reader);
         cache.insert(
@@ -1040,8 +1082,9 @@ impl Server {
     /// recording's metadata, and a reader opened before it would report the
     /// old events (and KPIs) to the next tool call.
     fn evict(&self, parquet_file: &str) {
+        let path = cache_path(parquet_file);
         let mut cache = self.reader_cache.write().unwrap();
-        cache.retain(|(p, _), _| p != parquet_file);
+        cache.retain(|(p, _), _| *p != path);
     }
 
     /// `add_event`: build one `Event` from the arguments and append it to
@@ -1096,6 +1139,9 @@ impl Server {
             "recording": report.recording,
             "events_in_recording": report.total,
             "file": parquet_file,
+            // The writer's own line, which is where a v1/v2 tar archive
+            // says it was upgraded to v3 on the way.
+            "report": report.report,
         }))?)
     }
 
@@ -1133,6 +1179,7 @@ impl Server {
             "recording": report.recording,
             "events_in_recording": report.total,
             "file": parquet_file,
+            "report": report.report,
         }))?)
     }
 
@@ -1169,7 +1216,7 @@ impl Server {
             return Ok(serde_json::to_string_pretty(&json!({
                 "checks": [],
                 "summary": run.summary(),
-                "message": run.nothing_to_run(path, override_ext.is_some()),
+                "message": run.nothing_to_run(path, override_ext.is_some(), "queries"),
             }))?);
         }
         let mut annotated: Option<String> = None;
@@ -1848,6 +1895,84 @@ mod tests {
         assert_eq!(out3["timestamp_ns"], 1_790_690_600_500_000_000u64);
         assert!(out3["duration_ns"].is_null());
         assert_eq!(stored_events(&path)[0].len(), 2);
+    }
+
+    /// The same digits mean seconds as a number and nanoseconds as a string
+    /// under `annotate --event`'s convention; the tool refuses the string
+    /// form and the out-of-range number rather than storing an event fifty
+    /// years off with no error.
+    #[tokio::test]
+    async fn add_event_refuses_ambiguous_timestamps_and_durations() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one.rez");
+        crate::mcp::tests::multi_recording_rez(&path, &["redis"], &[true]);
+        let server = Server::new();
+        let file = path.to_str().unwrap();
+        let attempt = |ts: Value, dur: Option<Value>| {
+            let mut a = json!({"parquet_file": file, "timestamp": ts, "description": "x"});
+            if let Some(d) = dur {
+                a["duration"] = d;
+            }
+            a
+        };
+        for (ts, dur, needle) in [
+            (json!("1776804000"), None, "digit-only"),
+            (json!(1_776_804_000_000_000_000u64), None, "year 5138"),
+            (json!(1_776_804_000.0), Some(json!("30")), "digit-only"),
+            (json!(1_776_804_000.0), Some(json!(2e9)), "31 years"),
+            (json!(1_776_804_000.0), Some(json!(0)), "positive"),
+        ] {
+            let err = server
+                .add_event(&attempt(ts.clone(), dur.clone()))
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("{ts} / {dur:?} must be refused"))
+                .to_string();
+            assert!(err.contains(needle), "{ts} / {dur:?}: {err}");
+        }
+        assert!(stored_events(&path)[0].is_empty(), "nothing was written");
+        // The unambiguous forms still work: RFC 3339, seconds, humantime.
+        server
+            .add_event(&attempt(
+                json!("2026-04-21T20:00:00Z"),
+                Some(json!("1m30s")),
+            ))
+            .await
+            .unwrap();
+        server
+            .add_event(&attempt(json!(1_776_804_000), Some(json!(90))))
+            .await
+            .unwrap();
+        let stored = stored_events(&path);
+        assert_eq!(stored[0].len(), 2);
+        assert!(stored[0]
+            .iter()
+            .all(|e| e.duration_ns == Some(90_000_000_000)));
+    }
+
+    /// The cache is keyed by canonical path, so a write through one spelling
+    /// evicts a reader opened through another.
+    #[tokio::test]
+    async fn a_write_through_another_spelling_of_the_path_evicts_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one.rez");
+        crate::mcp::tests::multi_recording_rez(&path, &["redis"], &[true]);
+        let server = Server::new();
+        // `dir/./one.rez` and `dir/one.rez` name one file.
+        let dotted = dir.path().join(".").join("one.rez");
+        server
+            .get_reader_selected(
+                dotted.to_str().unwrap(),
+                &crate::mcp::RecordingSelector::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(server.reader_cache.read().unwrap().len(), 1);
+        server
+            .add_event(&json!({"parquet_file": path.to_str().unwrap(), "timestamp": 1.0, "description": "x"}))
+            .await
+            .unwrap();
+        assert!(server.reader_cache.read().unwrap().is_empty());
     }
 
     #[tokio::test]

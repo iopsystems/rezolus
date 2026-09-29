@@ -162,9 +162,12 @@ target/release/rezolus mcp query multi.rez "sum(rate(cpu_cycles[1m]))" --recordi
 #   add_event (an instant or range event, source=mcp by default, id returned) and run_checks
 #   (KPI checks -> verdicts JSON; annotate=true writes them as kind=check events) are always on;
 #   remove_events (by ids/kind/source, empty filter refused) needs `rezolus mcp --allow-mutating`
-#   and is otherwise neither listed nor callable. Write tools refuse a multi-recording .rez
-#   without a selector (never stamp every arm). Handlers: src/mcp/server.rs; the write path is
-#   parquet_tools::events::{add_events_selected, remove_events_selected} over the annotate writer.
+#   and is otherwise neither listed nor callable. add_event/remove_events refuse a multi-recording
+#   .rez without a selector (never stamp every arm); run_checks without one evaluates every
+#   recording, as the CLI does. timestamp/duration: RFC 3339 or humantime strings, or numbers in
+#   seconds; digit-only strings are refused as ambiguous. Handlers: src/mcp/server.rs; the write
+#   path is parquet_tools::events::{add_events_selected, remove_events_selected} over the annotate
+#   writer, whose report line the reply carries (a v2 tar is upgraded to v3 on the way and says so).
 ```
 
 ## Architecture

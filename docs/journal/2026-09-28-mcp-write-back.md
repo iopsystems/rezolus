@@ -105,12 +105,23 @@ takes the footer path). A multi-recording archive with no selector is
 refused with the listing the read tools give: `annotate --event` writes the
 same event into every recording, and an agent marking what it saw in one
 arm must not stamp the other arms. `source` defaults to `mcp`; the id is
-minted as `mcp:<uuid>` (the recorder's `epoch::mint`) unless given, and a
-repeated id is a no-op through `append_events`' id rule. `timestamp` takes
-RFC 3339 or Unix seconds as a number; `duration` takes humantime or seconds.
-The reply carries the id, the ns instant, the outcome, and the recording's
-event count. Every write evicts the server's cached readers for that path,
-since a reader opened before the write reports the old events.
+minted as `mcp:<uuid>` (`agent::epoch::mint`, the producer-epoch minter)
+unless given, and a repeated id is a no-op through `append_events`' id rule
+(a stored `kind=check` event is replaced by one with the same id).
+`timestamp` takes RFC 3339 or Unix seconds as a number; `duration` takes
+humantime or seconds. A digit-only string is refused for both: under
+`annotate --event`'s convention it would read as nanoseconds, a billion
+away from the same digits sent as a number, with no error in between
+(review found `"1776804000"` landing 1.8 s after the epoch). Numbers past
+1e11 s or 1e9 s are refused for the same reason.
+The reply carries the id, the ns instant, the outcome, the recording's
+event count, and the annotation writer's report line, which is where a
+v1/v2 tar archive says it was upgraded to v3 on the way (review found the
+upgrade happening silently). Every write evicts the server's cached readers
+for that path, keyed by canonical path: `ParquetSource` keeps its footer
+offsets from open time and the footer path rewrites the file in place, so a
+reader cached under another spelling of the path would decode the new bytes
+at the old offsets.
 
 **`run_checks`.** The check runner was split out of its clap wrapper into
 `check::run_checks` (evaluation, no I/O beyond the open) and
@@ -127,8 +138,15 @@ given fields must match) and a replace. The replace is a new
 to leave one alone), symmetric with `per_recording_events`; the parquet path
 rewrites the footer. An empty filter is refused: "remove everything" is
 `annotate --clear-events`, typed by a person. The annotation writer's report
-line is now a `ReportSink` (stdout or captured) rather than a stdout/stderr
-flag, so the tools return the line instead of printing it.
+line is now a `ReportSink` (stdout, or captured and accumulated: a tar
+upgrade reports twice) rather than a stdout/stderr flag, so the tools
+return the lines instead of printing them.
+
+`run_checks` with no selector over a multi-recording archive evaluates every
+recording and gives each its own verdicts, as `recording check` does; the
+two event tools refuse the same call. The difference is deliberate: a
+verdict is computed per arm from that arm's data, an event is one mark the
+agent saw somewhere.
 
 **Measured.** Through stdio against a two-recording `.rez` combined from
 the A/B parquet fixtures, with a `recording` selector on each write:

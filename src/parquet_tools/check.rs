@@ -712,15 +712,17 @@ impl CheckRun {
         }
     }
 
-    /// Why there was nothing to run, when `checks_seen` is zero.
-    pub(crate) fn nothing_to_run(&self, path: &Path, had_override: bool) -> String {
+    /// Why there was nothing to run, when `checks_seen` is zero. `queries`
+    /// is how the caller spells its override (`--queries` on the CLI, the
+    /// `queries` argument in the MCP tool).
+    pub(crate) fn nothing_to_run(&self, path: &Path, had_override: bool, queries: &str) -> String {
         format!(
             "no checks to run: no KPI in {} carries a \"check\"{}",
             path.display(),
             if had_override {
-                " (the --queries file defines none)"
+                format!(" (the {queries} payload defines none)")
             } else {
-                " (embed one with `recording annotate --queries`, or pass --queries)"
+                format!(" (embed one with `recording annotate --queries`, or pass {queries})")
             }
         )
     }
@@ -778,7 +780,10 @@ fn run_inner(args: &ArgMatches, registry: &TemplateRegistry) -> Result<i32, Stri
     let run = run_checks(path, &selector, override_ext.as_ref(), registry)?;
 
     if run.checks_seen == 0 {
-        eprintln!("{}", run.nothing_to_run(path, override_ext.is_some()));
+        eprintln!(
+            "{}",
+            run.nothing_to_run(path, override_ext.is_some(), "--queries")
+        );
         return Ok(0);
     }
 

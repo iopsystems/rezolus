@@ -600,13 +600,16 @@ destroy. The additive tools are always on: the worst a wrong call does is add
 an event.
 
 - `add_event` marks an instant or a range in the recording. It takes
-  `timestamp` (RFC 3339, or Unix seconds as a number), `description`, and
-  optionally `kind`, `duration` (`30s`, or seconds as a number), `details`,
+  `timestamp` (RFC 3339, or Unix seconds as a JSON number; a digit-only
+  string is refused as ambiguous), `description`, and optionally `kind`,
+  `duration` (`30s`, or seconds as a number), `details`,
   `node`, `instance` and `id`. `source` defaults to `mcp`, so agent-written
   events can be filtered or removed as a group later. The event lands through
   the same manifest update `recording annotate --event` uses and the viewer
   draws it on the next open. Adding an event whose `id` is already present is
-  a no-op; the reply carries the id (minted as `mcp:<uuid>` when not given).
+  a no-op (a `kind=check` event replaces a stored check event with the same
+  id, so a verdict that grew is rewritten); the reply carries the id (minted
+  as `mcp:<uuid>` when not given).
 - `run_checks` evaluates the recording's KPI checks, the `check` blocks that
   `recording annotate --queries` embeds, or a ServiceExtension object passed
   as `queries`, and returns every verdict with its violation windows and a
@@ -627,8 +630,12 @@ rezolus mcp --allow-mutating
   --clear-events`, typed by a person.
 
 Without the flag `remove_events` is neither listed nor callable; a call
-answers with the flag's name. On a multi-recording `.rez` every write tool
-needs the `recording` selector below and refuses to write to every arm.
+answers with the flag's name. On a multi-recording `.rez`, `add_event` and
+`remove_events` need the `recording` selector below and refuse to write to
+every arm; `run_checks` without a selector evaluates every recording and
+gives each its own verdicts, as `recording check` does. The reply of a
+write carries the writer's report line, which is where a v1/v2 tar archive
+says it was upgraded to v3 on the way.
 
 ### Multi-recording archives
 

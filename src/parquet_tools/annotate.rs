@@ -272,18 +272,24 @@ pub(crate) struct RezAnnotation<'a> {
 /// stdout may be a JSON payload; the MCP tools, which return it).
 pub(crate) enum ReportSink {
     Stdout,
-    Capture(std::cell::RefCell<Option<String>>),
+    Capture(std::cell::RefCell<Vec<String>>),
 }
 
 impl ReportSink {
     pub(crate) fn capture() -> Self {
-        Self::Capture(std::cell::RefCell::new(None))
+        Self::Capture(std::cell::RefCell::new(Vec::new()))
     }
 
-    /// The captured line, if this sink captured one.
+    /// Every captured line, joined; `None` when nothing was reported. An
+    /// annotation can report more than once (a v1/v2 tar archive is
+    /// upgraded in place first and says so), and a caller returning the
+    /// report must not lose the first line to the second.
     pub(crate) fn captured(&self) -> Option<String> {
         match self {
-            Self::Capture(cell) => cell.borrow().clone(),
+            Self::Capture(cell) => {
+                let lines = cell.borrow();
+                (!lines.is_empty()).then(|| lines.join("; "))
+            }
             _ => None,
         }
     }
@@ -293,7 +299,7 @@ impl RezAnnotation<'_> {
     fn report(&self, line: String) {
         match &self.report {
             ReportSink::Stdout => println!("{line}"),
-            ReportSink::Capture(cell) => *cell.borrow_mut() = Some(line),
+            ReportSink::Capture(cell) => cell.borrow_mut().push(line),
         }
     }
 }

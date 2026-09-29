@@ -185,6 +185,10 @@ pub(crate) struct WriteReport {
     pub counts: AppendCounts,
     /// Events the recording holds after the write.
     pub total: usize,
+    /// The annotation writer's own report, when there was one: it says,
+    /// among other things, when a v1/v2 tar archive was upgraded to v3 on
+    /// the way, which a caller must not hide.
+    pub report: Option<String>,
 }
 
 /// Append `new` to the recording `selector` names in `path`: a parquet
@@ -205,6 +209,7 @@ pub(crate) fn add_events_selected(
             recording: None,
             counts: appended.counts,
             total: appended.events.events.len(),
+            report: None,
         });
     }
     // The same append the writer applies, run here first so the counts
@@ -225,6 +230,7 @@ pub(crate) fn add_events_selected(
         recording: target.labels,
         counts: preview.counts,
         total: preview.events.events.len(),
+        report: annotation.report.captured(),
     })
 }
 
@@ -264,6 +270,8 @@ pub(crate) struct RemoveReport {
     pub removed: usize,
     /// Events the recording holds after the write.
     pub total: usize,
+    /// The annotation writer's own report, when there was one.
+    pub report: Option<String>,
 }
 
 /// Drop every event matching `filter` from the recording `selector` names.
@@ -293,13 +301,18 @@ pub(crate) fn remove_events_selected(
         .filter(|e| !filter.matches(e))
         .collect();
     let removed = before - kept.len();
-    let payload = Events::new(kept);
+    // Every writer stores a normalized payload, so the kept subset already
+    // is one; normalizing again costs nothing and holds for a payload some
+    // other tool wrote unsorted.
+    let mut payload = Events::new(kept);
+    payload.normalize();
     if format == crate::recorder::rez::RezFormat::NotRez {
         write_events(path, &payload)?;
         return Ok(RemoveReport {
             recording: None,
             removed,
             total: payload.events.len(),
+            report: None,
         });
     }
     let remaining = payload.events.len();
@@ -317,6 +330,7 @@ pub(crate) fn remove_events_selected(
         recording: target.labels,
         removed,
         total: remaining,
+        report: annotation.report.captured(),
     })
 }
 
