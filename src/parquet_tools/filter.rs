@@ -50,7 +50,7 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
             let output = args.get_one::<PathBuf>("output").map(|p| p.as_path());
             let result = filter_rez_any(path, format, samplers.as_ref(), metrics.as_ref(), output);
             if let Err(e) = result {
-                eprintln!("error: failed to filter .rez: {e}");
+                eprintln!("error: failed to filter {}: {e}", path.display());
                 std::process::exit(1);
             }
             return;
@@ -191,6 +191,9 @@ fn filter_rez_any(
     keep_metrics: Option<&std::collections::BTreeSet<String>>,
     output: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if metriken_archive::DendroCatalog::is_archive(path).unwrap_or(false) {
+        return filter_dendro(path, keep_samplers, keep_metrics, output);
+    }
     if format != RezFormat::V2Tar {
         return filter_rez_v3(path, keep_samplers, keep_metrics, output);
     }
@@ -209,6 +212,124 @@ fn filter_rez_any(
         keep_metrics,
         Some(output.unwrap_or(path)),
     )
+}
+
+/// [`filter_rez_v3`] for a dendro archive: the same selection and the same
+/// guards, through dendro's `copy_sources_into` (`crate::dendro_copy`).
+///
+/// - `keep_samplers` keeps a stream when its sampler is named; an occupant
+///   stream (`<table>/occupants`) counts as its table's, so it goes with it.
+/// - `keep_metrics` trims columns with metriken-archive's `KeepMetrics`,
+///   which keeps a long table long (its `occupant` column and layout
+///   markers) and copies occupant streams whole, re-encoding with the
+///   writer's properties. A table left with no kept metric is dropped by the
+///   copy, and its occupant stream is then removed here, since dendro only
+///   sees the stream's own columns.
+///
+/// The live tail of each kept stream is sealed into the copy, as a snapshot
+/// seals it.
+fn filter_dendro(
+    path: &Path,
+    keep_samplers: Option<&std::collections::BTreeSet<String>>,
+    keep_metrics: Option<&std::collections::BTreeSet<String>>,
+    output: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use ::rez::occupants::table_of;
+    use dendro::archive::{Archive, ArchiveMut};
+    use dendro::rewrite::CopySpec;
+    use metriken_archive::table_sampler;
+
+    let src = Archive::open(path)?;
+    let tables: Vec<String> = crate::dendro_copy::streams(&src)?
+        .into_iter()
+        .filter(|s| table_of(s).is_none())
+        .collect();
+    let present: BTreeSet<String> = tables
+        .iter()
+        .map(|t| table_sampler(t).to_string())
+        .collect();
+    if let Some(keep) = keep_samplers {
+        let unmatched: Vec<&str> = keep
+            .iter()
+            .map(String::as_str)
+            .filter(|s| !present.contains(*s))
+            .collect();
+        if !unmatched.is_empty() {
+            return Err(format!(
+                "no sampler named {} in {}; it holds: {}",
+                unmatched.join(", "),
+                path.display(),
+                present
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )
+            .into());
+        }
+    }
+
+    let dest = output.unwrap_or(path);
+    let dir = dest.parent().filter(|p| !p.as_os_str().is_empty());
+    let staging = match dir {
+        Some(dir) => tempfile::tempdir_in(dir),
+        None => tempfile::tempdir(),
+    }?;
+    let staged = staging.path().join("filtered.dendro");
+
+    let keep_stream = |stream: &str| -> bool {
+        keep_samplers
+            .is_none_or(|keep| keep.contains(table_sampler(table_of(stream).unwrap_or(stream))))
+    };
+    let keep_columns = keep_metrics.map(metriken_archive::KeepMetrics::new);
+    let spec = CopySpec {
+        keep_streams: Some(&keep_stream),
+        keep_columns: keep_columns
+            .as_ref()
+            .map(|k| k as &dyn dendro::rewrite::ColumnFilter),
+        writer_props: Some(metriken_archive::segment_props(
+            metriken_archive::default_compression(),
+        )),
+        ..CopySpec::everything()
+    };
+    crate::dendro_copy::copy(&src, &staged, &spec)?;
+    drop(src);
+
+    // An occupant stream whose table did not survive the projection names
+    // occupants of nothing.
+    let mut dst = ArchiveMut::open(&staged)?;
+    let mut kept = 0usize;
+    for source in dst.read_sources()? {
+        let streams = dst.all_streams(source.id)?;
+        let tables: BTreeSet<&str> = streams
+            .iter()
+            .map(String::as_str)
+            .filter(|s| table_of(s).is_none())
+            .collect();
+        kept += tables.len();
+        let orphan = |stream: &str| table_of(stream).is_some_and(|t| !tables.contains(t));
+        if streams.iter().any(|s| orphan(s)) {
+            dst.evict_streams_before(source.id, i64::MAX, &orphan)?;
+        }
+    }
+    drop(dst);
+
+    if kept == 0 {
+        return Err(format!(
+            "filtering {} kept no tables — refusing to overwrite it with an empty archive; \
+             check the --metrics / --samplers names",
+            path.display(),
+        )
+        .into());
+    }
+    std::fs::rename(&staged, dest)?;
+    println!(
+        "Filtered {:?}: kept {} of {} tables",
+        dest,
+        kept,
+        tables.len()
+    );
+    Ok(())
 }
 
 /// Filter a v3 (SQLite) `.rez` by sampler and/or by metric column.
@@ -1003,5 +1124,103 @@ mod tests {
             vec![0, 1, 2],
             "seq is dense and starts at zero so the reader splices in order"
         );
+    }
+
+    /// The streams of a dendro archive's one source, sorted.
+    fn dendro_streams(path: &Path) -> Vec<String> {
+        let db = dendro::archive::Archive::open(path).unwrap();
+        let id = db.read_sources().unwrap()[0].id;
+        let mut s = db.all_streams(id).unwrap();
+        s.sort();
+        s
+    }
+
+    fn set(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// `--samplers` keeps a long table's occupant stream with its table.
+    #[test]
+    fn filter_dendro_by_sampler_keeps_the_occupant_stream_with_its_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("rec.dendro");
+        crate::dendro_copy::fixtures::recorded(&src, 10, true);
+        let out = dir.path().join("threads.dendro");
+        filter_dendro(&src, Some(&set(&["threads"])), None, Some(&out)).unwrap();
+        assert_eq!(
+            dendro_streams(&out),
+            vec![
+                "threads/tasks".to_string(),
+                "threads/tasks/occupants".to_string()
+            ]
+        );
+    }
+
+    /// `--metrics` trims columns and keeps a long table long; a table with no
+    /// kept metric goes, and so does its occupant stream.
+    #[test]
+    fn filter_dendro_by_metric_keeps_long_tables_long() {
+        use metriken_query::MetricsSource;
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("rec.dendro");
+        crate::dendro_copy::fixtures::recorded(&src, 10, true);
+
+        let mem = dir.path().join("mem.dendro");
+        filter_dendro(&src, None, Some(&set(&["mem_free"])), Some(&mem)).unwrap();
+        assert_eq!(dendro_streams(&mem), vec!["memory/meminfo".to_string()]);
+
+        let tasks = dir.path().join("tasks.dendro");
+        filter_dendro(&src, None, Some(&set(&["task_ops"])), Some(&tasks)).unwrap();
+        assert_eq!(
+            dendro_streams(&tasks),
+            vec![
+                "threads/tasks".to_string(),
+                "threads/tasks/occupants".to_string()
+            ]
+        );
+        let open = |p: &Path| {
+            crate::rez_reader::RezReader::open_recordings(
+                p,
+                metriken_query::BufferPool::new(64 * 1024 * 1024),
+            )
+            .unwrap()
+            .remove(0)
+            .1
+        };
+        let (a, b) = (open(&src), open(&tasks));
+        let q = "sum by (comm) (rate(task_ops[3s]))";
+        let (start, end) = a.time_range().unwrap();
+        let answer = |r: &crate::rez_reader::RezReader| {
+            let metriken_query::QueryResult::Matrix { result } =
+                r.query_range(q, start, end + 1.0, 1.0).unwrap()
+            else {
+                panic!("a matrix");
+            };
+            let mut out: Vec<(String, Vec<(f64, f64)>)> = result
+                .into_iter()
+                .map(|s| (s.metric.get("comm").cloned().unwrap_or_default(), s.values))
+                .collect();
+            out.sort_by(|x, y| x.0.cmp(&y.0));
+            out
+        };
+        let (x, y) = (answer(&a), answer(&b));
+        assert_eq!(x.len(), 2, "two threads, by their labels: {x:?}");
+        assert_eq!(x, y, "the kept metric answers the same");
+    }
+
+    /// The `.rez` guards hold for a dendro archive: an unknown sampler is
+    /// refused, and so is a filter that would keep nothing; the input is
+    /// untouched either way.
+    #[test]
+    fn filter_dendro_refuses_an_unknown_sampler_and_an_empty_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("rec.dendro");
+        crate::dendro_copy::fixtures::recorded(&src, 4, true);
+        let before = std::fs::read(&src).unwrap();
+        let err = filter_dendro(&src, Some(&set(&["nope"])), None, None).unwrap_err();
+        assert!(err.to_string().contains("no sampler named nope"), "{err}");
+        let err = filter_dendro(&src, None, Some(&set(&["absent"])), None).unwrap_err();
+        assert!(err.to_string().contains("kept no tables"), "{err}");
+        assert_eq!(std::fs::read(&src).unwrap(), before);
     }
 }

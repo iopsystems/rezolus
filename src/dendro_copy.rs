@@ -57,7 +57,8 @@ pub(crate) mod fixtures {
     pub(crate) const SECOND: u64 = 1_000_000_000;
 
     /// One tick: a slotted group `threads/tasks` with two threads, each a
-    /// counter rising 10/s and 20/s.
+    /// counter rising 10/s and 20/s, and a fixed group `memory/meminfo`
+    /// with one gauge.
     fn tick(i: u64) -> Snapshot {
         let ts = ANCHOR + i * SECOND;
         let member = |slot: u32, comm: &str| MetricDesc {
@@ -77,19 +78,42 @@ pub(crate) mod fixtures {
             gauges: Vec::new(),
             histograms: Vec::new(),
         };
+        let memory = GroupSchema {
+            counters: Vec::new(),
+            gauges: vec![MetricDesc {
+                name: "9".to_string(),
+                metadata: [("metric", "mem_free")]
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+            }],
+            histograms: Vec::new(),
+        };
+        let window = Some(metriken::Window::new(ts - SECOND / 2, ts));
         Snapshot::V3(SnapshotV3 {
             systemtime: UNIX_EPOCH + Duration::from_nanos(ts),
             duration: Duration::ZERO,
             metadata: Default::default(),
-            groups: vec![GroupSnapshot {
-                name: "threads/tasks".to_string(),
-                schema_hash: schema.hash(),
-                schema: (i == 0).then(|| Arc::new(schema)),
-                window: Some(metriken::Window::new(ts - SECOND / 2, ts)),
-                counters: vec![Some(i * 10), Some(i * 20)],
-                gauges: Vec::new(),
-                histograms: Vec::new(),
-            }],
+            groups: vec![
+                GroupSnapshot {
+                    name: "threads/tasks".to_string(),
+                    schema_hash: schema.hash(),
+                    schema: (i == 0).then(|| Arc::new(schema)),
+                    window,
+                    counters: vec![Some(i * 10), Some(i * 20)],
+                    gauges: Vec::new(),
+                    histograms: Vec::new(),
+                },
+                GroupSnapshot {
+                    name: "memory/meminfo".to_string(),
+                    schema_hash: memory.hash(),
+                    schema: (i == 0).then(|| Arc::new(memory)),
+                    window,
+                    counters: Vec::new(),
+                    gauges: vec![Some(1_000 - i as i64)],
+                    histograms: Vec::new(),
+                },
+            ],
         })
     }
 

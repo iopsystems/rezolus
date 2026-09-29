@@ -625,18 +625,15 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   (#1312, #1315; the reader moved to metriken-archive in #1320).
 - **Recording to dendro archives** — Open, in stages
   ([entry](journal/2026-09-28-dendro-writer-adoption.md)). A, `record -o
-  out.dendro`, B, hindsight, C, `record --stream`, and D1, `recording`
-  metadata/annotate/check/snapshot, are built. Remaining:
-  - **D2. `recording filter` on dendro**: `--samplers` as a stream
-    predicate keeping `<table>/occupants` with its table; `--metrics` needs
-    long-aware column projection (in metriken) that keeps `occupant`, the
-    occupant stream and the long file metadata, re-encoding with the
-    writer's codec.
+  out.dendro`, B, hindsight, C, `record --stream`, D1, `recording`
+  metadata/annotate/check/snapshot, and D2, `recording filter`, are built.
+  Remaining:
   - **D3. `recording combine` on dendro**: `copy_sources_into` per input
     into one transaction, refusing duplicates (`shared_sources`); `.rez` and
     parquet inputs converted first.
-  - **D4. Save-as-Report on dendro**: D2's projection, also for the wasm
-    viewer.
+  - **D4. Save-as-Report on dendro**: `KeepMetrics` (metriken-archive,
+    outside `write`), also for the wasm viewer; the tail encoder is behind
+    `write`, so the report needs another way to seal it.
   - **E. 6.0 default**: `record` and `hindsight` write dendro by default,
     after D.
 - **dendro's `vacuum_into` fails on the read handle** — Open, a dendro

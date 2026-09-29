@@ -1,7 +1,7 @@
 # Recording to dendro archives: `record`, then hindsight, then the default
 
 - **Opened:** 2026-09-28
-- **Status:** OPEN — stages A (`record -o out.dendro`), B (hindsight), C (`record --stream`) and D1 (`recording` metadata, annotate, check, snapshot) built; D2–D4 and E not.
+- **Status:** OPEN — stages A (`record -o out.dendro`), B (hindsight), C (`record --stream`) D1 (`recording` metadata, annotate, check, snapshot) and D2 (`filter`) built; D3–D4 and E not.
 
 ## Goal
 
@@ -195,18 +195,41 @@ table through the real writer (`dendro_copy::fixtures::recorded`).
 
 Still to do in D:
 
-- **D2, `filter`:** `--samplers` maps to a stream predicate that keeps
-  `<table>/occupants` with its table. `--metrics` needs column projection
-  that knows a long table: `occupant` is structural, an occupant stream is
-  kept whole while its table survives, the long layout's file key-value
-  metadata (`metriken.layout`, `metriken.occupants`) must survive the
-  re-encode, and the writer's codec must be used. That projection belongs
-  beside the long layout, in metriken.
+- **D2, `filter`:** built (below).
 - **D3, `combine`:** dendro inputs through `copy_sources_into` into one
   transaction, refusing a duplicate source (`shared_sources`); `.rez` and
   parquet inputs need converting first.
 - **D4, Save-as-Report:** the same projection as D2, built for the browser
   viewer too.
+
+## D2: built
+
+`recording filter` on a dendro archive (`filter_dendro`), through
+`dendro_copy::copy`:
+
+- `--samplers` is a stream predicate on the stream's sampler; an occupant
+  stream counts as its table's, so it goes with it.
+- `--metrics` is metriken-archive's `KeepMetrics` (0.2.6): the `.rez`
+  column rules (structural columns always, a value column by name, base or
+  `metric` metadata, a per-metric window with its metric) plus a long
+  table's `occupant` column, with occupant streams copied whole. Segments
+  are re-encoded with the writer's properties (`segment_props`, zstd-3).
+- Two things this needed from dendro (0.3.3): a projection now keeps the
+  file's key-value metadata, without which a projected long segment lost
+  `metriken.layout` and read as wide; and `ColumnFilter::projects`, which
+  lets an occupant stream be copied unprojected, since a field-by-field
+  filter cannot tell its columns from a table's.
+- A table left with no kept metric is dropped by the copy; its occupant
+  stream is then evicted from the staged copy, since it names occupants of
+  nothing.
+- The `.rez` guards carry over: an unknown sampler is refused, as is a
+  filter that keeps no table, and the output is staged and renamed.
+
+Tests: `filter_dendro_by_sampler_keeps_the_occupant_stream_with_its_table`,
+`filter_dendro_by_metric_keeps_long_tables_long` (the kept metric answers
+the same by `comm`),
+`filter_dendro_refuses_an_unknown_sampler_and_an_empty_result`; in
+metriken, `keep_metrics_trims_a_long_table_and_keeps_it_long`.
 
 ## Seal policy
 

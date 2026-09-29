@@ -90,8 +90,8 @@ pub fn command() -> Command {
              \x20         the default). Groups whose members come and go (threads,\n    \
              \x20         cgroups, CPUs) are stored one row per member, so it is several\n    \
              \x20         times smaller than a .rez. `rezolus view` and `rezolus mcp` read\n    \
-             \x20         it, as do `recording` metadata, annotate, check and\n    \
-             \x20         snapshot; filter and combine do not yet.\n    \
+             \x20         it, as do `recording` metadata, annotate, check,\n    \
+             \x20         snapshot and filter; combine does not yet.\n    \
              .parquet  One columnar table on a single uniform clock. Use it for a uniform\n    \
              \x20         tabular export or other parquet tooling.\n    \
              \x20         (Multiple endpoints, including Prometheus, do NOT need\n    \

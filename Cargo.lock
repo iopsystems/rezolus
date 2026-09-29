@@ -1040,9 +1040,9 @@ dependencies = [
 
 [[package]]
 name = "dendro"
-version = "0.3.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fac5581882cc737da4b102bfc583ece2a6eabbd9b6a239be30aec5bf595e12a"
+checksum = "c3419fe24f3f8320b68db8642bab7a6b9c9a86d99ce34539712338509f63796d"
 dependencies = [
  "arrow",
  "bytes",
@@ -2251,10 +2251,11 @@ dependencies = [
 
 [[package]]
 name = "metriken-archive"
-version = "0.2.5"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce89f25092af0d80cebdfae78dfdf9f641743994831cc070f876c0373ef7dc20"
+checksum = "2a8243d77a0a5954643efd78e2ce431934eba33963e0f935b47a9a3b34f0802b"
 dependencies = [
+ "arrow",
  "bytes",
  "dendro",
  "metriken-exposition",
