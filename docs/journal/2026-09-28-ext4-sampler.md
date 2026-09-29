@@ -1,11 +1,13 @@
 # ext4 telemetry through eBPF — journal first, allocator second
 
 - **Opened:** 2026-09-28
-- **Status:** **Phases 1 and 2 SHIPPED and measured. Phase 1
+- **Status:** **Phases 1, 2 and 3 SHIPPED and measured. Phase 1
   (`ext4_journal`, #1321): GO on probe cost, +225 instructions per fsync at
   450 K fsync/s on `null_blk`. Phase 2 (`ext4_alloc`): every counter exact
   against tracefs, refresh 151–301 µs; see *Results — phase 2*. Phase 3
-  (per-filesystem) OPEN**, re-prioritized by
+  (per-filesystem counters): exact attribution across three mounts, a mount
+  added while running attributed within a second, the lookup's probe cost
+  in *Results — phase 3*.** Phase 3 was re-prioritized by
   `2026-09-28-filesystem-telemetry-gaps.md`. Two BPF
   samplers are specified: `ext4_journal` (jbd2 commit and checkpoint phases,
   fsync counts, filesystem errors) and `ext4_alloc` (block allocator effort,
@@ -456,7 +458,8 @@ rate is bounded by the commit rate.
    reads (`ext4_load_inode`, the two bitmap loads) joined it, and
    `ext4_discard_preallocations` came along for eviction churn.*
 7. **Phase 3** per-filesystem counters, after the lookup-map measurement.
-   *Done; see Results — phase 3.*
+   *Done; see Results — phase 3. The hash was measured as part of the whole
+   per-filesystem path; the linear scan is still unmeasured.*
 
 ## Results — phase 1
 
@@ -655,6 +658,103 @@ one CO-RE struct read, a few counter increments and one histogram increment
 per extent allocation, and allocations run at write-batch rate, three
 orders of magnitude below the fsync rate the phase 1 bench measured at
 +225 instructions per event.
+
+## Results — phase 3
+
+Same guest (`6.12.63+deb13-amd64`, `CONFIG_EXT4_FS=m`, 56 vCPU, root on
+ext4 over virtio); functional run systemslab
+`01a0ebfb-7949-7180-7267-0ea759a41cb0`, probe cost
+`01a0ec20-765a-7184-a788-d268c448ecbb`.
+
+**Built as specified, with one departure.** Userspace assigns the slots from
+`/proc/self/mountinfo` (`src/agent/bpf/filesystems.rs`, one registry shared by
+every sampler that attributes by filesystem), the BPF programs look the
+device up in a `dev_t → slot` hash (`src/agent/bpf/filesystem.h`), and the
+counter banks are `MAX_CPUS × MAX_FILESYSTEMS` cacheline-padded
+(`FilesystemCounters` in `src/agent/bpf/counters.rs`): principle 7's
+`Counters` layout with a slot dimension, 8 MiB for `ext4_journal`'s 16-wide
+bank and 12 MiB for `ext4_alloc`'s 24-wide one, allocated eagerly by the
+kernel. The departure is slot 0: every event lands in some slot so the
+per-filesystem rates sum to the host rate, and a device the table does not
+know yet is counted under `mount="other"` rather than dropped. Slot 0
+moving is also how a new mount is noticed between the 10 s rescans: the
+reader that sees it asks for a rescan, floored at one per second.
+
+**The lookup-map question.** The design left `BPF_MAP_TYPE_HASH` versus a
+bounded linear scan open for measurement. The hash was built (principle 5's
+objection is update contention, and BPF never updates this map; the
+justification is in the header) and the bench below measured the whole
+per-filesystem path. The linear scan was not built in this phase: the bench
+does not separate the hash lookup from the pointer chases that derive the
+device (`file → inode → superblock → s_dev` on the fsync entry, two reads on
+the exit), and only the first of those is what a scan would replace. That
+split is the open item below.
+
+**Attribution is exact.** Three ext4 filesystems: the root and two
+loop-backed mounts A and B. 300 fsyncs on A plus fio writing and fsyncing
+2,000 small files there, 700 fsyncs on B:
+
+| series | A | B | root | other |
+|---|---|---|---|---|
+| `ext4_sync_file{op="fsync"}` | 2,300 | 700 | 6,001 (the guest's own) | 0 |
+| `ext4_allocations` | 2,018 | 5 | 18 | 0 |
+| `ext4_inodes{op="allocated"}` | 2,001 | 1 | 0 | 0 |
+| `ext4_journal_commits` | 2,300 | 700 | 6,001 | 0 |
+
+A third filesystem C mounted after the agent started, then 100 fsyncs, a 3 s
+pause, and 100 more: the first 100 landed in `other`, the rescan they
+triggered assigned C (agent log: "generation 2, 4 filesystem(s) assigned",
+0.5 s after the first batch ended), and the second 100 are on C's series.
+Unmounting B freed its slot at the next rescan (generation 3, its series
+gone from the snapshot); remounting it assigned the slot again (generation
+4) and the 50 fsyncs issued in the 0.3 s before that assignment landed in
+`other`, as the design says they do, with B's fresh series at 0. The
+consumer-facing consequence: `sum(irate(...))` is the host rate, but the
+cumulative sum is not a host total, and the docs say so.
+
+**A first VM run showed only `other`.** The reader declared its population
+with `set_member_set`, which the acquisition group stores once; every
+later assignment was silently dropped and slots 1..63 never reached a
+snapshot. Adversarial review found it from the code and the VM confirmed it;
+the population is now a bound, revised per assignment as principle 18
+allows for a changing population, with vacant slots under it reading
+absent. A vacant slot under the bound is still a null-valued column in a V3
+snapshot, the same trade the `filesystem` sampler makes; a host that churns
+loop or dm minors accumulates them.
+
+**Refresh cost** with four occupied slots on the 56-vCPU guest, sampled at
+1 Hz: `ext4_journal` 170–751 µs, median 220 µs; `ext4_alloc` 173–595 µs,
+median 216 µs (phase 1 and 2 host-wide: 190–295 and 151–301). The sweep is
+possible CPUs × occupied slots × bank width, so it grows with mounts, not
+with `MAX_FILESYSTEMS`.
+
+**Probe cost**, the phase 1 bench rerun on this branch (`null_blk`, 4 KiB
+`randwrite` with `fsync=1`, 8 fio jobs on CPUs 8–15, agent on 0–7, 4 reps ×
+20 s), so the delta against phase 1's +225 instructions per fsync is the
+per-filesystem lookup plus the slotted index arithmetic:
+
+| arm | IOPS | instructions / fsync | cycles / fsync | task-clock ns / fsync |
+|---|---|---|---|---|
+| no agent | 453,290 ± 11,418 | 33,038 ± 152 | 67,257 ± 524 | 17,983 ± 496 |
+| agent, no samplers | 458,564 ± 1,632 | 33,019 ± 130 | 67,014 ± 199 | 17,814 ± 64 |
+| agent + `ext4_journal`, per filesystem | 444,321 ± 3,780 | 34,158 ± 166 | 68,936 ± 195 | 18,336 ± 115 |
+
+Per-filesystem `ext4_journal` costs **+1,139 instructions, +1,923 cycles and
++522 ns per fsync** against the idle agent, a 3.1% IOPS loss at this
+saturating 450 K fsync/s, where phase 1's host-wide programs cost +225
+instructions on the same bench. The per-filesystem path is therefore about
+**+914 instructions per fsync, some 450 per probe**: for each of the two
+`ext4_sync_file` probes, a hash lookup and the pointer reads that reach
+`s_dev` (three on the entry, two on the exit, each a `bpf_probe_read_kernel`
+call). Which of the two dominates is not measured; that is the open item in
+*Deferred*. The reconcile held: 8.79 M `ext4_sync_file{op="fsync"}` against
+8.83 M fio writes with the last second unscraped, all of them on the
+`null_blk` mount's own series, none under `other`. At the characterization's
+20 K fsync/s the cost is 10 ms of CPU per second, about 1% of one core, so
+the samplers stay on by default; on a host whose fsync rate approaches
+saturation the 3% is real and the host-wide phase 1 shape is no longer
+available as a cheaper option, which is a deliberate trade and recorded
+here.
 
 ## Deferred / reopen
 

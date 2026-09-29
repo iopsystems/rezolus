@@ -915,10 +915,13 @@ The entry specifies `ext4_journal` (phase 1, implemented and measured),
   (above, after 6.0) plus a per-thread start map: the `MAX_PID` array
   (32 MB, as `syscall_latency`) or `BPF_MAP_TYPE_TASK_STORAGE` once the kernel
   floor is 5.11.
-- **Phase 3 lookup map** — Open. `dev_t → slot`, userspace-written, BPF
-  read-only: `BPF_MAP_TYPE_HASH` with the principle 5 justification, or a
-  bounded linear scan over `MAX_FILESYSTEMS` `dev_t` values. Measure both on
-  the phase 1 bench before choosing.
+- **Phase 3 lookup map** — Built as `BPF_MAP_TYPE_HASH` keyed by `dev_t`,
+  userspace-written, BPF read-only (justification in `bpf/filesystem.h`).
+  Open: the per-filesystem path costs +914 instructions per fsync over the
+  host-wide phase 1 programs (ext4 entry, "Results — phase 3"), and the bench
+  does not split the hash lookup from the device derivation's pointer reads.
+  Measure a bounded linear scan against the hash, and a `sb_dev` read cached
+  per program run, before deciding either is worth changing.
 - **VFS-layer read/write latency via `fentry`/`fexit`** — Idea.
   `ext4_file_read_iter`/`ext4_file_write_iter`; page-cache hit/miss split per
   filesystem. Reopen with phase 3; check the symbol set on the oldest fleet
@@ -968,8 +971,13 @@ bare-metal probe-cost bench for anything at request rate).
   `/proc/slabinfo` under its own name and so from `memory_slabinfo`. Reopen if
   its residency becomes the question; `/sys/kernel/slab/<cache>` resolves
   aliases at one directory walk per cache per sweep.
-- **Per-filesystem counters** — Roadmap (phase 3 of the ext4 entry,
-  promoted): the cache device is never the root filesystem.
+- **Per-filesystem counters** — DONE (phase 3 of the ext4 entry): every
+  `ext4_journal` and `ext4_alloc` counter carries `mount`, `fstype`, `devnum`
+  and `block_device`, plus `mount="other"`; exact against a three-mount VM.
+- **Vacant filesystem slots are null columns** — By design. A slot freed by
+  an unmount reads absent, which a V3 snapshot carries as a null-valued
+  column until the slot is reused; a host churning loop or dm minors
+  accumulates them, the same trade the `filesystem` sampler makes.
 - **`ext4_ops` sampler** — Roadmap. fsync and unlink latency from the
   enter/exit pairs, write and rename via `fexit`, per-cgroup blocked time.
   Forces the per-thread start-state decision (`MAX_PID` arrays vs task

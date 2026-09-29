@@ -362,8 +362,9 @@ pub(crate) fn filesystem_index(cpu: usize, slot: usize, idx: usize, bank_width: 
 /// # Windowing
 ///
 /// Same stamp-last discipline as [`Counters`]: one acquisition brackets the
-/// whole sweep, members are set plain, `finish()` last. The member set is
-/// slot 0 plus the occupied slots, revised whenever the assignment changes.
+/// whole sweep, members are set plain, `finish()` last. The population is a
+/// bound, one past the highest occupied slot, revised whenever the assignment
+/// changes; a vacant slot under it reads absent.
 pub struct FilesystemCounters<'a> {
     counter_map: CounterMap<'a>,
     lookup: &'a Map<'a>,
@@ -417,7 +418,7 @@ impl<'a> FilesystemCounters<'a> {
         this
     }
 
-    /// Bring the lookup map, the identities and the member set in line with
+    /// Bring the lookup map, the identities and the member bound in line with
     /// `assignment`. A slot changing hands is zeroed while no device maps to
     /// it, so the next occupant starts from zero.
     fn apply(&mut self, assignment: Arc<super::filesystems::Assignment>) {
