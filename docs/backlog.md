@@ -1026,15 +1026,14 @@ bare-metal probe-cost bench for anything at request rate).
   (`resolve_walk_window`), an interval wide. Drive sweeps from a timer, or
   emit pre-pass values with the pre-pass window. Reopen when a consumer
   needs the band tight.
-- **Page-cache hit ratio** — NO-GO for now, designed in
-  [Page-cache hit ratio](journal/2026-09-29-pagecache-hit-ratio.md). Probe
-  on 6.12: hits are one `filemap_read` bracket per read call (not per page;
-  `filemap_get_folio` is not the read path), fills are
-  `mm_filemap_add_to_page_cache` split by whether the task is inside a read.
-  Declined because the bracket costs about 1.3 µs on every read at the read
-  rate and no read-path finding asks for it; `memory_vmstat` has the
-  host-wide fill rate. Reopen on a read-path finding; GO gate is the measured
-  bracket cost against the fleet's read rate.
+- **Page-cache hit ratio** — Built as `memory_pagecache` (opt-in) in the
+  cheaper shape recorded in
+  [Page-cache hit ratio](journal/2026-09-29-pagecache-hit-ratio.md): one
+  `fentry` on `filemap_read` for calls and bytes, fills classified at fill
+  rate by the filling task's syscall (read, write, fault, other), evictions,
+  mmap faults, per mount; cgroup series behind `cgroup_attribution`. The
+  bracket design (per-call hit/miss, latency by outcome) stays unbuilt;
+  reopen if those are needed.
 - **Per-cgroup writeback throttling** — Roadmap. `balance_dirty_pages` keys
   by `cgroup_ino`, not css id; needs an inode-keyed lookup in `bpf/cgroup.h`.
 
