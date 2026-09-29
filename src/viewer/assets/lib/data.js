@@ -8,6 +8,72 @@ import { firstVisibleLabelValue } from './labels.js';
 export const CAPTURE_BASELINE = 'baseline';
 export const CAPTURE_EXPERIMENT = 'experiment';
 
+// ── Per-view memo of the capture list and per-capture metadata ──────────
+//
+// Every compare-mode chart asks which captures are attached and, for each
+// extra capture, what its time range is. Neither answer changes while a
+// view is open: attach, detach and a file swap clear the memo (via
+// clearMetadataCache / app.js clearViewerCaches). Before this memo a
+// section of twenty charts over twenty recordings sent the same twenty
+// metadata requests four hundred times. One promise per key is shared by
+// concurrent callers; a rejection is evicted so the next caller retries
+// rather than inheriting the failure.
+let _capturesMemo = null;
+const _captureMetaMemo = new Map(); // capture id -> Promise<metadata>
+
+// The backend call, made now (not on a later microtask, so the backend in
+// place when the caller asked is the one used) and always a promise: the
+// WASM adapter throws synchronously for an unattached capture.
+const asPromise = (fn) => {
+    try {
+        return Promise.resolve(fn());
+    } catch (e) {
+        return Promise.reject(e);
+    }
+};
+
+export const listCaptures = () => {
+    if (_capturesMemo) return _capturesMemo;
+    const p = asPromise(() => ViewerApi.getCaptures());
+    _capturesMemo = p;
+    p.catch(() => { if (_capturesMemo === p) _capturesMemo = null; });
+    return p;
+};
+
+export const captureMetadata = (captureId = CAPTURE_BASELINE) => {
+    const have = _captureMetaMemo.get(captureId);
+    if (have) return have;
+    const p = asPromise(() => ViewerApi.getMetadata(captureId));
+    _captureMetaMemo.set(captureId, p);
+    p.catch(() => { if (_captureMetaMemo.get(captureId) === p) _captureMetaMemo.delete(captureId); });
+    return p;
+};
+
+export const clearCaptureMemo = () => {
+    _capturesMemo = null;
+    _captureMetaMemo.clear();
+};
+
+// `fn` over `items` with at most `limit` in flight; results in input order.
+// The N-way overlay fetches each extra capture through this rather than
+// `Promise.all`: a browser allows about six connections per host, and a
+// chart that fires forty requests at once starves the baseline fetches
+// every other chart on the page is waiting on. A rejection is `fn`'s to
+// catch; one that escapes rejects the whole map.
+export const mapLimit = async (items, limit, fn) => {
+    const out = new Array(items.length);
+    let next = 0;
+    const worker = async () => {
+        while (next < items.length) {
+            const i = next++;
+            out[i] = await fn(items[i], i);
+        }
+    };
+    const workers = Math.max(1, Math.min(Math.floor(limit) || 1, items.length));
+    await Promise.all(Array.from({ length: workers }, worker));
+    return out;
+};
+
 let _stepOverride = null;
 const setStepOverride = (step) => { _stepOverride = step; };
 const getStepOverride = () => _stepOverride;
@@ -1339,6 +1405,7 @@ const createDataApi = ({
     const clearMetadataCache = () => {
         cachedMetadata = null;
         clearDisplayTiles(); // decoded tiles are keyed to the current recording
+        clearCaptureMemo(); // the capture list and every capture's range too
     };
 
     return {

@@ -9,7 +9,7 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
 import { collectGroupPlots } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setRateMode, getRateMode, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, nativeInterval, stepAtLeast, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setRateMode, getRateMode, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, nativeInterval, stepAtLeast, CAPTURE_BASELINE, CAPTURE_EXPERIMENT, listCaptures, captureMetadata, clearCaptureMemo } from './data.js';
 
 // Opt line-ish charts into display (boxplot decimation) mode: they fetch the
 // decimated boxplot binary instead of the full native-resolution JSON matrix.
@@ -136,7 +136,7 @@ const refreshCompareCaptures = async () => {
     }
     let capturesListed = false;
     try {
-        const caps = await ViewerApi.getCaptures();
+        const caps = await listCaptures();
         if (gen !== refreshGen) return;
         compareCaptures = Array.isArray(caps) ? caps : [];
         capturesListed = true;
@@ -152,14 +152,16 @@ const refreshCompareCaptures = async () => {
     // (`file_metadata`), not the editable events store, which is the
     // baseline's list and may be overridden by a persisted notebook. Both
     // backends answer these per capture id. The two A/B slots are always
-    // covered even when the captures list could not be fetched.
+    // covered even when the captures list could not be fetched. The
+    // metadata goes through the per-view memo, so the charts' N-way fetch
+    // finds every capture's range already answered.
     const ids = new Set(compareCaptures.map((c) => c.id).filter(Boolean));
     ids.add(CAPTURE_BASELINE);
     ids.add(CAPTURE_EXPERIMENT);
     await Promise.all([...ids].map(async (id) => {
         const [fm, meta] = await Promise.all([
             ViewerApi.getFileMetadata(id).catch(() => null),
-            ViewerApi.getMetadata(id).catch(() => null),
+            captureMetadata(id).catch(() => null),
         ]);
         if (gen !== refreshGen) return;
         if (!fm && !meta) return;
@@ -268,9 +270,13 @@ const queryRangeFromMeta = (meta) => {
 
 const attachExperiment = async (file) => {
     const sysinfo = await ViewerApi.attachExperiment(file);
+    // The capture list and the experiment slot's range just changed, and
+    // refreshCompareCaptures below reads both through the memo, so the
+    // caches go first (clearViewerCaches drops the memo with the rest).
+    clearViewerCaches();
     const [expFileMeta, expMeta] = await Promise.all([
         ViewerApi.getFileMetadata(CAPTURE_EXPERIMENT).catch(() => null),
-        ViewerApi.getMetadata(CAPTURE_EXPERIMENT).catch(() => null),
+        captureMetadata(CAPTURE_EXPERIMENT).catch(() => null),
     ]);
     experimentSystemInfo = sysinfo || null;
     experimentDurationMs = durationFromFileMetadata(expFileMeta);
@@ -287,7 +293,6 @@ const attachExperiment = async (file) => {
     refreshCompareCaptures();
 
     applyMultiNodeInfo(expFileMeta);
-    clearViewerCaches();
 
     // Clamp a stale anchor when the newly-attached experiment is
     // shorter than the previously-saved offset. Avoids a chart starting
@@ -349,6 +354,7 @@ const clearViewerCaches = () => {
     clearSectionResponses(sectionCacheState);
     heatmapDataCache.clear();
     chartsState.clear();
+    clearCaptureMemo();
 };
 
 const applyMultiNodeInfo = (experimentFileMetadata = null) => {
