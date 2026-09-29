@@ -124,11 +124,13 @@ fn write_path(view: &mut View, data: &dyn MetricsSource) {
 
     let terms = path.subgroup("Amplification");
     terms.describe(
-        "Bytes per second at each stage of the write path, on one axis: bytes applications \
-         wrote into ext4, pages writeback sent to the device, blocks the journal logged, and \
-         bytes the block layer wrote. Device over application bytes is the write \
-         amplification; which of the middle terms moved says where it comes from. Pages and \
-         journal blocks are converted at 4 KiB, the default for both.",
+        "Bytes per second at each stage of the write path, on one axis: pages writeback sent \
+         to the device, blocks the journal logged, bytes the block layer wrote, and, when the \
+         ext4_ops sampler is on, the bytes applications wrote into ext4 (buffered and \
+         synchronous direct writes; queued async direct writes are not counted). Device bytes \
+         over application bytes is the write amplification; which of the middle terms moved \
+         says where it comes from. Pages and journal blocks are converted at 4 KiB, the \
+         default for both.",
     );
     if has_metric(data, "ext4_write_bytes") {
         terms.plot_promql(

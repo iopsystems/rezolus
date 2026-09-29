@@ -2,15 +2,15 @@
 
 ### Added
 
-- `ext4_ops` sampler (off by default): how long fsync, unlink, write and
-  rename held the calling thread inside ext4. `ext4_op_latency{op}`
+- `ext4_ops` sampler (opt-in, never enabled by `[defaults]`): how long fsync,
+  unlink, write and rename held the calling thread inside ext4. `ext4_op_latency{op}`
   histograms; per-filesystem `ext4_ops{op}`, `ext4_op_time{op}`,
   `ext4_op_errors{op}` and `ext4_write_bytes`; per-cgroup `cgroup_ext4_ops{op}`
   and `cgroup_ext4_op_time{op}`, the time a service's request threads are held
   inside the filesystem. fsync and unlink from their tracepoints, write and
   rename from `fentry`/`fexit` on `ext4_file_write_iter` and `ext4_rename2`
-  (a program per arity of the latter), start timestamps in task local
-  storage; kernels 5.11+. The ext4 dashboard gains an Operations group and a
+  (its arity confirmed from BTF), start timestamps in task local storage;
+  kernels 5.12+. The ext4 dashboard gains an Operations group and a
   Write Path group that puts application bytes, writeback bytes, journal
   bytes and device bytes on one axis; the cgroup dashboards gain ext4 Blocked
   Time.

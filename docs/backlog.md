@@ -972,8 +972,14 @@ bare-metal probe-cost bench for anything at request rate).
   promoted): the cache device is never the root filesystem.
 - **`ext4_ops` sampler** — DONE, off by default. fsync and unlink from the
   enter/exit tracepoints, write and rename via `fentry`/`fexit`, per
-  filesystem and per cgroup; task local storage for the start state. See the
-  gaps entry's "Results — C5 and C6" for the measured probe cost.
+  filesystem and per cgroup; task local storage for the start state (floor
+  5.12). See the gaps entry's "Results — C5 and C6" for the measured probe
+  cost.
+- **`ext4_ops` async direct-IO bytes** — By design. `ext4_file_write_iter`
+  returns queued for an io_uring/libaio `O_DIRECT` write; its bytes land at
+  completion, which the sampler does not hook, so `ext4_write_bytes` misses
+  them and the write latency is submission time. Reopen with an
+  `iomap_dio_complete`-side hook if a direct-IO workload needs the term.
 - **`ext4_ops` on by default** — Open, NO-GO as measured: +4,070 instructions
   and +2.26 µs per write+fsync pair (four probes) on the phase 1 `null_blk`
   bench, 12% at 450 K ops/s. Profile per program (`bpftool prog profile`), the

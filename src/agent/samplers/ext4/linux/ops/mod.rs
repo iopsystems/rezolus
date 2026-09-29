@@ -23,15 +23,18 @@
 //! samplers and is benched before it is on by default; see the journal entry.
 //!
 //! Kernel support: the start timestamp is in task local storage
-//! (`BPF_MAP_TYPE_TASK_STORAGE`, 5.11), write and rename are `fentry`/`fexit`
-//! on ext4 functions (module BTF where ext4 is a module, 5.11), and the fsync
-//! and unlink tracepoints are `tp_btf` only, with no `raw_tp` twin, because a
-//! kernel old enough to lack the BTF for them cannot load the rest either.
-//! `ext4_rename2`'s signature changed in 5.12 (a namespace argument first), so
-//! the sampler carries a program per arity and selects on BTF. On a kernel
-//! whose BTF lacks a function the corresponding programs are disabled and the
-//! `rename` or `write` series stay absent. See
-//! docs/journal/2026-09-28-filesystem-telemetry-gaps.md (C5, C6).
+//! (`BPF_MAP_TYPE_TASK_STORAGE`, usable from tracing programs since 5.12),
+//! write and rename are `fentry`/`fexit` on ext4 functions (module BTF where
+//! ext4 is a module, 5.11), and the fsync and unlink tracepoints are `tp_btf`
+//! only, with no `raw_tp` twin, because a kernel old enough to lack the BTF
+//! for them cannot load the rest either. So the floor is 5.12. `ext4_rename2`
+//! has taken six arguments since 5.12 (a namespace argument first); the
+//! sampler confirms that from BTF and disables the rename pair on any other
+//! count rather than read the wrong slot. On a kernel whose BTF lacks
+//! `ext4_file_write_iter` or `ext4_rename2` the corresponding programs are
+//! disabled: that operation's histogram stays empty and its counters read 0,
+//! not absent. See docs/journal/2026-09-28-filesystem-telemetry-gaps.md
+//! (C5, C6).
 
 const NAME: &str = "ext4_ops";
 
@@ -133,25 +136,14 @@ fn select_programs(
         disabled.push("ext4_file_write_iter_fexit");
     }
 
-    match rename_arity {
-        Some(6) => {
-            disabled.push("ext4_rename2_fentry_5");
-            disabled.push("ext4_rename2_fexit_5");
-            required.push(("ext4_rename2_fentry_6", "rename latency"));
-            required.push(("ext4_rename2_fexit_6", "rename latency"));
-        }
-        Some(5) => {
-            disabled.push("ext4_rename2_fentry_6");
-            disabled.push("ext4_rename2_fexit_6");
-            required.push(("ext4_rename2_fentry_5", "rename latency"));
-            required.push(("ext4_rename2_fexit_5", "rename latency"));
-        }
-        _ => {
-            disabled.push("ext4_rename2_fentry_5");
-            disabled.push("ext4_rename2_fexit_5");
-            disabled.push("ext4_rename2_fentry_6");
-            disabled.push("ext4_rename2_fexit_6");
-        }
+    // The program reads six arguments and the return value by position; on
+    // any other arity it would read the wrong slot, so it is disabled.
+    if rename_arity == Some(6) {
+        required.push(("ext4_rename2_fentry", "rename latency"));
+        required.push(("ext4_rename2_fexit", "rename latency"));
+    } else {
+        disabled.push("ext4_rename2_fentry");
+        disabled.push("ext4_rename2_fexit");
     }
 
     (disabled, required)
@@ -162,26 +154,32 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
+    // This machine cannot, rather than this sampler failed: reported as
+    // unsupported, so `rezolus status` does not exit non-zero for a kernel
+    // that predates the BTF the sampler needs.
     if !kernel_btf_has_tracepoints(TRACEPOINTS) {
-        return Err(anyhow::anyhow!(
-            "{NAME}: the kernel's BTF does not describe the ext4 fsync and unlink tracepoints; \
-             this sampler needs vmlinux BTF with ext4 built in, or module BTF (kernels 5.11+) \
-             with ext4 as a module"
-        ));
+        return Err(crate::agent::sampler_status::Unsupported(
+            "the kernel's BTF does not describe the ext4 fsync and unlink tracepoints; needs \
+             vmlinux BTF with ext4 built in, or module BTF (kernels 5.11+) with ext4 as a module, \
+             and task local storage for tracing programs (5.12+)"
+                .to_string(),
+        )
+        .into());
     }
 
     let has_write_iter = kernel_btf_has_funcs(&["ext4_file_write_iter"]);
     if !has_write_iter {
-        info!("{NAME}: the kernel's BTF has no ext4_file_write_iter; write latency is off");
+        info!("{NAME}: the kernel's BTF has no ext4_file_write_iter; the write series read 0");
     }
 
     let rename_arity = kernel_btf_func_arg_count("ext4_rename2");
     match rename_arity {
-        Some(5) | Some(6) => {}
-        Some(n) => {
-            info!("{NAME}: ext4_rename2 takes {n} arguments, not 5 or 6; rename latency is off")
-        }
-        None => info!("{NAME}: the kernel's BTF has no ext4_rename2; rename latency is off"),
+        Some(6) => {}
+        Some(n) => info!(
+            "{NAME}: ext4_rename2 takes {n} arguments, not the 6 the program reads; the rename \
+             series read 0"
+        ),
+        None => info!("{NAME}: the kernel's BTF has no ext4_rename2; the rename series read 0"),
     }
 
     let (disabled, required) = select_programs(has_write_iter, rename_arity);
@@ -297,23 +295,20 @@ impl OpenSkelExt for ModSkel<'_> {
 mod tests {
     use super::*;
 
-    /// Exactly one rename pair is loaded, on the arity BTF reports, and none
-    /// on an arity the programs were not written for.
+    /// The rename pair is loaded on the one arity the program reads and on no
+    /// other, so a signature the program was not written for is never read
+    /// by position.
     #[test]
     fn rename_programs_are_selected_by_arity() {
         let (disabled, required) = select_programs(true, Some(6));
-        assert!(disabled.contains(&"ext4_rename2_fexit_5"));
-        assert!(required.iter().any(|(p, _)| *p == "ext4_rename2_fexit_6"));
+        assert!(required.iter().any(|(p, _)| *p == "ext4_rename2_fexit"));
+        assert!(!disabled.contains(&"ext4_rename2_fentry"));
         assert!(!disabled.contains(&"ext4_file_write_iter_fexit"));
 
-        let (disabled, required) = select_programs(true, Some(5));
-        assert!(disabled.contains(&"ext4_rename2_fexit_6"));
-        assert!(required.iter().any(|(p, _)| *p == "ext4_rename2_fexit_5"));
-
-        for arity in [None, Some(4), Some(7)] {
+        for arity in [None, Some(4), Some(5), Some(7)] {
             let (disabled, required) = select_programs(false, arity);
-            assert!(disabled.contains(&"ext4_rename2_fentry_5"));
-            assert!(disabled.contains(&"ext4_rename2_fentry_6"));
+            assert!(disabled.contains(&"ext4_rename2_fentry"));
+            assert!(disabled.contains(&"ext4_rename2_fexit"));
             assert!(disabled.contains(&"ext4_file_write_iter_fentry"));
             assert!(!required.iter().any(|(p, _)| p.contains("rename")));
             assert!(!required.iter().any(|(p, _)| p.contains("write_iter")));

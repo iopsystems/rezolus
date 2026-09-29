@@ -109,11 +109,10 @@ pub fn kernel_btf_func_arg_count(name: &str) -> Option<u32> {
 /// attach target.
 ///
 /// [`kernel_btf_has_funcs`] answers the same question for `fentry`/`fexit`
-/// targets but consults vmlinux BTF alone, which is right for kernel functions
-/// and wrong for a tracepoint that lives in a module: on a kernel with
-/// `CONFIG_EXT4_FS=m` (stock Debian amd64, for one), `btf_trace_jbd2_run_stats`
-/// is in `/sys/kernel/btf/jbd2`, not in vmlinux, and libbpf does resolve
-/// `tp_btf` targets against module BTF (kernels 5.11+). Selecting the `tp_btf`
+/// targets. Module BTF matters for both: on a kernel with `CONFIG_EXT4_FS=m`
+/// (stock Debian amd64, for one), `btf_trace_jbd2_run_stats` is in
+/// `/sys/kernel/btf/jbd2`, not in vmlinux, and libbpf does resolve `tp_btf`
+/// targets against module BTF (kernels 5.11+). Selecting the `tp_btf`
 /// twin on [`kernel_has_btf`] alone would make that kernel a load failure,
 /// fatal for the whole skeleton (see [`kernel_btf_has_funcs`] for why load-time
 /// misses matter more than attach-time ones). Selecting on this function falls
@@ -195,19 +194,23 @@ impl RawBtf {
         std::ptr::NonNull::new(ptr).map(Self)
     }
 
-    /// Whether this BTF — its own types only, not its base's — declares a
-    /// typedef of that name.
+    /// Whether this BTF declares a typedef of that name. For a module's
+    /// split BTF the search covers its base too, so a hit may come from
+    /// vmlinux; callers check vmlinux first, so the answer is the same.
     fn has_typedef(&self, name: &str) -> bool {
         self.find(name, libbpf_sys::BTF_KIND_TYPEDEF) >= 0
     }
 
-    /// Whether this BTF — its own types only, not its base's — declares a
-    /// function of that name.
+    /// Whether this BTF declares a function of that name (base included, as
+    /// for [`has_typedef`](Self::has_typedef)).
     fn has_func(&self, name: &str) -> bool {
         self.find(name, libbpf_sys::BTF_KIND_FUNC) >= 0
     }
 
     /// The id of the type named `name` of `kind` in this BTF, or negative.
+    /// `btf__find_by_name_kind` walks from id 1, so on a split BTF it walks
+    /// the base's types as well; a miss therefore costs a walk of vmlinux per
+    /// module, paid once at sampler init.
     fn find(&self, name: &str, kind: u32) -> i32 {
         let Ok(cname) = std::ffi::CString::new(name) else {
             return -1;
