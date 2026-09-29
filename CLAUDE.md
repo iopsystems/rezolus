@@ -168,6 +168,11 @@ target/release/rezolus mcp query multi.rez "sum(rate(cpu_cycles[1m]))" --recordi
 #   seconds; digit-only strings are refused as ambiguous. Handlers: src/mcp/server.rs; the write
 #   path is parquet_tools::events::{add_events_selected, remove_events_selected} over the annotate
 #   writer, whose report line the reply carries (a v2 tar is upgraded to v3 on the way and says so).
+#   export_query (src/mcp/export.rs) writes a range query as long-form CSV/parquet (series,
+#   timestamp, value, lo, hi) under `rezolus mcp --export-dir DIR` only, bare filename, never
+#   overwrites; viewer_link (src/mcp/link.rs) formats the url_state.js wire form (fragment + query;
+#   full URL with `--viewer-url` or a viewer_url argument), pinned to the JS parser by
+#   tests/viewer_link_parity.test.mjs.
 ```
 
 ## Architecture

@@ -47,6 +47,8 @@ enum McpTool {
     AddEvent,
     RemoveEvents,
     RunChecks,
+    ExportQuery,
+    ViewerLink,
     Unknown(String),
 }
 
@@ -62,6 +64,8 @@ impl From<&str> for McpTool {
             "add_event" => McpTool::AddEvent,
             "remove_events" => McpTool::RemoveEvents,
             "run_checks" => McpTool::RunChecks,
+            "export_query" => McpTool::ExportQuery,
+            "viewer_link" => McpTool::ViewerLink,
             other => McpTool::Unknown(other.to_string()),
         }
     }
@@ -284,6 +288,44 @@ fn additive_tools() -> Vec<Value> {
                 "required": ["parquet_file"]
             }
         }),
+        json!({
+            "name": "export_query",
+            "description": "Run a PromQL range query over the whole recording and write the result as a CSV or parquet file under the server's export directory (`rezolus mcp --export-dir`), for analysis outside PromQL. Long form: one row per series and timestamp with columns series, timestamp (Unix seconds), value, lo, hi (the rate() uncertainty band, else empty). Returns the path. Refused without an export directory, never overwrites, the filename must be bare, and a result over 1,000,000 rows is refused with a hint to raise step or aggregate.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "parquet_file": {"type": "string", "description": "Path to the recording (parquet or .rez)"},
+                    "recording": recording_property(),
+                    "query": {"type": "string", "description": "PromQL expression, as for the query tool. A heatmap result is refused: export histogram_quantile(...) of it instead."},
+                    "format": {"type": "string", "enum": ["csv", "parquet"], "description": "Default csv."},
+                    "filename": {"type": "string", "description": "A bare file name (no directories); the format's extension is added when missing. Derived from the query when omitted."},
+                    "step": {"type": "number", "description": "Evaluation step in seconds. Default 1."}
+                },
+                "required": ["parquet_file", "query"]
+            }
+        }),
+        json!({
+            "name": "viewer_link",
+            "description": "Build a link that opens a running rezolus viewer at a section (or one chart) with the view state set: time range, time mode, node, GPU, cgroup, service instance, family baseline and compare anchors. Opens nothing and reads no recording. Returns the hash fragment and query string, and a full URL when viewer_url is given or the server was started with --viewer-url. Hand the URL to the person so they land on the chart you are describing.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "section": {"type": "string", "description": "Dashboard section, e.g. overview, cpu, memory, scheduler, blockio, network, syscall, cgroups; a service section is service/<name>."},
+                    "chart_id": {"type": "string", "description": "One chart's id within the section, to open that chart expanded."},
+                    "from": {"type": ["string", "number"], "description": "Range start: RFC 3339 or Unix seconds as a number. Give from and to together."},
+                    "to": {"type": ["string", "number"], "description": "Range end, after from."},
+                    "time": {"type": "string", "enum": ["grid", "raw"], "description": "Rate time mode; grid is the default and is omitted."},
+                    "node": {"type": "string", "description": "Node to select in a multi-node recording."},
+                    "gpu": {"type": "array", "items": {"type": "string"}, "description": "GPUs to select, each vendor:id or a bare id."},
+                    "cgroup": {"type": "array", "items": {"type": "string"}, "description": "cgroup names to select."},
+                    "instance": {"type": "string", "description": "Service instance id, for a service section."},
+                    "family": {"type": "string", "description": "Family baseline in compare mode: envelope, or sigma:<k> (e.g. sigma:2)."},
+                    "anchors": {"type": "object", "additionalProperties": {"type": ["integer", "string"]}, "description": "Compare alignment per capture id (baseline, experiment, ...): signed milliseconds, or kind:<event kind> to align on that event."},
+                    "viewer_url": {"type": "string", "description": "The viewer's address (http:// or https://, no fragment), e.g. http://127.0.0.1:4200, to get a full URL. Overrides --viewer-url."}
+                },
+                "required": ["section"]
+            }
+        }),
     ]
 }
 
@@ -428,9 +470,13 @@ fn opt_str(arguments: &Value, key: &str) -> Result<Option<String>, String> {
 /// a wrong call does is add an event; the mutating ones (`remove_events`)
 /// can take another person's events out of a shared recording, so they
 /// need `--allow-mutating`.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ServerOptions {
     pub allow_mutating: bool,
+    /// Where `export_query` may write; the tool refuses every call without it.
+    pub export_dir: Option<std::path::PathBuf>,
+    /// A running viewer's address, so `viewer_link` can return a full URL.
+    pub viewer_url: Option<String>,
 }
 
 /// MCP server state
@@ -813,6 +859,16 @@ impl Server {
                 id,
                 "run_checks",
                 self.run_checks(arguments).await,
+            ))),
+            McpTool::ExportQuery => Ok(Some(tool_reply(
+                id,
+                "export_query",
+                self.export_query(arguments).await,
+            ))),
+            McpTool::ViewerLink => Ok(Some(tool_reply(
+                id,
+                "viewer_link",
+                self.viewer_link(arguments),
             ))),
             McpTool::Unknown(name) => Ok(Some(json!({
                 "jsonrpc": "2.0",
@@ -1242,6 +1298,81 @@ impl Server {
             "summary": run.summary(),
             "exit_code": run.exit_code(),
             "annotated": annotated,
+        }))?)
+    }
+
+    /// `export_query`: run a range query and write the rows under the
+    /// server's export directory.
+    async fn export_query(&self, arguments: &Value) -> Result<String, Box<dyn std::error::Error>> {
+        let Some(dir) = self.options.export_dir.as_deref() else {
+            return Err(
+                "export_query needs a directory to write into; start the server as \
+                        `rezolus mcp --export-dir <DIR>`"
+                    .into(),
+            );
+        };
+        let parquet_file = arguments
+            .get("parquet_file")
+            .and_then(|f| f.as_str())
+            .ok_or("Missing parquet_file")?;
+        let query = arguments
+            .get("query")
+            .and_then(|q| q.as_str())
+            .ok_or("Missing query")?;
+        let format = crate::mcp::export::Format::parse(opt_str(arguments, "format")?.as_deref())?;
+        let name = crate::mcp::export::file_name(
+            opt_str(arguments, "filename")?.as_deref(),
+            query,
+            format,
+        )?;
+        let selector = Self::selector_of(arguments)?;
+        let reader = self.get_reader_selected(parquet_file, &selector).await?;
+        let (start, end) = reader.time_range().unwrap_or((0.0, 0.0));
+        // The same step the `query` tool uses unless the caller says otherwise.
+        let step = match arguments.get("step") {
+            None | Some(Value::Null) => 1.0,
+            Some(Value::Number(n)) => {
+                let s = n.as_f64().unwrap_or(0.0);
+                if !(s.is_finite() && s > 0.0) {
+                    return Err("step must be a positive number of seconds".into());
+                }
+                s
+            }
+            Some(_) => return Err("step must be a number of seconds".into()),
+        };
+        let result = reader.query_range(query, start, end, step)?;
+        crate::mcp::export::check_row_cap(&result, step)?;
+        let rows = crate::mcp::export::rows_of(&result)?;
+        let exported = crate::mcp::export::write(dir, &name, format, &rows)?;
+        Ok(serde_json::to_string_pretty(&json!({
+            "path": exported.path,
+            "format": exported.format,
+            "rows": exported.rows,
+            "series": exported.series,
+            "columns": exported.columns,
+            "query": query,
+            "range": {"start": start, "end": end, "step": step},
+            "file": parquet_file,
+        }))?)
+    }
+
+    /// `viewer_link`: pure formatting; no recording is opened.
+    fn viewer_link(&self, arguments: &Value) -> Result<String, Box<dyn std::error::Error>> {
+        let spec = crate::mcp::link::LinkSpec::from_args(arguments)?;
+        let base = match opt_str(arguments, "viewer_url")? {
+            Some(b) => Some(crate::mcp::link::validate_base(&b)?),
+            None => self.options.viewer_url.clone(),
+        };
+        let link = spec.link(base.as_deref());
+        Ok(serde_json::to_string_pretty(&json!({
+            "fragment": link.fragment,
+            "query": link.query,
+            "url": link.url,
+            "note": if link.url.is_none() {
+                "no viewer address is known: open the viewer and append query + fragment to its address, or pass viewer_url (or start the server with --viewer-url)"
+            } else {
+                "opens a running rezolus viewer at this address; the hash picks the section, the query string the view"
+            },
         }))?)
     }
 }
@@ -1690,6 +1821,7 @@ mod tests {
         // With the flag, so the mutating tier is under the same check.
         let mut server = Server::with_options(ServerOptions {
             allow_mutating: true,
+            ..Default::default()
         });
         let listing = server
             .handle_message(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
@@ -1699,11 +1831,15 @@ mod tests {
         let tools = listing["result"]["tools"].as_array().unwrap().clone();
         assert_eq!(
             tools.len(),
-            9,
-            "six read tools, two additive, one mutating must be listed"
+            11,
+            "six read tools, four additive, one mutating must be listed"
         );
         for tool in tools {
             let name = tool["name"].as_str().unwrap();
+            // viewer_link opens no recording, so it has no selector to take.
+            if name == "viewer_link" {
+                continue;
+            }
             let props = &tool["inputSchema"]["properties"];
             assert!(
                 props.get("recording").is_some(),
@@ -1826,6 +1962,7 @@ mod tests {
         );
         let mut on = Server::with_options(ServerOptions {
             allow_mutating: true,
+            ..Default::default()
         });
         assert!(tool_names(&mut on).contains(&"remove_events".to_string()));
     }
@@ -2019,6 +2156,7 @@ mod tests {
         crate::mcp::tests::multi_recording_rez(&path, &["redis"], &[true]);
         let server = Server::with_options(ServerOptions {
             allow_mutating: true,
+            ..Default::default()
         });
         let file = path.to_str().unwrap();
         let add = |ts: &str, kind: &str, source: Option<&str>, id: &str| {
@@ -2173,5 +2311,120 @@ mod tests {
             server.reader_cache.read().unwrap().is_empty(),
             "a reader opened before the write would report the old events"
         );
+    }
+
+    // ── export_query / viewer_link ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn export_query_needs_the_export_dir_and_then_writes_under_it() {
+        // A shipped recording with a gauge the full-range query resolves.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("site/viewer/data/simple_capture.parquet");
+        let file = path.to_str().unwrap();
+        let args = json!({"parquet_file": file, "query": "queue_depth", "filename": "cpu"});
+
+        let off = Server::new();
+        let err = off.export_query(&args).await.err().unwrap().to_string();
+        assert!(err.contains("--export-dir"), "{err}");
+
+        let out_dir = tempfile::tempdir().unwrap();
+        let on = Server::with_options(ServerOptions {
+            export_dir: Some(out_dir.path().to_path_buf()),
+            ..Default::default()
+        });
+        let out: Value = serde_json::from_str(&on.export_query(&args).await.unwrap()).unwrap();
+        assert_eq!(out["format"], "csv");
+        assert_eq!(
+            out["columns"],
+            json!(["series", "timestamp", "value", "lo", "hi"])
+        );
+        let written = std::path::PathBuf::from(out["path"].as_str().unwrap());
+        assert_eq!(written, out_dir.path().join("cpu.csv"));
+        let text = std::fs::read_to_string(&written).unwrap();
+        assert!(text.starts_with("series,timestamp,value,lo,hi\n"), "{text}");
+        assert!(
+            out["rows"].as_u64().unwrap() > 0,
+            "the fixture has queue_depth rows: {out}"
+        );
+
+        // Never over an existing file; never outside the directory.
+        let err = on.export_query(&args).await.err().unwrap().to_string();
+        assert!(err.contains("already exists"), "{err}");
+        let mut escape = args.clone();
+        escape["filename"] = json!("../escape");
+        let err = on.export_query(&escape).await.err().unwrap().to_string();
+        assert!(err.contains("bare file name"), "{err}");
+        assert!(!out_dir.path().parent().unwrap().join("escape.csv").exists());
+
+        // Parquet, and a derived name when none is given.
+        let mut pq = args.clone();
+        pq["format"] = json!("parquet");
+        pq.as_object_mut().unwrap().remove("filename");
+        let out: Value = serde_json::from_str(&on.export_query(&pq).await.unwrap()).unwrap();
+        let p = out["path"].as_str().unwrap();
+        assert!(p.ends_with(".parquet") && p.contains("query-"), "{p}");
+        assert!(std::path::Path::new(p).exists());
+
+        // A step that is not a positive number, and a query that is a heatmap.
+        let mut bad = args.clone();
+        bad["filename"] = json!("s");
+        bad["step"] = json!(-1);
+        assert!(on
+            .export_query(&bad)
+            .await
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("step"));
+    }
+
+    #[test]
+    fn viewer_link_formats_without_opening_anything_and_takes_a_base() {
+        let plain = Server::new();
+        let out: Value = serde_json::from_str(
+            &plain
+                .viewer_link(&json!({"section": "cpu", "from": 1778373348.25, "to": 1778373529, "time": "raw"}))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out["fragment"], "#/cpu");
+        assert_eq!(
+            out["query"],
+            "?from=2026-05-10T00%3A35%3A48.250Z&to=2026-05-10T00%3A38%3A49.000Z&time=raw"
+        );
+        assert!(out["url"].is_null());
+        assert!(out["note"].as_str().unwrap().contains("viewer_url"));
+
+        let with_base = Server::with_options(ServerOptions {
+            viewer_url: Some("http://127.0.0.1:4200".to_string()),
+            ..Default::default()
+        });
+        let out: Value = serde_json::from_str(
+            &with_base
+                .viewer_link(&json!({"section": "cpu", "chart_id": "c1"}))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out["url"], "http://127.0.0.1:4200/#/cpu/chart/c1");
+        // The call's own base wins over the server's.
+        let out: Value = serde_json::from_str(
+            &with_base
+                .viewer_link(&json!({"section": "cpu", "viewer_url": "https://h/v/"}))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out["url"], "https://h/v/#/cpu");
+        let err = plain
+            .viewer_link(&json!({"from": 1}))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(err.contains("section"), "{err}");
+        let err = plain
+            .viewer_link(&json!({"section": "cpu", "viewer_url": "127.0.0.1:4200"}))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(err.contains("http://"), "{err}");
     }
 }

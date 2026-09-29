@@ -1424,11 +1424,11 @@ Source: [MCP write-back and tool tiers](journal/2026-09-28-mcp-write-back.md).
   `remove_events` (`ServerOptions`, tiered `tools/list`, flag-off call
   refused naming the flag, tested). `set_kpis` — Open, no producer of KPI
   sets on the agent side yet; the annotate KPI path is ready for it.
-- **`export_query` and `viewer_link`** — Open, next PR. `export_query`
-  writes a range query to parquet/CSV under `--export-dir`; `viewer_link`
-  returns the hash fragment plus the query string from
-  [viewer links](journal/2026-09-28-viewer-link-state.md) (full URL needs
-  the viewer's address; reopen if the fragment form proves insufficient).
+- **`export_query` and `viewer_link`** — DONE. `src/mcp/export.rs` writes
+  a range query as long-form CSV/parquet under `--export-dir` only;
+  `src/mcp/link.rs` formats the [viewer link](journal/2026-09-28-viewer-link-state.md)
+  wire form, pinned to the JS parser by `tests/viewer_link_parity.test.mjs`,
+  with a full URL from `--viewer-url` or a `viewer_url` argument.
 - **`rezolus mcp install`** — Open. Registers the server with known clients
   and ships a skill carrying the workflow prose that lives in tool
   descriptions today.
