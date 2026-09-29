@@ -58,3 +58,24 @@ pub static MEMORY_NUMA_LOCAL: LazyCounter = LazyCounter::new(Counter::default);
     metadata = { acq_group = "memory_vmstat_read" }
 )]
 pub static MEMORY_NUMA_OTHER: LazyCounter = LazyCounter::new(Counter::default);
+
+/*
+ * page-cache writeback totals. Complete counts from the mm layer: every
+ * page dirtied and every page written back by any path, including integrity
+ * syncs, which the flusher's own `writeback_pages_written` tracepoint (in
+ * `memory_writeback`) does not account for.
+ */
+
+#[metric(
+    name = "memory_pages_dirtied",
+    description = "Page-cache pages dirtied by writes (nr_dirtied). A page dirtied again before it is written back counts once",
+    metadata = { unit = "pages", acq_group = "memory_vmstat_read" }
+)]
+pub static MEMORY_PAGES_DIRTIED: LazyCounter = LazyCounter::new(Counter::default);
+
+#[metric(
+    name = "memory_pages_written",
+    description = "Page-cache pages written back to storage by any path (nr_written): the flusher threads, direct reclaim, and integrity syncs alike",
+    metadata = { unit = "pages", acq_group = "memory_vmstat_read" }
+)]
+pub static MEMORY_PAGES_WRITTEN: LazyCounter = LazyCounter::new(Counter::default);

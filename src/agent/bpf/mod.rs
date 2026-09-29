@@ -179,6 +179,82 @@ impl RawBtf {
 
         id >= 0
     }
+
+    /// The number of arguments the tracepoint `name` passes to a `tp_btf` or
+    /// `raw_tp` program, from its `btf_trace_<name>` typedef: the typedef
+    /// names a pointer to a function prototype whose first parameter is the
+    /// tracepoint's `void *` context and whose remaining parameters are the
+    /// `TP_PROTO` arguments, in order. `None` if this BTF has no such
+    /// typedef or it is not shaped that way.
+    fn tracepoint_arg_count(&self, name: &str) -> Option<u32> {
+        let Ok(cname) = std::ffi::CString::new(format!("btf_trace_{name}")) else {
+            return None;
+        };
+
+        // SAFETY: `self.0` is a live BTF object; every id passed to
+        // `btf__type_by_id` came from that object, and the returned pointer is
+        // read before the object is freed.
+        unsafe {
+            let id = libbpf_sys::btf__find_by_name_kind(
+                self.0.as_ptr(),
+                cname.as_ptr(),
+                libbpf_sys::BTF_KIND_TYPEDEF,
+            );
+            if id < 0 {
+                return None;
+            }
+
+            // typedef -> ptr -> func_proto; `type` on the first two is the
+            // referenced type id, and vlen on the last is the parameter count.
+            let mut ty = libbpf_sys::btf__type_by_id(self.0.as_ptr(), id as u32);
+            for expected in [libbpf_sys::BTF_KIND_TYPEDEF, libbpf_sys::BTF_KIND_PTR] {
+                if ty.is_null() || btf_kind(&*ty) != expected {
+                    return None;
+                }
+                ty = libbpf_sys::btf__type_by_id(self.0.as_ptr(), (*ty).__bindgen_anon_1.type_);
+            }
+            if ty.is_null() || btf_kind(&*ty) != libbpf_sys::BTF_KIND_FUNC_PROTO {
+                return None;
+            }
+
+            let params = (*ty).info & 0xffff;
+            params.checked_sub(1)
+        }
+    }
+}
+
+/// The kind bits of a BTF type's `info` word (bits 24..29), as
+/// `BTF_INFO_KIND` computes them.
+fn btf_kind(ty: &libbpf_sys::btf_type) -> u32 {
+    (ty.info >> 24) & 0x1f
+}
+
+/// The number of arguments tracepoint `name` passes to a `tp_btf`/`raw_tp`
+/// program on the running kernel, from vmlinux or module BTF, or `None` when
+/// no BTF describes it.
+///
+/// A tracepoint's `TP_PROTO` can change between kernel versions, and a
+/// `tp_btf`/`raw_tp` program reads its arguments by position, so a program
+/// written for one arity reads the wrong argument on a kernel with the other
+/// without any error. A sampler that hooks such a tracepoint keeps one program
+/// per known arity and selects on this at init; an unknown arity disables the
+/// hook rather than guessing. `kernel_btf_has_tracepoints` is the existence
+/// check this refines.
+pub fn kernel_btf_tracepoint_arg_count(name: &str) -> Option<u32> {
+    if !kernel_has_btf() {
+        return None;
+    }
+
+    let vmlinux = RawBtf::parse(Path::new("/sys/kernel/btf/vmlinux"), None)?;
+
+    if let Some(n) = vmlinux.tracepoint_arg_count(name) {
+        return Some(n);
+    }
+
+    module_btf_paths(Path::new("/sys/kernel/btf"))
+        .iter()
+        .filter_map(|path| RawBtf::parse(path, Some(&vmlinux)))
+        .find_map(|btf| btf.tracepoint_arg_count(name))
 }
 
 impl Drop for RawBtf {
@@ -220,6 +296,13 @@ mod btf_tests {
         let vmlinux = RawBtf::parse(vmlinux_path, None).expect("vmlinux BTF parses");
         assert!(vmlinux.has_typedef("btf_trace_sched_switch"));
         assert!(!vmlinux.has_typedef("btf_trace_no_such_tracepoint"));
+        // sched_switch has passed 3 (through 5.13) or 4 arguments (5.14+,
+        // `prev_state` added); any other count means the walk is wrong.
+        let n = vmlinux
+            .tracepoint_arg_count("sched_switch")
+            .expect("sched_switch is a tracepoint");
+        assert!((3..=4).contains(&n), "sched_switch has {n} arguments");
+        assert_eq!(vmlinux.tracepoint_arg_count("no_such_tracepoint"), None);
         for path in module_btf_paths(Path::new("/sys/kernel/btf")) {
             assert!(
                 RawBtf::parse(&path, Some(&vmlinux)).is_some(),
@@ -227,6 +310,50 @@ mod btf_tests {
                 path.display()
             );
         }
+    }
+}
+
+/// The length of one jiffy in nanoseconds, or `None` if the kernel would not
+/// say. `CLOCK_MONOTONIC_COARSE` is the tick-granular clock and its resolution
+/// is `TICK_NSEC`: 4,000,000 ns on a `CONFIG_HZ=250` kernel, 1,000,000 on
+/// `HZ=1000`. Measured, not configured, so it needs no `/proc/config.gz`; and
+/// not `sysconf(_SC_CLK_TCK)`, which is `USER_HZ`, a constant 100.
+///
+/// For BPF programs whose tracepoint arguments are in jiffies (jbd2's commit
+/// phases, the writeback throttle's `pause`): hand this to the program through
+/// a one-entry `BPF_F_MMAPABLE` map and multiply there.
+pub fn jiffy_ns() -> Option<u64> {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+
+    // SAFETY: `ts` is a valid, writable timespec for the duration of the call.
+    let rc = unsafe { libc::clock_getres(libc::CLOCK_MONOTONIC_COARSE, &mut ts) };
+
+    if rc != 0 || ts.tv_sec < 0 || ts.tv_nsec < 0 {
+        return None;
+    }
+
+    let ns = (ts.tv_sec as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(ts.tv_nsec as u64);
+
+    (ns > 0).then_some(ns)
+}
+
+#[cfg(test)]
+mod jiffy_tests {
+    /// The tick is a real kernel constant: between 1 ms (HZ=1000) and 10 ms
+    /// (HZ=100) on every Linux the agent supports. A value outside that range
+    /// means the clock being asked is not the tick-granular one.
+    #[test]
+    fn jiffy_is_between_one_and_ten_milliseconds() {
+        let tick = super::jiffy_ns().expect("clock_getres(CLOCK_MONOTONIC_COARSE)");
+        assert!(
+            (1_000_000..=10_000_000).contains(&tick),
+            "tick {tick} ns is not a jiffy"
+        );
     }
 }
 

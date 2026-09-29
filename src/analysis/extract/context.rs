@@ -76,6 +76,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "hw_sensors",
     "memory_meminfo",
     "memory_vmstat",
+    "memory_writeback",
     "network_ethtool",
     "network_interfaces",
     "network_traffic",
@@ -230,6 +231,8 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("memory_numa_miss", "memory_vmstat"),
     ("memory_numa_other", "memory_vmstat"),
     ("memory_page_tables", "memory_meminfo"),
+    ("memory_pages_dirtied", "memory_vmstat"),
+    ("memory_pages_written", "memory_vmstat"),
     ("memory_percpu", "memory_meminfo"),
     ("memory_shmem", "memory_meminfo"),
     ("memory_slab", "memory_meminfo"),
@@ -296,6 +299,14 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("tcp_packets", "tcp_traffic"),
     ("tcp_size", "tcp_traffic"),
     ("tcp_srtt", "tcp_receive"),
+    // The `memory_writeback` sampler's metrics carry the subsystem's own
+    // prefix, not the sampler's.
+    ("writeback_pages_written", "memory_writeback"),
+    ("writeback_runs", "memory_writeback"),
+    ("writeback_throttle_checks", "memory_writeback"),
+    ("writeback_throttle_events", "memory_writeback"),
+    ("writeback_throttle_latency", "memory_writeback"),
+    ("writeback_throttled_time", "memory_writeback"),
 ];
 
 /// The samplers that self-report `rezolus_bpf_run_count`/

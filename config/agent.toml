@@ -300,6 +300,11 @@ enabled = false
 # Memory NUMA metrics from /proc/vmstat
 [samplers.memory_vmstat]
 
+# BPF sampler on the page-cache writeback tracepoints: how long writers were
+# made to sleep by the dirty-page throttle, flusher runs by reason, and pages
+# written back. Filesystem-agnostic. See docs/metrics.md#memory_writeback.
+[samplers.memory_writeback]
+
 # Reads ENA (Elastic Network Adapter) driver statistics via ethtool ioctls to
 # expose AWS EC2 allowance exceeded counters for bandwidth, PPS, connection
 # tracking, and link-local traffic. Does nothing on non-ENA interfaces.

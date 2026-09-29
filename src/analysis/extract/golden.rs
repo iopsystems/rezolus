@@ -475,6 +475,7 @@ mod tests {
         "hw_sensors",
         "memory_meminfo",
         "memory_vmstat",
+        "memory_writeback",
         "network_ethtool",
         "network_interfaces",
         "network_traffic",

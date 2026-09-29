@@ -64,6 +64,8 @@ impl MeminfoInner {
             ("numa_interleave", &MEMORY_NUMA_INTERLEAVE),
             ("numa_local", &MEMORY_NUMA_LOCAL),
             ("numa_other", &MEMORY_NUMA_OTHER),
+            ("nr_dirtied", &MEMORY_PAGES_DIRTIED),
+            ("nr_written", &MEMORY_PAGES_WRITTEN),
         ]);
 
         let file = std::fs::File::open("/proc/vmstat").map(File::from_std)?;

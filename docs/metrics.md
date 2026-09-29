@@ -32,6 +32,7 @@ This guide walks you through all the available metrics, organized by category.
 - [Memory](#memory)
   - [memory_meminfo](#memory_meminfo)
   - [memory_vmstat](#memory_vmstat)
+  - [memory_writeback](#memory_writeback)
 - [Network](#network)
   - [network_interfaces](#network_interfaces)
   - [network_traffic](#network_traffic)
@@ -604,6 +605,37 @@ systems.
 | `memory_numa_interleave` | The number of interleave policy allocations that succeeded on the intended node | |
 | `memory_numa_local` | The number of allocations that succeeded on the local node | |
 | `memory_numa_other` | The number of allocations that on this node that were allocated by a process on another node | |
+| `memory_pages_dirtied` | Page-cache pages dirtied by writes (`nr_dirtied`); a page dirtied again before writeback counts once | |
+| `memory_pages_written` | Page-cache pages written back by any path (`nr_written`): flushers, reclaim and integrity syncs alike. The complete count; `writeback_pages_written` below is only what the flusher's own accounting saw | |
+
+### memory_writeback
+
+BPF sampler on the kernel's page-cache writeback tracepoints. Reports the
+sleeps the dirty-page throttle imposes on writers, the flusher work items by
+the reason they ran, and the pages written back. Filesystem-agnostic: these
+are the `mm` layer's tracepoints, and `memory_dirty` / `memory_writeback` in
+`memory_meminfo` are the gauges these rates act on.
+
+The throttle tracepoint (`balance_dirty_pages`) fires only once dirty pages are
+over the free-run ceiling, midway between the background and hard limits, so
+`writeback_throttle_checks` is zero while dirty pages stay comfortably under
+the limit and rises only when the throttle is being considered;
+`writeback_throttle_events` counts the evaluations that made the writer sleep.
+The sleep is a raw argument in jiffies, converted with the measured tick, so
+the histogram has one-jiffy resolution. That tracepoint has had
+two argument lists across kernel versions, and the sampler picks the program
+written for the one BTF reports; a kernel with neither, or without BTF, runs
+without the throttle metrics and reports degraded rather than reading the
+wrong argument.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `writeback_throttle_latency` | Distribution of the time a writer was made to sleep by the dirty-page throttle, in nanoseconds at one-jiffy resolution; sleeps only | |
+| `writeback_throttle_checks` | Throttle evaluations of tasks whose dirty pages were over the free-run ceiling | |
+| `writeback_throttle_events` | Evaluations that made the writer sleep | |
+| `writeback_throttled_time` | Total writer sleep in the throttle, in nanoseconds | |
+| `writeback_runs` | Flusher passes (one work item covering many inodes makes several), by why the work ran: `background` (dirty pages over the background threshold), `periodic` (the `dirty_writeback_centisecs` flusher), `sync`, `vmscan` (memory reclaim), `laptop_timer`, `fs_free_space`, `forker_thread`, `foreign_flush` (cgroup writeback) | `reason={background,vmscan,sync,periodic,laptop_timer,fs_free_space,forker_thread,foreign_flush}` |
+| `writeback_pages_written` | Pages the flushers reported written back, summed over flusher wakeups | |
 
 ## Network
 
