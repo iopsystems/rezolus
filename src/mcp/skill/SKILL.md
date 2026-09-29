@@ -37,7 +37,8 @@ Rules that hold on every recording:
 - `rate()` values carry an uncertainty band `[lo, hi]` from the acquisition
   window: in `query` JSON it is the `bands` (and `intervals`) list aligned
   with `values`. A difference inside the band is not a difference. A
-  recording with no acquisition windows (a converted parquet) has no band.
+  recording with no acquisition windows (for example a parquet combined into
+  a `.rez`) has no band, which says nothing about its precision.
 - Correlation does not establish causation. Report it as co-movement.
 - On a multi-recording `.rez`, pass the `recording` selector
   (e.g. `{"source": "redis"}`) to every call. Matching none or several is
@@ -54,7 +55,9 @@ Rules that hold on every recording:
   defaults to `mcp`, so your marks can be filtered or removed as a group.
   `timestamp` is RFC 3339 or Unix seconds as a JSON number (never a
   digit-only string). The reply carries the event id; adding an event
-  with an `id` already present changes nothing, so retrying is safe.
+  with an `id` already present changes nothing, so retrying is safe (a
+  `kind=check` event is the exception: it replaces a stored check event
+  with the same id).
 - **`run_checks`** evaluates the recording's KPI checks (or a
   ServiceExtension object you pass as `queries`) and returns each verdict
   with its violation windows; `annotate: true` writes them as events.

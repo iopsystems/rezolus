@@ -173,16 +173,20 @@ pub(crate) fn install_skill(opts: &InstallOptions) -> Result<String, String> {
     // A symlink is refused, dangling or not: every read and write below
     // would follow it, and the file it names (a checkout's copy of this
     // skill, say) is not ours to replace.
-    if let Ok(meta) = std::fs::symlink_metadata(&path) {
-        if meta.file_type().is_symlink() {
-            let target = std::fs::read_link(&path)
-                .map(|t| t.display().to_string())
-                .unwrap_or_else(|_| "?".into());
-            return Err(format!(
-                "{} is a symlink (to {target}); refusing to write through it. \
-                 Remove the link or update its target yourself",
-                path.display()
-            ));
+    // The same for the skill's own directory, the more common way to link
+    // a skill (`ln -s <checkout>/src/mcp/skill ~/.claude/skills/rezolus-mcp`).
+    for p in [&dir, &path] {
+        if let Ok(meta) = std::fs::symlink_metadata(p) {
+            if meta.file_type().is_symlink() {
+                let target = std::fs::read_link(p)
+                    .map(|t| t.display().to_string())
+                    .unwrap_or_else(|_| "?".into());
+                return Err(format!(
+                    "{} is a symlink (to {target}); refusing to write through it. \
+                     Remove the link or update its target yourself",
+                    p.display()
+                ));
+            }
         }
     }
     if path.exists() {
@@ -312,6 +316,14 @@ pub(crate) fn register(opts: &InstallOptions) -> Result<Vec<String>, String> {
                 out.push(w);
             }
         }
+        if opts.scope == Scope::User {
+            if let Some(n) = project_dir(opts)
+                .ok()
+                .and_then(|d| pending_project_note(&d))
+            {
+                out.push(n);
+            }
+        }
         return Ok(out);
     }
 
@@ -384,7 +396,16 @@ pub(crate) fn shadow_warning(get_output: &str, installed: Scope) -> Option<Strin
     } else {
         return None;
     };
-    if other == installed.as_str() {
+    // local > project > user. Only an entry that outranks the one just
+    // written shadows it. A project entry resolving to user means the new
+    // project entry is not approved yet (`get` skips unapproved project
+    // servers); once approved it wins, so nothing needs removing.
+    let rank = |s: &str| match s {
+        "local" => 3,
+        "project" => 2,
+        _ => 1,
+    };
+    if rank(other) <= rank(installed.as_str()) {
         return None;
     }
     Some(format!(
@@ -392,6 +413,19 @@ pub(crate) fn shadow_warning(get_output: &str, installed: Scope) -> Option<Strin
          takes precedence over the {} entry just written; remove it with \
          `claude mcp remove {SERVER_NAME} -s {other}` for this one to be used",
         installed.as_str()
+    ))
+}
+
+/// A user install can also be outranked by a `.mcp.json` in the working
+/// directory that `claude mcp get` does not report while it is unapproved.
+fn pending_project_note(dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(dir.join(".mcp.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    v.get("mcpServers")?.get(SERVER_NAME)?;
+    Some(format!(
+        "note: {} also defines {SERVER_NAME}; once approved in Claude Code, that project entry \
+         takes precedence over the user entry in this directory",
+        dir.join(".mcp.json").display()
     ))
 }
 
@@ -555,6 +589,13 @@ mod tests {
             .unwrap()
             .contains("-s project"));
         assert_eq!(shadow_warning(proj, Scope::Project), None);
+        // A project install that `get` still resolves to user: the new entry
+        // is pending approval and will outrank it; never tell the user to
+        // delete their global entry.
+        assert_eq!(shadow_warning(user, Scope::Project), None);
+        assert!(shadow_warning(local, Scope::Project)
+            .unwrap()
+            .contains("-s local"));
         assert_eq!(
             shadow_warning("No MCP server named rezolus", Scope::User),
             None
@@ -588,6 +629,40 @@ mod tests {
         // Dangling: refused the same way, not a confusing write error.
         std::fs::remove_file(&target).unwrap();
         assert!(install_skill(&o).err().unwrap().contains("symlink"));
+
+        // A symlinked skill DIRECTORY is refused too.
+        let d2 = tempfile::tempdir().unwrap();
+        let checkout = d2.path().join("checkout-skill");
+        std::fs::create_dir_all(&checkout).unwrap();
+        std::fs::write(
+            checkout.join("SKILL.md"),
+            "---\nname: rezolus-mcp\n---\nmine\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(d2.path().join(".claude/skills")).unwrap();
+        std::os::unix::fs::symlink(&checkout, d2.path().join(".claude/skills/rezolus-mcp"))
+            .unwrap();
+        let err = install_skill(&opts(Scope::Project, d2.path()))
+            .err()
+            .unwrap();
+        assert!(err.contains("symlink"), "{err}");
+        assert!(std::fs::read_to_string(checkout.join("SKILL.md"))
+            .unwrap()
+            .ends_with("mine\n"));
+    }
+
+    #[test]
+    fn a_user_install_notes_a_project_entry_in_the_working_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(pending_project_note(dir.path()), None);
+        std::fs::write(
+            dir.path().join(".mcp.json"),
+            r#"{"mcpServers":{"rezolus":{"command":"x"}}}"#,
+        )
+        .unwrap();
+        assert!(pending_project_note(dir.path())
+            .unwrap()
+            .contains("takes precedence"));
     }
 
     #[test]

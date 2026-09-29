@@ -227,20 +227,26 @@ The skill is `src/mcp/skill/SKILL.md`, embedded with `include_str!`, written
 to `~/.claude/skills/rezolus-mcp/` (user; `$CLAUDE_CONFIG_DIR/skills/` when
 set) or `.claude/skills/rezolus-mcp/` (project). A file already there is
 replaced only when its frontmatter names this skill; anything else is
-refused, and so is a symlink at that path, which every read and write would
-otherwise follow (review found a symlink into a checkout being overwritten).
-
-Claude Code resolves a name local > project > user, and `claude mcp
-remove --scope <s>` only touches one scope, so an install to user scope can
-be shadowed by an older local entry and the client keeps starting the old
-binary. After `add`, install reads `claude mcp get rezolus` and warns with
-the removal command when the resolved scope is another one. It carries the workflow that lived in
+refused, and so is a symlink at that path or at the skill directory, which
+every read and write would otherwise follow (review found a symlink into a
+checkout being overwritten). The skill carries the workflow that lived in
 the tool descriptions (discovery before query, features before hypotheses,
 one series for a check or anomaly detection, the selector), the rules
 (a missing metric is not zero, a rate band is the resolution, correlation
 is co-movement), and what to write back with which tool. The two read-tool
 descriptions that held workflow prose (`query`, `detect_anomalies`) now say
 what the tool does.
+
+Claude Code resolves a name local > project > user, and `claude mcp
+remove --scope <s>` only touches one scope, so an install to user scope can
+be shadowed by an older local entry and the client keeps starting the old
+binary. After `add`, install reads `claude mcp get rezolus` and warns with
+the removal command only when the resolved entry outranks the one just
+written. `get` skips unapproved project servers, so a fresh project install
+resolves to the user entry until approved; that is not a shadow and gets no
+warning (an earlier version told the user to delete their global entry).
+A user install notes a `.mcp.json` in the working directory that defines
+`rezolus`, which will outrank it once approved.
 
 **Measured.** With `CLAUDE_CONFIG_DIR` pointed at an empty directory,
 `rezolus mcp install` registered the server through `claude mcp add` and
