@@ -201,7 +201,11 @@ enabled = true
 [samplers.cpu_migrations]
 
 # Instruments CPU frequency, instructions, and cycles using perf counters.
+# The per-cgroup series read the counters on every context switch, which on a
+# VM with an emulated PMU is a hypervisor exit per read; set
+# cgroup_attribution = false to drop that program and keep per-CPU counters.
 [samplers.cpu_perf]
+# cgroup_attribution = false
 
 # Reports CPU energy and idle-state residency via perf. Power is derived at
 # query time from the energy counters. Discovers the
