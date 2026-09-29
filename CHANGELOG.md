@@ -1,5 +1,66 @@
 ## [Unreleased]
 
+### Changed
+
+- `ext4_journal` and `ext4_alloc` counters are per filesystem: every counter
+  carries `mount`, `fstype`, `devnum` and `block_device`, the labels the
+  `filesystem` sampler gives the same mount, with `mount="other"` for a
+  device the agent's mount table does not know yet. The BPF programs look the
+  device up in a `dev_t → slot` map the agent keeps in step with
+  `/proc/self/mountinfo` (rescanned every 10 s, and sooner when `other`
+  moves); counter banks are per CPU and per slot, 8 MiB and 12 MiB of
+  eagerly allocated map for the two samplers. jbd2 events from an ocfs2
+  mount get their own slot rather than being folded into the ext4 totals.
+  Histograms stay host-wide. The ext4 dashboard draws one line per mount.
+  Queries that sum these counters are unaffected; anything matching their
+  exact label set sees the new labels.
+- `ext4_ops` and `xfs_log` attribute to cgroups only when their section (or
+  `[defaults]`) sets `cgroup_attribution = true`. The per-cgroup path was
+  measured at half the end hook's cost (265 of 535 ns), so it is off by
+  default; when off, the `cgroup_ext4_*` and `cgroup_xfs_log_*` series are
+  absent and the path is folded out of the loaded program.
+
+### Added
+
+- `memory_pagecache` sampler (opt-in): the page cache's traffic per mount,
+  and per cgroup with `cgroup_attribution = true`. Buffered read calls and
+  bytes from one `fentry` on `filemap_read`, pages filled by the filling
+  task's context (read, write, fault, other) from the add tracepoint, pages
+  evicted, and mmap faults. Pages filled during reads over bytes read is the
+  read miss ratio. The memory dashboard's Page Cache group gains the rates
+  and the miss ratio when a recording has them.
+- `xfs_log` sampler (opt-in): how long threads block on the XFS log, per
+  mount and per cgroup, with host-wide latency histograms. Waiting for log
+  space is the `xfs_log_grant_sleep`/`_wake` pair; a log force is
+  `fentry`/`fexit` on `xfs_log_force` and `xfs_log_force_seq` (the fsync's
+  log write); CIL-full waits are counted. The counts equal
+  `xfs_log_space_sleeps` and `xfs_log_forces` from `xfs_stats` per mount;
+  the time and the cgroup are what the stats file cannot carry. Needs
+  kernels 5.12+ with XFS's BTF. The XFS dashboard gains a Blocked Time
+  group and the cgroups dashboard an XFS log blocked-time plot.
+- `xfs_stats` sampler: XFS's own per-mount counters from
+  `/sys/fs/xfs/<dev>/stats/stats`, one sysfs read per XFS mount off the
+  scrape cycle (1 s default): log writes, forces and force sleeps, in-core
+  log buffer stalls, log-space requests and sleeps, AIL pusher outcomes,
+  transactions, inode-cache lookups by outcome and reclaims, extents and
+  blocks allocated and freed, directory operations, file calls and bytes,
+  and the metadata buffer cache. Labeled `mount`, `fstype`, `devnum` and
+  `block_device` through the same slot registry as the ext4 samplers, which
+  now also assigns slots to XFS mounts. The viewer gains an XFS section.
+
+- `ext4_ops` sampler (opt-in, never enabled by `[defaults]`): how long fsync,
+  unlink, write and rename held the calling thread inside ext4. `ext4_op_latency{op}`
+  histograms; per-filesystem `ext4_ops{op}`, `ext4_op_time{op}`,
+  `ext4_op_errors{op}` and `ext4_write_bytes`; per-cgroup `cgroup_ext4_ops{op}`
+  and `cgroup_ext4_op_time{op}`, the time a service's request threads are held
+  inside the filesystem (with `cgroup_attribution = true`). fsync and unlink from their tracepoints, write and
+  rename from `fentry`/`fexit` on `ext4_file_write_iter` and `ext4_rename2`
+  (its arity confirmed from BTF), start timestamps in task local storage;
+  kernels 5.12+. The ext4 dashboard gains an Operations group and a
+  Write Path group that puts application bytes, writeback bytes, journal
+  bytes and device bytes on one axis; the cgroup dashboards gain ext4 Blocked
+  Time.
+
 ## [5.23.0] - 2026-09-29
 
 ### Added
