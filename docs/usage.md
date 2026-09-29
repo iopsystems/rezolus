@@ -219,10 +219,9 @@ one to the current container — as does rewriting it with `combine`, `filter` o
 `--stream` subscribes to each agent's replication stream (`/metrics/stream`)
 instead of scraping it. The agent pushes one frame per `--interval`, carrying
 only the acquisition groups it re-read since the last frame, stamped when the
-agent sampled rather than when the recorder asked. The identity index — which
-task or cgroup each slot means — arrives on the same stream; a `.rez` commits it
-in the same transaction as the rows it describes, and a `.dendro` takes the
-same identity from the rows' schemas into its occupant streams.
+agent sampled rather than when the recorder asked. Which task or cgroup each
+slot means travels in each group's schema, and the `.dendro` takes it from
+there into its occupant streams.
 
 ```bash
 rezolus record --stream --url http://localhost:4241 -o run.dendro
@@ -230,7 +229,10 @@ rezolus record --stream --endpoint http://web-01:4241 --endpoint http://web-02:4
 ```
 
 Scraping stays the default and the transport is never auto-detected. `--stream`
-records to `.dendro` or `.rez`, and every endpoint must be a rezolus agent that serves
+records to `.dendro` only; `-o out.rez` or `--format rez` with `--stream` is
+refused. (Rezolus 5.x wrote `.rez` from a stream, with an identity index beside
+the rows; 6.0 removed both. `.rez` recordings written that way still open.)
+Every endpoint must be a rezolus agent that serves
 the stream: an endpoint that cannot (a Prometheus exporter, a V2 agent, an agent
 from before `/metrics/stream`) fails the run rather than being scraped. An
 endpoint that is merely unreachable is retried each tick. A stream that drops
@@ -569,6 +571,30 @@ Protocol, with tools for querying metrics via PromQL, detecting anomalies, and
 analyzing correlations — useful for AI-guided performance investigation. Runs as
 a stdio MCP server or as one-shot CLI commands.
 
+### Setup with Claude Code
+
+```bash
+rezolus mcp install                                    # user scope: every project
+rezolus mcp install --scope project --export-dir ./exports   # this directory's .mcp.json
+rezolus mcp install --dry-run                          # say what would be done
+```
+
+`install` registers this binary as the `rezolus` server through `claude mcp
+add` and installs the `rezolus-mcp` skill (`~/.claude/skills/rezolus-mcp/` or
+`.claude/skills/rezolus-mcp/`), which carries the workflow: describe the
+recording and its metrics before querying, extract features before forming
+hypotheses, the recording selector, and what to write back. In Claude Code,
+`/mcp` lists the server and `/rezolus-mcp` loads the skill; `claude mcp list`
+checks the connection from a shell. Re-running replaces the entry, which is
+how the server's flags (`--allow-mutating`, `--export-dir`, `--viewer-url`,
+all accepted by `install`) are changed. Without `claude` on `PATH`, project
+scope writes `.mcp.json` directly and user scope prints the command to run.
+A skill file that is not this skill, or a symlink, is never overwritten.
+Claude Code resolves a server name local, then project, then user; when
+another scope's `rezolus` entry would win, `install` says so and prints the
+`claude mcp remove` command. A project-scope server is approved in Claude
+Code the first time it opens in that directory.
+
 ```bash
 rezolus mcp                                                  # stdio server
 rezolus mcp detect-anomalies run.rez                 # anomaly detection
@@ -615,6 +641,31 @@ an event.
   as `queries`, and returns every verdict with its violation windows and a
   summary. With `annotate: true` the windows are written into the recording
   as `kind=check` events, exactly as `rezolus recording check --annotate`.
+- `export_query` runs a PromQL range query over the whole recording and
+  writes the rows as CSV (default) or parquet, long form: one row per series
+  and timestamp with columns `series`, `timestamp` (Unix seconds), `value`,
+  `lo`, `hi` (the `rate()` uncertainty band, else empty). It is the way out
+  of PromQL: the agent gets rows it can load into whatever it has. Files
+  land only under the directory the server was started with, under a bare
+  `filename` (or one derived from the query), never over an existing file,
+  and never through a symlink planted there. A result over a million rows is
+  refused with the count and a hint to raise `step` or aggregate:
+
+  ```bash
+  rezolus mcp --export-dir /tmp/rezolus-exports
+  ```
+
+  Without the flag the tool refuses every call, naming it.
+- `viewer_link` builds a link that opens a running viewer at a `section` (or
+  one `chart_id`) with the view state set: `from`/`to`, `time`, `node`,
+  `gpu`, `cgroup`, `instance`, `family` and compare `anchors`, the same keys
+  as "Linking to a view". A service section is `service/<name>`. It opens
+  nothing and reads no recording. The reply carries the hash fragment and
+  the query string; with `viewer_url` in the call, or `rezolus mcp
+  --viewer-url http://127.0.0.1:4200`, it carries a full URL to hand to the
+  person. The address must be `http://` or `https://` with no fragment; one
+  that already has a query (the static site's `?capture=demo`) gets the view
+  keys appended to it.
 
 The mutating tools can take another person's events out of a shared
 recording, so they are off unless the operator starting the server says

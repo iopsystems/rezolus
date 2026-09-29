@@ -102,31 +102,25 @@ const HOOKS: &[(&str, &str, &str, &str)] = &[
 ];
 
 /// What a filesystem slot means, published when the mount table changes.
-static FS_IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(FS_IDENTITY_GROUPS);
+static FS_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(FS_IDENTITY_GROUPS);
 
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static FS_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &FS_IDENTITY;
-
-static FS_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
-    &COUNTERS_ACQ,
-    &[
-        &EXT4_JOURNAL_COMMITS,
-        &EXT4_JOURNAL_COMMIT_HANDLES,
-        &EXT4_JOURNAL_COMMIT_BLOCKS_DIRTIED,
-        &EXT4_JOURNAL_COMMIT_BLOCKS_LOGGED,
-        &EXT4_JOURNAL_CHECKPOINTS,
-        &EXT4_JOURNAL_CHECKPOINT_BUFFERS_WRITTEN,
-        &EXT4_JOURNAL_CHECKPOINT_BUFFERS_DROPPED,
-        &EXT4_JOURNAL_CHECKPOINT_FORCED_TO_CLOSE,
-        &EXT4_SYNC_FILE_FSYNC,
-        &EXT4_SYNC_FILE_FDATASYNC,
-        &EXT4_SYNC_FILE_ERRORS,
-        &EXT4_ERRORS,
-        &EXT4_SHUTDOWNS,
-        &EXT4_JOURNAL_LOCK_BUFFER_STALLS,
-    ],
-)];
+static FS_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[&[
+    &EXT4_JOURNAL_COMMITS,
+    &EXT4_JOURNAL_COMMIT_HANDLES,
+    &EXT4_JOURNAL_COMMIT_BLOCKS_DIRTIED,
+    &EXT4_JOURNAL_COMMIT_BLOCKS_LOGGED,
+    &EXT4_JOURNAL_CHECKPOINTS,
+    &EXT4_JOURNAL_CHECKPOINT_BUFFERS_WRITTEN,
+    &EXT4_JOURNAL_CHECKPOINT_BUFFERS_DROPPED,
+    &EXT4_JOURNAL_CHECKPOINT_FORCED_TO_CLOSE,
+    &EXT4_SYNC_FILE_FSYNC,
+    &EXT4_SYNC_FILE_FDATASYNC,
+    &EXT4_SYNC_FILE_ERRORS,
+    &EXT4_ERRORS,
+    &EXT4_SHUTDOWNS,
+    &EXT4_JOURNAL_LOCK_BUFFER_STALLS,
+]];
 
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {

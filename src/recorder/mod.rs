@@ -20,8 +20,7 @@ pub(crate) mod stream;
 #[cfg(test)]
 pub(crate) use ::rez::rez_stream;
 pub(crate) use ::rez::{
-    index, parquet_ingest, rez, rez_sqlite, rez_v3_rewrite, rez_v3_writer, schema, seal_policy,
-    wal, wire,
+    parquet_ingest, rez, rez_sqlite, rez_v3_rewrite, rez_v3_writer, schema, seal_policy, wal, wire,
 };
 
 /// True when the recording should be written as an archive of recordings: a
@@ -182,8 +181,8 @@ pub fn command() -> Command {
              --stream subscribes to each agent's /metrics/stream and records what it\n\
              pushes: one frame per --interval, carrying only the acquisition groups the\n\
              agent re-read since the last one, stamped when the agent sampled rather than\n\
-             when the recorder asked, plus the identity index (which task or cgroup each\n\
-             slot means) committed beside the rows it describes. Scraping stays the\n\
+             when the recorder asked. It writes .dendro only; .rez is refused (a .rez\n\
+             --stream recording needs a 5.x recorder and a 5.x agent). Scraping stays the\n\
              default and the transport is never auto-detected: --stream against an\n\
              endpoint that cannot serve it fails the run rather than scraping instead. A\n\
              stream that drops mid-run is reconnected after one interval (at least a\n\
@@ -274,7 +273,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("STREAM")
                 .long("stream")
-                .help("Subscribe to each agent's replication stream (/metrics/stream) instead of scraping it: the agent pushes one frame per --interval carrying only the groups it re-read, plus the identity index a .rez stores beside its rows (a .dendro takes identity from the rows' schemas instead). Opt-in and never auto-detected. .rez and .dendro output only, and rezolus agents only: an endpoint that cannot serve the stream (a Prometheus exporter, a V2 agent, an agent without /metrics/stream) fails the run rather than being scraped, while one that is merely unreachable is retried each tick as usual. A stream that drops mid-run is reconnected after one interval (at least a second), and a connection that produces no frame for the scrape timeout is treated as dropped")
+                .help("Subscribe to each agent's replication stream (/metrics/stream) instead of scraping it: the agent pushes one frame per --interval carrying only the groups it re-read, with slot identity in each group's schema. Opt-in and never auto-detected. .dendro output only (.rez is refused), and rezolus agents only: an endpoint that cannot serve the stream (a Prometheus exporter, a V2 agent, an agent without /metrics/stream) fails the run rather than being scraped, while one that is merely unreachable is retried each tick as usual. A stream that drops mid-run is reconnected after one interval (at least a second), and a connection that produces no frame for the scrape timeout is treated as dropped")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
@@ -719,17 +718,6 @@ fn handle_stream_event(
                     "{label}: the stream jumped to interval {}; the intervals before it \
                          produced no frame (the subscription was starved, or frames were lost)",
                     applied.seq
-                );
-            }
-            if applied.rows_skipped > 0 {
-                // Rule 10: rows naming an index state this recorder does
-                // not hold are not attributed. Said each time — a stream
-                // that keeps doing this is a broken stream, not an idle
-                // one.
-                warn!(
-                    "{label}: {} row(s) in interval {} named an index state this recorder \
-                         does not hold and were not recorded",
-                    applied.rows_skipped, applied.seq
                 );
             }
             if let Some(rec) = rez_recorder {
@@ -1290,7 +1278,6 @@ impl RezStream {
                 staged.push(rez_sqlite::TickBatch {
                     recording_id: rec.recording_id(),
                     rows,
-                    index_entries: Vec::new(),
                 });
             }
             Sink::Dendro { recs, staged, .. } => {
@@ -1306,11 +1293,9 @@ impl RezStream {
 
     /// Stage one interval off an endpoint's replication stream.
     ///
-    /// [`stage`](Self::stage) for the stream path. The rows go through the
-    /// same `stage_rows` the row endpoint feeds (see `Applied::for_writer`),
-    /// and the interval's index entries ride in the same `TickBatch`, so they
-    /// commit in the transaction that commits the rows they describe — the
-    /// guarantee `RecordingWriter::wal_with_index` exists for.
+    /// [`stage`](Self::stage) for the stream path, which writes `.dendro`
+    /// only: each pass is rebuilt into the V3 snapshot the writer ingests
+    /// (see `stream::StreamSchemas`).
     ///
     /// The stamp is the producer's: an interval carries when the agent
     /// sampled, and there is no recorder-side reading to prefer over it.
@@ -1320,66 +1305,44 @@ impl RezStream {
         url: &Url,
         applied: stream::Applied,
     ) -> Result<(), String> {
-        let interval = applied.for_writer()?;
-        if let Sink::Dendro {
+        let passes = applied.for_writer()?;
+        let Sink::Dendro {
             recs,
             staged,
             schemas,
             ..
         } = &mut self.sink
-        {
-            let Some(rec) = recs.get_mut(&endpoint) else {
-                return Err(format!(
-                    "{url} streamed an interval with no recording open for it; its rows \
-                     would be discarded"
-                ));
-            };
-            let cache = schemas.entry(endpoint).or_default();
-            let before = cache.unresolved;
-            for pass in &interval.rows {
-                let ts = u64::try_from(pass.ts).map_err(|_| {
-                    format!("{url} stamped a pass at {} ns, before the epoch", pass.ts)
-                })?;
-                self.last_stamp.insert(endpoint, (ts, pass.wall_offset));
-                let snapshot = cache.snapshot(pass)?;
-                staged.push(
-                    rec.stage(&snapshot, ts, pass.wall_offset)
-                        .map_err(archive_err)?,
-                );
-            }
-            if cache.unresolved > before {
-                warn!(
-                    "{url}: {} streamed rows named a schema this connection had not sent; \
-                     skipped",
-                    cache.unresolved - before
-                );
-            }
-            // The interval's index entries are not written: a dendro
-            // archive's occupant streams carry the same identity, taken from
-            // the schemas (see `stream::StreamSchemas`).
-            return Ok(());
-        }
-        let Sink::Rez { recs, staged, .. } = &mut self.sink else {
-            unreachable!("the dendro sink returned above");
+        else {
+            // Refused at parse time; see `reject_stream_without_dendro`.
+            return Err(format!(
+                "{url} streamed an interval into a .rez archive; --stream writes .dendro only"
+            ));
         };
         let Some(rec) = recs.get_mut(&endpoint) else {
             return Err(format!(
-                "{url} streamed an interval with no .rez recording open for it; its rows \
+                "{url} streamed an interval with no recording open for it; its rows \
                  would be discarded"
             ));
         };
-        let mut rows = Vec::new();
-        for pass in &interval.rows {
+        let cache = schemas.entry(endpoint).or_default();
+        let before = cache.unresolved;
+        for pass in &passes {
             let ts = u64::try_from(pass.ts)
                 .map_err(|_| format!("{url} stamped a pass at {} ns, before the epoch", pass.ts))?;
             self.last_stamp.insert(endpoint, (ts, pass.wall_offset));
-            rows.extend(rec.stage_rows(pass, ts, pass.wall_offset)?);
+            let snapshot = cache.snapshot(pass)?;
+            staged.push(
+                rec.stage(&snapshot, ts, pass.wall_offset)
+                    .map_err(archive_err)?,
+            );
         }
-        staged.push(rez_sqlite::TickBatch {
-            recording_id: rec.recording_id(),
-            rows,
-            index_entries: interval.index_entries,
-        });
+        if cache.unresolved > before {
+            warn!(
+                "{url}: {} streamed rows named a schema this connection had not sent; \
+                 skipped",
+                cache.unresolved - before
+            );
+        }
         Ok(())
     }
 
@@ -2007,15 +1970,13 @@ pub fn run(mut config: RecordingConfig) {
 
     let out_dir = output_dir(&config.output);
 
-    // `--stream` was refused at parse time for every format but `.rez`, and
+    // `--stream` was refused at parse time for every format but `.dendro`, and
     // the one demotion that can still flip the format (`--separate` with
     // several endpoints on a defaulted archive) was refused alongside it. So
     // this cannot fire; it is the backstop that turns a future gap into an
     // error rather than a stream fed to a writer that is not there.
     if config.stream && !rez_mode {
-        eprintln!(
-            "error: --stream records to .rez or .dendro only, and this run is not writing one"
-        );
+        eprintln!("error: --stream records to .dendro only, and this run is not writing one");
         std::process::exit(1);
     }
 
@@ -4062,194 +4023,14 @@ mod tests {
         assert_eq!(reader.source(), "rezolus");
     }
 
-    /// The `--stream` pipe end to end: an agent-shaped sequence of frames,
-    /// applied by the recorder's subscriber, staged through `stage_stream`,
-    /// committed a tick at a time, and read back through the same reader
-    /// every consumer uses.
-    ///
-    /// The frames are built here in the shape the agent's `FrameProducer`
-    /// emits — a handshake, the index, then rows whose payload carries the
-    /// schema on its first mention and not after — rather than by that
-    /// producer, which is private to the agent. The socket-level tests beside
-    /// it cover the real producer against the real `Subscription`.
-    ///
-    /// Two things are checked that no piece proves alone. The rows come back
-    /// as values — a counter rising 1/s reads as 1/s, on the producer's
-    /// stamps — and the index entry that arrived in the same interval is in
-    /// the same archive's `caller_rows`, byte for byte, which is what the
-    /// `TickBatch` plumbing exists for.
-    #[test]
-    fn a_streamed_recording_round_trips_its_rows_and_its_index() {
-        use crate::recorder::index::SourceIndex;
-        use crate::recorder::stream::StreamSubscriber;
-        use dendro::replicate::Frame;
-        use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, Snapshot, SnapshotV3};
-        use std::time::SystemTime;
-
-        const STREAM: &str = "fake/ops";
-        const PRODUCER_ANCHOR: i64 = 1_700_000_000_000_000_000;
-
-        // The producer side, as the agent runs it: one slot in the index.
-        let mut index = SourceIndex::new();
-        let entry = index
-            .observe(
-                STREAM,
-                vec![(
-                    0u32,
-                    [("comm".to_string(), "redis".to_string())]
-                        .into_iter()
-                        .collect(),
-                )],
-            )
-            .expect("a first observation is a change");
-        let handshake = Frame::Handshake {
-            source: 0,
-            uuid: Some("epoch-1".to_string()),
-            labels: [("source".to_string(), "rezolus".to_string())]
-                .into_iter()
-                .collect(),
-            metadata: BTreeMap::new(),
-            clock_anchor_wall_ns: PRODUCER_ANCHOR,
-            complete: false,
-        };
-        let schema = GroupSchema {
-            counters: vec![MetricDesc {
-                name: "0x0".to_string(),
-                metadata: [("metric".to_string(), "fake_ops".to_string())]
-                    .into_iter()
-                    .collect(),
-            }],
-            gauges: Vec::new(),
-            histograms: Vec::new(),
-        };
-
-        let mut sub = StreamSubscriber::new();
-        sub.apply(vec![handshake]).unwrap();
-        let source = sub
-            .source()
-            .cloned()
-            .expect("the handshake names the source");
-
-        // The recording is anchored on the handshake, as the loop does it.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("streamed.rez");
-        let config = rez_config(&path);
-        let mut ep = rez_endpoint();
-        adopt_source(&mut ep, &source);
-        assert_eq!(ep.agent.producer_epoch.as_deref(), Some("epoch-1"));
-        let mut rec = start_rez_recorder(&config, &[(0, &ep)], TEST_ANCHOR).unwrap();
-
-        let anchor = u64::try_from(source.clock_anchor_wall_ns).unwrap();
-        let ticks = 4u64;
-        for i in 0..ticks {
-            let ts = anchor + i * TEST_SECOND;
-            let group = GroupSnapshot {
-                name: STREAM.to_string(),
-                schema_hash: schema.hash(),
-                // The agent's own cache rule: the schema travels once.
-                schema: (i == 0).then(|| std::sync::Arc::new(schema.clone())),
-                window: Some(metriken::Window::new(ts - 500, ts)),
-                counters: vec![Some(i)],
-                gauges: Vec::new(),
-                histograms: Vec::new(),
-            };
-            let snapshot = Snapshot::V3(SnapshotV3 {
-                systemtime: SystemTime::UNIX_EPOCH + Duration::from_nanos(ts),
-                duration: Duration::from_millis(1),
-                metadata: Default::default(),
-                groups: vec![group],
-            });
-            let Snapshot::V3(v3) = &snapshot else {
-                unreachable!()
-            };
-            // The producer's payload: the schema inside on its first mention,
-            // absent after (`FrameProducer::interval`'s rule).
-            let payload = wal::encode_wal_group_row(&wal::wal_group_row(
-                &v3.groups[0],
-                (i == 0).then(|| (&schema).into()),
-            ))
-            .unwrap();
-            let mut frames = Vec::new();
-            // The index goes out with the first interval, as on connect.
-            if i == 0 {
-                for (stream, entry) in index.full_entries() {
-                    frames.push(Frame::Index {
-                        source: 0,
-                        stream,
-                        ts: ts as i64,
-                        kind: entry.kind.into(),
-                        state: entry.state,
-                        blob: entry.encode(),
-                    });
-                }
-            }
-            frames.push(Frame::Rows {
-                source: 0,
-                seq: i,
-                index_state: index.state(),
-                rows: vec![dendro::archive::WalRow {
-                    stream: STREAM.to_string(),
-                    ts: ts as i64,
-                    wall_offset: 3,
-                    row: payload,
-                }],
-            });
-
-            let applied = sub.apply(frames).unwrap();
-            assert_eq!(applied.rows_skipped, 0, "tick {i}");
-            assert_eq!(applied.rows.len(), 1, "tick {i}");
-            rec.stage_stream(0, &ep.config.url, applied).unwrap();
-            rec.commit_tick().unwrap();
-            rec.maybe_seal().unwrap();
-        }
-        let last = anchor + (ticks - 1) * TEST_SECOND;
-        rec.finalize((last, 3)).unwrap();
-
-        // The rows, as values.
-        use metriken_query::MetricsSource;
-        let reader = crate::rez_reader::RezReader::open_with_pool(
-            &path,
-            metriken_query::BufferPool::new(64 * 1024 * 1024),
-        )
-        .unwrap();
-        assert_eq!(reader.counter_names(), vec!["fake_ops".to_string()]);
-        let (start, end) = reader.time_range().unwrap();
-        assert_eq!(
-            (start * 1e9) as u64,
-            anchor,
-            "the rows sit on the producer's stamps, not the recorder's tick"
-        );
-        let r = reader.query_range("rate(fake_ops[5s])", start, end + 1.0, 1.0);
-        let metriken_query::QueryResult::Matrix { result } = r.expect("the query must resolve")
-        else {
-            panic!("a range query over a counter is a matrix");
-        };
-        let points: Vec<f64> = result
-            .iter()
-            .flat_map(|s| s.values.iter().map(|(_, v)| *v))
-            .collect();
-        assert!(!points.is_empty(), "the streamed rows must come back out");
-        assert!(
-            points.iter().all(|v| (*v - 1.0).abs() < 1e-6),
-            "a counter rising 1/s must read back as 1/s: {points:?}"
-        );
-
-        // The index entry, in the same archive, as sent.
-        let db = rez_sqlite::RezDb::open(&path).unwrap();
-        let stored = db.read_caller_rows(1, STREAM, 0, u64::MAX).unwrap();
-        assert_eq!(stored.len(), 1, "one entry was sent, one must be stored");
-        assert_eq!(stored[0].0, anchor, "stamped as the rows it describes");
-        assert_eq!(stored[0].1, entry.encode(), "stored verbatim");
-    }
-
     /// `--stream -o out.dendro`: a slotted group's rows become a long table
     /// whose occupants come from the streamed schemas' labels, as a scrape's
     /// do. Slot 0 changes hands at tick 4 (a new `__uid__` and `comm`, the
     /// counter restarting), slot 1 keeps one thread; the schema travels only
-    /// when it changes, and the index frames go out as the agent sends them.
+    /// when it changes, and there are no index frames, as a 6.0 agent sends
+    /// none.
     #[test]
     fn a_streamed_dendro_recording_takes_occupants_from_the_schemas() {
-        use crate::recorder::index::SourceIndex;
         use crate::recorder::stream::StreamSubscriber;
         use dendro::replicate::Frame;
         use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc};
@@ -4287,17 +4068,6 @@ mod tests {
             gauges: Vec::new(),
             histograms: Vec::new(),
         };
-        let index_view = |i: u64| {
-            occupants(i)
-                .into_iter()
-                .map(|(slot, comm, uid)| (slot, labels(&[("comm", comm), ("__uid__", uid)])))
-                .collect::<Vec<_>>()
-        };
-
-        let mut index = SourceIndex::new();
-        index
-            .observe(STREAM, index_view(0))
-            .expect("a first observation");
         let handshake = Frame::Handshake {
             source: 0,
             uuid: Some("epoch-1".to_string()),
@@ -4341,44 +4111,18 @@ mod tests {
                 changed.then(|| (&schema).into()),
             ))
             .unwrap();
-            let mut frames = Vec::new();
-            if i == 0 {
-                for (stream, entry) in index.full_entries() {
-                    frames.push(Frame::Index {
-                        source: 0,
-                        stream,
-                        ts: ts as i64,
-                        kind: entry.kind.into(),
-                        state: entry.state,
-                        blob: entry.encode(),
-                    });
-                }
-            } else if i == 4 {
-                let entry = index
-                    .observe(STREAM, index_view(i))
-                    .expect("slot 0 changed hands");
-                frames.push(Frame::Index {
-                    source: 0,
-                    stream: STREAM.to_string(),
-                    ts: ts as i64,
-                    kind: entry.kind.into(),
-                    state: entry.state,
-                    blob: entry.encode(),
-                });
-            }
-            frames.push(Frame::Rows {
+            let frames = vec![Frame::Rows {
                 source: 0,
                 seq: i,
-                index_state: index.state(),
+                index_state: dendro::replicate::NO_INDEX_STATE,
                 rows: vec![dendro::archive::WalRow {
                     stream: STREAM.to_string(),
                     ts: ts as i64,
                     wall_offset: 3,
                     row: payload,
                 }],
-            });
+            }];
             let applied = sub.apply(frames).unwrap();
-            assert_eq!(applied.rows_skipped, 0, "tick {i}");
             rec.stage_stream(0, &ep.config.url, applied).unwrap();
             rec.commit_tick().unwrap();
             rec.maybe_seal().unwrap();
@@ -4446,12 +4190,12 @@ mod tests {
     }
 
     /// An interval with no recording to land in is an error, as a scrape
-    /// with none is: in `.rez` mode nothing else would catch the rows.
+    /// with none is: nothing else would catch the rows.
     #[test]
     fn a_streamed_interval_with_no_recording_is_an_error_not_a_silent_drop() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("out.rez");
-        let config = rez_config(&path);
+        let path = dir.path().join("out.dendro");
+        let config = dendro_config(&path);
         let mut rec = start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR).unwrap();
         let url = Url::parse("http://localhost:4242").unwrap();
         let err = rec

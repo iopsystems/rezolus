@@ -67,51 +67,39 @@ const TRACEPOINTS: &[&str] = &[
 ];
 
 /// What a filesystem slot means, published when the mount table changes.
-static FS_IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(FS_IDENTITY_GROUPS);
+static FS_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(FS_IDENTITY_GROUPS);
 
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static FS_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &FS_IDENTITY;
-
-static FS_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
-    &COUNTERS_ACQ,
-    &[
-        &EXT4_OPS_FSYNC,
-        &EXT4_OPS_UNLINK,
-        &EXT4_OPS_WRITE,
-        &EXT4_OPS_RENAME,
-        &EXT4_OP_TIME_FSYNC,
-        &EXT4_OP_TIME_UNLINK,
-        &EXT4_OP_TIME_WRITE,
-        &EXT4_OP_TIME_RENAME,
-        &EXT4_OP_ERRORS_FSYNC,
-        &EXT4_OP_ERRORS_UNLINK,
-        &EXT4_OP_ERRORS_WRITE,
-        &EXT4_OP_ERRORS_RENAME,
-        &EXT4_WRITE_BYTES,
-    ],
-)];
+static FS_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[&[
+    &EXT4_OPS_FSYNC,
+    &EXT4_OPS_UNLINK,
+    &EXT4_OPS_WRITE,
+    &EXT4_OPS_RENAME,
+    &EXT4_OP_TIME_FSYNC,
+    &EXT4_OP_TIME_UNLINK,
+    &EXT4_OP_TIME_WRITE,
+    &EXT4_OP_TIME_RENAME,
+    &EXT4_OP_ERRORS_FSYNC,
+    &EXT4_OP_ERRORS_UNLINK,
+    &EXT4_OP_ERRORS_WRITE,
+    &EXT4_OP_ERRORS_RENAME,
+    &EXT4_WRITE_BYTES,
+]];
 
 /// What a cgroup slot means, published as the BPF side discovers cgroups.
-static CGROUP_IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(CGROUP_IDENTITY_GROUPS);
+static CGROUP_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(CGROUP_IDENTITY_GROUPS);
 
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static CGROUP_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &CGROUP_IDENTITY;
-
-static CGROUP_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
-    &CGROUP_ACQ,
-    &[
-        &CGROUP_EXT4_OPS_FSYNC,
-        &CGROUP_EXT4_OPS_UNLINK,
-        &CGROUP_EXT4_OPS_WRITE,
-        &CGROUP_EXT4_OPS_RENAME,
-        &CGROUP_EXT4_OP_TIME_FSYNC,
-        &CGROUP_EXT4_OP_TIME_UNLINK,
-        &CGROUP_EXT4_OP_TIME_WRITE,
-        &CGROUP_EXT4_OP_TIME_RENAME,
-    ],
-)];
+static CGROUP_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[&[
+    &CGROUP_EXT4_OPS_FSYNC,
+    &CGROUP_EXT4_OPS_UNLINK,
+    &CGROUP_EXT4_OPS_WRITE,
+    &CGROUP_EXT4_OPS_RENAME,
+    &CGROUP_EXT4_OP_TIME_FSYNC,
+    &CGROUP_EXT4_OP_TIME_UNLINK,
+    &CGROUP_EXT4_OP_TIME_WRITE,
+    &CGROUP_EXT4_OP_TIME_RENAME,
+]];
 
 fn handle_cgroup_info(data: &[u8]) -> i32 {
     process_cgroup_info::<bpf::types::cgroup_info>(data, &CGROUP_IDENTITY)

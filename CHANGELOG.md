@@ -2,6 +2,24 @@
 
 ### Changed
 
+- Slot identity and the producer epoch come from metriken 0.11.2
+  (`metriken::group::SlotIdentity`, `metriken::epoch`), which took them from
+  the agent; `__uid__` minting, the no-op on a re-announced label set, and
+  the epoch's format are unchanged. Samplers declare the metrics a slot
+  spans as one list per acquisition group (`SlotIdentity::grouped`).
+- `record --stream` writes `.dendro` only. `-o out.rez` or `--format rez`
+  with `--stream` is refused at parse time; scraping into a `.rez` is
+  unchanged. The identity index that `.rez --stream` stored beside its rows
+  is gone with it: the agent no longer sends `Frame::Index` on
+  `/metrics/stream` (every rows frame names dendro's `NO_INDEX_STATE`), no
+  longer keeps the slot-change broadcast or index history, and `/status`
+  drops `index_resyncs`. Slot identity reaches a `.dendro` through each
+  group's schema, `__uid__` included, as before. `.rez` archives written by
+  a 5.x `record --stream` still read with their occupants split by the
+  recorded index. 5.x keeps `.rez --stream` on `release/5.x`; a 5.x
+  `record --stream -o out.rez` against a 6.0 agent receives no index frames,
+  so it no longer records an identity index. A 6.0 `record --stream` from a
+  5.x agent ignores that agent's index frames.
 - `ext4_ops` and `xfs_log` attribute to cgroups only when their section (or
   `[defaults]`) sets `cgroup_attribution = true`. The per-cgroup path was
   measured at half the end hook's cost (265 of 535 ns), so it is off by
@@ -244,6 +262,14 @@
   configured one, so `listen = "127.0.0.1:0"` reports the port it got.
 
 ### Fixed
+
+- A dendro archive's metric that first appears in a later segment of its
+  table, or only in the live tail, can be queried; the reader learned a
+  table's metric names from its first segment alone (metriken-archive
+  0.2.8). A dendro archive's segments now also carry a format version
+  (`metriken.format`), and the reader refuses a newer format, an unknown
+  layout, or a source written by an encoder it does not decode, instead of
+  misreading it (metriken-segment 0.1.5, metriken-query 0.33.2).
 
 - Agent: a `/metrics/stream` interval with no reading to send (before the
   first sampling pass, or when a snapshot failed to encode) now gets an empty

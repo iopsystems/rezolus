@@ -58,39 +58,27 @@ impl_cgroup_info!(bpf::types::cgroup_info);
 const TRACEPOINTS: &[&str] = &["xfs_log_grant_sleep", "xfs_log_grant_wake"];
 
 /// What a filesystem slot means, published when the mount table changes.
-static FS_IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(FS_IDENTITY_GROUPS);
+static FS_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(FS_IDENTITY_GROUPS);
 
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static FS_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &FS_IDENTITY;
-
-static FS_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
-    &COUNTERS_ACQ,
-    &[
-        &XFS_LOG_WAITS_SPACE,
-        &XFS_LOG_WAITS_FORCE,
-        &XFS_LOG_WAITS_CIL,
-        &XFS_LOG_WAIT_TIME_SPACE,
-        &XFS_LOG_WAIT_TIME_FORCE,
-    ],
-)];
+static FS_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[&[
+    &XFS_LOG_WAITS_SPACE,
+    &XFS_LOG_WAITS_FORCE,
+    &XFS_LOG_WAITS_CIL,
+    &XFS_LOG_WAIT_TIME_SPACE,
+    &XFS_LOG_WAIT_TIME_FORCE,
+]];
 
 /// What a cgroup slot means, published as the BPF side discovers cgroups.
-static CGROUP_IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(CGROUP_IDENTITY_GROUPS);
+static CGROUP_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(CGROUP_IDENTITY_GROUPS);
 
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static CGROUP_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &CGROUP_IDENTITY;
-
-static CGROUP_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
-    &CGROUP_ACQ,
-    &[
-        &CGROUP_XFS_LOG_WAITS_SPACE,
-        &CGROUP_XFS_LOG_WAITS_FORCE,
-        &CGROUP_XFS_LOG_WAIT_TIME_SPACE,
-        &CGROUP_XFS_LOG_WAIT_TIME_FORCE,
-    ],
-)];
+static CGROUP_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[&[
+    &CGROUP_XFS_LOG_WAITS_SPACE,
+    &CGROUP_XFS_LOG_WAITS_FORCE,
+    &CGROUP_XFS_LOG_WAIT_TIME_SPACE,
+    &CGROUP_XFS_LOG_WAIT_TIME_FORCE,
+]];
 
 fn handle_cgroup_info(data: &[u8]) -> i32 {
     process_cgroup_info::<bpf::types::cgroup_info>(data, &CGROUP_IDENTITY)

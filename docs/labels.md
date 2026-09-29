@@ -129,7 +129,8 @@ consumers; metriken-query pins the engine.
 - **`{__name__="x"}` routes but cannot evaluate**: the selector parser accepts
   it (`promql/mod.rs:381`), the dispatcher requires a bare name
   (`streaming/dispatch.rs:605`).
-- **`caller_rows` is read by the archive reader.** The recorder stores
-  identity transitions (`rez_sqlite.rs`), and `crates/rez/src/indexed.rs`
-  replays them to split a group table's slot columns by occupant (#1280).
+- **`caller_rows` is read by the archive reader.** A `.rez` written by a 5.x
+  `record --stream` stores identity transitions there (`rez_sqlite.rs`), and
+  `crates/rez/src/indexed.rs` replays them to split a group table's slot
+  columns by occupant (#1280). Nothing in 6.0 writes them.
   See `docs/journal/2026-09-22-internal-labels.md`.

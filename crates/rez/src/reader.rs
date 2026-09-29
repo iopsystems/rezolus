@@ -3275,8 +3275,8 @@ mod tests {
             }
         }
 
-        /// The tick at which the recorder restates the whole set, as it does
-        /// every seal age: a `Full` that changes nothing.
+        /// The tick at which the 5.x recorder restated the whole set, as it
+        /// did every seal age: a `Full` that changes nothing.
         const RESTATED: u64 = 4;
 
         fn entry(tick: u64) -> Option<(u64, Vec<u8>)> {
@@ -3327,7 +3327,9 @@ mod tests {
 
         /// Write `TICKS` ticks of one two-slot group, slot 0 changing hands at
         /// `HANDOVER`, sealed every two rows so the table is several segments
-        /// plus a WAL tail. With `with_index` the handover is in `caller_rows`.
+        /// plus a WAL tail. With `with_index` the handover is in `caller_rows`,
+        /// as `record --stream -o out.rez` wrote it before 6.0; the entries are
+        /// inserted after the rows, since nothing in 6.0 writes them.
         fn write(path: &Path, labelled: bool, with_index: bool) {
             let seed = ManifestSeed {
                 labels: labels(&[("source", "rezolus")]),
@@ -3373,22 +3375,10 @@ mod tests {
                     groups: vec![g],
                 });
                 let rows = rec.stage(&snap, ts(tick), 0).unwrap();
-                let index_entries = match (with_index, entry(tick)) {
-                    (true, Some((ts, blob))) => vec![(
-                        STREAM.to_string(),
-                        vec![crate::rez_sqlite::IndexRow {
-                            ts,
-                            blob,
-                            full: tick == 0 || tick == RESTATED,
-                        }],
-                    )],
-                    _ => Vec::new(),
-                };
                 archive
                     .wal_tick(vec![TickBatch {
                         recording_id: rid,
                         rows,
-                        index_entries,
                     }])
                     .unwrap();
                 rec.maybe_seal().unwrap();
@@ -3396,6 +3386,12 @@ mod tests {
             rec.sync().unwrap();
             drop(rec);
             drop(archive);
+            if with_index {
+                let entries: Vec<(u64, Vec<u8>)> = (0..TICKS).filter_map(entry).collect();
+                let mut db = RezDb::open(path).unwrap();
+                db.transaction(|tx| tx.insert_caller_rows(rid, STREAM, &entries))
+                    .unwrap();
+            }
         }
 
         fn open(path: &Path) -> RezReader {

@@ -43,7 +43,7 @@ pub struct RecordingConfig {
     /// parquet for an endpoint `.rez` cannot record.
     pub format_defaulted: bool,
     /// `--stream`: subscribe to each agent's replication stream instead of
-    /// scraping it. Opt-in, never detected — see `reject_stream_without_rez`
+    /// scraping it. Opt-in, never detected — see `reject_stream_without_dendro`
     /// and the recorder's startup for what it refuses.
     pub stream: bool,
     /// `--record-command-line`: put the wrapped command's full argument list
@@ -219,19 +219,20 @@ fn reject_separate_with_rez(
     Ok(())
 }
 
-/// `--stream` feeds an archive writer (`.rez` or `.dendro`) and nothing else.
+/// `--stream` writes a `.dendro` archive and nothing else.
 ///
-/// The stream carries WAL rows and index entries — the archive's own shapes —
-/// and there is no parquet or raw form of either, so a run that asked for one
-/// of those formats has asked for two things that cannot both happen.
-/// Rejected at parse time rather than demoted: `--stream` is an explicit
+/// The stream carries WAL rows, which only an archive writer takes, so parquet
+/// and raw are refused. `.rez` is refused too: 6.0 removed `.rez` as a
+/// `--stream` target along with the identity index it depended on (5.x keeps
+/// it on `release/5.x`). A scraped `.rez` is still recorded as before.
+/// Rejected at parse time rather than substituted: `--stream` is an explicit
 /// choice, and the recorder's rule is that an explicit choice is never
 /// silently substituted (see `demote_from_rez`).
 ///
 /// `--separate` with several endpoints is the one way a defaulted archive can
 /// still turn into parquet at startup, so that combination is refused here
 /// too rather than letting the demotion discover the conflict a moment later.
-fn reject_stream_without_rez(
+fn reject_stream_without_dendro(
     stream: bool,
     format: Format,
     separate: bool,
@@ -240,10 +241,17 @@ fn reject_stream_without_rez(
     if !stream {
         return Ok(());
     }
+    if format == Format::Rez {
+        return Err(
+            "--stream records to .dendro only; .rez is no longer a --stream target in 6.0. \
+             Record to a .dendro (-o out.dendro), or drop --stream to scrape into a .rez"
+                .to_string(),
+        );
+    }
     if !is_archive(format) {
         return Err(format!(
-            "--stream records to .rez or .dendro only (the stream carries the archive's own \
-             rows, which have no {} form); drop --stream, or record to a .rez or .dendro",
+            "--stream records to .dendro only (the stream carries the archive's own \
+             rows, which have no {} form); drop --stream, or record to a .dendro",
             format_name(format)
         ));
     }
@@ -354,7 +362,7 @@ impl RecordingConfig {
                 plan.defaulted,
                 toml_cfg.endpoints.len(),
             )?;
-            reject_stream_without_rez(stream, plan.format, separate, toml_cfg.endpoints.len())?;
+            reject_stream_without_dendro(stream, plan.format, separate, toml_cfg.endpoints.len())?;
 
             return Ok(RecordingConfig {
                 interval,
@@ -383,7 +391,7 @@ impl RecordingConfig {
                 return Err("at least one --endpoint is required".to_string());
             }
             reject_separate_with_rez(separate, plan.format, plan.defaulted, endpoints.len())?;
-            reject_stream_without_rez(stream, plan.format, separate, endpoints.len())?;
+            reject_stream_without_dendro(stream, plan.format, separate, endpoints.len())?;
 
             return Ok(RecordingConfig {
                 interval,
@@ -427,7 +435,7 @@ impl RecordingConfig {
         };
         // One endpoint by construction, so `--separate` has nothing to split.
         reject_separate_with_rez(separate, plan.format, plan.defaulted, 1)?;
-        reject_stream_without_rez(stream, plan.format, separate, 1)?;
+        reject_stream_without_dendro(stream, plan.format, separate, 1)?;
 
         Ok(RecordingConfig {
             interval,
@@ -521,12 +529,11 @@ mod tests {
         );
     }
 
-    /// `--stream` is a transport for the `.rez` writer and nothing else. A
-    /// parquet or raw run that asks for it has asked for two things that
-    /// cannot both happen, and it is refused at parse time — an explicit
-    /// choice is never silently substituted.
+    /// `--stream` is a transport for the `.dendro` writer and nothing else. A
+    /// `.rez`, parquet or raw run that asks for it is refused at parse time —
+    /// an explicit choice is never silently substituted.
     #[test]
-    fn stream_is_accepted_for_the_archives_and_refused_for_every_other_format() {
+    fn stream_is_accepted_for_dendro_and_refused_for_every_other_format() {
         let parse = |args: &[&str]| {
             let mut argv = vec!["record"];
             argv.extend_from_slice(args);
@@ -536,15 +543,19 @@ mod tests {
                 .and_then(|m| RecordingConfig::from_args(&m))
         };
 
-        // The default output is a .rez, and an explicit one is too.
-        assert!(parse(&["--stream"]).unwrap().stream);
-        assert!(parse(&["--stream", "-o", "out.rez"]).unwrap().stream);
+        // The default output is a .dendro, and an explicit one is too.
+        let defaulted = parse(&["--stream"]).unwrap();
+        assert!(defaulted.stream);
+        assert_eq!(defaulted.format, Format::Dendro);
         assert!(parse(&["--stream", "-o", "out.dendro"]).unwrap().stream);
         assert!(parse(&["--stream", "--format", "dendro"]).unwrap().stream);
         assert!(!parse(&[]).unwrap().stream, "opt-in: off unless asked for");
 
         for args in [
-            &["--stream", "-o", "out.parquet"][..],
+            &["--stream", "-o", "out.rez"][..],
+            &["--stream", "--format", "rez"],
+            &["--stream", "--format", "rez", "-o", "out.rez"],
+            &["--stream", "-o", "out.parquet"],
             &["--stream", "--format", "raw"],
             &["--stream", "--format", "parquet", "-o", "out.parquet"],
         ] {
@@ -552,8 +563,11 @@ mod tests {
                 .err()
                 .unwrap_or_else(|| panic!("{args:?} must be refused"));
             assert!(err.contains("--stream"), "{args:?}: {err}");
-            assert!(err.contains(".rez"), "{args:?}: {err}");
+            assert!(err.contains(".dendro"), "{args:?}: {err}");
         }
+
+        // A .rez without --stream is still a scraped recording.
+        assert!(!parse(&["-o", "out.rez"]).unwrap().stream);
 
         // --separate with several endpoints is the one way a defaulted archive
         // can still become parquet at startup; refused up front instead.

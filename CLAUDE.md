@@ -62,7 +62,7 @@ target/release/rezolus record --url http://host:9090/metrics -o out.parquet --me
 target/release/rezolus record --stream --url http://localhost:4241 -o out.dendro   # subscribe to /metrics/stream instead of scraping
 target/release/rezolus record -o bench.rez -- ./bench.sh   # record for the command's lifetime; writes run_start/run_end events
 #   (program name only; --record-command-line adds the full argument list; .rez, .dendro and parquet carry them, raw cannot)
-target/release/rezolus record --url http://localhost:4241 -o out.dendro         # dendro archive via metriken-archive (opt-in; --stream too)
+target/release/rezolus record --url http://localhost:4241 -o out.dendro         # dendro archive via metriken-archive (--stream writes only this)
 # Auto-detects Rezolus agent vs Prometheus endpoints. The -o extension picks the format
 # (.rez | .parquet | .raw); --format {rez|parquet|raw} is rarely needed and conflicting with
 # the extension is an error. With no -o, the output is rezolus.<ext> for the format in play.
@@ -72,11 +72,12 @@ target/release/rezolus record --url http://localhost:4241 -o out.dendro         
 # demotes the format, since one archive cannot be one file per endpoint.
 # Also: --metadata key=value (repeatable), --label key=value (repeatable; tags a .rez
 # recording, source/host auto-populated), --interval, --duration.
-# --stream is opt-in and never auto-detected: .rez or .dendro, rezolus agents only. An endpoint
+# --stream is opt-in and never auto-detected: .dendro only (.rez is refused at parse time;
+# 6.0 removed .rez --stream and the identity index), rezolus agents only. An endpoint
 # that cannot serve the stream (Prometheus, V2 agent, no /metrics/stream) fails the run
 # rather than being scraped; an unreachable one is retried each tick, and a stream that
 # drops (or goes silent for the scrape timeout) is reconnected after one interval, at least
-# a second. Rows and index entries commit in one transaction per tick.
+# a second. Identity travels in each group's schema; the agent sends no index frames.
 
 # Viewer - web dashboard for parquet files, live agents, or upload mode
 target/release/rezolus view output.parquet [experiment.parquet] [--listen ADDR]
@@ -142,6 +143,10 @@ target/release/rezolus status web-01                # bare host/host:port is nor
 target/release/rezolus status --json
 
 target/release/rezolus mcp                                                    # stdio server
+target/release/rezolus mcp install [--scope user|project] [--dry-run] [--no-skill] [server flags]
+#   registers the server with Claude Code via `claude mcp add` (project scope writes .mcp.json
+#   when `claude` is absent) and installs the rezolus-mcp skill (src/mcp/skill/SKILL.md,
+#   embedded; replaced only when the file there is ours). src/mcp/install.rs.
 target/release/rezolus mcp describe-recording file.parquet                    # describe recording
 target/release/rezolus mcp describe-metrics file.parquet                      # list all metrics
 target/release/rezolus mcp detect-anomalies file.parquet                      # exhaustive anomaly detection
@@ -168,6 +173,11 @@ target/release/rezolus mcp query multi.rez "sum(rate(cpu_cycles[1m]))" --recordi
 #   seconds; digit-only strings are refused as ambiguous. Handlers: src/mcp/server.rs; the write
 #   path is parquet_tools::events::{add_events_selected, remove_events_selected} over the annotate
 #   writer, whose report line the reply carries (a v2 tar is upgraded to v3 on the way and says so).
+#   export_query (src/mcp/export.rs) writes a range query as long-form CSV/parquet (series,
+#   timestamp, value, lo, hi) under `rezolus mcp --export-dir DIR` only, bare filename, never
+#   overwrites; viewer_link (src/mcp/link.rs) formats the url_state.js wire form (fragment + query;
+#   full URL with `--viewer-url` or a viewer_url argument), pinned to the JS parser by
+#   tests/viewer_link_parity.test.mjs.
 ```
 
 ## Architecture
@@ -249,7 +259,8 @@ format, WAL rows and table builders are `metriken-segment`'s), per metriken's
 `docs/journal/2026-09-28-high-cardinality-stack.md`. What stays here is the
 `.rez` container (`RezDb`'s `metriken_archive::Catalog` impl, the tar path) and
 the identity-index relabel (`reader::IdentityIndex`, an
-`metriken_archive::IndexRelabel`).
+`metriken_archive::IndexRelabel`), which reads the `caller_rows` a 5.x
+`record --stream -o out.rez` wrote; nothing in 6.0 writes them.
 It is a workspace crate rather than a module of the binary because `rezolus` is
 **binary-only** (no `lib` target), so nothing can depend on it: a reader living
 there was reachable by the server viewer and by nothing else, which is why the

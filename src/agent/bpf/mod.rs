@@ -734,10 +734,7 @@ pub(crate) fn possible_cpus() -> usize {
     })
 }
 
-pub fn process_cgroup_info<T>(
-    data: &[u8],
-    identity: &'static crate::agent::identity::SlotIdentity,
-) -> i32
+pub fn process_cgroup_info<T>(data: &[u8], identity: &'static metriken::group::SlotIdentity) -> i32
 where
     T: CgroupInfo + plain::Plain + Default,
 {
@@ -777,11 +774,10 @@ where
             "".to_string()
         };
 
-        // Written and published together. A cgroup whose name changed without
-        // being published is invisible to a subscriber for the life of its
-        // connection — there is no per-tick diff to notice it any more.
+        // Written through `SlotIdentity`, which mints a new `__uid__` when the
+        // name changes, so a renamed cgroup is a new series.
         if !path.is_empty() {
-            identity.set(
+            identity.assign(
                 cgroup_info.id() as usize,
                 [("name".to_string(), path)].into_iter().collect(),
             );

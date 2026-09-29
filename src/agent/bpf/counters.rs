@@ -5,8 +5,8 @@ use libbpf_rs::{Map, MapCore, MapFlags};
 use memmap2::{MmapMut, MmapOptions};
 use metriken::{CounterGroup, LazyCounter};
 
-use crate::agent::identity::SlotIdentity;
 use crate::agent::timing::AcquisitionGroup;
+use metriken::group::SlotIdentity;
 
 use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 use std::sync::atomic::AtomicU64;
@@ -408,7 +408,7 @@ impl<'a> FilesystemCounters<'a> {
         // these groups are owned (not mmap-attached) and `apply` writes the
         // never-written sentinel when a slot empties.
         this.group.set_member_bound(1);
-        this.identity.set(
+        this.identity.assign(
             0,
             [("mount".to_string(), super::filesystems::OTHER.to_string())]
                 .into_iter()
@@ -437,7 +437,7 @@ impl<'a> FilesystemCounters<'a> {
                     if let Err(e) = self.lookup.delete(&old.dev.to_ne_bytes()) {
                         debug!("filesystem slots: delete {} from lookup: {e}", old.devnum);
                     }
-                    self.identity.clear(slot);
+                    self.identity.release(slot);
                     self.zero(slot);
                     for counter in &self.counters {
                         // u64::MAX is CounterGroup's never-written sentinel.
@@ -460,7 +460,7 @@ impl<'a> FilesystemCounters<'a> {
                     }
                 }
                 // A relabel (same device, moved mount point) is a set too.
-                self.identity.set(slot, new.labels());
+                self.identity.assign(slot, new.labels());
             }
         }
         // Stored before the next `finish()`, as the bound contract requires.

@@ -69,41 +69,29 @@ const LUT_WRITE: u64 = 2;
 const MAX_SYSCALL_ID: usize = 1024;
 
 /// What a filesystem slot means, published when the mount table changes.
-static FS_IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(FS_IDENTITY_GROUPS);
+static FS_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(FS_IDENTITY_GROUPS);
 
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static FS_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &FS_IDENTITY;
-
-static FS_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
-    &COUNTERS_ACQ,
-    &[
-        &PAGECACHE_READS,
-        &PAGECACHE_READ_BYTES,
-        &PAGECACHE_PAGES_ADDED_READ,
-        &PAGECACHE_PAGES_ADDED_WRITE,
-        &PAGECACHE_PAGES_ADDED_FAULT,
-        &PAGECACHE_PAGES_ADDED_OTHER,
-        &PAGECACHE_PAGES_EVICTED,
-        &PAGECACHE_FAULTS,
-    ],
-)];
+static FS_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[&[
+    &PAGECACHE_READS,
+    &PAGECACHE_READ_BYTES,
+    &PAGECACHE_PAGES_ADDED_READ,
+    &PAGECACHE_PAGES_ADDED_WRITE,
+    &PAGECACHE_PAGES_ADDED_FAULT,
+    &PAGECACHE_PAGES_ADDED_OTHER,
+    &PAGECACHE_PAGES_EVICTED,
+    &PAGECACHE_FAULTS,
+]];
 
 /// What a cgroup slot means, published as the BPF side discovers cgroups.
-static CGROUP_IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(CGROUP_IDENTITY_GROUPS);
+static CGROUP_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(CGROUP_IDENTITY_GROUPS);
 
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static CGROUP_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &CGROUP_IDENTITY;
-
-static CGROUP_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
-    &CGROUP_ACQ,
-    &[
-        &CGROUP_PAGECACHE_READS,
-        &CGROUP_PAGECACHE_READ_BYTES,
-        &CGROUP_PAGECACHE_PAGES_ADDED,
-    ],
-)];
+static CGROUP_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[&[
+    &CGROUP_PAGECACHE_READS,
+    &CGROUP_PAGECACHE_READ_BYTES,
+    &CGROUP_PAGECACHE_PAGES_ADDED,
+]];
 
 fn handle_cgroup_info(data: &[u8]) -> i32 {
     process_cgroup_info::<bpf::types::cgroup_info>(data, &CGROUP_IDENTITY)

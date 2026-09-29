@@ -12,16 +12,9 @@ mod exposition;
 /// module for it would be the wrong dependency.
 pub(crate) const REPLICATION_CONTENT_TYPE: &str = "application/vnd.rezolus.replication.v1+dendro";
 mod external_metrics;
-/// What a slot means, published when it changes — #1224.
-///
-/// Every production caller is a BPF ringbuf handler, so on a non-Linux build
-/// nothing here is reached and all of it reads as dead. The tests reach it on
-/// every platform, which is why `GroupMetadata` is not gated: the publish path
-/// is the part most worth exercising, and gating it would confine that to
-/// where BPF runs.
-#[cfg_attr(not(test), allow(dead_code))]
+/// What a slot means: its labels and the `__uid__` minted per occupant.
+#[allow(unused_imports)]
 pub mod identity;
-mod metrics;
 pub mod sampler_status;
 mod samplers;
 mod timing;
@@ -58,9 +51,6 @@ pub(crate) fn agent_uptime_seconds() -> u64 {
 
 /// The producer epoch: minted once per process, on every platform.
 pub mod epoch;
-
-#[cfg(target_os = "linux")]
-use metrics::GroupMetadata;
 
 #[cfg(target_os = "linux")]
 mod bpf;

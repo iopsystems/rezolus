@@ -11,6 +11,9 @@ pub(crate) use recording_selector::{
 pub mod anomaly_detection;
 pub mod correlation;
 mod describe_metrics;
+mod export;
+mod install;
+mod link;
 mod server;
 
 use chrono::{DateTime, Utc};
@@ -561,6 +564,7 @@ pub fn run(config: Config) {
         Mode::DetectAnomalies { file, query } => run_detect_anomalies(file, query, &recording),
         Mode::Query { file, query } => run_query(file, query, &recording),
         Mode::ExtractFeatures { file } => run_extract_features(file, &recording),
+        Mode::Install(opts) => std::process::exit(install::run(&opts)),
     }
 }
 
@@ -1163,6 +1167,8 @@ pub enum Mode {
     ExtractFeatures {
         file: PathBuf,
     },
+    /// Register the stdio server with a client and install the skill.
+    Install(install::InstallOptions),
 }
 
 /// MCP server configuration
@@ -1193,6 +1199,7 @@ impl TryFrom<ArgMatches> for Config {
         // Read from the SUBCOMMAND's matches: `--recording` is declared per
         // subcommand, so the top-level matches never carry it. `None` is
         // server mode, which has no selector to read (see `Config.recording`).
+        // `install` declares none either, and `try_get_many` answers absent.
         let recording = match args.subcommand() {
             // `try_get_many`, not `get_many`: the latter PANICS on an arg id
             // the matched subcommand never declared, and this lookup runs for
@@ -1273,17 +1280,70 @@ impl TryFrom<ArgMatches> for Config {
                     .clone();
                 Mode::ExtractFeatures { file }
             }
+            Some(("install", sub_args)) => {
+                let server = server::ServerOptions {
+                    allow_mutating: sub_args.get_flag("INSTALL_ALLOW_MUTATING"),
+                    export_dir: sub_args.get_one::<PathBuf>("INSTALL_EXPORT_DIR").cloned(),
+                    viewer_url: sub_args
+                        .get_one::<String>("INSTALL_VIEWER_URL")
+                        .map(|u| link::validate_base(u))
+                        .transpose()?,
+                };
+                if let Some(dir) = &server.export_dir {
+                    if !dir.is_dir() {
+                        return Err(format!(
+                            "--export-dir {}: not a directory (create it first)",
+                            dir.display()
+                        ));
+                    }
+                }
+                Mode::Install(install::InstallOptions {
+                    scope: install::Scope::parse(
+                        sub_args
+                            .get_one::<String>("SCOPE")
+                            .map(String::as_str)
+                            .unwrap_or("user"),
+                    )?,
+                    server,
+                    skill: !sub_args.get_flag("NO_SKILL"),
+                    dry_run: sub_args.get_flag("DRY_RUN"),
+                    binary: None,
+                    project_dir: None,
+                    home: None,
+                    cli: None,
+                })
+            }
             _ => Mode::Server,
         };
 
-        let server = server::ServerOptions {
+        let mut server = server::ServerOptions {
             allow_mutating: args.get_flag("ALLOW_MUTATING"),
+            export_dir: args.get_one::<PathBuf>("EXPORT_DIR").cloned(),
+            viewer_url: args.get_one::<String>("VIEWER_URL").cloned(),
         };
-        if server.allow_mutating && !matches!(mode, Mode::Server) {
-            return Err(
-                "--allow-mutating applies to the stdio server only; the one-shot subcommands read"
-                    .to_string(),
-            );
+        if !matches!(mode, Mode::Server) {
+            let set = [
+                (server.allow_mutating, "--allow-mutating"),
+                (server.export_dir.is_some(), "--export-dir"),
+                (server.viewer_url.is_some(), "--viewer-url"),
+            ];
+            if let Some((_, flag)) = set.iter().find(|(on, _)| *on) {
+                return Err(format!(
+                    "{flag} applies to the stdio server only; the one-shot subcommands read"
+                ));
+            }
+        }
+        if let Some(url) = &server.viewer_url {
+            server.viewer_url = Some(link::validate_base(url)?);
+        }
+        if let Some(dir) = &server.export_dir {
+            if !dir.is_dir() {
+                return Err(format!(
+                    "--export-dir {}: not a directory (create it first; exports are refused \
+                     rather than written somewhere else)",
+                    dir.display()
+                ));
+            }
         }
 
         Ok(Config {
@@ -1340,20 +1400,25 @@ pub fn command() -> Command {
              query                Run a PromQL query against a recording\n    \
              detect-anomalies     Flag anomalies for one metric, or exhaustively across all\n    \
              analyze-correlation  Correlate two PromQL series over the recording\n    \
-             extract-features     Extract structured features from a recording as JSON\n\n\
+             extract-features     Extract structured features from a recording as JSON\n    \
+             install              Register the server with Claude Code and install its skill\n\n\
              A good workflow is describe-metrics (see what's there) → query / detect-anomalies\n\
              (dig in). Run `rezolus mcp <subcommand> --help` for per-subcommand examples.\n\n\
-             The stdio server also has write tools with no CLI form: add_event marks an\n\
-             instant or range in the recording, run_checks evaluates its KPI checks (and\n\
-             writes the verdicts with annotate=true), and, only with --allow-mutating,\n\
-             remove_events takes events out again.\n\n\
+             The stdio server also has tools with no CLI form: add_event marks an instant\n\
+             or range in the recording, run_checks evaluates its KPI checks (and writes the\n\
+             verdicts with annotate=true), export_query writes a range query as CSV or\n\
+             parquet under --export-dir, viewer_link builds a link that opens a running\n\
+             viewer at a section and time range (a full URL with --viewer-url), and, only\n\
+             with --allow-mutating, remove_events takes events out again.\n\n\
              EXAMPLES:\n    \
              # Run as a stdio MCP server for an LLM client\n    \
              rezolus mcp\n\n    \
              # One-shot: list the metrics in a recording\n    \
              rezolus mcp describe-metrics file.parquet\n\n    \
              # One-shot: run a PromQL query\n    \
-             rezolus mcp query file.parquet \"sum(rate(cpu_cycles[1m]))\"",
+             rezolus mcp query file.parquet \"sum(rate(cpu_cycles[1m]))\"\n\n    \
+             # Register with Claude Code (user scope) and install the skill\n    \
+             rezolus mcp install",
         )
         .arg(
             clap::Arg::new("VERBOSE")
@@ -1373,6 +1438,28 @@ pub fn command() -> Command {
                      unless the operator starting the server says otherwise. Server mode only.",
                 )
                 .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            clap::Arg::new("EXPORT_DIR")
+                .long("export-dir")
+                .value_name("DIR")
+                .value_parser(clap::value_parser!(PathBuf))
+                .help(
+                    "Directory the export_query tool may write files into (server mode only)\n\
+                     Without it the tool is listed but refuses every call, naming this flag.\n\
+                     Files land under a bare name the agent chooses (or one derived from the\n\
+                     query), never over an existing file, never outside this directory.",
+                ),
+        )
+        .arg(
+            clap::Arg::new("VIEWER_URL")
+                .long("viewer-url")
+                .value_name("URL")
+                .help(
+                    "Address of a running `rezolus view`, e.g. http://127.0.0.1:4200 (server mode only)\n\
+                     The viewer_link tool then returns a full URL; without it the tool returns the\n\
+                     query string and hash fragment for the client to append to a viewer's address.",
+                ),
         )
         .subcommand(
             Command::new("analyze-correlation")
@@ -1537,6 +1624,73 @@ pub fn command() -> Command {
                         .index(1),
                 )
                 .arg(recording_arg()),
+        )
+        .subcommand(
+            Command::new("install")
+                .about("Register the stdio server with Claude Code and install its skill")
+                .long_about(
+                    "Register this binary as the `rezolus` MCP server with Claude Code and install\n\
+                     the `rezolus-mcp` skill, which tells the client how to investigate a recording\n\
+                     (discovery before query, the recording selector, what to write back).\n\n\
+                     Registration runs `claude mcp add` when `claude` is on PATH, in the scope given\n\
+                     (user by default: every project; project: this directory's .mcp.json). An\n\
+                     existing rezolus entry is replaced, so re-running after an upgrade or with new\n\
+                     server flags is the way to change it. Without `claude` on PATH, project scope\n\
+                     writes .mcp.json directly (merged into any existing one) and user scope prints\n\
+                     the command to run.\n\n\
+                     The skill goes to ~/.claude/skills/rezolus-mcp/SKILL.md (user; under\n\
+                     $CLAUDE_CONFIG_DIR/skills/ when that is set) or .claude/skills/rezolus-mcp/SKILL.md\n\
+                     (project). A file already there is replaced only when it is this skill; anything\n\
+                     else, including a symlink, is refused.\n\n\
+                     Claude Code resolves a server name local > project > user. When another scope's\n\
+                     rezolus entry would win over the one written, install says so and names the\n\
+                     command that removes it.\n\n\
+                     The server flags given here (--allow-mutating, --export-dir, --viewer-url) are\n\
+                     baked into the registered command, so the server the client starts has them.\n\n\
+                     EXAMPLES:\n    \
+                     rezolus mcp install\n    \
+                     rezolus mcp install --scope project --export-dir ./exports\n    \
+                     rezolus mcp install --dry-run",
+                )
+                .arg(
+                    clap::Arg::new("SCOPE")
+                        .long("scope")
+                        .value_name("SCOPE")
+                        .value_parser(["user", "project"])
+                        .default_value("user")
+                        .help("Where to register and where the skill goes: user (every project) or project (this directory)"),
+                )
+                .arg(
+                    clap::Arg::new("INSTALL_ALLOW_MUTATING")
+                        .long("allow-mutating")
+                        .help("Register the server with --allow-mutating (enables remove_events)")
+                        .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    clap::Arg::new("INSTALL_EXPORT_DIR")
+                        .long("export-dir")
+                        .value_name("DIR")
+                        .value_parser(clap::value_parser!(PathBuf))
+                        .help("Register the server with --export-dir DIR (enables export_query); must exist"),
+                )
+                .arg(
+                    clap::Arg::new("INSTALL_VIEWER_URL")
+                        .long("viewer-url")
+                        .value_name("URL")
+                        .help("Register the server with --viewer-url URL (viewer_link returns full URLs)"),
+                )
+                .arg(
+                    clap::Arg::new("NO_SKILL")
+                        .long("no-skill")
+                        .help("Register the server only; do not install the skill")
+                        .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    clap::Arg::new("DRY_RUN")
+                        .long("dry-run")
+                        .help("Report what would be done and change nothing")
+                        .action(clap::ArgAction::SetTrue),
+                ),
         )
 }
 

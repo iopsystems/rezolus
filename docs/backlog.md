@@ -602,7 +602,9 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   existing recordings, up to 50% larger on the spike's short-lived
   occupants. Compaction already re-encodes,
   so a caller-named sort key sorts off the tick path; segments declare it in
-  parquet `sorting_columns`.
+  parquet `sorting_columns`. It is also the reopen condition for the
+  changes-only stream (NO-GO in arrival order, "Agent — changes-only
+  stream" below).
 - ~~**Sort at seal**~~ — Decided 2026-09-28: no. The writer seals long
   segments in arrival order (metriken#184); sorting made the 100 ms
   replays 6–20% larger and did not improve the tick path. Sorting is the
@@ -637,15 +639,14 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   row time, the first staggered) was prototyped for the seal-policy
   measurement ([entry](journal/2026-09-28-dendro-writer-adoption.md), "Seal
   policy") and matched the wall-time policy at 1 s.
-- **The reader routes a table by one segment's footer** — Open. A metric
-  that first appears in a later segment of the same table cannot be
-  queried, in a `.rez` and a dendro archive alike (metriken
-  `docs/journal/2026-09-28-archive-writer.md`). Samplers emit the same
-  metric names every tick, so it has not arisen; reopen for a producer
-  whose metric set grows mid-recording.
+- ~~**The reader routes a table by one segment's footer**~~ — Done
+  (metriken-archive 0.2.8, metriken #199). Sealed segments carry a names
+  fingerprint and the reader probes one footer per distinct fingerprint,
+  plus the live tail's schema-carrying rows; a segment without a
+  fingerprint (a `.rez`, a conversion) keeps the old assumption.
 - **The reshaping converter** — Roadmap, after the reader. Replaces #1301's byte
-  copy. Oracle: on `--stream` recordings the occupants derived from the columns
-  must equal those the recorded index gives, and every series must read back
+  copy. Oracle: on 5.x `.rez --stream` recordings the occupants derived from
+  the columns must equal those the recorded index gives, and every series must read back
   the same as through the `.rez` reader.
 - **5.18–5.20 mid-segment occupant changes** — By design. The file does not
   record the new occupant's labels (#1232), so a conversion keeps what the file
@@ -1129,13 +1130,22 @@ the CI guest while profiling `ext4_ops` and `xfs_log`.
   `perf bench sched pipe`, 0.68 of a core at 33 K switches/s, against 114 ns
   and 665 ns for the other two programs on the same tracepoint. The two
   `bpf_perf_event_read` calls in `cpu/linux/perf/mod.bpf.c` read the
-  virtualized PMU through the hypervisor. To do: measure the same program
-  on bare metal (expected hundreds of ns) to confirm the mechanism; then
-  either detect a virtualized PMU at init (`/sys/devices/cpu/caps`, the
-  hypervisor CPUID bit, or a timed probe read) and refuse `cpu_perf` as
-  unsupported on guests, or read the counters at a bounded rate instead of
-  every switch. `rezolus status` says nothing today: the sampler is
-  "active healthy" while costing most of a core.
+  virtualized PMU through the hypervisor. Confirmed from inside the guest
+  (systemslab `01a0edd1-f053-716d-7604-c6261d862311`, KVM on a Threadripper
+  3970X, `perfctr_core` exposed, the AMD PMU driver loaded): a user-space
+  `rdpmc` costs 1.05–11.3 µs per read and the `read(2)` path 1.7–12.7 µs,
+  against tens of nanoseconds on bare metal, and the cost moves with which
+  counter index the event landed on (11.3 µs on index 6 with the image's
+  agent holding counters, 1.05 µs on index 1 with it stopped). So it is the
+  hypervisor's trap-and-emulate for every counter read, which the vPMU
+  being exposed to the guest makes reachable; the program's two reads per
+  switch are the 20 µs. Infrastructure side: the anvil VMs expose the vPMU
+  deliberately (perf works in the guest); with it off, `cpu_perf` and the
+  other PMU samplers would report unsupported and cost nothing. Rezolus
+  side, still open: detect a hypervisor at init (`hypervisor` CPU flag) and
+  refuse or throttle `cpu_perf` there, and name the PMU holder in
+  `rezolus status`. A bare-metal figure for the same program was not
+  measured (no bare-metal host in this session).
 - **A second agent's PMU reservations starve the first** — Observation.
   With the image's `cpu_perf` holding the counters, every agent started
   beside it reported `cpu_branch`, `cpu_dtlb` and `cpu_perf` pmu-starved
@@ -1412,14 +1422,16 @@ Source: [MCP write-back and tool tiers](journal/2026-09-28-mcp-write-back.md).
   `remove_events` (`ServerOptions`, tiered `tools/list`, flag-off call
   refused naming the flag, tested). `set_kpis` — Open, no producer of KPI
   sets on the agent side yet; the annotate KPI path is ready for it.
-- **`export_query` and `viewer_link`** — Open, next PR. `export_query`
-  writes a range query to parquet/CSV under `--export-dir`; `viewer_link`
-  returns the hash fragment plus the query string from
-  [viewer links](journal/2026-09-28-viewer-link-state.md) (full URL needs
-  the viewer's address; reopen if the fragment form proves insufficient).
-- **`rezolus mcp install`** — Open. Registers the server with known clients
-  and ships a skill carrying the workflow prose that lives in tool
-  descriptions today.
+- **`export_query` and `viewer_link`** — DONE. `src/mcp/export.rs` writes
+  a range query as long-form CSV/parquet under `--export-dir` only;
+  `src/mcp/link.rs` formats the [viewer link](journal/2026-09-28-viewer-link-state.md)
+  wire form, pinned to the JS parser by `tests/viewer_link_parity.test.mjs`,
+  with a full URL from `--viewer-url` or a `viewer_url` argument.
+- **`rezolus mcp install`** — DONE. `src/mcp/install.rs` registers through
+  `claude mcp add` (project `.mcp.json` merged when the CLI is absent) and
+  installs the embedded `rezolus-mcp` skill (`src/mcp/skill/SKILL.md`).
+- **Skills for other clients** — Open, no demand. The install command's
+  client list is the place; the skill text is client-neutral.
 - **`annotate --recording`** — Open, now cheap: `events::add_events_selected`
   is the selector-scoped write; the CLI flag would call it instead of
   writing every recording.
@@ -1437,6 +1449,24 @@ Related ideas with no entry yet:
   and each documented in a different journal entry or in `CLAUDE.md`. A
   single page under `docs/` that states the rules, plus an `llms.txt` index,
   so an agent or a new reader gets them without the archaeology.
+
+## Agent — changes-only stream
+
+Source: [Sending only what changed](journal/2026-09-28-changes-only-stream.md).
+NO-GO on size, measured 2026-09-29: on arrival-ordered long tables under
+zstd-3, removing unchanged readings saved 25.0% on the busy host and cost
+16.5% on the quiet host (rows dropped), or 12.4% and −10.6% (values nulled).
+
+- ~~**Measure unchanged readings per long table**~~ — Done 2026-09-29, in the
+  entry's "Measured" section.
+- **Agent: send only changed members; long layout v2** — NO-GO. Reopen when
+  the `CompactSpec` sort key (below, "dendro archives (6.0)") lands and
+  segments sorted by occupant still carry long runs of repeated values that
+  their encoding does not already collapse.
+- **Liveness without a lost event** — Open, useful without the rest. A
+  dropped `task_exit` leaves a phantom member at 0 until PID reuse
+  (`account__sched_process_exit`). Detect it at read time from
+  `task_start_times`. Cgroups have no removal event at all.
 
 ## Tooling / skills
 
