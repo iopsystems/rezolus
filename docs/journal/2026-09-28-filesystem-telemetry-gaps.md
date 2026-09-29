@@ -444,7 +444,11 @@ plot.
   attribution from `ext4_ops` (and `xfs_log`, same shape), make it cheaper
   (per-CPU cgroup banks cost `MAX_CPUS × MAX_CGROUPS` slots; caching the
   cgroup id and serial in the task's start slot saves the reads but not the
-  adds), or keep it and stay opt-in. That is a product call, left open here.
+  adds), or keep it and stay opt-in. Decided: it is the config option
+  `cgroup_attribution`, off by default, for `ext4_ops` and `xfs_log`; when
+  off the path is folded out of the loaded program by the verifier (a
+  `const volatile` switch written before load). The default-on question is
+  now about the 1.13 µs per pair that remains.
 
 - **Merged slab caches** — By design. A cache SLUB merges is absent, not
   approximated from the pool it joined; `ext4_extent_status` is merged on

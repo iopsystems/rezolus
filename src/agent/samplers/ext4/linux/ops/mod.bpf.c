@@ -33,6 +33,14 @@
 #define HISTOGRAM_POWER 3
 #define MAX_CPUS 1024
 
+// Per-cgroup attribution is the config option `cgroup_attribution`, off by
+// default: the serial check and two atomics it adds to the end hook measured
+// 265 ns of the hook's 535 ns on the null_blk fsync bench, half the hook.
+// Userspace writes the switch into read-only data before load, so with it
+// off the verifier removes the path from the program rather than testing a
+// flag on every run.
+const volatile __u8 cgroup_attribution = 0;
+
 // The operations, in the order of the `op` label's histograms and of the
 // per-op counter runs below.
 #define OP_FSYNC 0
@@ -227,6 +235,10 @@ static __always_inline void op_begin(u32 op, u32 dev) {
 }
 
 static __always_inline void cgroup_account(struct task_struct* task, u32 op, u64 lat) {
+    if (!cgroup_attribution) {
+        return;
+    }
+
     // runtime NULL check (bpf_core_field_exists is a compile-time BTF check)
     void* task_group = BPF_CORE_READ(task, sched_task_group);
     if (!task_group) {
