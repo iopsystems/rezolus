@@ -19,9 +19,13 @@
 //!
 //! A cache the running kernel does not have (`xfs_inode` without XFS loaded,
 //! `ext4_*` without ext4) leaves its gauges never set, which the snapshot
-//! reports as absent rather than 0. Under SLUB's cache merging a cache can
-//! appear in the file as an alias of a merged pool; the caches followed here
-//! all have constructors or distinct flags and are not merged in practice.
+//! reports as absent rather than 0. So does a cache SLUB has merged: a cache
+//! without a constructor can share a pool with others of its size and flags,
+//! and the file then lists the pool under one name only. `ext4_extent_status`
+//! (40 bytes, no constructor) is merged on the Debian 13 6.12 kernel and is
+//! absent there; `jbd2_journal_head` was not, and the inode and dentry caches
+//! have constructors and are never merged. `slab_nomerge` on the kernel
+//! command line lists every cache under its own name.
 
 const NAME: &str = "memory_slabinfo";
 

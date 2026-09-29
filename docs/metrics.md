@@ -657,7 +657,15 @@ axis. `vm.vfs_cache_pressure` trades this memory against the page cache.
 Caches followed: `dentry`, `inode_cache`, `ext4_inode_cache`,
 `ext4_extent_status`, `jbd2_journal_head`, `buffer_head`, `xfs_inode`,
 `radix_tree_node` (the page-cache index). A cache the running kernel does not
-have leaves its gauges absent.
+have leaves its gauges absent, and so does one SLUB has merged into a
+same-sized pool, which the file lists under one name only: caches without a
+constructor are candidates, and `ext4_extent_status` is merged on the Debian 13
+6.12 kernel. The inode and dentry caches have constructors and are never
+merged. Booting with `slab_nomerge` lists every cache under its own name.
+
+Measured on a 56-vCPU guest with a 196-line `/proc/slabinfo`: the sweep reads
+the file in 366–409 µs and parses it in 51–63 µs, once per interval on the
+blocking pool; the scrape-path `refresh()` is 0 µs except for the dispatch.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
