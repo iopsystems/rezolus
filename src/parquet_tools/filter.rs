@@ -582,7 +582,6 @@ mod tests {
             service_name: "test".to_string(),
             aliases: Vec::new(),
             service_metadata: Default::default(),
-            slo: None,
             kpis: queries
                 .iter()
                 .map(|q| crate::viewer::Kpi {
@@ -599,6 +598,7 @@ mod tests {
                     subgroup: None,
                     subgroup_description: None,
                     full_width: false,
+                    check: None,
                 })
                 .collect(),
         }

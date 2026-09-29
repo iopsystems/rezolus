@@ -38,7 +38,7 @@ mod proxy_allow;
 
 mod ab_extract;
 mod actions;
-mod metadata;
+pub(crate) mod metadata;
 mod report_save;
 mod report_save_rez;
 mod routes;

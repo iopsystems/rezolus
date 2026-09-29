@@ -246,20 +246,46 @@ fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
 /// The manifest edits one `annotate` invocation applies to every recording of
 /// a `.rez`. Both fields are optional; `run_rez` guarantees at least one is
 /// present, since an annotate that changes nothing is a mistake worth an error.
-struct RezAnnotation<'a> {
+pub(super) struct RezAnnotation<'a> {
     /// Validated ServiceExtension JSON to embed under `KEY_SERVICE_QUERIES`
     /// (KPIs). Re-probed against each recording's own metrics.
-    ext_json: Option<&'a str>,
+    pub(super) ext_json: Option<&'a str>,
     /// Event operations to fold into each recording's `KEY_EVENTS` payload.
-    events: Option<EventOps<'a>>,
+    pub(super) events: Option<EventOps<'a>>,
+    /// Events that differ per recording, indexed by the archive's catalog
+    /// order (`recording check --annotate` writes each recording's own
+    /// verdicts). Must have one entry per recording; an empty entry adds
+    /// nothing to that recording.
+    pub(super) per_recording_events: Option<Vec<Vec<crate::viewer::Event>>>,
+    /// Print the report line on stderr instead of stdout, for a caller
+    /// whose stdout is a machine-readable payload (`check --json`).
+    pub(super) report_to_stderr: bool,
+}
+
+impl RezAnnotation<'_> {
+    fn report(&self, line: String) {
+        if self.report_to_stderr {
+            eprintln!("{line}");
+        } else {
+            println!("{line}");
+        }
+    }
+}
+
+/// Running totals of what `per_recording_events` did across the recordings.
+#[derive(Default)]
+struct CheckEventTally {
+    counts: super::events::AppendCounts,
+    /// Recordings that were handed at least one event.
+    touched: usize,
 }
 
 /// Event operations for a `.rez` annotate, applied in the same
 /// `clear → add file → add inline` order as the parquet footer path.
-struct EventOps<'a> {
-    add_files: &'a [&'a Path],
-    inline: &'a [String],
-    clear: bool,
+pub(super) struct EventOps<'a> {
+    pub(super) add_files: &'a [&'a Path],
+    pub(super) inline: &'a [String],
+    pub(super) clear: bool,
 }
 
 /// Collect the KPI and event operations from the CLI and apply them to a
@@ -327,6 +353,8 @@ fn run_rez(args: &ArgMatches, path: &Path, format: RezFormat) {
     let annotation = RezAnnotation {
         ext_json: ext_content.as_deref(),
         events,
+        per_recording_events: None,
+        report_to_stderr: false,
     };
 
     annotate_rez_any(path, format, &annotation).unwrap_or_else(|e| {
@@ -339,7 +367,7 @@ fn run_rez(args: &ArgMatches, path: &Path, format: RezFormat) {
 ///
 /// A v1/v2 (tar) archive is upgraded in place first: annotating is a rewrite,
 /// and the tar container is no longer something this binary writes.
-fn annotate_rez_any(
+pub(super) fn annotate_rez_any(
     path: &Path,
     format: RezFormat,
     annotation: &RezAnnotation,
@@ -358,10 +386,10 @@ fn annotate_rez_any(
     // Staged beside the target so this rename is atomic and same-filesystem:
     // the original survives untouched until the annotated copy is complete.
     std::fs::rename(&staged, path)?;
-    println!(
+    annotation.report(format!(
         "upgraded {:?} from a v1/v2 tar archive to v3 (SQLite)",
         path
-    );
+    ));
     Ok(())
 }
 
@@ -407,12 +435,28 @@ fn annotate_rez_v3_at(
         .into());
     }
 
+    if let Some(per) = annotation
+        .per_recording_events
+        .as_ref()
+        .filter(|per| per.len() != recordings.len())
+    {
+        return Err(format!(
+            "{} has {} recording(s) but events were built for {}; the archive changed \
+             between evaluation and annotation",
+            path.display(),
+            recordings.len(),
+            per.len()
+        )
+        .into());
+    }
+
     let mut kpis: Option<usize> = None;
     // (events remaining after the ops, whether they were cleared first) — the
     // input is identical for every recording, so the last one's counts stand
     // in for the report.
     let mut events_report: Option<(usize, bool)> = None;
-    for (rec, (_labels, reader)) in recordings.iter().zip(readers) {
+    let mut per_recording_report: Option<CheckEventTally> = None;
+    for (idx, (rec, (_labels, reader))) in recordings.iter().zip(readers).enumerate() {
         let mut metadata = rec.meta.metadata.clone();
 
         if let Some(ext_json) = annotation.ext_json {
@@ -446,7 +490,47 @@ fn annotate_rez_v3_at(
             events_report = Some((events.events.len(), ops.clear));
         }
 
+        if let Some(per) = &annotation.per_recording_events {
+            let new = per[idx].clone();
+            let touched = !new.is_empty();
+            let existing = metadata
+                .get(KEY_EVENTS)
+                .map(|s| serde_json::from_str::<Events>(s))
+                .transpose()
+                .map_err(|e| format!("recording has an invalid events payload: {e}"))?;
+            let appended = super::events::append_events(existing, new);
+            if appended.events.events.is_empty() {
+                metadata.remove(KEY_EVENTS);
+            } else {
+                metadata.insert(
+                    KEY_EVENTS.to_string(),
+                    serde_json::to_string(&appended.events)?,
+                );
+            }
+            let tally = per_recording_report.get_or_insert_with(Default::default);
+            tally.counts.add(appended.counts);
+            tally.touched += usize::from(touched);
+        }
+
         db.update_recording_metadata(rec.id, &metadata)?;
+    }
+
+    // Unlike the KPI and event flags, per-recording events are not applied
+    // to every recording (`check --recording` writes into the one it
+    // evaluated), so when they are the only edit, say how many were touched.
+    let only_check_events = annotation.ext_json.is_none() && annotation.events.is_none();
+    if let Some(tally) = per_recording_report
+        .as_ref()
+        .filter(|t| only_check_events && t.counts.nothing_new())
+    {
+        annotation.report(format!(
+            "Annotated {:?}: nothing new; {} check event(s) already present in {} of {} recording(s)",
+            display,
+            tally.counts.unchanged,
+            tally.touched,
+            recordings.len()
+        ));
+        return Ok(());
     }
 
     let mut parts: Vec<String> = Vec::new();
@@ -460,12 +544,20 @@ fn annotate_rez_v3_at(
             format!("{total} event(s)")
         });
     }
-    println!(
-        "Annotated {:?}: embedded {} into {} recording(s)",
+    if let Some(tally) = &per_recording_report {
+        parts.push(tally.counts.describe());
+    }
+    let scope = match &per_recording_report {
+        Some(tally) if only_check_events => {
+            format!("{} of {} recording(s)", tally.touched, recordings.len())
+        }
+        _ => format!("{} recording(s)", recordings.len()),
+    };
+    annotation.report(format!(
+        "Annotated {:?}: embedded {} into {scope}",
         display,
-        parts.join(" and "),
-        recordings.len()
-    );
+        parts.join(" and ")
+    ));
     Ok(())
 }
 
@@ -994,6 +1086,8 @@ mod tests {
         RezAnnotation {
             ext_json: Some(ext_json),
             events: None,
+            per_recording_events: None,
+            report_to_stderr: false,
         }
     }
 
@@ -1006,6 +1100,8 @@ mod tests {
                 inline,
                 clear: false,
             }),
+            per_recording_events: None,
+            report_to_stderr: false,
         }
     }
 
@@ -1252,6 +1348,8 @@ mod tests {
                 inline: &inline,
                 clear: false,
             }),
+            per_recording_events: None,
+            report_to_stderr: false,
         };
         annotate_rez_v3(&path, &annotation).unwrap();
 
@@ -1288,6 +1386,8 @@ mod tests {
                 inline: &[],
                 clear: true,
             }),
+            per_recording_events: None,
+            report_to_stderr: false,
         };
         annotate_rez_v3(&path, &clear).unwrap();
 

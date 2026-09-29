@@ -173,6 +173,7 @@ mod tests {
             subgroup: None,
             subgroup_description: None,
             full_width: false,
+            check: None,
         }
     }
 
@@ -181,7 +182,6 @@ mod tests {
             service_name: name.to_string(),
             aliases: vec![],
             service_metadata: HashMap::new(),
-            slo: None,
             kpis,
         }
     }

@@ -1,7 +1,6 @@
 {
   "service_name": "sglang-router",
   "service_metadata": {},
-  "slo": null,
   "kpis": [
     {
       "role": "load",

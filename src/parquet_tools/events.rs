@@ -66,6 +66,110 @@ pub(super) fn apply_event_ops(
     Ok((events, added, dropped))
 }
 
+/// What [`append_events`] did with a batch, for the report line.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) struct AppendCounts {
+    /// Events whose id was not present (or that carry no id).
+    pub new: usize,
+    /// `kind=check` events whose id was present with different content;
+    /// the incoming copy replaced the stored one.
+    pub updated: usize,
+    /// Ids already present: identical content, or a stored event that is
+    /// not a `kind=check` and so keeps its earlier copy.
+    pub unchanged: usize,
+    /// Ids repeated within the batch itself; only the first is kept.
+    pub duplicates: usize,
+}
+
+impl AppendCounts {
+    pub fn add(&mut self, other: AppendCounts) {
+        self.new += other.new;
+        self.updated += other.updated;
+        self.unchanged += other.unchanged;
+        self.duplicates += other.duplicates;
+    }
+
+    /// Nothing in the payload changed.
+    pub fn nothing_new(&self) -> bool {
+        self.new == 0 && self.updated == 0
+    }
+
+    /// `2 new check event(s), 1 updated, 3 unchanged, 1 duplicate in this run`,
+    /// omitting the zero terms.
+    pub fn describe(&self) -> String {
+        let mut s = format!("{} new check event(s)", self.new);
+        if self.updated > 0 {
+            s.push_str(&format!(", {} updated", self.updated));
+        }
+        if self.unchanged > 0 {
+            s.push_str(&format!(", {} unchanged", self.unchanged));
+        }
+        if self.duplicates > 0 {
+            s.push_str(&format!(", {} duplicate in this run", self.duplicates));
+        }
+        s
+    }
+}
+
+pub(super) struct Appended {
+    pub events: Events,
+    pub counts: AppendCounts,
+}
+
+/// Add already-built events to a payload and normalize. The second half of
+/// [`apply_event_ops`] for a caller that has `Event` values rather than
+/// files or `--event` strings (`recording check --annotate`).
+///
+/// Ids decide what happens: an id repeated inside `new` keeps its first
+/// occurrence; an id already in `existing` keeps the stored copy, except
+/// that a `kind=check` event replaces a stored one with the same id, so a
+/// violation window that grew since the last run is rewritten rather than
+/// left at its old `duration_ns`. An id-less event is always added.
+pub(super) fn append_events(existing: Option<Events>, new: Vec<Event>) -> Appended {
+    let mut events = existing.unwrap_or_default();
+    let mut counts = AppendCounts::default();
+    let mut seen_in_batch = std::collections::HashSet::new();
+    for event in new {
+        let Some(id) = event.id.clone().filter(|id| !id.is_empty()) else {
+            counts.new += 1;
+            events.events.push(event);
+            continue;
+        };
+        if !seen_in_batch.insert(id.clone()) {
+            counts.duplicates += 1;
+            continue;
+        }
+        match events
+            .events
+            .iter()
+            .position(|e| e.id.as_deref() == Some(id.as_str()))
+        {
+            None => {
+                counts.new += 1;
+                events.events.push(event);
+            }
+            Some(i) if events.events[i] == event => counts.unchanged += 1,
+            Some(i) if event.kind.as_deref() == Some("check") => {
+                events.events[i] = event;
+                counts.updated += 1;
+            }
+            Some(_) => counts.unchanged += 1,
+        }
+    }
+    events.normalize();
+    Appended { events, counts }
+}
+
+/// Append `new` to a parquet file's `events` payload.
+pub(super) fn append_to_parquet(
+    path: &Path,
+    new: Vec<Event>,
+) -> Result<Appended, Box<dyn std::error::Error>> {
+    let appended = append_events(read_events(path)?, new);
+    write_events(path, &appended.events)?;
+    Ok(appended)
+}
+
 /// Apply event-related operations to a parquet file in the order
 /// `clear → add file → add inline`.
 ///
@@ -801,6 +905,72 @@ mod tests {
         assert!(kv
             .iter()
             .any(|kv| kv.key == "node" && kv.value.as_deref() == Some("web01")));
+    }
+
+    fn check_event(id: &str, ts: u64, duration: u64) -> Event {
+        Event {
+            timestamp: ts,
+            description: "c".into(),
+            kind: Some("check".into()),
+            details: None,
+            source: None,
+            node: None,
+            instance: None,
+            labels: BTreeMap::new(),
+            duration_ns: Some(duration),
+            id: Some(id.into()),
+            chart_id: None,
+        }
+    }
+
+    #[test]
+    fn append_events_counts_new_unchanged_and_batch_duplicates() {
+        let existing = Events::new(vec![check_event("a", 1, 10)]);
+        let appended = append_events(
+            Some(existing),
+            vec![
+                check_event("a", 1, 10), // identical to the stored one
+                check_event("b", 2, 10), // new
+                check_event("b", 2, 10), // repeated inside the batch
+            ],
+        );
+        assert_eq!(
+            appended.counts,
+            AppendCounts {
+                new: 1,
+                updated: 0,
+                unchanged: 1,
+                duplicates: 1
+            }
+        );
+        assert_eq!(appended.events.events.len(), 2);
+        assert!(appended
+            .counts
+            .describe()
+            .contains("1 duplicate in this run"));
+    }
+
+    #[test]
+    fn append_events_replaces_a_check_event_that_grew() {
+        let existing = Events::new(vec![check_event("a", 1, 10)]);
+        let appended = append_events(Some(existing), vec![check_event("a", 1, 25)]);
+        assert_eq!(appended.counts.updated, 1);
+        assert_eq!(appended.counts.new, 0);
+        assert_eq!(appended.events.events.len(), 1);
+        assert_eq!(appended.events.events[0].duration_ns, Some(25));
+        assert!(!appended.counts.nothing_new());
+    }
+
+    #[test]
+    fn append_events_keeps_a_stored_event_that_is_not_a_check() {
+        let mut stored = check_event("a", 1, 10);
+        stored.kind = Some("deploy".into());
+        let mut incoming = check_event("a", 1, 25);
+        incoming.kind = Some("deploy".into());
+        let appended = append_events(Some(Events::new(vec![stored])), vec![incoming]);
+        assert_eq!(appended.counts.unchanged, 1);
+        assert_eq!(appended.events.events[0].duration_ns, Some(10));
+        assert!(appended.counts.nothing_new());
     }
 
     #[test]

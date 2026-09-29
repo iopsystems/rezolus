@@ -1272,15 +1272,18 @@ Source: [A baseline built from many recordings](journal/2026-09-28-baseline-from
 
 Source: [Checks with verdicts, stored in the recording](journal/2026-09-28-checks-with-verdicts.md).
 
-- **`check` on a KPI and `recording check`** — Open. `above`/`below`, `for`,
-  `severity` on `Kpi` (`crates/dashboard/src/service_extension.rs`; the unread
-  `slo` field is removed or repurposed in the same change). Evaluates through
-  `metriken_query`, exit 1 on fail, `--annotate` writes violations as
-  `kind=check` range events carrying the check JSON. Rate checks compare
-  against the acquisition band and report `indeterminate` on a straddle.
-  *Gate:* if evaluating every KPI over the 9.6 h archive from the
-  reader-memory entry is slower than opening the viewer on it, the lazy
-  reader path is a prerequisite.
+- **`check` on a KPI and `recording check`** — DONE. `Kpi.check`
+  (`above`/`below`, `quantile`, `for`, `severity`) in
+  `crates/dashboard/src/service_extension.rs`, the unread `slo` field
+  removed; `rezolus recording check` in `src/parquet_tools/check.rs` evaluates
+  through `metriken_query` on a grid of the recording's interval capped at
+  1 s, exit 1 on fail and 2 on error, `--annotate` writes violations as
+  `kind=check` range events carrying the check JSON (ids hash title, query,
+  condition and start; a re-run rewrites a window that grew), band straddles
+  and interpolated points report `INDETERMINATE`, a data gap of more than 1.5
+  steps ends a run. The 9.6 h gate was not measured in this change; the
+  evaluation is one `query_range` per check over the whole span, the same
+  cost as one `mcp query` each.
 - **Family checks** (`outside_family_sigma`) — Open, after the baseline lands.
 - **Checks from inside the viewer** — Open. *Reopen:* after the CLI has users.
 

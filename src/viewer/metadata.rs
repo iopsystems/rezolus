@@ -5,6 +5,7 @@
 //! `regenerate_dashboards` orchestrator that re-derives the section map
 //! whenever a capture is attached/detached.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use parquet::file::reader::FileReader;
@@ -233,44 +234,50 @@ pub fn extract_service_extension_metadata(
     path: &Path,
     registry: &TemplateRegistry,
 ) -> Vec<(String, ServiceExtension)> {
+    let Ok(f) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let Ok(reader) = SerializedFileReader::new(f) else {
+        return Vec::new();
+    };
+    let Some(kv) = reader.metadata().file_metadata().key_value_metadata() else {
+        return Vec::new();
+    };
+    let metadata: HashMap<String, String> = kv
+        .iter()
+        .filter_map(|kv| Some((kv.key.clone(), kv.value.clone()?)))
+        .collect();
+    service_extensions_from_metadata(&metadata, registry)
+}
+
+/// The same lookup over an already-read metadata map: a parquet footer's
+/// key/values, or a `.rez` recording's manifest metadata as
+/// `MetricsSource::file_metadata` returns it. `extract_service_extension_metadata`
+/// and `rezolus recording check` both go through here, so a recording's
+/// embedded KPIs resolve the same way wherever they are read.
+pub fn service_extensions_from_metadata(
+    metadata: &HashMap<String, String>,
+    registry: &TemplateRegistry,
+) -> Vec<(String, ServiceExtension)> {
     use crate::parquet_metadata::{
         KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE, NESTED_SERVICE_QUERIES,
     };
 
     let mut results = Vec::new();
 
-    let Ok(f) = std::fs::File::open(path) else {
-        return results;
-    };
-    let Ok(reader) = SerializedFileReader::new(f) else {
-        return results;
-    };
-    let Some(kv) = reader.metadata().file_metadata().key_value_metadata() else {
-        return results;
-    };
-
     // 1. Top-level service_queries (written by `parquet annotate`).
-    if let Some(sq_json) = kv
-        .iter()
-        .find(|kv| kv.key == KEY_SERVICE_QUERIES)
-        .and_then(|kv| kv.value.as_deref())
-    {
+    if let Some(sq_json) = metadata.get(KEY_SERVICE_QUERIES) {
         if let Ok(ext) = serde_json::from_str::<ServiceExtension>(sq_json) {
-            let source = kv
-                .iter()
-                .find(|kv| kv.key == KEY_SOURCE)
-                .and_then(|kv| kv.value.as_deref())
+            let source = metadata
+                .get(KEY_SOURCE)
+                .map(String::as_str)
                 .unwrap_or(&ext.service_name);
             results.push((source.to_string(), ext));
         }
     }
 
     // 2. Nested under per_source_metadata (combined files).
-    if let Some(metadata_json) = kv
-        .iter()
-        .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
-        .and_then(|kv| kv.value.as_deref())
-    {
+    if let Some(metadata_json) = metadata.get(KEY_PER_SOURCE_METADATA) {
         if let Ok(metadata_map) =
             serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(metadata_json)
         {
@@ -305,11 +312,7 @@ pub fn extract_service_extension_metadata(
 
     // 3b. No per_source_metadata — check the top-level source key.
     if results.is_empty() {
-        if let Some(source) = kv
-            .iter()
-            .find(|kv| kv.key == KEY_SOURCE)
-            .and_then(|kv| kv.value.as_deref())
-        {
+        if let Some(source) = metadata.get(KEY_SOURCE) {
             if let Some(ext) = registry.get(source) {
                 results.push((source.to_string(), ext.clone()));
             }

@@ -96,6 +96,12 @@ target/release/rezolus recording metadata -i file.parquet --field source
 target/release/rezolus recording annotate file.parquet                # add service extension KPIs
 target/release/rezolus recording annotate file.parquet --queries ext.json
 target/release/rezolus recording annotate out.rez --event 'time=2026-05-12T15:23Z,kind=deploy,description=rollout'  # .rez: embed a timeline event into each recording
+target/release/rezolus recording check out.rez                        # evaluate the KPI checks the recording carries; exit 1 on FAIL, 2 on ERROR
+target/release/rezolus recording check file.parquet --queries kpis.json --json   # checks from a file instead, verdicts as JSON
+target/release/rezolus recording check fleet.rez --recording host=web-01 --annotate  # one recording; write FAIL/WARN windows as kind=check events
+# A check is `"check": {"above"|"below": <n>, "for": "10s", "severity": "fail"|"warn", "quantile": 0.99}` on a KPI
+# (crates/dashboard/src/service_extension.rs). Values with an acquisition band are compared by the band; a
+# straddle is INDETERMINATE, which never fails. See docs/journal/2026-09-28-checks-with-verdicts.md.
 target/release/rezolus recording convert rezolus.raw.zst               # raw msgpack -> parquet (writes rezolus.parquet)
 target/release/rezolus recording convert rezolus.raw -o out.parquet --interval 250ms
 target/release/rezolus recording convert rezolus.raw --systeminfo sysinfo.json --descriptions help.json

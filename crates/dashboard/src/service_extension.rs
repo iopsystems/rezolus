@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceExtension {
@@ -12,8 +13,6 @@ pub struct ServiceExtension {
     pub aliases: Vec<String>,
     #[serde(default)]
     pub service_metadata: HashMap<String, String>,
-    #[serde(default)]
-    pub slo: Option<serde_json::Value>,
     pub kpis: Vec<Kpi>,
 }
 
@@ -55,10 +54,259 @@ pub struct Kpi {
     /// columns of the group's grid.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub full_width: bool,
+    /// A threshold on the query's value. `rezolus recording check` evaluates
+    /// it over a recording and reports a verdict. A KPI without one is a
+    /// chart only. See `docs/journal/2026-09-28-checks-with-verdicts.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<Check>,
 }
 
 fn default_available() -> bool {
     true
+}
+
+/// A condition on a KPI's value, evaluated by `rezolus recording check`.
+///
+/// Exactly one of `above` / `below` is set (enforced at deserialization, so
+/// an invalid check never reaches the evaluator or an archive). `for` is the
+/// shortest run of violating points that counts, in the Prometheus
+/// alerting-rule sense; absent means a single point violates. A histogram
+/// KPI needs `quantile`, since a distribution has no single value to compare.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "CheckRaw")]
+pub struct Check {
+    /// Violates when the value is above this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub above: Option<f64>,
+    /// Violates when the value is below this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub below: Option<f64>,
+    /// For a histogram KPI: the quantile of the distribution the threshold
+    /// applies to, in (0, 1]. Ignored for other KPI types.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantile: Option<f64>,
+    /// Minimum span a run of violating points must cover. Serialized as a
+    /// duration string such as `10s` or `1m30s`.
+    #[serde(
+        rename = "for",
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_duration_opt"
+    )]
+    pub for_: Option<Duration>,
+    #[serde(default)]
+    pub severity: Severity,
+}
+
+/// What a violated check means for the run: `fail` sets exit status 1,
+/// `warn` is reported and does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    #[default]
+    Fail,
+    Warn,
+}
+
+impl Severity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Severity::Fail => "fail",
+            Severity::Warn => "warn",
+        }
+    }
+}
+
+/// The one threshold a check carries.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Bound {
+    Above(f64),
+    Below(f64),
+}
+
+impl Check {
+    pub fn bound(&self) -> Bound {
+        match (self.above, self.below) {
+            (Some(t), None) => Bound::Above(t),
+            (None, Some(t)) => Bound::Below(t),
+            // Unreachable through deserialization; a hand-built value that
+            // breaks the invariant is a programming error.
+            _ => panic!("Check must carry exactly one of above/below"),
+        }
+    }
+
+    /// `for`, with absent meaning zero.
+    pub fn min_duration(&self) -> Duration {
+        self.for_.unwrap_or_default()
+    }
+
+    /// The condition as prose: `above 5000000 for 10s`, `below 0.5`,
+    /// `p99 above 0.25`.
+    pub fn condition(&self) -> String {
+        let mut s = match self.bound() {
+            Bound::Above(t) => format!("above {t}"),
+            Bound::Below(t) => format!("below {t}"),
+        };
+        if let Some(q) = self.quantile {
+            s = format!("p{} {s}", q * 100.0);
+        }
+        if let Some(d) = self.for_.filter(|d| !d.is_zero()) {
+            s.push_str(&format!(" for {}", format_duration(d)));
+        }
+        s
+    }
+}
+
+/// The on-disk shape of [`Check`], before the exactly-one rule is applied.
+/// Unknown keys are refused so a misspelled `for` or `below` is an error
+/// rather than a check that silently never fires.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CheckRaw {
+    above: Option<f64>,
+    below: Option<f64>,
+    quantile: Option<f64>,
+    #[serde(rename = "for")]
+    for_: Option<DurationInput>,
+    #[serde(default)]
+    severity: Severity,
+}
+
+/// `for` as JSON: a string like `10s`, or a bare number of seconds.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum DurationInput {
+    Seconds(f64),
+    Text(String),
+}
+
+impl TryFrom<CheckRaw> for Check {
+    type Error = String;
+
+    fn try_from(raw: CheckRaw) -> Result<Self, String> {
+        match (raw.above, raw.below) {
+            (Some(_), Some(_)) => {
+                return Err("check sets both `above` and `below`; use exactly one".into());
+            }
+            (None, None) => {
+                return Err("check needs exactly one of `above` or `below`".into());
+            }
+            _ => {}
+        }
+        if let Some(q) = raw.quantile
+            && !(q > 0.0 && q <= 1.0)
+        {
+            return Err(format!("check `quantile` must be in (0, 1], got {q}"));
+        }
+        let for_ = match raw.for_ {
+            None => None,
+            Some(DurationInput::Seconds(s)) => {
+                if !(s.is_finite() && s >= 0.0) {
+                    return Err(format!(
+                        "check `for` must be a non-negative duration, got {s}"
+                    ));
+                }
+                Some(Duration::from_secs_f64(s))
+            }
+            Some(DurationInput::Text(t)) => Some(parse_duration(&t)?),
+        };
+        Ok(Check {
+            above: raw.above,
+            below: raw.below,
+            quantile: raw.quantile,
+            for_,
+            severity: raw.severity,
+        })
+    }
+}
+
+fn serialize_duration_opt<S: serde::Serializer>(
+    d: &Option<Duration>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    match d {
+        Some(d) => s.serialize_str(&format_duration(*d)),
+        None => s.serialize_none(),
+    }
+}
+
+/// Parse `10s`, `1m30s`, `500ms`, `2h`, `1d`, `1.5s`: one or more
+/// `<number><unit>` parts, the number an integer or a decimal, whitespace
+/// between parts allowed. Hand-written rather than a `humantime` dependency
+/// because this crate also builds for wasm32 and the accepted grammar is
+/// small.
+pub fn parse_duration(text: &str) -> Result<Duration, String> {
+    let s = text.trim();
+    if s.is_empty() {
+        return Err("duration is empty".into());
+    }
+    let mut total = Duration::ZERO;
+    let mut rest = s;
+    while !rest.is_empty() {
+        let num_len = rest.len()
+            - rest
+                .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.')
+                .len();
+        if num_len == 0 {
+            return Err(format!(
+                "invalid duration {text:?}: expected a number before {rest:?}"
+            ));
+        }
+        let number = &rest[..num_len];
+        let n: f64 = number
+            .parse()
+            .ok()
+            .filter(|n: &f64| n.is_finite() && *n >= 0.0)
+            .ok_or_else(|| format!("invalid duration {text:?}: {number:?} is not a number"))?;
+        rest = &rest[num_len..];
+        let unit_len = rest.len()
+            - rest
+                .trim_start_matches(|c: char| c.is_ascii_alphabetic())
+                .len();
+        let unit = &rest[..unit_len];
+        rest = rest[unit_len..].trim_start();
+        let unit_secs = match unit {
+            "ms" => 1e-3,
+            "s" | "sec" | "secs" => 1.0,
+            "m" | "min" | "mins" => 60.0,
+            "h" | "hr" | "hrs" => 3600.0,
+            "d" | "day" | "days" => 86400.0,
+            "" => {
+                return Err(format!(
+                    "invalid duration {text:?}: missing unit after {number} (use ms, s, m, h or d)"
+                ));
+            }
+            other => {
+                return Err(format!(
+                    "invalid duration {text:?}: unknown unit {other:?} (use ms, s, m, h or d)"
+                ));
+            }
+        };
+        let part = Duration::try_from_secs_f64(n * unit_secs)
+            .map_err(|_| format!("invalid duration {text:?}: out of range"))?;
+        total = total
+            .checked_add(part)
+            .ok_or_else(|| format!("invalid duration {text:?}: overflow"))?;
+    }
+    Ok(total)
+}
+
+/// The inverse of [`parse_duration`]: `1h2m3s`, `500ms`, `0s`. Whole units
+/// only; a sub-millisecond remainder is dropped.
+pub fn format_duration(d: Duration) -> String {
+    let ms = d.as_millis();
+    if ms == 0 {
+        return "0s".into();
+    }
+    let (h, rem) = (ms / 3_600_000, ms % 3_600_000);
+    let (m, rem) = (rem / 60_000, rem % 60_000);
+    let (s, ms) = (rem / 1000, rem % 1000);
+    let mut out = String::new();
+    for (n, unit) in [(h, "h"), (m, "m"), (s, "s"), (ms, "ms")] {
+        if n > 0 {
+            out.push_str(&format!("{n}{unit}"));
+        }
+    }
+    out
 }
 
 impl Kpi {
@@ -541,7 +789,6 @@ mod tests {
                 "service_name": "valkey",
                 "aliases": ["redis"],
                 "service_metadata": {},
-                "slo": null,
                 "kpis": []
             }"#,
         )
@@ -569,7 +816,6 @@ mod tests {
                 "service_name": "valkey",
                 "aliases": ["redis"],
                 "service_metadata": {},
-                "slo": null,
                 "kpis": []
             }"#,
         )
@@ -580,7 +826,6 @@ mod tests {
             r#"{
                 "service_name": "redis",
                 "service_metadata": {},
-                "slo": null,
                 "kpis": []
             }"#,
         )
@@ -601,7 +846,6 @@ mod tests {
             r#"{
                 "service_name": "vllm",
                 "service_metadata": {},
-                "slo": null,
                 "kpis": []
             }"#,
         )
@@ -612,7 +856,6 @@ mod tests {
             r#"{
                 "service_name": "sglang",
                 "service_metadata": {},
-                "slo": null,
                 "kpis": []
             }"#,
         )
@@ -702,7 +945,6 @@ mod tests {
             r#"{
                 "service_name": "vllm",
                 "service_metadata": {},
-                "slo": null,
                 "kpis": []
             }"#,
         )
@@ -833,7 +1075,6 @@ mod tests {
             service_name: "rpc-perf".to_string(),
             aliases: vec!["rpcperf".to_string()],
             service_metadata: HashMap::new(),
-            slo: None,
             kpis: Vec::new(),
         });
 
@@ -859,7 +1100,6 @@ mod tests {
             service_name: "valkey".to_string(),
             aliases: vec!["cachecannon".to_string()],
             service_metadata: HashMap::new(),
-            slo: None,
             kpis: Vec::new(),
         });
 
@@ -868,5 +1108,123 @@ mod tests {
             vec!["cachecannon".to_string(), "valkey".to_string()],
             "both the alias collision and the name collision are reported"
         );
+    }
+}
+
+#[cfg(test)]
+mod check_tests {
+    use super::*;
+
+    fn parse(json: &str) -> Result<Check, String> {
+        serde_json::from_str::<Check>(json).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn above_only_parses_with_defaults() {
+        let c = parse(r#"{"above": 5e6}"#).unwrap();
+        assert_eq!(c.bound(), Bound::Above(5e6));
+        assert_eq!(c.for_, None);
+        assert_eq!(c.min_duration(), Duration::ZERO);
+        assert_eq!(c.severity, Severity::Fail);
+        assert_eq!(c.condition(), "above 5000000");
+    }
+
+    #[test]
+    fn below_only_parses() {
+        let c = parse(r#"{"below": 0.5, "severity": "warn"}"#).unwrap();
+        assert_eq!(c.bound(), Bound::Below(0.5));
+        assert_eq!(c.severity, Severity::Warn);
+        assert_eq!(c.condition(), "below 0.5");
+    }
+
+    #[test]
+    fn both_bounds_are_rejected() {
+        let err = parse(r#"{"above": 1, "below": 2}"#).unwrap_err();
+        assert!(err.contains("exactly one"), "{err}");
+    }
+
+    #[test]
+    fn neither_bound_is_rejected() {
+        let err = parse(r#"{"for": "10s"}"#).unwrap_err();
+        assert!(err.contains("exactly one"), "{err}");
+    }
+
+    #[test]
+    fn for_parses_as_a_duration_string_and_as_seconds() {
+        let c = parse(r#"{"above": 1, "for": "10s"}"#).unwrap();
+        assert_eq!(c.for_, Some(Duration::from_secs(10)));
+        assert_eq!(c.condition(), "above 1 for 10s");
+
+        let c = parse(r#"{"above": 1, "for": "1m30s"}"#).unwrap();
+        assert_eq!(c.for_, Some(Duration::from_secs(90)));
+
+        let c = parse(r#"{"above": 1, "for": 2.5}"#).unwrap();
+        assert_eq!(c.for_, Some(Duration::from_millis(2500)));
+
+        let c = parse(r#"{"above": 1, "for": "1.5s"}"#).unwrap();
+        assert_eq!(c.for_, Some(Duration::from_millis(1500)));
+        let c = parse(r#"{"above": 1, "for": "0.5m"}"#).unwrap();
+        assert_eq!(c.for_, Some(Duration::from_secs(30)));
+        let err = parse(r#"{"above": 1, "for": "1.2.3s"}"#).unwrap_err();
+        assert!(err.contains("not a number"), "{err}");
+
+        let err = parse(r#"{"above": 1, "for": "10"}"#).unwrap_err();
+        assert!(err.contains("missing unit"), "{err}");
+        let err = parse(r#"{"above": 1, "for": "10x"}"#).unwrap_err();
+        assert!(err.contains("unknown unit"), "{err}");
+    }
+
+    #[test]
+    fn unknown_keys_are_rejected() {
+        let err = parse(r#"{"above": 1, "four": "10s"}"#).unwrap_err();
+        assert!(err.contains("unknown field"), "{err}");
+    }
+
+    #[test]
+    fn quantile_must_be_a_fraction() {
+        let c = parse(r#"{"above": 1, "quantile": 0.99}"#).unwrap();
+        assert_eq!(c.condition(), "p99 above 1");
+        let err = parse(r#"{"above": 1, "quantile": 99}"#).unwrap_err();
+        assert!(err.contains("quantile"), "{err}");
+    }
+
+    #[test]
+    fn serialization_round_trips_through_the_duration_string() {
+        let c = parse(r#"{"below": 3, "for": "90s", "severity": "warn"}"#).unwrap();
+        let json = serde_json::to_string(&c).unwrap();
+        assert_eq!(json, r#"{"below":3.0,"for":"1m30s","severity":"warn"}"#);
+        assert_eq!(parse(&json).unwrap(), c);
+    }
+
+    #[test]
+    fn a_kpi_without_check_serializes_without_the_key() {
+        let kpi: Kpi =
+            serde_json::from_str(r#"{"role":"latency","title":"t","query":"q","type":"gauge"}"#)
+                .unwrap();
+        assert!(kpi.check.is_none());
+        assert!(!serde_json::to_string(&kpi).unwrap().contains("check"));
+    }
+
+    #[test]
+    fn a_kpi_with_an_invalid_check_fails_to_load() {
+        let err = serde_json::from_str::<Kpi>(
+            r#"{"role":"latency","title":"t","query":"q","type":"gauge","check":{}}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("exactly one"), "{err}");
+    }
+
+    #[test]
+    fn duration_formatting() {
+        assert_eq!(format_duration(Duration::ZERO), "0s");
+        assert_eq!(format_duration(Duration::from_millis(500)), "500ms");
+        assert_eq!(format_duration(Duration::from_secs(3723)), "1h2m3s");
+        assert_eq!(
+            parse_duration("1h 2m 3s").unwrap(),
+            Duration::from_secs(3723)
+        );
+        assert_eq!(parse_duration("2d").unwrap(), Duration::from_secs(172_800));
+        assert!(parse_duration("").is_err());
     }
 }
