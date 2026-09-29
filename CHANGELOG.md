@@ -10,6 +10,13 @@
 
 ### Added
 
+- `memory_pagecache` sampler (opt-in): the page cache's traffic per mount,
+  and per cgroup with `cgroup_attribution = true`. Buffered read calls and
+  bytes from one `fentry` on `filemap_read`, pages filled by the filling
+  task's context (read, write, fault, other) from the add tracepoint, pages
+  evicted, and mmap faults. Pages filled during reads over bytes read is the
+  read miss ratio. The memory dashboard's Page Cache group gains the rates
+  and the miss ratio when a recording has them.
 - `xfs_log` sampler (opt-in): how long threads block on the XFS log, per
   mount and per cgroup, with host-wide latency histograms. Waiting for log
   space is the `xfs_log_grant_sleep`/`_wake` pair; a log force is

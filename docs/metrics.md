@@ -36,6 +36,7 @@ This guide walks you through all the available metrics, organized by category.
   - [gpu_intel_pmu](#gpu_intel_pmu)
 - [Memory](#memory)
   - [memory_meminfo](#memory_meminfo)
+  - [memory_pagecache](#memory_pagecache)
   - [memory_slabinfo](#memory_slabinfo)
   - [memory_vmstat](#memory_vmstat)
   - [memory_writeback](#memory_writeback)
@@ -829,6 +830,49 @@ utilized across the system.
 A line the running kernel does not print (`HardwareCorrupted` without
 `CONFIG_MEMORY_FAILURE`, the huge-page lines without the corresponding
 config) leaves its gauge absent from the snapshot rather than at 0.
+
+### memory_pagecache
+
+BPF sampler on the page cache, per filesystem and optionally per cgroup:
+buffered read calls and the bytes they ask for, pages filled by what the
+filling task was doing, pages evicted, and mmap faults. Reads are one
+`fentry` on `filemap_read` (`generic_file_buffered_read` before 5.12): no
+`fexit`, no task storage, so a read pays one probe crossing. Fills are the
+`mm_filemap_add_to_page_cache` tracepoint at the rate pages come in from the
+device, each classified from the task's saved syscall number (a read
+syscall, a write syscall, a page fault, or other; every fill is `other` on
+kernels before 5.15, which lack `bpf_task_pt_regs`). Evictions are the
+delete tracepoint; faults are `fentry` on `filemap_fault`.
+
+**The hit ratio.** `pagecache_pages_added{reason="read"} × 4096 /
+pagecache_read_bytes` is the fraction of bytes read that came from the
+device, readahead included, so `1 −` that is the page-level hit ratio.
+There is no per-call hit or miss and no latency by outcome: the design that
+had them bracketed every read with an `fexit` and task storage
+(`docs/journal/2026-09-29-pagecache-hit-ratio.md`), and this one keeps the
+read path to a single `fentry`.
+
+**Opt-in.** The read hook runs on every buffered read call. It is one of the
+samplers the `[defaults]` section never turns on: enable it with
+`[samplers.memory_pagecache] enabled = true`. `cgroup_attribution = true`
+adds the per-cgroup series at the cost measured for `ext4_ops`.
+
+Per filesystem means the slot registry's mounts (ext4, ext3, ext2, ocfs2,
+xfs): every other filesystem, and the block devices' own page cache (inode
+tables and directory blocks read through the buffer cache), lands in
+`mount="other"`. A large folio counts as its pages on 6.6+ and as one page
+on 5.16–6.5.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `pagecache_reads` | Buffered read calls into the page cache, hits and misses alike | `mount`, `fstype`, `devnum`, `block_device` |
+| `pagecache_read_bytes` | Bytes those calls asked for | `mount`, ... |
+| `pagecache_pages_added` | Pages added, by the adding task's context: `read` (misses and their readahead), `write` (buffered writes of uncached pages), `fault` (mmap), `other` | `reason={read,write,fault,other}`, `mount`, ... |
+| `pagecache_pages_evicted` | Pages removed: reclaim, truncation, invalidation | `mount`, ... |
+| `pagecache_faults` | mmap faults served by the page cache, resident or not | `mount`, ... |
+| `cgroup_pagecache_reads` | Read calls by the reading task's cgroup (`cgroup_attribution = true`) | `name` |
+| `cgroup_pagecache_read_bytes` | Bytes a cgroup's reads asked for | `name` |
+| `cgroup_pagecache_pages_added` | Pages a cgroup's tasks filled, every reason | `name` |
 
 ### memory_slabinfo
 

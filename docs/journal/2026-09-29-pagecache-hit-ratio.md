@@ -1,8 +1,13 @@
 # Page-cache hit ratio: probed, designed, not built
 
 - **Opened:** 2026-09-29
-- **Status:** **NO-GO for now — probed and designed, nothing built.** The
-  second half of step 7 (C7) of `2026-09-28-filesystem-telemetry-gaps.md`.
+- **Status:** **Built, opt-in, in a cheaper shape than the one designed
+  below** (`memory_pagecache`, see *Results*): the NO-GO was on the cost of
+  a per-read `fentry`/`fexit` bracket with task storage, and a request for
+  the hit rate in a test setting reopened it the same day with a design that
+  keeps the read path to one `fentry` and classifies fills at fill rate
+  instead. The original design and its decision stay below as the record.
+  The second half of step 7 (C7) of `2026-09-28-filesystem-telemetry-gaps.md`.
   One probe on the hv01 Debian 13 guest (`6.12.63+deb13-amd64`) measured how
   often every candidate hook fires per read under cached, cold, sequential
   and small-file workloads; the numbers are below, and they change the
@@ -163,11 +168,40 @@ buildable as written; the first thing to measure is the bracket's real cost
 with `kernel.bpf_stats_enabled` on a read-heavy `null_blk` workload, and
 the GO gate should be that cost against the fleet's read rate.
 
+## Results — `memory_pagecache`, the cheaper shape
+
+Reopened the same day: the hit rate is wanted for a test setting, and the
+question became whether it could be had for less than the bracket. It can,
+by giving up the per-call hit/miss and the latency by outcome:
+
+- **Reads**: one `fentry` on `filemap_read` (`generic_file_buffered_read`
+  on 5.9–5.11), calls and `iter->count` bytes per mount. No `fexit`, no task
+  storage: one crossing per read instead of two plus a storage lookup each.
+- **Fills**: `tp_btf/mm_filemap_add_to_page_cache`, pages per folio, per
+  mount, classified by what the filling task was doing from its saved
+  syscall number (`bpf_task_pt_regs`, 5.15+): a read syscall, a write
+  syscall, a page fault (the entry code stores −1 for exceptions on x86 and
+  arm64), or other (kernel threads, everything else). This replaces the
+  bracket's "adds during this call" with a lookup that runs at fill rate,
+  which the device bounds. A syscall-number table is written by userspace
+  for the running architecture, as `syscall_counts` does.
+- **Evictions** from the delete tracepoint and **mmap faults** from `fentry`
+  on `filemap_fault`, per mount.
+- **Per cgroup** (reads, bytes, pages filled) behind `cgroup_attribution`,
+  off by default, folded out of the program when off.
+
+The page-level miss ratio is `pages_added{reason="read"} × 4096 /
+read_bytes`, readahead included; the memory dashboard's Page Cache group
+draws it per mount. What is lost against the design above: no per-call
+outcome, no read latency split by hit and miss, and a fill that the
+readahead of one read serves to a later read still counts as that read's
+miss. Cost and the VM cross-check are in the PR and below once measured.
+
 ## Deferred / reopen
 
-- **`pagecache` sampler** — NO-GO for now, design above. Reopen on a
-  read-path finding; GO gate is the measured bracket cost against the
-  fleet's read rate.
+- **`pagecache` bracket design** — By design not built; the cheaper shape
+  above is. Reopen if a per-call hit/miss or a read latency by outcome is
+  needed; GO gate is the measured bracket cost against the fleet's read rate.
 - **Readahead efficiency** — Idea, falls out of the design (pages added
   during reads over pages requested). Not separately pursued.
 - **Block-device page cache** — Observation. Inode tables and directory

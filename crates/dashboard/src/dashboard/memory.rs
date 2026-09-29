@@ -137,6 +137,43 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             PlotOpts::gauge("Mapped", "mapped", Unit::Bytes),
             "memory_mapped".to_string(),
         );
+    }
+
+    if has_metric(data, "pagecache_reads") {
+        let traffic = usage.subgroup("Page Cache Traffic");
+        traffic.describe(
+            "From the memory_pagecache sampler. Reads into the cache and the bytes they ask \
+             for, per mount; pages filled by what the filling task was doing (a read syscall, a \
+             write, an mmap fault, or something else) and pages evicted. The read miss ratio is \
+             pages filled during reads, as bytes, over bytes read: what fraction of what was read \
+             came from the device, readahead included.",
+        );
+        traffic.plot_promql(
+            PlotOpts::counter("Read Calls", "pagecache-reads", Unit::Rate),
+            "sum by (mount) (irate(pagecache_reads[5m]))".to_string(),
+        );
+        traffic.plot_promql(
+            PlotOpts::counter("Read Bytes", "pagecache-read-bytes", Unit::Datarate),
+            "sum by (mount) (irate(pagecache_read_bytes[5m]))".to_string(),
+        );
+        traffic.plot_promql(
+            PlotOpts::counter("Pages Filled by Reason", "pagecache-filled", Unit::Rate),
+            "sum by (reason) (irate(pagecache_pages_added[5m]))".to_string(),
+        );
+        traffic.plot_promql(
+            PlotOpts::counter("Pages Evicted", "pagecache-evicted", Unit::Rate),
+            "sum by (mount) (irate(pagecache_pages_evicted[5m]))".to_string(),
+        );
+        traffic.plot_promql(
+            PlotOpts::counter("Read Miss Ratio", "pagecache-miss-ratio", Unit::Count),
+            "sum by (mount) (irate(pagecache_pages_added{reason=\"read\"}[5m])) * 4096 / \
+             sum by (mount) (irate(pagecache_read_bytes[5m]))"
+                .to_string(),
+        );
+        traffic.plot_promql(
+            PlotOpts::counter("mmap Faults", "pagecache-faults", Unit::Rate),
+            "sum by (mount) (irate(pagecache_faults[5m]))".to_string(),
+        );
 
         let anon = usage.subgroup("Anonymous");
         anon.describe(
