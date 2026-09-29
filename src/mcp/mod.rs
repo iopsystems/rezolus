@@ -11,6 +11,8 @@ pub(crate) use recording_selector::{
 pub mod anomaly_detection;
 pub mod correlation;
 mod describe_metrics;
+mod export;
+mod link;
 mod server;
 
 use chrono::{DateTime, Utc};
@@ -1278,12 +1280,29 @@ impl TryFrom<ArgMatches> for Config {
 
         let server = server::ServerOptions {
             allow_mutating: args.get_flag("ALLOW_MUTATING"),
+            export_dir: args.get_one::<PathBuf>("EXPORT_DIR").cloned(),
+            viewer_url: args.get_one::<String>("VIEWER_URL").cloned(),
         };
-        if server.allow_mutating && !matches!(mode, Mode::Server) {
-            return Err(
-                "--allow-mutating applies to the stdio server only; the one-shot subcommands read"
-                    .to_string(),
-            );
+        if !matches!(mode, Mode::Server) {
+            let set = [
+                (server.allow_mutating, "--allow-mutating"),
+                (server.export_dir.is_some(), "--export-dir"),
+                (server.viewer_url.is_some(), "--viewer-url"),
+            ];
+            if let Some((_, flag)) = set.iter().find(|(on, _)| *on) {
+                return Err(format!(
+                    "{flag} applies to the stdio server only; the one-shot subcommands read"
+                ));
+            }
+        }
+        if let Some(dir) = &server.export_dir {
+            if !dir.is_dir() {
+                return Err(format!(
+                    "--export-dir {}: not a directory (create it first; exports are refused \
+                     rather than written somewhere else)",
+                    dir.display()
+                ));
+            }
         }
 
         Ok(Config {
@@ -1343,10 +1362,12 @@ pub fn command() -> Command {
              extract-features     Extract structured features from a recording as JSON\n\n\
              A good workflow is describe-metrics (see what's there) → query / detect-anomalies\n\
              (dig in). Run `rezolus mcp <subcommand> --help` for per-subcommand examples.\n\n\
-             The stdio server also has write tools with no CLI form: add_event marks an\n\
-             instant or range in the recording, run_checks evaluates its KPI checks (and\n\
-             writes the verdicts with annotate=true), and, only with --allow-mutating,\n\
-             remove_events takes events out again.\n\n\
+             The stdio server also has tools with no CLI form: add_event marks an instant\n\
+             or range in the recording, run_checks evaluates its KPI checks (and writes the\n\
+             verdicts with annotate=true), export_query writes a range query as CSV or\n\
+             parquet under --export-dir, viewer_link builds a link that opens a running\n\
+             viewer at a section and time range (a full URL with --viewer-url), and, only\n\
+             with --allow-mutating, remove_events takes events out again.\n\n\
              EXAMPLES:\n    \
              # Run as a stdio MCP server for an LLM client\n    \
              rezolus mcp\n\n    \
@@ -1373,6 +1394,28 @@ pub fn command() -> Command {
                      unless the operator starting the server says otherwise. Server mode only.",
                 )
                 .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            clap::Arg::new("EXPORT_DIR")
+                .long("export-dir")
+                .value_name("DIR")
+                .value_parser(clap::value_parser!(PathBuf))
+                .help(
+                    "Directory the export_query tool may write files into (server mode only)\n\
+                     Without it the tool is listed but refuses every call, naming this flag.\n\
+                     Files land under a bare name the agent chooses (or one derived from the\n\
+                     query), never over an existing file, never outside this directory.",
+                ),
+        )
+        .arg(
+            clap::Arg::new("VIEWER_URL")
+                .long("viewer-url")
+                .value_name("URL")
+                .help(
+                    "Address of a running `rezolus view`, e.g. http://127.0.0.1:4200 (server mode only)\n\
+                     The viewer_link tool then returns a full URL; without it the tool returns the\n\
+                     query string and hash fragment for the client to append to a viewer's address.",
+                ),
         )
         .subcommand(
             Command::new("analyze-correlation")

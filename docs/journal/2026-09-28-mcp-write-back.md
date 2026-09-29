@@ -2,8 +2,8 @@
 
 - **Opened:** 2026-09-28
 - **Status:** IN PROGRESS. Tiers, `add_event`, `run_checks` and
-  `remove_events` built (first PR of the wave); `export_query`,
-  `viewer_link` and `rezolus mcp install` follow in their own PRs.
+  `remove_events` built (#1358); `export_query` and `viewer_link` built
+  (second PR); `rezolus mcp install` and the skill follow.
 
 ## Problem
 
@@ -157,6 +157,42 @@ run). `rezolus view` on the archive afterwards serves the event in
 `/api/v1/file_metadata`, which is what the timeline draws from. That is the
 entry's first GO condition.
 
+## Built: `export_query` and `viewer_link`
+
+The second PR adds the two tools that do not touch a recording's
+metadata, and the two server flags they need.
+
+**`export_query`** (`src/mcp/export.rs`). Runs the query the way the
+`query` tool does (whole recording, step 1 s unless `step` is given) and
+flattens the result to long form, one row per series and timestamp:
+`series` (the label set as the CLI prints it), `timestamp` (Unix
+seconds), `value`, and `lo`/`hi` from the acquisition-window band when the
+query carried one. CSV and parquet carry the same five columns. A heatmap
+result is refused with a pointer at `histogram_quantile`. Files land only
+under `rezolus mcp --export-dir DIR`, which must exist at startup; without
+the flag the tool is listed and refuses every call naming it. The
+filename must be one path component (no separators, no `..`, no leading
+dot) or is derived from a hash of the query and the time; an existing file
+is never overwritten. The reply carries the path, the counts, the columns
+and the evaluated range.
+
+**`viewer_link`** (`src/mcp/link.rs`). Pure formatting of the
+[viewer link](2026-09-28-viewer-link-state.md) wire form: the section and
+chart in the hash, everything else in the query string, values
+percent-encoded as `URLSearchParams` reads them back. `from`/`to` go
+together (RFC 3339 or seconds as a number, digit-only strings refused as in
+`add_event`), `time=raw` only, a zero anchor is not written. The decision
+the entry left open is made both ways: the reply always carries the
+fragment and query on their own, and a full URL when the call passes
+`viewer_url` or the server was started with `--viewer-url`. The Rust tests
+pin one full fixture string, and `tests/viewer_link_parity.test.mjs` parses
+that same string with the viewer's `parseViewState` and checks the Rust
+source still declares it, so the two sides cannot drift apart without a
+failing test.
+
+Both flags, like `--allow-mutating`, are refused on the one-shot
+subcommands.
+
 ## Not in scope
 
 - A hosted or remote MCP transport. Stdio only.
@@ -173,10 +209,10 @@ a message naming the flag.
 
 ## Deferred / Reopen
 
-- **`viewer_link` with a full URL.** Needs a way for the server to know the
-  viewer's address; reopen when the fragment-only form proves insufficient.
-- **`export_query` and `viewer_link`.** Next PR: the pure-function tools.
-- **`rezolus mcp install` and the skill.** After the tools.
+- **`viewer_link` with a full URL.** Built both ways: `--viewer-url` on the
+  server or `viewer_url` on the call gives a full URL; without either the
+  fragment and query come back on their own.
+- **`rezolus mcp install` and the skill.** Next PR.
 - **`set_kpis`.** Mutating replace of `service_queries`; the annotate KPI
   path exists (`RezAnnotation::ext_json`, `annotate_parquet`), so it is a
   small addition when a client asks for it. Not built with the first three
