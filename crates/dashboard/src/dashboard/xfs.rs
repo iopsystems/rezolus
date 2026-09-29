@@ -12,7 +12,17 @@ fn rate(metric: &str) -> String {
 pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
-    if !has_metric(data, "xfs_log_forces") {
+    let has_stats = has_metric(data, "xfs_log_forces");
+    let has_log = has_metric(data, "xfs_log_waits");
+    if !has_stats && !has_log {
+        return view;
+    }
+
+    if has_log {
+        blocked_time(&mut view);
+    }
+
+    if !has_stats {
         return view;
     }
 
@@ -195,6 +205,68 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     view
 }
 
+/// The `xfs_log` sampler's view: how long threads were blocked on the log,
+/// per mount, and the host-wide distributions.
+fn blocked_time(view: &mut View) {
+    let mut blocked = Group::new("Blocked Time", "blocked-time");
+
+    let space = blocked.subgroup("Log Space");
+    space.describe(
+        "A transaction that found the log full sleeps until the AIL pusher frees space. Any \
+         waits at all mean the log is too small or its device too slow for the metadata write \
+         rate; the wait count equals xfs_log_space_sleeps, and the time is what that count \
+         cannot say.",
+    );
+    space.plot_promql(
+        PlotOpts::histogram_latency("Log Space Wait Latency", "blocked-space-latency"),
+        "xfs_log_wait_latency{wait=\"space\"}".to_string(),
+    );
+    space.plot_promql(
+        PlotOpts::counter("Log Space Waits", "blocked-space-waits", Unit::Count),
+        rate("xfs_log_waits{wait=\"space\"}"),
+    );
+    space.plot_promql(
+        PlotOpts::counter("Mean Log Space Wait", "blocked-space-mean", Unit::Time),
+        "sum by (mount) (irate(xfs_log_wait_time{wait=\"space\"}[5m])) / \
+         sum by (mount) (irate(xfs_log_waits{wait=\"space\"}[5m]))"
+            .to_string(),
+    );
+
+    let force = blocked.subgroup("Log Force");
+    force.describe(
+        "A log force writes the committed log out and waits for it: the device round trip \
+         every fsync pays. Mean force latency per mount against the block device's write \
+         latency says whether the fsync is waiting on the device or on other commits.",
+    );
+    force.plot_promql(
+        PlotOpts::histogram_latency("Log Force Latency", "blocked-force-latency"),
+        "xfs_log_wait_latency{wait=\"force\"}".to_string(),
+    );
+    force.plot_promql(
+        PlotOpts::counter("Log Forces", "blocked-forces", Unit::Count),
+        rate("xfs_log_waits{wait=\"force\"}"),
+    );
+    force.plot_promql(
+        PlotOpts::counter("Mean Log Force Latency", "blocked-force-mean", Unit::Time),
+        "sum by (mount) (irate(xfs_log_wait_time{wait=\"force\"}[5m])) / \
+         sum by (mount) (irate(xfs_log_waits{wait=\"force\"}[5m]))"
+            .to_string(),
+    );
+
+    let cil = blocked.subgroup("CIL");
+    cil.describe(
+        "Committing transactions that found the committed item list over its hard limit and \
+         waited for a push to the log. A count only: the log's checkpoint writer is behind the \
+         commit rate.",
+    );
+    cil.plot_promql(
+        PlotOpts::counter("CIL Waits", "blocked-cil-waits", Unit::Count),
+        rate("xfs_log_waits{wait=\"cil\"}"),
+    );
+
+    view.group(blocked);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,6 +315,21 @@ mod tests {
         assert!(j.contains(
             "sum(irate(xfs_extent_blocks{op=\"allocated\"}[5m])) / sum(irate(xfs_extents{op=\"allocated\"}[5m]))"
         ));
+    }
+
+    #[test]
+    fn the_blocked_time_group_renders_from_xfs_log_alone() {
+        let view = generate(&store_with(&["xfs_log_waits"]), vec![]);
+        let j = json(&view);
+        assert!(j.contains("xfs_log_wait_latency{wait=\"space\"}"));
+        assert!(j.contains("sum by (mount) (irate(xfs_log_waits{wait=\"force\"}[5m]))"));
+        assert!(j.contains(
+            "sum by (mount) (irate(xfs_log_wait_time{wait=\"force\"}[5m])) / sum by (mount) (irate(xfs_log_waits{wait=\"force\"}[5m]))"
+        ));
+        assert!(
+            !j.contains("xfs_log_forces"),
+            "the stats groups need xfs_stats"
+        );
     }
 
     #[test]

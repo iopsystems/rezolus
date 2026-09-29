@@ -1,9 +1,12 @@
 # XFS telemetry: per-mount stats first, BPF for what stats cannot say
 
 - **Opened:** 2026-09-29
-- **Status:** **Step 1 shipped: `xfs_stats` (#1351), exact against sysfs
-  and `/proc/fs/xfs/stat` in the VM, see *Results — step 1*. Step 2
-  (`xfs_log` BPF) open.** Step 7 (C8) of
+- **Status:** **Both steps shipped. Step 1: `xfs_stats` (#1351), exact
+  against sysfs and `/proc/fs/xfs/stat` in the VM, see *Results — step 1*.
+  Step 2: `xfs_log` (#1352, opt-in), force counts exact against the stats
+  file, 1.3 µs per force measured with `kernel.bpf_stats_enabled`, see
+  *Results — step 2*; its log-space path could not be provoked on the test
+  rig and is verified only at zero.** Step 7 (C8) of
   `2026-09-28-filesystem-telemetry-gaps.md`. Two probes on the hv01 Debian 13
   guest (`6.12.63+deb13-amd64`, `CONFIG_XFS_FS=m` with module BTF) supplied the
   tracepoint inventory, the `tp_btf` prototypes, the module struct fields and
@@ -207,7 +210,8 @@ slots.
    without the `xstrat` line; see Results — step 1.*
 2. **`xfs_log`** with grant-sleep and force latency, CIL waits, per-cgroup
    blocked time; benched on `null_blk` XFS before it is offered even as an
-   opt-in.
+   opt-in. *Done in #1352; CIL waits are a count, not a latency. See
+   Results — step 2.*
 3. Reopen `xfs_alloc` if XFS free-space fragmentation becomes a question.
 
 ## Results — step 1: `xfs_stats`
@@ -321,8 +325,124 @@ honest but a whole interval wide, and any sweep dispatched from `refresh()`
 at the scrape's cadence (`memory_slabinfo`, `filesystem`) can hit it; see
 Deferred.
 
+## Results — step 2: `xfs_log`
+
+Same guest. Three systemslab runs on the PR's code (`e469853f`):
+`01a0ec94-bbd1-7186-8ed1-cdb6fcf6d6e8` (two loop-backed mounts, fio
+workloads), `01a0eca5-a64e-712d-fb57-4c7c7bfb8bfa` (a C driver of
+create, 4 KiB write, fsync, unlink, and the first bench),
+`01a0ecb3-c900-7160-df07-c50ebbbb098b` (a dm-delay device and the bench
+with `kernel.bpf_stats_enabled=1`). Shipped in #1352:
+`src/agent/samplers/xfs/linux/log/`, the Blocked Time group in
+`crates/dashboard/src/dashboard/xfs.rs`, an XFS row in the cgroups view.
+
+**Built as specified, with one narrowing.** The log-space wait is the
+`xfs_log_grant_sleep`/`_wake` pair on one thread; the force is
+`fentry`/`fexit` on `xfs_log_force` and on `xfs_log_force_seq`
+(`xfs_log_force_lsn` before 5.13, chosen from BTF at init); starts are in
+task local storage, one slot per pair, as `ext4_ops` keeps its. All seven
+programs attached on the 6.12 module-XFS guest. The CIL wait is a count
+only: `xfs_log_cil_wait` fires before the sleep on `xc_push_wait` and
+nothing traces the wake, and the function around it is static, so a
+latency would need a kprobe on a function the compiler may inline. The
+counts duplicate two `xfs_stats` fields on purpose: `xlog_grant_head_wait`
+increments `xs_sleep_logspace` in the same loop trip that fires the sleep
+tracepoint, and both force functions increment `xs_log_force` once at
+entry, so `xfs_log_waits{wait="space"}` and `{wait="force"}` must equal
+`xfs_log_space_sleeps` and `xfs_log_forces` per mount. That equality is
+the cross-check below.
+
+**Forces: exact, per mount and per cgroup.** Per mount, against the mount's
+own `stats/stats` read after the counters stopped moving:
+
+| run | mount, device | `xfs_log_waits{wait="force"}` | `log/force` | mean force |
+|---|---|---|---|---|
+| 1 | A, loop, 64 MiB log; fio 8 jobs 4 KiB write+fsync 20 s | 12,391 | 12,391 | 9.4 ms |
+| 1 | B, loop; fio 4 jobs write+fsync 10 s | 3,250 | 3,250 | 9.8 ms |
+| 2 | A, loop; 300 fsyncs then an unsynced flood | 393 | 393 | 6.6 ms |
+| 2 | B, loop; fio | 3,262 | 3,262 | 9.8 ms |
+| 3 | C, dm-delay (writes +20 ms); 994 fsyncs | 1,102 | 1,102 | 51.4 ms |
+
+The histogram total equaled the summed counts every time (15,641; 3,655;
+1,102). A Python driver run under `systemd-run --scope` wrote and fsynced
+300 files: its cgroup shows exactly 300 forces in both runs, 1.80 s and
+1.83 s blocked in total, 6.0 ms per fsync on the loop device. The `other`
+slot stayed at 0. Unmounting B freed its slot at the next rescan and its
+series left the snapshot. The force histogram on the dm-delay device sits
+where two 20 ms writes put it (51 ms mean): the fsync's log write and the
+data flush before it.
+
+tracefs is not the reference for forces: `xfs_log_force` fired 31,298 and
+7,322 times over the two runs against 15,641 and 3,655 forces completed
+and counted by the stats file, two per force plus the few before the agent
+attached. The tracepoint fires more than once on a force's path; the stats
+field increments once, and the sampler agrees with the field.
+
+**Log space: not exercised.** Three attempts to fill a 64 MiB log did not
+produce a single `xs_sleep_logspace` on this rig: 8 fio jobs creating and
+fsyncing files (run 1); 8 driver threads creating, writing and unlinking
+without fsync at 10,636 ops/s on the loop device (run 2, 748,350
+reservations); the same flood at 6,551 ops/s on a dm-delay device with 20
+ms writes (run 3, 932,130 reservations). The CIL cancels most of what a
+create-then-unlink logs and the AIL kept the tail moving, so the grant
+heads never reached the log's end. The sampler's space count equaled the
+stats file's at 0 on every mount, and the grant pair runs through the same
+`wait_begin`/`wait_end` code the force pair verified, but the space
+latency has not been seen with a real value. See Deferred.
+
+**Cost.** Two measures. `perf stat` over the driver on `null_blk` XFS
+(8 threads on CPUs 8–15, agent on 0–7, three arms, three 20 s reps) could
+not resolve the probes: one op costs about 1.4 ms of task clock and 360k
+instructions, and the per-op spread across reps (±8k–17k instructions)
+was an order of magnitude above the difference between arms, which
+changed sign between run 2 (+7,573 instructions per op, `xfs_log` minus
+idle) and run 3 (−6,224). The kernel's own program statistics, with
+`kernel.bpf_stats_enabled=1`, are precise:
+
+| rep | forces | BPF runs | runs per force | ns per run | ns per force |
+|---|---|---|---|---|---|
+| 1 | 111,029 | 222,058 | 2.00 | 654 | 1,307 |
+| 2 | 111,289 | 222,578 | 2.00 | 639 | 1,278 |
+| 3 | 108,726 | 217,452 | 2.00 | 640 | 1,281 |
+
+So **1.3 µs per force**, for the `fentry` and `fexit` together: task
+storage get, the `dev_t → slot` hash lookup, a histogram increment, two
+per-filesystem counters and the cgroup accounting. At 20,000 forces a
+second that is 26 ms of CPU a second, 2.6% of one core; the loop devices
+here forced about 600 times a second. Per crossing this is close to
+`ext4_ops`'s +2.26 µs per write-plus-fsync pair (four crossings). The
+sampler stays opt-in as designed; the number says a default-on decision
+would be about the fsync rate a fleet runs at, not about the probe.
+
+Refresh cost (the `sampling latency` line, one `counters` bank read plus
+two histograms and the cgroup maps): p50 220–249 µs across the runs,
+p99 509 µs, max 571 µs in run 3 and one 3.9 ms outlier in run 2 (n=47).
+Instruction counts 677 (`xfs_log_grant_wake`) and 678
+(`xfs_log_force_seq_fexit`).
+
+**Review.** Adversarial review found no defect. Its one note is now in the
+descriptions: a force called without `XFS_LOG_SYNC` (inode unpinning,
+buffer locking) returns once the write is issued, so the force histogram's
+low tail is those, and the count must include them to equal
+`xfs_log_forces`. A `sync` split would be one flag test in each `fentry`
+if it is ever wanted.
+
 ## Deferred / reopen
 
+- **`xfs_log` log-space latency unverified** — Open. `xfs_log_waits{
+  wait="space"}` and its time are 0 everywhere the sampler has run; the
+  pairing code is the force pair's, but no real grant sleep has been timed.
+  Reopen on the first host whose `xfs_log_space_sleeps` is nonzero:
+  compare the counts per mount (they must be equal) and read the latency.
+  A rig that fills the log needs a metadata workload the CIL cannot cancel
+  (creates without unlinks, or a directory that keeps growing) on a device
+  slower than the loop and dm-delay devices tried here.
+- **`xfs_log` default-on** — By design opt-in, with the number to revisit:
+  1.3 µs per force. Reopen if a fleet's XFS hosts force the log rarely
+  enough that 2.6% of a core at 20k forces/s is not the operating point.
+- **CIL wait latency** — By design a count. The wait is inside a static
+  function; reopen if the count is ever nonzero in production and the
+  duration matters.
 - **Refresh-dispatched sweeps race the snapshot walk** — Open. A
   `spawn_blocking` sweep dispatched by `refresh()` runs concurrently with
   the builder's walk of the same tick, and when it finishes mid-walk the

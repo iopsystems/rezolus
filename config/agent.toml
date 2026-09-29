@@ -263,6 +263,14 @@ enabled = false
 [samplers.xfs_stats]
 # interval = "1s"
 
+# Times threads blocked on the XFS log: waiting for log space and forcing the
+# log (the log write an fsync waits for), per mount and per cgroup, with
+# host-wide latency histograms; counts CIL-full waits. Opt-in: the force
+# probes run on every fsync. Needs kernels 5.12+ (task local storage for
+# tracing programs; module BTF when XFS is a module). See docs/metrics.md#xfs_log.
+[samplers.xfs_log]
+enabled = false
+
 # Produces nVIDIA GPU metrics using NVML and optionally CUPTI PM sampling.
 # CUPTI PM sampling (SM utilization, DRAM throughput, L2 hit rate, occupancy)
 # requires Turing+ GPU and is only available when built with --features cupti.
