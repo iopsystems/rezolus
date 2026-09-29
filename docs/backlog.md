@@ -930,8 +930,8 @@ The entry specifies `ext4_journal` (phase 1, implemented and measured),
   representative workload before attaching any of them.
 - **Fast commit** — By design. `ext4_fc_*` off by default; reopen if a fleet
   enables `fast_commit`.
-- **jbd2 counts include ocfs2** — By design until phase 3 assigns slots by
-  `fstype`.
+- **jbd2 counts include ocfs2** — Resolved by phase 3 (per-filesystem
+  counters): an ocfs2 mount has its own slot, labeled `fstype="ocfs2"`.
 - **Degraded on module-ext4 kernels below 5.11** — By design. No module BTF,
   no CO-RE against jbd2 structs; `rezolus status` shows the sampler degraded.
 - **XFS** — Idea. Its own tracepoint set and journaling model; a separate

@@ -14,6 +14,7 @@
 
 #include <vmlinux.h>
 #include "../../../agent/bpf/helpers.h"
+#include "../../../agent/bpf/filesystem.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
@@ -52,8 +53,10 @@ struct transaction_chp_stats_s___rz {
     __u32 cs_dropped;
 } __attribute__((preserve_access_index));
 
-// counters: one bank of COUNTER_GROUP_WIDTH per CPU. The order MUST match the
-// `counters` vec in mod.rs.
+// counters: one bank of COUNTER_GROUP_WIDTH per (CPU, filesystem slot); the
+// slot comes from fs_slot() on the device each hook has in hand, 0 for a
+// device the mount table does not know (bpf/filesystems.rs). The order MUST
+// match the `counters` vec in mod.rs.
 #define C_COMMITS 0
 #define C_COMMIT_HANDLES 1
 #define C_COMMIT_BLOCKS_DIRTIED 2
@@ -74,7 +77,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CPUS* COUNTER_GROUP_WIDTH);
+    __uint(max_entries, MAX_CPUS* MAX_FILESYSTEMS* COUNTER_GROUP_WIDTH);
 } counters SEC(".maps");
 
 // [0] = nanoseconds per jiffy, written by userspace before attach from
@@ -163,19 +166,26 @@ static __always_inline u64 tick_ns(void) {
     return v ? *v : 0;
 }
 
-static __always_inline void counter_add(u32 counter, u64 value) {
-    u32 idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + counter;
-
-    array_add(&counters, idx, value);
+static __always_inline void counter_add(u32 slot, u32 counter, u64 value) {
+    array_add(&counters, fs_counter_idx(slot, counter, COUNTER_GROUP_WIDTH), value);
 }
 
-static __always_inline void counter_incr(u32 counter) {
-    counter_add(counter, 1);
+static __always_inline void counter_incr(u32 slot, u32 counter) {
+    counter_add(slot, counter, 1);
+}
+
+// The device of the file an fsync was called on.
+static __always_inline u32 file_dev(struct file* file) {
+    if (!file) {
+        return 0;
+    }
+
+    return BPF_CORE_READ(file, f_inode, i_sb, s_dev);
 }
 
 // jbd2_run_stats fires once per commit, from the journal's kjournald2 thread,
 // after the commit completes. Every phase is in jiffies.
-static int __always_inline handle_run_stats(void* stats) {
+static int __always_inline handle_run_stats(u32 slot, void* stats) {
     struct transaction_run_stats_s___rz* s = stats;
     u64 tick = tick_ns();
 
@@ -187,10 +197,10 @@ static int __always_inline handle_run_stats(void* stats) {
         return 0;
     }
 
-    counter_incr(C_COMMITS);
-    counter_add(C_COMMIT_HANDLES, BPF_CORE_READ(s, rs_handle_count));
-    counter_add(C_COMMIT_BLOCKS_DIRTIED, BPF_CORE_READ(s, rs_blocks));
-    counter_add(C_COMMIT_BLOCKS_LOGGED, BPF_CORE_READ(s, rs_blocks_logged));
+    counter_incr(slot, C_COMMITS);
+    counter_add(slot, C_COMMIT_HANDLES, BPF_CORE_READ(s, rs_handle_count));
+    counter_add(slot, C_COMMIT_BLOCKS_DIRTIED, BPF_CORE_READ(s, rs_blocks));
+    counter_add(slot, C_COMMIT_BLOCKS_LOGGED, BPF_CORE_READ(s, rs_blocks_logged));
 
     if (tick == 0) {
         return 0;
@@ -208,7 +218,7 @@ static int __always_inline handle_run_stats(void* stats) {
 }
 
 // jbd2_checkpoint_stats fires once per checkpoint. chp_time is in jiffies.
-static int __always_inline handle_checkpoint_stats(void* stats) {
+static int __always_inline handle_checkpoint_stats(u32 slot, void* stats) {
     struct transaction_chp_stats_s___rz* s = stats;
     u64 tick = tick_ns();
 
@@ -216,10 +226,10 @@ static int __always_inline handle_checkpoint_stats(void* stats) {
         return 0;
     }
 
-    counter_incr(C_CHECKPOINTS);
-    counter_add(C_CHECKPOINT_WRITTEN, BPF_CORE_READ(s, cs_written));
-    counter_add(C_CHECKPOINT_DROPPED, BPF_CORE_READ(s, cs_dropped));
-    counter_add(C_CHECKPOINT_FORCED_TO_CLOSE, BPF_CORE_READ(s, cs_forced_to_close));
+    counter_incr(slot, C_CHECKPOINTS);
+    counter_add(slot, C_CHECKPOINT_WRITTEN, BPF_CORE_READ(s, cs_written));
+    counter_add(slot, C_CHECKPOINT_DROPPED, BPF_CORE_READ(s, cs_dropped));
+    counter_add(slot, C_CHECKPOINT_FORCED_TO_CLOSE, BPF_CORE_READ(s, cs_forced_to_close));
 
     if (tick == 0) {
         return 0;
@@ -233,35 +243,35 @@ static int __always_inline handle_checkpoint_stats(void* stats) {
 // jbd2_lock_buffer_stall reports the stall in whole milliseconds, a scalar
 // argument: no struct read, so this hook works even where the jbd2 structs are
 // not in BTF.
-static int __always_inline handle_lock_buffer_stall(unsigned long stall_ms) {
-    counter_incr(C_LOCK_BUFFER_STALLS);
+static int __always_inline handle_lock_buffer_stall(u32 slot, unsigned long stall_ms) {
+    counter_incr(slot, C_LOCK_BUFFER_STALLS);
     histogram_incr(&lock_buffer_stall_latency, HISTOGRAM_POWER, (u64)stall_ms * NS_PER_MS);
 
     return 0;
 }
 
-static int __always_inline handle_sync_file_enter(int datasync) {
-    counter_incr(datasync ? C_SYNC_FDATASYNC : C_SYNC_FSYNC);
+static int __always_inline handle_sync_file_enter(u32 slot, int datasync) {
+    counter_incr(slot, datasync ? C_SYNC_FDATASYNC : C_SYNC_FSYNC);
 
     return 0;
 }
 
-static int __always_inline handle_sync_file_exit(int ret) {
+static int __always_inline handle_sync_file_exit(u32 slot, int ret) {
     if (ret < 0) {
-        counter_incr(C_SYNC_ERRORS);
+        counter_incr(slot, C_SYNC_ERRORS);
     }
 
     return 0;
 }
 
-static int __always_inline handle_error(void) {
-    counter_incr(C_ERRORS);
+static int __always_inline handle_error(u32 slot) {
+    counter_incr(slot, C_ERRORS);
 
     return 0;
 }
 
-static int __always_inline handle_shutdown(void) {
-    counter_incr(C_SHUTDOWNS);
+static int __always_inline handle_shutdown(u32 slot) {
+    counter_incr(slot, C_SHUTDOWNS);
 
     return 0;
 }
@@ -273,72 +283,72 @@ static int __always_inline handle_shutdown(void) {
 
 SEC("tp_btf/jbd2_run_stats")
 int BPF_PROG(jbd2_run_stats_btf, dev_t dev, unsigned int tid, void* stats) {
-    return handle_run_stats(stats);
+    return handle_run_stats(fs_slot(dev), stats);
 }
 
 SEC("raw_tp/jbd2_run_stats")
 int BPF_PROG(jbd2_run_stats_raw, dev_t dev, unsigned int tid, void* stats) {
-    return handle_run_stats(stats);
+    return handle_run_stats(fs_slot(dev), stats);
 }
 
 SEC("tp_btf/jbd2_checkpoint_stats")
 int BPF_PROG(jbd2_checkpoint_stats_btf, dev_t dev, unsigned int tid, void* stats) {
-    return handle_checkpoint_stats(stats);
+    return handle_checkpoint_stats(fs_slot(dev), stats);
 }
 
 SEC("raw_tp/jbd2_checkpoint_stats")
 int BPF_PROG(jbd2_checkpoint_stats_raw, dev_t dev, unsigned int tid, void* stats) {
-    return handle_checkpoint_stats(stats);
+    return handle_checkpoint_stats(fs_slot(dev), stats);
 }
 
 SEC("tp_btf/jbd2_lock_buffer_stall")
 int BPF_PROG(jbd2_lock_buffer_stall_btf, dev_t dev, unsigned long stall_ms) {
-    return handle_lock_buffer_stall(stall_ms);
+    return handle_lock_buffer_stall(fs_slot(dev), stall_ms);
 }
 
 SEC("raw_tp/jbd2_lock_buffer_stall")
 int BPF_PROG(jbd2_lock_buffer_stall_raw, dev_t dev, unsigned long stall_ms) {
-    return handle_lock_buffer_stall(stall_ms);
+    return handle_lock_buffer_stall(fs_slot(dev), stall_ms);
 }
 
 SEC("tp_btf/ext4_sync_file_enter")
 int BPF_PROG(ext4_sync_file_enter_btf, struct file* file, int datasync) {
-    return handle_sync_file_enter(datasync);
+    return handle_sync_file_enter(fs_slot(file_dev(file)), datasync);
 }
 
 SEC("raw_tp/ext4_sync_file_enter")
 int BPF_PROG(ext4_sync_file_enter_raw, struct file* file, int datasync) {
-    return handle_sync_file_enter(datasync);
+    return handle_sync_file_enter(fs_slot(file_dev(file)), datasync);
 }
 
 SEC("tp_btf/ext4_sync_file_exit")
 int BPF_PROG(ext4_sync_file_exit_btf, struct inode* inode, int ret) {
-    return handle_sync_file_exit(ret);
+    return handle_sync_file_exit(fs_slot(inode_dev(inode)), ret);
 }
 
 SEC("raw_tp/ext4_sync_file_exit")
 int BPF_PROG(ext4_sync_file_exit_raw, struct inode* inode, int ret) {
-    return handle_sync_file_exit(ret);
+    return handle_sync_file_exit(fs_slot(inode_dev(inode)), ret);
 }
 
 SEC("tp_btf/ext4_error")
 int BPF_PROG(ext4_error_btf, struct super_block* sb, const char* function, unsigned int line) {
-    return handle_error();
+    return handle_error(fs_slot(sb_dev(sb)));
 }
 
 SEC("raw_tp/ext4_error")
 int BPF_PROG(ext4_error_raw, struct super_block* sb, const char* function, unsigned int line) {
-    return handle_error();
+    return handle_error(fs_slot(sb_dev(sb)));
 }
 
 SEC("tp_btf/ext4_shutdown")
 int BPF_PROG(ext4_shutdown_btf, struct super_block* sb, unsigned long flags) {
-    return handle_shutdown();
+    return handle_shutdown(fs_slot(sb_dev(sb)));
 }
 
 SEC("raw_tp/ext4_shutdown")
 int BPF_PROG(ext4_shutdown_raw, struct super_block* sb, unsigned long flags) {
-    return handle_shutdown();
+    return handle_shutdown(fs_slot(sb_dev(sb)));
 }
 
 char LICENSE[] SEC("license") = "GPL";

@@ -456,6 +456,7 @@ rate is bounded by the commit rate.
    reads (`ext4_load_inode`, the two bitmap loads) joined it, and
    `ext4_discard_preallocations` came along for eviction churn.*
 7. **Phase 3** per-filesystem counters, after the lookup-map measurement.
+   *Done; see Results — phase 3.*
 
 ## Results — phase 1
 
@@ -692,8 +693,8 @@ orders of magnitude below the fsync rate the phase 1 bench measured at
   still brackets them under "statvfs+publish".
 - **Per-page and per-reservation writeback hooks** — Idea. `ext4_da_write_pages`,
   `ext4_da_reserve_space`, `ext4__write_begin`; rate-gated.
-- **jbd2 counts include ocfs2** — By design until phase 3, where slots are
-  assigned by `fstype`.
+- **jbd2 counts include ocfs2** — Resolved by phase 3: an ocfs2 mount gets
+  its own slot, labeled `fstype="ocfs2"`, rather than folding into ext4's.
 - **Degraded on module-ext4 kernels below 5.11** — By design. No module BTF
   means no CO-RE against jbd2 structs; the sampler reports degraded and the
   module doc points here.

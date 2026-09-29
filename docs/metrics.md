@@ -318,9 +318,20 @@ and the block device.
 
 BPF sampler on the jbd2 and ext4 tracepoints. Reports every phase of each
 journal commit, checkpoint cost, lock-buffer stalls, fsync counts and errors,
-and filesystem errors. **Host-wide**: one set of series for every ext4
-filesystem on the host (per-filesystem attribution is a later phase). jbd2 is
-also ocfs2's journal, so an ocfs2 mount's commits are counted here too.
+and filesystem errors.
+
+**Counters are per filesystem.** Every counter below carries the labels the
+`filesystem` sampler gives the same mount, `mount`, `fstype`, `devnum`
+(major:minor) and `block_device` (when the device has a kernel name), so the
+two join. A device the agent's mount table does not know, a mount younger
+than the last rescan or beyond the 63-slot cap, is counted under
+`mount="other"`, so `sum(...)` over a metric is always the host total. The
+BPF program looks the device up in a `dev_t → slot` map on each event; the
+agent re-reads `/proc/self/mountinfo` every 10 s, and sooner when `other`
+moves, so a new mount is attributed within one refresh of its first event.
+jbd2 is also ocfs2's journal, and an ocfs2 mount gets its own slot with
+`fstype="ocfs2"`. **Histograms are host-wide** until histogram groups have
+slots.
 
 jbd2 reports commit and checkpoint phases in **jiffies**, so those histograms
 have one-jiffy resolution (1–10 ms depending on `CONFIG_HZ`); the sampler
@@ -361,8 +372,10 @@ Reports each extent allocation's requested versus returned length, the block
 groups scanned and the criterion the allocator finished at, blocks freed,
 inodes allocated and freed, writeback passes with their pages written and
 skipped, discards and preallocation releases, and the synchronous inode-table
-and bitmap reads that land on the calling thread. **Host-wide**, like
-`ext4_journal`, with the same kernel-support rule: the allocator hook reads
+and bitmap reads that land on the calling thread. Counters are per filesystem
+exactly as `ext4_journal`'s are (`mount`, `fstype`, `devnum`, `block_device`,
+plus `mount="other"`); `ext4_allocation_size` is host-wide. Same
+kernel-support rule as `ext4_journal`: the allocator hook reads
 `struct ext4_allocation_context` through CO-RE, which needs ext4's types in
 vmlinux or module BTF.
 
