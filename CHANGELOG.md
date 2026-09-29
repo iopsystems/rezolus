@@ -1,6 +1,21 @@
 ## [Unreleased]
 
+## [5.23.0] - 2026-09-29
+
 ### Added
+
+- `rezolus mcp install` registers the MCP server with Claude Code and
+  installs the `rezolus-mcp` skill, which tells the client how to investigate
+  a recording (describe it and its metrics before querying, extract features
+  before forming hypotheses, pick one recording out of a multi-recording
+  archive). Registration runs `claude mcp add` in user (default) or project
+  scope and replaces an existing entry in that scope; without `claude` on
+  `PATH`, project scope writes `.mcp.json` and user scope prints the command.
+  `--dry-run` changes nothing and `--no-skill` registers only. The skill file
+  is replaced only when it is this skill and never through a symlink, and a
+  warning names the removal command when another scope's `rezolus` entry
+  would win. Backported from 6.0 without the server flags, since 5.x has
+  only the read tools.
 
 - `memory_slabinfo` sampler: sizes of the dentry, VFS/ext4/XFS inode,
   ext4 extent-status, jbd2 journal-head, buffer-head and page-cache-index
@@ -81,36 +96,6 @@
   Page Cache, Anonymous, Kernel, Swap and Huge Pages subgroups, shown when
   the recording has the metrics.
 
-### Changed
-
-- The archive reader moved to metriken-archive 0.1.0 (`ArchiveReader`), with
-  no change in behaviour: every reader test passes unchanged. `RezReader`
-  is now a wrapper that recognizes the container (a `.rez` v1/v2/v3 or a
-  dendro archive) and derefs to `ArchiveReader`, so call sites are
-  unchanged. `RezDb` implements `metriken_archive::Catalog`, and the
-  identity index is read through `reader::IdentityIndex`, an
-  `metriken_archive::IndexRelabel`. `catalog::Container::of_path` returns
-  `None` for a file that is not a catalog container.
-
-- The WAL row format (`WalGroupRow`, `WalCell`, `WalValue`) and WAL-tail
-  materialization moved from `crates/rez/src/wal.rs` to metriken-segment
-  0.1.2, and `wal_group_row`/`group_approx_bytes` to metriken-exposition
-  0.21.1, with no change in behaviour; `rez::wal` and `rez::rez` re-export
-  them. `WalValue::of` is now `rez::wal::wal_value`. The unused pre-dendro
-  stream framing in `crates/rez/src/wire.rs` (`StreamFrame`,
-  `encode_frame`, `decode_frame`, `encode_frame_filtered`,
-  `STREAM_CONTENT_TYPE`) is deleted: `/metrics/stream` has sent dendro's
-  replication frames since it shipped.
-
-- The wide segment format, meaning the table model, its parquet encoding
-  and decoding, `TableBuilder`/`GroupTableBuilder`, `Window` and the
-  `GroupSchema` mirror, moved from `crates/rez` to metriken-segment 0.1.1,
-  with no change in behaviour. `crates/rez` re-exports it under the old
-  names. `TableBuilder::push_entries` is now the `rez::rez::PushEntries`
-  trait. Dependencies: metriken-exposition 0.21.0, metriken-query 0.33.0.
-
-### Added
-
 - `ext4_journal` sampler: BPF on the jbd2 and ext4 tracepoints. Every phase
   of each journal commit (`ext4_journal_commit_latency{phase}`), commit,
   handle and block counts, checkpoint latency and counts, lock-buffer stalls,
@@ -151,6 +136,32 @@
   output matches the input table by table.
 
 ### Changed
+
+- The archive reader moved to metriken-archive 0.1.0 (`ArchiveReader`), with
+  no change in behaviour: every reader test passes unchanged. `RezReader`
+  is now a wrapper that recognizes the container (a `.rez` v1/v2/v3 or a
+  dendro archive) and derefs to `ArchiveReader`, so call sites are
+  unchanged. `RezDb` implements `metriken_archive::Catalog`, and the
+  identity index is read through `reader::IdentityIndex`, an
+  `metriken_archive::IndexRelabel`. `catalog::Container::of_path` returns
+  `None` for a file that is not a catalog container.
+
+- The WAL row format (`WalGroupRow`, `WalCell`, `WalValue`) and WAL-tail
+  materialization moved from `crates/rez/src/wal.rs` to metriken-segment
+  0.1.2, and `wal_group_row`/`group_approx_bytes` to metriken-exposition
+  0.21.1, with no change in behaviour; `rez::wal` and `rez::rez` re-export
+  them. `WalValue::of` is now `rez::wal::wal_value`. The unused pre-dendro
+  stream framing in `crates/rez/src/wire.rs` (`StreamFrame`,
+  `encode_frame`, `decode_frame`, `encode_frame_filtered`,
+  `STREAM_CONTENT_TYPE`) is deleted: `/metrics/stream` has sent dendro's
+  replication frames since it shipped.
+
+- The wide segment format, meaning the table model, its parquet encoding
+  and decoding, `TableBuilder`/`GroupTableBuilder`, `Window` and the
+  `GroupSchema` mirror, moved from `crates/rez` to metriken-segment 0.1.1,
+  with no change in behaviour. `crates/rez` re-exports it under the old
+  names. `TableBuilder::push_entries` is now the `rez::rez::PushEntries`
+  trait. Dependencies: metriken-exposition 0.21.0, metriken-query 0.33.0.
 
 - Agent: `syscall{op}` is now per-CPU, one series per op per CPU with an
   `id` label, as `cpu_usage` is (docs/principles.md principle 9). The BPF
@@ -1724,7 +1735,10 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.21.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.23.0...HEAD
+[5.23.0]: https://github.com/iopsystems/rezolus/compare/v5.22.1...v5.23.0
+[5.22.1]: https://github.com/iopsystems/rezolus/compare/v5.22.0...v5.22.1
+[5.22.0]: https://github.com/iopsystems/rezolus/compare/v5.21.0...v5.22.0
 [5.21.0]: https://github.com/iopsystems/rezolus/compare/v5.20.0...v5.21.0
 [5.20.0]: https://github.com/iopsystems/rezolus/compare/v5.19.1...v5.20.0
 [5.19.1]: https://github.com/iopsystems/rezolus/compare/v5.19.0...v5.19.1
