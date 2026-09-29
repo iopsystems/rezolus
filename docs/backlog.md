@@ -1280,8 +1280,9 @@ Source: [Checks with verdicts, stored in the recording](journal/2026-09-28-check
   1 s, exit 1 on fail and 2 on error, `--annotate` writes violations as
   `kind=check` range events carrying the check JSON (ids hash title, query,
   condition and start; a re-run rewrites a window that grew), band straddles
-  and interpolated points report `INDETERMINATE`, a data gap of more than 1.5
-  steps ends a run. The 9.6 h gate was not measured in this change; the
+  and interpolated points report `INDETERMINATE` and one such point makes a
+  whole run indeterminate, a data gap of more than 1.5 steps (the grid step
+  or the series' own spacing, whichever is coarser) ends a run. The 9.6 h gate was not measured in this change; the
   evaluation is one `query_range` per check over the whole span, the same
   cost as one `mcp query` each.
 - **Family checks** (`outside_family_sigma`) — Open, after the baseline lands.

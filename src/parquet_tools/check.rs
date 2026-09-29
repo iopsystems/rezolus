@@ -122,24 +122,26 @@ pub(crate) struct Windows {
     pub indeterminate: Vec<Window>,
 }
 
-/// Find the runs of `Violating` and `Indeterminate` points in `states`
-/// (timestamp seconds, state), keeping those whose span is at least
-/// `min_span` seconds. A run's span is its last timestamp minus its first
-/// plus `step`, so with `min_span == 0` a single point is a window. A run
-/// ends at a point in another state (`Pass`, `NoData`, or the other
-/// reported state) and at a gap of more than `GAP_STEPS` steps.
+/// Find the runs in `states` (timestamp seconds, state), keeping those whose
+/// span is at least `min_span` seconds.
+///
+/// A run is consecutive points that do not pass: it ends at a `Pass` or
+/// `NoData` point and at a gap of more than `GAP_STEPS` steps. Its state is
+/// `Violating` only if every point violates; one indeterminate point makes
+/// the whole run `Indeterminate`. Splitting on the indeterminate point
+/// instead would turn a long violation with an intermittent straddle into
+/// short violating runs that never reach `for`, and report it as a pass; one
+/// long uncertain window is the answer that loses nothing.
+///
+/// A run's span is its last timestamp minus its first plus `step`, so with
+/// `min_span == 0` a single point is a window.
 pub(crate) fn windows(states: &[(f64, PointState)], step: f64, min_span: f64) -> Windows {
     let mut out = Windows::default();
-    // (state, start, last timestamp, points)
-    let mut run: Option<(PointState, f64, f64, usize)> = None;
+    // (every point violating so far, start, last timestamp, points)
+    let mut run: Option<(bool, f64, f64, usize)> = None;
 
-    fn flush(
-        run: Option<(PointState, f64, f64, usize)>,
-        step: f64,
-        min_span: f64,
-        out: &mut Windows,
-    ) {
-        let Some((state, start, last, points)) = run else {
+    fn flush(run: Option<(bool, f64, f64, usize)>, step: f64, min_span: f64, out: &mut Windows) {
+        let Some((all_violating, start, last, points)) = run else {
             return;
         };
         let end = last + step;
@@ -149,23 +151,24 @@ pub(crate) fn windows(states: &[(f64, PointState)], step: f64, min_span: f64) ->
             return;
         }
         let window = Window { start, end, points };
-        match state {
-            PointState::Violating => out.violating.push(window),
-            PointState::Indeterminate => out.indeterminate.push(window),
-            PointState::Pass | PointState::NoData => {}
+        if all_violating {
+            out.violating.push(window);
+        } else {
+            out.indeterminate.push(window);
         }
     }
 
     let max_gap = step * GAP_STEPS + 1e-9;
     for &(ts, state) in states {
+        let reported = matches!(state, PointState::Violating | PointState::Indeterminate);
         match run {
-            Some((s, start, last, n)) if s == state && ts - last <= max_gap => {
-                run = Some((s, start, ts, n + 1));
+            Some((all, start, last, n)) if reported && ts - last <= max_gap => {
+                run = Some((all && state == PointState::Violating, start, ts, n + 1));
             }
             _ => {
                 flush(run.take(), step, min_span, &mut out);
-                if matches!(state, PointState::Violating | PointState::Indeterminate) {
-                    run = Some((state, ts, ts, 1));
+                if reported {
+                    run = Some((state == PointState::Violating, ts, ts, 1));
                 }
             }
         }
@@ -197,8 +200,29 @@ fn interpolated_at(series: &MatrixSample, i: usize) -> bool {
         .unwrap_or(false)
 }
 
+/// The series' own point spacing: the lower median of consecutive deltas,
+/// or `fallback` for a series with fewer than two points.
+fn point_spacing(series: &MatrixSample, fallback: f64) -> f64 {
+    let mut gaps: Vec<f64> = series
+        .values
+        .windows(2)
+        .map(|w| w[1].0 - w[0].0)
+        .filter(|g| *g > 0.0)
+        .collect();
+    if gaps.is_empty() {
+        return fallback;
+    }
+    gaps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    gaps[(gaps.len() - 1) / 2]
+}
+
 /// Scan one series against a check. `step` is the grid the series was
-/// evaluated on.
+/// evaluated on; the run step is that or the series' own spacing, whichever
+/// is coarser. The engine emits one point per read of a slow sampler and
+/// holds nothing between reads, so a 10 s gauge on a 1 s grid yields points
+/// 10 s apart: each one spans its 10 s, and the 10 s between them is not a
+/// gap. A hole in the data is still a gap, because the median spacing stays
+/// at the sampler's cadence.
 pub(crate) fn evaluate_series(series: &MatrixSample, check: &Check, step: f64) -> Windows {
     let bound = check.bound();
     let states: Vec<(f64, PointState)> = series
@@ -212,7 +236,8 @@ pub(crate) fn evaluate_series(series: &MatrixSample, check: &Check, step: f64) -
             )
         })
         .collect();
-    windows(&states, step, check.min_duration().as_secs_f64())
+    let run_step = point_spacing(series, step).max(step);
+    windows(&states, run_step, check.min_duration().as_secs_f64())
 }
 
 /// The PromQL a check evaluates. A histogram KPI's query names a
@@ -941,7 +966,9 @@ mod tests {
     }
 
     #[test]
-    fn windows_reports_indeterminate_runs_separately() {
+    fn a_run_with_any_indeterminate_point_is_indeterminate() {
+        // One run of four non-passing points; the violating one inside it
+        // does not split it, and does not make it violating.
         let s = states(&[
             (0.0, Indeterminate),
             (1.0, Indeterminate),
@@ -949,29 +976,93 @@ mod tests {
             (3.0, Indeterminate),
         ]);
         let w = windows(&s, 1.0, 0.0);
+        assert!(w.violating.is_empty(), "{w:?}");
+        assert_eq!(
+            w.indeterminate,
+            vec![Window {
+                start: 0.0,
+                end: 4.0,
+                points: 4
+            }]
+        );
+        // A passing point still separates a violating run from an
+        // indeterminate one.
+        let s = states(&[
+            (0.0, Violating),
+            (1.0, Violating),
+            (2.0, Pass),
+            (3.0, Indeterminate),
+        ]);
+        let w = windows(&s, 1.0, 0.0);
         assert_eq!(
             w.violating,
             vec![Window {
-                start: 2.0,
-                end: 3.0,
-                points: 1
+                start: 0.0,
+                end: 2.0,
+                points: 2
             }]
         );
         assert_eq!(
             w.indeterminate,
-            vec![
-                Window {
-                    start: 0.0,
-                    end: 2.0,
-                    points: 2
-                },
-                Window {
-                    start: 3.0,
-                    end: 4.0,
-                    points: 1
-                },
-            ]
+            vec![Window {
+                start: 3.0,
+                end: 4.0,
+                points: 1
+            }]
         );
+    }
+
+    #[test]
+    fn an_intermittent_straddle_keeps_a_long_violation_as_one_window() {
+        // 60 s above the threshold with every tenth point straddling. Split
+        // on the straddles this would be runs of 9 s and 1 s, none reaching
+        // `for: 30s`, and the check would pass.
+        let s: Vec<(f64, PointState)> = (0..60)
+            .map(|i| {
+                let state = if i % 10 == 9 {
+                    Indeterminate
+                } else {
+                    Violating
+                };
+                (i as f64, state)
+            })
+            .collect();
+        let w = windows(&s, 1.0, 30.0);
+        assert!(w.violating.is_empty(), "{w:?}");
+        assert_eq!(
+            w.indeterminate,
+            vec![Window {
+                start: 0.0,
+                end: 60.0,
+                points: 60
+            }]
+        );
+    }
+
+    #[test]
+    fn a_slow_sampler_is_stepped_at_its_own_spacing() {
+        // A 10 s gauge evaluated on a 1 s grid: nine points 10 s apart, a
+        // gap-free run of 90 s. On the grid step each point would be its
+        // own 1 s window and `for: 60s` could never be met.
+        let values: Vec<(f64, f64)> = (0..9).map(|i| (i as f64 * 10.0, 9.0)).collect();
+        let s = series(&values, None);
+        let w = evaluate_series(&s, &check(r#"{"above": 5, "for": "60s"}"#), 1.0);
+        assert_eq!(
+            w.violating,
+            vec![Window {
+                start: 0.0,
+                end: 90.0,
+                points: 9
+            }]
+        );
+        // A hole of 5 minutes in that series is still a gap.
+        let mut values = values;
+        values.push((380.0, 9.0));
+        values.push((390.0, 9.0));
+        let s = series(&values, None);
+        let w = evaluate_series(&s, &check(r#"{"above": 5}"#), 1.0);
+        assert_eq!(w.violating.len(), 2, "{w:?}");
+        assert_eq!(w.violating[1].points, 2);
     }
 
     #[test]
@@ -1027,27 +1118,28 @@ mod tests {
             Some(vec![(5.5, 6.5), (4.5, 7.5), (5.9, 6.1)]),
         );
         let w = evaluate_series(&s, &check(r#"{"above": 5}"#), 1.0);
-        assert_eq!(
-            w.violating,
-            vec![
-                Window {
-                    start: 10.0,
-                    end: 11.0,
-                    points: 1
-                },
-                Window {
-                    start: 12.0,
-                    end: 13.0,
-                    points: 1
-                },
-            ]
-        );
+        // The straddling middle point makes the whole run indeterminate.
+        assert!(w.violating.is_empty(), "{w:?}");
         assert_eq!(
             w.indeterminate,
             vec![Window {
-                start: 11.0,
-                end: 12.0,
-                points: 1
+                start: 10.0,
+                end: 13.0,
+                points: 3
+            }]
+        );
+        // With the middle point clear of the threshold the run violates.
+        let s = series(
+            &[(10.0, 6.0), (11.0, 6.0), (12.0, 6.0)],
+            Some(vec![(5.5, 6.5), (5.2, 6.8), (5.9, 6.1)]),
+        );
+        let w = evaluate_series(&s, &check(r#"{"above": 5}"#), 1.0);
+        assert_eq!(
+            w.violating,
+            vec![Window {
+                start: 10.0,
+                end: 13.0,
+                points: 3
             }]
         );
     }
@@ -1057,13 +1149,13 @@ mod tests {
         let s = series(&[(10.0, 9.0), (11.0, 9.0), (12.0, 9.0)], None)
             .with_interpolated(Some(vec![false, true, false]));
         let w = evaluate_series(&s, &check(r#"{"above": 5}"#), 1.0);
-        assert_eq!(w.violating.len(), 2, "{w:?}");
+        assert!(w.violating.is_empty(), "{w:?}");
         assert_eq!(
             w.indeterminate,
             vec![Window {
-                start: 11.0,
-                end: 12.0,
-                points: 1
+                start: 10.0,
+                end: 13.0,
+                points: 3
             }]
         );
     }
@@ -1077,7 +1169,7 @@ mod tests {
         assert_eq!(w.violating.len(), 1);
         assert!((w.violating[0].end - 0.2).abs() < 1e-9, "{w:?}");
         // and a 300 ms hole at that step splits the run
-        let s = series(&[(0.0, 9.0), (0.1, 9.0), (0.4, 9.0)], None);
+        let s = series(&[(0.0, 9.0), (0.1, 9.0), (0.2, 9.0), (0.5, 9.0)], None);
         let w = evaluate_series(&s, &check(r#"{"above": 5}"#), 0.1);
         assert_eq!(w.violating.len(), 2, "{w:?}");
     }

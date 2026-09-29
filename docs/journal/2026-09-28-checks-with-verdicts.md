@@ -113,12 +113,21 @@ recording's manifest (the viewer's path-based loader now calls it), evaluates
 each check with one `query_range` over the whole span on a uniform grid whose
 step is the recording's sampling interval capped at 1 s, and scans the single
 series for runs. The comparison is strict (a value equal to the threshold
-passes). A run ends at a point in another state and at a gap of more than
-1.5 steps between points: the engine emits no point where the recording has
-no data, so without the gap rule `for` counted unobserved time (a gauge above
-threshold for 2 s, the agent down for five minutes, above again for 2 s, read
-as one 5m04s window). An interpolated point (`MatrixSample.interpolated`, a
-value across an unread span with no band) is indeterminate. Verdict lines are
+passes). A run is consecutive points that do not pass; it ends at a passing
+point and at a gap of more than 1.5 steps between points, since the engine
+emits no point where the recording has no data and without the gap rule
+`for` counted unobserved time (a gauge above threshold for 2 s, the agent
+down for five minutes, above again for 2 s, read as one 5m04s window). The
+run step is the grid step or the series' own median point spacing, whichever
+is coarser: a `.rez` reports its finest table cadence as `interval()`, and
+the engine emits one point per read of a slower sampler, so on the grid step
+alone a 10 s gauge was nine one-second windows and could never satisfy
+`for: 60s`. A run violates only if every point violates; one indeterminate
+point makes the whole run indeterminate, because splitting on the straddle
+turned 60 s of violation with every tenth point straddling into runs of 9 s
+and 1 s that never reached `for: 30s` and read as a pass. An interpolated
+point (`MatrixSample.interpolated`, a value across an unread span with no
+band) is indeterminate. Verdict lines are
 `PASS|WARN|FAIL|INDETERMINATE|ERROR`; exit 2 on any ERROR, else 1 on a
 `fail`-severity FAIL, else 0; `--json` emits the same as an array, and with
 `--annotate` the annotation report goes to stderr so stdout stays one array.
@@ -130,7 +139,8 @@ in the hash because titles repeat across services by design. On a re-run
 `events::append_events` replaces a stored `kind=check` event whose id matches
 and whose content differs (a window that grew gets its new `duration_ns`),
 counts an identical one as unchanged, and counts an id repeated inside one
-batch as a duplicate; a window that no longer fires keeps its old event. A
+batch as a duplicate; a stored event of another kind with the same id is
+kept as it is, and a window that no longer fires keeps its old event. A
 dendro archive evaluates (it reads through the same `RezReader`) but
 `--annotate` is refused before evaluation, since nothing in this version
 writes one. Deviations from the design above:
@@ -163,7 +173,8 @@ writes one. Deviations from the design above:
   condition to have held for the duration since it first became true.
 - **Cross-cadence evaluation is not used.** `RezReader::query_range_opts`
   passes straight through, and only the viewer supplies
-  `QueryOptions::eval_timestamps`; `check` evaluates on the uniform grid.
+  `QueryOptions::eval_timestamps`; `check` evaluates on the uniform grid and
+  takes a slow sampler's cadence from the spacing of the points it got back.
 - **No template gained a check.** Every built-in KPI is a chart still; the
   worked example lives in `docs/usage.md`. The GO condition's "one check in
   each of the vLLM, SGLang and Valkey templates" was not done: a `fail` in a

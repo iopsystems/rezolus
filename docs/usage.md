@@ -500,11 +500,18 @@ above the threshold and `below` only when it is entirely below. A point
 whose band straddles the threshold, or a point interpolated across a span the
 recording never observed, is neither, and is classified `INDETERMINATE`.
 
-The run rule: a run is consecutive points in one state. A point in another
-state ends it (an indeterminate point ends a violating run and starts an
-indeterminate one), and so does a gap of more than 1.5 steps between points,
-because the engine emits no point where the recording has no data and `for`
-must not count time nobody observed. A run's span is
+The run rule: a run is consecutive points that do not pass. A passing point
+ends it, and so does a gap of more than 1.5 steps between points, because the
+engine emits no point where the recording has no data and `for` must not
+count time nobody observed. A run violates only if every point in it
+violates; one indeterminate point makes the whole run indeterminate. This is
+deliberate: splitting on the straddle would turn 60 s of violation with every
+tenth point straddling into runs of 9 s and 1 s, none reaching `for: 30s`,
+and report a pass; instead it is one 60 s `INDETERMINATE` window. The step
+is the evaluation grid step or the series' own point spacing (the median gap
+between its points), whichever is coarser: a 10 s sampler evaluated on a 1 s
+grid yields one point per 10 s, each spanning its 10 s, so the 10 s between
+them is not a gap, while a real hole still is. A run's span is
 `last point - first point + step`, and the run is a window when
 `span >= for`. A check with any violating window is `FAIL` (or `WARN` by
 severity) even if it also has indeterminate windows, which the line then
@@ -531,8 +538,11 @@ title as `description`, and `details` carrying the condition plus the check
 JSON on a second line. That JSON is the version record: editing the template
 later does not change what an old recording claims. The event id is a hash of
 the title, the evaluated query, the condition and the window start, so
-running the checks again rewrites a window that grew, adds nothing for one
-that did not, and leaves a window that no longer fires with its old event.
+running the checks again overwrites a check event of the same id whose
+content differs (a window that grew, or an event edited in the viewer),
+adds nothing for one that did not change, and leaves a window that no longer
+fires with its old event. Only a stored `kind=check` event is overwritten;
+an event of another kind that carries the same id is kept.
 The viewer draws these as shaded bands. On a multi-recording `.rez` every
 recording is checked and each line is prefixed with the recording's labels;
 with `--annotate` each recording's events go into that recording only.

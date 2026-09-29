@@ -226,13 +226,19 @@ pub fn command() -> Command {
                      compared, so `above` fires only when the whole band is above the\n\
                      threshold and `below` only when it is entirely below; a point whose band\n\
                      straddles the threshold, or one interpolated across a span the recording\n\
-                     never observed, is INDETERMINATE. A run is consecutive points in one\n\
-                     state; a point in another state, or a gap of more than 1.5 steps between\n\
+                     never observed, is INDETERMINATE. A run is consecutive points that do\n\
+                     not pass; a passing point, or a gap of more than 1.5 steps between\n\
                      points (the engine emits no point where the recording has no data),\n\
-                     ends it. A run's span is (last point - first point + step); it is a window\n\
-                     when span >= for. A check with a violating window is FAIL (WARN for\n\
-                     severity warn) even if it also has indeterminate windows; with only\n\
-                     indeterminate windows it is INDETERMINATE; otherwise PASS.\n\n\
+                     ends it. A run violates only if every point in it violates; one\n\
+                     indeterminate point makes the whole run indeterminate, so a long\n\
+                     violation with an intermittent straddle is one long INDETERMINATE window\n\
+                     rather than short violations that never reach `for`. The step is the grid\n\
+                     step or the series' own point spacing, whichever is coarser (a 10 s\n\
+                     sampler on a 1 s grid yields a point per 10 s, each spanning 10 s). A run's\n\
+                     span is (last point - first point + step); it is a window when\n\
+                     span >= for. A check with a violating window is FAIL (WARN for severity\n\
+                     warn) even if it also has indeterminate windows; with only indeterminate\n\
+                     windows it is INDETERMINATE; otherwise PASS.\n\n\
                      EXIT STATUS: 2 if any check could not be evaluated (or the command itself\n\
                      failed), else 1 if any check with severity `fail` failed, else 0. WARN and\n\
                      INDETERMINATE never fail the run. No checks at all is 0, with a note on\n\

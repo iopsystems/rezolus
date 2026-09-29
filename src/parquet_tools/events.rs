@@ -74,8 +74,9 @@ pub(super) struct AppendCounts {
     /// `kind=check` events whose id was present with different content;
     /// the incoming copy replaced the stored one.
     pub updated: usize,
-    /// Ids already present: identical content, or a stored event that is
-    /// not a `kind=check` and so keeps its earlier copy.
+    /// Ids already present and kept as stored: identical content, or
+    /// either side not a `kind=check` event (the replace rule applies only
+    /// when both the stored and the incoming event are check events).
     pub unchanged: usize,
     /// Ids repeated within the batch itself; only the first is kept.
     pub duplicates: usize,
@@ -149,7 +150,13 @@ pub(super) fn append_events(existing: Option<Events>, new: Vec<Event>) -> Append
                 events.events.push(event);
             }
             Some(i) if events.events[i] == event => counts.unchanged += 1,
-            Some(i) if event.kind.as_deref() == Some("check") => {
+            // Both sides must be check events: a stored event of another
+            // kind that happens to carry a `check:` id is not ours to
+            // overwrite or re-kind.
+            Some(i)
+                if event.kind.as_deref() == Some("check")
+                    && events.events[i].kind.as_deref() == Some("check") =>
+            {
                 events.events[i] = event;
                 counts.updated += 1;
             }
@@ -959,6 +966,23 @@ mod tests {
         assert_eq!(appended.events.events.len(), 1);
         assert_eq!(appended.events.events[0].duration_ns, Some(25));
         assert!(!appended.counts.nothing_new());
+    }
+
+    #[test]
+    fn append_events_does_not_overwrite_a_stored_non_check_event_with_a_check() {
+        // A deploy event that carries a `check:` id (however it got one) is
+        // not replaced or re-kinded by an incoming check event.
+        let mut stored = check_event("check:abc", 1, 10);
+        stored.kind = Some("deploy".into());
+        stored.description = "rollout".into();
+        let incoming = check_event("check:abc", 1, 25);
+        let appended = append_events(Some(Events::new(vec![stored])), vec![incoming]);
+        assert_eq!(appended.counts.unchanged, 1);
+        assert_eq!(appended.counts.updated, 0);
+        assert_eq!(appended.events.events.len(), 1);
+        assert_eq!(appended.events.events[0].kind.as_deref(), Some("deploy"));
+        assert_eq!(appended.events.events[0].description, "rollout");
+        assert_eq!(appended.events.events[0].duration_ns, Some(10));
     }
 
     #[test]
