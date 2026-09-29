@@ -1127,13 +1127,22 @@ the CI guest while profiling `ext4_ops` and `xfs_log`.
   `perf bench sched pipe`, 0.68 of a core at 33 K switches/s, against 114 ns
   and 665 ns for the other two programs on the same tracepoint. The two
   `bpf_perf_event_read` calls in `cpu/linux/perf/mod.bpf.c` read the
-  virtualized PMU through the hypervisor. To do: measure the same program
-  on bare metal (expected hundreds of ns) to confirm the mechanism; then
-  either detect a virtualized PMU at init (`/sys/devices/cpu/caps`, the
-  hypervisor CPUID bit, or a timed probe read) and refuse `cpu_perf` as
-  unsupported on guests, or read the counters at a bounded rate instead of
-  every switch. `rezolus status` says nothing today: the sampler is
-  "active healthy" while costing most of a core.
+  virtualized PMU through the hypervisor. Confirmed from inside the guest
+  (systemslab `01a0edd1-f053-716d-7604-c6261d862311`, KVM on a Threadripper
+  3970X, `perfctr_core` exposed, the AMD PMU driver loaded): a user-space
+  `rdpmc` costs 1.05–11.3 µs per read and the `read(2)` path 1.7–12.7 µs,
+  against tens of nanoseconds on bare metal, and the cost moves with which
+  counter index the event landed on (11.3 µs on index 6 with the image's
+  agent holding counters, 1.05 µs on index 1 with it stopped). So it is the
+  hypervisor's trap-and-emulate for every counter read, which the vPMU
+  being exposed to the guest makes reachable; the program's two reads per
+  switch are the 20 µs. Infrastructure side: the anvil VMs expose the vPMU
+  deliberately (perf works in the guest); with it off, `cpu_perf` and the
+  other PMU samplers would report unsupported and cost nothing. Rezolus
+  side, still open: detect a hypervisor at init (`hypervisor` CPU flag) and
+  refuse or throttle `cpu_perf` there, and name the PMU holder in
+  `rezolus status`. A bare-metal figure for the same program was not
+  measured (no bare-metal host in this session).
 - **A second agent's PMU reservations starve the first** — Observation.
   With the image's `cpu_perf` holding the counters, every agent started
   beside it reported `cpu_branch`, `cpu_dtlb` and `cpu_perf` pmu-starved
