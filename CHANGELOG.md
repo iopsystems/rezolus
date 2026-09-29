@@ -2,6 +2,15 @@
 
 ### Added
 
+- `xfs_log` sampler (opt-in): how long threads block on the XFS log, per
+  mount and per cgroup, with host-wide latency histograms. Waiting for log
+  space is the `xfs_log_grant_sleep`/`_wake` pair; a log force is
+  `fentry`/`fexit` on `xfs_log_force` and `xfs_log_force_seq` (the fsync's
+  log write); CIL-full waits are counted. The counts equal
+  `xfs_log_space_sleeps` and `xfs_log_forces` from `xfs_stats` per mount;
+  the time and the cgroup are what the stats file cannot carry. Needs
+  kernels 5.12+ with XFS's BTF. The XFS dashboard gains a Blocked Time
+  group and the cgroups dashboard an XFS log blocked-time plot.
 - `xfs_stats` sampler: XFS's own per-mount counters from
   `/sys/fs/xfs/<dev>/stats/stats`, one sysfs read per XFS mount off the
   scrape cycle (1 s default): log writes, forces and force sleeps, in-core

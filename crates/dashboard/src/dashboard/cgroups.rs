@@ -85,6 +85,15 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
     );
 
     group.plot_promql(
+        PlotOpts::counter(
+            "XFS Log Blocked Time",
+            format!("{prefix}-xfs-log-blocked-time"),
+            Unit::Time,
+        ),
+        rate("cgroup_xfs_log_wait_time"),
+    );
+
+    group.plot_promql(
         PlotOpts::counter("IPC", format!("{prefix}-ipc"), Unit::Count),
         if individual {
             format!("sum by (name) (irate(cgroup_cpu_instructions{{{filter}}}[5m])) / sum by (name) (irate(cgroup_cpu_cycles{{{filter}}}[5m]))")

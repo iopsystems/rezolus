@@ -211,7 +211,8 @@ rate.
 7. **XFS** (C8), then page cache (C7). *Designed and probed in its own
    entry, `2026-09-29-xfs-samplers.md`: per-mount sysfs stats first, BPF for
    the latencies the stats file cannot carry; the page cache is deferred
-   there. `xfs_stats` shipped in #1351; `xfs_log` is open.*
+   there. `xfs_stats` shipped in #1351 and `xfs_log` (opt-in) in #1352;
+   the page cache (C7) stays open.*
 
 ## Results — C1, the `memory_writeback` sampler
 

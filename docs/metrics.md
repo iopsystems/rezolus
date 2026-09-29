@@ -30,6 +30,7 @@ This guide walks you through all the available metrics, organized by category.
   - [filesystem](#filesystem-1)
 - [XFS](#xfs)
   - [xfs_stats](#xfs_stats)
+  - [xfs_log](#xfs_log)
 - [GPU](#gpu)
   - [gpu_nvidia](#gpu_nvidia)
   - [gpu_intel_pmu](#gpu_intel_pmu)
@@ -607,6 +608,50 @@ the same as a remount.
 | `xfs_buffer_busy_locks` | Trylocks that found the buffer busy (`buf/busy_locked`) | `mount`, ... |
 | `xfs_buffer_misses` | Lookups that missed the cache (`buf/miss_locked`) | `mount`, ... |
 | `xfs_buffer_reads` | Buffers read from the device (`buf/get_read`), the synchronous metadata reads of a cold buffer cache | `mount`, ... |
+
+### xfs_log
+
+BPF sampler that times the two places a thread blocks on the XFS log, per
+filesystem and per cgroup: waiting for log space (a transaction reservation
+that found the log full, `xfs_log_grant_sleep` to `xfs_log_grant_wake` on the
+same thread) and forcing the log (the synchronous log write an fsync waits
+for, `fentry`/`fexit` on `xfs_log_force` and `xfs_log_force_seq`). It also
+counts transactions that found the CIL over its hard limit (`xfs_log_cil_wait`;
+a count only, since nothing traces that wake). The start timestamp lives in
+task local storage, one slot per pair, so a force that sleeps for log space
+inside it keeps both timings.
+
+The counts here duplicate two fields `xfs_stats` reads from sysfs and equal
+them per mount: `xfs_log_waits{wait="space"}` is `xfs_log_space_sleeps`
+(both are incremented per trip through the grant wait loop) and
+`xfs_log_waits{wait="force"}` is `xfs_log_forces` (each force function counts
+once at entry). What the stats file cannot carry is how long anyone waited and
+which cgroup did; that is what this sampler adds. `xfs_log_wait_time /
+xfs_log_waits` is the mean per mount.
+
+**Opt-in.** The force pair runs on every fsync, so this costs on the request
+path; the journal entry (`docs/journal/2026-09-29-xfs-samplers.md`) has the
+bench. It is one of the samplers the `[defaults]` section never turns on
+(with `ext4_ops`, `gpu_amd_pmu` and `hw_sensors`): enable it with
+`[samplers.xfs_log] enabled = true`.
+
+Kernel support: task local storage became usable from tracing programs in
+5.12, and attaching to XFS's tracepoints and functions needs XFS's BTF (vmlinux
+if built in, module BTF from 5.11 if a module), so the floor is 5.12 with XFS
+loaded. The fsync path's force is `xfs_log_force_seq` from 5.13 and
+`xfs_log_force_lsn` before; the sampler loads whichever the kernel's BTF has,
+and on a kernel with neither the fsync-path forces are not timed. On an older
+kernel, or a host with no XFS, `rezolus status` shows the sampler unsupported
+rather than failed. A kernel without `xfs_log_cil_wait` in BTF reads 0 for the
+CIL count.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `xfs_log_wait_latency` | Distribution of the time a thread was blocked on the log, by wait: `space` is one grant sleep, `force` is one log force entry to return (a force without `XFS_LOG_SYNC`, as inode unpinning issues, returns once the write is issued and sits in the low tail) | `wait={space,force}`, `unit=nanoseconds` |
+| `xfs_log_waits` | Log waits completed: grant sleeps, forces, and CIL-full waits (count only) | `wait={space,force,cil}`, `mount`, `fstype`, `devnum`, `block_device` |
+| `xfs_log_wait_time` | Nanoseconds threads were blocked, summed, by wait; over `xfs_log_waits` it is the mean | `wait={space,force}`, `mount`, ... |
+| `cgroup_xfs_log_waits` | Log waits by the waiting thread's cgroup | `wait={space,force}`, `name` |
+| `cgroup_xfs_log_wait_time` | Nanoseconds a cgroup's threads were blocked on the log, summed: time request threads were held by a full log or by durability | `wait={space,force}`, `name` |
 
 ## GPU
 

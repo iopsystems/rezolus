@@ -137,6 +137,7 @@ mod bpf {
         ("tcp", "receive"),
         ("tcp", "retransmit"),
         ("tcp", "traffic"),
+        ("xfs", "log"),
     ];
 
     pub fn generate() {

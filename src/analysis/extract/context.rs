@@ -92,6 +92,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "tcp_receive",
     "tcp_retransmit",
     "tcp_traffic",
+    "xfs_log",
     "xfs_stats",
 ];
 
@@ -158,6 +159,8 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("cgroup_scheduler_offcpu", "scheduler_runqueue"),
     ("cgroup_scheduler_runqueue_wait", "scheduler_runqueue"),
     ("cgroup_syscall", "syscall_counts"),
+    ("cgroup_xfs_log_wait_time", "xfs_log"),
+    ("cgroup_xfs_log_waits", "xfs_log"),
     ("core_c10_residency", "cpu_power"),
     ("core_c1_residency", "cpu_power"),
     ("core_c2_residency", "cpu_power"),
@@ -423,6 +426,7 @@ const BPF_SAMPLERS: &[&str] = &[
     "tcp_receive",
     "tcp_retransmit",
     "tcp_traffic",
+    "xfs_log",
 ];
 
 /// Metric names declared identically by more than one sampler (verified by
