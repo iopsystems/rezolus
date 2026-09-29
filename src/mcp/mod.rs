@@ -1400,7 +1400,7 @@ pub fn command() -> Command {
              query                Run a PromQL query against a recording\n    \
              detect-anomalies     Flag anomalies for one metric, or exhaustively across all\n    \
              analyze-correlation  Correlate two PromQL series over the recording\n    \
-             extract-features     Extract structured features from a recording as JSON\n\n\
+             extract-features     Extract structured features from a recording as JSON\n    \
              install              Register the server with Claude Code and install its skill\n\n\
              A good workflow is describe-metrics (see what's there) → query / detect-anomalies\n\
              (dig in). Run `rezolus mcp <subcommand> --help` for per-subcommand examples.\n\n\
