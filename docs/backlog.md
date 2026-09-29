@@ -937,9 +937,9 @@ The entry specifies `ext4_journal` (phase 1, implemented and measured),
   counters): an ocfs2 mount has its own slot, labeled `fstype="ocfs2"`.
 - **Degraded on module-ext4 kernels below 5.11** — By design. No module BTF,
   no CO-RE against jbd2 structs; `rezolus status` shows the sampler degraded.
-- **XFS** — Designed, see [XFS telemetry](journal/2026-09-29-xfs-samplers.md):
-  a per-mount sysfs stats sampler first, then `xfs_log` BPF for grant-sleep
-  and force latency.
+- **XFS** — `xfs_stats` shipped (#1351), see
+  [XFS telemetry](journal/2026-09-29-xfs-samplers.md); `xfs_log` BPF for
+  grant-sleep and force latency is open there.
 
 ## Agent — filesystem telemetry gaps
 
@@ -998,12 +998,22 @@ bare-metal probe-cost bench for anything at request rate).
   dashboard's Write Path group: application bytes (`ext4_write_bytes`),
   writeback bytes, journal bytes, device bytes on one axis, each term drawn
   when the recording has it.
-- **XFS samplers** — Open, designed in
-  [XFS telemetry](journal/2026-09-29-xfs-samplers.md): `xfs_stats` from
-  `/sys/fs/xfs/<dev>/stats/stats` per mount (no probes; the kernel keeps the
-  counts), then `xfs_log` BPF for grant-sleep and log-force latency and
-  per-cgroup blocked time (opt-in, benched first). Probed on Debian 13:
-  623 tracepoints, 606 in module BTF, 5.6 log-family events per fsync.
+- **XFS samplers** — Step 1 done, step 2 open, in
+  [XFS telemetry](journal/2026-09-29-xfs-samplers.md). `xfs_stats` shipped
+  in #1351: 41 per-mount counters from `/sys/fs/xfs/<dev>/stats/stats` (no
+  probes), exact against the file and `/proc/fs/xfs/stat` in the VM, sweep
+  measured in *Results — step 1*. Open: `xfs_log` BPF for grant-sleep and
+  log-force latency and per-cgroup blocked time (opt-in, benched on
+  `null_blk` XFS first). Probed on Debian 13: 623 tracepoints, 606 in module
+  BTF, 5.6 log-family events per fsync.
+- **Refresh-dispatched sweeps race the snapshot walk** — Open, from
+  [XFS telemetry](journal/2026-09-29-xfs-samplers.md) Results — step 1. A
+  `spawn_blocking` sweep dispatched by `refresh()` (`xfs_stats`,
+  `memory_slabinfo`, `filesystem`) can finish mid-walk, and the builder then
+  widens the group's window to the union of two sweeps
+  (`resolve_walk_window`), an interval wide. Drive sweeps from a timer, or
+  emit pre-pass values with the pre-pass window. Reopen when a consumer
+  needs the band tight.
 - **Page-cache hit ratio** — Idea. Misses from `mm_filemap_add_to_page_cache`;
   hits need `fentry` at read rate. Deferred behind the XFS steps in the same
   entry.

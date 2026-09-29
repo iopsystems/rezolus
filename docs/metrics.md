@@ -28,6 +28,8 @@ This guide walks you through all the available metrics, organized by category.
   - [ext4_ops](#ext4_ops)
 - [Filesystem](#filesystem)
   - [filesystem](#filesystem-1)
+- [XFS](#xfs)
+  - [xfs_stats](#xfs_stats)
 - [GPU](#gpu)
   - [gpu_nvidia](#gpu_nvidia)
   - [gpu_intel_pmu](#gpu_intel_pmu)
@@ -546,6 +548,65 @@ applications wrote it is the filesystem's term of write amplification. Both are
 sysfs text reads on the 60 s off-cycle sweep, the same principle 15 exception
 the sweep itself received, and they work on kernels the ext4 BPF samplers
 cannot run on.
+
+## XFS
+
+Metrics from inside XFS, between the syscall and the device.
+
+### xfs_stats
+
+XFS's own per-mount counters, read from `/sys/fs/xfs/<block_device>/stats/stats`
+(the same numbers `/proc/fs/xfs/stat` sums over mounts): the log, log space,
+the AIL pusher, transactions, the inode cache, the allocator, directories,
+file I/O and the metadata buffer cache. No probes: XFS maintains these at
+event rate itself, and counting the same events in BPF would cross about 5.6
+hooks per fsync (measured in `docs/journal/2026-09-29-xfs-samplers.md`) for
+numbers the kernel already has. What the file cannot say, how long a
+transaction waited for log space or a log force took and which cgroup waited,
+is the planned `xfs_log` BPF sampler's job.
+
+One read of the file costs about 160 µs, so the sweep runs off the scrape
+cycle on the blocking pool at most once per `interval` (default 1 s,
+`[samplers.xfs_stats]`); the counters keep their last values between sweeps.
+
+Every series is per mount, labeled `mount`, `fstype`, `devnum` and
+`block_device` exactly as the `filesystem` and ext4 samplers label the same
+mount, through the same slot registry, so the three join. A mount that is
+not XFS has no series here, and a host with no XFS mount has no table; a
+kernel whose file lacks a line or field leaves that counter absent. Field
+names below are the kernel's `xfsstats` (`fs/xfs/xfs_stats.h`). Every field
+but the byte counts is a 32-bit counter in the kernel, so a busy mount wraps
+one eventually (`xfs_log_blocks_written` after 2 TiB of log writes,
+`xfs_file_calls` after 4.29 billion calls); a wrap reads as a counter reset,
+the same as a remount.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `xfs_log_writes` | Log writes (`log/writes`) | `mount`, `fstype`, `devnum`, `block_device` |
+| `xfs_log_blocks_written` | 512-byte blocks written to the journal (`log/blocks`); ×512 is the journal's share of device writes | `mount`, ... |
+| `xfs_log_iclog_stalls` | Log writes that waited for a free in-core log buffer (`log/noiclogs`) | `mount`, ... |
+| `xfs_log_forces` | Log forces, the synchronous flush an fsync demands (`log/force`) | `mount`, ... |
+| `xfs_log_force_sleeps` | Forces that waited for a log write to complete (`log/force_sleep`); a synchronous force sleeps once for its own write, and a second sleep per force is a wait on the previous in-core log buffer, that is on another caller's commit | `mount`, ... |
+| `xfs_log_space_requests` | Transactions that reserved log space (`push_ail/try_logspace`) | `mount`, ... |
+| `xfs_log_space_sleeps` | Transactions that slept for log space (`push_ail/sleep_logspace`); any rate means the log is too small or too slow for the write rate | `mount`, ... |
+| `xfs_ail_pushes` | AIL push attempts (`push_ail/pushes`) | `mount`, ... |
+| `xfs_ail_push_items` | Items the pusher visited, by outcome (`push_ail/success`, `pushbuf`, `pinned`, `locked`, `flushing`) | `outcome={success,pushbuf,pinned,locked,flushing}`, `mount`, ... |
+| `xfs_ail_push_restarts` | Pushes that restarted after too many pinned or locked items (`push_ail/restarts`) | `mount`, ... |
+| `xfs_ail_flushes` | Pushes that forced the log because everything was pinned (`push_ail/flush`) | `mount`, ... |
+| `xfs_transactions` | Transactions committed (`trans/sync`, `async`, `empty`) | `kind={sync,async,empty}`, `mount`, ... |
+| `xfs_inode_cache_lookups` | Inode-cache lookups by outcome (`ig/found`, `missed`, `frecycle`, `dup`); a miss reads the inode from disk on the calling thread | `outcome={found,missed,recycled,duplicate}`, `mount`, ... |
+| `xfs_inode_reclaims` | Inodes reclaimed from the cache (`ig/reclaims`) | `mount`, ... |
+| `xfs_extents` | Extents allocated and freed (`extent_alloc/allocx`, `freex`) | `op={allocated,freed}`, `mount`, ... |
+| `xfs_extent_blocks` | Blocks allocated and freed (`extent_alloc/allocb`, `freeb`); allocated blocks over allocated extents is the mean extent length | `op={allocated,freed}`, `mount`, ... |
+| `xfs_directory_ops` | Directory operations (`dir/lookup`, `create`, `remove`, `getdents`) | `op={lookup,create,remove,getdents}`, `mount`, ... |
+| `xfs_file_calls` | Write and read calls into XFS (`rw`) | `op={write,read}`, `mount`, ... |
+| `xfs_file_bytes` | Bytes written into and read from XFS (`xpc/write_bytes`, `read_bytes`) | `op={written,read}`, `mount`, ... |
+| `xfs_buffer_lookups` | Metadata buffer lookups (`buf/get`) | `mount`, ... |
+| `xfs_buffer_creates` | Buffers created on a lookup that found none (`buf/create`) | `mount`, ... |
+| `xfs_buffer_lock_waits` | Lookups that waited for the buffer lock (`buf/get_locked_waited`) | `mount`, ... |
+| `xfs_buffer_busy_locks` | Trylocks that found the buffer busy (`buf/busy_locked`) | `mount`, ... |
+| `xfs_buffer_misses` | Lookups that missed the cache (`buf/miss_locked`) | `mount`, ... |
+| `xfs_buffer_reads` | Buffers read from the device (`buf/get_read`), the synchronous metadata reads of a cold buffer cache | `mount`, ... |
 
 ## GPU
 

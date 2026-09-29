@@ -1,7 +1,9 @@
 # XFS telemetry: per-mount stats first, BPF for what stats cannot say
 
 - **Opened:** 2026-09-29
-- **Status:** **OPEN — design, probed, nothing built.** Step 7 (C8) of
+- **Status:** **Step 1 shipped: `xfs_stats` (#1351), exact against sysfs
+  and `/proc/fs/xfs/stat` in the VM, see *Results — step 1*. Step 2
+  (`xfs_log` BPF) open.** Step 7 (C8) of
   `2026-09-28-filesystem-telemetry-gaps.md`. Two probes on the hv01 Debian 13
   guest (`6.12.63+deb13-amd64`, `CONFIG_XFS_FS=m` with module BTF) supplied the
   tracepoint inventory, the `tp_btf` prototypes, the module struct fields and
@@ -201,14 +203,137 @@ slots.
 
 1. **`xfs_stats`** sampler with the log, push_ail, ig, extent_alloc, buf,
    rw, xstrat and xpc families as per-mount counters; dashboard "XFS" group;
-   docs. Verified against `/proc/fs/xfs/stat` in the VM.
+   docs. Verified against `/proc/fs/xfs/stat` in the VM. *Done in #1351,
+   without the `xstrat` line; see Results — step 1.*
 2. **`xfs_log`** with grant-sleep and force latency, CIL waits, per-cgroup
    blocked time; benched on `null_blk` XFS before it is offered even as an
    opt-in.
 3. Reopen `xfs_alloc` if XFS free-space fragmentation becomes a question.
 
+## Results — step 1: `xfs_stats`
+
+Same guest as the probes (`6.12.63+deb13-amd64`, `CONFIG_XFS_FS=m`, 56
+vCPU, root on ext4), two loop-backed XFS filesystems: 4 GiB on `/mnt/xfs`
+(`loop0`) and 2 GiB on `/mnt/xfs2` (`loop1`). systemslab
+`01a0ec70-45d6-714e-e7da-d8b16b9a134e` on the PR's final code
+(`d9c9b54b`); an earlier run `01a0ec65-d0f0-71b8-21af-9369b13007dc` on the
+first commit is cited where it differs. Shipped in #1351:
+`src/agent/samplers/xfs/linux/stats/`, `crates/dashboard/src/dashboard/xfs.rs`,
+the `xfs` entry in `bpf/filesystems.rs`'s `FSTYPES`.
+
+**Built as specified, minus one line.** 41 per-mount counters from `log`,
+`push_ail`, `trans`, `ig`, `extent_alloc`, `dir`, `rw`, `xpc` and `buf`. The
+plan also named `xstrat` (delayed-allocation conversions, quick and split);
+it is not published, nor are `abt`, `bmbt`, `attr`, `vnodes`, `icluster`,
+`qm` or `defer_relog`. None of them answers a question the gaps entry asked;
+adding a line is a `FIELDS` row and a metric declaration. Every field but
+the byte counts is `uint32_t` in the kernel (`fs/xfs/xfs_stats.h`), so a busy
+mount wraps one eventually and the docs say so (`xfs_log_blocks_written`
+after 2 TiB of log writes); a wrap reads as a counter reset.
+
+**Exact against the file and against `/proc/fs/xfs/stat`.** Workload: 15 s
+of 4 KiB random writes with an fsync each, 8 fio jobs, on `/mnt/xfs` (6,734
+writes and fsyncs, 449 IOPS on the loop device); 1,000 files of 56 KiB with
+an fsync at the end on `/mnt/xfs2`, then `drop_caches` and a `stat` of every
+file. The compare waited until two reads of each mount's sysfs file 2.5 s
+apart were identical (three tries: the log worker keeps the counters moving
+for seconds after the workload ends) and then held the agent's snapshot
+against the file:
+
+| | result |
+|---|---|
+| series compared against the mount's own `stats/stats` | 82 over 2 mounts, 0 mismatches |
+| sum over mounts against `/proc/fs/xfs/stat` | 0 of 41 fields differ |
+| fields the sampler names that the 6.12 file carries | 41 of 41 |
+| labels | `mount`, `fstype="xfs"`, `block_device` (`loop0`, `loop1`), `devnum` (`7:0`, `7:1`) |
+
+Per mount, the values are the workload's:
+
+| series | `/mnt/xfs` (fsync) | `/mnt/xfs2` (small files) |
+|---|---|---|
+| `xfs_file_calls{op="write"}` | 6,734 | 1,000 |
+| `xfs_log_forces` | 6,736 | 1,002 |
+| `xfs_log_writes` | 3,543 | 1,012 |
+| `xfs_directory_ops{op="create"}` | 8 | 1,000 |
+| `xfs_directory_ops{op="lookup"}` | 8 | 2,000 |
+| `xfs_inode_cache_lookups{outcome="missed"}` | 11 | 2,003 |
+| `xfs_extents{op="allocated"}` | 72 | 1,026 |
+| `xfs_log_space_sleeps` | 0 | 0 |
+
+fio's 6,734 writes are the 6,734 write calls; the forces are one per fsync
+plus two. The 2,003 inode-cache misses on the small-file mount are the
+`stat` of every file after `drop_caches`, each inode read back from disk,
+which is the cold-metadata cost the dashboard's Inode Cache group is for.
+The first run (same workload shape) also showed what `xs_log_force_sleep`
+counts: 1,001 sleeps for 1,002 forces with fio's single small-file job, and
+10,546 for 6,756 forces with the 8 fsync jobs. A synchronous force sleeps
+once for its own log write, and `xlog_force_lsn` sleeps a second time when
+the previous in-core log buffer is still being written, so sleeps per force
+above one is fsyncs waiting on each other's commits; the dashboard and
+`docs/metrics.md` describe the counter that way, replacing an earlier
+"queued behind a force in progress" that was wrong for the single-job case.
+
+**Population.** Adversarial review found the sweep declaring the shared
+registry's bound as the group's member bound: on a host with an ext4 root
+and no XFS, that is `bound() == 2` and the sampler would have emitted an
+`xfs_stats` table of 82 all-null columns on every tick, forever. The first
+run confirmed the shape (82 unlabeled null series beside the two mounts'
+82 real ones). The bound is now one past the highest slot the sweep gave
+values, 0 when there is none, so an XFS-less host has no XFS table (unit
+test). On this mixed host slot 0 and the root's ext4 slot sit below the XFS
+slots and still read as 82 null columns, the trade the ext4 samplers'
+vacant slots make (`2026-09-28-ext4-sampler.md`, Results — phase 3). Review
+also had a stats line with an unparseable token shift every later field
+onto the wrong counter; such a line now reads absent.
+
+**Unmount.** `/mnt/xfs2` was unmounted with the agent running. The sysfs
+directory went first, so the sweep logged a failed read once a second for
+6 s until the registry's 10 s rescan (generation 2) freed the slot, cleared
+its identity and unset its 41 counters; the next snapshot had `/mnt/xfs`
+alone. The snapshot builder skipped the group for the one tick on which the
+schema shrank mid-walk (its `SkeletonCache` arity check, a debug line), the
+same one-tick gap any population change costs.
+
+**Cost.** The sweep is `spawn_blocking`, at most once per `interval` (1 s
+default), and the scrape path pays a time check:
+
+| | n | min | p50 | max |
+|---|---|---|---|---|
+| sweep, 2 mounts (`reads` p50 371 µs) | 34 | 321 µs | 394 µs | 624 µs |
+| sweep, 1 mount (`reads` p50 222 µs) | 14 | 173 µs | 237 µs | 294 µs |
+| `sampling latency`, the scrape path | 48 | 17 µs | 19 µs | 83 µs |
+
+About 190–220 µs per file here against the probe's 159 µs: the probe timed
+the read alone, the sampler's figure includes open, close and the string.
+Parse and publish are the difference between the sweep and its reads, about
+20 µs for two mounts. GO gate 3 holds: a 1 s sweep over a handful of mounts
+is under a millisecond a second of blocking-pool time and nothing on the
+scrape path.
+
+**One wide window.** One of the compare snapshots carried a 1.01 s
+acquisition window on the group, against 218 µs on the run's final
+snapshot. The sweep that scrape's own `refresh()` dispatched finished
+between the snapshot builder's window pre-pass and the group's emission,
+and the builder widens to the union of the two windows
+(`resolve_walk_window`, `src/agent/exposition/http/snapshot.rs`), since
+some of the values it read may belong to the newer sweep. The band is
+honest but a whole interval wide, and any sweep dispatched from `refresh()`
+at the scrape's cadence (`memory_slabinfo`, `filesystem`) can hit it; see
+Deferred.
+
 ## Deferred / reopen
 
+- **Refresh-dispatched sweeps race the snapshot walk** — Open. A
+  `spawn_blocking` sweep dispatched by `refresh()` runs concurrently with
+  the builder's walk of the same tick, and when it finishes mid-walk the
+  group's window becomes the union of two sweeps, an interval wide (seen
+  once in the `xfs_stats` run above). Applies to `memory_slabinfo` and
+  `filesystem` as well. Options: drive sweeps from a timer so they land
+  between scrapes rather than during one, or let the builder emit the
+  pre-pass values with the pre-pass window for sampler-stamped groups.
+  Reopen when the band width matters to a consumer.
+- **`xstrat` and the other stats lines** — By design, not published; a
+  `FIELDS` row each. Reopen with a question that needs one.
 - **Page-cache hit ratio (C7)** — Idea, the other half of step 7. Misses
   from `mm_filemap_add_to_page_cache`; hits need `fentry` at read rate.
   Deferred behind the XFS steps above; reopen when a read-path finding

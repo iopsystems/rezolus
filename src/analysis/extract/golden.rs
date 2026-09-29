@@ -488,7 +488,8 @@ mod tests {
         "tcp_connect_latency",
         "tcp_packet_latency",
         "tcp_receive",
-        "tcp_retransmit"
+        "tcp_retransmit",
+        "xfs_stats"
       ]
     }
   },
