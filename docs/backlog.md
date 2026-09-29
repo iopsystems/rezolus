@@ -1429,9 +1429,11 @@ Source: [MCP write-back and tool tiers](journal/2026-09-28-mcp-write-back.md).
   `src/mcp/link.rs` formats the [viewer link](journal/2026-09-28-viewer-link-state.md)
   wire form, pinned to the JS parser by `tests/viewer_link_parity.test.mjs`,
   with a full URL from `--viewer-url` or a `viewer_url` argument.
-- **`rezolus mcp install`** — Open. Registers the server with known clients
-  and ships a skill carrying the workflow prose that lives in tool
-  descriptions today.
+- **`rezolus mcp install`** — DONE. `src/mcp/install.rs` registers through
+  `claude mcp add` (project `.mcp.json` merged when the CLI is absent) and
+  installs the embedded `rezolus-mcp` skill (`src/mcp/skill/SKILL.md`).
+- **Skills for other clients** — Open, no demand. The install command's
+  client list is the place; the skill text is client-neutral.
 - **`annotate --recording`** — Open, now cheap: `events::add_events_selected`
   is the selector-scoped write; the CLI flag would call it instead of
   writing every recording.

@@ -1,9 +1,10 @@
 # MCP write-back and tool tiers
 
 - **Opened:** 2026-09-28
-- **Status:** IN PROGRESS. Tiers, `add_event`, `run_checks` and
-  `remove_events` built (#1358); `export_query` and `viewer_link` built
-  (second PR); `rezolus mcp install` and the skill follow.
+- **Status:** SHIPPED. Tiers, `add_event`, `run_checks` and
+  `remove_events` (#1358); `export_query` and `viewer_link` (#1362);
+  `rezolus mcp install` and the skill (third PR). `set_kpis` and skills
+  for other clients stay deferred below.
 
 ## Problem
 
@@ -208,6 +209,63 @@ failing test.
 Both flags, like `--allow-mutating`, are refused on the one-shot
 subcommands.
 
+## Built: `rezolus mcp install` and the skill
+
+`src/mcp/install.rs`. One client is known, Claude Code. Registration goes
+through its own CLI (`claude mcp add --scope <user|project> rezolus -- <this
+binary> mcp [server flags]`) when `claude` is on `PATH`, since its
+user-scope configuration is the client's own state file and not one this
+binary should edit; an existing `rezolus` entry is removed first, so a
+re-run after an upgrade or with new flags replaces it. Without the CLI,
+project scope writes `.mcp.json` in the working directory, merged into any
+existing one (other servers and unknown keys kept, a non-object refused),
+and user scope prints the command to run. The server flags given to
+`install` are baked into the registered command, so the server the client
+starts has the operator's tiers and directories.
+
+The skill is `src/mcp/skill/SKILL.md`, embedded with `include_str!`, written
+to `~/.claude/skills/rezolus-mcp/` (user; `$CLAUDE_CONFIG_DIR/skills/` when
+set) or `.claude/skills/rezolus-mcp/` (project). A file already there is
+replaced only when its frontmatter names this skill; anything else is
+refused, and so is a symlink at that path or at the skill directory, which
+every read and write would otherwise follow (review found a symlink into a
+checkout being overwritten). The skill carries the workflow that lived in
+the tool descriptions (discovery before query, features before hypotheses,
+one series for a check or anomaly detection, the selector), the rules
+(a missing metric is not zero, a rate band is the resolution, correlation
+is co-movement), and what to write back with which tool. The two read-tool
+descriptions that held workflow prose (`query`, `detect_anomalies`) now say
+what the tool does.
+
+Claude Code resolves a name local > project > user, and `claude mcp
+remove --scope <s>` only touches one scope, so an install to user scope can
+be shadowed by an older local entry and the client keeps starting the old
+binary. After `add`, install reads `claude mcp get rezolus` and warns with
+the removal command only when the resolved entry outranks the one just
+written. `get` skips unapproved project servers, so a fresh project install
+resolves to the user entry until approved; that is not a shadow and gets no
+warning (an earlier version told the user to delete their global entry).
+A user install notes a `.mcp.json` in the working directory that defines
+`rezolus`, which will outrank it once approved.
+
+**Measured.** With `CLAUDE_CONFIG_DIR` pointed at an empty directory,
+`rezolus mcp install` registered the server through `claude mcp add` and
+wrote the skill under that directory; `claude mcp get rezolus` showed the
+command and `claude mcp list` reported the server connected, which is
+Claude Code starting this binary and completing the MCP handshake. A second
+run with server flags replaced the entry and reported the skill up to date;
+project scope without `claude` on `PATH` wrote `.mcp.json`; a foreign
+`SKILL.md` was refused. That is the entry's second GO condition.
+
+A finding from the first attempt at that check: the Claude Code CLI does
+not honor a `HOME` override. Run with `HOME` pointed elsewhere, `claude mcp
+add` and `remove` still edited the real `~/.claude/.claude.json`, replacing
+and then removing the machine's own user-scope `rezolus` entry (restored by
+hand). `CLAUDE_CONFIG_DIR` is the knob the CLI resolves its files from, so
+the user-scope skill goes under `$CLAUDE_CONFIG_DIR/skills/` when that is
+set, where the client looks, and any test that registers through the CLI
+isolates with it and checks the real file's checksum afterwards.
+
 ## Not in scope
 
 - A hosted or remote MCP transport. Stdio only.
@@ -227,7 +285,12 @@ a message naming the flag.
 - **`viewer_link` with a full URL.** Built both ways: `--viewer-url` on the
   server or `viewer_url` on the call gives a full URL; without either the
   fragment and query come back on their own.
-- **`rezolus mcp install` and the skill.** Next PR.
+- **`document-feature` on the skill.** The skill is an interface under
+  test: a fresh agent given only `SKILL.md` and a recording should reach a
+  finding and an event without the tool descriptions. Not run as a
+  separate exercise; the adversarial review of the install PR read the
+  skill as that agent. Reopen when a client's session shows a workflow
+  step the skill did not carry.
 - **`set_kpis`.** Mutating replace of `service_queries`; the annotate KPI
   path exists (`RezAnnotation::ext_json`, `annotate_parquet`), so it is a
   small addition when a client asks for it. Not built with the first three
