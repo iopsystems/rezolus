@@ -547,9 +547,10 @@ pub fn run(config: Config) {
         verbose,
         recording,
         mode,
+        server,
     } = config;
     match mode {
-        Mode::Server => run_server(verbose),
+        Mode::Server => run_server(verbose, server),
         Mode::AnalyzeCorrelation {
             file,
             query1,
@@ -563,7 +564,7 @@ pub fn run(config: Config) {
     }
 }
 
-fn run_server(verbose: u8) {
+fn run_server(verbose: u8, options: server::ServerOptions) {
     let _log_drain = configure_logging(verbosity_to_level(verbose));
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -578,7 +579,7 @@ fn run_server(verbose: u8) {
     .expect("failed to set ctrl-c handler");
 
     rt.block_on(async {
-        let mut server = server::Server::new();
+        let mut server = server::Server::with_options(options);
         if let Err(e) = server.run_stdio().await {
             eprintln!("MCP server error: {e}");
             std::process::exit(1);
@@ -1179,6 +1180,8 @@ pub struct Config {
     /// consulted would be accepted and silently do nothing.
     pub recording: RecordingSelector,
     pub mode: Mode,
+    /// What the stdio server enables; read only by `Mode::Server`.
+    pub server: server::ServerOptions,
 }
 
 impl TryFrom<ArgMatches> for Config {
@@ -1273,10 +1276,21 @@ impl TryFrom<ArgMatches> for Config {
             _ => Mode::Server,
         };
 
+        let server = server::ServerOptions {
+            allow_mutating: args.get_flag("ALLOW_MUTATING"),
+        };
+        if server.allow_mutating && !matches!(mode, Mode::Server) {
+            return Err(
+                "--allow-mutating applies to the stdio server only; the one-shot subcommands read"
+                    .to_string(),
+            );
+        }
+
         Ok(Config {
             verbose,
             recording,
             mode,
+            server,
         })
     }
 }
@@ -1329,6 +1343,10 @@ pub fn command() -> Command {
              extract-features     Extract structured features from a recording as JSON\n\n\
              A good workflow is describe-metrics (see what's there) → query / detect-anomalies\n\
              (dig in). Run `rezolus mcp <subcommand> --help` for per-subcommand examples.\n\n\
+             The stdio server also has write tools with no CLI form: add_event marks an\n\
+             instant or range in the recording, run_checks evaluates its KPI checks (and\n\
+             writes the verdicts with annotate=true), and, only with --allow-mutating,\n\
+             remove_events takes events out again.\n\n\
              EXAMPLES:\n    \
              # Run as a stdio MCP server for an LLM client\n    \
              rezolus mcp\n\n    \
@@ -1343,6 +1361,18 @@ pub fn command() -> Command {
                 .short('v')
                 .help("Increase verbosity")
                 .action(clap::ArgAction::Count),
+        )
+        .arg(
+            clap::Arg::new("ALLOW_MUTATING")
+                .long("allow-mutating")
+                .help(
+                    "Enable the mutating tools in the stdio server (remove_events)\n\
+                     The read tools and the additive ones (add_event, run_checks) are always on:\n\
+                     the worst a wrong additive call does is add an event. A mutating tool can\n\
+                     take another person's events out of a shared recording, so it is off\n\
+                     unless the operator starting the server says otherwise. Server mode only.",
+                )
+                .action(clap::ArgAction::SetTrue),
         )
         .subcommand(
             Command::new("analyze-correlation")

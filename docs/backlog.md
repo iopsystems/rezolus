@@ -1401,18 +1401,26 @@ Source: [Checks with verdicts, stored in the recording](journal/2026-09-28-check
 
 Source: [MCP write-back and tool tiers](journal/2026-09-28-mcp-write-back.md).
 
-- **Additive tools: `add_event`, `export_query`, `viewer_link`** — Open.
-  `add_event` writes through the manifest `UPDATE` shape with `source=mcp`;
-  `export_query` writes a range query to parquet/CSV under `--export-dir`;
-  `viewer_link` returns the hash fragment (full URL needs the viewer's
-  address; reopen if the fragment form proves insufficient).
-- **Mutating tier behind `rezolus mcp --allow-mutating`** — Open.
-  `remove_events`, `set_kpis`; the flag-off server must reject with a message
-  naming the flag.
+- **`add_event` and `run_checks` (additive tier)** — DONE.
+  `src/mcp/server.rs`; `add_event` writes through
+  `parquet_tools::events::add_events_selected` with `source=mcp` and refuses
+  a multi-recording archive without a selector; `run_checks` calls the
+  runner split out of `recording check` (`check::run_checks`).
+- **Mutating tier behind `rezolus mcp --allow-mutating`** — DONE for
+  `remove_events` (`ServerOptions`, tiered `tools/list`, flag-off call
+  refused naming the flag, tested). `set_kpis` — Open, no producer of KPI
+  sets on the agent side yet; the annotate KPI path is ready for it.
+- **`export_query` and `viewer_link`** — Open, next PR. `export_query`
+  writes a range query to parquet/CSV under `--export-dir`; `viewer_link`
+  returns the hash fragment plus the query string from
+  [viewer links](journal/2026-09-28-viewer-link-state.md) (full URL needs
+  the viewer's address; reopen if the fragment form proves insufficient).
 - **`rezolus mcp install`** — Open. Registers the server with known clients
   and ships a skill carrying the workflow prose that lives in tool
   descriptions today.
-- **`run_checks` tool** — Open, after checks land.
+- **`annotate --recording`** — Open, now cheap: `events::add_events_selected`
+  is the selector-scoped write; the CLI flag would call it instead of
+  writing every recording.
 
 Related ideas with no entry yet:
 

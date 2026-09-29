@@ -1,8 +1,8 @@
-mod annotate;
-mod check;
+pub(crate) mod annotate;
+pub(crate) mod check;
 pub(crate) mod combine;
 mod convert;
-mod events;
+pub(crate) mod events;
 mod filter;
 pub(crate) mod metadata;
 

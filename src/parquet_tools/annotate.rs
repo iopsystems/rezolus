@@ -246,28 +246,54 @@ fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
 /// The manifest edits one `annotate` invocation applies to every recording of
 /// a `.rez`. Both fields are optional; `run_rez` guarantees at least one is
 /// present, since an annotate that changes nothing is a mistake worth an error.
-pub(super) struct RezAnnotation<'a> {
+pub(crate) struct RezAnnotation<'a> {
     /// Validated ServiceExtension JSON to embed under `KEY_SERVICE_QUERIES`
     /// (KPIs). Re-probed against each recording's own metrics.
-    pub(super) ext_json: Option<&'a str>,
+    pub(crate) ext_json: Option<&'a str>,
     /// Event operations to fold into each recording's `KEY_EVENTS` payload.
-    pub(super) events: Option<EventOps<'a>>,
+    pub(crate) events: Option<EventOps<'a>>,
     /// Events that differ per recording, indexed by the archive's catalog
     /// order (`recording check --annotate` writes each recording's own
     /// verdicts). Must have one entry per recording; an empty entry adds
     /// nothing to that recording.
-    pub(super) per_recording_events: Option<Vec<Vec<crate::viewer::Event>>>,
-    /// Print the report line on stderr instead of stdout, for a caller
-    /// whose stdout is a machine-readable payload (`check --json`).
-    pub(super) report_to_stderr: bool,
+    pub(crate) per_recording_events: Option<Vec<Vec<crate::viewer::Event>>>,
+    /// A whole events payload per recording, replacing what is stored:
+    /// `Some(events)` rewrites that recording's `KEY_EVENTS` (an empty list
+    /// drops the key), `None` leaves it alone. Must have one entry per
+    /// recording. The MCP `remove_events` tool writes through this, since a
+    /// removal is a read, a filter, and a replace.
+    pub(crate) per_recording_replace: Option<Vec<Option<crate::viewer::Events>>>,
+    /// Where the one-line report goes.
+    pub(crate) report: ReportSink,
+}
+
+/// Where an annotation's report line is delivered: stdout (the CLI's
+/// default), or captured for a caller that decides itself (`check`, whose
+/// stdout may be a JSON payload; the MCP tools, which return it).
+pub(crate) enum ReportSink {
+    Stdout,
+    Capture(std::cell::RefCell<Option<String>>),
+}
+
+impl ReportSink {
+    pub(crate) fn capture() -> Self {
+        Self::Capture(std::cell::RefCell::new(None))
+    }
+
+    /// The captured line, if this sink captured one.
+    pub(crate) fn captured(&self) -> Option<String> {
+        match self {
+            Self::Capture(cell) => cell.borrow().clone(),
+            _ => None,
+        }
+    }
 }
 
 impl RezAnnotation<'_> {
     fn report(&self, line: String) {
-        if self.report_to_stderr {
-            eprintln!("{line}");
-        } else {
-            println!("{line}");
+        match &self.report {
+            ReportSink::Stdout => println!("{line}"),
+            ReportSink::Capture(cell) => *cell.borrow_mut() = Some(line),
         }
     }
 }
@@ -282,10 +308,10 @@ struct CheckEventTally {
 
 /// Event operations for a `.rez` annotate, applied in the same
 /// `clear → add file → add inline` order as the parquet footer path.
-pub(super) struct EventOps<'a> {
-    pub(super) add_files: &'a [&'a Path],
-    pub(super) inline: &'a [String],
-    pub(super) clear: bool,
+pub(crate) struct EventOps<'a> {
+    pub(crate) add_files: &'a [&'a Path],
+    pub(crate) inline: &'a [String],
+    pub(crate) clear: bool,
 }
 
 /// Collect the KPI and event operations from the CLI and apply them to a
@@ -354,7 +380,8 @@ fn run_rez(args: &ArgMatches, path: &Path, format: RezFormat) {
         ext_json: ext_content.as_deref(),
         events,
         per_recording_events: None,
-        report_to_stderr: false,
+        per_recording_replace: None,
+        report: ReportSink::Stdout,
     };
 
     annotate_rez_any(path, format, &annotation).unwrap_or_else(|e| {
@@ -367,7 +394,7 @@ fn run_rez(args: &ArgMatches, path: &Path, format: RezFormat) {
 ///
 /// A v1/v2 (tar) archive is upgraded in place first: annotating is a rewrite,
 /// and the tar container is no longer something this binary writes.
-pub(super) fn annotate_rez_any(
+pub(crate) fn annotate_rez_any(
     path: &Path,
     format: RezFormat,
     annotation: &RezAnnotation,
@@ -501,7 +528,25 @@ fn annotate_rez_v3_at(
         .into());
     }
 
+    if let Some(per) = annotation
+        .per_recording_replace
+        .as_ref()
+        .filter(|per| per.len() != recordings.len())
+    {
+        return Err(format!(
+            "{} has {} recording(s) but replacement payloads were built for {}; the archive \
+             changed between the read and the write",
+            path.display(),
+            recordings.len(),
+            per.len()
+        )
+        .into());
+    }
+
     let mut kpis: Option<usize> = None;
+    // Recordings whose whole events payload was replaced, and the event
+    // count they hold afterwards.
+    let mut replaced: Option<(usize, usize)> = None;
     // (events remaining after the ops, whether they were cleared first) — the
     // input is identical for every recording, so the last one's counts stand
     // in for the report.
@@ -563,7 +608,31 @@ fn annotate_rez_v3_at(
             tally.touched += usize::from(touched);
         }
 
+        if let Some(events) = annotation
+            .per_recording_replace
+            .as_ref()
+            .and_then(|per| per[idx].as_ref())
+        {
+            if events.events.is_empty() {
+                metadata.remove(KEY_EVENTS);
+            } else {
+                metadata.insert(KEY_EVENTS.to_string(), serde_json::to_string(events)?);
+            }
+            let r = replaced.get_or_insert((0, 0));
+            r.0 += 1;
+            r.1 += events.events.len();
+        }
+
         db.write(*id, &metadata)?;
+    }
+
+    if let Some((n, total)) = replaced {
+        annotation.report(format!(
+            "Annotated {:?}: replaced the events of {n} of {} recording(s) ({total} event(s) remain)",
+            display,
+            recordings.len()
+        ));
+        return Ok(());
     }
 
     // Unlike the KPI and event flags, per-recording events are not applied
@@ -1138,7 +1207,8 @@ mod tests {
             ext_json: Some(ext_json),
             events: None,
             per_recording_events: None,
-            report_to_stderr: false,
+            per_recording_replace: None,
+            report: ReportSink::Stdout,
         }
     }
 
@@ -1152,7 +1222,8 @@ mod tests {
                 clear: false,
             }),
             per_recording_events: None,
-            report_to_stderr: false,
+            per_recording_replace: None,
+            report: ReportSink::Stdout,
         }
     }
 
@@ -1400,7 +1471,8 @@ mod tests {
                 clear: false,
             }),
             per_recording_events: None,
-            report_to_stderr: false,
+            per_recording_replace: None,
+            report: ReportSink::Stdout,
         };
         annotate_rez_v3(&path, &annotation).unwrap();
 
@@ -1446,7 +1518,8 @@ mod tests {
                 clear: false,
             }),
             per_recording_events: None,
-            report_to_stderr: false,
+            per_recording_replace: None,
+            report: ReportSink::Stdout,
         };
         annotate_rez_any(&path, RezFormat::V3Sqlite, &annotation).unwrap();
         let md = metadata();
@@ -1466,7 +1539,8 @@ mod tests {
                 clear: true,
             }),
             per_recording_events: None,
-            report_to_stderr: false,
+            per_recording_replace: None,
+            report: ReportSink::Stdout,
         };
         annotate_rez_any(&path, RezFormat::V3Sqlite, &clear).unwrap();
         assert!(!metadata().contains_key(crate::parquet_metadata::KEY_EVENTS));
@@ -1493,7 +1567,8 @@ mod tests {
                 clear: true,
             }),
             per_recording_events: None,
-            report_to_stderr: false,
+            per_recording_replace: None,
+            report: ReportSink::Stdout,
         };
         annotate_rez_v3(&path, &clear).unwrap();
 

@@ -44,6 +44,9 @@ enum McpTool {
     DetectAnomalies,
     Query,
     ExtractFeatures,
+    AddEvent,
+    RemoveEvents,
+    RunChecks,
     Unknown(String),
 }
 
@@ -56,6 +59,9 @@ impl From<&str> for McpTool {
             "detect_anomalies" => McpTool::DetectAnomalies,
             "query" => McpTool::Query,
             "extract_features" => McpTool::ExtractFeatures,
+            "add_event" => McpTool::AddEvent,
+            "remove_events" => McpTool::RemoveEvents,
+            "run_checks" => McpTool::RunChecks,
             other => McpTool::Unknown(other.to_string()),
         }
     }
@@ -90,8 +96,302 @@ struct CachedReader {
     provenance: crate::analysis::extract::Provenance,
 }
 
+/// The six read tools, as the server has always listed them.
+fn read_tools() -> Vec<Value> {
+    json!([
+        {
+            "name": "describe_recording",
+            "description": "Describe a Rezolus performance recording with version and duration information",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "parquet_file": {
+                        "type": "string",
+                        "description": "Path to the parquet file"
+                    },
+                    "recording": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                        "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
+                    }
+                },
+                "required": ["parquet_file"]
+            }
+        },
+        {
+            "name": "analyze_correlation",
+            "description": "Analyze correlation between two metrics using PromQL",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "parquet_file": {
+                        "type": "string",
+                        "description": "Path to the parquet file"
+                    },
+                    "recording": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                        "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
+                    },
+                    "metric1": {
+                        "type": "string",
+                        "description": "First metric PromQL expression"
+                    },
+                    "metric2": {
+                        "type": "string",
+                        "description": "Second metric PromQL expression"
+                    }
+                },
+                "required": ["parquet_file", "metric1", "metric2"]
+            }
+        },
+        {
+            "name": "describe_metrics",
+            "description": "List and describe all metrics available in a Rezolus recording, organized by type",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "parquet_file": {
+                        "type": "string",
+                        "description": "Path to the parquet file"
+                    },
+                    "recording": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                        "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
+                    }
+                },
+                "required": ["parquet_file"]
+            }
+        },
+        {
+            "name": "detect_anomalies",
+            "description": "Detect anomalies in time series data using MAD, CUSUM, and FFT analysis. IMPORTANT: Call describe_metrics first to see available metrics and labels before constructing your query. The query must result in a SINGLE time series - use sum() to aggregate multiple series.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "parquet_file": {
+                        "type": "string",
+                        "description": "Path to the parquet file"
+                    },
+                    "recording": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                        "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "PromQL query that produces a SINGLE time series. For COUNTERS (monotonically increasing), use rate() to get per-second rates, e.g., 'sum(rate(cpu_usage[1m]))'. For GAUGES (point-in-time values), query directly, e.g., 'sum(memory_available)'. For HISTOGRAMS, use histogram_quantile(), e.g., 'histogram_quantile(0.99, scheduler_runqueue_latency)'. ALWAYS use sum() or other aggregation to collapse multiple series into one. DO NOT use label selectors like {state=\"busy\"} unless you've confirmed those labels exist in describe_metrics output."
+                    }
+                },
+                "required": ["parquet_file", "query"]
+            }
+        },
+        {
+            "name": "query",
+            "description": "Execute a PromQL query and return results as JSON. Returns Prometheus-compatible format with resultType (vector/matrix/scalar) and result data. Use describe_metrics first to see available metrics and their types. Results can be used programmatically by other tools.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "parquet_file": {
+                        "type": "string",
+                        "description": "Path to the parquet file"
+                    },
+                    "recording": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                        "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "PromQL query expression. For COUNTERS use rate(metric[1m]), for GAUGES query directly, for HISTOGRAMS use histogram_quantile(0.99, metric). Use sum(), avg(), etc. to aggregate multiple series."
+                    }
+                },
+                "required": ["parquet_file", "query"]
+            }
+        },
+        {
+            "name": "extract_features",
+            "description": "Extract a deterministic, versioned overview record of a recording's Rezolus-native features (per-metric stats, noise classification, anomalies, regime shifts, acquisition-window uncertainty, top-N correlations, resource rankings, subsystem coverage) as JSON. The record is the structured input for bottleneck assessment. Requires a recording of at least 10 seconds.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "parquet_file": {
+                        "type": "string",
+                        "description": "Path to the recording (parquet or .rez)"
+                    },
+                    "recording": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                        "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
+                    }
+                },
+                "required": ["parquet_file"]
+            }
+        }
+    ])
+    .as_array()
+    .cloned()
+    .unwrap_or_default()
+}
+
+/// The `recording` property every tool schema carries.
+fn recording_property() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": {"type": "string"},
+        "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
+    })
+}
+
+/// The additive tools: they can only add to a recording, through the same
+/// manifest update `recording annotate` uses, so a wrong call is an extra
+/// event and not a lost one. On by default.
+fn additive_tools() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "add_event",
+            "description": "Mark an instant or a range in a recording with an event the viewer draws on its timeline. Additive: it never removes or changes an existing event. Returns the event id, which remove_events accepts.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "parquet_file": {"type": "string", "description": "Path to the recording (parquet or .rez)"},
+                    "recording": recording_property(),
+                    "timestamp": {"type": ["string", "number"], "description": "When the event starts: an RFC 3339 string (e.g. 2026-09-28T14:03:11Z), or Unix seconds as a number."},
+                    "description": {"type": "string", "description": "One line, what happened. Shown on the timeline."},
+                    "kind": {"type": "string", "description": "A short category such as deploy, incident, spike, or finding. Alignment and filters key on it."},
+                    "duration": {"type": ["string", "number"], "description": "Makes the event a range: humantime (30s, 2m) or seconds as a number. Omit for an instant."},
+                    "details": {"type": "string", "description": "Longer text shown when the event is opened: what was observed, the query that found it."},
+                    "source": {"type": "string", "description": "Who or what authored the event. Defaults to \"mcp\" so agent-written events can be filtered later."},
+                    "node": {"type": "string", "description": "Scope the event to one node of a multi-node recording."},
+                    "instance": {"type": "string", "description": "Scope the event to one service instance."},
+                    "id": {"type": "string", "description": "A stable id. Adding an event whose id is already present is a no-op. Minted as mcp:<uuid> when omitted."}
+                },
+                "required": ["parquet_file", "timestamp", "description"]
+            }
+        }),
+        json!({
+            "name": "run_checks",
+            "description": "Evaluate the recording's KPI checks (the `check` blocks embedded by `recording annotate --queries`, or the ones in `queries`) and return each verdict with its violation windows. With annotate=true the violation windows are also written into the recording as kind=check events, the same as `rezolus recording check --annotate`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "parquet_file": {"type": "string", "description": "Path to the recording (parquet or .rez)"},
+                    "recording": recording_property(),
+                    "queries": {"type": "object", "description": "A ServiceExtension object evaluated instead of the recording's embedded KPIs: {\"service_name\": \"...\", \"kpis\": [{\"role\": \"...\", \"title\": \"...\", \"query\": \"<PromQL producing ONE series>\", \"type\": \"gauge\"|\"counter\"|\"histogram\", \"check\": {\"above\": N} | {\"below\": N}, optional \"quantile\", \"for\" (seconds), \"severity\": \"fail\"|\"warn\"}]}."},
+                    "annotate": {"type": "boolean", "description": "Write the violation windows into the recording as events. Default false."}
+                },
+                "required": ["parquet_file"]
+            }
+        }),
+    ]
+}
+
+/// The mutating tools: they can remove or replace what is stored, so they
+/// stay behind `rezolus mcp --allow-mutating`. A server started without the
+/// flag neither lists them nor runs them.
+fn mutating_tools() -> Vec<Value> {
+    vec![json!({
+        "name": "remove_events",
+        "description": "Remove events from a recording by id, kind, and/or source (every given field must match). Mutating: available only when the server was started with --allow-mutating. An empty filter is refused.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "parquet_file": {"type": "string", "description": "Path to the recording (parquet or .rez)"},
+                "recording": recording_property(),
+                "ids": {"type": "array", "items": {"type": "string"}, "description": "Event ids to remove (as returned by add_event, or check:<hash> for verdicts)."},
+                "kind": {"type": "string", "description": "Remove events of this kind."},
+                "source": {"type": "string", "description": "Remove events with this source, e.g. mcp for every agent-written event."}
+            },
+            "required": ["parquet_file"]
+        }
+    })]
+}
+
+/// The message a mutating call gets from a server started without the flag.
+pub(crate) fn mutating_refused(tool: &str) -> String {
+    format!(
+        "{tool} is a mutating tool and this server was started without --allow-mutating; \
+         restart it as `rezolus mcp --allow-mutating` to enable removals"
+    )
+}
+
+/// A tool-call reply: the text on success, a JSON-RPC error otherwise.
+fn tool_reply(
+    id: Option<Value>,
+    label: &str,
+    result: Result<String, Box<dyn std::error::Error>>,
+) -> Value {
+    match result {
+        Ok(text) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {"content": [{"type": "text", "text": text}]}
+        }),
+        Err(e) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {"code": -32000, "message": format!("{label}: {e}")}
+        }),
+    }
+}
+
+/// `timestamp` as a tool argument: an RFC 3339 string (or a ns integer as
+/// a string, as `annotate --event` takes), or Unix seconds as a number.
+fn timestamp_ns_of(v: &Value) -> Result<u64, String> {
+    match v {
+        Value::String(s) => crate::parquet_tools::events::parse_timestamp_str(s),
+        Value::Number(n) => {
+            let secs = n.as_f64().ok_or("timestamp is not a finite number")?;
+            if !secs.is_finite() || secs < 0.0 {
+                return Err("timestamp must be non-negative Unix seconds".into());
+            }
+            Ok((secs * 1e9).round() as u64)
+        }
+        _ => Err("timestamp must be an RFC 3339 string or Unix seconds".into()),
+    }
+}
+
+/// `duration` as a tool argument: humantime or a ns integer as a string, or
+/// seconds as a number.
+fn duration_ns_of(v: &Value) -> Result<u64, String> {
+    match v {
+        Value::String(s) => crate::parquet_tools::events::parse_duration_str(s),
+        Value::Number(n) => {
+            let secs = n.as_f64().ok_or("duration is not a finite number")?;
+            if !secs.is_finite() || secs <= 0.0 {
+                return Err("duration must be a positive number of seconds".into());
+            }
+            Ok((secs * 1e9).round() as u64)
+        }
+        _ => Err("duration must be a humantime string or seconds".into()),
+    }
+}
+
+fn opt_str(arguments: &Value, key: &str) -> Result<Option<String>, String> {
+    match arguments.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if s.trim().is_empty() => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(_) => Err(format!("{key} must be a string")),
+    }
+}
+
+/// What the operator enabled at `rezolus mcp` startup.
+///
+/// Tools come in tiers by what they can destroy: the read tools and the
+/// additive ones (`add_event`, `run_checks`) are always on, since the worst
+/// a wrong call does is add an event; the mutating ones (`remove_events`)
+/// can take another person's events out of a shared recording, so they
+/// need `--allow-mutating`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ServerOptions {
+    pub allow_mutating: bool,
+}
+
 /// MCP server state
 pub struct Server {
+    options: ServerOptions,
     /// Keyed by (path, selector) — a TYPED pair, never a formatted string.
     ///
     /// A multi-recording `.rez` yields a DIFFERENT reader per recording from
@@ -106,11 +406,30 @@ pub struct Server {
 }
 
 impl Server {
+    #[cfg(test)]
     pub fn new() -> Self {
+        Self::with_options(ServerOptions::default())
+    }
+
+    pub fn with_options(options: ServerOptions) -> Self {
         Self {
+            options,
             reader_cache: Arc::new(RwLock::new(HashMap::new())),
             pool: BufferPool::new(MCP_CACHE_SIZE_BYTES),
         }
+    }
+
+    /// Every tool this server answers, in tiers: the read tools, then the
+    /// additive ones, then the mutating ones only when enabled. A tool that
+    /// is not listed is also not callable (`remove_events` without the flag
+    /// answers with the flag's name).
+    fn tool_list(&self) -> Vec<Value> {
+        let mut tools = read_tools();
+        tools.extend(additive_tools());
+        if self.options.allow_mutating {
+            tools.extend(mutating_tools());
+        }
+        tools
     }
 
     /// Run the MCP server using stdio.
@@ -201,138 +520,7 @@ impl Server {
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": {
-                        "tools": [
-                            {
-                                "name": "describe_recording",
-                                "description": "Describe a Rezolus performance recording with version and duration information",
-                                "inputSchema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "parquet_file": {
-                                            "type": "string",
-                                            "description": "Path to the parquet file"
-                                        },
-                                        "recording": {
-                                            "type": "object",
-                                            "additionalProperties": {"type": "string"},
-                                            "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
-                                        }
-                                    },
-                                    "required": ["parquet_file"]
-                                }
-                            },
-                            {
-                                "name": "analyze_correlation",
-                                "description": "Analyze correlation between two metrics using PromQL",
-                                "inputSchema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "parquet_file": {
-                                            "type": "string",
-                                            "description": "Path to the parquet file"
-                                        },
-                                        "recording": {
-                                            "type": "object",
-                                            "additionalProperties": {"type": "string"},
-                                            "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
-                                        },
-                                        "metric1": {
-                                            "type": "string",
-                                            "description": "First metric PromQL expression"
-                                        },
-                                        "metric2": {
-                                            "type": "string",
-                                            "description": "Second metric PromQL expression"
-                                        }
-                                    },
-                                    "required": ["parquet_file", "metric1", "metric2"]
-                                }
-                            },
-                            {
-                                "name": "describe_metrics",
-                                "description": "List and describe all metrics available in a Rezolus recording, organized by type",
-                                "inputSchema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "parquet_file": {
-                                            "type": "string",
-                                            "description": "Path to the parquet file"
-                                        },
-                                        "recording": {
-                                            "type": "object",
-                                            "additionalProperties": {"type": "string"},
-                                            "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
-                                        }
-                                    },
-                                    "required": ["parquet_file"]
-                                }
-                            },
-                            {
-                                "name": "detect_anomalies",
-                                "description": "Detect anomalies in time series data using MAD, CUSUM, and FFT analysis. IMPORTANT: Call describe_metrics first to see available metrics and labels before constructing your query. The query must result in a SINGLE time series - use sum() to aggregate multiple series.",
-                                "inputSchema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "parquet_file": {
-                                            "type": "string",
-                                            "description": "Path to the parquet file"
-                                        },
-                                        "recording": {
-                                            "type": "object",
-                                            "additionalProperties": {"type": "string"},
-                                            "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
-                                        },
-                                        "query": {
-                                            "type": "string",
-                                            "description": "PromQL query that produces a SINGLE time series. For COUNTERS (monotonically increasing), use rate() to get per-second rates, e.g., 'sum(rate(cpu_usage[1m]))'. For GAUGES (point-in-time values), query directly, e.g., 'sum(memory_available)'. For HISTOGRAMS, use histogram_quantile(), e.g., 'histogram_quantile(0.99, scheduler_runqueue_latency)'. ALWAYS use sum() or other aggregation to collapse multiple series into one. DO NOT use label selectors like {state=\"busy\"} unless you've confirmed those labels exist in describe_metrics output."
-                                        }
-                                    },
-                                    "required": ["parquet_file", "query"]
-                                }
-                            },
-                            {
-                                "name": "query",
-                                "description": "Execute a PromQL query and return results as JSON. Returns Prometheus-compatible format with resultType (vector/matrix/scalar) and result data. Use describe_metrics first to see available metrics and their types. Results can be used programmatically by other tools.",
-                                "inputSchema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "parquet_file": {
-                                            "type": "string",
-                                            "description": "Path to the parquet file"
-                                        },
-                                        "recording": {
-                                            "type": "object",
-                                            "additionalProperties": {"type": "string"},
-                                            "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
-                                        },
-                                        "query": {
-                                            "type": "string",
-                                            "description": "PromQL query expression. For COUNTERS use rate(metric[1m]), for GAUGES query directly, for HISTOGRAMS use histogram_quantile(0.99, metric). Use sum(), avg(), etc. to aggregate multiple series."
-                                        }
-                                    },
-                                    "required": ["parquet_file", "query"]
-                                }
-                            },
-                            {
-                                "name": "extract_features",
-                                "description": "Extract a deterministic, versioned overview record of a recording's Rezolus-native features (per-metric stats, noise classification, anomalies, regime shifts, acquisition-window uncertainty, top-N correlations, resource rankings, subsystem coverage) as JSON. The record is the structured input for bottleneck assessment. Requires a recording of at least 10 seconds.",
-                                "inputSchema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "parquet_file": {
-                                            "type": "string",
-                                            "description": "Path to the recording (parquet or .rez)"
-                                        },
-                                        "recording": {
-                                            "type": "object",
-                                            "additionalProperties": {"type": "string"},
-                                            "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
-                                        }
-                                    },
-                                    "required": ["parquet_file"]
-                                }
-                            }
-                        ]
+                        "tools": self.tool_list()
                     }
                 })))
             }
@@ -567,6 +755,21 @@ impl Server {
                     }
                 }))),
             },
+            McpTool::AddEvent => Ok(Some(tool_reply(
+                id,
+                "add_event",
+                self.add_event(arguments).await,
+            ))),
+            McpTool::RemoveEvents => Ok(Some(tool_reply(
+                id,
+                "remove_events",
+                self.remove_events(arguments).await,
+            ))),
+            McpTool::RunChecks => Ok(Some(tool_reply(
+                id,
+                "run_checks",
+                self.run_checks(arguments).await,
+            ))),
             McpTool::Unknown(name) => Ok(Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -831,6 +1034,165 @@ impl Server {
             .await?;
         let record = crate::analysis::extract::extract(reader.as_ref(), provenance)?;
         Ok(serde_json::to_string_pretty(&record)?)
+    }
+
+    /// Drop every cached reader of `parquet_file`: a write changed the
+    /// recording's metadata, and a reader opened before it would report the
+    /// old events (and KPIs) to the next tool call.
+    fn evict(&self, parquet_file: &str) {
+        let mut cache = self.reader_cache.write().unwrap();
+        cache.retain(|(p, _), _| p != parquet_file);
+    }
+
+    /// `add_event`: build one `Event` from the arguments and append it to
+    /// the recording the selector names.
+    async fn add_event(&self, arguments: &Value) -> Result<String, Box<dyn std::error::Error>> {
+        let parquet_file = arguments
+            .get("parquet_file")
+            .and_then(|f| f.as_str())
+            .ok_or("Missing parquet_file")?;
+        let selector = Self::selector_of(arguments)?;
+        let timestamp = timestamp_ns_of(arguments.get("timestamp").ok_or("Missing timestamp")?)?;
+        let description = opt_str(arguments, "description")?.ok_or("Missing description")?;
+        let duration_ns = match arguments.get("duration") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(duration_ns_of(v)?),
+        };
+        let id = opt_str(arguments, "id")?
+            .unwrap_or_else(|| format!("mcp:{}", crate::agent::epoch::mint()));
+        let event = crate::viewer::Event {
+            timestamp,
+            description,
+            kind: opt_str(arguments, "kind")?,
+            details: opt_str(arguments, "details")?,
+            // Agent-authored unless the caller says otherwise, so a person can
+            // filter (or `remove_events` by source) what the agent wrote.
+            source: Some(opt_str(arguments, "source")?.unwrap_or_else(|| "mcp".to_string())),
+            node: opt_str(arguments, "node")?,
+            instance: opt_str(arguments, "instance")?,
+            labels: Default::default(),
+            duration_ns,
+            id: Some(id.clone()),
+            chart_id: None,
+        };
+        let report = crate::parquet_tools::events::add_events_selected(
+            Path::new(parquet_file),
+            &selector,
+            vec![event],
+        )?;
+        self.evict(parquet_file);
+        let outcome = if report.counts.new > 0 {
+            "added"
+        } else if report.counts.updated > 0 {
+            "updated"
+        } else {
+            "unchanged (an event with this id was already present)"
+        };
+        Ok(serde_json::to_string_pretty(&json!({
+            "id": id,
+            "timestamp_ns": timestamp,
+            "duration_ns": duration_ns,
+            "outcome": outcome,
+            "recording": report.recording,
+            "events_in_recording": report.total,
+            "file": parquet_file,
+        }))?)
+    }
+
+    /// `remove_events`: mutating, so only with the flag.
+    async fn remove_events(&self, arguments: &Value) -> Result<String, Box<dyn std::error::Error>> {
+        if !self.options.allow_mutating {
+            return Err(mutating_refused("remove_events").into());
+        }
+        let parquet_file = arguments
+            .get("parquet_file")
+            .and_then(|f| f.as_str())
+            .ok_or("Missing parquet_file")?;
+        let selector = Self::selector_of(arguments)?;
+        let ids: Vec<String> = match arguments.get("ids") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Array(items)) => items
+                .iter()
+                .map(|v| v.as_str().map(str::to_string).ok_or("ids must be strings"))
+                .collect::<Result<_, _>>()?,
+            Some(_) => return Err("ids must be an array of strings".into()),
+        };
+        let filter = crate::parquet_tools::events::RemoveFilter {
+            ids,
+            kind: opt_str(arguments, "kind")?,
+            source: opt_str(arguments, "source")?,
+        };
+        let report = crate::parquet_tools::events::remove_events_selected(
+            Path::new(parquet_file),
+            &selector,
+            &filter,
+        )?;
+        self.evict(parquet_file);
+        Ok(serde_json::to_string_pretty(&json!({
+            "removed": report.removed,
+            "recording": report.recording,
+            "events_in_recording": report.total,
+            "file": parquet_file,
+        }))?)
+    }
+
+    /// `run_checks`: the same evaluation as `rezolus recording check`,
+    /// returned as JSON; with `annotate` the verdicts are written too.
+    async fn run_checks(&self, arguments: &Value) -> Result<String, Box<dyn std::error::Error>> {
+        let parquet_file = arguments
+            .get("parquet_file")
+            .and_then(|f| f.as_str())
+            .ok_or("Missing parquet_file")?;
+        let selector = Self::selector_of(arguments)?;
+        let override_ext: Option<crate::viewer::ServiceExtension> = match arguments.get("queries") {
+            None | Some(Value::Null) => None,
+            Some(v @ Value::Object(_)) => Some(
+                serde_json::from_value(v.clone())
+                    .map_err(|e| format!("queries is not a ServiceExtension object: {e}"))?,
+            ),
+            Some(_) => return Err("queries must be a ServiceExtension object".into()),
+        };
+        let annotate = match arguments.get("annotate") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(b)) => *b,
+            Some(_) => return Err("annotate must be a boolean".into()),
+        };
+        let path = Path::new(parquet_file);
+        let registry = crate::viewer::load_template_registry(None);
+        let run = crate::parquet_tools::check::run_checks(
+            path,
+            &selector,
+            override_ext.as_ref(),
+            &registry,
+        )?;
+        if run.checks_seen == 0 {
+            return Ok(serde_json::to_string_pretty(&json!({
+                "checks": [],
+                "summary": run.summary(),
+                "message": run.nothing_to_run(path, override_ext.is_some()),
+            }))?);
+        }
+        let mut annotated: Option<String> = None;
+        if annotate {
+            let n: usize = run.per_recording_events.iter().map(Vec::len).sum();
+            annotated = Some(if n == 0 {
+                "nothing to annotate: no violation windows".to_string()
+            } else {
+                let line = crate::parquet_tools::check::annotate_events(
+                    path,
+                    run.format,
+                    run.per_recording_events.clone(),
+                )?;
+                self.evict(parquet_file);
+                line
+            });
+        }
+        Ok(serde_json::to_string_pretty(&json!({
+            "checks": run.results,
+            "summary": run.summary(),
+            "exit_code": run.exit_code(),
+            "annotated": annotated,
+        }))?)
     }
 }
 
@@ -1275,14 +1637,21 @@ mod tests {
     /// and told only that the archive holds two.
     #[tokio::test]
     async fn every_tool_schema_advertises_the_recording_argument() {
-        let mut server = Server::new();
+        // With the flag, so the mutating tier is under the same check.
+        let mut server = Server::with_options(ServerOptions {
+            allow_mutating: true,
+        });
         let listing = server
             .handle_message(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
             .await
             .unwrap()
             .expect("tools/list must answer");
         let tools = listing["result"]["tools"].as_array().unwrap().clone();
-        assert_eq!(tools.len(), 6, "all six tools must be listed");
+        assert_eq!(
+            tools.len(),
+            9,
+            "six read tools, two additive, one mutating must be listed"
+        );
         for tool in tools {
             let name = tool["name"].as_str().unwrap();
             let props = &tool["inputSchema"]["properties"];
@@ -1355,6 +1724,323 @@ mod tests {
         assert!(
             dropped.is_empty(),
             "these handlers dropped the recording selector: {dropped:?}"
+        );
+    }
+
+    // ── write tools ──────────────────────────────────────────────────────
+
+    fn tool_names(server: &mut Server) -> Vec<String> {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let reply = rt
+            .block_on(
+                server.handle_message(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})),
+            )
+            .unwrap()
+            .unwrap();
+        reply["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn stored_events(path: &std::path::Path) -> Vec<Vec<crate::viewer::Event>> {
+        let db = crate::recorder::rez_sqlite::RezDb::open(path).unwrap();
+        db.read_recordings()
+            .unwrap()
+            .into_iter()
+            .map(|r| {
+                r.meta
+                    .metadata
+                    .get(crate::parquet_metadata::KEY_EVENTS)
+                    .map(|s| {
+                        serde_json::from_str::<crate::viewer::Events>(s)
+                            .unwrap()
+                            .events
+                    })
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_flag_decides_whether_mutating_tools_are_listed() {
+        let mut off = Server::new();
+        let names = tool_names(&mut off);
+        assert!(names.contains(&"add_event".to_string()));
+        assert!(names.contains(&"run_checks".to_string()));
+        assert!(
+            !names.contains(&"remove_events".to_string()),
+            "a server without --allow-mutating must not advertise removals: {names:?}"
+        );
+        let mut on = Server::with_options(ServerOptions {
+            allow_mutating: true,
+        });
+        assert!(tool_names(&mut on).contains(&"remove_events".to_string()));
+    }
+
+    #[tokio::test]
+    async fn a_mutating_call_without_the_flag_is_refused_naming_the_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one.rez");
+        crate::mcp::tests::multi_recording_rez(&path, &["redis"], &[true]);
+        let mut server = Server::new();
+        let reply = server
+            .handle_message(json!({
+                "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                "params": {"name": "remove_events", "arguments": {"parquet_file": path.to_str().unwrap(), "kind": "x"}}
+            }))
+            .await
+            .unwrap()
+            .unwrap();
+        let msg = reply["error"]["message"].as_str().unwrap();
+        assert!(msg.contains("--allow-mutating"), "{msg}");
+        assert!(reply.get("result").is_none());
+    }
+
+    #[tokio::test]
+    async fn add_event_lands_in_the_recording_and_is_idempotent_by_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one.rez");
+        crate::mcp::tests::multi_recording_rez(&path, &["redis"], &[true]);
+        let server = Server::new();
+        let args = json!({
+            "parquet_file": path.to_str().unwrap(),
+            "timestamp": "2026-09-28T14:03:11.250Z",
+            "description": "p99 spike",
+            "kind": "finding",
+            "duration": "30s",
+            "details": "sum(rate(x[1m])) doubled",
+        });
+        let out: Value = serde_json::from_str(&server.add_event(&args).await.unwrap()).unwrap();
+        let id = out["id"].as_str().unwrap().to_string();
+        assert!(id.starts_with("mcp:"), "{id}");
+        assert_eq!(out["outcome"], "added");
+        assert_eq!(out["events_in_recording"], 1);
+        assert_eq!(out["duration_ns"], 30_000_000_000u64);
+
+        let stored = stored_events(&path);
+        assert_eq!(stored.len(), 1);
+        let e = &stored[0][0];
+        assert_eq!(e.id.as_deref(), Some(id.as_str()));
+        assert_eq!(
+            e.source.as_deref(),
+            Some("mcp"),
+            "agent-authored by default"
+        );
+        assert_eq!(e.kind.as_deref(), Some("finding"));
+        assert_eq!(e.timestamp, 1_790_604_191_250_000_000);
+        assert_eq!(e.duration_ns, Some(30_000_000_000));
+
+        // Same id again: unchanged, not duplicated.
+        let mut again = args.clone();
+        again["id"] = Value::String(id.clone());
+        let out2: Value = serde_json::from_str(&server.add_event(&again).await.unwrap()).unwrap();
+        assert!(out2["outcome"].as_str().unwrap().starts_with("unchanged"));
+        assert_eq!(stored_events(&path)[0].len(), 1);
+
+        // Unix seconds as a number, and no duration: an instant.
+        let mut instant = args.clone();
+        instant["timestamp"] = json!(1_790_690_600.5);
+        instant.as_object_mut().unwrap().remove("duration");
+        let out3: Value = serde_json::from_str(&server.add_event(&instant).await.unwrap()).unwrap();
+        assert_eq!(out3["timestamp_ns"], 1_790_690_600_500_000_000u64);
+        assert!(out3["duration_ns"].is_null());
+        assert_eq!(stored_events(&path)[0].len(), 2);
+    }
+
+    #[tokio::test]
+    async fn add_event_writes_only_the_selected_recording_and_refuses_an_ambiguous_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        crate::mcp::tests::multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let server = Server::new();
+        let base = json!({
+            "parquet_file": path.to_str().unwrap(),
+            "timestamp": "2026-09-28T14:03:11Z",
+            "description": "seen in valkey",
+        });
+        let err = server.add_event(&base).await.err().unwrap().to_string();
+        assert!(
+            err.contains("2 recordings"),
+            "must list, never stamp every arm: {err}"
+        );
+        assert!(
+            err.contains("\"source\": \"redis\"") || err.contains("source"),
+            "{err}"
+        );
+        assert!(stored_events(&path).iter().all(Vec::is_empty));
+
+        let mut chosen = base.clone();
+        chosen["recording"] = json!({"source": "valkey"});
+        let out: Value = serde_json::from_str(&server.add_event(&chosen).await.unwrap()).unwrap();
+        assert_eq!(out["recording"]["source"], "valkey");
+        let stored = stored_events(&path);
+        assert!(stored[0].is_empty(), "redis untouched");
+        assert_eq!(stored[1].len(), 1);
+    }
+
+    #[tokio::test]
+    async fn remove_events_filters_by_id_kind_and_source_and_refuses_an_empty_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one.rez");
+        crate::mcp::tests::multi_recording_rez(&path, &["redis"], &[true]);
+        let server = Server::with_options(ServerOptions {
+            allow_mutating: true,
+        });
+        let file = path.to_str().unwrap();
+        let add = |ts: &str, kind: &str, source: Option<&str>, id: &str| {
+            let mut a = json!({"parquet_file": file, "timestamp": ts, "description": kind, "kind": kind, "id": id});
+            if let Some(s) = source {
+                a["source"] = Value::String(s.to_string());
+            }
+            a
+        };
+        server
+            .add_event(&add("2026-09-28T14:00:00Z", "deploy", Some("ops"), "d1"))
+            .await
+            .unwrap();
+        server
+            .add_event(&add("2026-09-28T14:01:00Z", "finding", None, "f1"))
+            .await
+            .unwrap();
+        server
+            .add_event(&add("2026-09-28T14:02:00Z", "finding", None, "f2"))
+            .await
+            .unwrap();
+        server
+            .add_event(&add("2026-09-28T14:03:00Z", "finding", Some("ops"), "f3"))
+            .await
+            .unwrap();
+        assert_eq!(stored_events(&path)[0].len(), 4);
+
+        let err = server
+            .remove_events(&json!({"parquet_file": file}))
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(err.contains("--clear-events"), "{err}");
+
+        // kind AND source: only the agent-written findings.
+        let out: Value = serde_json::from_str(
+            &server
+                .remove_events(&json!({"parquet_file": file, "kind": "finding", "source": "mcp"}))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out["removed"], 2);
+        assert_eq!(out["events_in_recording"], 2);
+        let ids: Vec<String> = stored_events(&path)[0]
+            .iter()
+            .map(|e| e.id.clone().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["d1", "f3"]);
+
+        // By id.
+        let out: Value = serde_json::from_str(
+            &server
+                .remove_events(&json!({"parquet_file": file, "ids": ["d1", "nope"]}))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out["removed"], 1);
+        assert_eq!(stored_events(&path)[0].len(), 1);
+
+        // Removing the last one drops the key rather than storing an empty list.
+        server
+            .remove_events(&json!({"parquet_file": file, "ids": ["f3"]}))
+            .await
+            .unwrap();
+        let db = crate::recorder::rez_sqlite::RezDb::open(&path).unwrap();
+        let recs = db.read_recordings().unwrap();
+        assert!(!recs[0]
+            .meta
+            .metadata
+            .contains_key(crate::parquet_metadata::KEY_EVENTS));
+    }
+
+    #[tokio::test]
+    async fn run_checks_reports_nothing_to_run_or_each_verdict() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one.rez");
+        crate::mcp::tests::multi_recording_rez(&path, &["redis"], &[true]);
+        let server = Server::new();
+        let file = path.to_str().unwrap();
+
+        let out: Value = serde_json::from_str(
+            &server
+                .run_checks(&json!({"parquet_file": file}))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out["checks"].as_array().unwrap().len(), 0);
+        assert!(out["message"]
+            .as_str()
+            .unwrap()
+            .contains("no checks to run"));
+
+        // A check over a metric the fixture does not hold: the verdict is an
+        // error naming the query, not a pass.
+        let queries = json!({
+            "service_name": "t",
+            "kpis": [{
+                "role": "q",
+                "title": "absent",
+                "query": "sum(rate(no_such_metric[1m]))",
+                "type": "gauge",
+                "check": {"above": 1.0}
+            }]
+        });
+        let out: Value = serde_json::from_str(
+            &server
+                .run_checks(&json!({"parquet_file": file, "queries": queries, "annotate": true}))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let checks = out["checks"].as_array().unwrap();
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0]["status"], "error");
+        assert_eq!(out["summary"]["error"], 1);
+        assert_eq!(out["exit_code"], 2);
+        assert!(out["annotated"]
+            .as_str()
+            .unwrap()
+            .contains("nothing to annotate"));
+
+        let err = server
+            .run_checks(&json!({"parquet_file": file, "queries": "kpis.json"}))
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(err.contains("ServiceExtension object"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_write_evicts_the_cached_reader_for_that_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one.rez");
+        crate::mcp::tests::multi_recording_rez(&path, &["redis"], &[true]);
+        let server = Server::new();
+        let file = path.to_str().unwrap();
+        server
+            .get_reader_selected(file, &crate::mcp::RecordingSelector::default())
+            .await
+            .unwrap();
+        assert_eq!(server.reader_cache.read().unwrap().len(), 1);
+        server
+            .add_event(&json!({"parquet_file": file, "timestamp": 1.0, "description": "x"}))
+            .await
+            .unwrap();
+        assert!(
+            server.reader_cache.read().unwrap().is_empty(),
+            "a reader opened before the write would report the old events"
         );
     }
 }

@@ -1,7 +1,9 @@
 # MCP write-back and tool tiers
 
 - **Opened:** 2026-09-28
-- **Status:** OPEN — design, nothing built.
+- **Status:** IN PROGRESS. Tiers, `add_event`, `run_checks` and
+  `remove_events` built (first PR of the wave); `export_query`,
+  `viewer_link` and `rezolus mcp install` follow in their own PRs.
 
 ## Problem
 
@@ -82,6 +84,61 @@ the tool descriptions moves into the skill and the descriptions shrink to
 what each tool does. `document-feature` applies: the skill is an interface
 under test.
 
+## Built: tiers, `add_event`, `run_checks`, `remove_events`
+
+The first PR lands the tier plumbing and the three tools whose write path
+already existed.
+
+**Tiers.** `rezolus mcp --allow-mutating` sets `ServerOptions` on the
+server (`src/mcp/server.rs`). `tools/list` is built in tiers: the six read
+tools, the additive ones, and the mutating ones only when the flag is on. A
+mutating call on a flag-off server is refused with a message naming the
+flag, tested by
+`a_mutating_call_without_the_flag_is_refused_naming_the_flag`. The flag is
+refused on the one-shot subcommands, which read.
+
+**`add_event`.** Builds one `Event` from the arguments and appends it
+through `parquet_tools::events::add_events_selected`, which resolves the
+selector to one recording with the check runner's open (`check::open_targets`)
+and writes with the annotation writer's per-recording path (a parquet file
+takes the footer path). A multi-recording archive with no selector is
+refused with the listing the read tools give: `annotate --event` writes the
+same event into every recording, and an agent marking what it saw in one
+arm must not stamp the other arms. `source` defaults to `mcp`; the id is
+minted as `mcp:<uuid>` (the recorder's `epoch::mint`) unless given, and a
+repeated id is a no-op through `append_events`' id rule. `timestamp` takes
+RFC 3339 or Unix seconds as a number; `duration` takes humantime or seconds.
+The reply carries the id, the ns instant, the outcome, and the recording's
+event count. Every write evicts the server's cached readers for that path,
+since a reader opened before the write reports the old events.
+
+**`run_checks`.** The check runner was split out of its clap wrapper into
+`check::run_checks` (evaluation, no I/O beyond the open) and
+`check::annotate_events` (the write, returning its report line), and the
+CLI and the tool both call them. The tool returns each `CheckResult` as the
+CLI's `--json` does, plus a summary, the exit code the CLI would give, and
+the annotation report when `annotate` was set. `queries` is a
+ServiceExtension object inline, since the agent has JSON in hand and no file
+to point at.
+
+**`remove_events`.** A read, a filter (`ids` any-of, `kind`, `source`, all
+given fields must match) and a replace. The replace is a new
+`RezAnnotation::per_recording_replace` (a whole payload per recording, `None`
+to leave one alone), symmetric with `per_recording_events`; the parquet path
+rewrites the footer. An empty filter is refused: "remove everything" is
+`annotate --clear-events`, typed by a person. The annotation writer's report
+line is now a `ReportSink` (stdout or captured) rather than a stdout/stderr
+flag, so the tools return the line instead of printing it.
+
+**Measured.** Through stdio against a two-recording `.rez` combined from
+the A/B parquet fixtures, with a `recording` selector on each write:
+`initialize`, `tools/list` (eight tools without the flag), `add_event`
+(landed in the selected recording, id `mcp:<uuid>` returned),
+`remove_events` (refused, names the flag), `run_checks` (no checks to
+run). `rezolus view` on the archive afterwards serves the event in
+`/api/v1/file_metadata`, which is what the timeline draws from. That is the
+entry's first GO condition.
+
 ## Not in scope
 
 - A hosted or remote MCP transport. Stdio only.
@@ -100,7 +157,12 @@ a message naming the flag.
 
 - **`viewer_link` with a full URL.** Needs a way for the server to know the
   viewer's address; reopen when the fragment-only form proves insufficient.
-- **A `run_checks` tool.** After checks land.
+- **`export_query` and `viewer_link`.** Next PR: the pure-function tools.
+- **`rezolus mcp install` and the skill.** After the tools.
+- **`set_kpis`.** Mutating replace of `service_queries`; the annotate KPI
+  path exists (`RezAnnotation::ext_json`, `annotate_parquet`), so it is a
+  small addition when a client asks for it. Not built with the first three
+  tools since nothing on the agent side produces a KPI set today.
 - **Skills for other clients.** Add per client when someone asks; the install
   command's client list is the place.
 

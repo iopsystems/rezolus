@@ -324,7 +324,7 @@ fn evaluate(reader: &dyn MetricsSource, kpi: &Kpi, check: &Check) -> Result<Wind
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
-enum Status {
+pub(crate) enum Status {
     Pass,
     Warn,
     Fail,
@@ -367,7 +367,7 @@ impl From<&Window> for WindowOut {
 
 /// One check's verdict, the unit of both the text and the JSON output.
 #[derive(Debug, serde::Serialize)]
-struct CheckResult {
+pub(crate) struct CheckResult {
     /// The recording's labels, for a `.rez`; absent for a parquet file.
     #[serde(skip_serializing_if = "Option::is_none")]
     recording: Option<BTreeMap<String, String>>,
@@ -534,10 +534,12 @@ fn event_id(title: &str, query: &str, condition: &str, start_ns: u64) -> String 
 
 /// One recording to check: a parquet file (no labels, index 0) or one
 /// recording of a `.rez` (its labels and catalog index).
-struct Target {
-    index: usize,
-    labels: Option<BTreeMap<String, String>>,
-    reader: Arc<dyn MetricsSource>,
+pub(crate) struct Target {
+    /// Position in the archive's catalog order, which is also the index
+    /// `RezAnnotation::per_recording_events` addresses.
+    pub(crate) index: usize,
+    pub(crate) labels: Option<BTreeMap<String, String>>,
+    pub(crate) reader: Arc<dyn MetricsSource>,
 }
 
 /// Open the recordings `--recording` names. The same readers the MCP path
@@ -545,7 +547,7 @@ struct Target {
 /// for a `.rez`); what differs is that with no selector a multi-recording
 /// archive is checked whole, one verdict list per recording, where the MCP
 /// tools would ask for a choice.
-fn open_targets(
+pub(crate) fn open_targets(
     path: &Path,
     selector: &RecordingSelector,
 ) -> Result<(RezFormat, Vec<Target>, usize), String> {
@@ -662,6 +664,102 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) -> i32 {
     }
 }
 
+/// What one evaluation produced, for the CLI to print and the MCP tool to
+/// serialize.
+pub(crate) struct CheckRun {
+    pub(crate) results: Vec<CheckResult>,
+    /// Each recording's verdict events in catalog order, one entry per
+    /// recording of the archive (empty for the ones not evaluated).
+    pub(crate) per_recording_events: Vec<Vec<Event>>,
+    pub(crate) format: RezFormat,
+    /// KPIs carrying a check, across the evaluated recordings. Zero means
+    /// there was nothing to run, which is not a failure.
+    pub(crate) checks_seen: usize,
+}
+
+/// Pass/warn/fail/indeterminate/error counts over a run's results.
+#[derive(Debug, Default, Clone, Copy, serde::Serialize)]
+pub(crate) struct Summary {
+    pub(crate) pass: usize,
+    pub(crate) warn: usize,
+    pub(crate) fail: usize,
+    pub(crate) indeterminate: usize,
+    pub(crate) error: usize,
+}
+
+impl CheckRun {
+    pub(crate) fn summary(&self) -> Summary {
+        let count = |s: Status| self.results.iter().filter(|r| r.status == s).count();
+        Summary {
+            pass: count(Status::Pass),
+            warn: count(Status::Warn),
+            fail: count(Status::Fail),
+            indeterminate: count(Status::Indeterminate),
+            error: count(Status::Error),
+        }
+    }
+
+    /// The process exit status the CLI maps a run to: error wins over
+    /// fail, which wins over everything else.
+    pub(crate) fn exit_code(&self) -> i32 {
+        let s = self.summary();
+        if s.error > 0 {
+            EXIT_ERROR
+        } else if s.fail > 0 {
+            EXIT_FAIL
+        } else {
+            0
+        }
+    }
+
+    /// Why there was nothing to run, when `checks_seen` is zero.
+    pub(crate) fn nothing_to_run(&self, path: &Path, had_override: bool) -> String {
+        format!(
+            "no checks to run: no KPI in {} carries a \"check\"{}",
+            path.display(),
+            if had_override {
+                " (the --queries file defines none)"
+            } else {
+                " (embed one with `recording annotate --queries`, or pass --queries)"
+            }
+        )
+    }
+}
+
+/// Evaluate every KPI check over the recordings `selector` names (all of
+/// them when it is empty). Shared by `recording check` and the MCP
+/// `run_checks` tool; neither prints or writes here.
+pub(crate) fn run_checks(
+    path: &Path,
+    selector: &RecordingSelector,
+    override_ext: Option<&ServiceExtension>,
+    registry: &TemplateRegistry,
+) -> Result<CheckRun, String> {
+    let (format, targets, total_recordings) = open_targets(path, selector)?;
+
+    let mut results: Vec<CheckResult> = Vec::new();
+    let mut per_recording_events: Vec<Vec<Event>> = vec![Vec::new(); total_recordings];
+    let mut checks_seen = 0usize;
+    for target in &targets {
+        let kpis = checked_kpis(target.reader.as_ref(), override_ext, registry);
+        checks_seen += kpis.len();
+        for kpi in &kpis {
+            let check = kpi.check.as_ref().expect("filtered to KPIs with a check");
+            let outcome = evaluate(target.reader.as_ref(), kpi, check);
+            let result = CheckResult::new(target.labels.clone(), kpi, check, outcome);
+            per_recording_events[target.index].extend(result.events());
+            results.push(result);
+        }
+    }
+    drop(targets);
+    Ok(CheckRun {
+        results,
+        per_recording_events,
+        format,
+        checks_seen,
+    })
+}
+
 fn run_inner(args: &ArgMatches, registry: &TemplateRegistry) -> Result<i32, String> {
     let path = args.get_one::<PathBuf>("FILE").expect("clap requires FILE");
     let json = args.get_flag("json");
@@ -677,94 +775,69 @@ fn run_inner(args: &ArgMatches, registry: &TemplateRegistry) -> Result<i32, Stri
         .map(|p| load_queries(p))
         .transpose()?;
 
-    let (format, targets, total_recordings) = open_targets(path, &selector)?;
+    let run = run_checks(path, &selector, override_ext.as_ref(), registry)?;
 
-    let mut results: Vec<CheckResult> = Vec::new();
-    let mut per_recording_events: Vec<Vec<Event>> = vec![Vec::new(); total_recordings];
-    let mut checks_seen = 0usize;
-    for target in &targets {
-        let kpis = checked_kpis(target.reader.as_ref(), override_ext.as_ref(), registry);
-        checks_seen += kpis.len();
-        for kpi in &kpis {
-            let check = kpi.check.as_ref().expect("filtered to KPIs with a check");
-            let outcome = evaluate(target.reader.as_ref(), kpi, check);
-            let result = CheckResult::new(target.labels.clone(), kpi, check, outcome);
-            per_recording_events[target.index].extend(result.events());
-            results.push(result);
-        }
-    }
-    drop(targets);
-
-    if checks_seen == 0 {
-        eprintln!(
-            "no checks to run: no KPI in {} carries a \"check\"{}",
-            path.display(),
-            if override_ext.is_some() {
-                " (the --queries file defines none)"
-            } else {
-                " (embed one with `recording annotate --queries`, or pass --queries)"
-            }
-        );
+    if run.checks_seen == 0 {
+        eprintln!("{}", run.nothing_to_run(path, override_ext.is_some()));
         return Ok(0);
     }
 
-    let count = |s: Status| results.iter().filter(|r| r.status == s).count();
-    let (pass, warn, fail, ind, err) = (
-        count(Status::Pass),
-        count(Status::Warn),
-        count(Status::Fail),
-        count(Status::Indeterminate),
-        count(Status::Error),
-    );
+    let Summary {
+        pass,
+        warn,
+        fail,
+        indeterminate: ind,
+        error: err,
+    } = run.summary();
 
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&results).map_err(|e| e.to_string())?
+            serde_json::to_string_pretty(&run.results).map_err(|e| e.to_string())?
         );
     } else {
-        for r in &results {
+        for r in &run.results {
             println!("{}", r.line());
         }
         println!(
             "{} check{}: {pass} passed, {fail} failed, {warn} warned, {ind} indeterminate, {err} error{}",
-            results.len(),
-            if results.len() == 1 { "" } else { "s" },
+            run.results.len(),
+            if run.results.len() == 1 { "" } else { "s" },
             if err == 1 { "" } else { "s" }
         );
     }
 
     if annotate {
-        let n: usize = per_recording_events.iter().map(Vec::len).sum();
+        let n: usize = run.per_recording_events.iter().map(Vec::len).sum();
         if n == 0 {
             eprintln!("nothing to annotate: no violation windows");
         } else {
             // With --json, stdout is the array and nothing else.
-            annotate_events(path, format, per_recording_events, json).map_err(|e| e.to_string())?;
+            let line = annotate_events(path, run.format, run.per_recording_events.clone())
+                .map_err(|e| e.to_string())?;
+            if json {
+                eprintln!("{line}");
+            } else {
+                println!("{line}");
+            }
         }
     }
 
-    Ok(if err > 0 {
-        EXIT_ERROR
-    } else if fail > 0 {
-        EXIT_FAIL
-    } else {
-        0
-    })
+    Ok(run.exit_code())
 }
 
 /// Write the violation windows into the recording as events, through the
-/// same code `recording annotate` uses for each container.
-fn annotate_events(
+/// same code `recording annotate` uses for each container. Returns the
+/// report line; the caller decides which stream it goes to.
+pub(crate) fn annotate_events(
     path: &Path,
     format: RezFormat,
     per_recording: Vec<Vec<Event>>,
-    report_to_stderr: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn std::error::Error>> {
     if format == RezFormat::NotRez {
         let events = per_recording.into_iter().flatten().collect();
         let appended = super::events::append_to_parquet(path, events)?;
-        let line = if appended.counts.nothing_new() {
+        return Ok(if appended.counts.nothing_new() {
             format!(
                 "Annotated {:?}: nothing new; {} check event(s) already present",
                 path, appended.counts.unchanged
@@ -776,21 +849,20 @@ fn annotate_events(
                 appended.counts.describe(),
                 appended.events.events.len()
             )
-        };
-        if report_to_stderr {
-            eprintln!("{line}");
-        } else {
-            println!("{line}");
-        }
-        return Ok(());
+        });
     }
     let annotation = super::annotate::RezAnnotation {
         ext_json: None,
         events: None,
         per_recording_events: Some(per_recording),
-        report_to_stderr,
+        per_recording_replace: None,
+        report: super::annotate::ReportSink::capture(),
     };
-    super::annotate::annotate_rez_any(path, format, &annotation)
+    super::annotate::annotate_rez_any(path, format, &annotation)?;
+    Ok(annotation
+        .report
+        .captured()
+        .unwrap_or_else(|| format!("Annotated {:?}", path)))
 }
 
 #[cfg(test)]
