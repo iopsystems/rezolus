@@ -224,6 +224,48 @@ mod tests {
         assert!(!c.cgroup_attribution("xfs_log"));
     }
 
+    /// The config the packages install (`config/agent.toml`, which the deb
+    /// and the rpm put at `/etc/rezolus/agent.toml`) documents the defaults
+    /// and must not change them: every sampler is enabled, attributed and
+    /// paced the same with it as with an empty config.
+    #[test]
+    fn the_packaged_config_changes_no_default() {
+        let packaged = config(include_str!("../../../config/agent.toml"));
+        let bare = config("");
+        for &name in crate::analysis::extract::context::EXPECTED_SUBSYSTEMS {
+            assert_eq!(
+                packaged.enabled(name),
+                bare.enabled(name),
+                "{name}: enabled"
+            );
+            assert_eq!(
+                packaged.cgroup_attribution(name),
+                bare.cgroup_attribution(name),
+                "{name}: cgroup_attribution"
+            );
+            assert_eq!(
+                packaged.cgroup_attribution_or(name, true),
+                bare.cgroup_attribution_or(name, true),
+                "{name}: cgroup_attribution for a default-on sampler"
+            );
+            assert_eq!(
+                packaged.task_attribution(name),
+                bare.task_attribution(name),
+                "{name}: task_attribution"
+            );
+            assert_eq!(
+                packaged.sampler_interval(name),
+                bare.sampler_interval(name),
+                "{name}: interval"
+            );
+            assert_eq!(
+                packaged.gpu_perf_level(name),
+                bare.gpu_perf_level(name),
+                "{name}: gpu_perf_level"
+            );
+        }
+    }
+
     #[test]
     fn a_sampler_can_default_cgroup_attribution_on() {
         let c = config("[samplers.cpu_perf]\n");
