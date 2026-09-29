@@ -395,10 +395,32 @@ plot.
 
 ## Deferred / reopen
 
-- **`ext4_ops` probe cost** — Open. +4,070 instructions per write+fsync pair
-  is 18x phase 1's two probes; profile per program before any attempt to cut
-  it, the per-cgroup atomics and the two task-storage lookups first. Reopen
-  the on-by-default question when a probe costs under ~300 instructions.
+- **`ext4_ops` probe cost** — Profiled per program; cutting it is open.
+  With `kernel.bpf_stats_enabled=1` on the same `null_blk` fsync bench
+  (systemslab `01a0ecd6-3645-7126-e09f-1a228805939d`, 26.0 M write+fsync
+  pairs at 371 K IOPS, the image's own agent running as in every bench):
+
+  | program | ns per run |
+  |---|---|
+  | `ext4_sync_file_enter` | 269 |
+  | `ext4_sync_file_exit` | 538 |
+  | `ext4_file_write_iter_fentry` | 312 |
+  | `ext4_file_write_iter_fexit` | 546 |
+  | `ext4_unlink_enter` / `_exit` (164,811 runs) | 283 / 636 |
+  | `ext4_rename2_fentry` / `_fexit` (164,811 runs) | 339 / 651 |
+
+  1.67 µs of program time per pair against the +2.26 µs the phase 1 bench
+  measured end to end, so about 150 ns per crossing is trampoline and
+  tracepoint dispatch outside the program. Every begin hook (task-storage
+  get-or-create, clock read, device read) is under 340 ns; every end hook
+  (task-storage get, histogram, two or three per-filesystem counters through
+  the `dev_t → slot` hash, cgroup serial check and two atomics) is 540–650
+  ns, twice the begin. `bpftool prog profile` (cycles and instructions per
+  run) is not in Debian's bpftool build, so instructions per run were not
+  measured; the ~300-instruction reopen threshold reads as roughly 300 ns
+  here. The first thing to try is a variant without the per-cgroup path in
+  the end hook, which is the only component that is three operations rather
+  than one. Reopen the on-by-default question if that halves the end hook.
 
 - **Merged slab caches** — By design. A cache SLUB merges is absent, not
   approximated from the pool it joined; `ext4_extent_status` is merged on
