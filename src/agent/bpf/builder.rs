@@ -468,7 +468,7 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
         &'static str,
         Vec<&'static CounterGroup>,
         &'static AcquisitionGroup,
-        &'static crate::agent::identity::SlotIdentity,
+        &'static metriken::group::SlotIdentity,
     )>,
     #[allow(clippy::type_complexity)]
     ringbuf_handler: Vec<(&'static str, fn(&[u8]) -> i32)>,
@@ -1182,7 +1182,7 @@ where
         lookup: &'static str,
         counters: Vec<&'static CounterGroup>,
         group: &'static AcquisitionGroup,
-        identity: &'static crate::agent::identity::SlotIdentity,
+        identity: &'static metriken::group::SlotIdentity,
     ) -> Self {
         self.filesystem_counters
             .push((name, lookup, counters, group, identity));

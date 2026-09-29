@@ -40,7 +40,7 @@ use stats::*;
 
 /// The NVMe-only throttle counter groups, in a fixed order, for per-drive label
 /// application at discovery.
-static NVME_COUNTER_GROUPS: &[&dyn GroupMetadata] = &[
+static NVME_COUNTER_GROUPS: &[&dyn metriken::group::SlotMetadata] = &[
     &DRIVE_TEMPERATURE_WARNING_TIME,
     &DRIVE_TEMPERATURE_CRITICAL_TIME,
     &DRIVE_THERMAL_THROTTLE_TIME_1,
@@ -68,23 +68,15 @@ fn drive_labels(drive: &Drive) -> std::collections::BTreeMap<String, String> {
 /// the counters labeled only for NVMe drives — so a SATA drive's slot meant
 /// something on the gauge and nothing on the counters beside it, inside one
 /// group. A slot index cannot express that.
-static SWEEP_IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(SWEEP_IDENTITY_GROUPS);
+static SWEEP_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(SWEEP_IDENTITY_GROUPS);
 
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static SWEEP_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &SWEEP_IDENTITY;
+static SWEEP_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[&[&DRIVE_TEMPERATURE]];
 
-static SWEEP_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] =
-    &[(&DRIVEHEALTH_SWEEP_ACQ, &[&DRIVE_TEMPERATURE])];
+static NVME_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(NVME_IDENTITY_GROUPS);
 
-static NVME_IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(NVME_IDENTITY_GROUPS);
-
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static NVME_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &NVME_IDENTITY;
-
-static NVME_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] =
-    &[(&DRIVEHEALTH_NVME_ACQ, NVME_COUNTER_GROUPS)];
+static NVME_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[NVME_COUNTER_GROUPS];
 
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
@@ -170,9 +162,9 @@ impl DriveHealth {
         // throttle counters are labeled only for NVMe drives.
         for (idx, drive) in drives.iter().enumerate() {
             let labels = drive_labels(drive);
-            SWEEP_IDENTITY.set(idx, labels.clone());
+            SWEEP_IDENTITY.assign(idx, labels.clone());
             if drive.drive_type == DriveType::Nvme {
-                NVME_IDENTITY.set(idx, labels);
+                NVME_IDENTITY.assign(idx, labels);
             }
         }
 

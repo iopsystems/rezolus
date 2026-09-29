@@ -1,28 +1,24 @@
 //! Consuming an agent's replication stream.
 //!
-//! The agent produces `Frame::{Handshake, Index, Rows}` over HTTP
-//! (`/metrics/stream`); this turns them back into the rows and index entries a
-//! `.rez` recording holds.
+//! The agent produces `Frame::{Handshake, Rows}` over HTTP
+//! (`/metrics/stream`); this turns them back into the passes a `.dendro`
+//! recording ingests.
 //!
 //! # Why not dendro's `Subscriber`
 //!
-//! dendro ships one, and it implements exactly these rules. It also owns a
-//! dendro `Writer` and produces a dendro archive — a different container from
-//! `.rez`, which is what `RezReader`, both viewers, MCP and `parquet_tools`
-//! read. Until that migration happens a subscriber has to write `.rez`, so the
-//! rules are implemented here against [`SourceIndex`], which is the same type
-//! the producer accumulates with. One type, two callers, no second
-//! implementation of the state hash to keep in agreement.
+//! dendro ships one. It owns a dendro `Writer`, while `record --stream` writes
+//! through metriken-archive's `ArchiveWriter`, which takes V3 snapshots (see
+//! [`StreamSchemas`]). So the frames are decoded and checked here and the
+//! archive is written there.
 //!
-//! # The rule that matters
+//! # No identity index
 //!
-//! A rows frame names the index state it was built against. A subscriber whose
-//! accumulated state differs **skips those rows** and says so: attributing one
-//! task's numbers to another is worse than a gap. That is rule 10, and
-//! [`Applied::rows_skipped`] is how a caller finds out it happened.
+//! Identity travels in each group's schema, `__uid__` included, so the rows
+//! are all a subscriber needs. A 6.0 agent sends no `Frame::Index` and stamps
+//! every rows frame with dendro's `NO_INDEX_STATE`. An older agent still sends
+//! index frames and names its own index state; both are ignored, since the
+//! same labels arrive in the schemas.
 
-use crate::recorder::index::{EntryKind, IndexEntry, IndexState, SourceIndex};
-use crate::recorder::rez_sqlite::{IndexEntries, IndexRow};
 use crate::recorder::wire::{AgentRow, AgentRows};
 
 use dendro::archive::WalRow;
@@ -35,41 +31,21 @@ pub(crate) struct Applied {
     /// The interval index the producer stamped. Not a frame count: a gap says
     /// an interval the subscriber asked for produced no reading.
     pub seq: u64,
-    /// Rows whose index state resolved, ready for the writer.
+    /// The interval's rows, ready for the writer.
     pub rows: Vec<WalRow>,
-    /// Index entries for `caller_rows`: `(stream, ts, blob, full)`. The blob
-    /// is opaque here exactly as it is in the archive; `ts` is the producer's
-    /// stamp on the frame, which is the stamp of the rows the entry describes;
-    /// `full` says the entry restates the stream's whole slot set, which is
-    /// what retention cuts history at (`RezDb::evict_caller_rows_before`).
-    pub entries: Vec<(String, i64, Vec<u8>, bool)>,
-    /// Rows dropped because the state they named is not the state this
-    /// subscriber holds.
-    pub rows_skipped: usize,
     /// Whether `seq` jumped, meaning intervals produced no frame at all.
     pub gap: bool,
 }
 
-/// One interval, in the shape the writer stages.
-///
-/// `rows` is grouped by the producer's stamp: one `AgentRows` per distinct
-/// `ts`, which for a well-formed interval is exactly one — the producer stamps
-/// a whole pass once. Grouping rather than assuming keeps a relay that batches
-/// several passes into one frame from landing them all on the first pass's
-/// stamp. By `ts` alone, not `(ts, wall_offset)`: the archive's WAL key is
-/// `(recording, stream, ts)`, so two passes at one `ts` are one row's worth of
-/// key however their wall offsets differ, and staging them as two passes would
-/// let a stream present in both collide on that key and kill the writer. The
-/// first row's `wall_offset` stands for the pass.
-#[derive(Debug, Default, PartialEq)]
-pub(crate) struct Interval {
-    pub rows: Vec<AgentRows>,
-    pub index_entries: IndexEntries,
-}
-
 impl Applied {
-    /// Turn the rows and entries into what `StreamRecorderV3::stage_rows`
-    /// and `RecordingWriter::wal_with_index` take.
+    /// Turn the rows into passes, one [`AgentRows`] per distinct stamp.
+    ///
+    /// For a well-formed interval that is exactly one: the producer stamps a
+    /// whole pass once. Grouping rather than assuming keeps a relay that
+    /// batches several passes into one frame from landing them all on the
+    /// first pass's stamp. By `ts` alone, not `(ts, wall_offset)`: two passes
+    /// at one `ts` would write one row's worth of key however their wall
+    /// offsets differ. The first row's `wall_offset` stands for the pass.
     ///
     /// Each payload is decoded once, here, to rebuild the envelope the row
     /// endpoint would have sent — see [`AgentRow::from_payload`] for why the
@@ -82,7 +58,7 @@ impl Applied {
     /// A negative stamp is refused for the reason `snapshot_producer_stamp`
     /// refuses one: the archive's `ts` is unsigned, and a producer that sent
     /// one is not one to guess for.
-    pub(crate) fn for_writer(self) -> Result<Interval, String> {
+    pub(crate) fn for_writer(self) -> Result<Vec<AgentRows>, String> {
         let mut by_stamp: std::collections::BTreeMap<i64, (i64, Vec<AgentRow>)> =
             std::collections::BTreeMap::new();
         for row in self.rows {
@@ -98,7 +74,7 @@ impl Applied {
                 .1
                 .push(AgentRow::from_payload(row.stream, row.row)?);
         }
-        let rows = by_stamp
+        Ok(by_stamp
             .into_iter()
             .map(|(ts, (wall_offset, rows))| AgentRows {
                 // `ts + wall_offset` is the wall clock at the pass by the
@@ -110,23 +86,7 @@ impl Applied {
                 wall_offset,
                 rows,
             })
-            .collect();
-
-        let mut index_entries: IndexEntries = Vec::new();
-        for (stream, ts, blob, full) in self.entries {
-            let ts = u64::try_from(ts).map_err(|_| {
-                format!("index entry on `{stream}` stamped at {ts} ns, before the epoch")
-            })?;
-            let row = IndexRow { ts, blob, full };
-            match index_entries.iter_mut().find(|(s, _)| *s == stream) {
-                Some((_, rows)) => rows.push(row),
-                None => index_entries.push((stream, vec![row])),
-            }
-        }
-        Ok(Interval {
-            rows,
-            index_entries,
-        })
+            .collect())
     }
 }
 
@@ -141,37 +101,11 @@ pub(crate) struct Source {
     pub clock_anchor_wall_ns: i64,
 }
 
-/// How often a subscriber restates every stream's slot set into the archive
-/// on the producer's behalf: the seal age, so that any segment's rows are at
-/// most one restatement away from a `Full` they can be attributed against.
-///
-/// The producer sends a `Full` once, at connect, and `Delta`s from then on.
-/// An archive with retention evicts rows by age, and an index entry can be
-/// cut only back to a `Full` — so without a periodic one, a rolling buffer
-/// would keep every entry since connect forever, and a reader of a long
-/// recording would replay its whole history to attribute its last hour. The
-/// subscriber holds the same set the producer does (rule 10 checks exactly
-/// that on every rows frame), so it can write the restatement itself; the
-/// producer need not know the recorder's cadence.
-pub(crate) const RESTATE_EVERY: Duration = Duration::from_secs(300);
-
 /// Accumulates one connection's frames.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct StreamSubscriber {
-    index: SourceIndex,
     source: Option<Source>,
     last_seq: Option<u64>,
-    skipped_total: usize,
-    restate_every: Duration,
-    /// The stamp of the last complete restatement in the archive — the
-    /// producer's at connect, or this subscriber's own since.
-    restated_at: Option<i64>,
-}
-
-impl Default for StreamSubscriber {
-    fn default() -> Self {
-        Self::with_restatement(RESTATE_EVERY)
-    }
 }
 
 impl StreamSubscriber {
@@ -179,42 +113,15 @@ impl StreamSubscriber {
         Self::default()
     }
 
-    /// A subscriber that restates every `every` of producer time.
-    pub(crate) fn with_restatement(every: Duration) -> Self {
-        Self {
-            index: SourceIndex::default(),
-            source: None,
-            last_seq: None,
-            skipped_total: 0,
-            restate_every: every,
-            restated_at: None,
-        }
-    }
-
     /// The source this stream is carrying, once its handshake has arrived.
     pub(crate) fn source(&self) -> Option<&Source> {
         self.source.as_ref()
     }
 
-    /// Rows dropped over this connection's life, for the caller to report.
-    pub(crate) fn skipped_total(&self) -> usize {
-        self.skipped_total
-    }
-
-    /// What a slot currently means, for a caller that wants to read identity
-    /// rather than just store it. The recorder stores; the tests read.
-    #[cfg(test)]
-    pub(crate) fn index(&self) -> &SourceIndex {
-        &self.index
-    }
-
     /// Fold one interval's frames in.
     ///
-    /// Takes the frames of a whole interval rather than one at a time because
-    /// the order within an interval is the covenant: index entries precede the
-    /// rows that reference them, so a row can never name identity that has not
-    /// been applied yet. A caller feeding them singly could not preserve that
-    /// without reimplementing it.
+    /// Takes the frames of a whole interval: everything up to and including
+    /// its `Rows`.
     pub(crate) fn apply(&mut self, frames: Vec<Frame>) -> Result<Applied, String> {
         let mut out = Applied::default();
 
@@ -246,53 +153,22 @@ impl StreamSubscriber {
                         metadata,
                         clock_anchor_wall_ns,
                     });
-                    // A connection opens with the producer's own `Full`.
-                    self.restated_at = None;
                 }
 
-                Frame::Index {
-                    stream, blob, ts, ..
-                } => {
-                    // Decoded to apply, stored as the bytes that arrived. The
-                    // archive keeps the producer's encoding rather than a
-                    // re-encoding of our decode, so a consumer reading it back
-                    // sees what was sent.
-                    let entry = IndexEntry::decode(&blob)
-                        .map_err(|e| format!("undecodable index entry on `{stream}`: {e}"))?;
-                    // Applied without comparing, because a complete
-                    // restatement is several entries carrying one state
-                    // between them — see `SourceIndex::apply_unchecked`. The
-                    // comparison happens once, against the rows below.
-                    self.index
-                        .apply_unchecked(&stream, &entry)
-                        .map_err(|e| format!("index entry on `{stream}` at {ts}: {e}"))?;
-                    out.entries
-                        .push((stream, ts, blob, entry.kind == EntryKind::Full));
-                }
+                // An agent before 6.0 sends an identity index. Its labels are
+                // also in the rows' schemas, which is where a `.dendro` takes
+                // identity from, so the frame is dropped.
+                Frame::Index { .. } => {}
 
-                Frame::Rows {
-                    seq,
-                    index_state,
-                    rows,
-                    ..
-                } => {
+                // `index_state` is not checked: a 6.0 agent always names
+                // `NO_INDEX_STATE`, and an older agent's state refers to an
+                // index this subscriber does not keep.
+                Frame::Rows { seq, rows, .. } => {
                     if let Some(last) = self.last_seq {
                         out.gap = seq > last.saturating_add(1);
                     }
                     self.last_seq = Some(seq);
                     out.seq = seq;
-
-                    if !self.resolves(index_state) {
-                        // Rule 10. Counted, not silently dropped: a caller that
-                        // cannot tell a skip from a quiet interval cannot tell
-                        // a broken stream from an idle one.
-                        out.rows_skipped += rows.len();
-                        self.skipped_total += rows.len();
-                        continue;
-                    }
-                    if let Some(now) = rows.iter().map(|r| r.ts).max() {
-                        self.restate_if_due(now, &mut out);
-                    }
                     out.rows.extend(rows);
                 }
 
@@ -311,57 +187,6 @@ impl StreamSubscriber {
         }
 
         Ok(out)
-    }
-
-    /// Write every stream's slot set as `Full` entries stamped `now` once
-    /// [`restate_every`](Self::with_restatement) of producer time has passed
-    /// since the last complete restatement. See [`RESTATE_EVERY`].
-    ///
-    /// The first rows of a connection come after the producer's own `Full`,
-    /// so they only start the clock. Stamped at the rows' own timestamp, and
-    /// pushed after the interval's entries, so the archive orders it after
-    /// whatever the producer said at that tick and a reader replaying it
-    /// finds the set unchanged.
-    fn restate_if_due(&mut self, now: i64, out: &mut Applied) {
-        let Some(last) = self.restated_at else {
-            self.restated_at = Some(now);
-            return;
-        };
-        let every = i64::try_from(self.restate_every.as_nanos()).unwrap_or(i64::MAX);
-        if now.saturating_sub(last) < every {
-            return;
-        }
-        for (stream, entry) in self.index.full_entries() {
-            out.entries.push((stream, now, entry.encode(), true));
-        }
-        self.restated_at = Some(now);
-    }
-
-    /// Whether rows naming `state` can be attributed.
-    fn resolves(&self, state: IndexState) -> bool {
-        if state == dendro::replicate::NO_INDEX_STATE {
-            // The producer keeps no index. Always resolvable, and rezolus's
-            // own producer never sends it — but a relay that does must not
-            // have every row dropped waiting for a `Full` that is not coming.
-            return true;
-        }
-        // The accumulated state hashing to what the rows claim is the whole
-        // test. There is deliberately no "have I seen a Full yet" guard
-        // alongside it, and the difference matters in one case: a producer
-        // whose groups have no slots sends a full state containing no entries,
-        // so no index frame arrives at all, and rows then name the empty
-        // state. A `seen_full` guard would skip every row of such a stream for
-        // the life of the connection, while the hash says — correctly — that
-        // an empty set is what both sides hold.
-        //
-        // It costs nothing elsewhere: a subscriber that joined mid-stream
-        // holds an empty index, and a producer with slots stamps a non-empty
-        // state, so the hashes differ and the rows are skipped exactly as they
-        // should be. dendro's own subscriber carries the extra guard because
-        // an archive publisher may start indexing mid-stream; rezolus's
-        // producer sends each stream's first entry as a `Full`, so that cannot
-        // arise here.
-        state == self.index.state()
     }
 }
 
@@ -645,10 +470,9 @@ impl Subscription {
     /// The next complete interval, or `None` when the agent closed the stream.
     ///
     /// An interval is every frame up to and including a `Rows`, which is what
-    /// the producer emits last — index entries first, then the rows that
-    /// reference them. Waiting for the `Rows` is what makes the batch handed
-    /// to [`StreamSubscriber::apply`] a whole interval rather than a fragment,
-    /// which that method requires.
+    /// the producer emits last. Waiting for the `Rows` is what makes the batch
+    /// handed to [`StreamSubscriber::apply`] a whole interval rather than a
+    /// fragment.
     pub(crate) async fn next_interval(&mut self) -> Result<Option<Applied>, String> {
         loop {
             if let Some(at) = self
@@ -686,11 +510,6 @@ impl Subscription {
         };
         self.pending.extend(self.decoder.push(&chunk)?);
         Ok(true)
-    }
-
-    /// Rows dropped over this subscription's life.
-    pub(crate) fn skipped_total(&self) -> usize {
-        self.subscriber.skipped_total()
     }
 
     /// How often this agent can have anything new to send — its snapshot
@@ -778,12 +597,6 @@ pub(crate) async fn pump(
                 humantime::format_duration(timeout)
             ),
         };
-        // The connection's skip count goes with its obituary: it is the one
-        // number that says whether the rows it did deliver were attributable.
-        let outcome = match sub.skipped_total() {
-            0 => outcome,
-            n => format!("{outcome}; {n} row(s) over the connection named an unheld index state"),
-        };
         if tx.send((idx, StreamEvent::Dropped(outcome))).await.is_err() {
             return;
         }
@@ -826,8 +639,7 @@ pub(crate) async fn pump(
 /// needs to keep. That schema already carries a slotted member's `id` and
 /// identity labels, `__uid__` included: the stream and a scrape are built from
 /// the same `create_v3` pass. So the writer takes occupant identity from it
-/// exactly as it does from a scrape, and the index frames, which repeat those
-/// labels, are not written to a dendro archive.
+/// exactly as it does from a scrape.
 #[derive(Default)]
 pub(crate) struct StreamSchemas {
     /// Per stream, the schema its rows currently align with, by hash.
@@ -916,16 +728,9 @@ impl StreamSchemas {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recorder::index::SourceIndex;
     use std::collections::BTreeMap;
 
     const STREAM: &str = "cpu_usage/cpu_usage_task";
-
-    fn labels(comm: &str) -> BTreeMap<String, String> {
-        [("comm".to_string(), comm.to_string())]
-            .into_iter()
-            .collect()
-    }
 
     fn handshake() -> Frame {
         Frame::Handshake {
@@ -940,22 +745,11 @@ mod tests {
         }
     }
 
-    fn index_frame(stream: &str, entry: &IndexEntry) -> Frame {
-        Frame::Index {
-            source: 0,
-            stream: stream.to_string(),
-            ts: 1_000,
-            kind: entry.kind.into(),
-            state: entry.state,
-            blob: entry.encode(),
-        }
-    }
-
-    fn rows_frame(seq: u64, state: IndexState, n: usize) -> Frame {
+    fn rows_frame(seq: u64, n: usize) -> Frame {
         Frame::Rows {
             source: 0,
             seq,
-            index_state: state,
+            index_state: dendro::replicate::NO_INDEX_STATE,
             rows: (0..n)
                 .map(|i| WalRow {
                     stream: STREAM.to_string(),
@@ -982,11 +776,7 @@ mod tests {
     /// in, in order.
     #[test]
     fn frames_survive_being_split_at_every_byte() {
-        let sent = vec![
-            handshake(),
-            rows_frame(1, dendro::replicate::NO_INDEX_STATE, 2),
-            rows_frame(2, dendro::replicate::NO_INDEX_STATE, 0),
-        ];
+        let sent = vec![handshake(), rows_frame(1, 2), rows_frame(2, 0)];
         let bytes = encoded_stream(&sent);
 
         let mut decoder = FrameDecoder::new();
@@ -1001,10 +791,7 @@ mod tests {
     /// And the other extreme: everything in one chunk.
     #[test]
     fn frames_survive_arriving_all_at_once() {
-        let sent = vec![
-            handshake(),
-            rows_frame(1, dendro::replicate::NO_INDEX_STATE, 1),
-        ];
+        let sent = vec![handshake(), rows_frame(1, 1)];
         let mut decoder = FrameDecoder::new();
         assert_eq!(decoder.push(&encoded_stream(&sent)).unwrap(), sent);
     }
@@ -1049,32 +836,14 @@ mod tests {
         assert!(err.contains("past the"), "{err}");
     }
 
-    /// The ordinary interval: identity first, then the rows that reference it.
+    /// The ordinary interval: a handshake, then rows.
     #[test]
-    fn an_interval_applies_its_entries_and_keeps_its_rows() {
-        let mut producer = SourceIndex::new();
-        let entry = producer
-            .observe(STREAM, vec![(0u32, labels("redis"))])
-            .unwrap();
-
+    fn an_interval_keeps_its_rows() {
         let mut sub = StreamSubscriber::new();
-        let applied = sub
-            .apply(vec![
-                handshake(),
-                index_frame(STREAM, &entry),
-                rows_frame(7, producer.state(), 3),
-            ])
-            .unwrap();
+        let applied = sub.apply(vec![handshake(), rows_frame(7, 3)]).unwrap();
 
         assert_eq!(applied.rows.len(), 3);
-        assert_eq!(applied.rows_skipped, 0);
         assert_eq!(applied.seq, 7);
-        assert_eq!(applied.entries.len(), 1);
-        assert_eq!(applied.entries[0].0, STREAM);
-        assert_eq!(
-            sub.index().stream(STREAM).unwrap().labels(0).unwrap()["comm"],
-            "redis"
-        );
         assert_eq!(
             sub.source().unwrap().clock_anchor_wall_ns,
             1_700_000_000_000_000_000,
@@ -1082,274 +851,37 @@ mod tests {
         );
     }
 
-    /// The producer's connect-time `Full` is flagged as one and a `Delta`
-    /// is not: the flag is what the writer cuts history at, so a `Delta`
-    /// flagged full would let retention delete the `Full` it depends on.
+    /// An agent before 6.0 sends index frames and stamps its rows with its own
+    /// index state. The frames are dropped and the rows kept whatever state
+    /// they name: identity reaches the archive through the schemas.
     #[test]
-    fn entries_carry_whether_they_are_full() {
-        let mut producer = SourceIndex::new();
-        let full = producer
-            .observe(STREAM, vec![(0u32, labels("redis"))])
-            .unwrap();
-        let delta = producer
-            .observe(STREAM, vec![(0u32, labels("valkey"))])
-            .unwrap();
-        assert_eq!((full.kind, delta.kind), (EntryKind::Full, EntryKind::Delta));
-
+    fn an_older_agents_index_frames_are_ignored() {
         let mut sub = StreamSubscriber::new();
         let applied = sub
             .apply(vec![
                 handshake(),
-                index_frame(STREAM, &full),
-                index_frame(STREAM, &delta),
+                Frame::Index {
+                    source: 0,
+                    stream: STREAM.to_string(),
+                    ts: 1_000,
+                    kind: dendro::replicate::IndexKind::Full,
+                    state: (0xdead, 0xbeef),
+                    blob: vec![0x93, 0x01],
+                },
+                Frame::Rows {
+                    source: 0,
+                    seq: 1,
+                    index_state: (0xdead, 0xbeef),
+                    rows: vec![WalRow {
+                        stream: STREAM.to_string(),
+                        ts: 1_000,
+                        wall_offset: 0,
+                        row: vec![0x93, 0x01],
+                    }],
+                },
             ])
             .unwrap();
-        let flags: Vec<bool> = applied.entries.iter().map(|e| e.3).collect();
-        assert_eq!(flags, vec![true, false]);
-    }
-
-    /// A rows frame stamped `ts`.
-    fn rows_frame_at(seq: u64, state: IndexState, ts: i64) -> Frame {
-        Frame::Rows {
-            source: 0,
-            seq,
-            index_state: state,
-            rows: vec![WalRow {
-                stream: STREAM.to_string(),
-                ts,
-                wall_offset: 0,
-                row: vec![0x93, 0x01],
-            }],
-        }
-    }
-
-    /// Every `restate_every` of producer time the subscriber writes the
-    /// whole slot set again, as `Full` entries stamped with the rows that
-    /// tripped it and flagged full — the point at which retention can cut a
-    /// stream's history. The first rows of a connection start the clock
-    /// rather than restating: the producer's own `Full` just preceded them.
-    #[test]
-    fn the_slot_set_is_restated_every_restate_interval() {
-        let mut producer = SourceIndex::new();
-        let a = producer
-            .observe("a/one", vec![(0u32, labels("redis"))])
-            .unwrap();
-        let b = producer
-            .observe("b/two", vec![(3u32, labels("nginx"))])
-            .unwrap();
-        let state = producer.state();
-
-        let mut sub = StreamSubscriber::with_restatement(Duration::from_nanos(1_000));
-        let first = sub
-            .apply(vec![
-                handshake(),
-                index_frame("a/one", &a),
-                index_frame("b/two", &b),
-                rows_frame_at(1, state, 10_000),
-            ])
-            .unwrap();
-        assert_eq!(
-            first.entries.len(),
-            2,
-            "the producer's entries only; the connect-time Full is the restatement"
-        );
-
-        let early = sub.apply(vec![rows_frame_at(2, state, 10_999)]).unwrap();
-        assert!(early.entries.is_empty(), "not due yet: {:?}", early.entries);
-
-        let due = sub.apply(vec![rows_frame_at(3, state, 11_000)]).unwrap();
-        assert_eq!(due.entries.len(), 2, "one Full per stream");
-        for (stream, ts, blob, full) in &due.entries {
-            assert_eq!(*ts, 11_000, "stamped as the rows that tripped it");
-            assert!(*full);
-            let entry = IndexEntry::decode(blob).unwrap();
-            assert_eq!(entry.kind, EntryKind::Full);
-            assert_eq!(entry.state, state, "restates what the producer holds");
-            let expected = producer.stream(stream).unwrap();
-            assert_eq!(entry.slots.len(), expected.len());
-        }
-        assert_eq!(due.rows.len(), 1, "the rows still come through");
-
-        // And the clock restarts from the restatement.
-        let again = sub.apply(vec![rows_frame_at(4, state, 11_999)]).unwrap();
-        assert!(again.entries.is_empty());
-        let again = sub.apply(vec![rows_frame_at(5, state, 12_000)]).unwrap();
-        assert_eq!(again.entries.len(), 2);
-    }
-
-    /// Rows that were skipped under rule 10 do not trip a restatement: the
-    /// set this subscriber holds is not the one those rows were built
-    /// against, and writing it as the truth at that stamp would be wrong.
-    #[test]
-    fn skipped_rows_do_not_restate() {
-        let mut producer = SourceIndex::new();
-        let a = producer
-            .observe(STREAM, vec![(0u32, labels("redis"))])
-            .unwrap();
-        let mut sub = StreamSubscriber::with_restatement(Duration::from_nanos(1));
-        sub.apply(vec![
-            handshake(),
-            index_frame(STREAM, &a),
-            rows_frame_at(1, producer.state(), 10_000),
-        ])
-        .unwrap();
-        let _lost = producer.observe(STREAM, vec![(0u32, labels("valkey"))]);
-        let applied = sub
-            .apply(vec![rows_frame_at(2, producer.state(), 20_000)])
-            .unwrap();
-        assert_eq!(applied.rows_skipped, 1);
-        assert!(applied.entries.is_empty());
-    }
-
-    /// Rule 10. Rows naming a state this subscriber does not hold are dropped,
-    /// because attributing one task's numbers to another is worse than a gap.
-    #[test]
-    fn rows_naming_an_unheld_state_are_skipped_and_counted() {
-        let mut sub = StreamSubscriber::new();
-        let mut producer = SourceIndex::new();
-        let entry = producer
-            .observe(STREAM, vec![(0u32, labels("redis"))])
-            .unwrap();
-        sub.apply(vec![handshake(), index_frame(STREAM, &entry)])
-            .unwrap();
-
-        // The producer moved on; this subscriber never saw the entry that did
-        // it.
-        let _lost = producer.observe(STREAM, vec![(0u32, labels("valkey"))]);
-
-        let applied = sub.apply(vec![rows_frame(8, producer.state(), 4)]).unwrap();
-        assert!(applied.rows.is_empty());
-        assert_eq!(applied.rows_skipped, 4);
-        assert_eq!(sub.skipped_total(), 4);
-    }
-
-    /// A complete restatement is several entries carrying ONE state between
-    /// them — the state after all of them. Checking after each would refuse
-    /// the first, which is what a connecting subscriber always receives.
-    #[test]
-    fn a_restatement_spread_over_several_entries_applies_whole() {
-        let mut producer = SourceIndex::new();
-        producer
-            .observe("a/one", vec![(0u32, labels("x"))])
-            .unwrap();
-        producer
-            .observe("b/two", vec![(0u32, labels("y"))])
-            .unwrap();
-        producer
-            .observe("c/three", vec![(0u32, labels("z"))])
-            .unwrap();
-
-        let full = producer.full_entries();
-        assert_eq!(full.len(), 3);
-        assert!(
-            full.iter().all(|(_, e)| e.state == full[0].1.state),
-            "fixture: a restatement carries one state across its entries"
-        );
-
-        let mut frames = vec![handshake()];
-        frames.extend(full.iter().map(|(s, e)| index_frame(s, e)));
-        frames.push(rows_frame(1, producer.state(), 2));
-
-        let mut sub = StreamSubscriber::new();
-        let applied = sub.apply(frames).unwrap();
-        assert_eq!(
-            applied.rows_skipped, 0,
-            "every entry applied, so the rows attribute"
-        );
-        assert_eq!(applied.rows.len(), 2);
-        assert_eq!(sub.index().state(), producer.state());
-    }
-
-    /// And losing one of those entries still skips the rows, which is the
-    /// property moving the check was not allowed to cost. The accumulated set
-    /// hashes to something other than what the rows name, so they are not
-    /// attributed.
-    #[test]
-    fn losing_one_entry_of_a_restatement_still_skips_the_rows() {
-        let mut producer = SourceIndex::new();
-        producer
-            .observe("a/one", vec![(0u32, labels("x"))])
-            .unwrap();
-        producer
-            .observe("b/two", vec![(0u32, labels("y"))])
-            .unwrap();
-        producer
-            .observe("c/three", vec![(0u32, labels("z"))])
-            .unwrap();
-
-        let full = producer.full_entries();
-        let mut frames = vec![handshake()];
-        // The middle one never arrives.
-        frames.extend(
-            full.iter()
-                .enumerate()
-                .filter(|(i, _)| *i != 1)
-                .map(|(_, (s, e))| index_frame(s, e)),
-        );
-        frames.push(rows_frame(1, producer.state(), 2));
-
-        let mut sub = StreamSubscriber::new();
-        let applied = sub.apply(frames).unwrap();
-        assert_eq!(
-            applied.rows_skipped, 2,
-            "a stream missing from the accumulated set means the rows cannot be attributed"
-        );
-        assert!(applied.rows.is_empty());
-    }
-
-    /// A subscriber that joined mid-stream holds an empty index, and a
-    /// producer with slots stamps a non-empty state, so its rows are not
-    /// attributable and are skipped.
-    #[test]
-    fn rows_from_a_producer_whose_index_we_have_not_received_are_skipped() {
-        let mut producer = SourceIndex::new();
-        producer
-            .observe(STREAM, vec![(0u32, labels("redis"))])
-            .unwrap();
-
-        let mut sub = StreamSubscriber::new();
-        let applied = sub
-            .apply(vec![handshake(), rows_frame(1, producer.state(), 2)])
-            .unwrap();
-        assert_eq!(applied.rows_skipped, 2);
-    }
-
-    /// But a producer whose groups have no slots sends a full state containing
-    /// NO entries, so no index frame arrives and its rows name the empty state.
-    /// Those are attributable — an empty set is what both sides hold — and a
-    /// "have I seen an index entry yet" guard would skip every row of such a
-    /// stream for the life of the connection.
-    #[test]
-    fn rows_from_a_producer_with_no_slots_at_all_are_kept() {
-        let empty = SourceIndex::new();
-        assert!(
-            empty.full_entries().is_empty(),
-            "fixture: a producer with no streams sends no index frames"
-        );
-
-        let mut sub = StreamSubscriber::new();
-        let applied = sub
-            .apply(vec![handshake(), rows_frame(1, empty.state(), 2)])
-            .unwrap();
-        assert_eq!(applied.rows_skipped, 0);
-        assert_eq!(applied.rows.len(), 2);
-    }
-
-    /// A publisher that keeps no secondary index says so, and its rows are
-    /// always resolvable. rezolus's own producer never sends this, but a relay
-    /// might, and waiting for a `Full` that is not coming would drop every row
-    /// for the life of the connection.
-    #[test]
-    fn rows_built_against_no_index_at_all_are_kept() {
-        let mut sub = StreamSubscriber::new();
-        let applied = sub
-            .apply(vec![
-                handshake(),
-                rows_frame(1, dendro::replicate::NO_INDEX_STATE, 2),
-            ])
-            .unwrap();
-        assert_eq!(applied.rows.len(), 2);
-        assert_eq!(applied.rows_skipped, 0);
+        assert_eq!(applied.rows.len(), 1);
     }
 
     /// A gap means intervals produced no frame at all — the subscriber was
@@ -1358,20 +890,12 @@ mod tests {
     #[test]
     fn a_jump_in_seq_is_reported_as_a_gap() {
         let mut sub = StreamSubscriber::new();
-        sub.apply(vec![
-            handshake(),
-            rows_frame(1, dendro::replicate::NO_INDEX_STATE, 1),
-        ])
-        .unwrap();
+        sub.apply(vec![handshake(), rows_frame(1, 1)]).unwrap();
 
-        let contiguous = sub
-            .apply(vec![rows_frame(2, dendro::replicate::NO_INDEX_STATE, 1)])
-            .unwrap();
+        let contiguous = sub.apply(vec![rows_frame(2, 1)]).unwrap();
         assert!(!contiguous.gap);
 
-        let jumped = sub
-            .apply(vec![rows_frame(9, dendro::replicate::NO_INDEX_STATE, 1)])
-            .unwrap();
+        let jumped = sub.apply(vec![rows_frame(9, 1)]).unwrap();
         assert!(
             jumped.gap,
             "seq 2 -> 9 is six intervals that produced nothing"
@@ -1520,8 +1044,7 @@ mod tests {
 
     /// The ordinary interval: every row shares the pass's stamp, so the
     /// writer gets ONE `AgentRows` at that stamp, each row's envelope rebuilt
-    /// from its payload, and the index entries keyed by stream at the same
-    /// stamp.
+    /// from its payload.
     #[test]
     fn an_interval_becomes_one_pass_at_the_producers_stamp() {
         let applied = Applied {
@@ -1530,18 +1053,12 @@ mod tests {
                 wal_row(STREAM, 5_000, 7, payload(2, true, 5_000)),
                 wal_row("b/two", 5_000, 7, payload(1, false, 5_000)),
             ],
-            entries: vec![
-                (STREAM.to_string(), 5_000, vec![1, 2], true),
-                (STREAM.to_string(), 5_000, vec![3], false),
-                ("b/two".to_string(), 5_000, vec![4], true),
-            ],
-            rows_skipped: 0,
             gap: false,
         };
-        let interval = applied.for_writer().unwrap();
+        let passes = applied.for_writer().unwrap();
 
-        assert_eq!(interval.rows.len(), 1, "one pass, not one per row");
-        let pass = &interval.rows[0];
+        assert_eq!(passes.len(), 1, "one pass, not one per row");
+        let pass = &passes[0];
         assert_eq!((pass.ts, pass.wall_offset), (5_000, 7));
         assert_eq!(
             pass.wall_ns, 5_007,
@@ -1557,20 +1074,6 @@ mod tests {
         assert_eq!(pass.rows[0].window, Some((4_500, 5_000)));
         assert_eq!(pass.rows[1].stream, "b/two");
         assert!(pass.rows[1].schema.is_none());
-
-        // Grouped by stream, in the order the entries arrived within a
-        // stream — `caller_rows` numbers same-ts entries by insertion.
-        let row = |ts: u64, blob: Vec<u8>, full: bool| IndexRow { ts, blob, full };
-        assert_eq!(
-            interval.index_entries,
-            vec![
-                (
-                    STREAM.to_string(),
-                    vec![row(5_000, vec![1, 2], true), row(5_000, vec![3], false)]
-                ),
-                ("b/two".to_string(), vec![row(5_000, vec![4], true)]),
-            ]
-        );
     }
 
     /// A frame carrying two stamps is two passes: a relay that batched them
@@ -1584,12 +1087,12 @@ mod tests {
             ],
             ..Applied::default()
         };
-        let interval = applied.for_writer().unwrap();
+        let passes = applied.for_writer().unwrap();
         assert_eq!(
-            interval.rows.iter().map(|p| p.ts).collect::<Vec<_>>(),
+            passes.iter().map(|p| p.ts).collect::<Vec<_>>(),
             vec![5_000, 6_000]
         );
-        assert!(interval.rows.iter().all(|p| p.rows.len() == 1));
+        assert!(passes.iter().all(|p| p.rows.len() == 1));
     }
 
     /// Two rows at one `ts` are one pass whatever their wall offsets say,
@@ -1604,10 +1107,10 @@ mod tests {
             ],
             ..Applied::default()
         };
-        let interval = applied.for_writer().unwrap();
-        assert_eq!(interval.rows.len(), 1);
-        assert_eq!(interval.rows[0].rows.len(), 2);
-        assert_eq!(interval.rows[0].wall_offset, 0, "the first row's stands");
+        let passes = applied.for_writer().unwrap();
+        assert_eq!(passes.len(), 1);
+        assert_eq!(passes[0].rows.len(), 2);
+        assert_eq!(passes[0].wall_offset, 0, "the first row's stands");
     }
 
     /// The archive's `ts` is unsigned. A producer stamping before the epoch
@@ -1620,16 +1123,6 @@ mod tests {
             ..Applied::default()
         };
         let err = rows.for_writer().expect_err("a negative row stamp");
-        assert!(
-            err.contains(STREAM) && err.contains("before the epoch"),
-            "{err}"
-        );
-
-        let entries = Applied {
-            entries: vec![(STREAM.to_string(), -1, vec![1], true)],
-            ..Applied::default()
-        };
-        let err = entries.for_writer().expect_err("a negative entry stamp");
         assert!(
             err.contains(STREAM) && err.contains("before the epoch"),
             "{err}"

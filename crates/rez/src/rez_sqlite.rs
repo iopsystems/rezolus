@@ -166,45 +166,16 @@ const LIVE_WAL_PREDICATE: &str = "recording_id = ?1 AND sampler = ?2 \
             WHERE recording_id = ?1 AND sampler = ?2), \
            0)";
 
-/// One identity index entry on its way into `caller_rows`.
-///
-/// `full` is not stored. The archive keeps the blob opaque, and what the
-/// writer needs the flag for — knowing where a stream's history can be cut
-/// (see [`RezDb::evict_caller_rows_before`]) — it needs while the writer is
-/// running, from what passed through it. A reader that needs the same fact
-/// decodes the blob, which it has to do anyway to use it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IndexRow {
-    pub ts: u64,
-    pub blob: Vec<u8>,
-    /// Whether this entry states the stream's whole slot set (`Full`) rather
-    /// than a change to it (`Delta`).
-    pub full: bool,
-}
-
-/// A tick's index entries, per stream, for `caller_rows`.
-///
-/// The blob is opaque all the way through — the producer encoded it, the
-/// archive stores it, and nothing between decodes it.
-pub type IndexEntries = Vec<(String, Vec<IndexRow>)>;
-
-/// One recording's contribution to one tick: its rows, and the index entries
-/// describing what those rows' slots mean.
-///
-/// The two travel together because they have to commit together — see
-/// [`RezDb::insert_wal_rows_batch`].
+/// One recording's contribution to one tick: its rows.
 #[derive(Debug, Default)]
 pub struct TickBatch {
     pub recording_id: i64,
     pub rows: Vec<WalRow>,
-    /// Per stream, `(ts, blob)` entries for `caller_rows`. The blob is opaque
-    /// here exactly as it is in the archive.
-    pub index_entries: IndexEntries,
 }
 
 impl TickBatch {
     pub fn is_empty(&self) -> bool {
-        self.rows.is_empty() && self.index_entries.iter().all(|(_, r)| r.is_empty())
+        self.rows.is_empty()
     }
 }
 
@@ -1016,22 +987,10 @@ impl RezDb {
     /// atomic across recordings: a crash cannot leave one endpoint's row for
     /// tick N present and another's missing, which is the state a reader
     /// comparing two arms would have to interpret.
-    ///
-    /// A tick's index entries commit here too, in the same transaction as the
-    /// rows they describe. A row names the index state it was built against,
-    /// and a consumer holding a different state skips it — so a crash that
-    /// kept a tick's rows and lost its entries would leave every row of that
-    /// tick unresolvable, which is the one outcome worse than losing the tick
-    /// outright.
     pub fn insert_wal_rows_batch(&mut self, ticks: &[TickBatch]) -> Result<(), String> {
         self.transaction(|tx| {
             for tick in ticks {
                 tx.insert_wal_rows(tick.recording_id, &tick.rows)?;
-                for (stream, rows) in &tick.index_entries {
-                    let rows: Vec<(u64, Vec<u8>)> =
-                        rows.iter().map(|r| (r.ts, r.blob.clone())).collect();
-                    tx.insert_caller_rows(tick.recording_id, stream, &rows)?;
-                }
             }
             Ok(())
         })

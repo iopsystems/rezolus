@@ -28,24 +28,17 @@ use std::sync::Arc;
 unsafe impl plain::Plain for bpf::types::cgroup_info {}
 impl_cgroup_info!(bpf::types::cgroup_info);
 
-/// Every group a cgroup id reaches, paired with the metrics carrying it.
+/// The metrics a cgroup id reaches, one list per acquisition group.
 ///
-/// One id spans several streams, and a subscriber keeps identity per
-/// stream — so each needs its own entry. Pairing them here is what stops a
-/// call site publishing one group's identity under another's name.
-static CGROUP_IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(CGROUP_IDENTITY_GROUPS);
+/// One id spans several groups, and each group's schema carries its own copy
+/// of the labels, so each group's metrics need their own entry.
+static CGROUP_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(CGROUP_IDENTITY_GROUPS);
 
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static CGROUP_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &CGROUP_IDENTITY;
-
-static CGROUP_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[
-    (
-        &CGROUP_CONTEXT_SWITCH_ACQ,
-        &[&CGROUP_SCHEDULER_IVCSW, &CGROUP_SCHEDULER_VCSW],
-    ),
-    (&CGROUP_OFFCPU_ACQ, &[&CGROUP_SCHEDULER_OFFCPU]),
-    (&CGROUP_WAIT_ACQ, &[&CGROUP_SCHEDULER_RUNQUEUE_WAIT]),
+static CGROUP_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[
+    &[&CGROUP_SCHEDULER_IVCSW, &CGROUP_SCHEDULER_VCSW],
+    &[&CGROUP_SCHEDULER_OFFCPU],
+    &[&CGROUP_SCHEDULER_RUNQUEUE_WAIT],
 ];
 
 fn handle_cgroup_info(data: &[u8]) -> i32 {
