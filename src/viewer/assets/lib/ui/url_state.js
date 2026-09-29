@@ -31,9 +31,29 @@ export const VIEW_KEYS = [
     'gpu',
     'cgroup',
     'instance',
+    'family',
     'anchor.baseline',
     'anchor.experiment',
 ];
+
+// `family=sigma:2` (mean ± 2·sd) or `family=envelope` (min..max): the
+// baseline is every attached capture but the experiment, drawn as a band.
+// Absent means a plain A/B.
+export const parseFamily = (s) => {
+    if (typeof s !== 'string' || s === '') return null;
+    if (s === 'envelope') return { kind: 'envelope', k: 2 };
+    const m = /^sigma(?::(\d+(?:\.\d+)?))?$/.exec(s);
+    if (!m) return null;
+    const k = m[1] != null ? Number(m[1]) : 2;
+    return { kind: 'sigma', k: Number.isFinite(k) && k > 0 ? k : 2 };
+};
+
+export const formatFamily = (f) => {
+    if (!f || typeof f !== 'object') return null;
+    if (f.kind === 'envelope') return 'envelope';
+    const k = Number.isFinite(f.k) && f.k > 0 ? f.k : 2;
+    return `sigma:${k}`;
+};
 
 const ANCHOR_PREFIX = 'anchor.';
 const KIND_PREFIX = 'kind:';
@@ -150,6 +170,7 @@ export function parseViewState(search) {
         cgroup: p.getAll('cgroup').filter((c) => c !== ''),
         gpu: p.getAll('gpu').map(parseGpu).filter(Boolean),
         instance: instance ? instance : null,
+        family: parseFamily(p.get('family')),
         anchors,
     };
 }
@@ -192,6 +213,7 @@ export function applyViewState(search, patch = {}) {
         setOrDelete('time', patch.time === 'raw' ? 'raw' : null);
     }
     if ('node' in patch) setOrDelete('node', patch.node);
+    if ('family' in patch) setOrDelete('family', formatFamily(patch.family));
     if ('instance' in patch) setOrDelete('instance', patch.instance == null ? null : String(patch.instance));
     if ('gpu' in patch) {
         setList('gpu', (Array.isArray(patch.gpu) ? patch.gpu : []).map(formatGpu));
@@ -221,6 +243,7 @@ export const CLEAR_PATCH = Object.freeze({
     gpu: [],
     cgroup: [],
     instance: null,
+    family: null,
     anchors: { baseline: null, experiment: null },
 });
 

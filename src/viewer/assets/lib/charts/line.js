@@ -27,6 +27,7 @@ import {
     isStranded,
 } from './boxplot.js';
 import { chartSwatches, renderSwatchRow, SWATCH_ROW_HEIGHT } from './swatches.js';
+import { FAMILY_COLOR } from './util/family_math.js';
 import { executePromQLRangeQuery, applyResultToPlot } from '../data.js';
 
 /**
@@ -265,9 +266,15 @@ export function configureLineChart(chart) {
         // Compare mode: shade the gap between the two overlaid medians (the
         // divergence band) BEHIND the lines, so agreement reads as a thin line
         // and divergence as a widening ribbon. Prepended so its low z draws first.
-        series: chart.spec.divergenceBand
-            ? [...buildDivergenceBand(chart.spec.divergenceBand), ...echartsSeries]
-            : echartsSeries,
+        // Family baseline: the statistic band (mean ± k·sd or min..max over
+        // the family members) behind the mean line and the experiment, in
+        // the family's neutral hue. Same stacked-fill renderer as the
+        // divergence band; the two never appear on one chart.
+        series: chart.spec.familyBand
+            ? [...buildDivergenceBand(chart.spec.familyBand, { color: FAMILY_COLOR, opacity: 0.22, stackId: 'family' }), ...echartsSeries]
+            : (chart.spec.divergenceBand
+                ? [...buildDivergenceBand(chart.spec.divergenceBand), ...echartsSeries]
+                : echartsSeries),
     };
 
     // Multi-series charts get the same legend treatment scatter uses

@@ -1,7 +1,8 @@
 # A baseline built from many recordings
 
 - **Opened:** 2026-09-28
-- **Status:** OPEN — design, nothing built.
+- **Status:** BUILT (this PR), as a viewer setting rather than a CLI
+  selector; see the corrections under the design.
 
 ## Problem
 
@@ -40,6 +41,18 @@ selector must match exactly one recording or the run is refused. The change:
 baseline family. `--experiment` keeps the exactly-one rule. A family of one is
 today's compare mode, so nothing existing changes shape.
 
+*Correction, when built:* the selector was left alone. The N-way overlay
+already attaches every recording of a multi-recording archive as a named
+capture on both backends, so the family needs no new backend state: it is
+**every attached capture except the experiment**, chosen by a "Baseline"
+menu in the compare badge (single capture, or family with the band shape),
+and the CLI's exactly-one rule for `--baseline`/`--experiment` still holds.
+That keeps the server and WASM viewers in parity by construction (nothing
+derived from the archive changed) and drops the whole `.rez`-selection
+surface from the change. A CLI form that names the family by label stays a
+backlog item; today the family is every attached capture but the
+experiment.
+
 **Align every member before aggregating.** Each member is rebased to relative
 time by its own anchor, which is why this depends on
 [event-anchored alignment](2026-09-28-events-ranges-and-alignment.md):
@@ -74,6 +87,25 @@ and it is the first thing to measure.
 thirty look the same and mean different things. The tooltip shows n per
 bucket.
 
+*Built (this PR).* The member count is in the legend, on the mean line's
+name (`family mean ± 2σ (20 members)`), not per bucket in the tooltip;
+per-bucket `n` is computed (`familyBand(...).n`) and left for the tooltip
+work in the backlog. The band itself: `charts/util/family_math.js` is the
+pure part (`resampleLinear` onto the first member's grid, null outside a
+member's range or across a hole in it; `familyBand` with `sigma` as sample
+sd needing two members per bucket, or `envelope`), node-tested.
+`compare.js::overlayLine` builds it when the setting is on and three or
+more captures are attached: the members are the rebased entries other than
+the experiment, so event-anchored alignment applies to each; the spec
+carries `familyBand` plus a two-entry `multiSeries` (the family mean in a
+neutral hue and the experiment), and `line.js` draws the band with the
+same stacked-fill renderer the divergence band uses. The setting lives in
+`notebookStore.family` (`{kind, k}` or null, v3-additive through
+`normalizeFamily`), rides the notebook and report payloads, and in the
+link as `family=sigma:2` / `family=envelope`. With fewer than three
+captures the setting is ignored and the plain overlay stands. Diff and
+side-by-side views are untouched (two captures only, as before).
+
 ## Not in scope
 
 - Storing the family statistic in the archive. It is a view over recordings
@@ -92,9 +124,43 @@ twice the two-capture time. NO-GO on that number means the family statistic
 moves into the backend as one fetch per chart, which is a larger change and a
 new entry.
 
+*Measured (server viewer, developer-mode build, headless Chrome, `#/cpu`,
+time to network idle with charts mounted).* Archives assembled with
+`recording combine` from the A/B parquet fixtures: 2 recordings, 4
+recordings, and 20 copies of one recording.
+
+| archive | first load | switch to family |
+|---|---|---|
+| 2 recordings | 1.3 s | n/a |
+| 4 recordings | 1.7 s | 2.0 s |
+| 20 recordings | 5.4 s | 2.0 s |
+
+The gate as written fails: 20 recordings load in 4.1× the two-capture
+time. But the number is not the family's. The switch to the family view
+costs the same 2.0 s at 4 and at 20 members (most of it the fixed wait for
+network idle after the redraw), and the aggregation runs over data the
+page already holds. The 5.4 s is the N-way overlay's first load, which
+predates this entry: `viewer_core.js` fetches the extra captures one at a
+time per chart (`for (const cap of extras)` with three awaited requests
+each: metadata, the range query, the display query), so a 20-arm archive
+issues 54 sequential round trips per chart. The
+NO-GO branch (move the statistic to the backend) would not touch that
+cost. Verdict: GO for the family band; the load cost is a backlog item on
+the N-way fetch loop, which should issue the per-capture requests in
+parallel. Correctness gates held: 20 identical copies produced a
+zero-width band with `19 members` in the legend, and the 4-recording
+archive drew a min..max band around its three members with the fourth as
+the experiment line.
+
+The WASM viewer was not measured; the frontend is the same and the
+per-capture calls are local, so its number can only be lower on the fetch
+loop.
+
 Correctness gate: a family of identical copies of one recording produces a
-zero-width band; a family with one member reproduces today's compare mode
-pixel for pixel (the `viewer-render` skill).
+zero-width band (held: the 20-copy archive above). The design's second
+gate, "a family of one reproduces today's compare mode", does not apply as
+built: below three captures the setting is ignored and the plain overlay
+stands, which a node test pins.
 
 ## Deferred / Reopen
 

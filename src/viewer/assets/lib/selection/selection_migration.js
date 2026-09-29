@@ -15,7 +15,21 @@ export const defaultSelection = () => ({
     stepOverride: null,
     anchors: { baseline: 0, experiment: 0 },
     chartToggles: {},
+    family: null,
 });
+
+/**
+ * The family-baseline setting, or `null` for a plain A/B: every attached
+ * capture except the experiment forms the baseline, drawn as one band.
+ * `kind` is `'sigma'` (mean ± k·sd) or `'envelope'` (min..max); `k` applies
+ * to sigma only. Still v3: an older viewer ignores the unknown field.
+ */
+export const normalizeFamily = (v) => {
+    if (!v || typeof v !== 'object') return null;
+    const kind = v.kind === 'envelope' ? 'envelope' : 'sigma';
+    const k = Number(v.k);
+    return { kind, k: kind === 'sigma' && Number.isFinite(k) && k > 0 ? k : 2 };
+};
 
 /**
  * One anchor value, in the v3 shape: a finite number (a signed ms offset
@@ -71,5 +85,6 @@ export const migrateSelection = (sel) => {
     if (!out.chartToggles || typeof out.chartToggles !== 'object') {
         out.chartToggles = {};
     }
+    out.family = normalizeFamily(out.family);
     return out;
 };

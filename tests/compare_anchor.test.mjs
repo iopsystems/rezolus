@@ -97,6 +97,55 @@ test('diff views shift the experiment index by the anchor difference in steps', 
     assert.deepEqual(diffTimeShift(CAPTURE_BASELINE, CAPTURE_EXPERIMENT, kind, aTime, []), { k: 0, ok: true });
 });
 
+test('a family baseline draws one band plus its mean, and the experiment over it', () => {
+    const ctx = new CaptureContext();
+    const three = [cap(CAPTURE_BASELINE, S), cap(CAPTURE_EXPERIMENT, S + 10), { ...cap('third', S + 20), valueData: [3, 4, 5, 6] }];
+    const out = renderCompareChart({
+        spec: { opts: { style: 'line' } },
+        captures: three,
+        anchors: {},
+        family: { kind: 'envelope' },
+        captureContext: ctx,
+        captureLabels: {},
+    });
+    assert.equal(out.kind, 'spec');
+    const ms = out.spec.multiSeries;
+    assert.equal(ms.length, 2);
+    assert.equal(ms[0].name, 'family min..max (2 members)');
+    assert.equal(ms[1].name, 'experiment');
+    // Members baseline [1,2,3,4] and third [3,4,5,6] on the same relative grid.
+    assert.deepEqual(out.spec.familyBand.lower, [1, 2, 3, 4]);
+    assert.deepEqual(out.spec.familyBand.upper, [3, 4, 5, 6]);
+    assert.deepEqual(ms[0].valueData, [2, 3, 4, 5]);
+    assert.equal(out.spec.divergenceBand, undefined);
+    // A capture with no data for this chart is not a member and cannot
+    // displace the experiment: the experiment is found by id, not index.
+    const four = [{ id: CAPTURE_BASELINE, timeData: [], valueData: [] }, ...three.slice(1), { ...cap('fourth', S + 30), valueData: [5, 6, 7, 8] }];
+    const gap = renderCompareChart({
+        spec: { opts: { style: 'line' } },
+        captures: four,
+        anchors: {},
+        family: { kind: 'envelope' },
+        captureContext: ctx,
+        captureLabels: {},
+    });
+    assert.equal(gap.spec.multiSeries[1].name, 'experiment');
+    assert.equal(gap.spec.multiSeries[0].name, 'family min..max (2 members)');
+    assert.deepEqual(gap.spec.familyBand.lower, [3, 4, 5, 6]);
+    assert.deepEqual(gap.spec.familyBand.upper, [5, 6, 7, 8]);
+    // Two captures: the setting is ignored and the plain overlay stands.
+    const two = renderCompareChart({
+        spec: { opts: { style: 'line' } },
+        captures: three.slice(0, 2),
+        anchors: {},
+        family: { kind: 'envelope' },
+        captureContext: ctx,
+        captureLabels: {},
+    });
+    assert.equal(two.spec.multiSeries.length, 2);
+    assert.equal(two.spec.familyBand, undefined);
+});
+
 test('without a context, the legacy first-sample rule holds', () => {
     const out = renderCompareChart({
         spec: { opts: { style: 'line' } },

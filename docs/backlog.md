@@ -1254,12 +1254,25 @@ Source: [Events as ranges, phases, and alignment anchors](journal/2026-09-28-eve
 
 Source: [A baseline built from many recordings](journal/2026-09-28-baseline-from-many-recordings.md).
 
-- **`--baseline` may match a set** — Open. The match set is the family; each
-  member rebased by its own anchor, bucketed to one value per member per
-  bucket over the decimated wire, drawn as mean ± kσ or min/max with member
-  count in the tooltip. Spread view only, never overlaid with the measurement
-  band. *Gate:* 20-member dashboard load ≤ 2× the two-capture time in both
-  backends, else aggregation moves to the backend (new entry).
+- **Family baseline** — **DONE**, as a viewer setting rather than a
+  `--baseline` set selector: with three or more captures the compare
+  badge's "Baseline" menu makes every capture but the experiment one band
+  (`charts/util/family_math.js`, `compare.js::overlayLine`), mean ± kσ or
+  min..max over the first member's grid, member count in the legend,
+  `family=` in the link. Spread view only.
+- **N-way extra captures are fetched one at a time per chart** — Open (bug,
+  pre-existing, measured). `viewer_core.js` awaits three requests per extra
+  capture in sequence (metadata, range query, display query), so a
+  20-recording archive takes 5.4 s to first load
+  against 1.3 s for two (measured on `#/cpu`, server viewer). Issue the
+  per-capture requests in parallel, bounded, and the family band's gate is
+  met as written.
+- **Family named by label from the CLI** (`--baseline arm=nightly` matching
+  many) — Open, no demand yet: today the family is every attached capture
+  but the experiment, and `combine`/a multi-recording `.rez` decides what
+  is attached.
+- **Per-bucket member count in the tooltip** — Open. `familyBand(...).n` is
+  computed; the tooltip does not show it.
 - **Family over heatmaps and percentile charts** — Open. *Reopen:* after the
   line case.
 

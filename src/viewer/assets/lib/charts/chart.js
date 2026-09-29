@@ -326,6 +326,16 @@ function multiSeriesDiffers(a, b) {
     return false;
 }
 
+// Compare two family bands for a change worth a reconfigure: presence,
+// shape (kind, k, member count) or the bounds themselves, compared
+// element-wise (a redraw rebuilds equal arrays, which must read as same).
+function familyBandDiffers(a, b) {
+    if (a === b) return false;
+    if (!a || !b) return true;
+    if (a.kind !== b.kind || a.k !== b.k || a.members !== b.members) return true;
+    return !shallowSameShape([a.lower], [b.lower]) || !shallowSameShape([a.upper], [b.upper]);
+}
+
 // Chart component - uses echarts to render a chart
 export class Chart {
     constructor(vnode) {
@@ -412,7 +422,11 @@ export class Chart {
         // chart types either don't set series_names or keep the same
         // ref across renders, so this is a no-op for them.)
         const seriesNamesChanged = oldSpec.series_names !== this.spec.series_names;
-        if (this.echart && (dataChanged || timeDataChanged || multiSeriesChanged || formatChanged || themeChanged || seriesNamesChanged)) {
+        // The family band: switching k, or sigma to envelope, leaves the
+        // mean line and the experiment as they were and changes only the
+        // band, which none of the terms above see.
+        const familyBandChanged = familyBandDiffers(oldSpec.familyBand, this.spec.familyBand);
+        if (this.echart && (dataChanged || timeDataChanged || multiSeriesChanged || formatChanged || themeChanged || seriesNamesChanged || familyBandChanged)) {
             this._themeVersion = themeVersion;
             this.configureChartByType();
             this._applyEventMarkers({ reconfigured: true });

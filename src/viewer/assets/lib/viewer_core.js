@@ -507,7 +507,7 @@ export const CompareChartWrapper = {
             }
         }
 
-        const { spec, chartsState, interval, anchors, toggles, setChartToggle, captureLabels, categoryMembers } = vnode.attrs;
+        const { spec, chartsState, interval, anchors, family, toggles, setChartToggle, captureLabels, categoryMembers } = vnode.attrs;
 
         if (vnode.state.error) {
             return m('div.chart-error', `compare error: ${vnode.state.error}`);
@@ -612,6 +612,9 @@ export const CompareChartWrapper = {
             spec,
             captures: [baselineCap, experimentCap, ...extraCaps],
             anchors: anchors || { baseline: 0, experiment: 0 },
+            // The family-baseline setting (null for a plain A/B): every
+            // capture but the experiment forms the baseline, drawn as a band.
+            family: family || null,
             // Per-capture events and recording starts, for anchors that name
             // an event kind. Filled by app.js when compare mode starts.
             captureContext,
@@ -659,7 +662,7 @@ export function createGroupComponent(getState) {
             const state = getState();
             const {
                 chartsState, heatmapEnabled, heatmapLoading, heatmapDataCache,
-                compareMode, toggles, setChartToggle, anchors, experimentQueryRange,
+                compareMode, toggles, setChartToggle, anchors, family, experimentQueryRange,
                 baselineAlias, experimentAlias,
             } = state;
             const captureLabels = {
@@ -728,6 +731,7 @@ export function createGroupComponent(getState) {
                     chartsState,
                     interval,
                     anchors,
+                    family,
                     toggles,
                     setChartToggle,
                     sectionRoute,
