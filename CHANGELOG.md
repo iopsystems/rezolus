@@ -2,6 +2,13 @@
 
 ### Added
 
+- `filesystem` sampler: for each ext4 filesystem, `filesystem_errors` (the
+  superblock's persisted error count, from sysfs `errors_count`) and
+  `filesystem_written_bytes` (lifetime bytes written to the block device,
+  journal included, from sysfs `lifetime_write_kbytes`), read on the existing
+  60 s sweep and absent on other filesystem types. The Filesystem dashboard
+  gains Device Writes and Errors cards.
+
 - `syscall_counts` / `syscall_latency`: a `sync` class (`op="sync"`) for
   `fsync`, `fdatasync`, `sync`, `syncfs` and `msync`, split out of the
   `filesystem` and `memory` classes so their latency, a device round trip,

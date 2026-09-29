@@ -1,10 +1,13 @@
 //! Occupancy and read-only state of local filesystems, one series per
 //! superblock, sampled from `/proc/self/mountinfo` and `fstatvfs`: total, free
 //! and available bytes, total and free inodes, and the superblock read-only flag.
+//! For an ext4 filesystem the same sweep also reads its sysfs error count and
+//! lifetime device writes from `/sys/fs/ext4/<block_device>/`.
 //!
 //! ```text
 //! mountinfo -> resolve visible mounts / classify -> assign slots
 //!           -> open / verify mount id / fstatvfs -> gauges -> window
+//!           -> (ext4) /sys/fs/ext4/<block_device>/{errors_count,lifetime_write_kbytes}
 //! ```
 //!
 //! # Scope and blocking
@@ -62,10 +65,15 @@ const MOUNTINFO: &str = "/proc/self/mountinfo";
 
 const SYS_DEV_BLOCK: &str = "/sys/dev/block";
 
+/// ext4's per-filesystem sysfs directory, one entry per mounted filesystem
+/// named by its block device (`/sys/fs/ext4/nvme0n1p5/`).
+const SYS_FS_EXT4: &str = "/sys/fs/ext4";
+
 /// A sweep still running after this many intervals is reported as stuck.
 const STUCK_INTERVALS: u32 = 3;
 
 use crate::agent::*;
+use metriken::CounterGroup;
 use metriken::GaugeGroup;
 
 use std::collections::HashMap;
@@ -91,7 +99,12 @@ static GROUPS: &[&GaugeGroup] = &[
     &FILESYSTEM_INODES_TOTAL,
     &FILESYSTEM_INODES_FREE,
     &FILESYSTEM_READONLY,
+    &FILESYSTEM_ERRORS,
 ];
+
+// The one counter family, cleared and relabeled alongside GROUPS. Kept apart
+// because a CounterGroup's absent sentinel is u64::MAX, not i64::MIN.
+static COUNTER_GROUPS: &[&CounterGroup] = &[&FILESYSTEM_WRITTEN_BYTES];
 
 /// What a filesystem slot means. Unlike a GPU or a drive this genuinely moves
 /// at runtime — a mount appears, a filesystem is unmounted and its slot is
@@ -112,6 +125,8 @@ static MOUNT_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
         &FILESYSTEM_INODES_TOTAL,
         &FILESYSTEM_INODES_FREE,
         &FILESYSTEM_READONLY,
+        &FILESYSTEM_ERRORS,
+        &FILESYSTEM_WRITTEN_BYTES,
     ],
 )];
 
@@ -201,6 +216,33 @@ pub fn read_usage(path: &str, mount_id: u64) -> std::io::Result<Usage> {
         total_inodes: st.f_files as u64,
         free_inodes: st.f_ffree as u64,
     })
+}
+
+/// What ext4 exports about one filesystem in `/sys/fs/ext4/<block_device>/`.
+/// Each field is `None` when its file is missing or unparsable, so a kernel
+/// lacking one attribute leaves the other readable.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Ext4Sysfs {
+    /// `errors_count`: errors recorded in the superblock since e2fsck last
+    /// cleared them.
+    pub errors: Option<u64>,
+    /// `lifetime_write_kbytes` in bytes: device writes over the filesystem's
+    /// life, journal included.
+    pub written_bytes: Option<u64>,
+}
+
+/// Read one ext4 filesystem's sysfs attributes from `dir/<block_device>/`.
+/// Two small reads of kernel-generated text, once per sweep per ext4 mount;
+/// neither can block on a device.
+pub fn read_ext4_sysfs(dir: &Path, block_device: &str) -> Ext4Sysfs {
+    let attr = |name: &str| -> Option<u64> {
+        let text = std::fs::read_to_string(dir.join(block_device).join(name)).ok()?;
+        text.trim().parse().ok()
+    };
+    Ext4Sysfs {
+        errors: attr("errors_count"),
+        written_bytes: attr("lifetime_write_kbytes").map(|kb| kb.saturating_mul(1024)),
+    }
 }
 
 /// One slot per `major:minor` device id while mounted; freed slots are reused.
@@ -353,13 +395,22 @@ impl Filesystem {
 }
 
 fn vacate(slot: usize) {
+    unset(slot);
+    // And say so. A subscriber not told keeps attributing rows to a filesystem
+    // that is no longer mounted, and the slot is reusable immediately.
+    MOUNT_IDENTITY.clear(slot);
+}
+
+/// Every value family reads absent for `slot`; labels and identity stay.
+fn unset(slot: usize) {
     for group in GROUPS {
         // Must use the absent sentinel, not zero, when a filesystem leaves.
         let _ = group.set(slot, i64::MIN);
     }
-    // And say so. A subscriber not told keeps attributing rows to a filesystem
-    // that is no longer mounted, and the slot is reusable immediately.
-    MOUNT_IDENTITY.clear(slot);
+    for group in COUNTER_GROUPS {
+        // u64::MAX is CounterGroup's never-written sentinel.
+        let _ = group.set(slot, u64::MAX);
+    }
 }
 
 fn label(slot: usize, mount: &MountEntry, block_device: Option<&str>) {
@@ -497,7 +548,13 @@ fn sweep_table(state: &mut SweepState, path: &str) -> usize {
         if let Err(e) = &read {
             debug!("{NAME}: statvfs {} failed: {e}", mount.mount_point);
         }
-        reads.push((slot, mount.readonly, read));
+        // sysfs names the directory after the block device, the same link
+        // the label resolves; a filesystem without one has no directory.
+        let ext4 = (mount.fstype == "ext4")
+            .then(|| block_device_name(Path::new(SYS_DEV_BLOCK), &mount.device))
+            .flatten()
+            .map(|name| read_ext4_sysfs(Path::new(SYS_FS_EXT4), &name));
+        reads.push((slot, mount.readonly, read, ext4));
     }
     let published = publish(&reads);
 
@@ -521,14 +578,18 @@ fn sweep_table(state: &mut SweepState, path: &str) -> usize {
     published
 }
 
+/// One mount's sweep result: its slot, superblock read-only flag, statvfs
+/// reading, and its ext4 sysfs attributes (`None` off ext4).
+type Reading = (usize, bool, std::io::Result<Usage>, Option<Ext4Sysfs>);
+
 /// Publish one sweep's reads and return how many succeeded.
 ///
 /// When anything succeeded, failed slots are unset so the fresh window never
 /// pairs with stale values. When nothing did, the caller keeps the previous
 /// window, and failed slots must keep the values that window describes.
-fn publish(reads: &[(usize, bool, std::io::Result<Usage>)]) -> usize {
-    let published = reads.iter().filter(|(_, _, read)| read.is_ok()).count();
-    for (slot, readonly, read) in reads {
+fn publish(reads: &[Reading]) -> usize {
+    let published = reads.iter().filter(|(_, _, read, _)| read.is_ok()).count();
+    for (slot, readonly, read, ext4) in reads {
         let slot = *slot;
         match read {
             Ok(usage) => {
@@ -541,12 +602,12 @@ fn publish(reads: &[(usize, bool, std::io::Result<Usage>)]) -> usize {
                 // From the superblock options, not statvfs `f_flag`: its
                 // ST_RDONLY is also set by this path's own mount flag.
                 let _ = FILESYSTEM_READONLY.set(slot, i64::from(*readonly));
+                // Absent, not 0, off ext4 or when the attribute is missing.
+                let ext4 = ext4.unwrap_or_default();
+                let _ = FILESYSTEM_ERRORS.set(slot, ext4.errors.map_or(i64::MIN, gauge));
+                let _ = FILESYSTEM_WRITTEN_BYTES.set(slot, ext4.written_bytes.unwrap_or(u64::MAX));
             }
-            Err(_) if published > 0 => {
-                for group in GROUPS {
-                    let _ = group.set(slot, i64::MIN);
-                }
-            }
+            Err(_) if published > 0 => unset(slot),
             Err(_) => {}
         }
     }
@@ -704,11 +765,74 @@ mod tests {
             );
         }
 
+        assert!(FILESYSTEM_WRITTEN_BYTES.set(slot, 7));
+
         vacate(slot);
         for group in GROUPS {
             assert_eq!(group.value(slot), None, "value must read absent, not zero");
             assert!(group.load_metadata(slot).is_none_or(|m| m.is_empty()));
         }
+        assert_eq!(
+            FILESYSTEM_WRITTEN_BYTES.value(slot),
+            None,
+            "the counter must read absent, not zero"
+        );
+    }
+
+    #[test]
+    fn ext4_sysfs_attributes_are_read_per_block_device_and_absent_when_missing() {
+        let sys = tempfile::tempdir().unwrap();
+        let dir = sys.path().join("sdz1");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("errors_count"), "3\n").unwrap();
+        std::fs::write(dir.join("lifetime_write_kbytes"), "2048\n").unwrap();
+        assert_eq!(
+            read_ext4_sysfs(sys.path(), "sdz1"),
+            Ext4Sysfs {
+                errors: Some(3),
+                written_bytes: Some(2 * 1024 * 1024),
+            }
+        );
+        // No directory: the device is not ext4, or sysfs is not mounted.
+        assert_eq!(read_ext4_sysfs(sys.path(), "sdz2"), Ext4Sysfs::default());
+        // One attribute missing or unparsable leaves the other readable.
+        std::fs::write(dir.join("errors_count"), "not a number\n").unwrap();
+        assert_eq!(
+            read_ext4_sysfs(sys.path(), "sdz1"),
+            Ext4Sysfs {
+                errors: None,
+                written_bytes: Some(2 * 1024 * 1024),
+            }
+        );
+    }
+
+    #[test]
+    fn ext4_attributes_publish_beside_usage_and_read_absent_off_ext4() {
+        let _globals = SWEEP_GLOBALS.lock().unwrap_or_else(|p| p.into_inner());
+        let (ext4, xfs) = (MAX_MOUNTS - 4, MAX_MOUNTS - 5);
+        let usage = Usage {
+            total_bytes: 7,
+            free_bytes: 7,
+            available_bytes: 7,
+            total_inodes: 7,
+            free_inodes: 7,
+        };
+        let attrs = Ext4Sysfs {
+            errors: Some(2),
+            written_bytes: Some(4096),
+        };
+        assert_eq!(
+            publish(&[
+                (ext4, false, Ok(usage), Some(attrs)),
+                (xfs, false, Ok(usage), None)
+            ]),
+            2
+        );
+        assert_eq!(FILESYSTEM_ERRORS.value(ext4), Some(2));
+        assert_eq!(FILESYSTEM_WRITTEN_BYTES.value(ext4), Some(4096));
+        assert_eq!(FILESYSTEM_ERRORS.value(xfs), None, "absent off ext4, not 0");
+        assert_eq!(FILESYSTEM_WRITTEN_BYTES.value(xfs), None);
+        assert_eq!(FILESYSTEM_TOTAL.value(xfs), Some(7));
     }
 
     /// Verifies gauges, labels and the acquisition window for a readable local
@@ -746,6 +870,19 @@ mod tests {
         assert!(FILESYSTEM_READONLY
             .value(slot)
             .is_some_and(|v| v == 0 || v == 1));
+        if mount.fstype == "ext4" && Path::new(SYS_FS_EXT4).is_dir() {
+            assert!(
+                FILESYSTEM_ERRORS.value(slot).is_some(),
+                "ext4 errors_count read"
+            );
+            assert!(
+                FILESYSTEM_WRITTEN_BYTES.value(slot).is_some(),
+                "ext4 lifetime_write_kbytes read"
+            );
+        } else {
+            assert_eq!(FILESYSTEM_ERRORS.value(slot), None);
+            assert_eq!(FILESYSTEM_WRITTEN_BYTES.value(slot), None);
+        }
         let labels = FILESYSTEM_TOTAL.load_metadata(slot).expect("labels set");
         assert_eq!(
             labels.get("mount").map(String::as_str),
@@ -917,11 +1054,14 @@ mod tests {
         };
         let missing = || -> std::io::Result<Usage> { Err(std::io::ErrorKind::NotFound.into()) };
         assert_eq!(
-            publish(&[(kept, false, Ok(usage)), (unset, false, Ok(usage))]),
+            publish(&[
+                (kept, false, Ok(usage), None),
+                (unset, false, Ok(usage), None)
+            ]),
             2
         );
 
-        assert_eq!(publish(&[(kept, false, missing())]), 0);
+        assert_eq!(publish(&[(kept, false, missing(), None)]), 0);
         assert_eq!(
             FILESYSTEM_TOTAL.value(kept),
             Some(7),
@@ -929,7 +1069,10 @@ mod tests {
         );
 
         assert_eq!(
-            publish(&[(kept, false, Ok(usage)), (unset, false, missing())]),
+            publish(&[
+                (kept, false, Ok(usage), None),
+                (unset, false, missing(), None)
+            ]),
             1
         );
         assert_eq!(

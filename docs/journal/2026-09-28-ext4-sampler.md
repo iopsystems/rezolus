@@ -685,9 +685,11 @@ orders of magnitude below the fsync rate the phase 1 bench measured at
 - **Fast commit** (`ext4_fc_*`) — By design, off by default in ext4. Reopen if
   a fleet enables `fast_commit`.
 - **sysfs `errors_count` and `lifetime_write_kbytes` in the `filesystem` sweep**
-  — Open. Works on every kernel, rides the existing 60 s off-cycle sweep, and
-  the `block_device` name is already resolved per mount. Smaller than the BPF
-  sampler and independent of it.
+  — Done. `filesystem_errors` and `filesystem_written_bytes`, read by
+  `read_ext4_sysfs` for each ext4 mount on the sweep
+  (`src/agent/samplers/filesystem/linux/mod.rs`), absent on other types. Two
+  sysfs text reads per ext4 mount per sweep; the sweep's phase log line
+  still brackets them under "statvfs+publish".
 - **Per-page and per-reservation writeback hooks** — Idea. `ext4_da_write_pages`,
   `ext4_da_reserve_space`, `ext4__write_begin`; rate-gated.
 - **jbd2 counts include ocfs2** — By design until phase 3, where slots are

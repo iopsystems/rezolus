@@ -918,9 +918,9 @@ The entry specifies `ext4_journal` (phase 1, implemented and measured),
   per-CPU/per-cgroup counters; `COUNTER_GROUP_WIDTH` 16 → 24 in both syscall
   BPF programs. No new probe.
 - **sysfs `errors_count` and `lifetime_write_kbytes` in the `filesystem` sweep**
-  — Open. `/sys/fs/ext4/<block_device>/` per ext4 mount, read on the existing
-  60 s off-cycle sweep (`src/agent/samplers/filesystem/linux/mod.rs`). Works on
-  kernels the BPF sampler cannot run on.
+  — DONE. `filesystem_errors` and `filesystem_written_bytes` per ext4 mount,
+  read by `read_ext4_sysfs` on the existing 60 s off-cycle sweep
+  (`src/agent/samplers/filesystem/linux/mod.rs`); absent on other types.
 - **Per-filesystem sync latency** — Roadmap. Needs histogram groups with slots
   (above, after 6.0) plus a per-thread start map: the `MAX_PID` array
   (32 MB, as `syscall_latency`) or `BPF_MAP_TYPE_TASK_STORAGE` once the kernel
