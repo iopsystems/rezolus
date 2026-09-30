@@ -57,8 +57,16 @@ impl LiveReader {
     }
 
     /// Reopen the archive, so rows committed since the last open are read.
+    ///
+    /// Opening an archive that is not finalized logs a warning, which the
+    /// first [`open`](Self::open) keeps. A live archive is never finalized,
+    /// so a refresh reopens with logging off rather than repeat it on every
+    /// interval; a reopen that fails is still returned as `Err`.
     pub fn refresh(&self) -> Result<(), Error> {
-        let (_, reader) = pick(&self.path, Some(&self.labels), &self.pool)?;
+        let (_, reader) = tracing::subscriber::with_default(
+            tracing::subscriber::NoSubscriber::default(),
+            || pick(&self.path, Some(&self.labels), &self.pool),
+        )?;
         *self.current.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(reader);
         Ok(())
     }
