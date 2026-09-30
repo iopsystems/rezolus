@@ -38,6 +38,7 @@ mod proxy_allow;
 
 mod ab_extract;
 mod actions;
+mod live;
 pub(crate) mod metadata;
 mod report_save;
 mod report_save_rez;
@@ -1167,13 +1168,20 @@ fn init_live_mode(
     pool: Arc<metriken_query::BufferPool>,
 ) -> AppState {
     info!("Connecting to live agent at {url}...");
-    let info = rt.block_on(async {
+    let (info, session) = rt.block_on(async {
         let client = Client::builder()
             .http1_only()
             .build()
             .expect("failed to create http client");
-        match actions::fetch_agent_info(&client, url).await {
+        let info = match actions::fetch_agent_info(&client, url).await {
             Ok(i) => i,
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        };
+        match live::LiveSession::start(&client, url, info.clone(), Arc::clone(&pool)).await {
+            Ok(session) => (info, session),
             Err(e) => {
                 eprintln!("{e}");
                 std::process::exit(1);
@@ -1181,36 +1189,18 @@ fn init_live_mode(
         }
     });
     info!(
-        "Connected to {source} {version} at {url}",
+        "Recording {source} {version} at {url} from its replication stream",
         source = info.source,
         version = info.version
     );
 
-    let store = metriken_query::MemoryStore::builder()
-        .source(info.source.clone())
-        .version(info.version.clone())
-        .sampling_interval_ms(1000)
-        .filename(url.to_string())
-        .build();
-    let store_arc: std::sync::Arc<dyn metriken_query::MetricsSource> =
-        std::sync::Arc::new(store.clone());
-    let state = AppState::with_pool(store_arc, registry.clone(), pool);
+    let state = AppState::with_pool(session.reader(), registry.clone(), pool);
     let context = dashboard::dashboard::build_dashboard_context(None, &[], None, &[]);
     *state.sections.write() = state::LazySectionStore::new(context);
+    *state.parquet_path.write() = Some(session.path().to_path_buf());
+    *state.live_session.lock() = Some(session);
     state.live.store(true, Ordering::Relaxed);
     state.captures.set_baseline_systeminfo(info.sysinfo);
-
-    let ingest_snapshots = state.snapshots.clone();
-    let mut ingest_url = url.clone();
-    ingest_url.set_path("/metrics/binary");
-
-    rt.spawn(actions::ingest_loop(
-        ingest_url,
-        store,
-        ingest_snapshots,
-        info.source,
-        info.version,
-    ));
 
     state
 }

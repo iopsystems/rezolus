@@ -5,7 +5,7 @@
 //! `ApiResponse`, `CaptureParam`) live here too because they're the
 //! HTTP-level scaffolding the handlers all touch.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -109,8 +109,9 @@ pub struct AppState {
     /// compare-mode hand-off has attached one.
     pub captures: Arc<CaptureRegistry>,
     pub templates: TemplateRegistry,
-    /// Raw msgpack snapshot bytes for parquet export (live mode only).
-    pub snapshots: Arc<Mutex<VecDeque<Vec<u8>>>>,
+    /// The live agent being recorded (live mode only). Its temporary archive
+    /// is the capture's data and what a save copies.
+    pub live_session: Mutex<Option<super::live::LiveSession>>,
     pub live: AtomicBool,
     /// Original parquet file path (file mode only).
     pub parquet_path: RwLock<Option<PathBuf>>,
@@ -150,7 +151,7 @@ impl AppState {
             sections: Default::default(),
             captures: Arc::new(CaptureRegistry::new(data, None, None, None)),
             templates,
-            snapshots: Arc::new(Mutex::new(VecDeque::new())),
+            live_session: Mutex::new(None),
             live: AtomicBool::new(false),
             parquet_path: RwLock::new(None),
             experiment_parquet_path: RwLock::new(None),

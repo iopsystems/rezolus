@@ -51,7 +51,7 @@ pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
         .route("/metadata", get(metadata))
         .route("/mode", get(mode))
         .route("/reset", axum::routing::post(actions::reset_tsdb))
-        .route("/save", get(actions::save_parquet))
+        .route("/save", get(actions::save_capture))
         .route("/systeminfo", get(systeminfo_handler))
         .route("/selection", get(selection_handler))
         .route("/sections", get(sections_handler))

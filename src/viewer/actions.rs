@@ -2,22 +2,19 @@
 //! and detach, live agent connect, parquet save) plus the live-mode
 //! ingest loop.
 
-use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Json, Response};
 use http::{header, StatusCode};
-use parking_lot::Mutex;
 use reqwest::{Client, Url};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
-use metriken_query::{MemoryStore, MetricsSource, ParquetReader};
+use metriken_query::{MetricsSource, ParquetReader};
 
 use super::capture_registry::CaptureId;
 use super::metadata::{
@@ -29,83 +26,6 @@ use super::state::{ApiResponse, AppState, LazySectionStore};
 use ::dashboard;
 
 // ── Snapshot ingest (live mode) ───────────────────────────────────────
-
-/// Background task that polls a live agent and ingests snapshots.
-pub async fn ingest_loop(
-    url: Url,
-    store: MemoryStore,
-    snapshots: Arc<Mutex<VecDeque<Vec<u8>>>>,
-    source: String,
-    version: String,
-) {
-    let client = match Client::builder().http1_only().build() {
-        Ok(c) => c,
-        Err(e) => {
-            error!("failed to create http client: {e}");
-            return;
-        }
-    };
-
-    // source/version/interval already set during construction; update in case
-    // they changed (connect_agent path).
-    store.set_source(&source);
-    store.set_version(&version);
-    store.set_sampling_interval_ms(1000);
-
-    let interval_duration = Duration::from_secs(1);
-    let mut interval = crate::common::aligned_interval(interval_duration);
-    let mut sample_count: u64 = 0;
-
-    loop {
-        interval.tick().await;
-
-        let start = Instant::now();
-        let response = match client.get(url.clone()).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("failed to fetch metrics: {e}");
-                continue;
-            }
-        };
-        let body = match response.bytes().await {
-            Ok(b) => b,
-            Err(e) => {
-                warn!("failed to read response body: {e}");
-                continue;
-            }
-        };
-
-        debug!("sampling latency: {} us", start.elapsed().as_micros());
-
-        // `Snapshot::from_msgpack`, not a bare `from_slice`: depth-capped,
-        // trailing-byte-checked decode for the same reason the recorder's
-        // and hindsight's ingest paths use it — this is an always-on poll of
-        // whatever msgpack endpoint the viewer was pointed at.
-        let snapshot: metriken_exposition::Snapshot =
-            match metriken_exposition::Snapshot::from_msgpack(&body) {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!("failed to deserialize snapshot: {e}");
-                    continue;
-                }
-            };
-
-        store.ingest_snapshot(snapshot);
-        sample_count += 1;
-
-        snapshots.lock().push_back(body.to_vec());
-
-        if sample_count <= 5 || sample_count.is_multiple_of(60) {
-            debug!(
-                "ingested {} samples, counters: {}, gauges: {}, histograms: {}",
-                sample_count,
-                store.counter_names().len(),
-                store.gauge_names().len(),
-                store.histogram_names().len(),
-            );
-        }
-    }
-}
 
 /// Fetch the agent banner (`source version`) and `/systeminfo`. Used by
 /// CLI startup and the runtime `/api/v1/connect` handler.
@@ -140,6 +60,7 @@ pub async fn fetch_agent_info(client: &Client, url: &Url) -> Result<AgentInfo, S
     })
 }
 
+#[derive(Clone)]
 pub struct AgentInfo {
     pub source: String,
     pub version: String,
@@ -622,31 +543,29 @@ pub async fn connect_agent(
         Err(e) => return ApiResponse::err(e, "connection_error"),
     };
 
-    let new_store = MemoryStore::builder()
-        .source(info.source.clone())
-        .version(info.version.clone())
-        .sampling_interval_ms(1000)
-        .filename(url.to_string())
-        .build();
-    let new_store_arc: Arc<dyn MetricsSource> = Arc::new(new_store.clone());
-    let context = dashboard::dashboard::build_dashboard_context(None, &[], None, &[]);
-
-    state.replace_baseline(new_store_arc);
-    *state.sections.write() = LazySectionStore::new(context);
-    state.captures.set_baseline_systeminfo(info.sysinfo);
-    state.live.store(true, Ordering::Relaxed);
-
-    let ingest_snapshots = state.snapshots.clone();
-    let mut ingest_url = url.clone();
-    ingest_url.set_path("/metrics/binary");
-
-    tokio::spawn(ingest_loop(
-        ingest_url,
-        new_store,
-        ingest_snapshots,
+    let (source, version, sysinfo) = (
         info.source.clone(),
         info.version.clone(),
-    ));
+        info.sysinfo.clone(),
+    );
+    let session =
+        match super::live::LiveSession::start(&client, &url, info, Arc::clone(&state.pool)).await {
+            Ok(session) => session,
+            Err(e) => return ApiResponse::err(e, "connection_error"),
+        };
+    let context = dashboard::dashboard::build_dashboard_context(None, &[], None, &[]);
+
+    state.replace_baseline(session.reader());
+    *state.parquet_path.write() = Some(session.path().to_path_buf());
+    *state.live_session.lock() = Some(session);
+    *state.sections.write() = LazySectionStore::new(context);
+    state.captures.set_baseline_systeminfo(sysinfo);
+    state.live.store(true, Ordering::Relaxed);
+    let info = AgentInfo {
+        source,
+        version,
+        sysinfo: None,
+    };
 
     info!(
         "Connected to {source} {version} at {url}",
@@ -669,66 +588,34 @@ pub async fn reset_tsdb(
         return ApiResponse::err("reset is only available in live mode", "bad_request");
     }
 
-    let data = state.baseline_data();
-    let source = data.source();
-    let version = data.version();
-    let filename = data.filename_or_default();
-
-    let new_store = MemoryStore::builder()
-        .source(source)
-        .version(version)
-        .sampling_interval_ms(1000)
-        .filename(filename)
-        .build();
-    let new_store_arc: Arc<dyn MetricsSource> = Arc::new(new_store);
-    state.replace_baseline(new_store_arc);
-
-    state.snapshots.lock().clear();
+    let client = match Client::builder().http1_only().build() {
+        Ok(c) => c,
+        Err(e) => {
+            return ApiResponse::err(
+                format!("failed to create HTTP client: {e}"),
+                "internal_error",
+            );
+        }
+    };
+    // The old session is dropped once the new one is in place: that stops
+    // its recording and deletes its archive.
+    let target = state.live_session.lock().as_ref().map(|s| s.target());
+    let Some((url, info)) = target else {
+        return ApiResponse::err("no live agent is being recorded", "bad_request");
+    };
+    let session =
+        match super::live::LiveSession::start(&client, &url, info, Arc::clone(&state.pool)).await {
+            Ok(session) => session,
+            Err(e) => return ApiResponse::err(e, "connection_error"),
+        };
+    state.replace_baseline(session.reader());
+    *state.parquet_path.write() = Some(session.path().to_path_buf());
+    *state.live_session.lock() = Some(session);
     info!("TSDB reset by user");
     ApiResponse::ok(serde_json::json!({ "ok": true }))
 }
 
 // ── Save parquet ──────────────────────────────────────────────────────
-
-/// Convert buffered live-mode snapshots to a parquet byte vec, stamped
-/// with `sampling_interval_ms`, optional `systeminfo`, and an optional
-/// `selection` JSON.
-fn snapshots_to_parquet(
-    snapshot_data: Vec<Vec<u8>>,
-    sysinfo_json: Option<String>,
-    selection_json: Option<String>,
-) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    use std::io::Cursor;
-
-    let total_size: usize = snapshot_data.iter().map(|s| s.len()).sum();
-    let mut raw = Vec::with_capacity(total_size);
-    for snapshot_bytes in &snapshot_data {
-        raw.extend_from_slice(snapshot_bytes);
-    }
-
-    let reader = Cursor::new(raw);
-    let mut output = Vec::new();
-    let mut converter = metriken_exposition::MsgpackToParquet::with_options(
-        metriken_exposition::ParquetOptions::new()
-            .max_batch_size(crate::parquet_metadata::MAX_ROW_GROUP_SIZE),
-    )
-    .metadata("sampling_interval_ms".to_string(), "1000".to_string());
-
-    if let Some(json) = sysinfo_json {
-        converter = converter.metadata("systeminfo".to_string(), json);
-    }
-    if let Some(selection) = selection_json {
-        converter = converter.metadata("selection".to_string(), selection);
-    }
-
-    converter
-        .convert_file_handle(reader, Cursor::new(&mut output))
-        .map(|rows| {
-            info!("saved parquet with {rows} rows");
-            output
-        })
-        .map_err(Into::into)
-}
 
 fn parquet_attachment(filename: &str, body: Vec<u8>) -> Response {
     Response::builder()
@@ -749,33 +636,31 @@ fn server_error(msg: impl Into<String>) -> Response {
         .unwrap()
 }
 
-/// Save buffered live-mode snapshots as a parquet file download.
-pub async fn save_parquet(State(state): State<Arc<AppState>>) -> Response {
-    let snapshot_data: Vec<Vec<u8>> = state.snapshots.lock().iter().cloned().collect();
-    if snapshot_data.is_empty() {
+/// Save the live recording: a sealed copy of its archive, as a `.dendro`.
+pub async fn save_capture(State(state): State<Arc<AppState>>) -> Response {
+    let path = state
+        .live_session
+        .lock()
+        .as_ref()
+        .map(|s| s.path().to_path_buf());
+    let Some(path) = path else {
         return Response::builder()
             .status(StatusCode::NO_CONTENT)
             .body(Body::empty())
             .unwrap();
-    }
-
-    let sysinfo_json = state.captures.systeminfo(CaptureId::Baseline);
+    };
     let result = tokio::task::spawn_blocking(move || {
-        snapshots_to_parquet(snapshot_data, sysinfo_json, None)
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let dest = dir.path().join("capture.dendro");
+        crate::hindsight::buffer::dump(
+            &path,
+            &dest,
+            &crate::hindsight::state::TimeRange::new(None, None),
+        )?;
+        std::fs::read(&dest).map_err(|e| e.to_string())
     })
     .await;
-
-    match result {
-        Ok(Ok(output)) => parquet_attachment("rezolus-capture.parquet", output),
-        Ok(Err(e)) => {
-            error!("failed to convert to parquet: {e}");
-            server_error(format!("parquet conversion failed: {e}"))
-        }
-        Err(e) => {
-            error!("parquet conversion task panicked: {e}");
-            server_error("internal error")
-        }
-    }
+    finalize_attachment(result, "rezolus-capture.dendro", parquet_attachment)
 }
 
 /// File mode: column-trim the loaded parquet (or repack a combined-A/B
@@ -938,32 +823,12 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
         return finalize_report_attachment(result);
     }
 
-    // Live mode: convert snapshots with the selection metadata.
-    let snapshot_data: Vec<Vec<u8>> = state.snapshots.lock().iter().cloned().collect();
-    if snapshot_data.is_empty() {
-        return Response::builder()
-            .status(StatusCode::NO_CONTENT)
-            .body(Body::empty())
-            .unwrap();
-    }
-
-    let sysinfo_json = state.captures.systeminfo(CaptureId::Baseline);
-    let result = tokio::task::spawn_blocking(move || {
-        snapshots_to_parquet(snapshot_data, sysinfo_json, Some(selection_json))
-    })
-    .await;
-
-    match result {
-        Ok(Ok(output)) => parquet_attachment("rezolus-capture-annotated.parquet", output),
-        Ok(Err(e)) => {
-            error!("failed to convert to parquet: {e}");
-            server_error(format!("parquet conversion failed: {e}"))
-        }
-        Err(e) => {
-            error!("parquet conversion task panicked: {e}");
-            server_error("internal error")
-        }
-    }
+    // Live mode sets `parquet_path` to its archive, so it took the branch
+    // above; with no file and no live agent there is nothing to save.
+    Response::builder()
+        .status(StatusCode::NO_CONTENT)
+        .body(Body::empty())
+        .unwrap()
 }
 
 fn finalize_report_attachment(
@@ -1016,7 +881,8 @@ mod tests {
     use ::dashboard::TemplateRegistry;
 
     fn upload_only_state() -> Arc<AppState> {
-        let store: Arc<dyn MetricsSource> = Arc::new(MemoryStore::builder().build());
+        let store: Arc<dyn MetricsSource> =
+            Arc::new(metriken_query::MemoryStore::builder().build());
         Arc::new(AppState::new(store, TemplateRegistry::empty()))
     }
 

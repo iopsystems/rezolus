@@ -93,7 +93,7 @@ const stopRecording = () => {
 };
 
 const saveCapture = async () => {
-    const result = await showSaveModal('rezolus-capture', '.parquet');
+    const result = await showSaveModal('rezolus-capture', '.dendro');
     if (!result) return;
     const filename = result.filename;
     const a = document.createElement('a');
