@@ -333,8 +333,10 @@ pub fn run(config: Config) {
         });
     }
 
-    rt.block_on(async move {
+    let refused = rt.block_on(async move {
         let mut interval = crate::common::aligned_interval(interval_dur);
+        // The agent refused a reconnect: capture the buffer, then exit.
+        let mut refused = false;
 
         // The subscription runs on its own task and hands each interval over;
         // the loop below writes them, maintains the buffer on its own tick, and
@@ -407,7 +409,7 @@ pub fn run(config: Config) {
 
                 Some(response) = capture_rx.recv() => {
                     capturing = false;
-                    let terminating = STATE.load(Ordering::SeqCst) == TERMINATING;
+                    let terminating = STATE.load(Ordering::SeqCst) == TERMINATING || refused;
                     // Back to RUNNING BEFORE the log line, so a second signal
                     // sent on seeing that line reads as a new capture rather
                     // than as "terminate once the capture is done".
@@ -474,8 +476,14 @@ pub fn run(config: Config) {
                         }
                     }
                     StreamEvent::Refused(e) => {
-                        error!("the agent can no longer serve its replication stream: {e}");
-                        fatal("the stream was refused on reconnect", &buffer_path);
+                        error!(
+                            "the agent at {url} can no longer serve /metrics/stream ({e}); \
+                             capturing the buffer and exiting"
+                        );
+                        refused = true;
+                        if !capturing {
+                            STATE.store(CAPTURING, Ordering::SeqCst);
+                        }
                     }
                 },
 
@@ -537,10 +545,15 @@ pub fn run(config: Config) {
             info!("waiting for {} dump(s) in flight", dumps.len());
             while dumps.join_next().await.is_some() {}
         }
+        refused
     });
 
-    // Only reached on a clean exit; the buffer directory goes with it.
+    // Only reached once the loop has stopped; the buffer directory goes with
+    // it.
     drop(staging);
+    if refused {
+        std::process::exit(1);
+    }
 }
 
 /// Write the buffer out to the configured output path.

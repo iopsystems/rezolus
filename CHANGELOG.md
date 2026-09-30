@@ -21,7 +21,9 @@
   schema. Rows carry the agent's own timestamps. An agent that cannot serve the
   stream (older than 5.21.0, or a V2 agent) is refused at startup with its
   version; a stream that drops is reconnected after one interval, and a
-  reconnect to a restarted agent is logged. `[general] source` still names the
+  reconnect to a restarted agent is logged. An agent that answers a reconnect
+  but can no longer serve the stream gets the buffer captured beside
+  `output`, as a SIGTERM does, and hindsight exits with status 1. `[general] source` still names the
   agent.
 - A recording streamed into a `.dendro` decodes each row once. The recorder
   decoded every streamed payload twice, once to rebuild the row endpoint's
