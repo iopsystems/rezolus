@@ -2,6 +2,10 @@
 
 ### Removed
 
+- **Hindsight no longer reads `/metrics/binary`.** It needs `/metrics/stream`:
+  an agent from 5.21.0 with `snapshot_format = "v3"` (the default). An older
+  agent, a v2 agent, a `rezolus exporter`, or a proxy that does not route
+  `/metrics/stream` is refused at startup.
 - **Ubuntu 20.04 (focal) packages are no longer built.** Focal ships clang 10,
   and the `memory_writeback` sampler's CO-RE enum relocations
   (`bpf_core_enum_value`) need clang 12, so the focal package no longer

@@ -8,7 +8,8 @@ interval = "1s"
 duration = "15m"
 
 # Specify the address of the Rezolus Agent. Hindsight subscribes to its
-# replication stream (/metrics/stream), which agents from 5.21.0 serve.
+# replication stream (/metrics/stream), which agents from 5.21.0 serve when
+# snapshot_format is "v3" (the default).
 source = "127.0.0.1:4241"
 
 # Specify the path for the snapshot output file. Snapshots are dendro archives,

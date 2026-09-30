@@ -112,7 +112,7 @@ pub struct StatusResponse {
     /// The configured lookback — `[general] duration`.
     pub lookback_secs: u64,
     pub sampling_interval_ms: u64,
-    /// Snapshots pulled and ingested since startup.
+    /// Passes received and ingested since startup.
     pub ticks_recorded: u64,
     /// The span actually retained. It reaches at least the lookback once the
     /// buffer is full, and typically a little further: retention drops whole

@@ -25,7 +25,7 @@ pub struct SharedState {
     pub interval: Duration,
     /// How far back the buffer is asked to reach — `[general] duration`.
     pub lookback: Duration,
-    /// Snapshots pulled from the agent and ingested since startup. Not a ring
+    /// Passes received from the agent's stream and ingested since startup. Not a ring
     /// position and not a capacity: just how much work the loop has done.
     ticks: AtomicU64,
     /// Whether retention has begun. Published by the loop rather than derived

@@ -125,7 +125,7 @@ impl HindsightBuffer {
     /// Create the buffer at `path`, which must not exist.
     ///
     /// The seal policy is a parameter rather than a constant because segment
-    /// size has to track the scrape interval: `[general] segment_rows` sets it
+    /// size has to track the interval: `[general] segment_rows` sets it
     /// and defaults to the writer's 900, which is a segment per ~15 minutes at
     /// the default 1 s interval and per ~90 seconds at 10 Hz.
     pub fn create(
@@ -188,7 +188,7 @@ impl HindsightBuffer {
         }
     }
 
-    /// Seal whatever is due, then apply retention. Call it every tick, scrape
+    /// Seal whatever is due, then apply retention. Call it every tick, whether or not an interval arrived
     /// or not — that is also where a writer that died asynchronously surfaces.
     ///
     /// Order is load-bearing: `maybe_seal` first, so a segment closed on this
