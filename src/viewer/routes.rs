@@ -535,6 +535,13 @@ async fn metadata(
         "interval": interval,
         "filename": filename,
     });
+    // A live recording that has stopped says why, so the page can stop
+    // presenting the view as live.
+    if capture == capture_registry::BASELINE_ID {
+        if let Some(why) = state.live_session.lock().as_ref().and_then(|s| s.stopped()) {
+            meta["liveError"] = serde_json::json!(why);
+        }
+    }
     if let Some(alias) = state.captures.alias_by_id(capture) {
         meta["alias"] = serde_json::json!(alias);
     }

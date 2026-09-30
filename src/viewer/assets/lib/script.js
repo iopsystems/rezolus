@@ -192,6 +192,18 @@ const refreshCurrentSection = async () => {
 
     liveRefreshInProgress = true;
     try {
+        // A live recording that stopped (the agent refused a reconnect, or a
+        // write failed) no longer advances. Say so until dismissed, and stop
+        // presenting the view as recording.
+        const meta = await ViewerApi.getMetadata();
+        const liveError = meta?.data?.liveError;
+        if (liveError) {
+            stopRecording();
+            notify('error', `Live recording stopped: ${liveError}. Record again to reconnect.`, 2147483647);
+            m.redraw();
+            return;
+        }
+
         const data = await ViewerApi.getSection(section, true);
 
         // freshMetadata: TSDB grows continuously in live mode; without

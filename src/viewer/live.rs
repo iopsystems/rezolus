@@ -70,6 +70,9 @@ pub struct LiveSession {
     reader: Arc<LiveReader>,
     path: PathBuf,
     dir: Arc<LiveDir>,
+    /// Why the recording stopped, once it has: a failed write, or an agent
+    /// that refused a reconnect.
+    stopped: Arc<Mutex<Option<String>>>,
     /// Aborted on drop, which closes the channel and ends the recording
     /// thread.
     _pump: AbortOnDrop,
@@ -166,12 +169,14 @@ impl LiveSession {
         )));
         // The writes, seals and reopens block, so they run on their own
         // thread rather than on the runtime that serves the viewer's HTTP.
+        let stopped = Arc::new(Mutex::new(None));
         let recording = Recording {
             label: url.to_string(),
             buffer,
             reader: Arc::clone(&reader),
             epoch: source.uuid,
             dir: Arc::clone(&dir),
+            stopped: Arc::clone(&stopped),
         };
         std::thread::Builder::new()
             .name("rezolus-live".to_string())
@@ -184,8 +189,18 @@ impl LiveSession {
             reader,
             path,
             dir,
+            stopped,
             _pump: pump,
         })
+    }
+
+    /// Why the recording stopped, if it has. The view then no longer
+    /// advances; a reset starts a new session.
+    pub fn stopped(&self) -> Option<String> {
+        self.stopped
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// The agent this session records, for starting a fresh one against it:
@@ -219,6 +234,7 @@ struct Recording {
     reader: Arc<LiveReader>,
     epoch: Option<String>,
     dir: Arc<LiveDir>,
+    stopped: Arc<Mutex<Option<String>>>,
 }
 
 impl Recording {
@@ -235,6 +251,7 @@ impl Recording {
                             .and_then(|_| self.buffer.maintain());
                     if let Err(e) = written {
                         error!("{label}: the live recording stopped: {e}");
+                        self.stop(format!("writing the live archive failed: {e}"));
                         break;
                     }
                     if let Err(e) = self.reader.refresh() {
@@ -253,6 +270,9 @@ impl Recording {
                 }
                 StreamEvent::Refused(e) => {
                     error!("{label}: the agent can no longer serve its stream: {e}");
+                    self.stop(format!(
+                        "the agent can no longer serve /metrics/stream: {e}"
+                    ));
                     break;
                 }
             }
@@ -261,6 +281,12 @@ impl Recording {
         let Recording { buffer, dir, .. } = self;
         drop(buffer);
         drop(dir);
+    }
+}
+
+impl Recording {
+    fn stop(&self, why: String) {
+        *self.stopped.lock().unwrap_or_else(|e| e.into_inner()) = Some(why);
     }
 }
 
@@ -373,6 +399,45 @@ mod tests {
             .err()
             .expect("no recording matches");
         assert!(err.to_string().contains("no recording matching"), "{err}");
+    }
+
+    fn recording(path: &Path, stopped: &Arc<Mutex<Option<String>>>) -> Recording {
+        let buffer = buffer(path);
+        Recording {
+            label: "test".to_string(),
+            reader: Arc::new(LiveReader::open(path, None, BufferPool::new(64 << 20)).unwrap()),
+            buffer,
+            epoch: None,
+            dir: Arc::new(LiveDir::create().unwrap()),
+            stopped: Arc::clone(stopped),
+        }
+    }
+
+    /// A reconnect the agent refuses stops the recording and records why,
+    /// which the metadata route reports to the page.
+    #[test]
+    fn a_refused_reconnect_records_why_the_recording_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let stopped = Arc::new(Mutex::new(None));
+        let rec = recording(&dir.path().join("live.dendro"), &stopped);
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        tx.try_send((0, StreamEvent::Refused("HTTP 404".to_string())))
+            .unwrap();
+        std::thread::spawn(move || rec.run(rx)).join().unwrap();
+        let why = stopped.lock().unwrap().clone().expect("a reason");
+        assert!(why.contains("HTTP 404"), "{why}");
+    }
+
+    /// A session that is dropped closes the channel; that is not a failure.
+    #[test]
+    fn a_closed_channel_ends_the_recording_without_a_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let stopped = Arc::new(Mutex::new(None));
+        let rec = recording(&dir.path().join("live.dendro"), &stopped);
+        let (tx, rx) = tokio::sync::mpsc::channel::<(usize, StreamEvent)>(4);
+        drop(tx);
+        std::thread::spawn(move || rec.run(rx)).join().unwrap();
+        assert!(stopped.lock().unwrap().is_none());
     }
 
     /// The live view names the agent, not the temporary file.
