@@ -11,6 +11,14 @@
 
 ### Changed
 
+- **Hindsight records the agent over its replication stream.** It subscribes
+  to `/metrics/stream`, as `record` to a `.dendro` does, instead of scraping
+  `/metrics/binary`, whose every body carries every acquisition group's full
+  schema. Rows carry the agent's own timestamps. An agent that cannot serve the
+  stream (older than 5.21.0, or a V2 agent) is refused at startup with its
+  version; a stream that drops is reconnected after one interval, and a
+  reconnect to a restarted agent is logged. `[general] source` still names the
+  agent.
 - A recording streamed into a `.dendro` decodes each row once. The recorder
   decoded every streamed payload twice, once to rebuild the row endpoint's
   envelope and once to build the snapshot the writer takes. At 100 ms under

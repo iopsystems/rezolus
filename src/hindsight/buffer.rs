@@ -147,7 +147,7 @@ impl HindsightBuffer {
         })
     }
 
-    /// Append one scraped snapshot. Every tick is committed as it arrives, so
+    /// Append one snapshot. Every tick is committed as it arrives, so
     /// an unclean kill of the daemon costs one tick, not a whole open segment.
     pub fn ingest(
         &mut self,

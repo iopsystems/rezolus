@@ -86,9 +86,11 @@ impl General {
             .unwrap()
     }
 
+    /// The agent's base URL. Hindsight subscribes to its replication stream
+    /// (`/metrics/stream`) and reads its metadata routes from here.
     pub fn url(&self) -> Url {
         let source = self.source();
-        Url::try_from(format!("http://{source}/metrics/binary").as_str()).unwrap()
+        Url::try_from(format!("http://{source}/").as_str()).unwrap()
     }
 
     /// Rows per sealed segment, or `None` for the writer's default.

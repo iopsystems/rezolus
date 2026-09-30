@@ -7,7 +7,8 @@ interval = "1s"
 # buffer file bounded.
 duration = "15m"
 
-# Specify the address of the Rezolus Agent
+# Specify the address of the Rezolus Agent. Hindsight subscribes to its
+# replication stream (/metrics/stream), which agents from 5.21.0 serve.
 source = "127.0.0.1:4241"
 
 # Specify the path for the snapshot output file. Snapshots are dendro archives,
@@ -33,7 +34,7 @@ output = "/var/lib/rezolus/rezolus.dendro"
 # above is one segment per ~15 minutes (a segment is also sealed after 5
 # minutes, or at about 8 MiB, whichever comes first). Retention and ranged
 # snapshots both work in WHOLE segments, so this also sets the granularity at
-# which the buffer trims — lower it if you scrape much faster than once a second.
+# which the buffer trims — lower it if the interval is much shorter than a second.
 # segment_rows = 900
 
 # Optional: enable HTTP endpoint for remote dump triggering
