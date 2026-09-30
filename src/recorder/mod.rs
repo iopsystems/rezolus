@@ -69,8 +69,9 @@ pub fn command() -> Command {
              A wrapped command keeps this terminal: its stdin/stdout/stderr pass straight\n\
              through, and rezolus exits with the command\'s own exit status, so\n\
              `rezolus record -o bench.rez -- ./bench.sh && analyze bench.rez` gates on the\n\
-             benchmark exactly as it would without the wrapper. The one substitution is the\n\
-             --duration cap: if it fires and the command is killed, rezolus exits 124.\n\n\
+             benchmark exactly as it would without the wrapper. Two substitutions: the\n\
+             --duration cap exits 124 if it kills the command, and a recording failure (an\n\
+             endpoint refused mid-run, a write error) exits 1 whatever the command returned.\n\n\
              A wrapped run is also marked in the recording: a `run_start` event when the\n\
              command spawns and a `run_end` event when it exits, so the viewer can draw the\n\
              run's edges and align two recordings on them. Only the program name is stored\n\
@@ -93,7 +94,9 @@ pub fn command() -> Command {
              .rez      The same recordings in the archive format before 6.0, several\n    \
              \x20         times larger. Every tool still reads and writes it; choose it\n    \
              \x20         only for a consumer that has not moved to .dendro, or to record an\n    \
-             \x20         agent older than 5.21.0 (which a .dendro refuses).\n    \
+             \x20         agent older than 5.21.0 (which a .dendro refuses); `rezolus\n    \
+             \x20         recording upgrade --to dendro out.rez -o out.dendro` converts it\n    \
+             \x20         afterwards.\n    \
              .parquet  One columnar table on a single uniform clock. Use it for a uniform\n    \
              \x20         tabular export or other parquet tooling.\n    \
              \x20         (Multiple endpoints, including Prometheus, do NOT need\n    \
@@ -187,21 +190,25 @@ pub fn command() -> Command {
              (/metrics/stream): the agent pushes one frame per --interval, carrying only\n\
              the acquisition groups it re-read since the last one, stamped when the agent\n\
              sampled rather than when the recorder asked. Prometheus endpoints cannot\n\
-             stream, so they are scraped each tick, and one run can hold both kinds. There\n\
-             is no scrape path for a Rezolus agent into a .dendro: an agent that cannot\n\
-             serve the stream (older than 5.21.0, a V2 agent, or a handshake that does not\n\
-             decode) is refused with its version. At startup that refuses the run before\n\
-             anything is written; record such an agent with -o out.rez or -o out.parquet,\n\
-             which scrape. An agent that comes up later and is refused, or is refused on a\n\
+             stream, so they are scraped each tick, and one run can hold both kinds.\n\n\
+             There is no scrape path for a Rezolus agent into a .dendro. An agent that\n\
+             cannot serve the stream (older than 5.21.0, a V2 agent, a stream route that\n\
+             answers 404 or another refusal, or a handshake that does not decode) is\n\
+             refused with its version. At startup that refuses the run before anything is\n\
+             written; record such an agent with -o out.rez or -o out.parquet, which\n\
+             scrape, and convert a .rez afterwards with `rezolus recording upgrade --to\n\
+             dendro`. An agent that comes up later and is refused, or is refused on a\n\
              reconnect, is left out of the recording from then on (a reconnect keeps the\n\
              rows it had), the other endpoints keep recording, and the run exits 1 once\n\
-             the archive is finalized. An agent that is not reachable yet, or whose stream\n\
-             fails with an error that can change (a 5xx, a handshake timeout), is retried\n\
-             each tick. A stream that drops mid-run is reconnected after one interval (at\n\
-             least a second), like a scrape that fails is retried, and one that goes\n\
-             silent for the scrape timeout counts as dropped. A wrapped command that exits\n\
-             on its own waits for each agent's frame covering the exit, at most one\n\
-             interval plus the scrape timeout.",
+             the archive is finalized. When every endpoint has been refused, the run ends.\n\n\
+             An agent that is not reachable yet, or whose stream fails with an error that\n\
+             can change (a 5xx, a handshake timeout), is retried each tick. A stream that\n\
+             drops mid-run is reconnected after one interval (at least a second), as a\n\
+             failed scrape is, and one that goes silent for the scrape timeout (twice the\n\
+             interval, between 2 s and 10 s) counts as dropped.\n\n\
+             A wrapped command that exits on its own waits for each agent's frame covering\n\
+             the exit, at most one interval plus the scrape timeout (twice the interval,\n\
+             between 2 s and 10 s).",
         )
         .arg(
             clap::Arg::new("URL")
@@ -739,6 +746,8 @@ fn refusal_summary(endpoints: &[EndpointState], output: &Path, finalized: bool) 
 /// two endpoints of one A/B on different transports.
 fn unstreamable_agent(ep: &EndpointState, reason: &str, at: RefusedAt) -> String {
     let url = &ep.config.url;
+    let mut stream_url = url.clone();
+    stream_url.set_path("/metrics/stream");
     let why = match ep.agent.version.as_deref() {
         Some(version) => match predates_stream(version) {
             Some(true) => format!(
@@ -746,8 +755,9 @@ fn unstreamable_agent(ep: &EndpointState, reason: &str, at: RefusedAt) -> String
                  (agents serve /metrics/stream from {STREAM_SINCE}): {reason}"
             ),
             _ => format!(
-                "{url} is Rezolus {version}, which should serve a replication stream, \
-                 but it did not open: {reason}"
+                "{url} is Rezolus {version}, which serves a replication stream, but \
+                 {reason}. Check that {stream_url} is reachable from this host; a proxy in \
+                 front of the agent may not route it"
             ),
         },
         None => format!(
@@ -759,19 +769,23 @@ fn unstreamable_agent(ep: &EndpointState, reason: &str, at: RefusedAt) -> String
         RefusedAt::Startup => {
             "A .dendro records Rezolus agents from their replication stream only; \
              record this agent to a .rez (-o out.rez) or to parquet (-o out.parquet) \
-             instead, both of which scrape"
+             instead, both of which scrape. `rezolus recording upgrade --to dendro out.rez \
+             -o out.dendro` converts the .rez afterwards"
         }
         RefusedAt::MidRun => {
             "This endpoint is excluded from this recording and not retried; the other \
              endpoints keep recording. A .dendro records Rezolus agents from their \
              replication stream only; a separate `rezolus record` to a .rez or to \
-             parquet, both of which scrape, can record this agent"
+             parquet, both of which scrape, can record this agent, and `rezolus recording \
+             upgrade --to dendro out.rez -o out.dendro` converts the .rez afterwards"
         }
         RefusedAt::Reconnect => {
             "This endpoint's recording stops here, keeping the rows it had, and is not \
              retried; the other endpoints keep recording. A .dendro records Rezolus \
              agents from their replication stream only; a separate `rezolus record` to a \
-             .rez or to parquet, both of which scrape, can record this agent"
+             .rez or to parquet, both of which scrape, can record this agent, and \
+             `rezolus recording upgrade --to dendro out.rez -o out.dendro` converts the \
+             .rez afterwards"
         }
     };
     format!("{why}. {next}")
@@ -3045,7 +3059,7 @@ pub fn run(mut config: RecordingConfig) {
         //
         // A wrapped command that exited on its own waits for frames: until
         // every streamed endpoint has delivered one stamped at or after the
-        // exit, bounded by one interval plus the tick timeout, and cut short
+        // exit, bounded by one interval plus the scrape timeout, and cut short
         // by ctrl-c. That
         // is what makes `-o out.dendro -- <short command>` record the
         // interval the command exited in, as the scrape path's final pass
@@ -3108,8 +3122,8 @@ pub fn run(mut config: RecordingConfig) {
                         _ = tokio::time::sleep_until(deadline.into()) => {
                             for idx in waiting {
                                 warn!(
-                                    "{} ({}): no stream frame from after the command exited \
-                                     arrived within {}; the recording ends before it",
+                                    "{} ({}): no stream frame stamped after the command's exit \
+                                     arrived within {}; the recording ends before the exit",
                                     endpoints[idx].config.source_label(),
                                     endpoints[idx].config.url,
                                     humantime::format_duration(interval_dur + scrape_timeout)
@@ -3934,9 +3948,14 @@ mod tests {
         let msg = unstreamable_agent(&ep, reason, RefusedAt::Startup);
         assert!(!msg.contains("predates"), "{msg}");
         assert!(
-            msg.contains("Rezolus 5.22.1") && msg.contains(reason),
+            msg.contains("Rezolus 5.22.1, which serves") && msg.contains(reason),
             "{msg}"
         );
+        assert!(
+            msg.contains("Check that http://localhost:4241/metrics/stream is reachable"),
+            "{msg}"
+        );
+        assert!(msg.contains("recording upgrade --to dendro"), "{msg}");
 
         ep.agent.version = None;
         let msg = unstreamable_agent(&ep, reason, RefusedAt::Startup);

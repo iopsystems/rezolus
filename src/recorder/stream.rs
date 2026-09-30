@@ -266,8 +266,8 @@ impl FrameDecoder {
             ]);
             if version != dendro::replicate::wire::PROTOCOL_VERSION {
                 return Err(format!(
-                    "the agent speaks replication protocol version {version} and this \
-                     recorder speaks version {}; the agent and recorder builds do not match",
+                    "the agent sent replication protocol version {version}; this recorder \
+                     implements version {}. The agent and recorder builds do not match",
                     dendro::replicate::wire::PROTOCOL_VERSION
                 ));
             }
@@ -435,8 +435,8 @@ impl Subscription {
             .to_string();
         if content_type != crate::agent::REPLICATION_CONTENT_TYPE {
             return Err(ConnectError::Unsupported(format!(
-                "{url} serves `{content_type}`, not `{}` — this build speaks only the \
-                 replication stream",
+                "{url} serves `{content_type}`, not `{}`; this recorder reads only `{}`",
+                crate::agent::REPLICATION_CONTENT_TYPE,
                 crate::agent::REPLICATION_CONTENT_TYPE
             )));
         }

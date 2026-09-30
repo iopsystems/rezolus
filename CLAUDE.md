@@ -83,7 +83,8 @@ target/release/rezolus record --url http://localhost:4241 -o out.dendro         
 # run exits 1 (`refuse_mid_run`). An unreachable one (or a 5xx / handshake timeout) is retried each
 # tick, and a stream that drops (or goes silent for the scrape timeout) is reconnected
 # after one interval, at least a second. A wrapped command that exits on its own waits for
-# each agent's frame stamped at or after the exit (bounded by interval + tick timeout).
+# each agent's frame stamped at or after the exit (bounded by interval + scrape timeout).
+# When every endpoint has been refused the run ends; each refused endpoint gets a line.
 # Identity travels in each group's schema; the agent sends no index frames. --stream was
 # removed before 6.0.0 (clap's unknown-argument error): the output format picks the transport.
 

@@ -134,5 +134,5 @@ consumers; metriken-query pins the engine.
   (`rez_sqlite.rs`), and `crates/rez/src/indexed.rs` replays them to split a
   group table's slot columns by occupant (#1280). 6.0 writes none: a
   `.dendro` streams agents and takes identity from each group's schema, and
-  a `.rez` is only scraped.
+  a `.rez` is scraped.
   See `docs/journal/2026-09-22-internal-labels.md`.

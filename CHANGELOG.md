@@ -27,7 +27,11 @@
   `.rez` or parquet, which scrape. An agent that answers but whose stream
   fails with an error that can change (a 5xx, a handshake timeout) is retried
   each tick. A wrapped command that exits on its own waits for each agent's
-  frame covering the exit, at most one interval plus the scrape timeout.
+  frame covering the exit, at most one interval plus the scrape timeout
+  (twice the interval, between 2 s and 10 s). A run whose every endpoint has
+  been refused ends there, and each refused endpoint is named at the end.
+  A refusal points at `rezolus recording upgrade --to dendro` to convert a
+  `.rez` of the agent afterwards.
   `record --stream` is removed: a `.dendro` records agents by stream and
   `.rez`, parquet and raw scrape, so the output format decides the
   transport, and passing `--stream` is an unknown-argument error (exit 2).
