@@ -79,11 +79,24 @@ const TABLE: &str = "fake/ops";
 /// the optional metadata routes, which hindsight treats as absent. Returns the
 /// bound port; the accept loop is detached and dies with the test process.
 fn spawn_fake_agent(width: usize) -> u16 {
+    spawn_agent(width, None)
+}
+
+/// As [`spawn_fake_agent`], but the first subscription gets `frames` frames
+/// and is then closed, and every later one gets a 404: an agent replaced by
+/// one that cannot stream, or a proxy that stopped routing the path.
+fn spawn_fake_agent_that_stops(width: usize, frames: u64) -> u16 {
+    spawn_agent(width, Some(frames))
+}
+
+fn spawn_agent(width: usize, frames: Option<u64>) -> u16 {
+    let subscriptions = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the fake agent");
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
+            let subscriptions = subscriptions.clone();
             // A thread per connection: a subscription holds its connection
             // for the whole run.
             std::thread::spawn(move || {
@@ -96,8 +109,9 @@ fn spawn_fake_agent(width: usize) -> u16 {
                 }
                 let req = String::from_utf8_lossy(&buf[..n]);
                 let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
-                if path.starts_with("/metrics/stream") {
-                    serve_stream(stream, &path, width);
+                let first = || subscriptions.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+                if path.starts_with("/metrics/stream") && (frames.is_none() || first()) {
+                    serve_stream(stream, &path, width, frames);
                     return;
                 }
                 let _ = stream.write_all(
@@ -122,7 +136,7 @@ fn wall_ns() -> u64 {
 /// carrying `width` counters (`fake_ops_0`..) in the `fake/ops` acquisition
 /// group, the schema on the first row only, until hindsight hangs up. Each
 /// frame's values differ, so consecutive rows are not deduped.
-fn serve_stream(mut stream: std::net::TcpStream, path: &str, width: usize) {
+fn serve_stream(mut stream: std::net::TcpStream, path: &str, width: usize, frames: Option<u64>) {
     use dendro::replicate::{wire, Frame};
     use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc};
 
@@ -169,6 +183,10 @@ fn serve_stream(mut stream: std::net::TcpStream, path: &str, width: usize) {
         histograms: Vec::new(),
     };
     for seq in 0u64.. {
+        if frames.is_some_and(|n| seq >= n) {
+            // Closing the connection is how the stream ends.
+            return;
+        }
         std::thread::sleep(interval);
         let ts = wall_ns();
         let group = GroupSnapshot {
@@ -1567,6 +1585,35 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
 /// A `.dendro` output keeps the buffer as a dendro archive, and its dumps
 /// are dendro archives that the ordinary readers open, finished and
 /// queryable, while the buffer runs on.
+/// An agent that stops serving its stream, and answers the reconnect with a
+/// 404, ends the daemon. Before it exits, hindsight captures the buffer beside
+/// `output`, as a SIGTERM does, and it exits 1.
+#[test]
+fn a_refused_reconnect_captures_the_buffer_then_exits() {
+    let agent = spawn_fake_agent_that_stops(1, 20);
+    let mut h = Hindsight::try_start_as(agent, 8, "dendro")
+        .unwrap_or_else(|why| panic!("rezolus hindsight failed to come up: {why}"));
+    let status = h.wait_for_exit(Duration::from_secs(60));
+    assert_eq!(status.code(), Some(1), "{}", h.log_text());
+    assert!(
+        h.log_has("can no longer serve /metrics/stream"),
+        "{}",
+        h.log_text()
+    );
+    let dir = h.output.parent().unwrap();
+    let captures: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("snapshot-") && n.ends_with(".dendro"))
+        })
+        .collect();
+    assert_eq!(captures.len(), 1, "one capture beside output: {captures:?}");
+    assert!(std::fs::metadata(&captures[0]).unwrap().len() > 0);
+}
+
 #[test]
 fn a_dendro_buffer_dumps_a_dendro_archive() {
     use metriken_archive::Catalog;
