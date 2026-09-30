@@ -304,6 +304,30 @@ Tests: `no_output_and_no_format_defaults_to_dendro`,
 `from_args_populates_command_from_trailing_args`,
 `only_a_rez_output_keeps_a_rez_buffer`.
 
+## After E: agents stream, Prometheus scrapes (2026-09-29)
+
+Decided 2026-09-29: a `.dendro` records a rezolus agent only by its
+replication stream. `--stream` is implied, hidden, and refused for the
+formats that scrape (`.rez`, parquet, raw).
+
+- Endpoints are probed as before. An agent streams, and a Prometheus
+  endpoint is scraped and converted into a `prometheus/scrape` group. Both
+  can be in one run: each tick scrapes the Prometheus endpoints, drains the
+  agents' stream intervals, and commits once through the one writer.
+- An agent without `/metrics/stream` (before 5.21.0) is refused before the
+  archive is created, with its version and `-o out.rez` or parquet as the
+  alternatives. It is not scraped instead.
+- A stream that fails for a reason retrying could fix (5xx, a timeout, a
+  handshake dropped) is retried each tick; a 404, a wrong content type or a
+  malformed first frame refuses the endpoint.
+- Measured on a Linux VM (metriken
+  `docs/journal/2026-09-29-members-that-come-and-go.md`, "5b: measured"):
+  at 10 Hz the recorder used 6.3 s of CPU per 180 s streaming against 18.5 s
+  scraping, for the same archive.
+- Left as it was: an agent named by a non-root path
+  (`--url http://h:4241/metrics/binary`) is classified as Prometheus by the
+  existing probe rule and scraped.
+
 ## Seal policy
 
 Measured on three replayed recordings (metriken
