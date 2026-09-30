@@ -63,12 +63,8 @@ impl Applied {
     /// at one `ts` would write one row's worth of key however their wall
     /// offsets differ. The first row's `wall_offset` stands for the pass.
     ///
-    /// Each payload is decoded here, and only here: [`StreamSchemas::snapshot`]
-    /// takes the decoded rows. It used to be decoded twice, once to rebuild the
-    /// row endpoint's envelope (`AgentRow::from_payload`) and again to build
-    /// the snapshot; under churn the decode was about 12% of a 10 Hz
-    /// recorder's CPU (metriken `docs/journal/2026-09-30-membership-as-events.md`,
-    /// step 1). A payload that will not decode fails the interval rather than being
+    /// Each payload is decoded here, once; [`StreamSchemas::snapshot`] takes
+    /// the decoded rows. A payload that will not decode fails the interval rather than being
     /// dropped: the producer is this binary, so an undecodable row is a
     /// version mismatch, and a stream that quietly thinned itself would
     /// record a gap nothing explains.
