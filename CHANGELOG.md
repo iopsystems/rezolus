@@ -11,6 +11,11 @@
 
 ### Changed
 
+- A recording streamed into a `.dendro` decodes each row once. The recorder
+  decoded every streamed payload twice, once to rebuild the row endpoint's
+  envelope and once to build the snapshot the writer takes. At 100 ms under
+  process churn on a 32-core host the recorder used 24–27% less CPU over four
+  180 s windows (25.9–37.4 s → 19.6–27.5 s).
 - The agent's V3 router resolves each metric module's sampler once and
   caches it, and looks acquisition groups up with foldhash. Attribution was
   a scan of every sampler module, run for every metric twice a pass. On the
