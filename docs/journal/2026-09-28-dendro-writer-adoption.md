@@ -304,6 +304,59 @@ Tests: `no_output_and_no_format_defaults_to_dendro`,
 `from_args_populates_command_from_trailing_args`,
 `only_a_rez_output_keeps_a_rez_buffer`.
 
+## After E: agents stream, Prometheus scrapes (2026-09-29)
+
+Decided 2026-09-29: a `.dendro` records a rezolus agent only by its
+replication stream, and `.rez`, parquet and raw scrape. The output format
+picks the transport, so `--stream` was removed before 6.0.0 (first hidden
+and implied by `.dendro`, then deleted): passing it is clap's
+unknown-argument error.
+
+- Endpoints are probed as before. An agent streams, and a Prometheus
+  endpoint is scraped and converted into a `prometheus/scrape` group. Both
+  can be in one run: each tick scrapes the Prometheus endpoints, drains the
+  agents' stream intervals, and commits once through the one writer.
+- An agent that cannot serve the stream is refused, never scraped instead.
+  Refused: a 404 or 409 from `/metrics/stream`, any other status that is
+  not a 5xx, 408 or 429 (a 401 or 403 from a proxy included), a wrong
+  content type, and a handshake that does not decode (wrong magic, another protocol version,
+  which the message names on both sides, an oversized or undecodable
+  frame). Retried each tick: no answer, a 5xx, 408 or 429, a handshake that
+  times out, a connection that closes before or during the handshake.
+- The refusal names the agent's version. Only a version before 5.21.0 is
+  said to predate the stream; a current agent's 404 is quoted as the route's
+  answer, since a proxy that does not route the path gives the same answer.
+- At startup the refusal ends the run before the archive is created, with
+  `-o out.rez` or parquet as the alternatives. After that, one path
+  (`refuse_mid_run`) handles an agent refused on first activation and one
+  refused on a reconnect (its pump's `StreamEvent::Refused`): the endpoint
+  is marked `Refused` and not retried, a reconnecting agent's recording
+  keeps the rows it had and is finalized with the rest, the other endpoints
+  keep recording, and the run exits 1 after one line per refused endpoint
+  (URL, source, and from when the archive has no rows for it) and an
+  "N of M endpoints refused" line. A reconnect refusal used to end the whole
+  run. Decided 2026-09-29: when every endpoint has been refused, the run
+  ends after that tick instead of waiting for `--duration` or ctrl-c; a
+  wrapped command still running is then terminated.
+- A refusal of a current agent (5.21.0 or later) suggests checking that
+  `/metrics/stream` is reachable, since a proxy may not route it; every
+  refusal points at `rezolus recording upgrade --to dendro` for a `.rez` of
+  the agent recorded instead.
+- A wrapped command that exits on its own waits for each streamed
+  endpoint's frame stamped at or after the exit, bounded by one interval
+  plus the scrape timeout (twice the interval, between 2 s and 10 s). A fixed grace of `interval.min(2s)` recorded
+  nothing for a command that exited before the agent's first frame (measured
+  against a real agent: `--interval 5s -- true` failed 1 of 1, `3s` 2 of 5).
+  Every other stop keeps that capped grace, so a `docker stop` is not held
+  for a long interval.
+- Measured on a Linux VM (metriken
+  `docs/journal/2026-09-29-members-that-come-and-go.md`, "5b: measured"):
+  at 10 Hz the recorder used 6.3 s of CPU per 180 s streaming against 18.5 s
+  scraping, for the same archive.
+- Left as it was: an agent named by a non-root path
+  (`--url http://h:4241/metrics/binary`) is classified as Prometheus by the
+  existing probe rule and scraped.
+
 ## Seal policy
 
 Measured on three replayed recordings (metriken

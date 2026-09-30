@@ -34,46 +34,246 @@ fn snapshot_bytes(tick: u64) -> Vec<u8> {
     rmp_serde::encode::to_vec(&snapshot).expect("failed to encode the fake snapshot")
 }
 
-/// Minimal stand-in for the agent's msgpack endpoint: answers
-/// `/metrics/binary` with a snapshot and 404s the optional metadata routes
-/// (`/systeminfo`, `/metrics/descriptions`, `/samplers`), which the recorder
-/// treats as absent. Returns the bound port; the accept loop is detached and
-/// dies with the test process.
+/// Minimal stand-in for a 6.0 agent: answers `/metrics/binary` with a
+/// snapshot, serves a replication stream on `/metrics/stream` (see
+/// [`serve_stream`]), and 404s the optional metadata routes (`/systeminfo`,
+/// `/metrics/descriptions`, `/samplers`, `/status`), which the recorder treats
+/// as absent. A `.rez`, parquet or raw run scrapes it; a `.dendro` run
+/// streams it. Returns the bound port; the accept loop is detached and dies
+/// with the test process.
 fn spawn_fake_agent() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the fake agent");
-    let port = listener.local_addr().unwrap().port();
+    spawn_agent(Streams::Always, None)
+}
+
+/// Whether and how a fake agent serves `/metrics/stream`.
+#[derive(Clone, Copy)]
+enum Streams {
+    /// 404, as an agent before 5.21.0.
+    Never,
+    /// A stream on every subscription.
+    Always,
+    /// One subscription gets this many frames and is then closed; every
+    /// later subscription gets a 404, as a proxy that stopped routing the
+    /// path would answer.
+    OnceThen404(u64),
+}
+
+/// A 6.0-version agent whose stream closes after `frames` frames, and whose
+/// stream route answers 404 to the reconnect. Reports itself as 6.0.0 on
+/// `/`.
+fn spawn_fake_agent_that_stops_streaming(frames: u64) -> u16 {
+    spawn_agent(Streams::OnceThen404(frames), Some("6.0.0"))
+}
+
+/// A stand-in for an agent older than `/metrics/stream` (5.21.0): it scrapes
+/// like any other, answers `/` with the `Rezolus <version> Agent` banner, and
+/// 404s the stream route and `/status`.
+fn spawn_fake_agent_without_stream(version: &'static str) -> u16 {
+    spawn_agent(Streams::Never, Some(version))
+}
+
+/// As [`spawn_fake_agent_without_stream`], but nothing listens on the port
+/// until `ready` returns true: an agent that comes up after the recording
+/// started.
+fn spawn_fake_agent_without_stream_when(
+    version: &'static str,
+    ready: impl Fn() -> bool + Send + 'static,
+) -> u16 {
+    // Reserve a free port, release it, and bind it again once `ready`.
+    // Another process could take it in between; on a test host that is
+    // unlikely enough not to matter.
+    let port = TcpListener::bind("127.0.0.1:0")
+        .expect("failed to reserve a port")
+        .local_addr()
+        .unwrap()
+        .port();
     std::thread::spawn(move || {
-        let mut tick = 0u64;
-        for stream in listener.incoming() {
-            let Ok(mut stream) = stream else { continue };
-            let mut buf = [0u8; 8192];
-            let Ok(n) = stream.read(&mut buf) else {
-                continue;
-            };
-            if n == 0 {
-                continue;
-            }
-            let req = String::from_utf8_lossy(&buf[..n]);
-            let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
-            if path.starts_with("/metrics/binary") {
-                tick += 1;
-                let body = snapshot_bytes(tick);
-                let head = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/msgpack\r\n\
-                     Content-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                let _ = stream.write_all(head.as_bytes());
-                let _ = stream.write_all(&body);
-            } else {
-                let _ = stream.write_all(
-                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                );
-            }
-            let _ = stream.flush();
+        while !ready() {
+            std::thread::sleep(Duration::from_millis(20));
         }
+        let listener =
+            TcpListener::bind(("127.0.0.1", port)).expect("failed to bind the late agent");
+        serve_agent(listener, Streams::Never, Some(version));
     });
     port
+}
+
+fn spawn_agent(streams: Streams, banner: Option<&'static str>) -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the fake agent");
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || serve_agent(listener, streams, banner));
+    port
+}
+
+/// The fake agent's accept loop; see [`spawn_fake_agent`].
+fn serve_agent(listener: TcpListener, streams: Streams, banner: Option<&'static str>) {
+    let tick = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let subscriptions = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let tick = tick.clone();
+            let subscriptions = subscriptions.clone();
+            // A thread per connection: a stream subscription holds its
+            // connection for the whole run.
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 8192];
+                let Ok(n) = stream.read(&mut buf) else {
+                    return;
+                };
+                if n == 0 {
+                    return;
+                }
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
+                if path.starts_with("/metrics/binary") {
+                    let tick = tick.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                    let body = snapshot_bytes(tick);
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/msgpack\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(&body);
+                } else if path.starts_with("/metrics/stream")
+                    && match streams {
+                        Streams::Never => false,
+                        Streams::Always => true,
+                        Streams::OnceThen404(_) => {
+                            subscriptions.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0
+                        }
+                    }
+                {
+                    let frames = match streams {
+                        Streams::OnceThen404(n) => Some(n),
+                        _ => None,
+                    };
+                    serve_stream(stream, &path, frames);
+                    return;
+                } else if let (Some(version), "/") = (banner, path.as_str()) {
+                    let body = format!("Rezolus {version} Agent\n");
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(body.as_bytes());
+                } else {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                }
+                let _ = stream.flush();
+            });
+        }
+    }
+}
+
+fn wall_ns() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64
+}
+
+/// The agent's replication stream, as `/metrics/stream` serves it: the
+/// preamble and a handshake, then one rows frame per requested interval carrying one
+/// counter in the `fake/ops` acquisition group, until the recorder hangs up or
+/// `frames` have been sent.
+fn serve_stream(mut stream: std::net::TcpStream, path: &str, frames: Option<u64>) {
+    use dendro::replicate::{wire, Frame};
+    use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc};
+
+    // The interval the recorder asked for (`?interval=`, a humantime
+    // duration), as the agent honours it; 100ms when absent.
+    let interval = path
+        .split_once("interval=")
+        .map(|(_, v)| v.split('&').next().unwrap_or(v).replace("%20", " "))
+        .and_then(|v| humantime::parse_duration(&v).ok())
+        .unwrap_or(Duration::from_millis(100));
+    let head = "HTTP/1.1 200 OK\r\n\
+                Content-Type: application/vnd.rezolus.replication.v1+dendro\r\n\
+                Connection: close\r\n\r\n";
+    let mut bytes = head.as_bytes().to_vec();
+    wire::write_preamble(&mut bytes).unwrap();
+    let anchor = wall_ns();
+    wire::encode_frame(
+        &Frame::Handshake {
+            source: 0,
+            uuid: Some("fake-epoch".to_string()),
+            labels: Default::default(),
+            metadata: Default::default(),
+            clock_anchor_wall_ns: anchor as i64,
+            complete: false,
+        },
+        &mut bytes,
+    )
+    .unwrap();
+    if stream
+        .write_all(&bytes)
+        .and_then(|()| stream.flush())
+        .is_err()
+    {
+        return;
+    }
+
+    let schema = GroupSchema {
+        counters: vec![MetricDesc {
+            name: "0x0".to_string(),
+            metadata: [("metric".to_string(), "fake_ops".to_string())]
+                .into_iter()
+                .collect(),
+        }],
+        gauges: Vec::new(),
+        histograms: Vec::new(),
+    };
+    for seq in 0u64.. {
+        if frames.is_some_and(|n| seq >= n) {
+            // Closing the connection is how the stream ends.
+            return;
+        }
+        std::thread::sleep(interval);
+        let ts = wall_ns();
+        let group = GroupSnapshot {
+            name: "fake/ops".to_string(),
+            schema_hash: schema.hash(),
+            schema: Some(std::sync::Arc::new(schema.clone())),
+            window: Some(metriken::Window::new(ts - 1_000_000, ts)),
+            counters: vec![Some(seq * 10)],
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        };
+        let row = rez::wal::encode_wal_group_row(&rez::wal::wal_group_row(
+            &group,
+            Some((&schema).into()),
+        ))
+        .unwrap();
+        let mut bytes = Vec::new();
+        wire::encode_frame(
+            &Frame::Rows {
+                source: 0,
+                seq,
+                index_state: dendro::replicate::NO_INDEX_STATE,
+                rows: vec![dendro::archive::WalRow {
+                    stream: "fake/ops".to_string(),
+                    ts: ts as i64,
+                    wall_offset: 0,
+                    row,
+                }],
+            },
+            &mut bytes,
+        )
+        .unwrap();
+        if stream
+            .write_all(&bytes)
+            .and_then(|()| stream.flush())
+            .is_err()
+        {
+            return;
+        }
+    }
 }
 
 /// Minimal stand-in for a Prometheus exporter. Answers `/metrics` with text
@@ -86,8 +286,19 @@ fn spawn_fake_exporter() -> u16 {
 /// As `spawn_fake_exporter`, with the counter's name chosen by the caller so
 /// two exporters in one run are telling apart by what they expose.
 fn spawn_fake_exporter_named(counter: &'static str) -> u16 {
+    spawn_fake_exporter_counted(counter).0
+}
+
+/// As `spawn_fake_exporter_named`, also returning how many requests it has
+/// answered, so a test can tell when the recorder is past startup (the
+/// startup probe is the first request, the first tick's scrape the second).
+fn spawn_fake_exporter_counted(
+    counter: &'static str,
+) -> (u16, std::sync::Arc<std::sync::atomic::AtomicU64>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the fake exporter");
     let port = listener.local_addr().unwrap().port();
+    let hits = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let served = hits.clone();
     std::thread::spawn(move || {
         let mut tick = 0u64;
         for stream in listener.incoming() {
@@ -116,9 +327,10 @@ fn spawn_fake_exporter_named(counter: &'static str) -> u16 {
             let _ = stream.write_all(head.as_bytes());
             let _ = stream.write_all(body.as_bytes());
             let _ = stream.flush();
+            served.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
     });
-    port
+    (port, hits)
 }
 
 /// A Prometheus endpoint records into a `.rez` — it used to demote the whole
@@ -467,6 +679,127 @@ fn a_rezolus_agent_and_a_prometheus_exporter_share_one_archive() {
     assert!(
         stdout.contains("fake"),
         "and the agent's own sampler table alongside it: {stdout}"
+    );
+}
+
+/// A `.dendro` streams a Rezolus agent and scrapes a Prometheus exporter in
+/// the same run, into one archive with a recording each.
+///
+/// The two reach the writer on different paths — the agent's rows off its
+/// stream pump, the exporter's from the tick's scrape — and are committed
+/// together each tick, so this is where a run that fed only one of them, or
+/// opened a second archive handle, would show.
+#[test]
+fn a_dendro_streams_an_agent_and_scrapes_a_prometheus_exporter_into_one_archive() {
+    use metriken_archive::Catalog;
+
+    let agent = spawn_fake_agent();
+    let exporter = spawn_fake_exporter_named("http_requests_total");
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("mixed.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{agent},source=agent"))
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{exporter}/metrics,source=svc"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "a mixed .dendro run must record (status {:?})\nstderr:\n{stderr}",
+        out.status.code()
+    );
+    assert!(
+        stderr.contains("subscribed to its replication stream"),
+        "the agent is streamed, not scraped:\n{stderr}"
+    );
+
+    let catalog = metriken_archive::DendroCatalog::open(&output).expect("the archive opens");
+    let sources = catalog.sources().expect("the catalog reads");
+    assert_eq!(sources.len(), 2, "one recording per endpoint: {sources:?}");
+    let rows = |id: i64, table: &str| {
+        let sealed = catalog.segment_span(id, table).unwrap().1.rows;
+        let live = catalog.live_wal_span(id, table).unwrap().rows;
+        sealed + live
+    };
+    for (source, table) in [("agent", "fake/ops"), ("svc", "prometheus/scrape")] {
+        let recording = sources
+            .iter()
+            .find(|s| s.labels.get("source").map(String::as_str) == Some(source))
+            .unwrap_or_else(|| panic!("a recording for {source}: {sources:?}"));
+        assert!(recording.complete, "{source} is finalized");
+        let tables = catalog.tables(recording.id).unwrap();
+        assert!(
+            tables.iter().any(|t| t == table),
+            "{source} holds {table}: {tables:?}"
+        );
+        let n = rows(recording.id, table);
+        assert!(n > 0, "{source}'s {table} holds rows");
+    }
+}
+
+/// An agent that cannot serve `/metrics/stream` is refused for a `.dendro`,
+/// by name and version, before the archive is created — so nothing is left
+/// at the output path — and is never scraped instead.
+#[test]
+fn a_dendro_refuses_an_agent_without_a_stream_and_leaves_nothing_behind() {
+    let agent = spawn_fake_agent_without_stream("5.20.0");
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("old.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{agent}"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "refused:\n{stderr}");
+    for needle in [
+        "Rezolus 5.20.0",
+        "/metrics/stream",
+        "5.21.0",
+        "-o out.rez",
+        &format!("127.0.0.1:{agent}"),
+    ] {
+        assert!(stderr.contains(needle), "{needle:?} in:\n{stderr}");
+    }
+    let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+    assert!(left.is_empty(), "nothing is written: {left:?}");
+
+    // The same agent still records into a .rez, which scrapes it.
+    let rez = dir.path().join("old.rez");
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{agent}"))
+        .arg("-o")
+        .arg(&rez)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("500ms")
+        .output()
+        .expect("failed to run rezolus record");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }
 
@@ -1093,4 +1426,325 @@ fn the_interval_the_command_exited_in_is_sampled() {
         "the last row ({last_ts}) must be within one interval of run_end ({})",
         run_end.timestamp
     );
+}
+
+/// Rows in `table` of the one source in a `.dendro`, and the newest row's
+/// timestamp, sealed and live together.
+fn dendro_rows(output: &std::path::Path, table: &str) -> (u64, Option<u64>, Vec<String>) {
+    use metriken_archive::Catalog;
+    let catalog = metriken_archive::DendroCatalog::open(output).expect("the archive opens");
+    let sources = catalog.sources().expect("the catalog reads");
+    assert_eq!(sources.len(), 1, "one endpoint, one source");
+    let id = sources[0].id;
+    let sealed = catalog.segment_span(id, table).unwrap().1;
+    let live = catalog.live_wal_span(id, table).unwrap();
+    let kinds = sources[0]
+        .metadata
+        .get("events")
+        .map(|raw| {
+            let payload: dashboard::Events = serde_json::from_str(raw).expect("the payload parses");
+            payload.events.into_iter().filter_map(|e| e.kind).collect()
+        })
+        .unwrap_or_default();
+    (
+        sealed.rows + live.rows,
+        sealed.last_ts.max(live.last_ts),
+        kinds,
+    )
+}
+
+/// `.dendro` form of [`a_command_that_exits_at_once_still_gets_one_scrape`]:
+/// a command that exits before the agent's first frame is still recorded,
+/// because the recorder waits for that frame rather than for a fixed grace.
+///
+/// Regression: the grace was one interval capped at two seconds, and stream
+/// frames are paced by the agent, so `--interval 3s -- true` finished before
+/// the first frame: "command exited before any metrics were recorded", no
+/// file, exit 1.
+#[test]
+fn a_dendro_command_that_exits_at_once_still_gets_one_frame() {
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("out.dendro");
+    let out = record_wrapped_script(&output, "3s", "exit 0");
+    assert!(
+        out.status.success(),
+        "an instant exit is a recorded run, exit 0\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let (rows, _, kinds) = dendro_rows(&output, "fake/ops");
+    assert!(rows >= 1, "the first frame was recorded, got {rows} rows");
+    assert_eq!(kinds, vec!["run_start", "run_end"]);
+}
+
+/// `.dendro` form of [`the_interval_the_command_exited_in_is_sampled`]: the
+/// frame covering the moment the command exited is recorded, so the last row
+/// is no older than one interval before `run_end`.
+///
+/// At a 3s interval and a 3.5s command, the frame that covers the exit comes
+/// 2.5s after it, past the old two-second grace.
+#[test]
+fn the_interval_the_dendro_command_exited_in_is_recorded() {
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("out.dendro");
+    let out = record_wrapped_script(&output, "3s", "sleep 3.5");
+    assert!(
+        out.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let (rows, last_ts, _) = dendro_rows(&output, "fake/ops");
+    assert!(rows >= 2, "{rows} rows");
+    let last_ts = last_ts.expect("a last row");
+
+    use metriken_archive::Catalog;
+    let catalog = metriken_archive::DendroCatalog::open(&output).unwrap();
+    let raw = catalog.sources().unwrap()[0]
+        .metadata
+        .get("events")
+        .cloned()
+        .expect("events");
+    let payload: dashboard::Events = serde_json::from_str(&raw).expect("the payload parses");
+    let run_end = payload
+        .events
+        .iter()
+        .find(|e| e.kind.as_deref() == Some("run_end"))
+        .expect("run_end");
+    let interval_ns = Duration::from_secs(3).as_nanos() as u64;
+    assert!(
+        last_ts + interval_ns >= run_end.timestamp,
+        "the last row ({last_ts}) must be within one interval of run_end ({})",
+        run_end.timestamp
+    );
+    assert!(
+        last_ts >= run_end.timestamp,
+        "the frame after the exit was waited for: last row {last_ts}, run_end {}",
+        run_end.timestamp
+    );
+}
+
+/// An agent that comes up after the recording started, and cannot serve its
+/// stream, is refused on its own: the other endpoints keep recording and the
+/// archive is finalized, and the run exits 1 so a pipeline notices.
+///
+/// Regression: the refusal ended the whole run and left the archive
+/// unfinalized.
+#[test]
+fn a_late_agent_without_a_stream_is_left_out_and_the_rest_finalize() {
+    use metriken_archive::Catalog;
+
+    let (exporter, hits) = spawn_fake_exporter_counted("http_requests_total");
+    // Up once the exporter has been scraped twice: the startup probe, then
+    // the first tick. By then the archive is open.
+    let agent = spawn_fake_agent_without_stream_when("5.20.0", move || {
+        hits.load(std::sync::atomic::Ordering::SeqCst) >= 2
+    });
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("late.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{exporter}/metrics,source=svc"))
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{agent},source=old"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("200ms")
+        .arg("--duration")
+        .arg("2s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "exits 1:\n{stderr}");
+    for needle in [
+        "Rezolus 5.20.0",
+        "predates",
+        "excluded from this recording",
+        &format!("127.0.0.1:{agent}"),
+        &format!(
+            "error: http://127.0.0.1:{agent}/ (old) was refused mid-run and has no rows in {}\n",
+            output.display()
+        ),
+        "1 of 2 endpoints refused; the archive holds the rest and is finalized",
+    ] {
+        assert!(stderr.contains(needle), "{needle:?} in:\n{stderr}");
+    }
+    assert!(
+        !stderr.contains("-o out.rez"),
+        "no format switch advised:\n{stderr}"
+    );
+
+    let catalog = metriken_archive::DendroCatalog::open(&output).expect("the archive opens");
+    let sources = catalog.sources().expect("the catalog reads");
+    assert_eq!(
+        sources.len(),
+        1,
+        "only the exporter is recorded: {sources:?}"
+    );
+    assert!(sources[0].complete, "the recording is finalized");
+    let id = sources[0].id;
+    let rows = catalog
+        .segment_span(id, "prometheus/scrape")
+        .unwrap()
+        .1
+        .rows
+        + catalog.live_wal_span(id, "prometheus/scrape").unwrap().rows;
+    assert!(rows > 0, "the exporter kept recording");
+    drop(catalog);
+
+    let described = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("recording")
+        .arg("metadata")
+        .arg("-i")
+        .arg(&output)
+        .output()
+        .expect("failed to run rezolus recording metadata");
+    let stdout = String::from_utf8_lossy(&described.stdout);
+    assert!(described.status.success(), "{stdout}");
+    assert!(
+        !stdout.contains("not cleanly finalized"),
+        "a clean finalize: {stdout}"
+    );
+}
+
+/// An agent that streamed, then answers its reconnect with a 404, is refused
+/// on its own as a late agent is: its recording stops with the rows it had
+/// and is finalized, the other endpoint keeps recording, and the run exits 1.
+///
+/// Regression: a refusal on a reconnect ended the whole run.
+#[test]
+fn an_agent_refused_on_reconnect_keeps_its_rows_and_the_rest_finalize() {
+    use metriken_archive::Catalog;
+
+    let exporter = spawn_fake_exporter();
+    let agent = spawn_fake_agent_that_stops_streaming(3);
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("reconnect.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{exporter}/metrics,source=svc"))
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{agent},source=agent"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("200ms")
+        .arg("--duration")
+        .arg("3s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "exits 1:\n{stderr}");
+    let dropped = format!(
+        "error: http://127.0.0.1:{agent}/ (agent) was refused mid-run and has no rows in {} after ",
+        output.display()
+    );
+    for needle in [
+        "Rezolus 6.0.0",
+        "returned HTTP 404",
+        "recording stops here",
+        dropped.as_str(),
+        "1 of 2 endpoints refused; the archive holds the rest and is finalized",
+    ] {
+        assert!(stderr.contains(needle), "{needle:?} in:\n{stderr}");
+    }
+    assert!(!stderr.contains("predates"), "a 6.0 agent:\n{stderr}");
+
+    let catalog = metriken_archive::DendroCatalog::open(&output).expect("the archive opens");
+    let sources = catalog.sources().expect("the catalog reads");
+    assert_eq!(sources.len(), 2, "{sources:?}");
+    let rows = |id: i64, table: &str| {
+        catalog.segment_span(id, table).unwrap().1.rows
+            + catalog.live_wal_span(id, table).unwrap().rows
+    };
+    let by_source = |name: &str| {
+        sources
+            .iter()
+            .find(|s| s.labels.get("source").map(String::as_str) == Some(name))
+            .unwrap_or_else(|| panic!("a recording for {name}: {sources:?}"))
+    };
+    let agent_src = by_source("agent");
+    assert!(
+        agent_src.complete,
+        "the dropped agent's recording is finalized"
+    );
+    let agent_rows = rows(agent_src.id, "fake/ops");
+    assert!(
+        (1..=3).contains(&agent_rows),
+        "the agent keeps the rows it streamed, and no more: {agent_rows}"
+    );
+    let svc = by_source("svc");
+    assert!(svc.complete, "the exporter's recording is finalized");
+    let svc_rows = rows(svc.id, "prometheus/scrape");
+    // Scrapes after the refusal: more than the agent's three frames' worth.
+    assert!(
+        svc_rows > agent_rows + 3,
+        "the exporter kept recording: {svc_rows} rows"
+    );
+}
+
+/// A run whose every endpoint has been refused mid-run ends on its own: with
+/// no `--duration` it would otherwise record nothing until ctrl-c. The
+/// archive is finalized with the rows the agent streamed before its
+/// reconnect was refused, and the run exits 1.
+#[test]
+fn a_run_whose_every_endpoint_is_refused_ends_on_its_own() {
+    use metriken_archive::Catalog;
+
+    let agent = spawn_fake_agent_that_stops_streaming(3);
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("alone.dendro");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{agent}"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("200ms")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to run rezolus record");
+    // Three frames, a one-second reconnect delay and the refusal take about
+    // two seconds; a run that does not end on its own is killed here and
+    // fails the test rather than hanging it.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the run did not end after every endpoint was refused");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    assert_eq!(status.code(), Some(1), "exits 1:\n{stderr}");
+    assert!(
+        stderr.contains("1 of 1 endpoints refused; the archive holds the rest and is finalized"),
+        "{stderr}"
+    );
+
+    let catalog = metriken_archive::DendroCatalog::open(&output).expect("the archive opens");
+    let sources = catalog.sources().expect("the catalog reads");
+    assert_eq!(sources.len(), 1, "{sources:?}");
+    assert!(sources[0].complete, "the archive is finalized");
+    let id = sources[0].id;
+    let rows = catalog.segment_span(id, "fake/ops").unwrap().1.rows
+        + catalog.live_wal_span(id, "fake/ops").unwrap().rows;
+    assert!((1..=3).contains(&rows), "the rows it streamed: {rows}");
 }

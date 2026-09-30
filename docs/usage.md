@@ -113,8 +113,8 @@ play, which by default means `rezolus.dendro`.
 
 | Extension | What it is | When |
 | --- | --- | --- |
-| `.dendro` | **Default** (since 6.0). An archive with separate acquisition groups and their cadences/windows. Holds one *recording* per endpoint. Groups whose members come and go (threads, cgroups, CPUs) are stored one row per member. | One or more Rezolus or Prometheus endpoints, including mixed inputs. |
-| `.rez` | The same recordings in the archive format before 6.0, several times larger than a `.dendro`. Every tool still reads and writes it. | A consumer that has not moved to `.dendro`. |
+| `.dendro` | **Default** (since 6.0). An archive with separate acquisition groups and their cadences/windows. Holds one *recording* per endpoint. Groups whose members come and go (threads, cgroups, CPUs) are stored one row per member. Rezolus agents are streamed (5.21.0 or later) and Prometheus endpoints scraped. | One or more Rezolus or Prometheus endpoints, including mixed inputs. |
+| `.rez` | The same recordings in the archive format before 6.0, several times larger than a `.dendro`. Every tool still reads and writes it. Scrapes every endpoint. | A consumer that has not moved to `.dendro`, or an agent older than 5.21.0; `rezolus recording upgrade --to dendro out.rez -o out.dendro` converts it afterwards. |
 | `.parquet` | One columnar table on a single uniform clock. | Uniform tabular export or other Parquet tooling. |
 | `.raw` | The msgpack snapshots as scraped, concatenated. | Capture now, decide later — convert with `rezolus recording convert`. |
 
@@ -122,7 +122,10 @@ Passing a `--format` that contradicts the extension (say `--format parquet` with
 `-o out.dendro`) is an error. Both Rezolus and Prometheus endpoints can be
 recorded to an archive (`.dendro` or `.rez`); a Prometheus scrape gets an acquisition window spanning the HTTP
 request and response. Multiple endpoints remain separate recordings in the
-same archive.
+same archive. A `.dendro` takes each Rezolus agent from its replication stream
+rather than scraping it, and refuses an agent that cannot serve one; see
+[Streaming and scraping](#streaming-and-scraping). The other formats scrape
+every endpoint.
 
 `--separate` with multiple endpoints requires parquet or raw: it requests one
 file per endpoint. If the output format was left at its default, that option
@@ -135,8 +138,10 @@ parquet or raw output is overwritten. There is no `--force`.
 
 When wrapping a command, rezolus passes its stdio straight through and exits
 with the command's own status, so `rezolus record -o bench.dendro -- ./bench.sh &&
-analyze bench.dendro` gates on the benchmark; the exception is the `--duration`
-cap, which exits 124 if it has to kill the command.
+analyze bench.dendro` gates on the benchmark. Two substitutions: the
+`--duration` cap exits 124 if it kills the command, and a recording failure
+(an endpoint refused mid-run, a write error) exits 1 whatever the command
+returned.
 
 A wrapped run is also marked in the recording: a `run_start` event when the
 command spawns and a `run_end` event when its exit is observed (both in `.dendro`,
@@ -214,31 +219,61 @@ releases still open everywhere, and `rezolus recording upgrade old.rez` converts
 one to the current container — as does rewriting it with `combine`, `filter` or
 `annotate`, all of which read either container and emit the current one.
 
-### Streaming instead of scraping
+### Streaming and scraping
 
-`--stream` subscribes to each agent's replication stream (`/metrics/stream`)
-instead of scraping it. The agent pushes one frame per `--interval`, carrying
+A `.dendro` records each Rezolus agent from its replication stream
+(`/metrics/stream`). The agent pushes one frame per `--interval`, carrying
 only the acquisition groups it re-read since the last frame, stamped when the
 agent sampled rather than when the recorder asked. Which task or cgroup each
 slot means travels in each group's schema, and the `.dendro` takes it from
-there into its occupant streams.
+there into its occupant streams. A Prometheus endpoint cannot stream, so it is
+scraped each tick, and one run can hold both kinds, each endpoint its own
+recording:
 
 ```bash
-rezolus record --stream --url http://localhost:4241 -o run.dendro
-rezolus record --stream --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.dendro
+rezolus record --url http://localhost:4241 -o run.dendro
+rezolus record --endpoint http://agent:4241 --endpoint http://svc:9090/metrics,source=svc -o run.dendro
 ```
 
-Scraping stays the default and the transport is never auto-detected. `--stream`
-records to `.dendro` only; `-o out.rez` or `--format rez` with `--stream` is
-refused. (Rezolus 5.x wrote `.rez` from a stream, with an identity index beside
-the rows; 6.0 removed both. `.rez` recordings written that way still open.)
-Every endpoint must be a rezolus agent that serves
-the stream: an endpoint that cannot (a Prometheus exporter, a V2 agent, an agent
-from before `/metrics/stream`) fails the run rather than being scraped. An
-endpoint that is merely unreachable is retried each tick. A stream that drops
-mid-run, or that produces no frame for the scrape timeout, is reconnected after
-one interval (at least a second), with the drop and the reconnect logged; rows
-between the two are lost, as a failed scrape's are.
+There is no scrape path for a Rezolus agent into a `.dendro`. An agent that
+cannot serve the stream — older than 5.21.0, when `/metrics/stream` shipped, a
+V2 agent, a stream route that answers 404 or another refusal (a proxy that
+does not route the path, or answers 401 or 403), or one whose handshake does
+not decode (a replication protocol version mismatch names both versions) — is
+refused with its version. At startup the run is refused before the archive is
+created. An agent that comes up later and is refused is left out: the other
+endpoints keep recording, the archive is finalized, and the run exits 1. When
+every endpoint has been refused, the run ends there. At the end each refused
+endpoint gets its own line, saying from when the archive has no rows for it.
+Record such an agent to a `.rez` or parquet, which scrape, and convert a
+`.rez` afterwards if you want a `.dendro`:
+
+```bash
+rezolus record --url http://old-host:4241 -o run.rez
+rezolus recording upgrade --to dendro run.rez -o run.dendro
+```
+
+An agent that is merely unreachable is retried each tick, as is one that
+answers but whose stream fails to open with an error that can change (a 5xx
+from a proxy, a handshake that times out). A stream that drops mid-run, or that
+produces no frame for the scrape timeout (twice the interval, between 2 s and
+10 s), is reconnected after one interval (at least a second), with the drop and the reconnect logged; rows between the two
+are lost, as a failed scrape's are. An agent that comes back unable to serve
+the stream (a 404, a wrong content type, a handshake that does not decode) is
+refused as a late agent is: its recording stops with the rows it had and is
+finalized, it is not retried, the other endpoints keep recording, and the run
+exits 1.
+
+A wrapped command (`-- <command>`) that exits on its own is followed by a wait
+for each agent's frame stamped at or after the exit, at most one interval plus
+the scrape timeout (twice the interval, between 2 s and 10 s), so the interval the command exited in is recorded even
+when the agent's next frame is seconds away. Other stops (`--duration`,
+ctrl-c) wait one interval, at most two seconds.
+
+Streamed rows and the tick's scrapes go through one archive writer and are
+committed together, once per tick.
+
+A `.rez` recorded by a 5.x `record --stream` still opens.
 
 ## Viewer
 

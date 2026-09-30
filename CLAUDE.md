@@ -54,30 +54,39 @@ sudo target/release/rezolus config/agent.toml
 # Exporter - Prometheus-compatible metrics endpoint
 sudo target/release/rezolus exporter config/exporter.toml
 
-# Recorder - capture metrics to disk (.rez by default)
+# Recorder - capture metrics to disk (.dendro by default)
 target/release/rezolus record                                                           # localhost:4241 -> rezolus.dendro
 target/release/rezolus record --url http://localhost:4241 -o out.dendro --label arm=redis  # per-sampler archive (.rez: the pre-6.0 format)
 target/release/rezolus record --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.dendro  # one recording per endpoint
 target/release/rezolus record --url http://host:9090/metrics -o out.parquet --metadata source=llm-perf
-target/release/rezolus record --stream --url http://localhost:4241 -o out.dendro   # subscribe to /metrics/stream instead of scraping
+target/release/rezolus record --endpoint http://agent:4241 --endpoint http://svc:9090/metrics,source=svc -o run.dendro  # agent streamed, Prometheus scraped, one archive
 target/release/rezolus record -o bench.rez -- ./bench.sh   # record for the command's lifetime; writes run_start/run_end events
 #   (program name only; --record-command-line adds the full argument list; .rez, .dendro and parquet carry them, raw cannot)
-target/release/rezolus record --url http://localhost:4241 -o out.dendro         # dendro archive via metriken-archive (--stream writes only this)
+target/release/rezolus record --url http://localhost:4241 -o out.dendro         # dendro archive via metriken-archive; the agent is streamed
 # Auto-detects Rezolus agent vs Prometheus endpoints. The -o extension picks the format
-# (.rez | .parquet | .raw); --format {rez|parquet|raw} is rarely needed and conflicting with
-# the extension is an error. With no -o, the output is rezolus.<ext> for the format in play.
+# (.dendro, the default | .rez | .parquet | .raw); --format {dendro|rez|parquet|raw} is rarely
+# needed and conflicting with the extension is an error. With no -o, the output is
+# rezolus.<ext> for the format in play (rezolus.dendro by default).
 # .rez takes any number of endpoints, rezolus or Prometheus, each as its own recording
 # in one multi-recording archive. A Prometheus scrape becomes one acquisition group per
 # target (`prometheus/scrape`), windowed by the real HTTP round trip. Only --separate
 # demotes the format, since one archive cannot be one file per endpoint.
 # Also: --metadata key=value (repeatable), --label key=value (repeatable; tags a .rez
 # recording, source/host auto-populated), --interval, --duration.
-# --stream is opt-in and never auto-detected: .dendro only (.rez is refused at parse time;
-# 6.0 removed .rez --stream and the identity index), rezolus agents only. An endpoint
-# that cannot serve the stream (Prometheus, V2 agent, no /metrics/stream) fails the run
-# rather than being scraped; an unreachable one is retried each tick, and a stream that
-# drops (or goes silent for the scrape timeout) is reconnected after one interval, at least
-# a second. Identity travels in each group's schema; the agent sends no index frames.
+# A .dendro records every rezolus agent from /metrics/stream and scrapes every Prometheus
+# endpoint (src/recorder/mod.rs `activate_endpoint`); both feed one ArchiveWriter, one commit
+# per tick. There is no scrape path for an agent into a .dendro: one that cannot serve the
+# stream (older than 5.21.0, V2 agent, handshake that does not decode) is refused with its
+# version. At startup that is before the archive exists, pointing at .rez/parquet (which
+# scrape); an agent that comes up later, or is refused on a reconnect, is marked Refused
+# and left out from then on (a reconnect keeps the rows it had), the rest finalize, and the
+# run exits 1 (`refuse_mid_run`). An unreachable one (or a 5xx / handshake timeout) is retried each
+# tick, and a stream that drops (or goes silent for the scrape timeout) is reconnected
+# after one interval, at least a second. A wrapped command that exits on its own waits for
+# each agent's frame stamped at or after the exit (bounded by interval + scrape timeout).
+# When every endpoint has been refused the run ends; each refused endpoint gets a line.
+# Identity travels in each group's schema; the agent sends no index frames. --stream was
+# removed before 6.0.0 (clap's unknown-argument error): the output format picks the transport.
 
 # Viewer - web dashboard for parquet files, live agents, or upload mode
 target/release/rezolus view output.parquet [experiment.parquet] [--listen ADDR]
@@ -188,7 +197,7 @@ The binary operates in seven modes via subcommands:
 
 1. **Agent** (`src/agent/`) - Default. Collects system metrics via samplers.
 2. **Exporter** (`src/exporter/`) - Pulls from agent's msgpack endpoint, exposes Prometheus metrics.
-3. **Recorder** (`src/recorder/`) - Writes metrics to disk. Auto-detects Rezolus vs Prometheus sources. The output extension picks the format (`.dendro` default since 6.0, `.rez`, `.parquet`, `.raw`); `.dendro` writes through metriken-archive's `ArchiveWriter` (`RezStream`'s `Sink::Dendro`), see `docs/journal/2026-09-28-dendro-writer-adoption.md`; `--format` is the explicit form and contradicting the extension is an error. Defaults to `rezolus.dendro` when no `-o` is given, falling back to `rezolus.parquet` only for `--separate` with several endpoints when nothing pinned the format. Several endpoints in one run write one multi-recording archive, a recording each. Supports `--metadata key=value`; `--label key=value` tags every archive recording in the run, so `--endpoint url,source=name` is what distinguishes two endpoints (see "`.rez` archive format" below).
+3. **Recorder** (`src/recorder/`) - Writes metrics to disk. Auto-detects Rezolus vs Prometheus sources. The output extension picks the format (`.dendro` default since 6.0, `.rez`, `.parquet`, `.raw`); `.dendro` writes through metriken-archive's `ArchiveWriter` (`RezStream`'s `Sink::Dendro`), streams Rezolus agents and scrapes Prometheus endpoints, see `docs/journal/2026-09-28-dendro-writer-adoption.md`; `--format` is the explicit form and contradicting the extension is an error. Defaults to `rezolus.dendro` when no `-o` is given, falling back to `rezolus.parquet` only for `--separate` with several endpoints when nothing pinned the format. Several endpoints in one run write one multi-recording archive, a recording each. Supports `--metadata key=value`; `--label key=value` tags every archive recording in the run, so `--endpoint url,source=name` is what distinguishes two endpoints (see "`.rez` archive format" below).
 4. **Hindsight** (`src/hindsight/`) - Maintains a rolling archive buffer on disk (the archive writer with retention: everything older than `duration` is evicted each tick) for post-incident snapshots. The buffer is readable live by the viewer/MCP/`recording metadata`. It is a dendro archive through metriken-archive's writer (`buffer.rs`'s `Writer::Dendro`) unless `output` ends in `.rez`, which keeps the `.rez` v3 buffer (a snapshot of that is a `VACUUM INTO` copy taken without pausing the recording). A dendro buffer's snapshots go through dendro's `copy_sources_into` on the read handle, which seals the live tail into the copy (a fully sealed artifact, no WAL rows), and a ranged one starts one occupant restatement period early so long tables keep their labels.
 5. **Viewer** (`src/viewer/`) - Web dashboard with PromQL query engine and TSDB (from `metriken-query` crate). Supports parquet files, `.rez` archives (a 2-recording `.rez` renders as an A/B baseline/experiment comparison; >2 shows the first two unless `--baseline k=v` / `--experiment k=v` name which recordings fill the slots — repeatable, ANDed, subset match, the same selector semantics as the MCP `--recording` flag, and each must name exactly one recording or the run is refused with a listing), live agent connections, and upload-only mode. Generates service KPI dashboards from `ServiceExtension` metadata.
 6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation, PromQL queries, feature extraction). Runs as stdio server or one-shot CLI commands. `query` prints acquisition-window uncertainty bands `[lo, hi]` beside `rate()`/`irate()` values (scalar ops scale the band; series-op-series combines both operands' bands by interval arithmetic, and operands from *different* acquisition tables have their bands widened to the union of both spans first — identical edges mean the same read, so the common case widens by nothing; non-rate/non-histogram queries have no band). See `docs/journal/2026-08-21-cross-table-uncertainty.md`. `extract-features` emits a deterministic, versioned overview record (JSON) summarizing a recording's Rezolus-native features.

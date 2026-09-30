@@ -737,10 +737,10 @@ mod stream_tests {
         reqwest::Url::parse(&format!("http://{addr}")).unwrap()
     }
 
-    /// `--stream` against an agent that cannot serve it fails loudly, and
-    /// the two ways an agent can fail to serve it both classify as
-    /// `Unsupported`: retrying will not change either answer, so the recorder
-    /// must not sit in its retry loop on them.
+    /// A `.dendro` recording of an agent that cannot serve the stream fails
+    /// loudly, and the two ways an agent can fail to serve it both classify
+    /// as `Unsupported`: retrying will not change either answer, so the
+    /// recorder must not sit in its retry loop on them.
     #[tokio::test]
     async fn an_agent_that_cannot_serve_the_stream_is_refused_as_unsupported() {
         use crate::recorder::stream::{ConnectError, Subscription};
@@ -788,6 +788,75 @@ mod stream_tests {
                 panic!("a 503 will change on retry and must not end the run: {e}")
             }
             Ok(_) => panic!("there is no stream behind a 503"),
+        }
+    }
+
+    /// Serve `body` as a replication stream's bytes on `/metrics/stream`.
+    async fn serve_stream_bytes(body: Vec<u8>) -> reqwest::Url {
+        use axum::response::IntoResponse;
+        let router = Router::new().route(
+            "/metrics/stream",
+            get(move || {
+                let body = body.clone();
+                async move {
+                    (
+                        [(
+                            axum::http::header::CONTENT_TYPE,
+                            axum::http::HeaderValue::from_static(frames::CONTENT_TYPE),
+                        )],
+                        body,
+                    )
+                        .into_response()
+                }
+            }),
+        );
+        serve(router).await
+    }
+
+    /// Bytes that do not decode as a handshake are refused, not retried: the
+    /// agent will send the same bytes next time. A protocol-version mismatch
+    /// names both versions, so a version skew between agent and recorder
+    /// builds can be read off the message.
+    #[tokio::test]
+    async fn a_malformed_handshake_is_refused_by_what_was_wrong() {
+        use crate::recorder::stream::{ConnectError, Subscription};
+        use dendro::replicate::wire::{MAGIC, PROTOCOL_VERSION};
+        let client = test_client();
+
+        let mut other_version = MAGIC.to_vec();
+        let theirs = PROTOCOL_VERSION.wrapping_add(1);
+        other_version.extend_from_slice(&theirs.to_le_bytes());
+        let base = serve_stream_bytes(other_version).await;
+        match Subscription::connect(&client, &base, Duration::from_secs(1)).await {
+            Err(ConnectError::Unsupported(e)) => {
+                assert!(e.contains(&format!("version {theirs}")), "{e}");
+                assert!(e.contains(&format!("version {PROTOCOL_VERSION}")), "{e}");
+            }
+            Err(ConnectError::Unreachable(e)) => panic!("retrying cannot fix this: {e}"),
+            Ok(_) => panic!("not this protocol"),
+        }
+
+        let base = serve_stream_bytes(b"not a replication stream".to_vec()).await;
+        match Subscription::connect(&client, &base, Duration::from_secs(1)).await {
+            Err(ConnectError::Unsupported(e)) => assert!(e.contains("magic"), "{e}"),
+            Err(ConnectError::Unreachable(e)) => panic!("retrying cannot fix this: {e}"),
+            Ok(_) => panic!("not this protocol"),
+        }
+    }
+
+    /// A connection that ends during the handshake is an outage: the next
+    /// attempt may complete it.
+    #[tokio::test]
+    async fn a_handshake_cut_short_is_an_outage_not_a_refusal() {
+        use crate::recorder::stream::{ConnectError, Subscription};
+        use dendro::replicate::wire::{MAGIC, PROTOCOL_VERSION};
+        let mut preamble_only = MAGIC.to_vec();
+        preamble_only.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
+        let base = serve_stream_bytes(preamble_only).await;
+        match Subscription::connect(&test_client(), &base, Duration::from_secs(1)).await {
+            Err(ConnectError::Unreachable(e)) => assert!(e.contains("handshake"), "{e}"),
+            Err(ConnectError::Unsupported(e)) => panic!("a retry may complete it: {e}"),
+            Ok(_) => panic!("no handshake arrived"),
         }
     }
 

@@ -6,7 +6,7 @@
 //!
 //! # Why not dendro's `Subscriber`
 //!
-//! dendro ships one. It owns a dendro `Writer`, while `record --stream` writes
+//! dendro ships one. It owns a dendro `Writer`, while `record -o out.dendro` writes
 //! through metriken-archive's `ArchiveWriter`, which takes V3 snapshots (see
 //! [`StreamSchemas`]). So the frames are decoded and checked here and the
 //! archive is written there.
@@ -266,7 +266,8 @@ impl FrameDecoder {
             ]);
             if version != dendro::replicate::wire::PROTOCOL_VERSION {
                 return Err(format!(
-                    "replication protocol version {version}, but this build speaks {}",
+                    "the agent sent replication protocol version {version}; this recorder \
+                     implements version {}. The agent and recorder builds do not match",
                     dendro::replicate::wire::PROTOCOL_VERSION
                 ));
             }
@@ -316,9 +317,9 @@ impl FrameDecoder {
 /// An agent that answered and cannot serve the stream — no route (404), no
 /// acquisition groups to stream (the 409 a V2 agent gives), a body of the
 /// wrong type — is a configuration the run was not written for, and it fails
-/// loudly rather than falling back to scraping: `--stream` names a transport,
-/// and a run that silently used another would put two endpoints of one A/B on
-/// different transports.
+/// loudly rather than falling back to scraping: a `.dendro` records agents by
+/// stream only, and a run that silently scraped one would put two endpoints of
+/// one A/B on different transports.
 #[derive(Debug)]
 pub(crate) enum ConnectError {
     /// Nothing answered, or the connection dropped before the handshake.
@@ -331,6 +332,22 @@ impl std::fmt::Display for ConnectError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ConnectError::Unreachable(e) | ConnectError::Unsupported(e) => f.write_str(e),
+        }
+    }
+}
+
+/// Why reading the connection failed: the transport, which retrying can
+/// change, or bytes that do not decode, which it cannot.
+#[derive(Debug)]
+enum FillError {
+    Transport(String),
+    Decode(String),
+}
+
+impl FillError {
+    fn into_message(self) -> String {
+        match self {
+            FillError::Transport(e) | FillError::Decode(e) => e,
         }
     }
 }
@@ -395,10 +412,10 @@ impl Subscription {
                     "{url} cannot serve a replication stream: the agent reports no \
                      acquisition groups, which a V2 agent never has"
                 )),
-                404 => ConnectError::Unsupported(format!(
-                    "{url} returned HTTP 404: this agent has no replication stream (it \
-                     predates /metrics/stream)"
-                )),
+                // Not "predates the stream": a current agent behind a proxy
+                // that does not route this path answers the same way. The
+                // caller knows the agent's version and says which it is.
+                404 => ConnectError::Unsupported(format!("{url} returned HTTP 404")),
                 408 | 429 | 500..=599 => {
                     ConnectError::Unreachable(format!("{url} returned HTTP {code}"))
                 }
@@ -418,8 +435,8 @@ impl Subscription {
             .to_string();
         if content_type != crate::agent::REPLICATION_CONTENT_TYPE {
             return Err(ConnectError::Unsupported(format!(
-                "{url} serves `{content_type}`, not `{}` — this build speaks only the \
-                 replication stream",
+                "{url} serves `{content_type}`, not `{}`; this recorder reads only `{}`",
+                crate::agent::REPLICATION_CONTENT_TYPE,
                 crate::agent::REPLICATION_CONTENT_TYPE
             )));
         }
@@ -439,10 +456,19 @@ impl Subscription {
         };
 
         // The handshake is the first frame by protocol. Anything else first
-        // is a producer this subscriber was not written for, and a connection
-        // that ends before it is a transport failure like any other.
+        // is a producer this subscriber was not written for, and so are bytes
+        // that do not decode (wrong magic, another protocol version, a frame
+        // past the size limit): retrying gets the same bytes, so those refuse.
+        // A connection that ends before or during the handshake is a
+        // transport failure like any other.
         while sub.pending.is_empty() {
-            if !sub.fill().await.map_err(ConnectError::Unreachable)? {
+            let filled = sub.fill().await.map_err(|e| match e {
+                FillError::Transport(e) => ConnectError::Unreachable(e),
+                FillError::Decode(e) => {
+                    ConnectError::Unsupported(format!("{url} sent a malformed handshake: {e}"))
+                }
+            })?;
+            if !filled {
                 return Err(ConnectError::Unreachable(format!(
                     "{url} closed the stream before sending a handshake"
                 )));
@@ -483,7 +509,7 @@ impl Subscription {
                 let batch: Vec<Frame> = self.pending.drain(..=at).collect();
                 return self.subscriber.apply(batch).map(Some);
             }
-            if !self.fill().await? {
+            if !self.fill().await.map_err(FillError::into_message)? {
                 return Ok(None);
             }
         }
@@ -491,24 +517,25 @@ impl Subscription {
 
     /// Read one chunk off the connection and decode what it completes into
     /// `pending`. `Ok(false)` means the agent closed the stream cleanly.
-    async fn fill(&mut self) -> Result<bool, String> {
+    async fn fill(&mut self) -> Result<bool, FillError> {
         let chunk = self
             .response
             .chunk()
             .await
-            .map_err(|e| format!("replication stream failed: {e}"))?;
+            .map_err(|e| FillError::Transport(format!("replication stream failed: {e}")))?;
         let Some(chunk) = chunk else {
             // The agent closed. Bytes still held back mean it closed
             // mid-frame, which is worth saying — a clean end leaves none.
             if self.decoder.pending() > 0 {
-                return Err(format!(
+                return Err(FillError::Transport(format!(
                     "the agent closed the stream mid-frame, with {} byte(s) unread",
                     self.decoder.pending()
-                ));
+                )));
             }
             return Ok(false);
         };
-        self.pending.extend(self.decoder.push(&chunk)?);
+        self.pending
+            .extend(self.decoder.push(&chunk).map_err(FillError::Decode)?);
         Ok(true)
     }
 
@@ -630,7 +657,7 @@ pub(crate) async fn pump(
 }
 
 /// Streamed rows back into the V3 snapshots metriken-archive's writer
-/// ingests, for `record --stream -o out.dendro`.
+/// ingests, for an agent recorded into a `.dendro`.
 ///
 /// The stream's rows are `WalGroupRow`s: values and a window per group, the
 /// schema only when it changed. The producer sends a stream's schema whenever
