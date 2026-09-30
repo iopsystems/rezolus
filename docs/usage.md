@@ -60,8 +60,8 @@ format before 6.0, several times larger where threads and cgroups come and go.
 Any other `output` is a `.dendro` archive.
 
 Hindsight reads the agent named by `source` over its replication stream
-(`/metrics/stream`), which agents from 5.21.0 serve. An agent that cannot
-serve it is refused at startup. If the stream drops, hindsight reconnects
+(`/metrics/stream`), which agents from 5.21.0 serve when `snapshot_format` is
+`"v3"` (the default). An agent that cannot serve it is refused at startup. If the stream drops, hindsight reconnects
 after one interval and keeps its buffer.
 
 Hindsight is **disabled by default**. Review the config before enabling it.

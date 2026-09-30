@@ -50,10 +50,12 @@ ttl = "10ms"
 #
 #   - Anything parsing /metrics/json DIRECTLY. Its shape changes wholesale:
 #     a flat `{counters: [...], gauges: [...], histograms: [...]}` becomes
-#     `{groups: [{name, schema, counters, gauges, histograms}, ...]}`. This
-#     repo's own consumers (exporter, recorder, viewer, MCP, hindsight)
-#     handle both and need no change; a homegrown scraper of that endpoint
-#     does.
+#     `{groups: [{name, schema, counters, gauges, histograms}, ...]}`. The
+#     exporter, and `record` to .rez, parquet or raw, handle both; a
+#     homegrown scraper of that endpoint needs changing.
+#
+#   Hindsight, the live viewer and `record` to a .dendro read the agent's
+#   replication stream, which a v2 agent does not serve. They refuse it.
 #
 #   - A consumer built before SnapshotV3 existed. It cannot decode a v3
 #     payload at all. Builds from that era served /metrics as HTTP 200 with

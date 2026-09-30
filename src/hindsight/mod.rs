@@ -234,8 +234,7 @@ pub fn run(config: Config) {
     // Subscribe before the buffer exists. The handshake's anchor is the
     // buffer's timeline (rows carry the agent's own stamps, as a recording of
     // the stream does), and an agent that cannot stream is refused before
-    // anything is written. Hindsight used to scrape `/metrics/binary`, whose
-    // every body carries every group's full schema.
+    // anything is written.
     let connected = rt.block_on(async {
         tokio::time::timeout(
             timeout,
@@ -270,7 +269,7 @@ pub fn run(config: Config) {
         .source()
         .cloned()
         .expect("connect returns only once the handshake has been applied");
-    // Zero is what no agent anchors at (1970), so it is not an anchor.
+    // An anchor of 0 means the handshake carried none; use the local clock.
     let clock_anchor_wall_ns = u64::try_from(source.clock_anchor_wall_ns)
         .ok()
         .filter(|a| *a != 0)
