@@ -11,6 +11,11 @@
 
 ### Changed
 
+- The agent's V3 router resolves each metric module's sampler once and
+  caches it, and looks acquisition groups up with foldhash. Attribution was
+  a scan of every sampler module, run for every metric twice a pass. On the
+  `v3_build_cost` registry the build's median fell about 4% on cache-hit
+  ticks and 2.5% on membership-change ticks.
 - **A `.dendro` records Rezolus agents by stream only.** `record -o
   out.dendro` (and a bare `rezolus record`, whose default output is a
   `.dendro`) subscribes to each agent's `/metrics/stream` and scrapes each
