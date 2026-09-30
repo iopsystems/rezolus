@@ -113,8 +113,8 @@ play, which by default means `rezolus.dendro`.
 
 | Extension | What it is | When |
 | --- | --- | --- |
-| `.dendro` | **Default** (since 6.0). An archive with separate acquisition groups and their cadences/windows. Holds one *recording* per endpoint. Groups whose members come and go (threads, cgroups, CPUs) are stored one row per member. | One or more Rezolus or Prometheus endpoints, including mixed inputs. |
-| `.rez` | The same recordings in the archive format before 6.0, several times larger than a `.dendro`. Every tool still reads and writes it. | A consumer that has not moved to `.dendro`. |
+| `.dendro` | **Default** (since 6.0). An archive with separate acquisition groups and their cadences/windows. Holds one *recording* per endpoint. Groups whose members come and go (threads, cgroups, CPUs) are stored one row per member. Rezolus agents are streamed (5.21.0 or later) and Prometheus endpoints scraped. | One or more Rezolus or Prometheus endpoints, including mixed inputs. |
+| `.rez` | The same recordings in the archive format before 6.0, several times larger than a `.dendro`. Every tool still reads and writes it. Scrapes every endpoint. | A consumer that has not moved to `.dendro`, or an agent older than 5.21.0. |
 | `.parquet` | One columnar table on a single uniform clock. | Uniform tabular export or other Parquet tooling. |
 | `.raw` | The msgpack snapshots as scraped, concatenated. | Capture now, decide later — convert with `rezolus recording convert`. |
 
@@ -122,7 +122,10 @@ Passing a `--format` that contradicts the extension (say `--format parquet` with
 `-o out.dendro`) is an error. Both Rezolus and Prometheus endpoints can be
 recorded to an archive (`.dendro` or `.rez`); a Prometheus scrape gets an acquisition window spanning the HTTP
 request and response. Multiple endpoints remain separate recordings in the
-same archive.
+same archive. A `.dendro` takes each Rezolus agent from its replication stream
+rather than scraping it, and refuses an agent that cannot serve one; see
+[Streaming and scraping](#streaming-and-scraping). The other formats scrape
+every endpoint.
 
 `--separate` with multiple endpoints requires parquet or raw: it requests one
 file per endpoint. If the output format was left at its default, that option
@@ -214,31 +217,47 @@ releases still open everywhere, and `rezolus recording upgrade old.rez` converts
 one to the current container — as does rewriting it with `combine`, `filter` or
 `annotate`, all of which read either container and emit the current one.
 
-### Streaming instead of scraping
+### Streaming and scraping
 
-`--stream` subscribes to each agent's replication stream (`/metrics/stream`)
-instead of scraping it. The agent pushes one frame per `--interval`, carrying
+A `.dendro` records each Rezolus agent from its replication stream
+(`/metrics/stream`). The agent pushes one frame per `--interval`, carrying
 only the acquisition groups it re-read since the last frame, stamped when the
 agent sampled rather than when the recorder asked. Which task or cgroup each
 slot means travels in each group's schema, and the `.dendro` takes it from
-there into its occupant streams.
+there into its occupant streams. A Prometheus endpoint cannot stream, so it is
+scraped each tick as before, and one run can hold both kinds, each endpoint its
+own recording:
 
 ```bash
-rezolus record --stream --url http://localhost:4241 -o run.dendro
-rezolus record --stream --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.dendro
+rezolus record --url http://localhost:4241 -o run.dendro
+rezolus record --endpoint http://agent:4241 --endpoint http://svc:9090/metrics,source=svc -o run.dendro
 ```
 
-Scraping stays the default and the transport is never auto-detected. `--stream`
-records to `.dendro` only; `-o out.rez` or `--format rez` with `--stream` is
-refused. (Rezolus 5.x wrote `.rez` from a stream, with an identity index beside
-the rows; 6.0 removed both. `.rez` recordings written that way still open.)
-Every endpoint must be a rezolus agent that serves
-the stream: an endpoint that cannot (a Prometheus exporter, a V2 agent, an agent
-from before `/metrics/stream`) fails the run rather than being scraped. An
-endpoint that is merely unreachable is retried each tick. A stream that drops
-mid-run, or that produces no frame for the scrape timeout, is reconnected after
-one interval (at least a second), with the drop and the reconnect logged; rows
-between the two are lost, as a failed scrape's are.
+There is no scrape path for a Rezolus agent into a `.dendro`. An agent that
+cannot serve the stream — older than 5.21.0, when `/metrics/stream` shipped, or
+a V2 agent — is refused at startup with its version, before the archive is
+created. Record such an agent to a `.rez` or parquet, which scrape:
+
+```bash
+rezolus record --url http://old-host:4241 -o run.rez
+```
+
+An agent that is merely unreachable is retried each tick, as is one that
+answers but whose stream fails to open with an error that can change (a 5xx
+from a proxy, a handshake that times out). A stream that drops mid-run, or that
+produces no frame for the scrape timeout, is reconnected after one interval (at
+least a second), with the drop and the reconnect logged; rows between the two
+are lost, as a failed scrape's are. An agent that comes back unable to serve
+the stream ends the recording, and what was written is kept.
+
+Streamed rows and the tick's scrapes go through one archive writer and are
+committed together, once per tick.
+
+`--stream` is implied by `.dendro` and no longer needed; it is still accepted
+there, with a note. With `.rez`, parquet or raw it is refused, since those
+formats scrape. (Rezolus 5.x wrote `.rez` from a stream, with an identity index
+beside the rows; 6.0 removed both. `.rez` recordings written that way still
+open.)
 
 ## Viewer
 

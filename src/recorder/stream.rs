@@ -6,7 +6,7 @@
 //!
 //! # Why not dendro's `Subscriber`
 //!
-//! dendro ships one. It owns a dendro `Writer`, while `record --stream` writes
+//! dendro ships one. It owns a dendro `Writer`, while `record -o out.dendro` writes
 //! through metriken-archive's `ArchiveWriter`, which takes V3 snapshots (see
 //! [`StreamSchemas`]). So the frames are decoded and checked here and the
 //! archive is written there.
@@ -316,9 +316,9 @@ impl FrameDecoder {
 /// An agent that answered and cannot serve the stream — no route (404), no
 /// acquisition groups to stream (the 409 a V2 agent gives), a body of the
 /// wrong type — is a configuration the run was not written for, and it fails
-/// loudly rather than falling back to scraping: `--stream` names a transport,
-/// and a run that silently used another would put two endpoints of one A/B on
-/// different transports.
+/// loudly rather than falling back to scraping: a `.dendro` records agents by
+/// stream only, and a run that silently scraped one would put two endpoints of
+/// one A/B on different transports.
 #[derive(Debug)]
 pub(crate) enum ConnectError {
     /// Nothing answered, or the connection dropped before the handshake.
@@ -630,7 +630,7 @@ pub(crate) async fn pump(
 }
 
 /// Streamed rows back into the V3 snapshots metriken-archive's writer
-/// ingests, for `record --stream -o out.dendro`.
+/// ingests, for an agent recorded into a `.dendro`.
 ///
 /// The stream's rows are `WalGroupRow`s: values and a window per group, the
 /// schema only when it changed. The producer sends a stream's schema whenever

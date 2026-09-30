@@ -11,6 +11,19 @@
 
 ### Changed
 
+- **A `.dendro` records Rezolus agents by stream only.** `record -o
+  out.dendro` (and a bare `rezolus record`, whose default output is a
+  `.dendro`) subscribes to each agent's `/metrics/stream` and scrapes each
+  Prometheus endpoint; one run can mix both, each endpoint its own recording,
+  with streamed rows and scrapes committed through one archive writer once
+  per tick. An agent that cannot serve the stream (older than 5.21.0, or a V2
+  agent) is refused at startup with its version, before the archive is
+  created, and is never scraped instead; record it to a `.rez` or parquet,
+  which scrape. An agent that answers but whose stream fails with an error
+  that can change (a 5xx, a handshake timeout) is retried each tick.
+  `--stream` is implied by `.dendro`: it is hidden from help and still
+  accepted there with a note, and still refused with `.rez`, parquet and raw.
+  `.rez`, parquet and raw output are unchanged.
 - The agent's V3 snapshot is built by metriken-exposition's `GroupBuilder`
   and its `/metrics/stream` frames by metriken-archive's `FrameProducer`.
   The agent supplies a router (`src/agent/exposition/http/router.rs`) that

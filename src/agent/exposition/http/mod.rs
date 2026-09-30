@@ -737,7 +737,8 @@ mod stream_tests {
         reqwest::Url::parse(&format!("http://{addr}")).unwrap()
     }
 
-    /// `--stream` against an agent that cannot serve it fails loudly, and
+    /// A `.dendro` recording of an agent that cannot serve the stream fails
+    /// loudly, and
     /// the two ways an agent can fail to serve it both classify as
     /// `Unsupported`: retrying will not change either answer, so the recorder
     /// must not sit in its retry loop on them.
