@@ -1,16 +1,14 @@
 //! Live mode: an agent's replication stream recorded into a temporary archive
 //! and read back while it grows.
 //!
-//! The viewer used to poll `/metrics/binary`, whose every body carries every
-//! acquisition group's full schema, ingest each snapshot into a `MemoryStore`,
-//! and keep every raw body in memory for saving. It is now a stream consumer
-//! like `record` to a `.dendro` and hindsight: the subscription feeds
-//! hindsight's buffer writer, with no retention, and the capture reads the
-//! file through a [`LiveReader`] refreshed after each interval. Saving copies
-//! the archive.
+//! A [`LiveSession`] subscribes to the agent's `/metrics/stream`, writes each
+//! interval into a temporary `.dendro` through hindsight's buffer writer with
+//! no retention, and serves the archive through a [`LiveReader`] refreshed
+//! after each interval. Saving copies the archive.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use metriken_query::BufferPool;
@@ -22,25 +20,59 @@ use super::actions::AgentInfo;
 use crate::hindsight::buffer::HindsightBuffer;
 use crate::recorder::stream::{ConnectError, StreamEvent, StreamSchemas, Subscription};
 
-/// How often the live view asks the agent for an interval.
+/// The interval the live view subscribes at.
 pub const LIVE_INTERVAL: Duration = Duration::from_secs(1);
 
-/// One live agent being recorded. Dropping it stops the recording and
-/// deletes the temporary archive.
+/// Every live archive directory that exists, so an exit that runs no
+/// destructors (`std::process::exit` from the Ctrl-C handler) can remove
+/// them; see [`remove_live_dirs`].
+static LIVE_DIRS: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+
+/// Remove every live archive directory. For an exit path that skips
+/// destructors.
+pub fn remove_live_dirs() {
+    let dirs = std::mem::take(&mut *LIVE_DIRS.lock().unwrap_or_else(|e| e.into_inner()));
+    for dir in dirs {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// A live archive's directory, deleted when the last holder drops it: the
+/// session, its recording thread, and any save copying the archive.
+pub struct LiveDir(tempfile::TempDir);
+
+impl LiveDir {
+    fn create() -> std::io::Result<Self> {
+        let dir = tempfile::Builder::new().prefix("rezolus-live-").tempdir()?;
+        LIVE_DIRS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(dir.path().to_path_buf());
+        Ok(Self(dir))
+    }
+}
+
+impl Drop for LiveDir {
+    fn drop(&mut self) {
+        LIVE_DIRS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(self.0.path());
+    }
+}
+
+/// One live agent being recorded. Dropping it stops the recording; the
+/// archive is deleted once the recording thread and any save in progress
+/// have let go of it.
 pub struct LiveSession {
     url: Url,
     info: AgentInfo,
     reader: Arc<LiveReader>,
     path: PathBuf,
-    task: tokio::task::JoinHandle<()>,
-    // Declared last so the archive is deleted after the task is stopped.
-    _dir: tempfile::TempDir,
-}
-
-impl Drop for LiveSession {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
+    dir: Arc<LiveDir>,
+    /// Aborted on drop, which closes the channel and ends the recording
+    /// thread.
+    _pump: AbortOnDrop,
 }
 
 impl LiveSession {
@@ -48,7 +80,8 @@ impl LiveSession {
     /// temporary archive. Must be called inside a Tokio runtime.
     ///
     /// `Err` is an agent that cannot be subscribed to: unreachable, or one
-    /// that cannot serve the stream (older than 5.21.0, or a V2 agent).
+    /// that cannot serve the stream (older than 5.21.0, or one with
+    /// `snapshot_format = "v2"`).
     pub async fn start(
         client: &Client,
         url: &Url,
@@ -64,7 +97,8 @@ impl LiveSession {
                 Ok(Err(ConnectError::Unsupported(e))) => {
                     return Err(format!(
                         "the agent at {url} ({}) cannot serve its replication stream: {e}. \
-                         Live mode reads /metrics/stream, which agents from 5.21.0 serve.",
+                         Live mode reads /metrics/stream, which agents from 5.21.0 serve \
+                         when snapshot_format is \"v3\".",
                         info.version
                     ))
                 }
@@ -83,12 +117,12 @@ impl LiveSession {
             .cloned()
             .expect("connect returns only once the handshake has been applied");
 
-        let dir = tempfile::Builder::new()
-            .prefix("rezolus-live-")
-            .tempdir()
-            .map_err(|e| format!("could not create a directory for the live archive: {e}"))?;
-        let path = dir.path().join("live.dendro");
-        // Zero is what no agent anchors at (1970), so it is not an anchor.
+        let dir = Arc::new(
+            LiveDir::create()
+                .map_err(|e| format!("could not create a directory for the live archive: {e}"))?,
+        );
+        let path = dir.0.path().join("live.dendro");
+        // An anchor of 0 means the handshake carried none; use the local clock.
         let clock_anchor_wall_ns = u64::try_from(source.clock_anchor_wall_ns)
             .ok()
             .filter(|a| *a != 0)
@@ -104,9 +138,9 @@ impl LiveSession {
             ),
             clock_anchor_wall_ns,
         };
-        // No retention: the view keeps everything since it connected, as
-        // the in-memory store it replaces did, but on disk.
-        let mut buffer = HindsightBuffer::create_dendro(
+        // No retention: the archive holds everything since the session
+        // started.
+        let buffer = HindsightBuffer::create_dendro(
             &path,
             seed,
             Duration::MAX,
@@ -118,10 +152,10 @@ impl LiveSession {
                 .named(url.to_string()),
         );
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<(usize, StreamEvent)>(
+        let (tx, rx) = tokio::sync::mpsc::channel::<(usize, StreamEvent)>(
             crate::recorder::STREAM_QUEUE_PER_ENDPOINT,
         );
-        let pump = tokio::spawn(crate::recorder::stream::pump(
+        let pump = AbortOnDrop(tokio::spawn(crate::recorder::stream::pump(
             0,
             subscription,
             client.clone(),
@@ -129,56 +163,28 @@ impl LiveSession {
             LIVE_INTERVAL,
             timeout,
             tx,
-        ));
-        let live = Arc::clone(&reader);
-        let label = url.to_string();
-        let task = tokio::spawn(async move {
-            // Aborting this task drops the receiver, which ends the pump.
-            let _pump = AbortOnDrop(pump);
-            let mut schemas = StreamSchemas::default();
-            let mut epoch = source.uuid;
-            while let Some((_, event)) = rx.recv().await {
-                match event {
-                    StreamEvent::Interval(applied) => {
-                        let written =
-                            crate::hindsight::ingest_interval(&mut buffer, &mut schemas, applied)
-                                .and_then(|_| buffer.maintain());
-                        if let Err(e) = written {
-                            error!("{label}: the live recording stopped: {e}");
-                            return;
-                        }
-                        if let Err(e) = live.refresh() {
-                            warn!("{label}: could not reread the live archive: {e}");
-                        }
-                    }
-                    StreamEvent::Dropped(e) => {
-                        warn!("{label}: the stream ended ({e}); reconnecting");
-                    }
-                    StreamEvent::Connected(source) => {
-                        info!("{label}: the stream reconnected");
-                        if source.uuid != epoch {
-                            warn!(
-                                "{label}: the agent restarted; its counters started again \
-                                 from zero"
-                            );
-                            epoch = source.uuid;
-                        }
-                    }
-                    StreamEvent::Refused(e) => {
-                        error!("{label}: the agent can no longer serve its stream: {e}");
-                        return;
-                    }
-                }
-            }
-        });
+        )));
+        // The writes, seals and reopens block, so they run on their own
+        // thread rather than on the runtime that serves the viewer's HTTP.
+        let recording = Recording {
+            label: url.to_string(),
+            buffer,
+            reader: Arc::clone(&reader),
+            epoch: source.uuid,
+            dir: Arc::clone(&dir),
+        };
+        std::thread::Builder::new()
+            .name("rezolus-live".to_string())
+            .spawn(move || recording.run(rx))
+            .map_err(|e| format!("could not start the live recording: {e}"))?;
 
         Ok(Self {
             url: url.clone(),
             info,
             reader,
             path,
-            task,
-            _dir: dir,
+            dir,
+            _pump: pump,
         })
     }
 
@@ -193,9 +199,68 @@ impl LiveSession {
         Arc::clone(&self.reader)
     }
 
-    /// The temporary archive, which saves copy.
+    /// The temporary archive's path, which a save copies.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The archive's path and a hold on its directory. A save keeps the hold
+    /// until its copy is done, so a reset during the copy does not delete
+    /// the archive under it.
+    pub fn archive(&self) -> (PathBuf, Arc<LiveDir>) {
+        (self.path.clone(), Arc::clone(&self.dir))
+    }
+}
+
+/// The recording thread's state.
+struct Recording {
+    label: String,
+    buffer: HindsightBuffer,
+    reader: Arc<LiveReader>,
+    epoch: Option<String>,
+    dir: Arc<LiveDir>,
+}
+
+impl Recording {
+    /// Write each interval as it arrives, until the channel closes (the
+    /// session was dropped), a write fails, or the agent refuses a reconnect.
+    fn run(mut self, mut rx: tokio::sync::mpsc::Receiver<(usize, StreamEvent)>) {
+        let label = self.label.clone();
+        let mut schemas = StreamSchemas::default();
+        while let Some((_, event)) = rx.blocking_recv() {
+            match event {
+                StreamEvent::Interval(applied) => {
+                    let written =
+                        crate::hindsight::ingest_interval(&mut self.buffer, &mut schemas, applied)
+                            .and_then(|_| self.buffer.maintain());
+                    if let Err(e) = written {
+                        error!("{label}: the live recording stopped: {e}");
+                        break;
+                    }
+                    if let Err(e) = self.reader.refresh() {
+                        warn!("{label}: could not reread the live archive: {e}");
+                    }
+                }
+                StreamEvent::Dropped(e) => {
+                    warn!("{label}: the stream ended ({e}); reconnecting");
+                }
+                StreamEvent::Connected(source) => {
+                    info!("{label}: the stream reconnected");
+                    if source.uuid != self.epoch {
+                        warn!("{label}: the agent restarted; its counters started again from zero");
+                        self.epoch = source.uuid;
+                    }
+                }
+                StreamEvent::Refused(e) => {
+                    error!("{label}: the agent can no longer serve its stream: {e}");
+                    break;
+                }
+            }
+        }
+        // The writer closes before the directory can be removed.
+        let Recording { buffer, dir, .. } = self;
+        drop(buffer);
+        drop(dir);
     }
 }
 
@@ -290,6 +355,24 @@ mod tests {
         };
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].value.1, 988.0);
+    }
+
+    /// A selector matches a recording whose labels include every pair in it,
+    /// as the `--recording` selectors do, and one that matches none is an
+    /// error.
+    #[test]
+    fn a_selector_matches_by_subset() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("live.dendro");
+        let mut buffer = buffer(&path);
+        record(&mut buffer, 0..1);
+        let subset = [("source".to_string(), "rezolus".to_string())].into();
+        assert!(LiveReader::open(&path, Some(subset), BufferPool::new(64 << 20)).is_ok());
+        let other = [("source".to_string(), "elsewhere".to_string())].into();
+        let err = LiveReader::open(&path, Some(other), BufferPool::new(64 << 20))
+            .err()
+            .expect("no recording matches");
+        assert!(err.to_string().contains("no recording matching"), "{err}");
     }
 
     /// The live view names the agent, not the temporary file.

@@ -95,7 +95,7 @@ pub fn command() -> Command {
              - a parquet recording:      rezolus view rezolus.parquet\n    \
              - two recordings (A/B):     rezolus view baseline.parquet experiment.parquet\n    \
              - a .rez archive:           rezolus view out.rez\n    \
-             - a live agent:             rezolus view http://host:4241\n    \
+             - a live agent:             rezolus view http://host:4241   (5.21.0+, v3; recorded into a temporary .dendro)\n    \
              - nothing (upload-only):    rezolus view    (drag files in from the browser)\n\n\
              A .rez archive loads its per-sampler tables directly. A 2-recording .rez is shown\n\
              as an A/B baseline/experiment comparison (aliases derived from each recording's\n\
@@ -429,7 +429,12 @@ pub fn run(config: Config) {
     // leave the terminal in raw mode. In raw mode a keyboard Ctrl-C is
     // delivered as a normal key event and handled as a graceful quit.
     if !config.tui {
-        ctrlc::set_handler(move || std::process::exit(2)).expect("failed to set ctrl-c handler");
+        ctrlc::set_handler(move || {
+            // `exit` runs no destructors, so the live archive is removed here.
+            live::remove_live_dirs();
+            std::process::exit(2)
+        })
+        .expect("failed to set ctrl-c handler");
     }
 
     let registry = load_template_registry(config.templates_dir.as_deref());
@@ -1197,8 +1202,7 @@ fn init_live_mode(
     let state = AppState::with_pool(session.reader(), registry.clone(), pool);
     let context = dashboard::dashboard::build_dashboard_context(None, &[], None, &[]);
     *state.sections.write() = state::LazySectionStore::new(context);
-    *state.parquet_path.write() = Some(session.path().to_path_buf());
-    *state.live_session.lock() = Some(session);
+    state.install_live(session);
     state.live.store(true, Ordering::Relaxed);
     state.captures.set_baseline_systeminfo(info.sysinfo);
 

@@ -1,6 +1,6 @@
 //! Action handlers — endpoints that mutate `AppState` (uploads, attach
-//! and detach, live agent connect, parquet save) plus the live-mode
-//! ingest loop.
+//! and detach, live agent connect and reset, save). Live-mode recording is
+//! in `live.rs`.
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -25,7 +25,7 @@ use super::report_save;
 use super::state::{ApiResponse, AppState, LazySectionStore};
 use ::dashboard;
 
-// ── Snapshot ingest (live mode) ───────────────────────────────────────
+// ── Agent info ────────────────────────────────────────────────────────
 
 /// Fetch the agent banner (`source version`) and `/systeminfo`. Used by
 /// CLI startup and the runtime `/api/v1/connect` handler.
@@ -555,9 +555,7 @@ pub async fn connect_agent(
         };
     let context = dashboard::dashboard::build_dashboard_context(None, &[], None, &[]);
 
-    state.replace_baseline(session.reader());
-    *state.parquet_path.write() = Some(session.path().to_path_buf());
-    *state.live_session.lock() = Some(session);
+    state.install_live(session);
     *state.sections.write() = LazySectionStore::new(context);
     state.captures.set_baseline_systeminfo(sysinfo);
     state.live.store(true, Ordering::Relaxed);
@@ -608,14 +606,12 @@ pub async fn reset_tsdb(
             Ok(session) => session,
             Err(e) => return ApiResponse::err(e, "connection_error"),
         };
-    state.replace_baseline(session.reader());
-    *state.parquet_path.write() = Some(session.path().to_path_buf());
-    *state.live_session.lock() = Some(session);
+    state.install_live(session);
     info!("TSDB reset by user");
     ApiResponse::ok(serde_json::json!({ "ok": true }))
 }
 
-// ── Save parquet ──────────────────────────────────────────────────────
+// ── Save ──────────────────────────────────────────────────────────────
 
 fn parquet_attachment(filename: &str, body: Vec<u8>) -> Response {
     Response::builder()
@@ -638,18 +634,15 @@ fn server_error(msg: impl Into<String>) -> Response {
 
 /// Save the live recording: a sealed copy of its archive, as a `.dendro`.
 pub async fn save_capture(State(state): State<Arc<AppState>>) -> Response {
-    let path = state
-        .live_session
-        .lock()
-        .as_ref()
-        .map(|s| s.path().to_path_buf());
-    let Some(path) = path else {
+    let archive = state.live_session.lock().as_ref().map(|s| s.archive());
+    let Some((path, hold)) = archive else {
         return Response::builder()
             .status(StatusCode::NO_CONTENT)
             .body(Body::empty())
             .unwrap();
     };
     let result = tokio::task::spawn_blocking(move || {
+        let _hold = hold;
         let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
         let dest = dir.path().join("capture.dendro");
         crate::hindsight::buffer::dump(
@@ -665,11 +658,14 @@ pub async fn save_capture(State(state): State<Arc<AppState>>) -> Response {
 
 /// File mode: column-trim the loaded parquet (or repack a combined-A/B
 /// tarball with per-side trims) using the saved selection, embed the
-/// selection JSON in the output footer, and stream it back. Live mode:
-/// convert buffered snapshots into a parquet stamped with the selection
-/// (no trim — there's no source parquet to project from).
+/// selection JSON in the output footer, and stream it back. Live mode takes
+/// the archive branch: `parquet_path` is the live archive, and the report is
+/// a trimmed `.dendro`.
 pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: String) -> Response {
     let parquet_path = state.parquet_path.read().clone();
+    // In live mode `parquet_path` is the live archive: hold its directory
+    // until the report is built, so a reset meanwhile does not delete it.
+    let live_hold = state.live_session.lock().as_ref().map(|s| s.archive().1);
     let selection_json = body;
 
     if let Some(path) = parquet_path {
@@ -731,6 +727,7 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                 let source = path.clone();
                 let body = selection_json.clone();
                 move || {
+                    let _hold = live_hold;
                     super::report_save_rez::build_rez_report(
                         &source,
                         keep.as_ref(),

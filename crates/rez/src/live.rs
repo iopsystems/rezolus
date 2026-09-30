@@ -24,7 +24,7 @@ type Error = Box<dyn std::error::Error>;
 pub struct LiveReader {
     path: PathBuf,
     pool: Arc<BufferPool>,
-    /// Which recording: the one with these labels.
+    /// Which recording: the full label set of the one first opened.
     labels: BTreeMap<String, String>,
     current: RwLock<Arc<RezReader>>,
     /// What [`MetricsSource::filename`] reports, when not the archive's own.
@@ -32,14 +32,22 @@ pub struct LiveReader {
 }
 
 impl LiveReader {
-    /// Open the recording labelled `labels` in the archive at `path`, or its
-    /// only recording when `labels` is `None`.
+    /// Open one recording of the archive at `path`: the one whose labels
+    /// include every pair in `selector`, or the only recording when
+    /// `selector` is `None`. A selector that matches no recording or several
+    /// is an error, as the `--recording` selectors are.
+    ///
+    /// Opening an archive that is not finalized is logged as a warning by
+    /// the reader. A live archive is never finalized, so this and
+    /// [`refresh`](Self::refresh) open it with logging off: every event
+    /// emitted on this thread during the open is dropped. A failed open is
+    /// returned as `Err`.
     pub fn open(
         path: &Path,
-        labels: Option<BTreeMap<String, String>>,
+        selector: Option<BTreeMap<String, String>>,
         pool: Arc<BufferPool>,
     ) -> Result<Self, Error> {
-        let (labels, reader) = pick(path, labels.as_ref(), &pool)?;
+        let (labels, reader) = quiet(|| pick(path, selector.as_ref(), &pool))?;
         Ok(Self {
             path: path.to_path_buf(),
             pool,
@@ -57,16 +65,12 @@ impl LiveReader {
     }
 
     /// Reopen the archive, so rows committed since the last open are read.
+    /// Logging is off during the reopen, as for [`open`](Self::open).
     ///
-    /// Opening an archive that is not finalized logs a warning, which the
-    /// first [`open`](Self::open) keeps. A live archive is never finalized,
-    /// so a refresh reopens with logging off rather than repeat it on every
-    /// interval; a reopen that fails is still returned as `Err`.
+    /// The new reader has no decoded blocks cached, so the next query on it
+    /// reads the segments it touches again.
     pub fn refresh(&self) -> Result<(), Error> {
-        let (_, reader) = tracing::subscriber::with_default(
-            tracing::subscriber::NoSubscriber::default(),
-            || pick(&self.path, Some(&self.labels), &self.pool),
-        )?;
+        let (_, reader) = quiet(|| pick(&self.path, Some(&self.labels), &self.pool))?;
         *self.current.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(reader);
         Ok(())
     }
@@ -82,28 +86,39 @@ impl LiveReader {
     }
 }
 
+/// Run `f` with every tracing event on this thread dropped.
+fn quiet<T>(f: impl FnOnce() -> T) -> T {
+    tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), f)
+}
+
 fn pick(
     path: &Path,
-    labels: Option<&BTreeMap<String, String>>,
+    selector: Option<&BTreeMap<String, String>>,
     pool: &Arc<BufferPool>,
 ) -> Result<(BTreeMap<String, String>, RezReader), Error> {
     let mut recordings = RezReader::open_recordings(path, Arc::clone(pool))?;
-    let at = match labels {
-        Some(labels) => recordings
-            .iter()
-            .position(|(l, _)| l == labels)
-            .ok_or_else(|| format!("{} has no recording labelled {labels:?}", path.display()))?,
-        None if recordings.len() == 1 => 0,
-        None => {
-            return Err(format!(
-                "{} holds {} recordings; name one by its labels",
-                path.display(),
-                recordings.len()
-            )
-            .into())
+    let matching: Vec<usize> = recordings
+        .iter()
+        .enumerate()
+        .filter(|(_, (labels, _))| {
+            selector.is_none_or(|sel| sel.iter().all(|(k, v)| labels.get(k) == Some(v)))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    match matching.as_slice() {
+        [at] => Ok(recordings.swap_remove(*at)),
+        [] => Err(match selector {
+            Some(sel) => format!("{} has no recording matching {sel:?}", path.display()),
+            None => format!("{} holds no recording", path.display()),
         }
-    };
-    Ok(recordings.swap_remove(at))
+        .into()),
+        several => Err(format!(
+            "{} holds {} recordings matching {selector:?}; name one by its labels",
+            path.display(),
+            several.len()
+        )
+        .into()),
+    }
 }
 
 impl MetricsSource for LiveReader {

@@ -191,6 +191,18 @@ impl AppState {
 
     /// Replace the baseline data store (used by upload/connect handlers).
     /// The display filename is carried on the data source itself.
+    /// Make `session` the live capture: its reader the baseline, its
+    /// archive what saves copy. All three change under the session lock, so
+    /// two resets racing each other leave the view, the saves and the
+    /// running recording on the same session. The session replaced is
+    /// dropped, which stops its recording.
+    pub fn install_live(&self, session: super::live::LiveSession) {
+        let mut slot = self.live_session.lock();
+        self.replace_baseline(session.reader());
+        *self.parquet_path.write() = Some(session.path().to_path_buf());
+        *slot = Some(session);
+    }
+
     pub fn replace_baseline(&self, data: Arc<dyn MetricsSource>) {
         self.captures.set_baseline_data(data);
     }

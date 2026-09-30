@@ -302,8 +302,9 @@ rezolus view
 ```
 
 A live agent is recorded over its replication stream (`/metrics/stream`,
-served by agents from 5.21.0) into a temporary `.dendro` archive, which the
-view reads as it grows and which is deleted when the viewer exits. Save
+served by agents from 5.21.0 when `snapshot_format` is `"v3"`, the default)
+into a temporary `.dendro` archive under the system temp directory, which
+the view reads as it grows and which is deleted when the viewer exits. Save
 capture downloads a copy of it as `rezolus-capture.dendro`.
 
 Prefer the terminal? Pass `--tui` to render in the terminal instead of the
