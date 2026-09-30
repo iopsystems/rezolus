@@ -16,6 +16,9 @@
   a scan of every sampler module, run for every metric twice a pass. On the
   `v3_build_cost` registry the build's median fell about 4% on cache-hit
   ticks and 2.5% on membership-change ticks.
+- metriken-exposition 0.21.3: the V3 group builder uses foldhash for its
+  per-pass maps and sizes a cache-hit group from the lookup it already made,
+  rather than looking each member up a second time.
 - **A `.dendro` records Rezolus agents by stream only.** `record -o
   out.dendro` (and a bare `rezolus record`, whose default output is a
   `.dendro`) subscribes to each agent's `/metrics/stream` and scrapes each
