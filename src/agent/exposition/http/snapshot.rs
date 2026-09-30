@@ -37,6 +37,10 @@ pub struct SnapshotBuilder {
     /// Bounded by the number of acquisition groups (45 on a 25-sampler host),
     /// not by generations: one entry per group name, overwritten on change.
     emitted_schemas: HashMap<String, (u64, u64)>,
+    /// Each group's schema converted to the row format, once per schema hash.
+    /// A snapshot carries every group's schema on every pass; converting all
+    /// of them each pass was most of what encoding rows for the stream cost.
+    schemas: metriken_archive::stream::SchemaCache,
     /// Completed sampling passes — see [`samples`](Self::samples).
     samples: u64,
 }
@@ -97,6 +101,7 @@ impl SnapshotBuilder {
             format: config.general().snapshot_format(),
             v3: v3_builder(),
             emitted_schemas: HashMap::new(),
+            schemas: metriken_archive::stream::SchemaCache::new(),
             samples: 0,
         }
     }
@@ -210,8 +215,9 @@ impl SnapshotBuilder {
     /// must never be able to drive a sampling pass of its own, or N
     /// subscribers would mean N passes and the whole point of one shared clock
     /// would be lost.
-    pub fn latest_rows(&self) -> Option<Arc<crate::recorder::wire::AgentRows>> {
+    pub fn latest_rows(&mut self) -> Option<Arc<crate::recorder::wire::AgentRows>> {
         let cached = self.cached.as_ref()?;
+        let schemas = &mut self.schemas;
         cached
             .rows_full
             .get_or_init(|| {
@@ -219,6 +225,7 @@ impl SnapshotBuilder {
                     &cached.snapshot,
                     cached.sampled_ts,
                     cached.sampled_wall_offset,
+                    schemas,
                 )
                 .ok()
                 .map(Arc::new)
@@ -308,6 +315,7 @@ impl SnapshotBuilder {
                 &cached.snapshot,
                 cached.sampled_ts,
                 cached.sampled_wall_offset,
+                &mut self.schemas,
             )?
         };
 

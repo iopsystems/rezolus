@@ -11,6 +11,15 @@
 
 ### Changed
 
+- The agent converts each acquisition group's schema for `/metrics/stream`
+  and `/metrics/rows` once per schema change instead of on every sampling
+  pass (metriken-archive 0.3.0's `SchemaCache`), and a changed schema is put
+  into the already-encoded row rather than the row being decoded and encoded
+  again. Converting every schema each pass was why a streamed agent used more
+  CPU than a scraped one. On the `v3_build_cost` registry (a 2,500-task
+  group) encoding a pass for the stream fell from 20.4 ms to 0.29 ms at the
+  median, and to 4.2 ms on a pass where the task group's membership changed;
+  encoding the same pass for a scrape takes 9.7 ms.
 - The agent's V3 router resolves each metric module's sampler once and
   caches it, and looks acquisition groups up with foldhash. Attribution was
   a scan of every sampler module, run for every metric twice a pass. On the

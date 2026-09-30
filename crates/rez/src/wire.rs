@@ -87,6 +87,8 @@
 //! segment at the same boundaries as one taken over the snapshot endpoint,
 //! rather than merely containing the same values.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use crate::schema::GroupSchema;
@@ -109,7 +111,12 @@ pub struct AgentRow {
     /// missed — the same rule its snapshot payload follows. A consumer that
     /// already knows this hash ignores it; one that does not, and receives
     /// `None`, cannot decode the row and skips it.
-    pub schema: Option<GroupSchema>,
+    ///
+    /// Shared with the producer's [`SchemaCache`], which converts a group's
+    /// schema once per hash rather than once per pass.
+    ///
+    /// [`SchemaCache`]: metriken_archive::stream::SchemaCache
+    pub schema: Option<Arc<GroupSchema>>,
     /// `(counters, gauges, histograms)` slot counts for `row`, so a consumer
     /// can run the arity check against a resolved schema without decoding.
     pub arity: (u32, u32, u32),
@@ -157,7 +164,7 @@ impl AgentRow {
             Some(schema) => {
                 let row = crate::wal::encode_wal_group_row(&decoded)
                     .map_err(|e| format!("stream {stream}: {e}"))?;
-                (Some(schema), row)
+                (Some(Arc::new(schema)), row)
             }
             None => (None, payload),
         };
@@ -236,7 +243,7 @@ impl metriken_archive::stream::StreamRow for AgentRow {
     }
 
     fn schema(&self) -> Option<&GroupSchema> {
-        self.schema.as_ref()
+        self.schema.as_deref()
     }
 
     fn payload(&self) -> &[u8] {
@@ -246,16 +253,20 @@ impl metriken_archive::stream::StreamRow for AgentRow {
 
 /// Encode one producer-side acquisition group as an [`AgentRow`].
 ///
-/// `schema` is what the producer chose to transmit this tick — its own cache
-/// decision, passed through unchanged. It is NOT what the payload carries:
-/// the payload's schema is always `None`. See the module docs.
+/// The row's `schema` is the group's schema from `schemas`, converted only
+/// when its hash changed since the producer's last pass. It is NOT what the
+/// payload carries: the payload's schema is always `None`. See the module
+/// docs.
 #[cfg(feature = "write")]
-pub fn encode_group(g: &metriken_exposition::GroupSnapshot) -> Result<AgentRow, String> {
+pub fn encode_group(
+    g: &metriken_exposition::GroupSnapshot,
+    schemas: &mut metriken_archive::stream::SchemaCache,
+) -> Result<AgentRow, String> {
     Ok(AgentRow {
         stream: g.name.clone(),
         window: g.window.map(|w| (w.begin_ns, w.end_ns)),
         schema_hash: g.schema_hash,
-        schema: g.schema.as_ref().map(|s| s.as_ref().into()),
+        schema: schemas.schema(g),
         arity: (
             g.counters.len() as u32,
             g.gauges.len() as u32,
@@ -276,6 +287,7 @@ pub fn encode_snapshot(
     snapshot: &metriken_exposition::Snapshot,
     ts: i64,
     wall_offset: i64,
+    schemas: &mut metriken_archive::stream::SchemaCache,
 ) -> Result<AgentRows, String> {
     let metriken_exposition::Snapshot::V3(v3) = snapshot else {
         return Err(
@@ -294,7 +306,7 @@ pub fn encode_snapshot(
         rows: v3
             .groups
             .iter()
-            .map(encode_group)
+            .map(|g| encode_group(g, schemas))
             .collect::<Result<Vec<_>, _>>()?,
     })
 }
@@ -339,7 +351,8 @@ mod tests {
             gauges: Vec::new(),
             histograms: vec![Some(h)],
         };
-        let from_endpoint = encode_group(&g).unwrap();
+        let from_endpoint =
+            encode_group(&g, &mut metriken_archive::stream::SchemaCache::new()).unwrap();
 
         // First mention: the schema rides inside the payload.
         let anchored = encode_wal_group_row(&wal_group_row(&g, Some(schema.clone()))).unwrap();
