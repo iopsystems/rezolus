@@ -84,8 +84,8 @@ target/release/rezolus record --url http://localhost:4241 -o out.dendro         
 # tick, and a stream that drops (or goes silent for the scrape timeout) is reconnected
 # after one interval, at least a second. A wrapped command that exits on its own waits for
 # each agent's frame stamped at or after the exit (bounded by interval + tick timeout).
-# Identity travels in each group's schema; the agent sends no index frames. --stream is
-# hidden: implied by .dendro (a note), refused elsewhere.
+# Identity travels in each group's schema; the agent sends no index frames. --stream was
+# removed before 6.0.0 (clap's unknown-argument error): the output format picks the transport.
 
 # Viewer - web dashboard for parquet files, live agents, or upload mode
 target/release/rezolus view output.parquet [experiment.parquet] [--listen ADDR]

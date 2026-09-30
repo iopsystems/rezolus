@@ -266,11 +266,7 @@ ctrl-c) wait one interval, at most two seconds.
 Streamed rows and the tick's scrapes go through one archive writer and are
 committed together, once per tick.
 
-`--stream` is implied by `.dendro` and no longer needed; it is still accepted
-there, with a note. With `.rez`, parquet or raw it is refused, since those
-formats scrape. (Rezolus 5.x wrote `.rez` from a stream, with an identity index
-beside the rows; 6.0 removed both. `.rez` recordings written that way still
-open.)
+A `.rez` recorded by a 5.x `record --stream` still opens.
 
 ## Viewer
 

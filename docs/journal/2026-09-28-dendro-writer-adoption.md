@@ -307,8 +307,10 @@ Tests: `no_output_and_no_format_defaults_to_dendro`,
 ## After E: agents stream, Prometheus scrapes (2026-09-29)
 
 Decided 2026-09-29: a `.dendro` records a rezolus agent only by its
-replication stream. `--stream` is implied, hidden, and refused for the
-formats that scrape (`.rez`, parquet, raw).
+replication stream, and `.rez`, parquet and raw scrape. The output format
+picks the transport, so `--stream` was removed before 6.0.0 (first hidden
+and implied by `.dendro`, then deleted): passing it is clap's
+unknown-argument error.
 
 - Endpoints are probed as before. An agent streams, and a Prometheus
   endpoint is scraped and converted into a `prometheus/scrape` group. Both

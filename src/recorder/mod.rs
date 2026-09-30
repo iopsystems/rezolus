@@ -285,13 +285,6 @@ pub fn command() -> Command {
                 .action(clap::ArgAction::Append),
         )
         .arg(
-            clap::Arg::new("STREAM")
-                .long("stream")
-                .help("Implied by .dendro output, which streams every Rezolus agent; refused with any other format")
-                .hide(true)
-                .action(clap::ArgAction::SetTrue),
-        )
-        .arg(
             clap::Arg::new("URL_FLAG")
                 .long("url")
                 .help("Single metrics endpoint to record; auto-detects Rezolus agent vs Prometheus (default http://localhost:4241)")

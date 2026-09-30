@@ -28,9 +28,11 @@
   fails with an error that can change (a 5xx, a handshake timeout) is retried
   each tick. A wrapped command that exits on its own waits for each agent's
   frame covering the exit, at most one interval plus the scrape timeout.
-  `--stream` is implied by `.dendro`: it is hidden from help, accepted there
-  with a note, and refused with `.rez`, parquet and raw, which scrape and are
-  otherwise unchanged. `.rez` is no longer a stream target, and the identity
+  `record --stream` is removed: a `.dendro` records agents by stream and
+  `.rez`, parquet and raw scrape, so the output format decides the
+  transport, and passing `--stream` is an unknown-argument error (exit 2).
+  `.rez`, parquet and raw output are otherwise unchanged. `.rez` is no
+  longer a stream target, and the identity
   index that `.rez --stream` stored beside its rows is gone with it: the
   agent no longer sends `Frame::Index` on `/metrics/stream` (every rows frame
   names dendro's `NO_INDEX_STATE`), no longer keeps the slot-change broadcast

@@ -215,67 +215,6 @@ fn reject_separate_with_rez(
     Ok(())
 }
 
-/// `--stream` is implied by `.dendro` and refused with every other format.
-///
-/// A `.dendro` records every Rezolus agent from its replication stream
-/// (`/metrics/stream`), so the flag adds nothing there; it stays accepted,
-/// hidden from help, so scripts written for 6.0 alphas keep working. `.rez`,
-/// parquet and raw record agents by scraping them, so the flag contradicts
-/// them and is refused at parse time rather than ignored: the recorder never
-/// silently substitutes an explicit choice (see `demote_from_rez`).
-///
-/// `--separate` with several endpoints is the one way a defaulted archive can
-/// still turn into parquet at startup, so with the flag that combination is
-/// refused here too rather than letting the demotion discover the conflict a
-/// moment later. Without the flag the demotion applies as usual, and the
-/// parquet run it produces scrapes.
-fn reject_stream_without_dendro(
-    stream: bool,
-    format: Format,
-    separate: bool,
-    endpoints: usize,
-) -> Result<(), String> {
-    if !stream {
-        return Ok(());
-    }
-    if format != Format::Dendro {
-        return Err(format!(
-            "--stream applies to .dendro output only, where it is implied: a .{} \
-             records agents by scraping them. Drop --stream, or record to a .dendro \
-             (-o out.dendro)",
-            format_name(format)
-        ));
-    }
-    if separate && endpoints > 1 {
-        return Err(
-            "--stream cannot be combined with --separate: a .dendro records every \
-             endpoint into one archive, and --separate asks for a file per endpoint"
-                .to_string(),
-        );
-    }
-    Ok(())
-}
-
-/// What `--stream` gets in reply once it has passed
-/// [`reject_stream_without_dendro`]: a `.dendro` streams agents whether or not
-/// it was given.
-const STREAM_IMPLIED_NOTE: &str = "note: --stream is implied by .dendro output and can be \
-     dropped: a .dendro records every Rezolus agent from its replication stream";
-
-/// [`reject_stream_without_dendro`], then the note for a flag it accepted.
-fn check_stream_flag(
-    stream: bool,
-    format: Format,
-    separate: bool,
-    endpoints: usize,
-) -> Result<(), String> {
-    reject_stream_without_dendro(stream, format, separate, endpoints)?;
-    if stream {
-        eprintln!("{STREAM_IMPLIED_NOTE}");
-    }
-    Ok(())
-}
-
 impl RecordingConfig {
     /// Whether Rezolus agents in this run are streamed rather than scraped.
     ///
@@ -296,7 +235,6 @@ impl RecordingConfig {
         let duration = args.get_one::<humantime::Duration>("DURATION").copied();
         let explicit_format = args.get_one::<Format>("FORMAT").copied();
         let separate = args.get_flag("SEPARATE");
-        let stream = args.get_flag("STREAM");
         let record_command_line = args.get_flag("RECORD_COMMAND_LINE");
         let metadata: Vec<(String, String)> = args
             .get_many::<String>("METADATA")
@@ -384,7 +322,6 @@ impl RecordingConfig {
                 plan.defaulted,
                 toml_cfg.endpoints.len(),
             )?;
-            check_stream_flag(stream, plan.format, separate, toml_cfg.endpoints.len())?;
 
             return Ok(RecordingConfig {
                 interval,
@@ -412,7 +349,6 @@ impl RecordingConfig {
                 return Err("at least one --endpoint is required".to_string());
             }
             reject_separate_with_rez(separate, plan.format, plan.defaulted, endpoints.len())?;
-            check_stream_flag(stream, plan.format, separate, endpoints.len())?;
 
             return Ok(RecordingConfig {
                 interval,
@@ -455,7 +391,6 @@ impl RecordingConfig {
         };
         // One endpoint by construction, so `--separate` has nothing to split.
         reject_separate_with_rez(separate, plan.format, plan.defaulted, 1)?;
-        check_stream_flag(stream, plan.format, separate, 1)?;
 
         Ok(RecordingConfig {
             interval,
@@ -548,12 +483,9 @@ mod tests {
         );
     }
 
-    /// A `.dendro` streams agents with or without `--stream`, and every other
-    /// format scrapes them. `--stream` stays accepted for a `.dendro` and is
-    /// refused with anything else: an explicit choice is never silently
-    /// substituted.
+    /// A `.dendro` streams agents and every other format scrapes them.
     #[test]
-    fn dendro_streams_agents_and_stream_is_refused_for_every_other_format() {
+    fn dendro_streams_agents_and_every_other_format_scrapes() {
         let parse = |args: &[&str]| {
             let mut argv = vec!["record"];
             argv.extend_from_slice(args);
@@ -563,20 +495,13 @@ mod tests {
                 .and_then(|m| RecordingConfig::from_args(&m))
         };
 
-        // The default output is a .dendro, and it streams without the flag.
+        // The default output is a .dendro.
         let defaulted = parse(&[]).unwrap();
         assert_eq!(defaulted.format, Format::Dendro);
         assert!(defaulted.streams_agents());
-        for args in [
-            &["--stream"][..],
-            &["-o", "out.dendro"],
-            &["--stream", "-o", "out.dendro"],
-            &["--format", "dendro"],
-            &["--stream", "--format", "dendro"],
-        ] {
+        for args in [&["-o", "out.dendro"][..], &["--format", "dendro"]] {
             assert!(parse(args).unwrap().streams_agents(), "{args:?}");
         }
-
         for args in [
             &["-o", "out.rez"][..],
             &["-o", "out.parquet"],
@@ -584,50 +509,20 @@ mod tests {
         ] {
             assert!(!parse(args).unwrap().streams_agents(), "{args:?} scrapes");
         }
-
-        for args in [
-            &["--stream", "-o", "out.rez"][..],
-            &["--stream", "--format", "rez"],
-            &["--stream", "--format", "rez", "-o", "out.rez"],
-            &["--stream", "-o", "out.parquet"],
-            &["--stream", "--format", "raw"],
-            &["--stream", "--format", "parquet", "-o", "out.parquet"],
-        ] {
-            let err = parse(args)
-                .err()
-                .unwrap_or_else(|| panic!("{args:?} must be refused"));
-            assert!(err.contains("--stream"), "{args:?}: {err}");
-            assert!(err.contains(".dendro"), "{args:?}: {err}");
-            assert!(err.contains("scraping"), "{args:?}: {err}");
-        }
-
-        // --separate with several endpoints is the one way a defaulted archive
-        // can still become parquet at startup; with the flag it is refused up
-        // front instead.
-        let err = parse(&[
-            "--stream",
-            "--separate",
-            "--endpoint",
-            "http://a:4241",
-            "--endpoint",
-            "http://b:4241",
-        ])
-        .err()
-        .expect("stream + separate + several endpoints must be refused");
-        assert!(err.contains("--separate"), "{err}");
-        // ...but with one endpoint --separate is a no-op.
-        assert!(parse(&["--stream", "--separate"]).unwrap().streams_agents());
     }
 
-    /// `--stream` is hidden from help: it names nothing a `.dendro` does not
-    /// already do. The note it earns says so.
+    /// `--stream` was removed before 6.0.0: the output format decides the
+    /// transport. A script still passing it fails as clap fails on any
+    /// unknown argument, rather than having it silently ignored.
     #[test]
-    fn stream_is_hidden_from_help_and_its_note_says_it_is_implied() {
+    fn stream_is_rejected_as_an_unknown_argument() {
+        let err = crate::recorder::command()
+            .try_get_matches_from(["record", "--stream"])
+            .expect_err("--stream is not an argument");
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+        assert_eq!(err.exit_code(), 2);
         let help = crate::recorder::command().render_long_help().to_string();
         assert!(!help.contains("--stream"), "{help}");
-        assert!(STREAM_IMPLIED_NOTE.contains("implied by .dendro"));
-        assert!(check_stream_flag(true, Format::Dendro, false, 1).is_ok());
-        assert!(check_stream_flag(false, Format::Rez, false, 1).is_ok());
     }
 
     /// `--rez-version` is gone, and a script still passing it must FAIL rather
