@@ -11,6 +11,14 @@
 
 ### Changed
 
+- **The viewer's live mode records the agent's stream.** `rezolus view
+  http://agent:4241` (and `--tui`) subscribes to `/metrics/stream` and writes
+  it into a temporary `.dendro` archive, read as it grows, instead of polling
+  `/metrics/binary` into memory and keeping every raw snapshot body for
+  saving. Save capture downloads a copy of the archive as
+  `rezolus-capture.dendro` rather than a parquet file. Reset starts a fresh
+  archive and stops the old recording, which used to keep running. An agent
+  older than 5.21.0 is refused with its version.
 - **Hindsight records the agent over its replication stream.** It subscribes
   to `/metrics/stream`, as `record` to a `.dendro` does, instead of scraping
   `/metrics/binary`, whose every body carries every acquisition group's full
