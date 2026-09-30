@@ -78,8 +78,9 @@ target/release/rezolus record --url http://localhost:4241 -o out.dendro         
 # per tick. There is no scrape path for an agent into a .dendro: one that cannot serve the
 # stream (older than 5.21.0, V2 agent, handshake that does not decode) is refused with its
 # version. At startup that is before the archive exists, pointing at .rez/parquet (which
-# scrape); an agent that comes up later is marked Refused and left out, the rest finalize,
-# and the run exits 1. An unreachable one (or a 5xx / handshake timeout) is retried each
+# scrape); an agent that comes up later, or is refused on a reconnect, is marked Refused
+# and left out from then on (a reconnect keeps the rows it had), the rest finalize, and the
+# run exits 1 (`refuse_mid_run`). An unreachable one (or a 5xx / handshake timeout) is retried each
 # tick, and a stream that drops (or goes silent for the scrape timeout) is reconnected
 # after one interval, at least a second. A wrapped command that exits on its own waits for
 # each agent's frame stamped at or after the exit (bounded by interval + tick timeout).

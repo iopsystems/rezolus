@@ -192,9 +192,10 @@ pub fn command() -> Command {
              serve the stream (older than 5.21.0, a V2 agent, or a handshake that does not\n\
              decode) is refused with its version. At startup that refuses the run before\n\
              anything is written; record such an agent with -o out.rez or -o out.parquet,\n\
-             which scrape. An agent that comes up later and is refused is left out of the\n\
-             recording, the other endpoints keep recording, and the run exits 1 once the\n\
-             archive is finalized. An agent that is not reachable yet, or whose stream\n\
+             which scrape. An agent that comes up later and is refused, or is refused on a\n\
+             reconnect, is left out of the recording from then on (a reconnect keeps the\n\
+             rows it had), the other endpoints keep recording, and the run exits 1 once\n\
+             the archive is finalized. An agent that is not reachable yet, or whose stream\n\
              fails with an error that can change (a 5xx, a handshake timeout), is retried\n\
              each tick. A stream that drops mid-run is reconnected after one interval (at\n\
              least a second), like a scrape that fails is retried, and one that goes\n\
@@ -670,8 +671,23 @@ async fn open_stream(
 enum RefusedAt {
     /// Before the archive exists: the whole run is refused.
     Startup,
-    /// After the archive opened: only this endpoint is left out.
+    /// After the archive opened, on first activation: only this endpoint is
+    /// left out.
     MidRun,
+    /// On a reconnect, after the stream had been open: this endpoint's
+    /// recording stops with the rows it had.
+    Reconnect,
+}
+
+/// Leave one endpoint out of the rest of the run: print the refusal, mark it
+/// [`EndpointStatus::Refused`] so it is never retried, and stop treating it
+/// as streamed. The other endpoints keep recording; the run counts refused
+/// endpoints at the end and exits 1 (see `run`). A recording already open for
+/// it keeps its rows and is finalized with the rest.
+fn refuse_mid_run(ep: &mut EndpointState, refusal: &str) {
+    eprintln!("error: {refusal}");
+    ep.status = EndpointStatus::Refused;
+    ep.streaming = false;
 }
 
 /// The refusal for a Rezolus agent that cannot serve its replication stream
@@ -713,6 +729,12 @@ fn unstreamable_agent(ep: &EndpointState, reason: &str, at: RefusedAt) -> String
              endpoints keep recording. A .dendro records Rezolus agents from their \
              replication stream only; a separate `rezolus record` to a .rez or to \
              parquet, both of which scrape, can record this agent"
+        }
+        RefusedAt::Reconnect => {
+            "This endpoint's recording stops here, keeping the rows it had, and is not \
+             retried; the other endpoints keep recording. A .dendro records Rezolus \
+             agents from their replication stream only; a separate `rezolus record` to a \
+             .rez or to parquet, both of which scrape, can record this agent"
         }
     };
     format!("{why}. {next}")
@@ -913,14 +935,12 @@ fn handle_stream_event(
             adopt_source(&mut endpoints[idx], &source);
         }
         stream::StreamEvent::Refused(e) => {
-            // The agent came back unable to serve the stream. Fatal for
-            // the reason it is fatal at startup: the run named its
-            // transport, and there is no quiet substitute. What is on
-            // disk is kept and named.
-            failed.get_or_insert(format!(
-                "{label} ({}) can no longer serve its replication stream: {e}",
-                endpoints[idx].config.url
-            ));
+            // The agent came back unable to serve the stream. Refused as a
+            // mid-run first activation is: this endpoint only, never
+            // scraped instead, never retried (its pump has stopped). Its
+            // recording keeps what it had and is finalized with the rest.
+            let refusal = unstreamable_agent(&endpoints[idx], &e, RefusedAt::Reconnect);
+            refuse_mid_run(&mut endpoints[idx], &refusal);
         }
     }
     failed
@@ -2416,10 +2436,6 @@ pub fn run(mut config: RecordingConfig) {
             config.duration.map(|d| start + Duration::from(d))
         };
         let mut deadline_fired = false;
-        // Endpoints refused after the archive opened (see the late
-        // activation below). The recording goes on without them, and the
-        // run exits 1 once it is finalized.
-        let mut refused_mid_run = 0usize;
 
         while STATE.load(Ordering::Relaxed) == RUNNING {
             if wrapped {
@@ -2823,9 +2839,7 @@ pub fn run(mut config: RecordingConfig) {
                         continue;
                     }
                     Err(e) => {
-                        eprintln!("error: {e}");
-                        endpoints[idx].status = EndpointStatus::Refused;
-                        refused_mid_run += 1;
+                        refuse_mid_run(&mut endpoints[idx], &e);
                         continue;
                     }
                     Ok(Activation::Stream(sub)) => {
@@ -3152,10 +3166,18 @@ pub fn run(mut config: RecordingConfig) {
                     );
                 }
             }
+            // Endpoints refused after the archive opened, on first
+            // activation or on a reconnect (a refusal at startup exits
+            // before the archive exists). The recording went on without
+            // them; the exit status says so.
+            let refused_mid_run = endpoints
+                .iter()
+                .filter(|ep| ep.status == EndpointStatus::Refused)
+                .count();
             if refused_mid_run > 0 {
                 eprintln!(
                     "error: {refused_mid_run} endpoint(s) were refused mid-run and are not in \
-                     {}; see the refusal above",
+                     {} past the refusal; see the refusal above",
                     config.output.display()
                 );
                 recording_failed.store(true, Ordering::SeqCst);

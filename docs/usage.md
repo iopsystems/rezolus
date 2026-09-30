@@ -252,7 +252,10 @@ from a proxy, a handshake that times out). A stream that drops mid-run, or that
 produces no frame for the scrape timeout, is reconnected after one interval (at
 least a second), with the drop and the reconnect logged; rows between the two
 are lost, as a failed scrape's are. An agent that comes back unable to serve
-the stream ends the recording, and what was written is kept.
+the stream (a 404, a wrong content type, a handshake that does not decode) is
+refused as a late agent is: its recording stops with the rows it had and is
+finalized, it is not retried, the other endpoints keep recording, and the run
+exits 1.
 
 A wrapped command (`-- <command>`) that exits on its own is followed by a wait
 for each agent's frame stamped at or after the exit, at most one interval plus

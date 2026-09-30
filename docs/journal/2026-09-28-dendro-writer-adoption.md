@@ -324,9 +324,13 @@ formats that scrape (`.rez`, parquet, raw).
   said to predate the stream; a current agent's 404 is quoted as the route's
   answer, since a proxy that does not route the path gives the same answer.
 - At startup the refusal ends the run before the archive is created, with
-  `-o out.rez` or parquet as the alternatives. An agent that comes up later
-  and is refused is marked `Refused` and not retried; the other endpoints
-  keep recording, the archive is finalized, and the run exits 1.
+  `-o out.rez` or parquet as the alternatives. After that, one path
+  (`refuse_mid_run`) handles an agent refused on first activation and one
+  refused on a reconnect (its pump's `StreamEvent::Refused`): the endpoint
+  is marked `Refused` and not retried, a reconnecting agent's recording
+  keeps the rows it had and is finalized with the rest, the other endpoints
+  keep recording, and the run exits 1 after naming how many endpoints were
+  refused. A reconnect refusal used to end the whole run.
 - A wrapped command that exits on its own waits for each streamed
   endpoint's frame stamped at or after the exit, bounded by one interval
   plus the tick timeout. A fixed grace of `interval.min(2s)` recorded

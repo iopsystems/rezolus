@@ -20,8 +20,10 @@
   agent, or a handshake that does not decode, such as a replication protocol
   version mismatch) is refused with its version and never scraped instead:
   at startup the run is refused before the archive is created, and an agent
-  that comes up later is left out while the other endpoints keep recording,
-  the archive is finalized, and the run exits 1. Record such an agent to a
+  that comes up later, or that answers a reconnect with such a refusal, is
+  left out from then on (a reconnecting agent's recording keeps the rows it
+  had and is finalized) while the other endpoints keep recording, the
+  archive is finalized, and the run exits 1. Record such an agent to a
   `.rez` or parquet, which scrape. An agent that answers but whose stream
   fails with an error that can change (a 5xx, a handshake timeout) is retried
   each tick. A wrapped command that exits on its own waits for each agent's
