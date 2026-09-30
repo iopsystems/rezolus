@@ -234,9 +234,13 @@ rezolus record --endpoint http://agent:4241 --endpoint http://svc:9090/metrics,s
 ```
 
 There is no scrape path for a Rezolus agent into a `.dendro`. An agent that
-cannot serve the stream — older than 5.21.0, when `/metrics/stream` shipped, or
-a V2 agent — is refused at startup with its version, before the archive is
-created. Record such an agent to a `.rez` or parquet, which scrape:
+cannot serve the stream — older than 5.21.0, when `/metrics/stream` shipped, a
+V2 agent, or one whose handshake does not decode (a replication protocol
+version mismatch names both versions) — is refused with its version. At
+startup the run is refused before the archive is created. An agent that comes
+up later and is refused is left out: the other endpoints keep recording, the
+archive is finalized, and the run exits 1. Record such an agent to a `.rez` or
+parquet, which scrape:
 
 ```bash
 rezolus record --url http://old-host:4241 -o run.rez
@@ -249,6 +253,12 @@ produces no frame for the scrape timeout, is reconnected after one interval (at
 least a second), with the drop and the reconnect logged; rows between the two
 are lost, as a failed scrape's are. An agent that comes back unable to serve
 the stream ends the recording, and what was written is kept.
+
+A wrapped command (`-- <command>`) that exits on its own is followed by a wait
+for each agent's frame stamped at or after the exit, at most one interval plus
+the scrape timeout, so the interval the command exited in is recorded even
+when the agent's next frame is seconds away. Other stops (`--duration`,
+ctrl-c) wait one interval, at most two seconds.
 
 Streamed rows and the tick's scrapes go through one archive writer and are
 committed together, once per tick.

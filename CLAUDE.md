@@ -54,7 +54,7 @@ sudo target/release/rezolus config/agent.toml
 # Exporter - Prometheus-compatible metrics endpoint
 sudo target/release/rezolus exporter config/exporter.toml
 
-# Recorder - capture metrics to disk (.rez by default)
+# Recorder - capture metrics to disk (.dendro by default)
 target/release/rezolus record                                                           # localhost:4241 -> rezolus.dendro
 target/release/rezolus record --url http://localhost:4241 -o out.dendro --label arm=redis  # per-sampler archive (.rez: the pre-6.0 format)
 target/release/rezolus record --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.dendro  # one recording per endpoint
@@ -64,8 +64,9 @@ target/release/rezolus record -o bench.rez -- ./bench.sh   # record for the comm
 #   (program name only; --record-command-line adds the full argument list; .rez, .dendro and parquet carry them, raw cannot)
 target/release/rezolus record --url http://localhost:4241 -o out.dendro         # dendro archive via metriken-archive; the agent is streamed
 # Auto-detects Rezolus agent vs Prometheus endpoints. The -o extension picks the format
-# (.rez | .parquet | .raw); --format {rez|parquet|raw} is rarely needed and conflicting with
-# the extension is an error. With no -o, the output is rezolus.<ext> for the format in play.
+# (.dendro, the default | .rez | .parquet | .raw); --format {dendro|rez|parquet|raw} is rarely
+# needed and conflicting with the extension is an error. With no -o, the output is
+# rezolus.<ext> for the format in play (rezolus.dendro by default).
 # .rez takes any number of endpoints, rezolus or Prometheus, each as its own recording
 # in one multi-recording archive. A Prometheus scrape becomes one acquisition group per
 # target (`prometheus/scrape`), windowed by the real HTTP round trip. Only --separate
@@ -75,11 +76,15 @@ target/release/rezolus record --url http://localhost:4241 -o out.dendro         
 # A .dendro records every rezolus agent from /metrics/stream and scrapes every Prometheus
 # endpoint (src/recorder/mod.rs `activate_endpoint`); both feed one ArchiveWriter, one commit
 # per tick. There is no scrape path for an agent into a .dendro: one that cannot serve the
-# stream (older than 5.21.0, V2 agent) is refused at startup with its version, before the
-# archive exists, pointing at .rez/parquet (which scrape). An unreachable one is retried
-# each tick, and a stream that drops (or goes silent for the scrape timeout) is reconnected
-# after one interval, at least a second. Identity travels in each group's schema; the agent
-# sends no index frames. --stream is hidden: implied by .dendro (a note), refused elsewhere.
+# stream (older than 5.21.0, V2 agent, handshake that does not decode) is refused with its
+# version. At startup that is before the archive exists, pointing at .rez/parquet (which
+# scrape); an agent that comes up later is marked Refused and left out, the rest finalize,
+# and the run exits 1. An unreachable one (or a 5xx / handshake timeout) is retried each
+# tick, and a stream that drops (or goes silent for the scrape timeout) is reconnected
+# after one interval, at least a second. A wrapped command that exits on its own waits for
+# each agent's frame stamped at or after the exit (bounded by interval + tick timeout).
+# Identity travels in each group's schema; the agent sends no index frames. --stream is
+# hidden: implied by .dendro (a note), refused elsewhere.
 
 # Viewer - web dashboard for parquet files, live agents, or upload mode
 target/release/rezolus view output.parquet [experiment.parquet] [--listen ADDR]

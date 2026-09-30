@@ -16,14 +16,29 @@
   `.dendro`) subscribes to each agent's `/metrics/stream` and scrapes each
   Prometheus endpoint; one run can mix both, each endpoint its own recording,
   with streamed rows and scrapes committed through one archive writer once
-  per tick. An agent that cannot serve the stream (older than 5.21.0, or a V2
-  agent) is refused at startup with its version, before the archive is
-  created, and is never scraped instead; record it to a `.rez` or parquet,
-  which scrape. An agent that answers but whose stream fails with an error
-  that can change (a 5xx, a handshake timeout) is retried each tick.
-  `--stream` is implied by `.dendro`: it is hidden from help and still
-  accepted there with a note, and still refused with `.rez`, parquet and raw.
-  `.rez`, parquet and raw output are unchanged.
+  per tick. An agent that cannot serve the stream (older than 5.21.0, a V2
+  agent, or a handshake that does not decode, such as a replication protocol
+  version mismatch) is refused with its version and never scraped instead:
+  at startup the run is refused before the archive is created, and an agent
+  that comes up later is left out while the other endpoints keep recording,
+  the archive is finalized, and the run exits 1. Record such an agent to a
+  `.rez` or parquet, which scrape. An agent that answers but whose stream
+  fails with an error that can change (a 5xx, a handshake timeout) is retried
+  each tick. A wrapped command that exits on its own waits for each agent's
+  frame covering the exit, at most one interval plus the scrape timeout.
+  `--stream` is implied by `.dendro`: it is hidden from help, accepted there
+  with a note, and refused with `.rez`, parquet and raw, which scrape and are
+  otherwise unchanged. `.rez` is no longer a stream target, and the identity
+  index that `.rez --stream` stored beside its rows is gone with it: the
+  agent no longer sends `Frame::Index` on `/metrics/stream` (every rows frame
+  names dendro's `NO_INDEX_STATE`), no longer keeps the slot-change broadcast
+  or index history, and `/status` drops `index_resyncs`. Slot identity
+  reaches a `.dendro` through each group's schema, `__uid__` included.
+  `.rez` archives written by a 5.x `record --stream` still read with their
+  occupants split by the recorded index. 5.x keeps `.rez --stream` on
+  `release/5.x`; a 5.x `record --stream -o out.rez` against a 6.0 agent
+  receives no index frames, so it no longer records an identity index. A 6.0
+  recorder ignores a 5.x agent's index frames.
 - The agent's V3 snapshot is built by metriken-exposition's `GroupBuilder`
   and its `/metrics/stream` frames by metriken-archive's `FrameProducer`.
   The agent supplies a router (`src/agent/exposition/http/router.rs`) that
@@ -52,19 +67,6 @@
   the agent; `__uid__` minting, the no-op on a re-announced label set, and
   the epoch's format are unchanged. Samplers declare the metrics a slot
   spans as one list per acquisition group (`SlotIdentity::grouped`).
-- `record --stream` writes `.dendro` only. `-o out.rez` or `--format rez`
-  with `--stream` is refused at parse time; scraping into a `.rez` is
-  unchanged. The identity index that `.rez --stream` stored beside its rows
-  is gone with it: the agent no longer sends `Frame::Index` on
-  `/metrics/stream` (every rows frame names dendro's `NO_INDEX_STATE`), no
-  longer keeps the slot-change broadcast or index history, and `/status`
-  drops `index_resyncs`. Slot identity reaches a `.dendro` through each
-  group's schema, `__uid__` included, as before. `.rez` archives written by
-  a 5.x `record --stream` still read with their occupants split by the
-  recorded index. 5.x keeps `.rez --stream` on `release/5.x`; a 5.x
-  `record --stream -o out.rez` against a 6.0 agent receives no index frames,
-  so it no longer records an identity index. A 6.0 `record --stream` from a
-  5.x agent ignores that agent's index frames.
 - `ext4_ops` and `xfs_log` attribute to cgroups only when their section (or
   `[defaults]`) sets `cgroup_attribution = true`. The per-cgroup path was
   measured at half the end hook's cost (265 of 535 ns), so it is off by

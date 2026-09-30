@@ -314,12 +314,26 @@ formats that scrape (`.rez`, parquet, raw).
   endpoint is scraped and converted into a `prometheus/scrape` group. Both
   can be in one run: each tick scrapes the Prometheus endpoints, drains the
   agents' stream intervals, and commits once through the one writer.
-- An agent without `/metrics/stream` (before 5.21.0) is refused before the
-  archive is created, with its version and `-o out.rez` or parquet as the
-  alternatives. It is not scraped instead.
-- A stream that fails for a reason retrying could fix (5xx, a timeout, a
-  handshake dropped) is retried each tick; a 404, a wrong content type or a
-  malformed first frame refuses the endpoint.
+- An agent that cannot serve the stream is refused, never scraped instead.
+  Refused: a 404 or 409 from `/metrics/stream`, a wrong content type, and a
+  handshake that does not decode (wrong magic, another protocol version,
+  which the message names on both sides, an oversized or undecodable
+  frame). Retried each tick: no answer, a 5xx, 408 or 429, a handshake that
+  times out, a connection that closes before or during the handshake.
+- The refusal names the agent's version. Only a version before 5.21.0 is
+  said to predate the stream; a current agent's 404 is quoted as the route's
+  answer, since a proxy that does not route the path gives the same answer.
+- At startup the refusal ends the run before the archive is created, with
+  `-o out.rez` or parquet as the alternatives. An agent that comes up later
+  and is refused is marked `Refused` and not retried; the other endpoints
+  keep recording, the archive is finalized, and the run exits 1.
+- A wrapped command that exits on its own waits for each streamed
+  endpoint's frame stamped at or after the exit, bounded by one interval
+  plus the tick timeout. A fixed grace of `interval.min(2s)` recorded
+  nothing for a command that exited before the agent's first frame (measured
+  against a real agent: `--interval 5s -- true` failed 1 of 1, `3s` 2 of 5).
+  Every other stop keeps that capped grace, so a `docker stop` is not held
+  for a long interval.
 - Measured on a Linux VM (metriken
   `docs/journal/2026-09-29-members-that-come-and-go.md`, "5b: measured"):
   at 10 Hz the recorder used 6.3 s of CPU per 180 s streaming against 18.5 s
