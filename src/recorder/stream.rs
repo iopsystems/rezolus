@@ -412,10 +412,10 @@ impl Subscription {
                     "{url} cannot serve a replication stream: the agent reports no \
                      acquisition groups, which a V2 agent never has"
                 )),
-                404 => ConnectError::Unsupported(format!(
-                    "{url} returned HTTP 404: this agent has no replication stream (it \
-                     predates /metrics/stream)"
-                )),
+                // Not "predates the stream": a current agent behind a proxy
+                // that does not route this path answers the same way. The
+                // caller knows the agent's version and says which it is.
+                404 => ConnectError::Unsupported(format!("{url} returned HTTP 404")),
                 408 | 429 | 500..=599 => {
                     ConnectError::Unreachable(format!("{url} returned HTTP {code}"))
                 }

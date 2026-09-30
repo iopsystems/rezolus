@@ -41,6 +41,9 @@ impl EndpointConfig {
 pub enum EndpointStatus {
     Active,
     Pending,
+    /// Answered and cannot be recorded into this run's output (an agent
+    /// without a replication stream in a `.dendro` run). Never retried.
+    Refused,
 }
 
 /// What a Rezolus agent tells the recorder about itself, once, at probe time.
@@ -85,6 +88,12 @@ pub struct EndpointState {
     /// True for a Rezolus agent whose rows arrive off its replication stream
     /// (a `.dendro` run) rather than from a scrape each tick.
     pub streaming: bool,
+    /// Stream intervals received so far (streamed endpoints only).
+    pub frames: u64,
+    /// Wall-clock stamp of the newest row in the last interval received,
+    /// `ts + wall_offset` on the agent's clock; `None` when that interval
+    /// carried no rows.
+    pub last_frame_wall_ns: Option<u64>,
 }
 
 impl EndpointState {
@@ -99,6 +108,8 @@ impl EndpointState {
             first_success_ns: None,
             last_success_ns: None,
             streaming: false,
+            frames: 0,
+            last_frame_wall_ns: None,
         }
     }
 

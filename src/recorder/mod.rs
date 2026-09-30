@@ -189,12 +189,18 @@ pub fn command() -> Command {
              sampled rather than when the recorder asked. Prometheus endpoints cannot\n\
              stream, so they are scraped each tick, and one run can hold both kinds. There\n\
              is no scrape path for a Rezolus agent into a .dendro: an agent that cannot\n\
-             serve the stream (older than 5.21.0, or a V2 agent) is refused at startup with\n\
-             its version, and is recorded with -o out.rez or -o out.parquet instead, which\n\
-             scrape. An agent that is not reachable yet is retried each tick. A stream that\n\
-             drops mid-run is reconnected after one interval (at least a second), like a\n\
-             scrape that fails is retried, and one that goes silent for the scrape timeout\n\
-             counts as dropped.",
+             serve the stream (older than 5.21.0, a V2 agent, or a handshake that does not\n\
+             decode) is refused with its version. At startup that refuses the run before\n\
+             anything is written; record such an agent with -o out.rez or -o out.parquet,\n\
+             which scrape. An agent that comes up later and is refused is left out of the\n\
+             recording, the other endpoints keep recording, and the run exits 1 once the\n\
+             archive is finalized. An agent that is not reachable yet, or whose stream\n\
+             fails with an error that can change (a 5xx, a handshake timeout), is retried\n\
+             each tick. A stream that drops mid-run is reconnected after one interval (at\n\
+             least a second), like a scrape that fails is retried, and one that goes\n\
+             silent for the scrape timeout counts as dropped. A wrapped command that exits\n\
+             on its own waits for each agent's frame covering the exit, at most one\n\
+             interval plus the scrape timeout.",
         )
         .arg(
             clap::Arg::new("URL")
@@ -659,36 +665,81 @@ async fn open_stream(
     Ok(sub)
 }
 
+/// Where an agent was refused, which decides what the refusal advises.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RefusedAt {
+    /// Before the archive exists: the whole run is refused.
+    Startup,
+    /// After the archive opened: only this endpoint is left out.
+    MidRun,
+}
+
 /// The refusal for a Rezolus agent that cannot serve its replication stream
 /// into a `.dendro`.
 ///
-/// Names the agent's version when `/status` or the `/` banner gave one, since
-/// the usual cause is an agent older than the stream ([`STREAM_SINCE`]), and
-/// says what records such an agent instead. There is no scrape fallback: a
-/// `.dendro` records agents by stream only, and a run that quietly scraped one
-/// agent would put two endpoints of one A/B on different transports.
-fn unstreamable_agent(ep: &EndpointState, reason: &str) -> String {
-    let agent = match ep.agent.version.as_deref() {
-        Some(version) => format!("Rezolus {version}"),
-        None => "a Rezolus agent of unknown version".to_string(),
+/// Names the agent's version when `/status` or the `/` banner gave one. An
+/// agent older than [`STREAM_SINCE`] is said to predate the stream; one at or
+/// after it should serve the stream, so the refusal only quotes what the
+/// route answered (a proxy that does not route `/metrics/stream` gives a 404
+/// from a current agent). There is no scrape fallback: a `.dendro` records
+/// agents by stream only, and a run that quietly scraped one agent would put
+/// two endpoints of one A/B on different transports.
+fn unstreamable_agent(ep: &EndpointState, reason: &str, at: RefusedAt) -> String {
+    let url = &ep.config.url;
+    let why = match ep.agent.version.as_deref() {
+        Some(version) => match predates_stream(version) {
+            Some(true) => format!(
+                "{url} is Rezolus {version}, which predates the replication stream \
+                 (agents serve /metrics/stream from {STREAM_SINCE}): {reason}"
+            ),
+            _ => format!(
+                "{url} is Rezolus {version}, which should serve a replication stream, \
+                 but it did not open: {reason}"
+            ),
+        },
+        None => format!(
+            "{url} is a Rezolus agent of unknown version, and its replication stream \
+             did not open: {reason}. Agents serve /metrics/stream from {STREAM_SINCE}"
+        ),
     };
-    format!(
-        "{} is {agent}, which cannot serve its replication stream: {reason}. A .dendro \
-         records Rezolus agents from /metrics/stream only, which agents serve from \
-         {STREAM_SINCE}; record this agent to a .rez (-o out.rez) or to parquet \
-         (-o out.parquet) instead, both of which scrape",
-        ep.config.url
-    )
+    let next = match at {
+        RefusedAt::Startup => {
+            "A .dendro records Rezolus agents from their replication stream only; \
+             record this agent to a .rez (-o out.rez) or to parquet (-o out.parquet) \
+             instead, both of which scrape"
+        }
+        RefusedAt::MidRun => {
+            "This endpoint is excluded from this recording and not retried; the other \
+             endpoints keep recording. A .dendro records Rezolus agents from their \
+             replication stream only; a separate `rezolus record` to a .rez or to \
+             parquet, both of which scrape, can record this agent"
+        }
+    };
+    format!("{why}. {next}")
 }
 
 /// The first Rezolus release whose agent serves `/metrics/stream`.
 const STREAM_SINCE: &str = "5.21.0";
 
+/// Whether `version` (as `/status` or the `/` banner reports it) is older
+/// than [`STREAM_SINCE`]. `None` when it does not parse as
+/// `major.minor.patch`; a pre-release or build suffix is ignored, so
+/// `5.21.0-alpha.1` counts as 5.21.0.
+fn predates_stream(version: &str) -> Option<bool> {
+    let parse = |v: &str| -> Option<(u64, u64, u64)> {
+        let core = v.split(['-', '+']).next()?;
+        let mut parts = core.split('.').map(|p| p.parse::<u64>().ok());
+        let triple = (parts.next()??, parts.next()??, parts.next()??);
+        parts.next().is_none().then_some(triple)
+    };
+    Some(parse(version)? < parse(STREAM_SINCE)?)
+}
+
 /// How an endpoint came up, from [`activate_endpoint`].
 enum Activation {
-    /// Not reachable yet (or its stream did not open for a reason retrying
-    /// can change); probed again next tick.
-    Pending,
+    /// Not up yet; probed again next tick. Carries the line that says why,
+    /// for the caller to log at the level it wants.
+    Pending(String),
     /// Active and scraped each tick: a Prometheus endpoint, or any endpoint of
     /// a run that does not write a `.dendro`.
     Scrape,
@@ -706,14 +757,16 @@ enum Activation {
 /// the declared `protocol=`).
 ///
 /// `Err` is an agent that answered and cannot serve the stream: refused, never
-/// scraped instead (see [`unstreamable_agent`]). The probe and the stream
-/// connect are each bounded by `timeout`, because this runs on the tick loop.
+/// scraped instead (see [`unstreamable_agent`]), with `at` choosing the
+/// advice. The probe and the stream connect are each bounded by `timeout`,
+/// because this runs on the tick loop.
 async fn activate_endpoint(
     client: &Client,
     ep: &mut EndpointState,
     stream_agents: bool,
     interval: Duration,
     timeout: Duration,
+    at: RefusedAt,
 ) -> Result<Activation, String> {
     let probed = match tokio::time::timeout(timeout, probe_endpoint(client, &ep.config)).await {
         Ok(probed) => probed,
@@ -727,25 +780,25 @@ async fn activate_endpoint(
         }
     };
     let Some((protocol, url)) = probed else {
-        return Ok(Activation::Pending);
+        return Ok(Activation::Pending(format!(
+            "endpoint {} not reachable, will retry each tick",
+            ep.config.url
+        )));
     };
 
     if stream_agents && protocol == Protocol::Msgpack {
         return match open_stream(client, ep, interval, timeout).await {
             Ok(sub) => Ok(Activation::Stream(Box::new(sub))),
-            Err(stream::ConnectError::Unsupported(e)) => Err(unstreamable_agent(ep, &e)),
-            Err(stream::ConnectError::Unreachable(e)) => {
-                // It answered the probe, so it is there; the stream route
-                // failed with an answer that may change (a 5xx from a proxy,
-                // a handshake that timed out). Retried like any unreachable
-                // endpoint rather than scraped.
-                warn!(
-                    "endpoint {} answered, but its replication stream did not open ({e}); \
-                     will retry each tick",
-                    ep.config.url
-                );
-                Ok(Activation::Pending)
-            }
+            Err(stream::ConnectError::Unsupported(e)) => Err(unstreamable_agent(ep, &e, at)),
+            // It answered the probe, so it is there; the stream route failed
+            // with an answer that may change (a 5xx from a proxy, a handshake
+            // that timed out). Retried like any unreachable endpoint rather
+            // than scraped.
+            Err(stream::ConnectError::Unreachable(e)) => Ok(Activation::Pending(format!(
+                "endpoint {} answered, but its replication stream did not open ({e}); \
+                 will retry each tick",
+                ep.config.url
+            ))),
         };
     }
 
@@ -824,6 +877,12 @@ fn handle_stream_event(
     match event {
         stream::StreamEvent::Interval(applied) => {
             endpoints[idx].record_success(wall_ns);
+            endpoints[idx].frames += 1;
+            endpoints[idx].last_frame_wall_ns = applied
+                .rows
+                .iter()
+                .map(|r| r.ts.saturating_add(r.wall_offset).max(0) as u64)
+                .max();
             if applied.gap {
                 // Every interval gets a frame, so a jump is a lost
                 // reading rather than a quiet one — the distinction
@@ -2105,7 +2164,15 @@ pub fn run(mut config: RecordingConfig) {
     // ordinary retry-each-tick case.
     rt.block_on(async {
         for (idx, ep) in endpoints.iter_mut().enumerate() {
-            match activate_endpoint(&client, ep, stream_agents, interval_dur, connect_timeout).await
+            match activate_endpoint(
+                &client,
+                ep,
+                stream_agents,
+                interval_dur,
+                connect_timeout,
+                RefusedAt::Startup,
+            )
+            .await
             {
                 Ok(Activation::Stream(sub)) => {
                     info!(
@@ -2123,12 +2190,7 @@ pub fn run(mut config: RecordingConfig) {
                         ep.protocol()
                     );
                 }
-                Ok(Activation::Pending) => {
-                    warn!(
-                        "endpoint {} not reachable, will retry each tick",
-                        ep.config.url
-                    );
-                }
+                Ok(Activation::Pending(why)) => warn!("{why}"),
                 Err(e) => {
                     eprintln!("error: {e}");
                     std::process::exit(1);
@@ -2286,6 +2348,11 @@ pub fn run(mut config: RecordingConfig) {
         // the loop top's poll stamps `run_end` with it rather than with its
         // own, later, reading.
         let mut child_exit_seen: Option<u64> = None;
+        // The wall clock when the wrapped command was seen to exit on its
+        // own, and each endpoint's frame count at that moment: what the
+        // post-exit wait for streamed frames measures against. Not set for a
+        // capped or interrupted command.
+        let mut child_exit_wall: Option<(u64, Vec<u64>)> = None;
         // The exit arm fires once. After that the tick governs, whether the
         // wait succeeded (the loop top takes it from here) or failed (a
         // failed wait would fire every iteration and spin the loop).
@@ -2349,6 +2416,10 @@ pub fn run(mut config: RecordingConfig) {
             config.duration.map(|d| start + Duration::from(d))
         };
         let mut deadline_fired = false;
+        // Endpoints refused after the archive opened (see the late
+        // activation below). The recording goes on without them, and the
+        // run exits 1 once it is finalized.
+        let mut refused_mid_run = 0usize;
 
         while STATE.load(Ordering::Relaxed) == RUNNING {
             if wrapped {
@@ -2359,6 +2430,12 @@ pub fn run(mut config: RecordingConfig) {
                             let code = child::map_exit_code(status);
                             info!("command exited (code {code}), finalizing recording");
                             outcome = Some(child::Outcome::Exited(code));
+                            if child_exit_wall.is_none() {
+                                child_exit_wall = Some((
+                                    wall_now_ns(),
+                                    endpoints.iter().map(|ep| ep.frames).collect(),
+                                ));
+                            }
                             if let Some(marker) = &run_marker {
                                 // The instant the exit arm saw it, when it
                                 // did; this poll's reading otherwise.
@@ -2463,6 +2540,10 @@ pub fn run(mut config: RecordingConfig) {
                             child_exit_seen = Some(anchored_at(
                                 clock_anchor_wall_ns,
                                 clock_anchor_mono.elapsed(),
+                            ));
+                            child_exit_wall = Some((
+                                wall_now_ns(),
+                                endpoints.iter().map(|ep| ep.frames).collect(),
                             ));
                         }
                         // The exit came while waiting, after the last scrape,
@@ -2723,22 +2804,28 @@ pub fn run(mut config: RecordingConfig) {
 
             for idx in pending_indices {
                 // The same activation as startup, with one difference: an
-                // agent that cannot serve its stream fails the recording here
-                // rather than the process, since there is an archive with
-                // other recordings in it by now, and it is kept and named on
-                // the way out.
+                // agent that cannot serve its stream is refused on its own.
+                // The archive already holds the other endpoints' recordings,
+                // so they keep recording and finalize as usual; the refused
+                // endpoint is never retried, and the run exits 1 at the end.
                 let activated = activate_endpoint(
                     &client,
                     &mut endpoints[idx],
                     stream_agents,
                     interval_dur,
                     scrape_timeout,
+                    RefusedAt::MidRun,
                 )
                 .await;
                 let sub = match activated {
-                    Ok(Activation::Pending) => continue,
+                    Ok(Activation::Pending(why)) => {
+                        debug!("{why}");
+                        continue;
+                    }
                     Err(e) => {
-                        late_endpoint_failure.get_or_insert(e);
+                        eprintln!("error: {e}");
+                        endpoints[idx].status = EndpointStatus::Refused;
+                        refused_mid_run += 1;
                         continue;
                     }
                     Ok(Activation::Stream(sub)) => {
@@ -2886,34 +2973,105 @@ pub fn run(mut config: RecordingConfig) {
 
         // ── Finalization ──────────────────────────────────────────────────
 
-        // The interval in flight. The agent frames on its own boundary and
-        // the loop's deadline sits on the same boundary, so the final frame
-        // lands a few milliseconds AFTER the tick that ended the loop, and a
-        // ctrl-c lands anywhere inside an interval. Without a wait, that
-        // frame is never committed and the recording ends one interval short
-        // of the window it was asked for. So the pumps get one interval's
-        // grace — an unconditional sleep, because a `recv` would return at
-        // once on anything already queued and the frame still in flight would
-        // be dropped after all; bounded, so a dead agent cannot hold the exit
-        // — and whatever arrived is committed once.
+        // The interval in flight. The agent frames on its own boundary, not
+        // on the recorder's tick, so the frame covering the moment the loop
+        // ended arrives after it did. Without a wait, that frame is never
+        // committed and the recording ends one interval short of the window
+        // it was asked for.
+        //
+        // A wrapped command that exited on its own waits for frames: until
+        // every streamed endpoint has delivered one stamped at or after the
+        // exit, bounded by one interval plus the tick timeout, and cut short
+        // by ctrl-c. That
+        // is what makes `-o out.dendro -- <short command>` record the
+        // interval the command exited in, as the scrape path's final pass
+        // does; a fixed grace shorter than the agent's interval recorded
+        // nothing for a command that exited before the first frame.
+        //
+        // Every other stop (`--duration`, ctrl-c, a capped command) gets one
+        // interval's grace, at most two seconds so a long interval cannot
+        // hold a `docker stop` past its grace period: an unconditional sleep,
+        // because a `recv` would return at once on anything already queued
+        // and the frame still in flight would be dropped after all.
         //
         // Skipped when the recording already failed: it was reported when it
         // did, and there is nothing left to commit into; and when no endpoint
         // streams, since a scraped endpoint has nothing in flight.
         if endpoints.iter().any(|ep| ep.streaming) && rez_recorder.is_some() {
-            let grace = interval_dur.min(Duration::from_secs(2));
-            tokio::time::sleep(grace).await;
-            let failed = drain_stream_events(
-                &mut stream_rx,
-                &mut endpoints,
-                rez_recorder.as_mut(),
-                wall_now_ns(),
-            )
-            .or_else(|| {
-                rez_recorder
-                    .as_mut()
-                    .and_then(|rec| rec.commit_tick().err())
-            });
+            let mut failed = None;
+            if let Some((exit_wall, frames_at_exit)) = child_exit_wall.as_ref() {
+                // By stamp, including an endpoint's first frame: a frame the
+                // agent sent before the exit can still be queued when the
+                // exit is seen, and counting it would end the wait one
+                // interval early. An interval with no rows has no stamp and
+                // counts once it arrives after the exit. The agent's clock is
+                // compared with this host's, so skew between the two can only
+                // lengthen the wait, up to its bound, or end it early by the
+                // skew.
+                let delivered = |ep: &EndpointState, before: u64| {
+                    ep.frames > before
+                        && ep
+                            .last_frame_wall_ns
+                            .is_none_or(|stamp| stamp >= *exit_wall)
+                };
+                let deadline = Instant::now() + interval_dur + scrape_timeout;
+                loop {
+                    let waiting: Vec<usize> = endpoints
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, ep)| ep.streaming && !delivered(ep, frames_at_exit[*i]))
+                        .map(|(i, _)| i)
+                        .collect();
+                    if waiting.is_empty() {
+                        break;
+                    }
+                    tokio::select! {
+                        biased;
+                        _ = shutdown.notified() => break,
+                        event = stream_rx.recv() => {
+                            let Some((idx, event)) = event else { break };
+                            if let Some(e) = handle_stream_event(
+                                idx,
+                                event,
+                                &mut endpoints,
+                                rez_recorder.as_mut(),
+                                wall_now_ns(),
+                            ) {
+                                failed = Some(e);
+                                break;
+                            }
+                        }
+                        _ = tokio::time::sleep_until(deadline.into()) => {
+                            for idx in waiting {
+                                warn!(
+                                    "{} ({}): no stream frame from after the command exited \
+                                     arrived within {}; the recording ends before it",
+                                    endpoints[idx].config.source_label(),
+                                    endpoints[idx].config.url,
+                                    humantime::format_duration(interval_dur + scrape_timeout)
+                                );
+                            }
+                            break;
+                        }
+                    }
+                }
+            } else {
+                tokio::time::sleep(interval_dur.min(Duration::from_secs(2))).await;
+            }
+            let failed = failed
+                .or_else(|| {
+                    drain_stream_events(
+                        &mut stream_rx,
+                        &mut endpoints,
+                        rez_recorder.as_mut(),
+                        wall_now_ns(),
+                    )
+                })
+                .or_else(|| {
+                    rez_recorder
+                        .as_mut()
+                        .and_then(|rec| rec.commit_tick().err())
+                });
             if let Some(e) = failed {
                 eprintln!("error: recording failed: {e}");
                 recording_failed.store(true, Ordering::SeqCst);
@@ -2993,6 +3151,14 @@ pub fn run(mut config: RecordingConfig) {
                         config.output.display()
                     );
                 }
+            }
+            if refused_mid_run > 0 {
+                eprintln!(
+                    "error: {refused_mid_run} endpoint(s) were refused mid-run and are not in \
+                     {}; see the refusal above",
+                    config.output.display()
+                );
+                recording_failed.store(true, Ordering::SeqCst);
             }
             return outcome;
         }
@@ -3678,17 +3844,19 @@ mod tests {
     }
 
     /// The refusal for an agent that cannot stream names the endpoint, the
-    /// agent's version when there is one, the release the stream arrived in,
-    /// and the outputs that record such an agent.
+    /// agent's version when there is one, and the outputs that record such an
+    /// agent. Only an agent older than the stream is said to predate it: a
+    /// current agent's 404 is quoted as the route's answer.
     #[test]
     fn an_unstreamable_agent_is_refused_by_version_with_the_alternatives() {
+        let reason = "http://localhost:4241/metrics/stream?interval=1s returned HTTP 404";
         let mut ep = rez_endpoint();
         ep.agent.version = Some("5.20.0".to_string());
-        let msg = unstreamable_agent(&ep, "HTTP 404");
+        let msg = unstreamable_agent(&ep, reason, RefusedAt::Startup);
         for needle in [
-            "http://localhost:4241",
-            "Rezolus 5.20.0",
-            "HTTP 404",
+            "http://localhost:4241/ is Rezolus 5.20.0",
+            "predates",
+            reason,
             STREAM_SINCE,
             "-o out.rez",
             "-o out.parquet",
@@ -3696,9 +3864,37 @@ mod tests {
             assert!(msg.contains(needle), "{needle:?} in {msg}");
         }
 
+        ep.agent.version = Some("5.22.1".to_string());
+        let msg = unstreamable_agent(&ep, reason, RefusedAt::Startup);
+        assert!(!msg.contains("predates"), "{msg}");
+        assert!(
+            msg.contains("Rezolus 5.22.1") && msg.contains(reason),
+            "{msg}"
+        );
+
         ep.agent.version = None;
-        let msg = unstreamable_agent(&ep, "HTTP 404");
+        let msg = unstreamable_agent(&ep, reason, RefusedAt::Startup);
         assert!(msg.contains("unknown version"), "{msg}");
+        assert!(msg.contains(STREAM_SINCE), "{msg}");
+
+        // Mid-run, only the endpoint is left out: switching the run's format
+        // is not the advice.
+        ep.agent.version = Some("5.20.0".to_string());
+        let msg = unstreamable_agent(&ep, reason, RefusedAt::MidRun);
+        assert!(msg.contains("excluded from this recording"), "{msg}");
+        assert!(msg.contains("separate"), "{msg}");
+        assert!(!msg.contains("-o out.rez"), "{msg}");
+    }
+
+    #[test]
+    fn predates_stream_compares_the_release() {
+        assert_eq!(predates_stream("5.20.0"), Some(true));
+        assert_eq!(predates_stream("4.1.2"), Some(true));
+        assert_eq!(predates_stream("5.21.0"), Some(false));
+        assert_eq!(predates_stream("5.21.0-alpha.1"), Some(false));
+        assert_eq!(predates_stream("6.0.0-alpha.14"), Some(false));
+        assert_eq!(predates_stream("5.21"), None);
+        assert_eq!(predates_stream("dev"), None);
     }
 
     /// A second endpoint, distinguishable from [`rez_endpoint`] by `source`.
