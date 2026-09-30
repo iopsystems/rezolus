@@ -222,6 +222,28 @@ pub fn decode(bytes: &[u8]) -> Result<AgentRows, String> {
     rmp_serde::from_slice(bytes).map_err(|e| format!("failed to decode agent rows: {e}"))
 }
 
+/// An agent's row, read by metriken-archive's stream `FrameProducer`
+/// directly. The agent builds these once per pass for `/metrics/rows`, and
+/// its stream sends the same rows, so a stream frame costs no conversion.
+#[cfg(feature = "write")]
+impl metriken_archive::stream::StreamRow for AgentRow {
+    fn stream(&self) -> &str {
+        &self.stream
+    }
+
+    fn schema_hash(&self) -> (u64, u64) {
+        self.schema_hash
+    }
+
+    fn schema(&self) -> Option<&GroupSchema> {
+        self.schema.as_ref()
+    }
+
+    fn payload(&self) -> &[u8] {
+        &self.row
+    }
+}
+
 /// Encode one producer-side acquisition group as an [`AgentRow`].
 ///
 /// `schema` is what the producer chose to transmit this tick — its own cache

@@ -21,6 +21,7 @@ static STATUS_TTL_SECONDS: OnceLock<u64> = OnceLock::new();
 /// frames whose round trip into an archive is already tested.
 #[cfg_attr(not(test), allow(dead_code))]
 mod frames;
+mod router;
 mod snapshot;
 
 pub use snapshot::SnapshotBuilder;
@@ -292,27 +293,12 @@ fn rows_frames(
         let mut last_sent_wall: Option<u64> = None;
         let mut last_index: Option<u64> = None;
 
-        let mut producer = frames::FrameProducer::new(
-            crate::agent::epoch::producer_epoch().to_string(),
-            [("source".to_string(), env!("CARGO_BIN_NAME").to_string())]
-                .into_iter()
-                .collect(),
-            [(
-                dendro::keys::PRODUCER_EPOCH.to_string(),
-                crate::agent::epoch::producer_epoch().to_string(),
-            )]
-            .into_iter()
-            .collect(),
-        );
+        let mut producer = frames::agent_producer();
 
         // dendro's own framing: a preamble, then length-prefixed frames. Sent
         // before anything else so a consumer can reject a stream it cannot
         // read rather than decoding its first frame as garbage.
-        let mut opening = Vec::new();
-        dendro::replicate::wire::write_preamble(&mut opening)
-            .map_err(std::io::Error::other)?;
-        dendro::replicate::wire::encode_frame(&producer.handshake(), &mut opening)
-            .map_err(std::io::Error::other)?;
+        let opening = producer.opening().map_err(std::io::Error::other)?;
         yield bytes::Bytes::from(opening);
 
         loop {
@@ -367,10 +353,11 @@ fn rows_frames(
                     let advanced = last_sent_wall != Some(rows.wall_ns);
                     last_sent_wall = Some(rows.wall_ns);
 
-                    producer.interval(
-                        &rows,
-                        index,
-                        |row| {
+                    // Filtered BEFORE the producer sees the rows: it records a
+                    // schema as sent when it builds a row carrying it, so a
+                    // row dropped afterwards would leave its group referencing
+                    // a schema this subscriber never received.
+                    let keep = rows.rows.iter().filter(|row| {
                             // The whole snapshot is one this connection already has, so
                             // nothing in it is new — including a windowless group,
                             // which carries no evidence either way and would otherwise
@@ -390,8 +377,10 @@ fn rows_frames(
                                 last_window.insert(row.stream.clone(), end);
                             }
                             true
-                        },
-                    )
+                    });
+                    // The pass's own stamp, carried through: a frame sent now
+                    // can describe a pass that ran up to a TTL ago.
+                    producer.interval(keep, rows.ts, rows.wall_offset, index)
                 }
                 // No reading to send: before the first sampling pass, or when
                 // the snapshot failed to encode. The interval still elapsed,
@@ -818,8 +807,9 @@ mod stream_tests {
             get(|| async {
                 let mut opening = Vec::new();
                 dendro::replicate::wire::write_preamble(&mut opening).unwrap();
-                let mut producer = frames::FrameProducer::new(
+                let mut producer = frames::FrameProducer::for_source(
                     "epoch-silent".to_string(),
+                    crate::agent::epoch::clock_anchor_wall_ns(),
                     Default::default(),
                     Default::default(),
                 );

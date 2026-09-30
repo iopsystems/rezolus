@@ -53,6 +53,9 @@ write = [
     "dendro/write",
     # `From` between `metriken::Window` and the segment format's `Window`.
     "metriken-segment/metriken",
+    # `StreamRow` for `wire::AgentRow`, so the agent's frame producer reads
+    # the rows it already built for `/metrics/rows` without converting them.
+    "metriken-archive/stream",
 ]
 # Fixture builders used by the binary crate's tests. Not `#[cfg(test)]`,
 # because a `#[cfg(test)]` module in THIS crate is invisible to the crate

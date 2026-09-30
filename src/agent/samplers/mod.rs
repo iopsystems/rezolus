@@ -78,7 +78,7 @@ pub static SAMPLERS: [SamplerEntry] = [..];
 /// even though they never collide on Linux. Always prefixing with the real
 /// sampler name keeps the group name globally unique across every sampler
 /// EVEN under that collapse. `group_registry()` (in
-/// `agent::exposition::http::snapshot`) `debug_assert!`s this at first use.
+/// `agent::exposition::http::router`) `debug_assert!`s this at first use.
 #[distributed_slice]
 pub static ACQUISITION_GROUPS: [&'static crate::agent::timing::AcquisitionGroup] = [..];
 

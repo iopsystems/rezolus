@@ -11,6 +11,16 @@
 
 ### Changed
 
+- The agent's V3 snapshot is built by metriken-exposition's `GroupBuilder`
+  and its `/metrics/stream` frames by metriken-archive's `FrameProducer`.
+  The agent supplies a router (`src/agent/exposition/http/router.rs`) that
+  does what `create_v3` did itself: the `log_` filter, sampler attribution,
+  `acq_group` routing against `ACQUISITION_GROUPS`, each group's membership
+  rule and window source, and the `sampler` label. Groups, schemas, schema
+  hashes, values, windows and snapshot metadata are unchanged; a test pins
+  them over nine ticks of slot assignment, release and metadata changes.
+  `/metrics/rows`, V2 snapshots, the stream's route, timer and per-subscriber
+  filters are unchanged. The hit-path eviction no longer logs at `debug`.
 - `cpu_perf` honours `cgroup_attribution` (on by default for this
   sampler). With `cgroup_attribution = false` its `sched_switch` program is
   not loaded, so nothing reads the PMU per context switch; `cpu_cycles` and
