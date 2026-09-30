@@ -254,9 +254,8 @@ impl metriken_archive::stream::StreamRow for AgentRow {
 /// Encode one producer-side acquisition group as an [`AgentRow`].
 ///
 /// The row's `schema` is the group's schema from `schemas`, converted only
-/// when its hash changed since the producer's last pass. It is NOT what the
-/// payload carries: the payload's schema is always `None`. See the module
-/// docs.
+/// when its hash changed since the producer's last pass. The payload's schema
+/// is always `None`; see the module docs.
 #[cfg(feature = "write")]
 pub fn encode_group(
     g: &metriken_exposition::GroupSnapshot,

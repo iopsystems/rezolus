@@ -38,8 +38,6 @@ pub struct SnapshotBuilder {
     /// not by generations: one entry per group name, overwritten on change.
     emitted_schemas: HashMap<String, (u64, u64)>,
     /// Each group's schema converted to the row format, once per schema hash.
-    /// A snapshot carries every group's schema on every pass; converting all
-    /// of them each pass was most of what encoding rows for the stream cost.
     schemas: metriken_archive::stream::SchemaCache,
     /// Completed sampling passes — see [`samples`](Self::samples).
     samples: u64,
