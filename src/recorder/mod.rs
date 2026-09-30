@@ -683,6 +683,50 @@ fn refuse_mid_run(ep: &mut EndpointState, refusal: &str) {
     ep.streaming = false;
 }
 
+/// The end-of-run lines for endpoints refused mid-run, one per endpoint and
+/// a count, or `None` when none was.
+///
+/// A reconnect refusal leaves the rows the endpoint had, so its line says
+/// from when the archive has none (its last delivered interval, on this
+/// host's clock); a first-activation refusal never had any.
+fn refusal_summary(endpoints: &[EndpointState], output: &Path, finalized: bool) -> Option<String> {
+    let refused: Vec<&EndpointState> = endpoints
+        .iter()
+        .filter(|ep| ep.status == EndpointStatus::Refused)
+        .collect();
+    if refused.is_empty() {
+        return None;
+    }
+    let path = output.display();
+    let mut lines: Vec<String> = refused
+        .iter()
+        .map(|ep| {
+            let who = format!("{} ({})", ep.config.url, ep.config.source_label());
+            match ep.last_success_ns {
+                Some(ns) => {
+                    let at = std::time::UNIX_EPOCH + Duration::from_nanos(ns);
+                    format!(
+                        "error: {who} was refused mid-run and has no rows in {path} after {}",
+                        humantime::format_rfc3339_seconds(at)
+                    )
+                }
+                None => format!("error: {who} was refused mid-run and has no rows in {path}"),
+            }
+        })
+        .collect();
+    lines.push(format!(
+        "error: {} of {} endpoints refused; {}",
+        refused.len(),
+        endpoints.len(),
+        if finalized {
+            "the archive holds the rest and is finalized"
+        } else {
+            "the archive holds the rest"
+        }
+    ));
+    Some(lines.join("\n"))
+}
+
 /// The refusal for a Rezolus agent that cannot serve its replication stream
 /// into a `.dendro`.
 ///
@@ -2947,6 +2991,19 @@ pub fn run(mut config: RecordingConfig) {
                 break;
             }
             scraped_last_pass = true;
+
+            // Every endpoint refused mid-run: nothing is left to record, and
+            // nothing will come back (a refused endpoint is never retried),
+            // so the run ends here instead of waiting for `--duration` or
+            // ctrl-c. The archive is finalized with what it holds and the
+            // summary below says what was refused.
+            if endpoints
+                .iter()
+                .all(|ep| ep.status == EndpointStatus::Refused)
+            {
+                warn!("every endpoint has been refused; finalizing the recording");
+                break;
+            }
         }
 
         // If the loop ended via ctrl-c (STATE flip) while the wrapped command
@@ -3125,6 +3182,7 @@ pub fn run(mut config: RecordingConfig) {
             // `None` means the recording already failed mid-run and reported it
             // (what was on disk was left in place there, and its path printed);
             // nothing to add here.
+            let mut finalized = false;
             if let Some(mut rec) = rez_recorder.take() {
                 // `run_end` before finalize: `update_metadata` needs a live
                 // writer, and finalize is what stops it. Not fatal for the
@@ -3157,22 +3215,15 @@ pub fn run(mut config: RecordingConfig) {
                         config::format_name(config.format),
                         config.output.display()
                     );
+                    finalized = true;
                 }
             }
             // Endpoints refused after the archive opened, on first
             // activation or on a reconnect (a refusal at startup exits
             // before the archive exists). The recording went on without
             // them; the exit status says so.
-            let refused_mid_run = endpoints
-                .iter()
-                .filter(|ep| ep.status == EndpointStatus::Refused)
-                .count();
-            if refused_mid_run > 0 {
-                eprintln!(
-                    "error: {refused_mid_run} endpoint(s) were refused mid-run and are not in \
-                     {} past the refusal; see the refusal above",
-                    config.output.display()
-                );
+            if let Some(summary) = refusal_summary(&endpoints, &config.output, finalized) {
+                eprintln!("{summary}");
                 recording_failed.store(true, Ordering::SeqCst);
             }
             return outcome;
