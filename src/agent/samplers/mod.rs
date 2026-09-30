@@ -177,7 +177,7 @@ pub(crate) const fn bpf_sampler_name(_linux_name: &'static str) -> &'static str 
 /// Attribute a metric (identified by its definition module path) to the
 /// sampler whose registered module is the longest prefix of that path. Metrics
 /// with no matching sampler fall into the `"unattributed"` bucket.
-pub fn attribute_sampler<'a>(metric_module: &str, samplers: &'a [(&'a str, &'a str)]) -> &'a str {
+pub fn attribute_sampler<'n>(metric_module: &str, samplers: &[(&str, &'n str)]) -> &'n str {
     samplers
         .iter()
         .filter(|(module, _)| is_module_prefix(module, metric_module))

@@ -3064,7 +3064,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "6.0.0-alpha.14"
+version = "6.0.0-alpha.15"
 dependencies = [
  "allan",
  "anyhow",
@@ -3082,6 +3082,7 @@ dependencies = [
  "ctrlc",
  "dashboard",
  "dendro",
+ "foldhash 0.2.0",
  "futures",
  "getrandom 0.3.4",
  "histogram",

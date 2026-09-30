@@ -16,9 +16,12 @@ use metriken_exposition::group_builder::{
 };
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
-type GroupRegistry = HashMap<(&'static str, &'static str), &'static AcquisitionGroup>;
+/// Keyed by `(sampler, name)` and looked up for every routed metric twice a
+/// pass, so it hashes with foldhash rather than the default SipHash.
+type GroupRegistry =
+    HashMap<(&'static str, &'static str), &'static AcquisitionGroup, foldhash::fast::RandomState>;
 
 /// The `(sampler, name) -> AcquisitionGroup` registry, built once. Sound to
 /// cache for the process lifetime: `ACQUISITION_GROUPS` is a `linkme`
@@ -27,7 +30,7 @@ type GroupRegistry = HashMap<(&'static str, &'static str), &'static AcquisitionG
 pub(super) fn group_registry() -> &'static GroupRegistry {
     static REGISTRY: OnceLock<GroupRegistry> = OnceLock::new();
     REGISTRY.get_or_init(|| {
-        let mut registry: GroupRegistry = HashMap::new();
+        let mut registry: GroupRegistry = HashMap::default();
         for group in crate::agent::samplers::ACQUISITION_GROUPS {
             // Keyed by the `(sampler, name)` parts `AcquisitionGroup` itself
             // stores, both `&'static str`, so neither building this map nor a
@@ -96,6 +99,11 @@ pub(super) fn group_registry() -> &'static GroupRegistry {
 pub(crate) struct RezolusRouter {
     sampler_mods: Vec<(&'static str, &'static str)>,
     groups: &'static GroupRegistry,
+    /// Each module path's sampler, resolved once. Attribution is a scan of
+    /// every registered sampler module, and the builder routes every metric
+    /// twice a pass; a module path's sampler never changes, since sampler
+    /// modules are registered at link time.
+    attribution: Mutex<HashMap<String, &'static str, foldhash::fast::RandomState>>,
 }
 
 impl RezolusRouter {
@@ -103,11 +111,19 @@ impl RezolusRouter {
         Self {
             sampler_mods: crate::agent::samplers::sampler_modules(),
             groups: group_registry(),
+            attribution: Mutex::new(HashMap::default()),
         }
     }
 
-    fn sampler<'a>(&'a self, metric: &MetricEntry) -> &'a str {
-        crate::agent::samplers::attribute_sampler(metric.module(), &self.sampler_mods)
+    fn sampler(&self, metric: &MetricEntry) -> &'static str {
+        let module = metric.module();
+        let mut cache = self.attribution.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(sampler) = cache.get(module) {
+            return sampler;
+        }
+        let sampler = crate::agent::samplers::attribute_sampler(module, &self.sampler_mods);
+        cache.insert(module.to_string(), sampler);
+        sampler
     }
 }
 
