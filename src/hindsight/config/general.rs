@@ -86,9 +86,11 @@ impl General {
             .unwrap()
     }
 
+    /// The agent's base URL. Hindsight subscribes to its replication stream
+    /// (`/metrics/stream`) and reads its metadata routes from here.
     pub fn url(&self) -> Url {
         let source = self.source();
-        Url::try_from(format!("http://{source}/metrics/binary").as_str()).unwrap()
+        Url::try_from(format!("http://{source}/").as_str()).unwrap()
     }
 
     /// Rows per sealed segment, or `None` for the writer's default.
@@ -99,7 +101,7 @@ impl General {
     /// dumps both work in whole segments) and how long a row waits in the WAL
     /// before it is sealed. At the 1 s default interval 900 rows is a segment
     /// per ~15 minutes, which is right for a 15 m lookback and wrong for a
-    /// buffer scraped ten times a second.
+    /// buffer at a 100 ms interval.
     pub fn segment_rows(&self) -> Option<usize> {
         self.segment_rows
     }
