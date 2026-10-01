@@ -30,6 +30,23 @@ host-level series are unchanged.
 
 `cpu_bandwidth` has no option: all of its series are per cgroup.
 
+What the path costs, per run of each hook, measured with
+`kernel.bpf_stats_enabled` on a 56-vCPU KVM guest (Debian 13, 6.12) under
+`perf bench sched pipe`, `perf bench syscall basic` and a multi-threaded
+mmap/munmap loop:
+
+| Sampler, hook | On | Off |
+|---|---|---|
+| `syscall_counts`, `sys_enter` | 250–291 ns | 62–75 ns |
+| `cpu_tlb_flush`, `tlb_flush` | 293–352 ns | 72–76 ns |
+| `scheduler_runqueue`, `sched_switch` | 629–775 ns | 240–349 ns |
+| `cpu_usage`, `cpuacct_account_field` | 416–776 ns | 238–518 ns |
+| `cpu_migrations`, `sched_switch` | 106–126 ns | 107–132 ns (its cgroup path runs only on a migration) |
+| `ext4_ops`, fsync and write end hooks | 531–537 ns | 266–271 ns |
+
+With the five default-on samplers' paths off, `perf bench syscall basic`
+ran at 2.81 M ops/s against 1.82 M with them on.
+
 A task is attributed to its CPU controller's task group. A service whose
 cgroup has no CPU controller of its own is counted under the nearest
 ancestor that has one, usually its slice.
