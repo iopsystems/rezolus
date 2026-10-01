@@ -31,21 +31,23 @@ host-level series are unchanged.
 `cpu_bandwidth` has no option: all of its series are per cgroup.
 
 What the path costs, per run of each hook, measured with
-`kernel.bpf_stats_enabled` on a 56-vCPU KVM guest (Debian 13, 6.12) under
-`perf bench sched pipe`, `perf bench syscall basic` and a multi-threaded
-mmap/munmap loop:
+`kernel.bpf_stats_enabled` under `perf bench sched pipe`, `perf bench syscall
+basic` and a multi-threaded mmap/munmap loop, on bare metal (AMD EPYC 4564P,
+Zen 4, Debian 13, 6.12) and in a 56-vCPU KVM guest (Zen 2 host):
 
-| Sampler, hook | On | Off |
-|---|---|---|
-| `syscall_counts`, `sys_enter` | 250–291 ns | 62–75 ns |
-| `cpu_tlb_flush`, `tlb_flush` | 293–352 ns | 72–76 ns |
-| `scheduler_runqueue`, `sched_switch` | 629–775 ns | 240–349 ns |
-| `cpu_usage`, `cpuacct_account_field` | 416–776 ns | 238–518 ns |
-| `cpu_migrations`, `sched_switch` | 106–126 ns | 107–132 ns (its cgroup path runs only on a migration) |
-| `ext4_ops`, fsync and write end hooks | 531–537 ns | 266–271 ns |
+| Sampler, hook | Bare metal on | Bare metal off | Guest on | Guest off |
+|---|---|---|---|---|
+| `syscall_counts`, `sys_enter` | 176–188 ns | 39–42 ns | 250–291 ns | 62–75 ns |
+| `cpu_tlb_flush`, `tlb_flush` | 180–197 ns | 36–39 ns | 293–352 ns | 72–76 ns |
+| `scheduler_runqueue`, `sched_switch` | 491–575 ns | 213–256 ns | 629–775 ns | 240–349 ns |
+| `cpu_usage`, `cpuacct_account_field` | 502–599 ns | 285–351 ns | 416–776 ns | 238–518 ns |
+| `cpu_migrations`, `sched_switch` | 77–98 ns | 77–90 ns | 106–126 ns | 107–132 ns |
+| `ext4_ops`, fsync and write end hooks | | | 531–537 ns | 266–271 ns |
 
-With the five default-on samplers' paths off, `perf bench syscall basic`
-ran at 2.81 M ops/s against 1.82 M with them on.
+`cpu_migrations`'s cgroup path runs only on a migration, so it costs nothing
+per switch. On bare metal, `perf bench syscall basic` ran at 715 K ops/s with
+the five samplers' cgroup paths off, the same as without these samplers
+(711 K), and at 564–582 K with them on.
 
 A task is attributed to its CPU controller's task group. A service whose
 cgroup has no CPU controller of its own is counted under the nearest
