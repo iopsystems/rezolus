@@ -59,6 +59,14 @@ An `output` ending in `.rez` keeps the buffer and its snapshots in the archive
 format before 6.0, several times larger where threads and cgroups come and go.
 Any other `output` is a `.dendro` archive.
 
+Hindsight reads the agent named by `source` over its replication stream
+(`/metrics/stream`), which agents from 5.21.0 serve when `snapshot_format` is
+`"v3"` (the default). An agent that cannot serve it is refused at startup.
+If the stream drops, hindsight reconnects after one interval and keeps its
+buffer. If the agent answers a reconnect but can no longer serve the stream,
+hindsight writes the buffer to a timestamped file beside `output`, where a
+SIGHUP capture goes, and exits with status 1.
+
 Hindsight is **disabled by default**. Review the config before enabling it.
 
 ```bash
@@ -295,6 +303,12 @@ rezolus view http://localhost:4241
 # upload-only mode (no file argument)
 rezolus view
 ```
+
+A live agent is recorded over its replication stream (`/metrics/stream`,
+served by agents from 5.21.0 when `snapshot_format` is `"v3"`, the default)
+into a temporary `.dendro` archive under the system temp directory, which
+the view reads as it grows and which is deleted when the viewer exits. Save
+capture downloads a copy of it as `rezolus-capture.dendro`.
 
 Prefer the terminal? Pass `--tui` to render in the terminal instead of the
 browser — a curated live overview plus a drill-down browser of the same

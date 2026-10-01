@@ -19,7 +19,7 @@
 //! index frames and names its own index state; both are ignored, since the
 //! same labels arrive in the schemas.
 
-use crate::recorder::wire::{AgentRow, AgentRows};
+use crate::recorder::wal::WalGroupRow;
 
 use dendro::archive::WalRow;
 use dendro::replicate::Frame;
@@ -37,8 +37,24 @@ pub(crate) struct Applied {
     pub gap: bool,
 }
 
+/// One pass off the stream: the producer's stamp, and each group's row
+/// decoded once.
+#[derive(Debug)]
+pub(crate) struct Pass {
+    pub ts: i64,
+    pub wall_offset: i64,
+    pub rows: Vec<StreamedRow>,
+}
+
+/// One group's row in a [`Pass`].
+#[derive(Debug)]
+pub(crate) struct StreamedRow {
+    pub stream: String,
+    pub row: WalGroupRow,
+}
+
 impl Applied {
-    /// Turn the rows into passes, one [`AgentRows`] per distinct stamp.
+    /// Turn the rows into passes, one [`Pass`] per distinct stamp.
     ///
     /// For a well-formed interval that is exactly one: the producer stamps a
     /// whole pass once. Grouping rather than assuming keeps a relay that
@@ -47,19 +63,17 @@ impl Applied {
     /// at one `ts` would write one row's worth of key however their wall
     /// offsets differ. The first row's `wall_offset` stands for the pass.
     ///
-    /// Each payload is decoded once, here, to rebuild the envelope the row
-    /// endpoint would have sent — see [`AgentRow::from_payload`] for why the
-    /// stream is fed through the same staging path rather than a new one.
-    /// A payload that will not decode fails the interval rather than being
-    /// dropped: the producer is this binary, so an undecodable row is a
-    /// version mismatch, and a stream that quietly thinned itself would
-    /// record a gap nothing explains.
+    /// Each payload is decoded here, once; [`StreamSchemas::snapshot`] takes
+    /// the decoded rows. A payload that will not decode fails the interval
+    /// rather than being dropped: the producer is this binary, so an
+    /// undecodable row is a version mismatch, and a stream with rows silently
+    /// missing would record a gap nothing explains.
     ///
     /// A negative stamp is refused for the reason `snapshot_producer_stamp`
     /// refuses one: the archive's `ts` is unsigned, and a producer that sent
     /// one is not one to guess for.
-    pub(crate) fn for_writer(self) -> Result<Vec<AgentRows>, String> {
-        let mut by_stamp: std::collections::BTreeMap<i64, (i64, Vec<AgentRow>)> =
+    pub(crate) fn for_writer(self) -> Result<Vec<Pass>, String> {
+        let mut by_stamp: std::collections::BTreeMap<i64, (i64, Vec<StreamedRow>)> =
             std::collections::BTreeMap::new();
         for row in self.rows {
             if row.ts < 0 {
@@ -72,16 +86,15 @@ impl Applied {
                 .entry(row.ts)
                 .or_insert_with(|| (row.wall_offset, Vec::new()))
                 .1
-                .push(AgentRow::from_payload(row.stream, row.row)?);
+                .push(StreamedRow {
+                    row: crate::recorder::wal::decode_wal_group_row(&row.row)
+                        .map_err(|e| format!("stream {}: {e}", row.stream))?,
+                    stream: row.stream,
+                });
         }
         Ok(by_stamp
             .into_iter()
-            .map(|(ts, (wall_offset, rows))| AgentRows {
-                // `ts + wall_offset` is the wall clock at the pass by the
-                // producer's own definition; the stream carries no pass
-                // duration, so that field is what a windowless reading gets.
-                wall_ns: ts.saturating_add(wall_offset).max(0) as u64,
-                duration_ns: 0,
+            .map(|(ts, (wall_offset, rows))| Pass {
                 ts,
                 wall_offset,
                 rows,
@@ -684,13 +697,10 @@ impl StreamSchemas {
     /// One pass's rows as a V3 snapshot. A group's schema rides along on the
     /// rows where it arrived, which are the rows where it changed, so the
     /// writer validates and lays out a schema once per change.
-    pub(crate) fn snapshot(
-        &mut self,
-        pass: &AgentRows,
-    ) -> Result<metriken_exposition::Snapshot, String> {
+    pub(crate) fn snapshot(&mut self, pass: Pass) -> Result<metriken_exposition::Snapshot, String> {
         use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, Snapshot, SnapshotV3};
         let mut groups = Vec::with_capacity(pass.rows.len());
-        for row in &pass.rows {
+        for StreamedRow { stream, row } in pass.rows {
             let arrived = row.schema.as_ref().map(|s| {
                 let convert = |list: &[crate::recorder::schema::MetricDesc]| {
                     list.iter()
@@ -708,44 +718,43 @@ impl StreamSchemas {
             });
             if let Some(schema) = &arrived {
                 self.current.insert(
-                    row.stream.clone(),
+                    stream.clone(),
                     (row.schema_hash, std::sync::Arc::clone(schema)),
                 );
             }
-            match self.current.get(&row.stream) {
+            match self.current.get(&stream) {
                 Some((hash, _)) if *hash == row.schema_hash => {}
                 _ => {
                     self.unresolved += 1;
                     continue;
                 }
             }
-            let decoded = crate::recorder::wal::decode_wal_group_row(&row.row)
-                .map_err(|e| format!("stream {}: {e}", row.stream))?;
-            let histograms = decoded
+            let histograms = row
                 .histograms
                 .into_iter()
                 .map(|h| {
                     h.map(|(gp, mvp, buckets)| {
                         histogram::Histogram::from_buckets(gp, mvp, buckets)
-                            .map_err(|e| format!("stream {}: histogram: {e}", row.stream))
+                            .map_err(|e| format!("stream {stream}: histogram: {e}"))
                     })
                     .transpose()
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             groups.push(GroupSnapshot {
-                name: row.stream.clone(),
+                name: stream,
                 schema_hash: row.schema_hash,
                 schema: arrived,
                 window: row.window.map(|(b, e)| metriken::Window::new(b, e)),
-                counters: decoded.counters,
-                gauges: decoded.gauges,
+                counters: row.counters,
+                gauges: row.gauges,
                 histograms,
             });
         }
         let wall = u64::try_from(pass.ts.saturating_add(pass.wall_offset)).unwrap_or(0);
         Ok(Snapshot::V3(SnapshotV3 {
             systemtime: std::time::UNIX_EPOCH + Duration::from_nanos(wall),
-            duration: Duration::from_nanos(pass.duration_ns),
+            // The stream carries no pass duration.
+            duration: Duration::ZERO,
             metadata: Default::default(),
             groups,
         }))
@@ -1012,13 +1021,14 @@ mod tests {
     }
 
     /// One pass holding one payload, as `for_writer` builds it.
-    fn pass_of(row: Vec<u8>) -> AgentRows {
-        AgentRows {
-            wall_ns: 1_000,
-            duration_ns: 0,
+    fn pass_of(row: Vec<u8>) -> Pass {
+        Pass {
             ts: 1_000,
             wall_offset: 0,
-            rows: vec![AgentRow::from_payload("fake/ops".to_string(), row).unwrap()],
+            rows: vec![StreamedRow {
+                stream: "fake/ops".to_string(),
+                row: crate::recorder::wal::decode_wal_group_row(&row).unwrap(),
+            }],
         }
     }
 
@@ -1031,14 +1041,10 @@ mod tests {
             metriken_exposition::Snapshot::V3(v3) => v3.groups.into_iter().next().unwrap(),
             _ => panic!("a V3 snapshot"),
         };
-        let first = group(schemas.snapshot(&pass_of(payload(2, true, 2_000))).unwrap());
+        let first = group(schemas.snapshot(pass_of(payload(2, true, 2_000))).unwrap());
         assert_eq!(first.schema.as_ref().map(|s| s.counters.len()), Some(2));
         assert_eq!(first.counters, vec![Some(0), Some(1)]);
-        let next = group(
-            schemas
-                .snapshot(&pass_of(payload(2, false, 3_000)))
-                .unwrap(),
-        );
+        let next = group(schemas.snapshot(pass_of(payload(2, false, 3_000))).unwrap());
         assert!(next.schema.is_none(), "known by hash, not re-sent");
         assert_eq!(next.schema_hash, first.schema_hash);
         assert_eq!(schemas.unresolved, 0);
@@ -1049,10 +1055,9 @@ mod tests {
     #[test]
     fn a_streamed_row_with_an_unsent_schema_is_skipped() {
         let mut schemas = StreamSchemas::default();
-        schemas.snapshot(&pass_of(payload(2, true, 2_000))).unwrap();
-        let metriken_exposition::Snapshot::V3(v3) = schemas
-            .snapshot(&pass_of(payload(3, false, 3_000)))
-            .unwrap()
+        schemas.snapshot(pass_of(payload(2, true, 2_000))).unwrap();
+        let metriken_exposition::Snapshot::V3(v3) =
+            schemas.snapshot(pass_of(payload(3, false, 3_000))).unwrap()
         else {
             panic!("a V3 snapshot");
         };
@@ -1070,8 +1075,7 @@ mod tests {
     }
 
     /// The ordinary interval: every row shares the pass's stamp, so the
-    /// writer gets ONE `AgentRows` at that stamp, each row's envelope rebuilt
-    /// from its payload.
+    /// writer gets ONE pass at that stamp, each row decoded.
     #[test]
     fn an_interval_becomes_one_pass_at_the_producers_stamp() {
         let applied = Applied {
@@ -1087,20 +1091,16 @@ mod tests {
         assert_eq!(passes.len(), 1, "one pass, not one per row");
         let pass = &passes[0];
         assert_eq!((pass.ts, pass.wall_offset), (5_000, 7));
-        assert_eq!(
-            pass.wall_ns, 5_007,
-            "the wall clock at the pass is ts + wall_offset, by definition"
-        );
         assert_eq!(pass.rows.len(), 2);
         assert_eq!(pass.rows[0].stream, STREAM);
-        assert_eq!(pass.rows[0].arity, (2, 0, 0));
+        assert_eq!(pass.rows[0].row.counters.len(), 2);
         assert!(
-            pass.rows[0].schema.is_some(),
-            "the first mention's schema is lifted into the envelope"
+            pass.rows[0].row.schema.is_some(),
+            "the first mention carries its schema"
         );
-        assert_eq!(pass.rows[0].window, Some((4_500, 5_000)));
+        assert_eq!(pass.rows[0].row.window, Some((4_500, 5_000)));
         assert_eq!(pass.rows[1].stream, "b/two");
-        assert!(pass.rows[1].schema.is_none());
+        assert!(pass.rows[1].row.schema.is_none());
     }
 
     /// A frame carrying two stamps is two passes: a relay that batched them

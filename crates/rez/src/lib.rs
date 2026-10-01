@@ -25,6 +25,7 @@ pub mod index;
 /// A group table split by occupant through that index, for the reader. Not
 /// behind `write` for the same reason.
 pub mod indexed;
+pub mod live;
 /// Reshape a plain parquet into `.rez` recordings (metriken-free). Not behind
 /// `write` — the browser assembles `.rez` reports from uploaded parquet bytes.
 pub mod occupants;

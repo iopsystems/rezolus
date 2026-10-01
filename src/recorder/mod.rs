@@ -1571,15 +1571,13 @@ impl RezStream {
         };
         let cache = schemas.entry(endpoint).or_default();
         let before = cache.unresolved;
-        for pass in &passes {
+        for pass in passes {
             let ts = u64::try_from(pass.ts)
                 .map_err(|_| format!("{url} stamped a pass at {} ns, before the epoch", pass.ts))?;
-            self.last_stamp.insert(endpoint, (ts, pass.wall_offset));
+            let wall_offset = pass.wall_offset;
+            self.last_stamp.insert(endpoint, (ts, wall_offset));
             let snapshot = cache.snapshot(pass)?;
-            staged.push(
-                rec.stage(&snapshot, ts, pass.wall_offset)
-                    .map_err(archive_err)?,
-            );
+            staged.push(rec.stage(&snapshot, ts, wall_offset).map_err(archive_err)?);
         }
         if cache.unresolved > before {
             warn!(
@@ -2069,7 +2067,7 @@ const MAX_SCRAPE_TIMEOUT: Duration = Duration::from_secs(10);
 /// single scrape and record nothing at all, where the honest outcome is
 /// sampling at the endpoint's pace. Floored so short intervals stay
 /// recordable, capped so a long interval still hands back a bounded tick.
-fn tick_timeout(interval: Duration) -> Duration {
+pub(crate) fn tick_timeout(interval: Duration) -> Duration {
     (interval * 2).clamp(Duration::from_secs(2), MAX_SCRAPE_TIMEOUT)
 }
 
@@ -2080,7 +2078,7 @@ fn tick_timeout(interval: Duration) -> Duration {
 /// falls behind the agent's frame rate — a slow commit, or an `--interval`
 /// shorter than the writer can keep up with. Bounded so that case pushes back
 /// on the socket rather than growing without limit.
-const STREAM_QUEUE_PER_ENDPOINT: usize = 16;
+pub(crate) const STREAM_QUEUE_PER_ENDPOINT: usize = 16;
 
 /// Handle a run that asked for (or defaulted to) archive output that this
 /// endpoint set cannot produce: either rewrite `config` to record parquet and

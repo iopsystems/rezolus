@@ -51,7 +51,7 @@ pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
         .route("/metadata", get(metadata))
         .route("/mode", get(mode))
         .route("/reset", axum::routing::post(actions::reset_tsdb))
-        .route("/save", get(actions::save_parquet))
+        .route("/save", get(actions::save_capture))
         .route("/systeminfo", get(systeminfo_handler))
         .route("/selection", get(selection_handler))
         .route("/sections", get(sections_handler))
@@ -535,6 +535,13 @@ async fn metadata(
         "interval": interval,
         "filename": filename,
     });
+    // A live recording that has stopped says why, so the page can stop
+    // presenting the view as live.
+    if capture == capture_registry::BASELINE_ID {
+        if let Some(why) = state.live_session.lock().as_ref().and_then(|s| s.stopped()) {
+            meta["liveError"] = serde_json::json!(why);
+        }
+    }
     if let Some(alias) = state.captures.alias_by_id(capture) {
         meta["alias"] = serde_json::json!(alias);
     }
@@ -629,4 +636,43 @@ async fn lib(uri: Uri, headers: HeaderMap) -> Response {
         _ => "text/plain",
     };
     asset_response(asset.contents(), content_type, &headers)
+}
+
+#[cfg(test)]
+mod live_error_tests {
+    use super::*;
+    use crate::viewer::live::LiveSession;
+    use ::dashboard::TemplateRegistry;
+
+    async fn metadata_of(state: Arc<AppState>) -> serde_json::Value {
+        let Json(resp) = metadata(State(state), Query(CaptureParam { capture: None })).await;
+        serde_json::to_value(resp).unwrap()["data"].clone()
+    }
+
+    fn state_with(session: LiveSession) -> Arc<AppState> {
+        let state = AppState::new(session.reader(), TemplateRegistry::empty());
+        state.install_live(session);
+        Arc::new(state)
+    }
+
+    /// The page learns that a live recording stopped from the baseline's
+    /// metadata, and a recording that is running reports nothing.
+    #[tokio::test]
+    async fn a_stopped_live_recording_is_reported_in_the_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("live.dendro");
+        crate::dendro_copy::fixtures::recorded(&path, 3, false);
+
+        let stopped = state_with(LiveSession::for_test(
+            &path,
+            Some("the agent can no longer serve /metrics/stream: HTTP 404".to_string()),
+        ));
+        assert_eq!(
+            metadata_of(stopped).await["liveError"],
+            "the agent can no longer serve /metrics/stream: HTTP 404"
+        );
+
+        let running = state_with(LiveSession::for_test(&path, None));
+        assert!(metadata_of(running).await.get("liveError").is_none());
+    }
 }

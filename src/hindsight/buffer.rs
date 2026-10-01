@@ -125,7 +125,7 @@ impl HindsightBuffer {
     /// Create the buffer at `path`, which must not exist.
     ///
     /// The seal policy is a parameter rather than a constant because segment
-    /// size has to track the scrape interval: `[general] segment_rows` sets it
+    /// size has to track the interval: `[general] segment_rows` sets it
     /// and defaults to the writer's 900, which is a segment per ~15 minutes at
     /// the default 1 s interval and per ~90 seconds at 10 Hz.
     pub fn create(
@@ -147,7 +147,7 @@ impl HindsightBuffer {
         })
     }
 
-    /// Append one scraped snapshot. Every tick is committed as it arrives, so
+    /// Append one snapshot. Every tick is committed as it arrives, so
     /// an unclean kill of the daemon costs one tick, not a whole open segment.
     pub fn ingest(
         &mut self,
@@ -188,11 +188,12 @@ impl HindsightBuffer {
         }
     }
 
-    /// Seal whatever is due, then apply retention. Call it every tick, scrape
-    /// or not — that is also where a writer that died asynchronously surfaces.
+    /// Seal whatever is due, then apply retention. Call it every tick, whether
+    /// or not an interval arrived; a writer that died asynchronously surfaces
+    /// here.
     ///
-    /// Order is load-bearing: `maybe_seal` first, so a segment closed on this
-    /// tick is in the catalog before the cutoff is applied to it. Retention
+    /// `maybe_seal` runs first, so a segment closed on this tick is in the
+    /// catalog before the cutoff is applied to it. Retention
     /// only ever sees committed data — rows still sitting in an open builder
     /// are evicted when their segment seals and later ages out.
     pub fn maintain(&mut self) -> Result<(), String> {

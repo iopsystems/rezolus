@@ -131,10 +131,6 @@ impl CaptureRegistry {
             .unwrap_or_default()
     }
 
-    pub fn systeminfo(&self, id: CaptureId) -> Option<String> {
-        self.systeminfo_by_id(id.id())
-    }
-
     pub fn systeminfo_by_id(&self, id: &str) -> Option<String> {
         self.with_slot(id, |slot| slot.systeminfo.read().clone())
             .flatten()
