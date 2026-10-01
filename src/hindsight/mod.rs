@@ -460,6 +460,14 @@ pub fn run(config: Config) {
                             }
                             shared_state.record_tick();
                         }
+                        // Seal and evict with each interval, as each scrape
+                        // did. The select is biased toward this arm, so while
+                        // intervals keep arriving the tick arm below may not
+                        // run, and sealing must not wait on it.
+                        if let Err(e) = buffer.maintain() {
+                            fatal(&e, &buffer_path);
+                        }
+                        shared_state.set_at_retention_bound(buffer.at_retention_bound());
                         if schemas.unresolved > before {
                             warn!(
                                 "{} streamed rows named a schema this connection had not \
