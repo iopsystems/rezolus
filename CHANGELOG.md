@@ -2,6 +2,12 @@
 
 ### Removed
 
+- **The live viewer no longer reads `/metrics/binary`.** `rezolus view
+  http://agent:4241` needs `/metrics/stream`: an agent from 5.21.0 with
+  `snapshot_format = "v3"` (the default). An older agent, a v2 agent, a
+  `rezolus exporter`, or a proxy that does not route `/metrics/stream` is
+  refused with its version. Save capture in live mode returns a `.dendro`
+  archive, not parquet.
 - **Hindsight no longer reads `/metrics/binary`.** It needs `/metrics/stream`:
   an agent from 5.21.0 with `snapshot_format = "v3"` (the default). An older
   agent, a v2 agent, a `rezolus exporter`, or a proxy that does not route
@@ -15,6 +21,15 @@
 
 ### Changed
 
+- **The viewer's live mode records the agent's stream.** `rezolus view
+  http://agent:4241` (and `--tui`) subscribes to `/metrics/stream` and writes
+  it into a temporary `.dendro` archive, read as it grows, instead of polling
+  `/metrics/binary` into memory and keeping every raw snapshot body for
+  saving. Save capture downloads a copy of the archive as
+  `rezolus-capture.dendro`. Reset starts a fresh archive; before, reset left
+  the view empty, because polling continued into the store it replaced. If
+  the recording stops (the agent refuses a reconnect, or a write fails), the
+  page says why and stops presenting the view as recording.
 - **Hindsight records the agent over its replication stream.** It subscribes
   to `/metrics/stream`, as `record` to a `.dendro` does, instead of scraping
   `/metrics/binary`, whose every body carries every acquisition group's full

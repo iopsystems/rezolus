@@ -147,14 +147,14 @@ fn load_section_charts(state: &AppState, app: &App) -> Vec<LoadedPlot> {
 
 /// Entry point for the TUI. Replaces the axum server when `--tui` is set.
 ///
-/// `_rt` is the process tokio runtime. In live mode the ingest loop it drives
-/// was already spawned by `init_live_mode`; the TUI itself is synchronous and
-/// reads the shared TSDB. The handle is kept in the signature so the runtime
-/// outlives the ingest task and for future async-driven refresh.
+/// `_rt` is the process tokio runtime. In live mode the live session's
+/// subscription runs on it, started by `init_live_mode`; the TUI itself is
+/// synchronous and reads the shared capture. The handle is kept in the
+/// signature so the runtime outlives the subscription.
 pub fn run_tui(state: AppState, live: bool, _rt: &tokio::runtime::Runtime) {
     // Populate the nav (file mode: from the loaded data; live mode: the
-    // ingest loop is already running and has produced at least the initial
-    // context, but regenerate to pick up all metrics seen so far).
+    // live session is already recording and has produced at least the
+    // initial context, but regenerate to pick up all metrics seen so far).
     metadata::regenerate_dashboards(&state);
 
     let mut app = App::new(initial_sections(&state));
@@ -174,6 +174,7 @@ pub fn run_tui(state: AppState, live: bool, _rt: &tokio::runtime::Runtime) {
     }));
     let _ = ctrlc::set_handler(|| {
         restore_terminal();
+        super::live::remove_live_dirs();
         std::process::exit(130);
     });
 
@@ -201,11 +202,11 @@ pub fn run_tui(state: AppState, live: bool, _rt: &tokio::runtime::Runtime) {
         if live {
             metadata::regenerate_dashboards(&state);
             app.reconcile_sections(initial_sections(&state));
-            // In live mode the store is typically EMPTY at startup —
-            // `init_live_mode` only spawns `ingest_loop`, which awaits its
-            // first interval tick before fetching. Anything derived from the
-            // metric catalog, the blockio name alias included, has to be
-            // recomputed here rather than once before the loop.
+            // In live mode the archive is typically empty at startup: the
+            // first interval arrives about a second after `init_live_mode`
+            // returns. Anything derived from the metric catalog, the blockio
+            // name alias included, has to be recomputed here rather than once
+            // before the loop.
             overview_tiles = render::overview::tiles(state.baseline_data().as_ref());
             dirty = true;
         }

@@ -38,6 +38,7 @@ mod proxy_allow;
 
 mod ab_extract;
 mod actions;
+mod live;
 pub(crate) mod metadata;
 mod report_save;
 mod report_save_rez;
@@ -94,7 +95,7 @@ pub fn command() -> Command {
              - a parquet recording:      rezolus view rezolus.parquet\n    \
              - two recordings (A/B):     rezolus view baseline.parquet experiment.parquet\n    \
              - a .rez archive:           rezolus view out.rez\n    \
-             - a live agent:             rezolus view http://host:4241\n    \
+             - a live agent:             rezolus view http://host:4241   (agent 5.21.0+ with snapshot_format = \"v3\"; recorded into a temporary .dendro)\n    \
              - nothing (upload-only):    rezolus view    (drag files in from the browser)\n\n\
              A .rez archive loads its per-sampler tables directly. A 2-recording .rez is shown\n\
              as an A/B baseline/experiment comparison (aliases derived from each recording's\n\
@@ -428,7 +429,12 @@ pub fn run(config: Config) {
     // leave the terminal in raw mode. In raw mode a keyboard Ctrl-C is
     // delivered as a normal key event and handled as a graceful quit.
     if !config.tui {
-        ctrlc::set_handler(move || std::process::exit(2)).expect("failed to set ctrl-c handler");
+        ctrlc::set_handler(move || {
+            // `exit` runs no destructors, so the live archive is removed here.
+            live::remove_live_dirs();
+            std::process::exit(2)
+        })
+        .expect("failed to set ctrl-c handler");
     }
 
     let registry = load_template_registry(config.templates_dir.as_deref());
@@ -504,6 +510,12 @@ pub fn run(config: Config) {
         }
         let live = matches!(config.source, Source::Live(_));
         tui::run_tui(state, live, &rt);
+        // Dropping the runtime stops the live session's subscription, which
+        // ends its recording thread; wait for the thread to close its writer,
+        // then remove the archive directory, since the process would exit
+        // before the thread let go of it.
+        drop(rt);
+        live::finish_live_sessions(Duration::from_secs(5));
         return;
     }
 
@@ -1167,13 +1179,20 @@ fn init_live_mode(
     pool: Arc<metriken_query::BufferPool>,
 ) -> AppState {
     info!("Connecting to live agent at {url}...");
-    let info = rt.block_on(async {
+    let (info, session) = rt.block_on(async {
         let client = Client::builder()
             .http1_only()
             .build()
             .expect("failed to create http client");
-        match actions::fetch_agent_info(&client, url).await {
+        let info = match actions::fetch_agent_info(&client, url).await {
             Ok(i) => i,
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        };
+        match live::LiveSession::start(&client, url, info.clone(), Arc::clone(&pool)).await {
+            Ok(session) => (info, session),
             Err(e) => {
                 eprintln!("{e}");
                 std::process::exit(1);
@@ -1181,36 +1200,17 @@ fn init_live_mode(
         }
     });
     info!(
-        "Connected to {source} {version} at {url}",
+        "Recording {source} {version} at {url} from its replication stream",
         source = info.source,
         version = info.version
     );
 
-    let store = metriken_query::MemoryStore::builder()
-        .source(info.source.clone())
-        .version(info.version.clone())
-        .sampling_interval_ms(1000)
-        .filename(url.to_string())
-        .build();
-    let store_arc: std::sync::Arc<dyn metriken_query::MetricsSource> =
-        std::sync::Arc::new(store.clone());
-    let state = AppState::with_pool(store_arc, registry.clone(), pool);
+    let state = AppState::with_pool(session.reader(), registry.clone(), pool);
     let context = dashboard::dashboard::build_dashboard_context(None, &[], None, &[]);
     *state.sections.write() = state::LazySectionStore::new(context);
+    state.install_live(session);
     state.live.store(true, Ordering::Relaxed);
     state.captures.set_baseline_systeminfo(info.sysinfo);
-
-    let ingest_snapshots = state.snapshots.clone();
-    let mut ingest_url = url.clone();
-    ingest_url.set_path("/metrics/binary");
-
-    rt.spawn(actions::ingest_loop(
-        ingest_url,
-        store,
-        ingest_snapshots,
-        info.source,
-        info.version,
-    ));
 
     state
 }

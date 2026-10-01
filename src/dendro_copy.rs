@@ -59,7 +59,7 @@ pub(crate) mod fixtures {
     /// One tick: a slotted group `threads/tasks` with two threads, each a
     /// counter rising 10/s and 20/s, and a fixed group `memory/meminfo`
     /// with one gauge.
-    fn tick(i: u64) -> Snapshot {
+    pub(crate) fn tick(i: u64) -> Snapshot {
         let ts = ANCHOR + i * SECOND;
         let member = |slot: u32, comm: &str| MetricDesc {
             name: format!("0x{slot}"),

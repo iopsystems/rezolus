@@ -3,10 +3,10 @@ use super::*;
 use std::fs::OpenOptions;
 use std::path::Path;
 
-mod buffer;
+pub(crate) mod buffer;
 mod config;
 mod http;
-mod state;
+pub(crate) mod state;
 
 use crate::recorder::stream::{ConnectError, StreamEvent, StreamSchemas, Subscription};
 use buffer::HindsightBuffer;
@@ -435,30 +435,9 @@ pub fn run(config: Config) {
 
                 Some((_, event)) = stream_rx.recv() => match event {
                     StreamEvent::Interval(applied) => {
-                        if applied.gap {
-                            warn!(
-                                "the stream jumped to interval {}; the intervals before it \
-                                 produced no frame",
-                                applied.seq
-                            );
-                        }
-                        let passes = match applied.for_writer() {
-                            Ok(passes) => passes,
+                        match ingest_interval(&mut buffer, &mut schemas, applied) {
+                            Ok(passes) => (0..passes).for_each(|_| shared_state.record_tick()),
                             Err(e) => fatal(&e, &buffer_path),
-                        };
-                        let before = schemas.unresolved;
-                        for pass in passes {
-                            // `for_writer` refuses a stamp before the epoch.
-                            let ts = pass.ts as u64;
-                            let wall_offset = pass.wall_offset;
-                            let snapshot = match schemas.snapshot(pass) {
-                                Ok(snapshot) => snapshot,
-                                Err(e) => fatal(&e, &buffer_path),
-                            };
-                            if let Err(e) = buffer.ingest(&snapshot, ts, wall_offset) {
-                                fatal(&e, &buffer_path);
-                            }
-                            shared_state.record_tick();
                         }
                         // Seal and evict with each interval, as each scrape
                         // did. The select is biased toward this arm, so while
@@ -468,13 +447,6 @@ pub fn run(config: Config) {
                             fatal(&e, &buffer_path);
                         }
                         shared_state.set_at_retention_bound(buffer.at_retention_bound());
-                        if schemas.unresolved > before {
-                            warn!(
-                                "{} streamed rows named a schema this connection had not \
-                                 sent; skipped",
-                                schemas.unresolved - before
-                            );
-                        }
                     }
                     StreamEvent::Dropped(e) => {
                         warn!("the agent's stream ended ({e}); reconnecting");
@@ -640,6 +612,44 @@ fn log_capture(response: &DumpToFileResponse) {
     }
 }
 
+/// Write one streamed interval into `buffer`, and return how many passes it
+/// held (one, unless a relay batched several). Shared by hindsight and the
+/// viewer's live mode, which both record an agent's stream into a buffer.
+///
+/// `Err` is a row that would not decode or a write that failed; either ends
+/// the recording. Sealing and retention are the caller's, on its own tick
+/// ([`HindsightBuffer::maintain`]). A row naming a schema this connection has not sent is
+/// skipped and logged.
+pub(crate) fn ingest_interval(
+    buffer: &mut HindsightBuffer,
+    schemas: &mut StreamSchemas,
+    applied: crate::recorder::stream::Applied,
+) -> Result<usize, String> {
+    if applied.gap {
+        warn!(
+            "the stream jumped to interval {}; the intervals before it produced no frame",
+            applied.seq
+        );
+    }
+    let passes = applied.for_writer()?;
+    let n = passes.len();
+    let before = schemas.unresolved;
+    for pass in passes {
+        // `for_writer` refuses a stamp before the epoch.
+        let ts = pass.ts as u64;
+        let wall_offset = pass.wall_offset;
+        let snapshot = schemas.snapshot(pass)?;
+        buffer.ingest(&snapshot, ts, wall_offset)?;
+    }
+    if schemas.unresolved > before {
+        warn!(
+            "{} streamed rows named a schema this connection had not sent; skipped",
+            schemas.unresolved - before
+        );
+    }
+    Ok(n)
+}
+
 /// A buffer write that failed is not recoverable in place — but everything
 /// committed before it is, and unlike the ring it is in a file anything can
 /// open. Say where before exiting.
@@ -661,7 +671,7 @@ fn wall_ns() -> u64 {
 
 /// The recording's file-level metadata, matching what `rezolus record` writes
 /// so a dump is indistinguishable from a recording to every consumer.
-fn buffer_metadata(
+pub(crate) fn buffer_metadata(
     interval: Duration,
     systeminfo: &Option<String>,
     descriptions: &Option<String>,

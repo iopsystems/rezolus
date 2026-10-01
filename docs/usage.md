@@ -304,6 +304,12 @@ rezolus view http://localhost:4241
 rezolus view
 ```
 
+A live agent is recorded over its replication stream (`/metrics/stream`,
+served by agents from 5.21.0 when `snapshot_format` is `"v3"`, the default)
+into a temporary `.dendro` archive under the system temp directory, which
+the view reads as it grows and which is deleted when the viewer exits. Save
+capture downloads a copy of it as `rezolus-capture.dendro`.
+
 Prefer the terminal? Pass `--tui` to render in the terminal instead of the
 browser — a curated live overview plus a drill-down browser of the same
 sections. It works with a recording or a live agent URL (not upload-only
