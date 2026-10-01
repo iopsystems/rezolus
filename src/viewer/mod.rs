@@ -95,7 +95,7 @@ pub fn command() -> Command {
              - a parquet recording:      rezolus view rezolus.parquet\n    \
              - two recordings (A/B):     rezolus view baseline.parquet experiment.parquet\n    \
              - a .rez archive:           rezolus view out.rez\n    \
-             - a live agent:             rezolus view http://host:4241   (5.21.0+, v3; recorded into a temporary .dendro)\n    \
+             - a live agent:             rezolus view http://host:4241   (agent 5.21.0+ with snapshot_format = \"v3\"; recorded into a temporary .dendro)\n    \
              - nothing (upload-only):    rezolus view    (drag files in from the browser)\n\n\
              A .rez archive loads its per-sampler tables directly. A 2-recording .rez is shown\n\
              as an A/B baseline/experiment comparison (aliases derived from each recording's\n\
@@ -510,6 +510,12 @@ pub fn run(config: Config) {
         }
         let live = matches!(config.source, Source::Live(_));
         tui::run_tui(state, live, &rt);
+        // Dropping the runtime stops the live session's subscription, which
+        // ends its recording thread; wait for the thread to close its writer,
+        // then remove the archive directory, since the process would exit
+        // before the thread let go of it.
+        drop(rt);
+        live::finish_live_sessions(Duration::from_secs(5));
         return;
     }
 

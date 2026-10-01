@@ -28,8 +28,30 @@ pub const LIVE_INTERVAL: Duration = Duration::from_secs(1);
 /// them; see [`remove_live_dirs`].
 static LIVE_DIRS: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
 
+/// Every live recording thread started in this process, so a normal exit can
+/// wait for them to close their writers; see [`finish_live_sessions`].
+static LIVE_THREADS: Mutex<Vec<std::thread::JoinHandle<()>>> = Mutex::new(Vec::new());
+
+/// Wait up to `within` for every live recording thread to finish, then remove
+/// every live archive directory. For a normal exit after the sessions were
+/// dropped: a thread finishes once its channel closes, and the directory is
+/// removed after its writer has closed, so no file appears in it mid-removal.
+pub fn finish_live_sessions(within: Duration) {
+    let threads = std::mem::take(&mut *LIVE_THREADS.lock().unwrap_or_else(|e| e.into_inner()));
+    let deadline = std::time::Instant::now() + within;
+    for thread in threads {
+        while !thread.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if thread.is_finished() {
+            let _ = thread.join();
+        }
+    }
+    remove_live_dirs();
+}
+
 /// Remove every live archive directory. For an exit path that skips
-/// destructors.
+/// destructors and cannot wait, such as a signal handler.
 pub fn remove_live_dirs() {
     let dirs = std::mem::take(&mut *LIVE_DIRS.lock().unwrap_or_else(|e| e.into_inner()));
     for dir in dirs {
@@ -178,10 +200,14 @@ impl LiveSession {
             dir: Arc::clone(&dir),
             stopped: Arc::clone(&stopped),
         };
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("rezolus-live".to_string())
             .spawn(move || recording.run(rx))
             .map_err(|e| format!("could not start the live recording: {e}"))?;
+        LIVE_THREADS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(thread);
 
         Ok(Self {
             url: url.clone(),
@@ -214,7 +240,8 @@ impl LiveSession {
         Arc::clone(&self.reader)
     }
 
-    /// The temporary archive's path, which a save copies.
+    /// The temporary archive's path. A save uses [`archive`](Self::archive),
+    /// which also holds the directory.
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -224,6 +251,29 @@ impl LiveSession {
     /// the archive under it.
     pub fn archive(&self) -> (PathBuf, Arc<LiveDir>) {
         (self.path.clone(), Arc::clone(&self.dir))
+    }
+}
+
+#[cfg(test)]
+impl LiveSession {
+    /// A session over an existing archive, with no subscription or
+    /// recording thread, whose recording reports `stopped`. Must be called
+    /// inside a Tokio runtime.
+    pub(crate) fn for_test(path: &Path, stopped: Option<String>) -> Self {
+        let reader = Arc::new(LiveReader::open(path, None, BufferPool::new(64 << 20)).unwrap());
+        Self {
+            url: "http://agent.test:4241/".parse().unwrap(),
+            info: AgentInfo {
+                source: "rezolus".to_string(),
+                version: "test".to_string(),
+                sysinfo: None,
+            },
+            reader,
+            path: path.to_path_buf(),
+            dir: Arc::new(LiveDir::create().unwrap()),
+            stopped: Arc::new(Mutex::new(stopped)),
+            _pump: AbortOnDrop(tokio::spawn(async {})),
+        }
     }
 }
 
@@ -277,7 +327,8 @@ impl Recording {
                 }
             }
         }
-        // The writer closes before the directory can be removed.
+        // Close the writer before releasing this thread's hold on the
+        // directory; the last hold deletes it.
         let Recording { buffer, dir, .. } = self;
         drop(buffer);
         drop(dir);
@@ -438,6 +489,38 @@ mod tests {
         drop(tx);
         std::thread::spawn(move || rec.run(rx)).join().unwrap();
         assert!(stopped.lock().unwrap().is_none());
+    }
+
+    /// A selector that matches several recordings is refused, as the
+    /// `--recording` selectors refuse one.
+    #[test]
+    fn a_selector_that_matches_several_recordings_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("two.dendro");
+        let mut writer =
+            metriken_archive::ArchiveWriter::create(&path, Default::default()).unwrap();
+        for host in ["a", "b"] {
+            let labels = [
+                ("source".to_string(), "rezolus".to_string()),
+                ("host".to_string(), host.to_string()),
+            ]
+            .into();
+            let mut source = writer
+                .add_source(labels, Default::default(), ANCHOR)
+                .unwrap();
+            let staged = source.stage(&tick(0), ANCHOR, 0).unwrap();
+            writer.commit(vec![staged]).unwrap();
+            source.sync().unwrap();
+        }
+        writer.join().unwrap();
+
+        let both = [("source".to_string(), "rezolus".to_string())].into();
+        let err = LiveReader::open(&path, Some(both), BufferPool::new(64 << 20))
+            .err()
+            .expect("two recordings match");
+        assert!(err.to_string().contains("2 recordings matching"), "{err}");
+        let one = [("host".to_string(), "b".to_string())].into();
+        assert!(LiveReader::open(&path, Some(one), BufferPool::new(64 << 20)).is_ok());
     }
 
     /// The live view names the agent, not the temporary file.

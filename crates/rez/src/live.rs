@@ -65,12 +65,15 @@ impl LiveReader {
     }
 
     /// Reopen the archive, so rows committed since the last open are read.
-    /// Logging is off during the reopen, as for [`open`](Self::open).
+    /// Logging is off during the reopen, as for [`open`](Self::open). The
+    /// recording is found again by the full label set it had when opened.
     ///
-    /// The new reader has no decoded blocks cached, so the next query on it
-    /// reads the segments it touches again.
+    /// The new reader opens each table again on its first query, reading
+    /// every segment's footer. Decoded blocks are found in the shared
+    /// `BufferPool` when metriken-query keys them by content (0.33.4 and
+    /// later); before that, the query decodes the segments it touches again.
     pub fn refresh(&self) -> Result<(), Error> {
-        let (_, reader) = quiet(|| pick(&self.path, Some(&self.labels), &self.pool))?;
+        let (_, reader) = quiet(|| pick_exact(&self.path, &self.labels, &self.pool))?;
         *self.current.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(reader);
         Ok(())
     }
@@ -89,6 +92,20 @@ impl LiveReader {
 /// Run `f` with every tracing event on this thread dropped.
 fn quiet<T>(f: impl FnOnce() -> T) -> T {
     tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), f)
+}
+
+/// The recording whose label set equals `labels`.
+fn pick_exact(
+    path: &Path,
+    labels: &BTreeMap<String, String>,
+    pool: &Arc<BufferPool>,
+) -> Result<(BTreeMap<String, String>, RezReader), Error> {
+    let mut recordings = RezReader::open_recordings(path, Arc::clone(pool))?;
+    let at = recordings
+        .iter()
+        .position(|(l, _)| l == labels)
+        .ok_or_else(|| format!("{} has no recording labelled {labels:?}", path.display()))?;
+    Ok(recordings.swap_remove(at))
 }
 
 fn pick(

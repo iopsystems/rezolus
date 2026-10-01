@@ -510,14 +510,42 @@ pub async fn detach_experiment(State(state): State<Arc<AppState>>) -> Response {
 
 // ── Live agent connect / reset ────────────────────────────────────────
 
+/// The `live` flag, claimed for one connect. Released when dropped unless
+/// [`keep`](Self::keep) was called.
+struct LiveClaim<'a>(&'a std::sync::atomic::AtomicBool, bool);
+
+impl<'a> LiveClaim<'a> {
+    /// Set the flag, or `None` if it was already set.
+    fn take(flag: &'a std::sync::atomic::AtomicBool) -> Option<Self> {
+        flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self(flag, false))
+    }
+
+    /// Leave the flag set.
+    fn keep(mut self) {
+        self.1 = true;
+    }
+}
+
+impl Drop for LiveClaim<'_> {
+    fn drop(&mut self) {
+        if !self.1 {
+            self.0.store(false, Ordering::Release);
+        }
+    }
+}
+
 /// Connect to a live Rezolus agent at runtime.
 pub async fn connect_agent(
     State(state): State<Arc<AppState>>,
     body: Bytes,
 ) -> Json<ApiResponse<serde_json::Value>> {
-    if state.live.load(Ordering::Relaxed) {
+    // Claimed before the awaits, so two connects racing cannot both start a
+    // session; released on every error return.
+    let Some(claim) = LiveClaim::take(&state.live) else {
         return ApiResponse::err("already connected to a live agent", "bad_request");
-    }
+    };
 
     let url_str = match std::str::from_utf8(&body) {
         Ok(s) => s.trim().to_string(),
@@ -558,7 +586,7 @@ pub async fn connect_agent(
     state.install_live(session);
     *state.sections.write() = LazySectionStore::new(context);
     state.captures.set_baseline_systeminfo(sysinfo);
-    state.live.store(true, Ordering::Relaxed);
+    claim.keep();
     let info = AgentInfo {
         source,
         version,
@@ -578,7 +606,8 @@ pub async fn connect_agent(
     }))
 }
 
-/// Reset the TSDB — clears all data and buffered snapshots.
+/// Start a fresh live session against the same agent and install it; the
+/// old session is dropped.
 pub async fn reset_tsdb(
     State(state): State<Arc<AppState>>,
 ) -> Json<ApiResponse<serde_json::Value>> {
@@ -595,8 +624,9 @@ pub async fn reset_tsdb(
             );
         }
     };
-    // The old session is dropped once the new one is in place: that stops
-    // its recording and deletes its archive.
+    // The old session is dropped once the new one is in place. That stops its
+    // recording; its archive is deleted once its recording thread and any
+    // save in progress release it.
     let target = state.live_session.lock().as_ref().map(|s| s.target());
     let Some((url, info)) = target else {
         return ApiResponse::err("no live agent is being recorded", "bad_request");
@@ -662,10 +692,17 @@ pub async fn save_capture(State(state): State<Arc<AppState>>) -> Response {
 /// the archive branch: `parquet_path` is the live archive, and the report is
 /// a trimmed `.dendro`.
 pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: String) -> Response {
-    let parquet_path = state.parquet_path.read().clone();
     // In live mode `parquet_path` is the live archive: hold its directory
     // until the report is built, so a reset meanwhile does not delete it.
-    let live_hold = state.live_session.lock().as_ref().map(|s| s.archive().1);
+    // Both are read under the session lock, which `install_live` holds while
+    // it changes them.
+    let (parquet_path, live_hold) = {
+        let session = state.live_session.lock();
+        (
+            state.parquet_path.read().clone(),
+            session.as_ref().map(|s| s.archive().1),
+        )
+    };
     let selection_json = body;
 
     if let Some(path) = parquet_path {
