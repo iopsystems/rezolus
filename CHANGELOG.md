@@ -21,6 +21,13 @@
 
 ### Changed
 
+- metriken-query 0.33.6 and metriken-archive 0.3.1. A segment's decoded
+  blocks are cached by its bytes, so a reader reopened over the same archive
+  finds the blocks the previous one decoded. A query range that starts or
+  ends at a sample's own time now includes that sample; the range's `f64`
+  seconds could convert to up to about 130 ns past it, which on a two-second
+  recording made `rate()` at a 1 s step return nothing, reported as the
+  metric not being found.
 - **The viewer's live mode records the agent's stream.** `rezolus view
   http://agent:4241` (and `--tui`) subscribes to `/metrics/stream` and writes
   it into a temporary `.dendro` archive, read as it grows, instead of polling
