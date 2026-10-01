@@ -54,15 +54,15 @@ ttl = "10ms"
 #     exporter, and `record` to .rez, parquet or raw, handle both; a
 #     homegrown scraper of that endpoint needs changing.
 #
-#   Hindsight, the live viewer and `record` to a .dendro read the agent's
-#   replication stream, which a v2 agent does not serve. They refuse it.
-#
 #   - A consumer built before SnapshotV3 existed. It cannot decode a v3
 #     payload at all. Builds from that era served /metrics as HTTP 200 with
 #     an empty body forever and logged nothing at any level — an
 #     undiagnosable blackout. Current builds log the decode failure loudly on
 #     every failed poll instead, so a mismatch is noisy rather than silent,
 #     but only if the consumer is new enough to have that fix.
+#
+# Setting v2 turns off /metrics/stream: hindsight, the live viewer and
+# `record` to a .dendro refuse a v2 agent.
 #
 # Rolling back is safe and takes effect on restart: the format is chosen per
 # snapshot, nothing on disk records which one produced it, and recordings

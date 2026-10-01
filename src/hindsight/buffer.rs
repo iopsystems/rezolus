@@ -188,11 +188,12 @@ impl HindsightBuffer {
         }
     }
 
-    /// Seal whatever is due, then apply retention. Call it every tick, whether or not an interval arrived
-    /// or not — that is also where a writer that died asynchronously surfaces.
+    /// Seal whatever is due, then apply retention. Call it every tick, whether
+    /// or not an interval arrived; a writer that died asynchronously surfaces
+    /// here.
     ///
-    /// Order is load-bearing: `maybe_seal` first, so a segment closed on this
-    /// tick is in the catalog before the cutoff is applied to it. Retention
+    /// `maybe_seal` runs first, so a segment closed on this tick is in the
+    /// catalog before the cutoff is applied to it. Retention
     /// only ever sees committed data — rows still sitting in an open builder
     /// are evicted when their segment seals and later ages out.
     pub fn maintain(&mut self) -> Result<(), String> {

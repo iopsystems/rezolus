@@ -64,8 +64,8 @@ Hindsight reads the agent named by `source` over its replication stream
 `"v3"` (the default). An agent that cannot serve it is refused at startup.
 If the stream drops, hindsight reconnects after one interval and keeps its
 buffer. If the agent answers a reconnect but can no longer serve the stream,
-hindsight captures the buffer beside `output`, as a SIGTERM does, and exits
-with status 1.
+hindsight writes the buffer to a timestamped file beside `output`, where a
+SIGHUP capture goes, and exits with status 1.
 
 Hindsight is **disabled by default**. Review the config before enabling it.
 
