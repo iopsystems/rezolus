@@ -1611,9 +1611,8 @@ fn a_refused_reconnect_captures_the_buffer_then_exits() {
     assert_eq!(captures.len(), 1, "one capture beside output: {captures:?}");
 
     // The capture holds the rows recorded before the refusal: the stand-in
-    // agent sent 20 intervals of one counter. Read off `recording metadata`'s
-    // per-table row count rather than queried: a rate over a two-second
-    // recording finds samples or not depending on where its steps fall.
+    // agent sent 20 intervals of one counter. The claim is about rows, so
+    // read `recording metadata`'s per-table row count.
     let meta = Command::new(env!("CARGO_BIN_EXE_rezolus"))
         .args(["recording", "metadata", "-i"])
         .arg(&captures[0])
@@ -1627,7 +1626,7 @@ fn a_refused_reconnect_captures_the_buffer_then_exits() {
             (words.next() == Some(TABLE)).then(|| words.next()?.parse().ok())?
         })
         .unwrap_or_else(|| panic!("no {TABLE} table in the capture:\n{stdout}"));
-    assert!(rows > 0, "the capture holds the recorded rows:\n{stdout}");
+    assert!(rows >= 10, "the capture holds the recorded rows:\n{stdout}");
 }
 
 /// A `.dendro` output keeps the buffer as a dendro archive, and its dumps
