@@ -35,7 +35,6 @@ pub use common::*;
 static STATE: AtomicUsize = AtomicUsize::new(RUNNING);
 
 static RUNNING: usize = 0;
-static CAPTURING: usize = 1;
 static TERMINATING: usize = 2;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Deserialize)]

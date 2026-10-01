@@ -65,9 +65,16 @@ Hindsight is **disabled by default**. Review the config before enabling it.
 sudo editor /etc/rezolus/hindsight.toml
 sudo systemctl enable rezolus-hindsight
 sudo systemctl start rezolus-hindsight
-# trigger a save of the buffer to the output file
+# save the buffer to a timestamped file beside the output path
 sudo systemctl kill -sHUP rezolus-hindsight
 ```
+
+SIGHUP writes the buffer to a timestamped file beside `output` (for
+`rezolus.dendro`, `rezolus-<UTC time>.dendro`) and keeps recording; a SIGHUP
+during a capture is ignored. SIGTERM or SIGINT, which `systemctl stop` and
+ctrl-c send, does the same capture and then exits with status 0. A stop during
+a SIGHUP capture exits when that capture completes, and a second stop exits at
+once with status 2.
 
 Hindsight can also expose an optional HTTP endpoint for remote buffer
 management — see [HTTP Endpoint](#http-endpoint-optional) below.

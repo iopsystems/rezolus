@@ -31,11 +31,16 @@ pub fn command() -> Command {
              ([general] output). An output ending in .rez keeps the buffer and its snapshots\n\
              in the archive format before 6.0; any other output is a .dendro archive. See\n\
              config/hindsight.toml for a documented starting point.\n\n\
-             TRIGGERING A SNAPSHOT: send SIGHUP to write the buffer to the output file without\n\
-             stopping the daemon. Optionally set [general] listen to enable an HTTP endpoint for\n\
-             remote status/dump requests instead. Either way the recording keeps running for the\n\
-             whole of the snapshot — a capture costs no samples, including the samples taken\n\
-             while it is being written.\n\n\
+             TRIGGERING A SNAPSHOT: send SIGHUP to write the buffer to a timestamped file beside\n\
+             the output path (rezolus-<UTC time>.dendro for output rezolus.dendro) without\n\
+             stopping the daemon. A SIGHUP during a capture is ignored. Optionally set\n\
+             [general] listen to enable an HTTP endpoint for remote status/dump requests;\n\
+             POST /dump/file writes the output path itself. Either way the recording keeps\n\
+             running for the whole of the snapshot — a capture costs no samples, including\n\
+             the samples taken while it is being written.\n\n\
+             STOPPING: SIGTERM or SIGINT (what systemctl stop and ctrl-c send) captures the\n\
+             buffer the same way, then exits with status 0. A stop during a SIGHUP capture\n\
+             exits when that capture completes; a second stop exits at once with status 2.\n\n\
              EXAMPLE:\n    \
              # Run the rolling-buffer daemon using the example config\n    \
              rezolus hindsight config/hindsight.toml",
@@ -52,7 +57,8 @@ pub fn command() -> Command {
 
 /// Runs the Rezolus `flight-recorder`: a Rezolus client that pulls from the
 /// agent's msgpack endpoint and keeps a rolling archive buffer covering the
-/// configured lookback. On SIGHUP it writes the buffer out to the output file.
+/// configured lookback. On SIGHUP it writes the buffer to a timestamped file
+/// beside the output path; on SIGTERM or SIGINT it does the same and exits.
 ///
 /// This is intended to be run as a daemon that allows retroactive collection of
 /// high-resolution metrics in the event of an anomaly. To be effective the
@@ -83,29 +89,13 @@ pub fn run(config: Config) {
         .build()
         .expect("failed to launch async runtime");
 
-    // Wakes the recording loop when a signal changes STATE, so a capture starts
-    // on the signal rather than on the next tick. The loop reads STATE itself —
+    // Wakes the recording loop when a signal changes the signal state, so a
+    // capture starts on the signal rather than on the next tick. The loop reads
+    // the state itself —
     // this only says "look again" — so a dropped or full channel costs nothing
     // but the tick of latency the loop used to have anyway.
     let (signal_tx, mut signal_rx) = tokio::sync::mpsc::channel::<()>(1);
-
-    ctrlc::set_handler(move || {
-        let state = STATE.load(Ordering::SeqCst);
-
-        if state == RUNNING {
-            info!("triggering buffer capture");
-            STATE.store(CAPTURING, Ordering::SeqCst);
-        } else if state == CAPTURING {
-            info!("waiting for capture to complete before exiting");
-            STATE.store(TERMINATING, Ordering::SeqCst);
-        } else {
-            info!("terminating immediately");
-            std::process::exit(2);
-        }
-
-        let _ = signal_tx.try_send(());
-    })
-    .expect("failed to set ctrl-c handler");
+    listen_for_signals(&rt, signal_tx);
 
     let url = config.general().url();
 
@@ -337,7 +327,7 @@ pub fn run(config: Config) {
         // not one another dump renamed into place a moment later. Waiting for
         // the gate happens on the spawned task, so the loop keeps ticking.
         let dump_gate = Arc::new(tokio::sync::Mutex::new(()));
-        // The SIGHUP/ctrl-c capture, which has no caller to reply to: it
+        // The signal-triggered capture, which has no caller to reply to: it
         // reports back here so its completion is logged from the loop and the
         // state machine advances in one place.
         let (capture_tx, mut capture_rx) = tokio::sync::mpsc::channel::<DumpToFileResponse>(1);
@@ -375,12 +365,12 @@ pub fn run(config: Config) {
 
                 Some(response) = capture_rx.recv() => {
                     capturing = false;
-                    let terminating = STATE.load(Ordering::SeqCst) == TERMINATING;
-                    // Back to RUNNING BEFORE the log line, so a second signal
-                    // sent on seeing that line reads as a new capture rather
-                    // than as "terminate once the capture is done".
+                    let terminating = signals::STATE.load(Ordering::SeqCst) == signals::TERMINATING;
+                    // Back to RUNNING BEFORE the log line, so a signal sent on
+                    // seeing that line is acted on as a new request rather than
+                    // as one made during the capture.
                     if !terminating {
-                        STATE.store(RUNNING, Ordering::SeqCst);
+                        signals::STATE.store(signals::RUNNING, Ordering::SeqCst);
                     }
                     log_capture(&response);
                     if terminating {
@@ -388,7 +378,8 @@ pub fn run(config: Config) {
                     }
                 }
 
-                // A signal changed STATE; the check below acts on it.
+                // A signal changed the signal state; the check below acts on
+                // it.
                 Some(_) = signal_rx.recv() => {}
 
                 _ = interval.tick() => {
@@ -444,18 +435,23 @@ pub fn run(config: Config) {
                 }
             }
 
-            // A SIGHUP / ctrl-c capture, started here and finished on the
-            // `capture_rx` arm above. The recording goes on running underneath
-            // it — the state stays CAPTURING so a second signal still means
-            // "exit when this finishes", but the loop is free the whole time.
+            // A signal-triggered capture (SIGHUP, or the capture a stop
+            // takes), started here and finished on the `capture_rx` arm above.
+            // The recording goes on running underneath it, and the loop is
+            // free the whole time. A SIGHUP during it is ignored; a stop
+            // during it exits when it completes.
             if !capturing {
-                let state = STATE.load(Ordering::SeqCst);
-                if state >= TERMINATING {
-                    // Signalled twice before the capture even began: the second
-                    // signal asked to stop, and there is nothing to wait for.
+                let state = signals::STATE.load(Ordering::SeqCst);
+                if state == signals::TERMINATING {
+                    // A stop with no capture left to wait for.
                     break;
                 }
-                if state == CAPTURING {
+                if state == signals::CAPTURING || state == signals::STOPPING {
+                    // A stop's capture is the last: the loop exits when it
+                    // completes.
+                    if state == signals::STOPPING {
+                        signals::STATE.store(signals::TERMINATING, Ordering::SeqCst);
+                    }
                     capturing = true;
                     info!("capture in progress; the recording continues");
                     // NOT `output`. An HTTP dump writes there because its
@@ -495,6 +491,90 @@ pub fn run(config: Config) {
 
     // Only reached on a clean exit; the buffer directory goes with it.
     drop(staging);
+}
+
+/// What signals have asked of hindsight, apart from the recorder's state in
+/// `main.rs`.
+mod signals {
+    use std::sync::atomic::AtomicUsize;
+
+    /// What signals have asked of the daemon. Read and written by the signal
+    /// task and the recording loop.
+    pub static STATE: AtomicUsize = AtomicUsize::new(RUNNING);
+
+    /// Recording, with no capture asked for.
+    pub const RUNNING: usize = 0;
+    /// A capture was asked for (SIGHUP) or is in flight; recording continues
+    /// after it.
+    pub const CAPTURING: usize = 1;
+    /// A stop was asked for and a capture is in flight: exit when it completes.
+    pub const TERMINATING: usize = 2;
+    /// A stop was asked for with no capture in flight: capture, then exit.
+    pub const STOPPING: usize = 3;
+}
+
+/// What a signal asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Request {
+    /// SIGHUP: capture the buffer and keep recording.
+    Capture,
+    /// SIGTERM or SIGINT: capture the buffer, then exit.
+    Stop,
+}
+
+/// Apply a signal to [`signals::STATE`]. A capture asked for while one is in
+/// flight is ignored. A stop during a capture exits when that capture completes,
+/// and a second stop exits at once with status 2.
+fn on_signal(request: Request) {
+    let state = signals::STATE.load(Ordering::SeqCst);
+    match (request, state) {
+        (Request::Capture, signals::RUNNING) => {
+            info!("SIGHUP: capturing the buffer; the recording continues");
+            signals::STATE.store(signals::CAPTURING, Ordering::SeqCst);
+        }
+        (Request::Capture, _) => info!("SIGHUP: a capture is already in progress"),
+        (Request::Stop, signals::RUNNING) => {
+            info!("stop requested: capturing the buffer, then exiting");
+            signals::STATE.store(signals::STOPPING, Ordering::SeqCst);
+        }
+        (Request::Stop, signals::CAPTURING) => {
+            info!("stop requested: exiting when the capture in progress completes");
+            signals::STATE.store(signals::TERMINATING, Ordering::SeqCst);
+        }
+        (Request::Stop, _) => {
+            info!("second stop requested: exiting now");
+            std::process::exit(2);
+        }
+    }
+}
+
+/// Route SIGHUP to a capture and SIGTERM and SIGINT to a stop, waking the
+/// recording loop through `wake` after each.
+fn listen_for_signals(rt: &tokio::runtime::Runtime, wake: tokio::sync::mpsc::Sender<()>) {
+    use tokio::signal::unix::{signal, SignalKind};
+    let _guard = rt.enter();
+    let listen = |kind: SignalKind| {
+        signal(kind).unwrap_or_else(|e| {
+            error!("could not listen for signals: {e}");
+            std::process::exit(1);
+        })
+    };
+    let (mut hup, mut term, mut int) = (
+        listen(SignalKind::hangup()),
+        listen(SignalKind::terminate()),
+        listen(SignalKind::interrupt()),
+    );
+    rt.spawn(async move {
+        loop {
+            let request = tokio::select! {
+                _ = hup.recv() => Request::Capture,
+                _ = term.recv() => Request::Stop,
+                _ = int.recv() => Request::Stop,
+            };
+            on_signal(request);
+            let _ = wake.try_send(());
+        }
+    });
 }
 
 /// Write the buffer out to the configured output path.
@@ -537,7 +617,7 @@ fn shutdown_capture_path(output: &Path, now_ns: u64) -> PathBuf {
     output.with_file_name(name)
 }
 
-/// Report a SIGHUP / ctrl-c capture. It is the only trace such a capture
+/// Report a signal-triggered capture. It is the only trace such a capture
 /// leaves: there is no caller to answer, so a failure that is not logged here
 /// is a failure nobody ever hears about.
 fn log_capture(response: &DumpToFileResponse) {

@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+### Fixed
+
+- **Hindsight exits on SIGTERM and SIGINT.** One handler took SIGHUP, SIGTERM
+  and SIGINT alike, and treated a first signal as "capture and keep
+  recording", so `systemctl stop` and `restart` captured the buffer, kept
+  running until `TimeoutStopSec` (120 s), and were then SIGKILLed, which left
+  the buffer's staging directory behind. SIGTERM and SIGINT now capture the
+  buffer and exit with status 0; a stop during a SIGHUP capture exits when that
+  capture completes, and a second stop exits at once. SIGHUP captures and keeps
+  recording, and a SIGHUP during a capture is ignored.
+
 ### Removed
 
 - **Ubuntu 20.04 (focal) packages are no longer built.** Focal ships clang 10,
