@@ -64,10 +64,10 @@ impl Applied {
     /// offsets differ. The first row's `wall_offset` stands for the pass.
     ///
     /// Each payload is decoded here, once; [`StreamSchemas::snapshot`] takes
-    /// the decoded rows. A payload that will not decode fails the interval rather than being
-    /// dropped: the producer is this binary, so an undecodable row is a
-    /// version mismatch, and a stream that quietly thinned itself would
-    /// record a gap nothing explains.
+    /// the decoded rows. A payload that will not decode fails the interval
+    /// rather than being dropped: the producer is this binary, so an
+    /// undecodable row is a version mismatch, and a stream with rows silently
+    /// missing would record a gap nothing explains.
     ///
     /// A negative stamp is refused for the reason `snapshot_producer_stamp`
     /// refuses one: the archive's `ts` is unsigned, and a producer that sent
