@@ -625,17 +625,20 @@ enum Request {
 /// status 2. The state changes by compare-and-swap, because the recording loop
 /// changes it from another thread.
 fn on_signal(request: Request) {
-    let mut from = signals::RUNNING;
-    let applied = signals::STATE.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |state| {
-        from = state;
-        match (request, state) {
-            (Request::Capture, signals::RUNNING) => Some(signals::CAPTURING),
-            (Request::Stop, signals::RUNNING) => Some(signals::STOPPING),
-            (Request::Stop, signals::CAPTURING) => Some(signals::TERMINATING),
-            _ => None,
+    let mut from = signals::STATE.load(Ordering::SeqCst);
+    let applied = loop {
+        let to = match (request, from) {
+            (Request::Capture, signals::RUNNING) => signals::CAPTURING,
+            (Request::Stop, signals::RUNNING) => signals::STOPPING,
+            (Request::Stop, signals::CAPTURING) => signals::TERMINATING,
+            _ => break false,
+        };
+        match signals::STATE.compare_exchange(from, to, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => break true,
+            Err(now) => from = now,
         }
-    });
-    match (request, applied.is_ok(), from) {
+    };
+    match (request, applied, from) {
         (Request::Capture, true, _) => {
             info!("SIGHUP: capturing the buffer; the recording continues")
         }
