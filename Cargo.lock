@@ -2252,9 +2252,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-archive"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c18c25b8bc7977f7468a21a1e1b5c9fbfe748323865e3b19703472bc8e64b672"
+checksum = "473e2d2e6c83980ea7e645e1db3b4b09ae572d97190d53fa922080c43878f6ce"
 dependencies = [
  "arrow",
  "bytes",
@@ -2311,9 +2311,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.33.3"
+version = "0.33.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a21fa0d551184346587967810ebcc81f38df1dc5697184005df54dbea793e343"
+checksum = "e95b5d2c492cff79f0262b280ca0a26f35805e6b4cc80a782cd2425567832d60"
 dependencies = [
  "arrow",
  "bytes",
@@ -2327,6 +2327,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tracing",
+ "twox-hash",
 ]
 
 [[package]]
