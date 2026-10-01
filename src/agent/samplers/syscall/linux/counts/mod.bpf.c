@@ -23,6 +23,13 @@
 #define MAX_SYSCALL_ID 1024
 #define MAX_PID 4194304
 
+// Per-cgroup attribution is the config option `cgroup_attribution`, on by
+// default for this sampler. Written into read-only data before load, so with
+// it off the verifier removes the per-cgroup path (the task-group read, the
+// new-cgroup check and the per-cgroup adds) rather than testing a flag on
+// every event.
+const volatile __u8 cgroup_attribution = 0;
+
 // dummy instance for skeleton to generate definition
 struct cgroup_info _cgroup_info = {};
 
@@ -234,7 +241,7 @@ int sys_enter(struct trace_event_raw_sys_enter* args) {
     struct task_struct* current = (struct task_struct*)bpf_get_current_task();
 
     // runtime NULL check (bpf_core_field_exists is a compile-time BTF check)
-    void* task_group = BPF_CORE_READ(current, sched_task_group);
+    void* task_group = cgroup_attribution ? BPF_CORE_READ(current, sched_task_group) : NULL;
     if (task_group) {
         u32 cgroup_id = BPF_CORE_READ(current, sched_task_group, css.id);
 

@@ -87,7 +87,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &SYSCALL_SYNC,
     ];
 
-    let bpf = BpfBuilder::new(
+    let cgroup_attribution = config.cgroup_attribution_or(NAME, true);
+
+    let mut builder = BpfBuilder::new(
         &config,
         NAME,
         BpfProgStats {
@@ -98,93 +100,108 @@ fn init(config: Arc<Config>) -> SamplerResult {
     )
     .cpu_counters("counters", counters, &COUNTERS_ACQ)
     .map("syscall_lut", syscall_lut())
-    .packed_counters(
-        "cgroup_syscall_other",
-        &CGROUP_SYSCALL_OTHER,
-        &CGROUP_COUNTERS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_syscall_read",
-        &CGROUP_SYSCALL_READ,
-        &CGROUP_COUNTERS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_syscall_write",
-        &CGROUP_SYSCALL_WRITE,
-        &CGROUP_COUNTERS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_syscall_poll",
-        &CGROUP_SYSCALL_POLL,
-        &CGROUP_COUNTERS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_syscall_lock",
-        &CGROUP_SYSCALL_LOCK,
-        &CGROUP_COUNTERS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_syscall_time",
-        &CGROUP_SYSCALL_TIME,
-        &CGROUP_COUNTERS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_syscall_sleep",
-        &CGROUP_SYSCALL_SLEEP,
-        &CGROUP_COUNTERS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_syscall_socket",
-        &CGROUP_SYSCALL_SOCKET,
-        &CGROUP_COUNTERS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_syscall_yield",
-        &CGROUP_SYSCALL_YIELD,
-        &CGROUP_COUNTERS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_syscall_filesystem",
-        &CGROUP_SYSCALL_FILESYSTEM,
-        &CGROUP_COUNTERS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_syscall_memory",
-        &CGROUP_SYSCALL_MEMORY,
-        &CGROUP_COUNTERS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_syscall_process",
-        &CGROUP_SYSCALL_PROCESS,
-        &CGROUP_COUNTERS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_syscall_query",
-        &CGROUP_SYSCALL_QUERY,
-        &CGROUP_COUNTERS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_syscall_ipc",
-        &CGROUP_SYSCALL_IPC,
-        &CGROUP_COUNTERS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_syscall_timer",
-        &CGROUP_SYSCALL_TIMER,
-        &CGROUP_COUNTERS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_syscall_event",
-        &CGROUP_SYSCALL_EVENT,
-        &CGROUP_COUNTERS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_syscall_sync",
-        &CGROUP_SYSCALL_SYNC,
-        &CGROUP_COUNTERS_ACQ,
-    )
-    .ringbuf_handler("cgroup_info", handle_cgroup_info)
-    .build()?;
+    // The switch is read-only data the verifier folds at load (see
+    // `cgroup_attribution` in mod.bpf.c); the cgroup maps and their series
+    // exist only when it is on.
+    .pre_load(move |open| {
+        open.maps
+            .rodata_data
+            .as_mut()
+            .expect("the program declares read-only data")
+            .cgroup_attribution = cgroup_attribution as u8;
+    });
+
+    if cgroup_attribution {
+        builder = builder
+            .packed_counters(
+                "cgroup_syscall_other",
+                &CGROUP_SYSCALL_OTHER,
+                &CGROUP_COUNTERS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_syscall_read",
+                &CGROUP_SYSCALL_READ,
+                &CGROUP_COUNTERS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_syscall_write",
+                &CGROUP_SYSCALL_WRITE,
+                &CGROUP_COUNTERS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_syscall_poll",
+                &CGROUP_SYSCALL_POLL,
+                &CGROUP_COUNTERS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_syscall_lock",
+                &CGROUP_SYSCALL_LOCK,
+                &CGROUP_COUNTERS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_syscall_time",
+                &CGROUP_SYSCALL_TIME,
+                &CGROUP_COUNTERS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_syscall_sleep",
+                &CGROUP_SYSCALL_SLEEP,
+                &CGROUP_COUNTERS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_syscall_socket",
+                &CGROUP_SYSCALL_SOCKET,
+                &CGROUP_COUNTERS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_syscall_yield",
+                &CGROUP_SYSCALL_YIELD,
+                &CGROUP_COUNTERS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_syscall_filesystem",
+                &CGROUP_SYSCALL_FILESYSTEM,
+                &CGROUP_COUNTERS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_syscall_memory",
+                &CGROUP_SYSCALL_MEMORY,
+                &CGROUP_COUNTERS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_syscall_process",
+                &CGROUP_SYSCALL_PROCESS,
+                &CGROUP_COUNTERS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_syscall_query",
+                &CGROUP_SYSCALL_QUERY,
+                &CGROUP_COUNTERS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_syscall_ipc",
+                &CGROUP_SYSCALL_IPC,
+                &CGROUP_COUNTERS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_syscall_timer",
+                &CGROUP_SYSCALL_TIMER,
+                &CGROUP_COUNTERS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_syscall_event",
+                &CGROUP_SYSCALL_EVENT,
+                &CGROUP_COUNTERS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_syscall_sync",
+                &CGROUP_SYSCALL_SYNC,
+                &CGROUP_COUNTERS_ACQ,
+            )
+            .ringbuf_handler("cgroup_info", handle_cgroup_info);
+    }
+
+    let bpf = builder.build()?;
 
     Ok(Some(Box::new(bpf)))
 }

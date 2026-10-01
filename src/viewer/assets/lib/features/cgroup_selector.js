@@ -8,22 +8,8 @@
 import globalColorMapper from '../charts/util/colormap.js';
 import { collectGroupPlots } from './group_utils.js';
 import { writeViewState } from '../ui/url_state.js';
+import { discoverCgroups } from './cgroup_discovery.js';
 
-/** Extract cgroup names from a PromQL query result's metric labels. */
-const extractCgroupNames = (result) => {
-    const names = new Set();
-    if (result.status !== 'success' || !result.data?.result?.length) return names;
-
-    for (const series of result.data.result) {
-        if (!series.metric) continue;
-        for (const [key, value] of Object.entries(series.metric)) {
-            if ((key === 'name' || key.includes('cgroup') || key === 'container') && value) {
-                names.add(value);
-            }
-        }
-    }
-    return names;
-};
 
 /** Render a custom multi-select list with a color swatch per item.
  *  Supports shift+click range selection via lastClicked / setLastClicked. */
@@ -126,25 +112,9 @@ export const CgroupSelector = {
 
     async fetchAvailableCgroups(vnode) {
         const { executeQuery } = vnode.attrs;
-        const queries = [
-            'sum by (name) (cgroup_cpu_usage)',
-            'group by (name) (cgroup_cpu_usage)',
-            'cgroup_cpu_usage',
-            'sum by (name) (rate(cgroup_cpu_usage[1m]))',
-        ];
 
         try {
-            let cgroups = new Set();
-
-            for (const query of queries) {
-                try {
-                    const result = await executeQuery(query);
-                    cgroups = extractCgroupNames(result);
-                    if (cgroups.size > 0) break;
-                } catch (e) {
-                    console.warn(`Query failed: ${query}`, e);
-                }
-            }
+            const cgroups = await discoverCgroups(executeQuery);
 
             if (cgroups.size === 0) {
                 vnode.state.error = 'No cgroup data found';

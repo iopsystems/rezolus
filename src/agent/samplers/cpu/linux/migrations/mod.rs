@@ -52,7 +52,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     let migrations = vec![&CPU_MIGRATIONS_FROM, &CPU_MIGRATIONS_TO];
 
-    let bpf = BpfBuilder::new(
+    let cgroup_attribution = config.cgroup_attribution_or(NAME, true);
+
+    let mut builder = BpfBuilder::new(
         &config,
         NAME,
         BpfProgStats {
@@ -62,18 +64,33 @@ fn init(config: Arc<Config>) -> SamplerResult {
         ModSkelBuilder::default,
     )
     .cpu_counters("migrations", migrations, &MIGRATIONS_ACQ)
-    .packed_counters(
-        "cgroup_cpu_migrations",
-        &CGROUP_CPU_MIGRATIONS,
-        &CGROUP_MIGRATIONS_ACQ,
-    )
-    .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .disabled_programs(if kernel_has_btf() {
         &["handle__sched_switch_raw"]
     } else {
         &["handle__sched_switch_btf"]
     })
-    .build()?;
+    // The switch is read-only data the verifier folds at load (see
+    // `cgroup_attribution` in mod.bpf.c); the cgroup maps and their series
+    // exist only when it is on.
+    .pre_load(move |open| {
+        open.maps
+            .rodata_data
+            .as_mut()
+            .expect("the program declares read-only data")
+            .cgroup_attribution = cgroup_attribution as u8;
+    });
+
+    if cgroup_attribution {
+        builder = builder
+            .packed_counters(
+                "cgroup_cpu_migrations",
+                &CGROUP_CPU_MIGRATIONS,
+                &CGROUP_MIGRATIONS_ACQ,
+            )
+            .ringbuf_handler("cgroup_info", handle_cgroup_info);
+    }
+
+    let bpf = builder.build()?;
 
     Ok(Some(Box::new(bpf)))
 }
