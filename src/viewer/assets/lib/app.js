@@ -1639,7 +1639,7 @@ const getRecording = () => recording;
 const setRecording = (value) => { recording = value; };
 
 // Stop the periodic refresh: the follow of an archive file ended (it was
-// finalized, removed, stopped growing, or replaced).
+// finalized or removed, or the baseline was replaced).
 const stopRefreshing = () => {
     if (liveRefreshInterval) clearInterval(liveRefreshInterval);
     liveRefreshInterval = null;

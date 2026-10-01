@@ -325,8 +325,12 @@ capture downloads a copy of it as `rezolus-capture.dendro`.
 
 A `.dendro` or `.rez` file that was not finalized when opened, such as a
 running hindsight buffer or a `rezolus record` in progress, is followed: the
-viewer reopens it every 2 seconds and the page refreshes the current section
-every 5 seconds, as for a live agent. The page keeps its file-mode behavior:
+viewer reopens it every 2 seconds while it grows, and the page refreshes the
+current section every 5 seconds, as for a live agent. After a reopen that
+finds no new row, the viewer doubles the wait before the next one, up to 60
+seconds; a reopen that finds a new row sets it back to 2 seconds. A file
+written once a minute is therefore read within about a minute of each
+write. The page keeps its file-mode behavior:
 the file name, the `from`/`to` range in a link, and A/B compare for a
 two-recording archive, whose experiment charts are fetched again when the
 experiment's range grows. When retention evicts the start of a zoomed
@@ -334,10 +338,11 @@ window, the window is cut to the new start, or reset to the full range when
 none of it is left.
 
 Following stops when the writer finalizes the file (`record` exits), when
-the file is removed, or when no new row has arrived for 30 seconds or ten of
-the file's sampling intervals, whichever is longer. A file that stops
-growing, such as a snapshot or the buffer of a killed hindsight, stops being
-followed after 30 seconds. Hindsight removes its buffer when it exits on
+the file is removed, or when another file is loaded in the page. It does not
+stop because the file has not grown. A file that will not grow but is not
+finalized, such as a snapshot, a copy of a running archive, or the buffer of
+a killed hindsight, stays followed and is reopened every 60 seconds until
+the viewer exits. Hindsight removes its buffer when it exits on
 SIGTERM or SIGINT, without finalizing it; after that, charts already loaded
 stay on the page, and data the page had not yet read cannot be read. A
 finalized file is opened once and not reopened. An archive in which two

@@ -145,17 +145,19 @@
 - **The viewer follows an archive file that is still being written.**
   `rezolus view` on a `.dendro` or `.rez` (v3) that is not finalized, such as
   a running hindsight buffer or a `rezolus record` in progress, reopens it
-  every 2 seconds, and the page refreshes the current section every 5
-  seconds as in live mode. Before, the view showed the file as it was when
+  every 2 seconds while it grows, and the page refreshes the current section
+  every 5 seconds as in live mode. After a reopen that finds no new row the
+  wait doubles, up to 60 seconds, and a new row sets it back to 2 seconds. Before, the view showed the file as it was when
   the viewer opened it. The page keeps its file-mode behavior (file name,
   `from`/`to` in a link, A/B compare); `/api/v1/mode` reports `following`
   rather than `live`. A zoomed window whose start retention evicted is cut
   to the new start, or reset to the full range when none of it is left. In
   compare mode the experiment's charts are fetched again when its range
   grows. Following stops when the writer finalizes the file, when the file
-  is removed, or when no new row has arrived for 30 seconds or ten sampling
-  intervals, whichever is longer (a snapshot, or the buffer of a killed
-  hindsight, is never finalized). A finalized file is not reopened, and an
+  is removed, or when another file is loaded; a file that is not growing
+  stays followed (a snapshot, or the buffer of a killed hindsight, is never
+  finalized, and is reopened every 60 seconds). A finalized file is not
+  reopened, and an
   archive whose recordings share a label set is not followed. `--tui`
   redraws a followed file each second.
 - In live mode and when following a file, the full range that chart

@@ -224,7 +224,7 @@ impl AppState {
     }
 
     /// Whether the opened archive file is being followed. A follow ends when
-    /// the file is finalized, removed, stops growing, or is replaced.
+    /// the file is finalized or removed, or the baseline is replaced.
     pub fn following(&self) -> bool {
         self.follow.lock().as_ref().is_some_and(|f| f.active())
     }
