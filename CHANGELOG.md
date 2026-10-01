@@ -150,10 +150,17 @@
   the viewer opened it. The page keeps its file-mode behavior (file name,
   `from`/`to` in a link, A/B compare); `/api/v1/mode` reports `following`
   rather than `live`. A zoomed window whose start retention evicted is cut
-  to the new start, or reset to the full range when none of it is left.
-  Following stops when the writer finalizes the file or the file is
-  removed; a finalized file is not reopened. `--tui` redraws a followed file
-  each second. In compare mode only the baseline's charts refresh.
+  to the new start, or reset to the full range when none of it is left. In
+  compare mode the experiment's charts are fetched again when its range
+  grows. Following stops when the writer finalizes the file, when the file
+  is removed, or when no new row has arrived for 30 seconds or ten sampling
+  intervals, whichever is longer (a snapshot, or the buffer of a killed
+  hindsight, is never finalized). A finalized file is not reopened, and an
+  archive whose recordings share a label set is not followed. `--tui`
+  redraws a followed file each second.
+- In live mode and when following a file, the full range that chart
+  drill-down zooms within now advances with the recording; before, it was
+  fixed at the extent when the first zoom happened.
 - `memory_pagecache` sampler (opt-in): the page cache's traffic per mount,
   and per cgroup with `cgroup_attribution = true`. Buffered read calls and
   bytes from one `fentry` on `filemap_read`, pages filled by the filling

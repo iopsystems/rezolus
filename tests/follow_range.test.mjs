@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clampRangeToExtent } from '../src/viewer/assets/lib/data.js';
+import { clampRangeToExtent, sameExtent } from '../src/viewer/assets/lib/data.js';
 
 // A followed hindsight buffer evicts its oldest rows, so the recording's
 // start moves forward between refreshes. A committed zoom window is cut to
@@ -36,4 +36,16 @@ test('clampRangeToExtent: an unknown extent leaves the window alone', () => {
     const range = { start: 2, end: 8 };
     assert.equal(clampRangeToExtent(range, null), range);
     assert.equal(clampRangeToExtent(range, { start: NaN, end: NaN }), range);
+});
+
+test('sameExtent: equal spans match, a changed end does not', () => {
+    assert.equal(sameExtent({ start: 1, end: 2, step: 1 }, { start: 1, end: 2 }), true);
+    assert.equal(sameExtent({ start: 1, end: 2 }, { start: 1, end: 3 }), false);
+    assert.equal(sameExtent({ start: 1, end: 2 }, { start: 0, end: 2 }), false);
+});
+
+test('sameExtent: null matches only null', () => {
+    assert.equal(sameExtent(null, null), true);
+    assert.equal(sameExtent(null, { start: 1, end: 2 }), false);
+    assert.equal(sameExtent({ start: 1, end: 2 }, null), false);
 });

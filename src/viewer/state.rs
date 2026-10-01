@@ -215,8 +215,16 @@ impl AppState {
         self.captures.set_baseline_data(data);
     }
 
-    /// Whether the opened archive file is being followed: it was not
-    /// finalized at the last reopen, so its range can still grow.
+    /// Stop reopening capture `id` of a followed archive: its slot was
+    /// detached or is being replaced.
+    pub fn unfollow_capture(&self, id: &str) {
+        if let Some(follow) = self.follow.lock().as_ref() {
+            follow.drop_capture(id);
+        }
+    }
+
+    /// Whether the opened archive file is being followed. A follow ends when
+    /// the file is finalized, removed, stops growing, or is replaced.
     pub fn following(&self) -> bool {
         self.follow.lock().as_ref().is_some_and(|f| f.active())
     }

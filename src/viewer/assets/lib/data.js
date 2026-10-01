@@ -122,6 +122,13 @@ export const getRangeOverride = () => _rangeOverride;
 // extent, the part from the extent's start when it begins before it, and
 // null when it ends at or before the extent's start (none of it is left).
 // The end is not clamped: a followed archive's end only grows.
+// Whether two `{start, end}` ranges cover the same span. A null range
+// matches only null.
+export const sameExtent = (a, b) => {
+    if (!a || !b) return a === b;
+    return a.start === b.start && a.end === b.end;
+};
+
 export const clampRangeToExtent = (range, extent) => {
     if (!range || !extent) return range;
     if (!Number.isFinite(extent.start) || range.start >= extent.start) return range;

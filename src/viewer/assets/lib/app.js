@@ -9,7 +9,7 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
 import { collectGroupPlots } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setRateMode, getRateMode, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, clampRangeToExtent, nativeInterval, stepAtLeast, CAPTURE_BASELINE, CAPTURE_EXPERIMENT, listCaptures, captureMetadata, clearCaptureMemo } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setRateMode, getRateMode, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, clampRangeToExtent, sameExtent, nativeInterval, stepAtLeast, CAPTURE_BASELINE, CAPTURE_EXPERIMENT, listCaptures, captureMetadata, clearCaptureMemo } from './data.js';
 
 // Opt line-ish charts into display (boxplot decimation) mode: they fetch the
 // decimated boxplot binary instead of the full native-resolution JSON matrix.
@@ -197,7 +197,7 @@ let pendingLinkAnchors = null;
 // schema. The accessors below read-through to the store.
 
 let liveMode = false;
-// An opened archive file whose writer is still appending (server viewer
+// An opened archive file that was not finalized when opened (server viewer
 // only). It refreshes as live mode does but keeps the file-mode UI: its
 // label, its range params, its A/B compare.
 let following = false;
@@ -1638,27 +1638,41 @@ const getActiveCgroupPattern = () => activeCgroupPattern;
 const getRecording = () => recording;
 const setRecording = (value) => { recording = value; };
 
-// Stop the periodic refresh: a followed archive was finalized.
+// Stop the periodic refresh: the follow of an archive file ended (it was
+// finalized, removed, stopped growing, or replaced).
 const stopRefreshing = () => {
     if (liveRefreshInterval) clearInterval(liveRefreshInterval);
     liveRefreshInterval = null;
 };
 
-// The baseline's extent changed on a refresh: a live recording or a followed
-// archive grew, or a followed hindsight buffer evicted its oldest rows. The
-// drill-down's full range is updated, and a committed window that starts
-// before the new start is cut to it, or dropped when none of it is left.
-const noteRecordingExtent = (meta) => {
+// Called on each refresh with the baseline's metadata: a live recording or a
+// followed archive grew, or a followed hindsight buffer evicted its oldest
+// rows. The drill-down's full range is updated, and a committed window that
+// starts before the new start is cut to it, or dropped when none of it is
+// left. In compare mode the experiment's range is read again, and replaced
+// when it changed, which makes each compare chart fetch the experiment again
+// (CompareChartWrapper compares the range it fetched with the current one).
+const noteRecordingExtent = async (meta) => {
     const range = queryRangeFromMeta(meta);
-    if (!range) return;
-    _baselineRange = range;
-    const override = getRangeOverride();
-    const clamped = clampRangeToExtent(override, range);
-    if (clamped === override) return;
-    if (clamped === null) {
-        console.info('[range] the selected window is no longer in the recording; showing the full range');
+    if (range) {
+        _baselineRange = range;
+        const override = getRangeOverride();
+        const clamped = clampRangeToExtent(override, range);
+        if (clamped !== override) {
+            if (clamped === null) {
+                console.info('[range] the selected window is no longer in the recording; showing the full range');
+            }
+            commitRangeOverride(clamped);
+        }
     }
-    commitRangeOverride(clamped);
+    if (compareMode) {
+        clearCaptureMemo();
+        const expMeta = await captureMetadata(CAPTURE_EXPERIMENT).catch(() => null);
+        const expRange = queryRangeFromMeta(expMeta);
+        if (expRange && !sameExtent(expRange, experimentQueryRange)) {
+            experimentQueryRange = expRange;
+        }
+    }
 };
 
 export { initDashboard, sectionResponseCache, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, resetLinkedViewState, reapplyFileMetadata, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, stopRefreshing, noteRecordingExtent, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };

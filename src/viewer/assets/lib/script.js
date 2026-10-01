@@ -205,13 +205,13 @@ const refreshCurrentSection = async () => {
             return;
         }
 
-        // A followed archive that its writer finalized no longer grows, so
-        // this refresh is the last one.
+        // The follow of an archive file ended (it was finalized, removed,
+        // stopped growing, or replaced), so this refresh is the last one.
         if (followMode && meta?.data?.following !== true) {
             followMode = false;
             stopRefreshing();
         }
-        noteRecordingExtent(meta);
+        await noteRecordingExtent(meta);
 
         if (!chartsState.isDefaultZoom()) return;
         const currentRoute = m.route.get();

@@ -848,16 +848,34 @@ fn init_file_mode_rez(
     let identities =
         dashboard::capture_alias::assign_capture_identities(&ordered_labels, &all_labels);
 
-    // An archive a writer is still appending to (a running hindsight buffer,
-    // a `record` in progress) is followed: each recording shown is read
-    // through a `LiveReader` that a `follow::Follow` thread reopens until the
-    // writer finalizes. Only the SQLite containers (dendro and `.rez` v3) can
-    // grow in place; a tar `.rez` is written whole.
+    // An archive that was not finalized when opened (a running hindsight
+    // buffer, a `record` in progress, or a file whose writer is gone) is
+    // followed: each recording shown is read through a `LiveReader` that a
+    // `follow::Follow` thread reopens until the follow ends (see follow.rs).
+    // Only the SQLite containers (dendro and `.rez` v3) can grow in place; a
+    // tar `.rez` is written whole.
     let growable = crate::recorder::rez::detect_rez_format(path).ok()
         == Some(crate::recorder::rez::RezFormat::V3Sqlite);
-    let following = growable && order.iter().any(|&i| !readers[i].1.complete());
-    let mut followed: Vec<Arc<rez::live::LiveReader>> = Vec::new();
-    let mut source = |labels: &BTreeMap<String, String>,
+    let mut following = growable && order.iter().any(|&i| !readers[i].1.complete());
+    // A reopen finds each recording by its label set, so a shown recording
+    // whose label set another recording shares cannot be found again.
+    if following {
+        if let Some(&dup) = order
+            .iter()
+            .find(|&&i| all_labels.iter().filter(|l| **l == all_labels[i]).count() > 1)
+        {
+            warn!(
+                "{} is not finalized, but it holds several recordings labelled {}; \
+                 showing it as it was when opened",
+                path.display(),
+                crate::mcp::render_labels(&all_labels[dup])
+            );
+            following = false;
+        }
+    }
+    let mut followed: Vec<(String, Arc<rez::live::LiveReader>)> = Vec::new();
+    let mut source = |id: &str,
+                      labels: &BTreeMap<String, String>,
                       reader: crate::rez_reader::RezReader|
      -> Arc<dyn metriken_query::MetricsSource> {
         if !following {
@@ -869,7 +887,7 @@ fn init_file_mode_rez(
             reader,
             Arc::clone(&pool),
         ));
-        followed.push(Arc::clone(&live));
+        followed.push((id.to_string(), Arc::clone(&live)));
         live
     };
 
@@ -907,7 +925,7 @@ fn init_file_mode_rez(
         .unwrap_or_else(|| identities[0].alias.clone());
 
     let state = AppState::with_pool(
-        source(&b_labels, b_reader),
+        source(capture_registry::BASELINE_ID, &b_labels, b_reader),
         registry.clone(),
         Arc::clone(&pool),
     );
@@ -931,7 +949,7 @@ fn init_file_mode_rez(
         let file_meta = file_meta_json(&reader);
         state.captures.attach_capture(
             &identities[pos].id,
-            source(&labels, reader),
+            source(&identities[pos].id, &labels, reader),
             systeminfo,
             file_meta,
             Some(identities[pos].alias.clone()),
@@ -939,10 +957,10 @@ fn init_file_mode_rez(
     }
 
     if following {
-        match follow::Follow::start(followed, follow::FOLLOW_INTERVAL) {
+        match follow::Follow::start(followed, Arc::clone(&pool), follow::FOLLOW_INTERVAL) {
             Ok(f) => {
                 info!(
-                    "{} is not finalized; following it while its writer appends",
+                    "{} was not finalized when opened; following it",
                     path.display()
                 );
                 *state.follow.lock() = Some(f);

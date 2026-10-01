@@ -205,8 +205,9 @@ async fn mode(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     };
     Json(serde_json::json!({
         "live": state.live.load(Ordering::Relaxed),
-        // An opened archive file whose writer is still appending: the page
-        // refreshes as in live mode and keeps its file-mode UI.
+        // An opened archive file that was not finalized when opened, and is
+        // still followed: the page refreshes as in live mode and keeps its
+        // file-mode UI.
         "following": state.following(),
         "loaded": loaded,
         "compare_mode": state.captures.experiment_attached(),
@@ -544,8 +545,9 @@ async fn metadata(
         if let Some(why) = state.live_session.lock().as_ref().and_then(|s| s.stopped()) {
             meta["liveError"] = serde_json::json!(why);
         }
-        // Whether a followed archive file can still grow. The page stops
-        // refreshing once this is false (the writer finalized it).
+        // Whether a followed archive file is still followed. The page stops
+        // refreshing once this is false or absent (the file was finalized,
+        // removed, stopped growing, or replaced).
         if state.follow.lock().is_some() {
             meta["following"] = serde_json::json!(state.following());
         }

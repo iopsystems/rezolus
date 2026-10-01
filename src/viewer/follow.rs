@@ -1,135 +1,267 @@
-//! Following an archive file that is still being written: a running
+//! Following an archive file that was not finalized when opened: a running
 //! `rezolus hindsight` buffer, or a `rezolus record` in progress.
 //!
 //! An open reader's view is fixed (see `rez::live`), so file mode wraps each
-//! recording it shows in a [`LiveReader`] and a [`Follow`] thread refreshes
-//! them every [`FOLLOW_INTERVAL`] until every one of them is finalized or the
-//! file is removed. The
-//! page learns that the view advances from the `following` flag in
+//! recording it shows in a [`LiveReader`], and a [`Follow`] thread reopens
+//! the archive every [`FOLLOW_INTERVAL`] and hands each reader its recording.
+//! The follow ends when every recording is finalized, when the file is
+//! removed, or when the newest row has not advanced for the stall bound (see
+//! [`stall_bound`]): a file whose writer was killed, or a copy of a running
+//! archive, is never finalized. The page reads the `following` flag in
 //! `/api/v1/mode` and the baseline's metadata.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use metriken_query::{BufferPool, MetricsSource};
+use parking_lot::Mutex;
 use rez::live::LiveReader;
 use tracing::{info, warn};
 
+use crate::rez_reader::RezReader;
+
 /// How often a followed archive is reopened. The page refreshes every 5 s,
 /// so a reopen at 2 s puts the rows it shows at most about 2 s behind the
-/// writer's last commit. A reopen reads the catalog; table footers are read
-/// on a table's first query.
+/// writer's last commit. A reopen opens every recording of the archive and
+/// parses each table's segment footers, once per tick however many
+/// recordings are shown.
 pub const FOLLOW_INTERVAL: Duration = Duration::from_secs(2);
+
+/// The shortest time without a new row after which a follow ends.
+const STALL_FLOOR: Duration = Duration::from_secs(30);
+
+/// How many of the archive's sampling intervals without a new row end a
+/// follow, when that is longer than [`STALL_FLOOR`].
+const STALL_INTERVALS: f64 = 10.0;
 
 /// Readers of one archive being followed. Dropping it stops the thread
 /// within one interval.
 pub struct Follow {
-    readers: Arc<Vec<Arc<LiveReader>>>,
-    path: PathBuf,
+    inner: Arc<Followed>,
     /// Set on drop; the thread exits at its next wake-up.
     stop: Arc<AtomicBool>,
-    /// Set once every reader is finalized, or the follow was stopped.
-    done: Arc<AtomicBool>,
+}
+
+struct Followed {
+    path: PathBuf,
+    pool: Arc<BufferPool>,
+    /// Each followed capture's id and reader.
+    readers: Mutex<Vec<(String, Arc<LiveReader>)>>,
+    progress: Mutex<Progress>,
+    /// Set once the follow has ended, for any reason.
+    done: AtomicBool,
+}
+
+struct Progress {
+    /// The newest row time across the followed readers, in ns.
+    newest: Option<u64>,
+    /// When `newest` last advanced, or when the follow started.
+    since: Instant,
+    /// Whether the last reopen failed, so a run of failures is logged once.
+    failing: bool,
+    /// Replaces [`stall_bound`] (tests).
+    stall_override: Option<Duration>,
 }
 
 impl Follow {
-    /// Start refreshing `readers` every `interval` on a thread of their own,
-    /// since a reopen does blocking IO. `readers` must not be empty.
-    pub fn start(readers: Vec<Arc<LiveReader>>, interval: Duration) -> std::io::Result<Self> {
+    /// Start reopening the archive behind `readers` every `interval` on a
+    /// thread of its own, since a reopen does blocking IO. Each entry is a
+    /// capture id and the reader serving it. The readers must all read one
+    /// archive, and no two of them may have the same label set (see
+    /// [`LiveReader::from_reader`]).
+    pub fn start(
+        readers: Vec<(String, Arc<LiveReader>)>,
+        pool: Arc<BufferPool>,
+        interval: Duration,
+    ) -> std::io::Result<Self> {
+        debug_assert!(!readers.is_empty(), "a follow needs a reader");
         let path = readers
             .first()
-            .map(|r| r.path().to_path_buf())
+            .map(|(_, r)| r.path().to_path_buf())
             .unwrap_or_default();
-        let follow = Self {
-            readers: Arc::new(readers),
+        let newest = newest_row(&readers);
+        let inner = Arc::new(Followed {
             path,
-            stop: Arc::new(AtomicBool::new(false)),
-            done: Arc::new(AtomicBool::new(false)),
-        };
-        let readers = Arc::clone(&follow.readers);
-        let path = follow.path.clone();
-        let stop = Arc::clone(&follow.stop);
-        let done = Arc::clone(&follow.done);
+            pool,
+            readers: Mutex::new(readers),
+            progress: Mutex::new(Progress {
+                newest,
+                since: Instant::now(),
+                failing: false,
+                stall_override: None,
+            }),
+            done: AtomicBool::new(false),
+        });
+        let stop = Arc::new(AtomicBool::new(false));
+        let (thread_inner, thread_stop) = (Arc::clone(&inner), Arc::clone(&stop));
         std::thread::Builder::new()
             .name("rezolus-follow".to_string())
             .spawn(move || {
-                let mut failing = false;
                 loop {
                     std::thread::sleep(interval);
-                    if stop.load(Ordering::Acquire) {
-                        break;
-                    }
-                    if !refresh_all(&readers, &path, &mut failing) {
+                    if thread_stop.load(Ordering::Acquire) || !thread_inner.step() {
                         break;
                     }
                 }
-                done.store(true, Ordering::Release);
+                thread_inner.done.store(true, Ordering::Release);
             })?;
-        Ok(follow)
+        Ok(Self { inner, stop })
     }
 
-    /// Whether the archive is still being followed: the file was there and
-    /// some recording was not finalized at the last reopen.
+    /// Whether the archive is still being followed.
     pub fn active(&self) -> bool {
-        !self.done.load(Ordering::Acquire)
+        !self.inner.done.load(Ordering::Acquire)
     }
 
-    /// Reopen every reader now, as the thread does each interval. Returns
+    /// Stop reopening the capture `id`: its slot was detached or replaced.
+    /// When no capture is left, the follow ends.
+    pub fn drop_capture(&self, id: &str) {
+        let mut readers = self.inner.readers.lock();
+        readers.retain(|(c, _)| c != id);
+        if readers.is_empty() {
+            self.inner.done.store(true, Ordering::Release);
+        }
+    }
+
+    /// The capture ids still followed.
+    #[cfg(test)]
+    pub fn captures(&self) -> Vec<String> {
+        self.inner
+            .readers
+            .lock()
+            .iter()
+            .map(|(c, _)| c.clone())
+            .collect()
+    }
+
+    /// Reopen the archive now, as the thread does each interval. Returns
     /// whether to keep following; when not, the follow ends.
     #[cfg(test)]
     pub fn refresh_now(&self) -> bool {
-        let mut failing = false;
-        let more = refresh_all(&self.readers, &self.path, &mut failing);
+        let more = self.inner.step();
         if !more {
-            self.done.store(true, Ordering::Release);
+            self.inner.done.store(true, Ordering::Release);
         }
         more
+    }
+
+    /// Use `bound` in place of [`stall_bound`].
+    #[cfg(test)]
+    pub fn set_stall_bound(&self, bound: Duration) {
+        self.inner.progress.lock().stall_override = Some(bound);
     }
 }
 
 impl Drop for Follow {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        self.done.store(true, Ordering::Release);
+        self.inner.done.store(true, Ordering::Release);
     }
 }
 
-/// Reopen each reader. A reader whose reopen fails keeps its previous view,
-/// and the failure is logged once until a reopen succeeds again. Returns
-/// whether to keep following: false once every recording is finalized, or
-/// once the file is gone (hindsight removes its buffer when it exits, without
-/// finalizing it), in which case the readers are left as last opened.
-fn refresh_all(readers: &[Arc<LiveReader>], path: &std::path::Path, failing: &mut bool) -> bool {
-    if !path.exists() {
-        info!("{} was removed; no longer following it", path.display());
-        return false;
-    }
-    let mut failed = None;
-    for reader in readers {
-        if let Err(e) = reader.refresh() {
-            failed = Some(e);
+impl Followed {
+    /// Reopen the archive once and hand each reader its recording. A reader
+    /// whose recording cannot be read keeps its previous view, and a run of
+    /// failures is logged once. Returns whether to keep following.
+    fn step(&self) -> bool {
+        if self.done.load(Ordering::Acquire) {
+            return false;
         }
-    }
-    match failed {
-        Some(e) if !*failing => {
-            warn!("{}: could not reread the archive: {e}", path.display());
-            *failing = true;
+        let path = self.path.display();
+        if !self.path.exists() {
+            info!("{path} was removed; no longer following it");
+            return false;
         }
-        Some(_) => {}
-        None => *failing = false,
+        let readers = self.readers.lock().clone();
+        if readers.is_empty() {
+            return false;
+        }
+
+        let opened = quiet(|| RezReader::open_recordings(&self.path, Arc::clone(&self.pool)));
+        let mut progress = self.progress.lock();
+        let failure = match opened {
+            Ok(mut recordings) => {
+                let mut missing = None;
+                for (_, reader) in &readers {
+                    match recordings.iter().position(|(l, _)| l == reader.labels()) {
+                        Some(at) => reader.replace(recordings.swap_remove(at).1),
+                        None => {
+                            missing = Some(format!("no recording labelled {:?}", reader.labels()))
+                        }
+                    }
+                }
+                missing
+            }
+            Err(e) => Some(e.to_string()),
+        };
+        match failure {
+            Some(e) if !progress.failing => {
+                warn!("{path}: could not reread the archive: {e}");
+                progress.failing = true;
+            }
+            Some(_) => {}
+            None => progress.failing = false,
+        }
+
+        if readers.iter().all(|(_, r)| r.complete()) {
+            info!("{path} was finalized; no longer following it");
+            return false;
+        }
+        let newest = newest_row(&readers);
+        if newest > progress.newest {
+            progress.newest = newest;
+            progress.since = Instant::now();
+            return true;
+        }
+        let idle = progress.since.elapsed();
+        let bound = progress
+            .stall_override
+            .unwrap_or_else(|| stall_bound(&readers));
+        if idle >= bound {
+            info!(
+                "{path} has not grown in {}; no longer following it (its writer is not \
+                 running, or the file is a copy)",
+                humantime::format_duration(Duration::from_secs(idle.as_secs()))
+            );
+            return false;
+        }
+        true
     }
-    let more = readers.iter().any(|r| !r.complete());
-    if !more {
-        info!("{} was finalized; no longer following it", path.display());
-    }
-    more
+}
+
+/// How long a followed archive may go without a new row before the follow
+/// ends: ten of its sampling intervals, and at least [`STALL_FLOOR`]. The
+/// interval is the slowest of the readers' measured intervals.
+fn stall_bound(readers: &[(String, Arc<LiveReader>)]) -> Duration {
+    let slowest = readers
+        .iter()
+        .map(|(_, r)| r.interval())
+        .filter(|i| i.is_finite() && *i > 0.0)
+        .fold(0.0, f64::max);
+    STALL_FLOOR.max(Duration::try_from_secs_f64(slowest * STALL_INTERVALS).unwrap_or(Duration::MAX))
+}
+
+/// The newest row time across `readers`, in ns.
+fn newest_row(readers: &[(String, Arc<LiveReader>)]) -> Option<u64> {
+    readers
+        .iter()
+        .filter_map(|(_, r)| r.time_range_ns().map(|(_, end)| end))
+        .max()
+}
+
+/// Run `f` with every tracing event on this thread dropped: every reopen of
+/// an unfinalized archive would otherwise log that it was not finalized.
+fn quiet<T>(f: impl FnOnce() -> T) -> T {
+    tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), f)
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;
+    use std::time::Duration;
 
     use metriken_archive::{ArchiveWriter, SourceRecorder, WriterConfig};
 
@@ -229,6 +361,127 @@ mod tests {
         assert!(!state.follow.lock().as_ref().unwrap().refresh_now());
         assert!(!state.following());
         assert_eq!(end_ms(&state), (ANCHOR + 4 * SECOND) / 1_000_000);
+    }
+
+    /// An unfinalized archive with no writer (a killed hindsight's buffer, a
+    /// copy of a running archive) never grows. The follow ends once no row
+    /// has arrived for the stall bound.
+    #[test]
+    fn a_file_with_no_writer_stops_being_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("copy.dendro");
+        recorded(&path, 5, false);
+        let state = view(&path);
+        assert!(state.following(), "it is not finalized, so it is followed");
+        let follow = state.follow.lock();
+        let follow = follow.as_ref().unwrap();
+        assert!(follow.refresh_now(), "within the default bound of 30 s");
+        follow.set_stall_bound(Duration::ZERO);
+        assert!(
+            !follow.refresh_now(),
+            "a file that does not grow stops being followed"
+        );
+        assert!(!follow.active());
+    }
+
+    /// The default bound is ten of the archive's intervals, at least 30 s.
+    #[test]
+    fn the_stall_bound_is_ten_intervals_and_at_least_thirty_seconds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one-second.dendro");
+        recorded(&path, 5, false);
+        let state = view(&path);
+        let follow = state.follow.lock();
+        let readers = follow.as_ref().unwrap().inner.readers.lock().clone();
+        assert_eq!(super::stall_bound(&readers), Duration::from_secs(30));
+        assert_eq!(super::stall_bound(&[]), Duration::from_secs(30));
+
+        // Rows 10 s apart: ten intervals is 100 s.
+        let path = dir.path().join("ten-second.dendro");
+        let (mut writer, mut source) = writer(&path);
+        for i in 0..5 {
+            let staged = source.stage(&tick(i), ANCHOR + i * 10 * SECOND, 0).unwrap();
+            writer.commit(vec![staged]).unwrap();
+        }
+        source.sync().unwrap();
+        let slow = view(&path);
+        let follow = slow.follow.lock();
+        let readers = follow.as_ref().unwrap().inner.readers.lock().clone();
+        assert_eq!(super::stall_bound(&readers), Duration::from_secs(100));
+    }
+
+    /// Two recordings fill the A/B slots. Each is followed, from one reopen
+    /// per tick, and detaching the experiment stops reopening it.
+    #[test]
+    fn both_slots_of_an_ab_archive_are_followed_until_detached() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.dendro");
+        let mut writer = ArchiveWriter::create(&path, WriterConfig::default()).unwrap();
+        let mut sources: Vec<SourceRecorder> = ["a", "b"]
+            .into_iter()
+            .map(|host| {
+                let labels = [
+                    ("source".to_string(), "rezolus".to_string()),
+                    ("host".to_string(), host.to_string()),
+                ]
+                .into();
+                writer.add_source(labels, BTreeMap::new(), ANCHOR).unwrap()
+            })
+            .collect();
+        let mut write_both = |ticks: std::ops::Range<u64>| {
+            for i in ticks {
+                let staged = sources
+                    .iter_mut()
+                    .map(|s| s.stage(&tick(i), ANCHOR + i * SECOND, 0).unwrap())
+                    .collect();
+                writer.commit(staged).unwrap();
+            }
+            for s in &mut sources {
+                s.sync().unwrap();
+            }
+        };
+        write_both(0..3);
+        let state = view(&path);
+        let follow_ids = || state.follow.lock().as_ref().unwrap().captures();
+        assert_eq!(follow_ids(), ["baseline", "experiment"]);
+
+        write_both(3..6);
+        assert!(state.follow.lock().as_ref().unwrap().refresh_now());
+        let end = |id| {
+            state
+                .captures
+                .get_by_id(id)
+                .unwrap()
+                .time_range_ns()
+                .unwrap()
+                .1
+        };
+        assert_eq!(end("baseline"), ANCHOR + 5 * SECOND);
+        assert_eq!(end("experiment"), ANCHOR + 5 * SECOND);
+
+        state.unfollow_capture("experiment");
+        assert_eq!(follow_ids(), ["baseline"]);
+        assert!(state.following());
+    }
+
+    /// A reopen finds each recording by its label set, so an archive whose
+    /// shown recordings share one is not followed.
+    #[test]
+    fn recordings_that_share_a_label_set_are_not_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("twins.dendro");
+        let mut writer = ArchiveWriter::create(&path, WriterConfig::default()).unwrap();
+        for _ in 0..2 {
+            let labels = [("source".to_string(), "rezolus".to_string())].into();
+            let mut source = writer.add_source(labels, BTreeMap::new(), ANCHOR).unwrap();
+            let staged = source.stage(&tick(0), ANCHOR, 0).unwrap();
+            writer.commit(vec![staged]).unwrap();
+            source.sync().unwrap();
+        }
+        let state = view(&path);
+        assert!(!state.following());
+        assert!(state.follow.lock().is_none());
+        drop(writer);
     }
 
     /// A finalized archive is opened once and never reopened.
