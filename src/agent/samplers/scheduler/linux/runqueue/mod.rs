@@ -58,7 +58,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &SCHEDULER_VCSW,
     ];
 
-    let bpf = BpfBuilder::new(
+    let cgroup_attribution = config.cgroup_attribution_or(NAME, true);
+
+    let mut builder = BpfBuilder::new(
         &config,
         NAME,
         BpfProgStats {
@@ -71,27 +73,6 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .histogram("runqlat", &SCHEDULER_RUNQUEUE_LATENCY, &RUNQLAT_ACQ)
     .histogram("running", &SCHEDULER_RUNNING, &RUNNING_ACQ)
     .histogram("offcpu", &SCHEDULER_OFFCPU, &OFFCPU_ACQ)
-    .packed_counters(
-        "cgroup_runq_wait",
-        &CGROUP_SCHEDULER_RUNQUEUE_WAIT,
-        &CGROUP_WAIT_ACQ,
-    )
-    .packed_counters(
-        "cgroup_offcpu",
-        &CGROUP_SCHEDULER_OFFCPU,
-        &CGROUP_OFFCPU_ACQ,
-    )
-    .packed_counters(
-        "cgroup_ivcsw",
-        &CGROUP_SCHEDULER_IVCSW,
-        &CGROUP_CONTEXT_SWITCH_ACQ,
-    )
-    .packed_counters(
-        "cgroup_vcsw",
-        &CGROUP_SCHEDULER_VCSW,
-        &CGROUP_CONTEXT_SWITCH_ACQ,
-    )
-    .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .disabled_programs(if kernel_has_btf() {
         &[
             "handle__sched_wakeup_raw",
@@ -105,7 +86,43 @@ fn init(config: Arc<Config>) -> SamplerResult {
             "handle__sched_switch_btf",
         ]
     })
-    .build()?;
+    // The switch is read-only data the verifier folds at load (see
+    // `cgroup_attribution` in mod.bpf.c); the cgroup maps and their series
+    // exist only when it is on.
+    .pre_load(move |open| {
+        open.maps
+            .rodata_data
+            .as_mut()
+            .expect("the program declares read-only data")
+            .cgroup_attribution = cgroup_attribution as u8;
+    });
+
+    if cgroup_attribution {
+        builder = builder
+            .packed_counters(
+                "cgroup_runq_wait",
+                &CGROUP_SCHEDULER_RUNQUEUE_WAIT,
+                &CGROUP_WAIT_ACQ,
+            )
+            .packed_counters(
+                "cgroup_offcpu",
+                &CGROUP_SCHEDULER_OFFCPU,
+                &CGROUP_OFFCPU_ACQ,
+            )
+            .packed_counters(
+                "cgroup_ivcsw",
+                &CGROUP_SCHEDULER_IVCSW,
+                &CGROUP_CONTEXT_SWITCH_ACQ,
+            )
+            .packed_counters(
+                "cgroup_vcsw",
+                &CGROUP_SCHEDULER_VCSW,
+                &CGROUP_CONTEXT_SWITCH_ACQ,
+            )
+            .ringbuf_handler("cgroup_info", handle_cgroup_info);
+    }
+
+    let bpf = builder.build()?;
 
     Ok(Some(Box::new(bpf)))
 }
