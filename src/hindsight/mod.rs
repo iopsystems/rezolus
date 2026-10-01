@@ -337,6 +337,10 @@ pub fn run(config: Config) {
         let mut interval = crate::common::aligned_interval(interval_dur);
         // The agent refused a reconnect: capture the buffer, then exit.
         let mut refused = false;
+        // Whether the capture that ends the run has started. A capture
+        // already in flight when the refusal arrives was snapshotted before
+        // it, so the refusal starts one of its own after that.
+        let mut refusal_capture_started = false;
 
         // The subscription runs on its own task and hands each interval over;
         // the loop below writes them, maintains the buffer on its own tick, and
@@ -409,12 +413,16 @@ pub fn run(config: Config) {
 
                 Some(response) = capture_rx.recv() => {
                     capturing = false;
-                    let terminating = STATE.load(Ordering::SeqCst) == TERMINATING || refused;
+                    let terminating = STATE.load(Ordering::SeqCst) == TERMINATING
+                        || (refused && refusal_capture_started);
                     // Back to RUNNING BEFORE the log line, so a second signal
                     // sent on seeing that line reads as a new capture rather
-                    // than as "terminate once the capture is done".
+                    // than as "terminate once the capture is done". After a
+                    // refusal, CAPTURING instead: the check below starts the
+                    // capture that ends the run.
                     if !terminating {
-                        STATE.store(RUNNING, Ordering::SeqCst);
+                        let next = if refused { CAPTURING } else { RUNNING };
+                        STATE.store(next, Ordering::SeqCst);
                     }
                     log_capture(&response);
                     if terminating {
@@ -483,6 +491,9 @@ pub fn run(config: Config) {
                 }
                 if state == CAPTURING {
                     capturing = true;
+                    if refused {
+                        refusal_capture_started = true;
+                    }
                     info!("capture in progress; the recording continues");
                     // NOT `output`. An HTTP dump writes there because its
                     // caller asked for exactly that path; a signal-triggered
@@ -520,10 +531,12 @@ pub fn run(config: Config) {
         refused
     });
 
-    // Only reached once the loop has stopped; the buffer directory goes with
-    // it.
+    // Reached once the loop has stopped. Dropping `staging` deletes the buffer
+    // directory, and the log drain flushes the capture's last line; both have
+    // to happen before `exit`, which runs no destructors.
     drop(staging);
     if refused {
+        drop(_log_drain);
         std::process::exit(1);
     }
 }

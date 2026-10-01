@@ -1582,12 +1582,10 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
     );
 }
 
-/// A `.dendro` output keeps the buffer as a dendro archive, and its dumps
-/// are dendro archives that the ordinary readers open, finished and
-/// queryable, while the buffer runs on.
 /// An agent that stops serving its stream, and answers the reconnect with a
-/// 404, ends the daemon. Before it exits, hindsight captures the buffer beside
-/// `output`, as a SIGTERM does, and it exits 1.
+/// 404, ends the daemon. Before it exits, hindsight writes the buffer to a
+/// timestamped file beside `output`, where a SIGHUP capture goes, and it exits
+/// with status 1.
 #[test]
 fn a_refused_reconnect_captures_the_buffer_then_exits() {
     let agent = spawn_fake_agent_that_stops(1, 20);
@@ -1611,9 +1609,30 @@ fn a_refused_reconnect_captures_the_buffer_then_exits() {
         })
         .collect();
     assert_eq!(captures.len(), 1, "one capture beside output: {captures:?}");
-    assert!(std::fs::metadata(&captures[0]).unwrap().len() > 0);
+
+    // The capture holds the rows recorded before the refusal: the stand-in
+    // agent sent 20 intervals of one counter. Read off `recording metadata`'s
+    // per-table row count rather than queried: a rate over a two-second
+    // recording finds samples or not depending on where its steps fall.
+    let meta = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .args(["recording", "metadata", "-i"])
+        .arg(&captures[0])
+        .output()
+        .expect("failed to run rezolus recording metadata");
+    let stdout = String::from_utf8_lossy(&meta.stdout);
+    let rows: u64 = stdout
+        .lines()
+        .find_map(|line| {
+            let mut words = line.split_whitespace();
+            (words.next() == Some(TABLE)).then(|| words.next()?.parse().ok())?
+        })
+        .unwrap_or_else(|| panic!("no {TABLE} table in the capture:\n{stdout}"));
+    assert!(rows > 0, "the capture holds the recorded rows:\n{stdout}");
 }
 
+/// A `.dendro` output keeps the buffer as a dendro archive, and its dumps
+/// are dendro archives that the ordinary readers open, finished and
+/// queryable, while the buffer runs on.
 #[test]
 fn a_dendro_buffer_dumps_a_dendro_archive() {
     use metriken_archive::Catalog;
