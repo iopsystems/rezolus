@@ -547,8 +547,7 @@ async fn metadata(
         }
         // Whether a followed archive file is still followed. The page stops
         // refreshing once this is false or absent (the file was finalized or
-        // removed, or the baseline was replaced). A file that is not growing
-        // stays followed.
+        // removed, its writer stopped, or the baseline was replaced).
         if state.follow.lock().is_some() {
             meta["following"] = serde_json::json!(state.following());
         }

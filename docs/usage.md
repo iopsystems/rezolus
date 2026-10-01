@@ -325,24 +325,32 @@ capture downloads a copy of it as `rezolus-capture.dendro`.
 
 A `.dendro` or `.rez` file that was not finalized when opened, such as a
 running hindsight buffer or a `rezolus record` in progress, is followed: the
-viewer reopens it every 2 seconds while it grows, and the page refreshes the
-current section every 5 seconds, as for a live agent. After a reopen that
-finds no new row, the viewer doubles the wait before the next one, up to 60
-seconds; a reopen that finds a new row sets it back to 2 seconds. A file
-written once a minute is therefore read within about a minute of each
-write. The page keeps its file-mode behavior:
+viewer reopens it and the page refreshes the current section every 5
+seconds, as for a live agent. The page keeps its file-mode behavior:
 the file name, the `from`/`to` range in a link, and A/B compare for a
 two-recording archive, whose experiment charts are fetched again when the
 experiment's range grows. When retention evicts the start of a zoomed
 window, the window is cut to the new start, or reset to the full range when
 none of it is left.
 
-Following stops when the writer finalizes the file (`record` exits), when
-the file is removed, or when another file is loaded in the page. It does not
-stop because the file has not grown. A file that will not grow but is not
-finalized, such as a snapshot, a copy of a running archive, or the buffer of
-a killed hindsight, stays followed and is reopened every 60 seconds until
-the viewer exits. Hindsight removes its buffer when it exits on
+A `.dendro` writer bumps a heartbeat in the file every 5 seconds, whether or
+not it has rows to write, and the viewer reads it on each reopen. What it
+does depends on what the heartbeat shows for the recordings it follows:
+
+- A writer is running: the viewer reopens the file every 2 seconds, however
+  rarely rows arrive. A recording sampled once a minute stays followed.
+- Every writer has stopped: the heartbeat has not changed for 15 seconds
+  (three heartbeat intervals), because the writer was killed or the file is
+  a copy, such as a snapshot or a `cp` of a running archive. Following stops.
+- No heartbeat: a `.rez`, or a `.dendro` whose writer did not record a
+  heartbeat. The viewer reopens the file every 2 seconds while rows arrive;
+  after a reopen that finds no new row it doubles the wait, up to 60
+  seconds, and a new row sets it back to 2 seconds. Following does not stop
+  for lack of rows.
+
+Following also stops when the writer finalizes the file (`record` exits),
+when the file is removed, or when another file is loaded in the page.
+Hindsight removes its buffer when it exits on
 SIGTERM or SIGINT, without finalizing it; after that, charts already loaded
 stay on the page, and data the page had not yet read cannot be read. A
 finalized file is opened once and not reopened. An archive in which two

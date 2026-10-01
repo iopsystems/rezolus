@@ -206,7 +206,8 @@ const refreshCurrentSection = async () => {
         }
 
         // The follow of an archive file ended (it was finalized or removed,
-        // or the baseline was replaced), so this refresh is the last one.
+        // its writer stopped, or the baseline was replaced), so this refresh
+        // is the last one.
         if (followMode && meta?.data?.following !== true) {
             followMode = false;
             stopRefreshing();
