@@ -7,19 +7,25 @@
 //! # Why not dendro's `Subscriber`
 //!
 //! dendro ships one. It owns a dendro `Writer`, while `record -o out.dendro` writes
-//! through metriken-archive's `ArchiveWriter`, which takes V3 snapshots (see
-//! [`StreamSchemas`]). So the frames are decoded and checked here and the
-//! archive is written there.
+//! through metriken-archive's `ArchiveWriter`, which maps the producer's
+//! occupant keys to its own occupant numbers (`SourceRecorder::stage_streamed`).
+//! So the frames are read and checked here; the callers decode their rows
+//! with `StreamDecoder`, and metriken-archive writes the archive.
+//!
+//! # Layout
+//!
+//! A subscription asks for a [`Layout`]. In the long layout a group of slots
+//! arrives as values keyed by occupant, with each occupant's labels sent
+//! once on `<group>/occupants`; in the wide layout every group's schema
+//! lists every member. `StreamDecoder` reads either, so an agent that serves
+//! only the wide layout is still recorded.
 //!
 //! # No identity index
 //!
-//! Identity travels in each group's schema, `__uid__` included, so the rows
-//! are all a subscriber needs. A 6.0 agent sends no `Frame::Index` and stamps
-//! every rows frame with dendro's `NO_INDEX_STATE`. An older agent still sends
-//! index frames and names its own index state; both are ignored, since the
-//! same labels arrive in the schemas.
-
-use crate::recorder::wal::WalGroupRow;
+//! Identity travels in the rows, `__uid__` included. A 6.0 agent sends no
+//! `Frame::Index` and stamps every rows frame with dendro's `NO_INDEX_STATE`.
+//! An older agent still sends index frames and names its own index state;
+//! both are ignored, since the same labels arrive in the rows.
 
 use dendro::archive::WalRow;
 use dendro::replicate::Frame;
@@ -37,20 +43,33 @@ pub(crate) struct Applied {
     pub gap: bool,
 }
 
-/// One pass off the stream: the producer's stamp, and each group's row
-/// decoded once.
+/// How a stream carries groups whose metrics are all counter or gauge
+/// groups: as a `WalGroupRow` whose schema lists every member (wide), or as
+/// a `WalLongRow` keyed by occupant with each occupant's labels sent on
+/// `<group>/occupants` (long). See the module docs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Layout {
+    Wide,
+    Long,
+}
+
+impl Layout {
+    /// The value of the `layout` query parameter and `x-rezolus-layout`.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Layout::Wide => "wide",
+            Layout::Long => "long",
+        }
+    }
+}
+
+/// One pass off the stream: the producer's stamp and its rows, in the order
+/// they arrived.
 #[derive(Debug)]
 pub(crate) struct Pass {
     pub ts: i64,
     pub wall_offset: i64,
-    pub rows: Vec<StreamedRow>,
-}
-
-/// One group's row in a [`Pass`].
-#[derive(Debug)]
-pub(crate) struct StreamedRow {
-    pub stream: String,
-    pub row: WalGroupRow,
+    pub rows: Vec<WalRow>,
 }
 
 impl Applied {
@@ -63,17 +82,11 @@ impl Applied {
     /// at one `ts` would write one row's worth of key however their wall
     /// offsets differ. The first row's `wall_offset` stands for the pass.
     ///
-    /// Each payload is decoded here, once; [`StreamSchemas::snapshot`] takes
-    /// the decoded rows. A payload that will not decode fails the interval
-    /// rather than being dropped: the producer is this binary, so an
-    /// undecodable row is a version mismatch, and a stream with rows silently
-    /// missing would record a gap nothing explains.
-    ///
     /// A negative stamp is refused for the reason `snapshot_producer_stamp`
     /// refuses one: the archive's `ts` is unsigned, and a producer that sent
     /// one is not one to guess for.
     pub(crate) fn for_writer(self) -> Result<Vec<Pass>, String> {
-        let mut by_stamp: std::collections::BTreeMap<i64, (i64, Vec<StreamedRow>)> =
+        let mut by_stamp: std::collections::BTreeMap<i64, (i64, Vec<WalRow>)> =
             std::collections::BTreeMap::new();
         for row in self.rows {
             if row.ts < 0 {
@@ -86,11 +99,7 @@ impl Applied {
                 .entry(row.ts)
                 .or_insert_with(|| (row.wall_offset, Vec::new()))
                 .1
-                .push(StreamedRow {
-                    row: crate::recorder::wal::decode_wal_group_row(&row.row)
-                        .map_err(|e| format!("stream {}: {e}", row.stream))?,
-                    stream: row.stream,
-                });
+                .push(row);
         }
         Ok(by_stamp
             .into_iter()
@@ -379,6 +388,9 @@ pub(crate) struct Subscription {
     /// anything new, which is its snapshot TTL. `None` when the agent did
     /// not say.
     update_floor: Option<Duration>,
+    /// The layout the agent serves, from `x-rezolus-layout`; wide when it
+    /// does not say, as an agent before the long layout does not.
+    layout: Layout,
 }
 
 impl Subscription {
@@ -398,13 +410,15 @@ impl Subscription {
         client: &reqwest::Client,
         base: &reqwest::Url,
         interval: Duration,
+        layout: Layout,
     ) -> Result<Self, ConnectError> {
         let mut url = base.clone();
         url.set_path("/metrics/stream");
-        url.set_query(Some(&format!(
-            "interval={}",
-            humantime::format_duration(interval)
-        )));
+        let interval = humantime::format_duration(interval);
+        url.set_query(Some(&match layout {
+            Layout::Wide => format!("interval={interval}"),
+            Layout::Long => format!("interval={interval}&layout={}", layout.as_str()),
+        }));
 
         let response =
             client.get(url.clone()).send().await.map_err(|e| {
@@ -460,12 +474,22 @@ impl Subscription {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| humantime::parse_duration(v).ok());
 
+        let served = match response
+            .headers()
+            .get("x-rezolus-layout")
+            .and_then(|v| v.to_str().ok())
+        {
+            Some("long") => Layout::Long,
+            _ => Layout::Wide,
+        };
+
         let mut sub = Self {
             response,
             decoder: FrameDecoder::new(),
             subscriber: StreamSubscriber::new(),
             pending: Vec::new(),
             update_floor,
+            layout: served,
         };
 
         // The handshake is the first frame by protocol. Anything else first
@@ -565,6 +589,11 @@ impl Subscription {
     pub(crate) fn source(&self) -> Option<&Source> {
         self.subscriber.source()
     }
+
+    /// The layout the agent serves this subscription.
+    pub(crate) fn layout(&self) -> Layout {
+        self.layout
+    }
 }
 
 /// What a [`pump`] reports to the recording loop.
@@ -608,12 +637,14 @@ pub(crate) enum StreamEvent {
 /// scrape path bounds every scrape the same way; without this the stream had
 /// no equivalent, and a silent connection was a recording that ended early
 /// with no warning.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn pump(
     idx: usize,
     mut sub: Subscription,
     client: reqwest::Client,
     base: reqwest::Url,
     interval: Duration,
+    layout: Layout,
     timeout: Duration,
     tx: tokio::sync::mpsc::Sender<(usize, StreamEvent)>,
 ) {
@@ -642,9 +673,11 @@ pub(crate) async fn pump(
         }
         sub = loop {
             tokio::time::sleep(retry).await;
-            let connected =
-                tokio::time::timeout(timeout, Subscription::connect(&client, &base, interval))
-                    .await;
+            let connected = tokio::time::timeout(
+                timeout,
+                Subscription::connect(&client, &base, interval, layout),
+            )
+            .await;
             match connected {
                 Ok(Ok(sub)) => break sub,
                 // A connect that hangs is an outage like any other.
@@ -669,96 +702,36 @@ pub(crate) async fn pump(
     }
 }
 
-/// Streamed rows back into the V3 snapshots metriken-archive's writer
-/// ingests, for an agent recorded into a `.dendro`.
+/// A pass's decoded groups as the V3 snapshot a `.rez` writer ingests.
 ///
-/// The stream's rows are `WalGroupRow`s: values and a window per group, the
-/// schema only when it changed. The producer sends a stream's schema whenever
-/// its hash differs from the last one it sent on that stream
-/// (`FrameProducer::interval`), so one schema per stream is all a consumer
-/// needs to keep. That schema already carries a slotted member's `id` and
-/// identity labels, `__uid__` included: the stream and a scrape are built from
-/// the same `create_v3` pass. So the writer takes occupant identity from it
-/// exactly as it does from a scrape.
-#[derive(Default)]
-pub(crate) struct StreamSchemas {
-    /// Per stream, the schema its rows currently align with, by hash.
-    current: std::collections::HashMap<
-        String,
-        ((u64, u64), std::sync::Arc<metriken_exposition::GroupSchema>),
-    >,
-    /// Rows whose schema hash matched no schema this connection has sent;
-    /// the producer re-sends on every change, so these are rows from before
-    /// a reconnect's first schema.
-    pub unresolved: u64,
-}
-
-impl StreamSchemas {
-    /// One pass's rows as a V3 snapshot. A group's schema rides along on the
-    /// rows where it arrived, which are the rows where it changed, so the
-    /// writer validates and lays out a schema once per change.
-    pub(crate) fn snapshot(&mut self, pass: Pass) -> Result<metriken_exposition::Snapshot, String> {
-        use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, Snapshot, SnapshotV3};
-        let mut groups = Vec::with_capacity(pass.rows.len());
-        for StreamedRow { stream, row } in pass.rows {
-            let arrived = row.schema.as_ref().map(|s| {
-                let convert = |list: &[crate::recorder::schema::MetricDesc]| {
-                    list.iter()
-                        .map(|d| MetricDesc {
-                            name: d.name.clone(),
-                            metadata: d.metadata.clone(),
-                        })
-                        .collect()
-                };
-                std::sync::Arc::new(GroupSchema {
-                    counters: convert(&s.counters),
-                    gauges: convert(&s.gauges),
-                    histograms: convert(&s.histograms),
-                })
-            });
-            if let Some(schema) = &arrived {
-                self.current.insert(
-                    stream.clone(),
-                    (row.schema_hash, std::sync::Arc::clone(schema)),
-                );
+/// Only a wide-layout subscription's groups make one: a long row has no
+/// member list to rebuild a group's schema from, and is refused.
+pub(crate) fn wide_snapshot(
+    groups: Vec<metriken_archive::StreamedGroup>,
+    ts: i64,
+    wall_offset: i64,
+) -> Result<metriken_exposition::Snapshot, String> {
+    use metriken_archive::StreamedGroup;
+    use metriken_exposition::{Snapshot, SnapshotV3};
+    let groups = groups
+        .into_iter()
+        .map(|g| match g {
+            StreamedGroup::Wide(g) => Ok(g),
+            StreamedGroup::Long { name, .. } | StreamedGroup::Occupants { table: name, .. } => {
+                Err(format!(
+                    "stream {name} arrived in the long layout, which a .rez archive cannot record"
+                ))
             }
-            match self.current.get(&stream) {
-                Some((hash, _)) if *hash == row.schema_hash => {}
-                _ => {
-                    self.unresolved += 1;
-                    continue;
-                }
-            }
-            let histograms = row
-                .histograms
-                .into_iter()
-                .map(|h| {
-                    h.map(|(gp, mvp, buckets)| {
-                        histogram::Histogram::from_buckets(gp, mvp, buckets)
-                            .map_err(|e| format!("stream {stream}: histogram: {e}"))
-                    })
-                    .transpose()
-                })
-                .collect::<Result<Vec<_>, String>>()?;
-            groups.push(GroupSnapshot {
-                name: stream,
-                schema_hash: row.schema_hash,
-                schema: arrived,
-                window: row.window.map(|(b, e)| metriken::Window::new(b, e)),
-                counters: row.counters,
-                gauges: row.gauges,
-                histograms,
-            });
-        }
-        let wall = u64::try_from(pass.ts.saturating_add(pass.wall_offset)).unwrap_or(0);
-        Ok(Snapshot::V3(SnapshotV3 {
-            systemtime: std::time::UNIX_EPOCH + Duration::from_nanos(wall),
-            // The stream carries no pass duration.
-            duration: Duration::ZERO,
-            metadata: Default::default(),
-            groups,
-        }))
-    }
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let wall = u64::try_from(ts.saturating_add(wall_offset)).unwrap_or(0);
+    Ok(Snapshot::V3(SnapshotV3 {
+        systemtime: std::time::UNIX_EPOCH + Duration::from_nanos(wall),
+        // The stream carries no pass duration.
+        duration: Duration::ZERO,
+        metadata: Default::default(),
+        groups,
+    }))
 }
 
 #[cfg(test)]
@@ -1020,49 +993,68 @@ mod tests {
         .unwrap()
     }
 
-    /// One pass holding one payload, as `for_writer` builds it.
-    fn pass_of(row: Vec<u8>) -> Pass {
-        Pass {
-            ts: 1_000,
-            wall_offset: 0,
-            rows: vec![StreamedRow {
-                stream: "fake/ops".to_string(),
-                row: crate::recorder::wal::decode_wal_group_row(&row).unwrap(),
-            }],
-        }
+    /// The groups of one row, as a connection's decoder reads it.
+    fn decode(
+        decoder: &mut metriken_archive::StreamDecoder,
+        row: Vec<u8>,
+    ) -> Vec<metriken_exposition::GroupSnapshot> {
+        decoder
+            .decode([wal_row("fake/ops", 1_000, 0, row)])
+            .unwrap()
+            .into_iter()
+            .map(|g| match g {
+                metriken_archive::StreamedGroup::Wide(g) => g,
+                _ => panic!("a wide group"),
+            })
+            .collect()
     }
 
     /// The schema rides only on the row where it arrived, so the writer
     /// validates it once per change; rows after it resolve by hash.
     #[test]
     fn a_streamed_schema_is_attached_where_it_arrived() {
-        let mut schemas = StreamSchemas::default();
-        let group = |snap: metriken_exposition::Snapshot| match snap {
-            metriken_exposition::Snapshot::V3(v3) => v3.groups.into_iter().next().unwrap(),
-            _ => panic!("a V3 snapshot"),
-        };
-        let first = group(schemas.snapshot(pass_of(payload(2, true, 2_000))).unwrap());
+        let mut decoder = metriken_archive::StreamDecoder::new();
+        let first = decode(&mut decoder, payload(2, true, 2_000)).remove(0);
         assert_eq!(first.schema.as_ref().map(|s| s.counters.len()), Some(2));
         assert_eq!(first.counters, vec![Some(0), Some(1)]);
-        let next = group(schemas.snapshot(pass_of(payload(2, false, 3_000))).unwrap());
+        let next = decode(&mut decoder, payload(2, false, 3_000)).remove(0);
         assert!(next.schema.is_none(), "known by hash, not re-sent");
         assert_eq!(next.schema_hash, first.schema_hash);
-        assert_eq!(schemas.unresolved, 0);
+        assert_eq!(decoder.unresolved, 0);
     }
 
     /// A row naming a schema this connection never sent is skipped and
     /// counted, not decoded against the wrong members.
     #[test]
     fn a_streamed_row_with_an_unsent_schema_is_skipped() {
-        let mut schemas = StreamSchemas::default();
-        schemas.snapshot(pass_of(payload(2, true, 2_000))).unwrap();
-        let metriken_exposition::Snapshot::V3(v3) =
-            schemas.snapshot(pass_of(payload(3, false, 3_000))).unwrap()
-        else {
+        let mut decoder = metriken_archive::StreamDecoder::new();
+        decode(&mut decoder, payload(2, true, 2_000));
+        assert!(decode(&mut decoder, payload(3, false, 3_000)).is_empty());
+        assert_eq!(decoder.unresolved, 1);
+    }
+
+    /// A `.rez` archive records snapshots: a pass of wide groups becomes one
+    /// at the pass's wall clock, and a long row is refused by name.
+    #[test]
+    fn only_a_wide_pass_rebuilds_a_snapshot() {
+        let mut decoder = metriken_archive::StreamDecoder::new();
+        let groups = decoder
+            .decode([wal_row(STREAM, 5_000, 7, payload(2, true, 5_000))])
+            .unwrap();
+        let metriken_exposition::Snapshot::V3(v3) = wide_snapshot(groups, 5_000, 7).unwrap() else {
             panic!("a V3 snapshot");
         };
-        assert!(v3.groups.is_empty());
-        assert_eq!(schemas.unresolved, 1);
+        assert_eq!(v3.groups.len(), 1);
+        assert_eq!(
+            v3.systemtime,
+            std::time::UNIX_EPOCH + Duration::from_nanos(5_007)
+        );
+        let long = vec![metriken_archive::StreamedGroup::Occupants {
+            table: STREAM.to_string(),
+            occupants: Vec::new(),
+        }];
+        let err = wide_snapshot(long, 5_000, 0).expect_err("a long pass");
+        assert!(err.contains(STREAM) && err.contains("long layout"), "{err}");
     }
 
     fn wal_row(stream: &str, ts: i64, wall_offset: i64, row: Vec<u8>) -> WalRow {
@@ -1075,7 +1067,7 @@ mod tests {
     }
 
     /// The ordinary interval: every row shares the pass's stamp, so the
-    /// writer gets ONE pass at that stamp, each row decoded.
+    /// writer gets ONE pass at that stamp.
     #[test]
     fn an_interval_becomes_one_pass_at_the_producers_stamp() {
         let applied = Applied {
@@ -1093,14 +1085,7 @@ mod tests {
         assert_eq!((pass.ts, pass.wall_offset), (5_000, 7));
         assert_eq!(pass.rows.len(), 2);
         assert_eq!(pass.rows[0].stream, STREAM);
-        assert_eq!(pass.rows[0].row.counters.len(), 2);
-        assert!(
-            pass.rows[0].row.schema.is_some(),
-            "the first mention carries its schema"
-        );
-        assert_eq!(pass.rows[0].row.window, Some((4_500, 5_000)));
-        assert_eq!(pass.rows[1].stream, "b/two");
-        assert!(pass.rows[1].row.schema.is_none());
+        assert_eq!(pass.rows[1].stream, "b/two", "in the order they arrived");
     }
 
     /// A frame carrying two stamps is two passes: a relay that batched them
@@ -1166,7 +1151,11 @@ mod tests {
             rows: vec![wal_row(STREAM, 5_000, 0, vec![0x93, 0x01])],
             ..Applied::default()
         };
-        let err = applied.for_writer().expect_err("must refuse");
+        let pass = applied.for_writer().unwrap().remove(0);
+        let err = metriken_archive::StreamDecoder::new()
+            .decode(pass.rows)
+            .err()
+            .expect("must refuse");
         assert!(err.contains(STREAM), "{err}");
     }
 }

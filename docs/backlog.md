@@ -656,25 +656,16 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
 ## Stream consumers and membership as events (6.0)
 
 Source: metriken `docs/journal/2026-09-30-membership-as-events.md` (phase
-5d, iopsystems/metriken#214).
+5d). The recorder, hindsight (#1385) and the live viewer (#1386) record the
+agent's stream, and slot groups travel in the long layout
+(`/metrics/stream?layout=long`).
 
-- **Slot groups on the stream in the archive's long form** — Open, design.
-  Under churn the task group's schema is resent on nearly every tick, and
-  schema was 81% of the stream's bytes at 1 s and 100 ms on a 32-core host
-  (about 180 KB per tick to report about 28 changed members). This side of
-  it: `/metrics/stream?layout=long`, and the recorder asking for it.
-- **Hindsight as a stream consumer** — Open, decided 2026-09-30. Hindsight
-  scrapes `/metrics/binary` (`src/hindsight/config/general.rs:91`), which
-  carries every group's full schema on every tick. It should subscribe as
-  the recorder does, keeping retention, `/status`, `/dump` and SIGHUP
-  capture. It does not need the long form to move.
-- **The live viewer as a stream consumer** — Open, decided 2026-09-30.
-  `ingest_loop` (`src/viewer/actions.rs`) polls `/metrics/binary` into a
-  `MemoryStore` and keeps every raw body in an unbounded `VecDeque`
-  (`state.snapshots`) for save and report. The viewer should instead write
-  a temporary archive, read it live through `ArchiveReader`, and save by
-  copying the archive. Where the temporary archive lives, and what bounds
-  it, are open.
+- **What bounds the live viewer's temporary archive** — Open. `rezolus view
+  http://agent:4241` records into a temporary dendro archive with no
+  retention (`src/viewer/live.rs`), so a viewer left open for days grows
+  without bound. Hindsight's retention is the likely answer. Do before 6.0
+  if hindsight's retention fits; otherwise when a long-running live session
+  is reported.
 
 ## Agent — histogram groups with slots (after 6.0)
 

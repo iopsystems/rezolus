@@ -21,6 +21,19 @@
 
 ### Changed
 
+- **Groups of slots travel long on the agent's stream.**
+  `/metrics/stream?layout=long` sends a group whose metrics are all counter
+  or gauge groups (per task, per cgroup, per CPU) as values keyed by
+  occupant, with each occupant's labels sent once on `<group>/occupants`
+  when it first appears to the subscription. A task starting or exiting
+  then costs that task's labels instead of the group's whole member list.
+  The agent builds the wide snapshot only when something reads it, so an
+  agent that is only streamed long never builds it. `record` to `.dendro`,
+  hindsight and the live viewer ask for the long layout; a `.rez` hindsight
+  buffer asks for the wide one. An agent that does not serve the long
+  layout is recorded through the wide one, and `record` logs that when it
+  connects. The
+  response names the layout served in `x-rezolus-layout`.
 - metriken-query 0.33.6 and metriken-archive 0.3.1. A segment's decoded
   blocks are cached by its bytes, so a reader reopened over the same archive
   finds the blocks the previous one decoded. A query range that starts or

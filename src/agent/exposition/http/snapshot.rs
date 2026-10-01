@@ -39,13 +39,26 @@ pub struct SnapshotBuilder {
     emitted_schemas: HashMap<String, (u64, u64)>,
     /// Each group's schema converted to the row format, once per schema hash.
     schemas: metriken_archive::stream::SchemaCache,
+    /// The same for the long layout's columns. Separate from `schemas`: the
+    /// cache keeps one entry per group name, and a group's wide schema and
+    /// long columns would replace each other on every pass that builds both.
+    long_schemas: metriken_archive::stream::SchemaCache,
+    /// Whether a failure to encode the long layout has been logged.
+    long_encode_warned: bool,
     /// Completed sampling passes — see [`samples`](Self::samples).
     samples: u64,
 }
 
 struct CachedSnapshot {
     timestamp: Instant,
-    snapshot: Snapshot,
+    /// The pass's wide snapshot, built on first request: a pass whose only
+    /// readers are long-layout stream subscribers never builds it.
+    snapshot: OnceLock<Snapshot>,
+    /// What a build of this pass needs: the wall clock `systemtime` reports,
+    /// how long the samplers took, and the pushed metrics read at the pass.
+    systemtime: SystemTime,
+    duration: Duration,
+    external: Vec<ExternalMetric>,
     /// When this pass READ the values, on the source's timeline, and the wall
     /// clock's disagreement with it at that moment.
     ///
@@ -83,6 +96,40 @@ struct CachedSnapshot {
     /// connection. Each subscriber then clears the schemas IT has already
     /// sent, which is per-connection state and cannot be shared.
     rows_full: OnceLock<Option<Arc<crate::recorder::wire::AgentRows>>>,
+    /// The long-layout stream rows for this pass (`/metrics/stream?layout=long`),
+    /// built on first request and shared by every long subscriber.
+    stream_long: OnceLock<Option<Arc<StreamRows>>>,
+}
+
+/// One pass as the long layout's stream rows: every group from
+/// `GroupBuilder::build_stream`, encoded once, and the pass's stamp.
+pub struct StreamRows {
+    pub wall_ns: u64,
+    pub ts: i64,
+    pub wall_offset: i64,
+    pub rows: Vec<metriken_archive::stream::EncodedStreamGroup>,
+}
+
+/// The pass's wide snapshot, built on first use.
+fn wide<'a>(
+    cached: &'a CachedSnapshot,
+    v3: &mut V3Builder,
+    format: SnapshotFormat,
+) -> &'a Snapshot {
+    cached.snapshot.get_or_init(|| match format {
+        SnapshotFormat::V2 => create(
+            cached.systemtime,
+            cached.duration,
+            cached.external.clone(),
+            (cached.sampled_ts, cached.sampled_wall_offset),
+        ),
+        SnapshotFormat::V3 => create_v3(
+            cached.duration,
+            cached.external.clone(),
+            v3,
+            (cached.sampled_ts, cached.sampled_wall_offset),
+        ),
+    })
 }
 
 impl SnapshotBuilder {
@@ -100,6 +147,8 @@ impl SnapshotBuilder {
             v3: v3_builder(),
             emitted_schemas: HashMap::new(),
             schemas: metriken_archive::stream::SchemaCache::new(),
+            long_schemas: metriken_archive::stream::SchemaCache::new(),
+            long_encode_warned: false,
             samples: 0,
         }
     }
@@ -134,23 +183,11 @@ impl SnapshotBuilder {
             Vec::new()
         };
 
-        let snapshot = match self.format {
-            SnapshotFormat::V2 => create(
-                timestamp,
-                duration,
-                external_metrics,
-                (sampled_ts, sampled_wall_offset),
-            ),
-            SnapshotFormat::V3 => create_v3(
-                duration,
-                external_metrics,
-                &mut self.v3,
-                (sampled_ts, sampled_wall_offset),
-            ),
-        };
-
         self.cached = Some(CachedSnapshot {
-            snapshot,
+            snapshot: OnceLock::new(),
+            systemtime: timestamp,
+            duration,
+            external: external_metrics,
             timestamp: last,
             sampled_ts,
             sampled_wall_offset,
@@ -159,6 +196,7 @@ impl SnapshotBuilder {
             rows: OnceLock::new(),
             rows_all: OnceLock::new(),
             rows_full: OnceLock::new(),
+            stream_long: OnceLock::new(),
         });
     }
 
@@ -216,11 +254,12 @@ impl SnapshotBuilder {
     pub fn latest_rows(&mut self) -> Option<Arc<crate::recorder::wire::AgentRows>> {
         let cached = self.cached.as_ref()?;
         let schemas = &mut self.schemas;
+        let snapshot = wide(cached, &mut self.v3, self.format);
         cached
             .rows_full
             .get_or_init(|| {
                 crate::recorder::wire::encode_snapshot(
-                    &cached.snapshot,
+                    snapshot,
                     cached.sampled_ts,
                     cached.sampled_wall_offset,
                     schemas,
@@ -232,28 +271,95 @@ impl SnapshotBuilder {
     }
 
     pub async fn build(&mut self, now: Instant) -> &Snapshot {
+        self.ensure_fresh(now).await;
+        wide(
+            self.cached
+                .as_ref()
+                .expect("ensure_fresh populates the cache"),
+            &mut self.v3,
+            self.format,
+        )
+    }
+
+    /// Run a sampling pass if there is none or the cached one has aged past
+    /// the TTL. Builds no body.
+    async fn ensure_fresh(&mut self, now: Instant) {
         if self.cached.is_none()
             || now.duration_since(self.cached.as_ref().unwrap().timestamp) > self.ttl
         {
             self.refresh().await;
         }
+    }
 
-        &self.cached.as_ref().unwrap().snapshot
+    /// [`rows_at`](Self::rows_at) for a long-layout subscriber: the pass as
+    /// [`StreamRows`], sampling only if the cached pass has aged past the TTL.
+    pub async fn stream_long_at(&mut self, now: Instant) -> Option<Arc<StreamRows>> {
+        self.ensure_fresh(now).await;
+        self.latest_stream_long()
+    }
+
+    /// The most recent pass as [`StreamRows`], built once per pass; `None`
+    /// before the first pass, for a V2 agent, or when a group fails to
+    /// encode (logged once). Does not sample.
+    pub fn latest_stream_long(&mut self) -> Option<Arc<StreamRows>> {
+        let cached = self.cached.as_ref()?;
+        if !matches!(self.format, SnapshotFormat::V3) {
+            return None;
+        }
+        let (v3, schemas, warned) = (
+            &mut self.v3,
+            &mut self.long_schemas,
+            &mut self.long_encode_warned,
+        );
+        cached
+            .stream_long
+            .get_or_init(|| {
+                #[cfg(test)]
+                let _serialize = BUILDER_TEST_LOCK
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let extra = external_group(cached.external.clone())
+                    .into_iter()
+                    .collect();
+                let rows = v3
+                    .build_stream(extra)
+                    .iter()
+                    .map(|g| metriken_archive::stream::EncodedStreamGroup::encode(g, schemas))
+                    .collect::<Result<Vec<_>, _>>();
+                let rows = match rows {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        if !*warned {
+                            warn!("the long stream layout could not be encoded: {e}");
+                            *warned = true;
+                        }
+                        return None;
+                    }
+                };
+                Some(Arc::new(StreamRows {
+                    wall_ns: (cached.sampled_ts + cached.sampled_wall_offset).max(0) as u64,
+                    ts: cached.sampled_ts,
+                    wall_offset: cached.sampled_wall_offset,
+                    rows,
+                }))
+            })
+            .clone()
     }
 
     /// The msgpack body for the current snapshot, encoded at most once per
     /// snapshot. Cloning the returned [`Bytes`] is a refcount bump, not a copy.
     pub async fn build_msgpack(&mut self, now: Instant) -> Bytes {
-        let cached = {
-            self.build(now).await;
-            self.cached.as_ref().expect("build populates the cache")
-        };
+        self.ensure_fresh(now).await;
+        let cached = self
+            .cached
+            .as_ref()
+            .expect("ensure_fresh populates the cache");
+        let snapshot = wide(cached, &mut self.v3, self.format);
         cached
             .msgpack
             .get_or_init(|| {
                 Bytes::from(
-                    rmp_serde::encode::to_vec(&cached.snapshot)
-                        .expect("failed to serialize snapshot"),
+                    rmp_serde::encode::to_vec(snapshot).expect("failed to serialize snapshot"),
                 )
             })
             .clone()
@@ -310,7 +416,7 @@ impl SnapshotBuilder {
         let mut rows = {
             let cached = self.cached.as_ref().expect("build populates the cache");
             crate::recorder::wire::encode_snapshot(
-                &cached.snapshot,
+                wide(cached, &mut self.v3, self.format),
                 cached.sampled_ts,
                 cached.sampled_wall_offset,
                 &mut self.schemas,
@@ -344,14 +450,16 @@ impl SnapshotBuilder {
     /// The JSON body for the current snapshot, encoded at most once per
     /// snapshot. Cloning the returned `Arc<str>` is a refcount bump.
     pub async fn build_json(&mut self, now: Instant) -> Arc<str> {
-        let cached = {
-            self.build(now).await;
-            self.cached.as_ref().expect("build populates the cache")
-        };
+        self.ensure_fresh(now).await;
+        let cached = self
+            .cached
+            .as_ref()
+            .expect("ensure_fresh populates the cache");
+        let snapshot = wide(cached, &mut self.v3, self.format);
         cached
             .json
             .get_or_init(|| {
-                serde_json::to_string(&cached.snapshot)
+                serde_json::to_string(snapshot)
                     .expect("failed to serialize snapshot")
                     .into()
             })
@@ -3555,6 +3663,28 @@ mod tests {
     /// being allowed to drive the samplers — which is what makes a separate
     /// "minimum interval" knob unnecessary, and what stops a remote subscriber
     /// having any say over how hard this agent works.
+    /// A pass read only by a long-layout subscriber never builds the wide
+    /// snapshot; a scrape in the same pass builds it then.
+    #[tokio::test]
+    async fn a_long_layout_read_builds_no_wide_snapshot() {
+        let config: Config = toml::from_str("[general]\nttl = \"60s\"\nsnapshot_format = \"v3\"\n")
+            .expect("valid config");
+        let mut builder = SnapshotBuilder::new(
+            Arc::new(config),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+        let now = Instant::now();
+        let rows = builder.stream_long_at(now).await.expect("v3 agent");
+        assert!(!rows.rows.is_empty());
+        let cached = builder.cached.as_ref().expect("a pass ran");
+        assert!(cached.snapshot.get().is_none(), "no wide snapshot built");
+        builder.build_msgpack(now).await;
+        let cached = builder.cached.as_ref().expect("the same pass");
+        assert!(cached.snapshot.get().is_some(), "built for the scrape");
+        assert_eq!(builder.samples(), 1, "one pass for both");
+    }
+
     #[tokio::test]
     async fn a_tick_inside_the_ttl_does_not_sample_again() {
         let config: Config = toml::from_str("[general]\nttl = \"60s\"\nsnapshot_format = \"v3\"\n")

@@ -158,7 +158,11 @@ struct StreamQuery {
     /// at the TTL's rate. The TTL is the floor, and it belongs to the operator
     /// rather than to the subscriber.
     interval: Option<String>,
+    /// `wide` (the default) or `long`. See [`stream`].
+    layout: Option<String>,
 }
+
+use crate::recorder::stream::Layout;
 
 /// Subscribe to this agent: a stream of row frames, one per sampling tick.
 ///
@@ -175,10 +179,18 @@ struct StreamQuery {
 ///
 /// # Frames
 ///
-/// Each frame is a `u32` big-endian length followed by that many bytes of
-/// msgpack [`AgentRows`](crate::recorder::wire::AgentRows). The first frame
-/// carries every schema; later frames carry a schema only where it changed
-/// for THIS connection.
+/// dendro's replication framing: a preamble, a handshake, then one rows
+/// frame per interval. The first frame carries every schema; later frames
+/// carry a schema only where it changed for THIS connection.
+///
+/// # Layout
+///
+/// `?layout=long` asks for groups whose metrics are all counter or gauge
+/// groups in the long form: values keyed by occupant, and each occupant's
+/// labels once, when it first appears to this connection. A change of
+/// occupant then costs its labels, not the group's schema. Without the
+/// parameter, or with `layout=wide`, every group is a `WalGroupRow`. The
+/// response names the layout served in `x-rezolus-layout`.
 ///
 /// # Backpressure
 ///
@@ -215,6 +227,17 @@ async fn stream(
         },
         None => Duration::from_secs(1),
     };
+    let layout = match query.layout.as_deref() {
+        None | Some("wide") => Layout::Wide,
+        Some("long") => Layout::Long,
+        Some(other) => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                format!("bad layout {other:?}: expected \"wide\" or \"long\""),
+            )
+                .into_response()
+        }
+    };
 
     // Refuse up front rather than accepting a subscription this agent can
     // never satisfy — see `SnapshotBuilder::serves_rows`. 409 matches
@@ -232,7 +255,8 @@ async fn stream(
     let builder = state.builder.clone();
     let ttl = state.ttl;
 
-    let body = axum::body::Body::from_stream(rows_frames(builder, subscription, wall_now_ns));
+    let body =
+        axum::body::Body::from_stream(rows_frames(builder, subscription, wall_now_ns, layout));
     let duration_header = |d: Duration| {
         axum::http::HeaderValue::from_str(&format!("{}", humantime::format_duration(d)))
             .unwrap_or(axum::http::HeaderValue::from_static("unknown"))
@@ -259,6 +283,10 @@ async fn stream(
                 axum::http::HeaderName::from_static("x-rezolus-update-floor"),
                 duration_header(ttl),
             ),
+            (
+                axum::http::HeaderName::from_static("x-rezolus-layout"),
+                axum::http::HeaderValue::from_static(layout.as_str()),
+            ),
         ],
         body,
     )
@@ -279,6 +307,7 @@ fn rows_frames(
     builder: Arc<Mutex<SnapshotBuilder>>,
     subscription: crate::agent::clock::Subscription,
     wall_now: impl Fn() -> u64,
+    layout: Layout,
 ) -> impl futures::Stream<Item = Result<bytes::Bytes, std::io::Error>> {
     async_stream::try_stream! {
         let interval = subscription.interval();
@@ -327,7 +356,20 @@ fn rows_frames(
                 );
             }
 
-            let reading = builder.lock().await.rows_at(Instant::now()).await;
+            let reading = match layout {
+                Layout::Wide => builder
+                    .lock()
+                    .await
+                    .rows_at(Instant::now())
+                    .await
+                    .map(Reading::Wide),
+                Layout::Long => builder
+                    .lock()
+                    .await
+                    .stream_long_at(Instant::now())
+                    .await
+                    .map(Reading::Long),
+            };
 
             if let Some(previous) = last_index {
                 if index > previous + 1 {
@@ -344,43 +386,57 @@ fn rows_frames(
             last_index = Some(index);
 
             let frame = match reading {
-                Some(rows) => {
+                Some(reading) => {
+                    let (wall_ns, ts, wall_offset) = reading.stamp();
                     // The same reading as last time — reached when the interval asked
                     // for is shorter than the TTL, which is the case the TTL exists to
                     // bound. Nothing in this snapshot can have advanced, so every row
                     // is dropped below and the frame goes out empty, saying "your
                     // interval elapsed and there is nothing new".
-                    let advanced = last_sent_wall != Some(rows.wall_ns);
-                    last_sent_wall = Some(rows.wall_ns);
+                    let advanced = last_sent_wall != Some(wall_ns);
+                    last_sent_wall = Some(wall_ns);
 
                     // Filtered BEFORE the producer sees the rows: it records a
                     // schema as sent when it builds a row carrying it, so a
                     // row dropped afterwards would leave its group referencing
                     // a schema this subscriber never received.
-                    let keep = rows.rows.iter().filter(|row| {
-                            // The whole snapshot is one this connection already has, so
-                            // nothing in it is new — including a windowless group,
-                            // which carries no evidence either way and would otherwise
-                            // be sent again on the strength of not being able to prove
-                            // itself stale.
-                            if !advanced {
+                    let mut keep = |stream: &str, window: Option<(u64, u64)>| {
+                        // The whole snapshot is one this connection already has, so
+                        // nothing in it is new — including a windowless group,
+                        // which carries no evidence either way and would otherwise
+                        // be sent again on the strength of not being able to prove
+                        // itself stale.
+                        if !advanced {
+                            return false;
+                        }
+                        // Has this group actually been read again since this
+                        // connection last heard about it? A windowless group
+                        // carries no answer, so it is always sent — the same
+                        // disposition `stage_rows` gives it.
+                        if let Some(end) = window.map(|(_, end)| end) {
+                            if last_window.get(stream) == Some(&end) {
                                 return false;
                             }
-                            // Has this group actually been read again since this
-                            // connection last heard about it? A windowless group
-                            // carries no answer, so it is always sent — the same
-                            // disposition `stage_rows` gives it.
-                            if let Some(end) = row.window.map(|(_, end)| end) {
-                                if last_window.get(&row.stream) == Some(&end) {
-                                    return false;
-                                }
-                                last_window.insert(row.stream.clone(), end);
-                            }
-                            true
-                    });
+                            last_window.insert(stream.to_string(), end);
+                        }
+                        true
+                    };
                     // The pass's own stamp, carried through: a frame sent now
                     // can describe a pass that ran up to a TTL ago.
-                    producer.interval(keep, rows.ts, rows.wall_offset, index)
+                    match &reading {
+                        Reading::Wide(rows) => producer.interval(
+                            rows.rows.iter().filter(|r| keep(&r.stream, r.window)),
+                            ts,
+                            wall_offset,
+                            index,
+                        ),
+                        Reading::Long(rows) => producer.interval(
+                            rows.rows.iter().filter(|r| keep(group_stream(r), group_window(r))),
+                            ts,
+                            wall_offset,
+                            index,
+                        ),
+                    }
                 }
                 // No reading to send: before the first sampling pass, or when
                 // the snapshot failed to encode. The interval still elapsed,
@@ -402,6 +458,34 @@ fn rows_frames(
                 .map_err(std::io::Error::other)?;
             yield bytes::Bytes::from(body);
         }
+    }
+}
+
+/// One pass as a subscription of either layout reads it.
+enum Reading {
+    Wide(Arc<crate::recorder::wire::AgentRows>),
+    Long(Arc<snapshot::StreamRows>),
+}
+
+impl Reading {
+    /// `(wall_ns, ts, wall_offset)` of the pass.
+    fn stamp(&self) -> (u64, i64, i64) {
+        match self {
+            Reading::Wide(r) => (r.wall_ns, r.ts, r.wall_offset),
+            Reading::Long(r) => (r.wall_ns, r.ts, r.wall_offset),
+        }
+    }
+}
+
+fn group_stream(g: &metriken_archive::stream::EncodedStreamGroup) -> &str {
+    metriken_archive::stream::StreamRow::stream(g)
+}
+
+fn group_window(g: &metriken_archive::stream::EncodedStreamGroup) -> Option<(u64, u64)> {
+    use metriken_archive::stream::EncodedStreamGroup;
+    match g {
+        EncodedStreamGroup::Wide(g) => g.window,
+        EncodedStreamGroup::Long(g) => g.window,
     }
 }
 
@@ -520,9 +604,14 @@ mod stream_tests {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let client = reqwest::Client::builder().http1_only().build().unwrap();
         let base = reqwest::Url::parse(&format!("http://{addr}")).unwrap();
-        let mut sub = Subscription::connect(&client, &base, Duration::from_secs(1))
-            .await
-            .expect("subscribes");
+        let mut sub = Subscription::connect(
+            &client,
+            &base,
+            Duration::from_secs(1),
+            crate::recorder::stream::Layout::Wide,
+        )
+        .await
+        .expect("subscribes");
         assert!(
             sub.source().is_some(),
             "connect returns with the handshake applied: the recorder opens the \
@@ -542,6 +631,133 @@ mod stream_tests {
             Some("rezolus"),
             "the handshake arrived and identified the source"
         );
+    }
+
+    /// `?layout=long` over HTTP: the agent says it serves the long layout,
+    /// a group of slots arrives as a long row after the occupants it
+    /// introduces, and the second interval does not describe them again.
+    #[tokio::test]
+    async fn a_long_layout_subscription_sends_each_occupant_once() {
+        use crate::recorder::stream::{Layout, Subscription};
+        use metriken_archive::StreamedGroup;
+
+        let config: Config = toml::from_str("[general]\nttl = \"1s\"\nsnapshot_format = \"v3\"\n")
+            .expect("valid config");
+        let state = AppState {
+            builder: Arc::new(Mutex::new(SnapshotBuilder::new(
+                Arc::new(config),
+                Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+                None,
+            ))),
+            subscribers: Subscribers::new(),
+            ttl: Duration::from_secs(1),
+        };
+        // Warm the builders, as the test above does, so the first interval is
+        // the stream's own latency.
+        state
+            .builder
+            .lock()
+            .await
+            .stream_long_at(Instant::now())
+            .await;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app(state)).await;
+        });
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = reqwest::Client::builder().http1_only().build().unwrap();
+        let base = reqwest::Url::parse(&format!("http://{addr}")).unwrap();
+        let mut sub = Subscription::connect(&client, &base, Duration::from_secs(1), Layout::Long)
+            .await
+            .expect("subscribes");
+        assert_eq!(sub.layout(), Layout::Long);
+
+        // Recorded as `record -o out.dendro` records it: decoded, then staged.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("long.dendro");
+        let mut writer =
+            metriken_archive::ArchiveWriter::create(&path, Default::default()).unwrap();
+        let source = sub.source().cloned().unwrap();
+        let mut recording = writer
+            .add_source(
+                source.labels.clone(),
+                source.metadata.clone(),
+                source.clock_anchor_wall_ns as u64,
+            )
+            .unwrap();
+
+        // Per interval: occupants described, long rows, occupants present.
+        let mut intervals: Vec<(usize, usize, usize)> = Vec::new();
+        let mut last = (0u64, 0i64);
+        let mut decoder = metriken_archive::StreamDecoder::new();
+        while intervals.len() < 2 {
+            let applied = tokio::time::timeout(Duration::from_secs(10), sub.next_interval())
+                .await
+                .expect("an interval arrives inside the timeout")
+                .expect("the stream is well formed")
+                .expect("the stream did not end");
+            if applied.rows.is_empty() {
+                continue;
+            }
+            let mut tally = (0, 0, 0);
+            for pass in applied.for_writer().unwrap() {
+                let groups = decoder.decode(pass.rows).unwrap();
+                for g in &groups {
+                    match g {
+                        StreamedGroup::Occupants { occupants, .. } => tally.0 += occupants.len(),
+                        StreamedGroup::Long { row, .. } => {
+                            tally.1 += 1;
+                            tally.2 += row.occupants.len();
+                        }
+                        StreamedGroup::Wide(_) => {}
+                    }
+                }
+                last = (pass.ts as u64, pass.wall_offset);
+                let staged = recording
+                    .stage_streamed(groups, pass.ts as u64, pass.wall_offset)
+                    .unwrap();
+                writer.commit(vec![staged]).unwrap();
+            }
+            intervals.push(tally);
+        }
+        assert_eq!(decoder.unresolved, 0);
+        let (described, long_rows, _) = intervals[0];
+        assert!(long_rows > 0, "a group of slots arrives long");
+        assert!(described > 0, "its occupants are described first");
+        // Other tests in this binary change slot metadata in the shared
+        // registry, so an occupant may change between the two intervals;
+        // the ones that did not are not described again.
+        let (described, _, present) = intervals[1];
+        assert!(
+            described < present,
+            "{described} of {present} occupants described again"
+        );
+
+        recording.finalize(last).unwrap();
+        writer.join().unwrap();
+        let catalog = metriken_archive::DendroCatalog::open(&path).unwrap();
+        use metriken_archive::Catalog;
+        let id = catalog.sources().unwrap()[0].id;
+        let tables = catalog.tables(id).unwrap();
+        assert!(
+            tables.iter().any(|t| t.ends_with("/occupants")),
+            "the archive holds occupant streams: {tables:?}"
+        );
+        let reader = crate::rez_reader::RezReader::open_with_pool(
+            &path,
+            metriken_query::BufferPool::new(16 << 20),
+        )
+        .expect("the recording opens");
+        assert!(!metriken_query::MetricsSource::counter_names(&reader).is_empty());
+
+        let bad = client
+            .get(base.join("/metrics/stream?layout=diagonal").unwrap())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(bad.status(), reqwest::StatusCode::BAD_REQUEST);
     }
 
     /// An interval with no reading to send still gets a frame: the empty one,
@@ -565,9 +781,12 @@ mod stream_tests {
         let subscription = Subscribers::new().register(Duration::from_secs(1));
         let now = Arc::new(AtomicU64::new(1_700_000_000_000_000_000));
         let clock_for_stream = Arc::clone(&now);
-        let stream = rows_frames(builder, subscription, move || {
-            clock_for_stream.load(Ordering::Relaxed)
-        });
+        let stream = rows_frames(
+            builder,
+            subscription,
+            move || clock_for_stream.load(Ordering::Relaxed),
+            Layout::Wide,
+        );
         futures::pin_mut!(stream);
 
         let mut body = Vec::new();
@@ -646,9 +865,12 @@ mod stream_tests {
         let now = Arc::new(AtomicU64::new(1_700_000_000_000_000_000));
         let clock_for_stream = Arc::clone(&now);
 
-        let stream = rows_frames(builder, subscription, move || {
-            clock_for_stream.load(Ordering::Relaxed)
-        });
+        let stream = rows_frames(
+            builder,
+            subscription,
+            move || clock_for_stream.load(Ordering::Relaxed),
+            Layout::Wide,
+        );
         futures::pin_mut!(stream);
 
         // Every chunk concatenated, preamble included, then read back through
@@ -749,7 +971,14 @@ mod stream_tests {
         // An agent from before the route existed: 404.
         let old = Router::new().route("/", get(root));
         let base = serve(old).await;
-        match Subscription::connect(&client, &base, Duration::from_secs(1)).await {
+        match Subscription::connect(
+            &client,
+            &base,
+            Duration::from_secs(1),
+            crate::recorder::stream::Layout::Wide,
+        )
+        .await
+        {
             Err(ConnectError::Unsupported(e)) => {
                 assert!(e.contains("404"), "{e}");
                 assert!(e.contains("/metrics/stream"), "names the route: {e}");
@@ -761,7 +990,14 @@ mod stream_tests {
         // A V2 agent: the route exists and answers 409.
         let v2 = test_state("[general]\nttl = \"1s\"\nsnapshot_format = \"v2\"\n");
         let base = serve(app(v2)).await;
-        match Subscription::connect(&client, &base, Duration::from_secs(1)).await {
+        match Subscription::connect(
+            &client,
+            &base,
+            Duration::from_secs(1),
+            crate::recorder::stream::Layout::Wide,
+        )
+        .await
+        {
             Err(ConnectError::Unsupported(e)) => {
                 assert!(e.contains("V2"), "says what kind of agent this is: {e}");
             }
@@ -782,7 +1018,14 @@ mod stream_tests {
             get(|| async { (axum::http::StatusCode::SERVICE_UNAVAILABLE, "upstream down") }),
         );
         let base = serve(proxy_down).await;
-        match Subscription::connect(&test_client(), &base, Duration::from_secs(1)).await {
+        match Subscription::connect(
+            &test_client(),
+            &base,
+            Duration::from_secs(1),
+            crate::recorder::stream::Layout::Wide,
+        )
+        .await
+        {
             Err(ConnectError::Unreachable(e)) => assert!(e.contains("503"), "{e}"),
             Err(ConnectError::Unsupported(e)) => {
                 panic!("a 503 will change on retry and must not end the run: {e}")
@@ -827,7 +1070,14 @@ mod stream_tests {
         let theirs = PROTOCOL_VERSION.wrapping_add(1);
         other_version.extend_from_slice(&theirs.to_le_bytes());
         let base = serve_stream_bytes(other_version).await;
-        match Subscription::connect(&client, &base, Duration::from_secs(1)).await {
+        match Subscription::connect(
+            &client,
+            &base,
+            Duration::from_secs(1),
+            crate::recorder::stream::Layout::Wide,
+        )
+        .await
+        {
             Err(ConnectError::Unsupported(e)) => {
                 assert!(e.contains(&format!("version {theirs}")), "{e}");
                 assert!(e.contains(&format!("version {PROTOCOL_VERSION}")), "{e}");
@@ -837,7 +1087,14 @@ mod stream_tests {
         }
 
         let base = serve_stream_bytes(b"not a replication stream".to_vec()).await;
-        match Subscription::connect(&client, &base, Duration::from_secs(1)).await {
+        match Subscription::connect(
+            &client,
+            &base,
+            Duration::from_secs(1),
+            crate::recorder::stream::Layout::Wide,
+        )
+        .await
+        {
             Err(ConnectError::Unsupported(e)) => assert!(e.contains("magic"), "{e}"),
             Err(ConnectError::Unreachable(e)) => panic!("retrying cannot fix this: {e}"),
             Ok(_) => panic!("not this protocol"),
@@ -853,7 +1110,14 @@ mod stream_tests {
         let mut preamble_only = MAGIC.to_vec();
         preamble_only.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
         let base = serve_stream_bytes(preamble_only).await;
-        match Subscription::connect(&test_client(), &base, Duration::from_secs(1)).await {
+        match Subscription::connect(
+            &test_client(),
+            &base,
+            Duration::from_secs(1),
+            crate::recorder::stream::Layout::Wide,
+        )
+        .await
+        {
             Err(ConnectError::Unreachable(e)) => assert!(e.contains("handshake"), "{e}"),
             Err(ConnectError::Unsupported(e)) => panic!("a retry may complete it: {e}"),
             Ok(_) => panic!("no handshake arrived"),
@@ -898,9 +1162,14 @@ mod stream_tests {
         );
         let base = serve(silent).await;
         let client = test_client();
-        let sub = Subscription::connect(&client, &base, Duration::from_millis(100))
-            .await
-            .expect("the handshake arrives, so the connect succeeds");
+        let sub = Subscription::connect(
+            &client,
+            &base,
+            Duration::from_millis(100),
+            crate::recorder::stream::Layout::Wide,
+        )
+        .await
+        .expect("the handshake arrives, so the connect succeeds");
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         tokio::spawn(pump(
@@ -909,6 +1178,7 @@ mod stream_tests {
             client,
             base,
             Duration::from_millis(100),
+            crate::recorder::stream::Layout::Wide,
             Duration::from_millis(500),
             tx,
         ));
@@ -935,7 +1205,14 @@ mod stream_tests {
             listener.local_addr().unwrap()
         };
         let base = reqwest::Url::parse(&format!("http://{addr}")).unwrap();
-        match Subscription::connect(&test_client(), &base, Duration::from_secs(1)).await {
+        match Subscription::connect(
+            &test_client(),
+            &base,
+            Duration::from_secs(1),
+            crate::recorder::stream::Layout::Wide,
+        )
+        .await
+        {
             Err(ConnectError::Unreachable(_)) => {}
             Err(ConnectError::Unsupported(e)) => {
                 panic!("a refused connection is an outage, not a refusal: {e}")
@@ -1032,9 +1309,14 @@ mod stream_tests {
         let base = reqwest::Url::parse(&format!("http://{}", agent.addr)).unwrap();
         let interval = Duration::from_secs(1);
 
-        let sub = Subscription::connect(&client, &base, interval)
-            .await
-            .expect("subscribes");
+        let sub = Subscription::connect(
+            &client,
+            &base,
+            interval,
+            crate::recorder::stream::Layout::Wide,
+        )
+        .await
+        .expect("subscribes");
         let first = sub.source().cloned().unwrap();
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
@@ -1044,6 +1326,7 @@ mod stream_tests {
             client.clone(),
             base.clone(),
             interval,
+            crate::recorder::stream::Layout::Wide,
             Duration::from_secs(10),
             tx,
         ));
