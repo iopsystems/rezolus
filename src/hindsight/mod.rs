@@ -468,9 +468,9 @@ pub fn run(config: Config) {
                 },
 
                 _ = interval.tick() => {
-                    // Every tick, whether or not an interval arrived: this is where segments
-                    // seal, where retention runs, and where a writer that
-                    // died asynchronously is noticed.
+                    // Every tick, whether or not an interval arrived: this
+                    // is where segments seal, where retention runs, and where
+                    // a writer that died asynchronously is noticed.
                     if let Err(e) = buffer.maintain() {
                         fatal(&e, &buffer_path);
                     }
