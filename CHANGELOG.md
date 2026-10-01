@@ -45,6 +45,16 @@
   envelope and once to build the snapshot the writer takes. At 100 ms under
   process churn on a 32-core host the recorder used 24–27% less CPU over four
   180 s windows (25.9–37.4 s → 19.6–27.5 s).
+- The agent converts each acquisition group's schema for `/metrics/stream`
+  and `/metrics/rows` once per schema change instead of on every sampling
+  pass (metriken-archive 0.3.0's `SchemaCache`), and a changed schema is put
+  into the already-encoded row rather than the row being decoded and encoded
+  again. On the `v3_build_cost` registry (a 2,500-task group) encoding a pass
+  for the stream fell from 20.4 ms to 0.29 ms at the median, and to 4.2 ms on
+  a pass where the task group's membership changed; encoding the same pass
+  for a scrape takes 9.7 ms. On a 32-core host under process churn, a
+  streamed agent's CPU fell 31% at 1 Hz and 38% at 10 Hz, to within 0–16% of
+  the same agent scraped (it had cost 50–70% more).
 - The agent's V3 router resolves each metric module's sampler once and
   caches it, and looks acquisition groups up with foldhash. Attribution was
   a scan of every sampler module, run for every metric twice a pass. On the

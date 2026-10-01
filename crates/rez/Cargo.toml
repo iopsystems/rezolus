@@ -29,7 +29,7 @@ parquet = { version = "58.2.0", default-features = false, features = [
 ] }
 rusqlite = { version = "0.40", features = ["bundled", "blob", "serialize"] }
 rmp-serde = "1.3.1"
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 tar = { version = "0.4.45", default-features = false }
 tempfile = "3"

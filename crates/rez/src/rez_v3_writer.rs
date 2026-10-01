@@ -1568,7 +1568,9 @@ impl StreamRecorderV3 {
             }
 
             let Some(schema) = self.resolve_schema(&r.stream, r.schema_hash, {
-                r.schema.as_ref().map(|s| move || s.clone())
+                r.schema
+                    .as_ref()
+                    .map(|s| move || crate::schema::GroupSchema::clone(s))
             }) else {
                 continue;
             };
@@ -4246,7 +4248,13 @@ mod tests {
                 ts: u64,
             ) -> Vec<WalRow> {
                 let snapshot = v3_snap(ts, groups);
-                let rows = wire::encode_snapshot(&snapshot, 0, 0).unwrap();
+                let rows = wire::encode_snapshot(
+                    &snapshot,
+                    0,
+                    0,
+                    &mut metriken_archive::stream::SchemaCache::new(),
+                )
+                .unwrap();
                 // Through the wire, not merely through the conversion: an
                 // `AgentRows` that failed to round-trip would still compare
                 // equal if we never encoded it.
@@ -4357,7 +4365,13 @@ mod tests {
                             true,
                         )],
                     );
-                    let rows = wire::encode_snapshot(&snapshot, 0, 0).unwrap();
+                    let rows = wire::encode_snapshot(
+                        &snapshot,
+                        0,
+                        0,
+                        &mut metriken_archive::stream::SchemaCache::new(),
+                    )
+                    .unwrap();
                     let staged = rec.stage_rows(&rows, (tick + 1) * 1_000, 0).unwrap();
                     payloads.push((rows.rows[0].row.clone(), staged[0].row.clone()));
                 }
@@ -4395,7 +4409,13 @@ mod tests {
                             include_schema,
                         )],
                     );
-                    let rows = wire::encode_snapshot(&snapshot, 0, 0).unwrap();
+                    let rows = wire::encode_snapshot(
+                        &snapshot,
+                        0,
+                        0,
+                        &mut metriken_archive::stream::SchemaCache::new(),
+                    )
+                    .unwrap();
                     assert_eq!(
                         rows.rows[0].schema.is_some(),
                         include_schema,
@@ -4431,7 +4451,13 @@ mod tests {
                         true,
                     )],
                 );
-                let mut rows = wire::encode_snapshot(&snapshot, 0, 0).unwrap();
+                let mut rows = wire::encode_snapshot(
+                    &snapshot,
+                    0,
+                    0,
+                    &mut metriken_archive::stream::SchemaCache::new(),
+                )
+                .unwrap();
                 rows.rows[0].arity = (3, 0, 0);
 
                 assert!(
@@ -4459,7 +4485,13 @@ mod tests {
                         false,
                     )],
                 );
-                let rows = wire::encode_snapshot(&snapshot, 0, 0).unwrap();
+                let rows = wire::encode_snapshot(
+                    &snapshot,
+                    0,
+                    0,
+                    &mut metriken_archive::stream::SchemaCache::new(),
+                )
+                .unwrap();
                 assert!(rows.rows[0].schema.is_none());
                 assert!(
                     rec.stage_rows(&rows, 1_000, 0).unwrap().is_empty(),
@@ -4489,7 +4521,13 @@ mod tests {
                         true,
                     )],
                 );
-                let mut rows = wire::encode_snapshot(&snapshot, 0, 0).unwrap();
+                let mut rows = wire::encode_snapshot(
+                    &snapshot,
+                    0,
+                    0,
+                    &mut metriken_archive::stream::SchemaCache::new(),
+                )
+                .unwrap();
                 // Rewrite the PAYLOAD's hash, leaving the cleartext intact.
                 let mut payload = decode_wal_group_row(&rows.rows[0].row).unwrap();
                 payload.schema_hash = (1, 2);
@@ -4515,6 +4553,7 @@ mod tests {
                     ),
                     0,
                     0,
+                    &mut metriken_archive::stream::SchemaCache::new(),
                 )
                 .unwrap();
                 let staged = rec.stage_rows(&good, 2_000, 0).unwrap();
@@ -4660,7 +4699,13 @@ mod tests {
                     for tick in 0..TICKS {
                         let snap = build(tick, resend);
                         let t = Instant::now();
-                        let rows = crate::wire::encode_snapshot(&snap, 0, 0).unwrap();
+                        let rows = crate::wire::encode_snapshot(
+                            &snap,
+                            0,
+                            0,
+                            &mut metriken_archive::stream::SchemaCache::new(),
+                        )
+                        .unwrap();
                         let body = crate::wire::encode(&rows).unwrap();
                         ra += t.elapsed().as_nanos();
                         rb += body.len();
@@ -4707,7 +4752,13 @@ mod tests {
             /// consumer from an agent with every sampler disabled.
             #[test]
             fn a_non_v3_snapshot_is_refused_rather_than_served_empty() {
-                assert!(wire::encode_snapshot(&snap(1_000, vec![]), 0, 0).is_err());
+                assert!(wire::encode_snapshot(
+                    &snap(1_000, vec![]),
+                    0,
+                    0,
+                    &mut metriken_archive::stream::SchemaCache::new()
+                )
+                .is_err());
             }
         }
     }
