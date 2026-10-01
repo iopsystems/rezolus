@@ -5,7 +5,7 @@
 //! `ApiResponse`, `CaptureParam`) live here too because they're the
 //! HTTP-level scaffolding the handlers all touch.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -109,8 +109,9 @@ pub struct AppState {
     /// compare-mode hand-off has attached one.
     pub captures: Arc<CaptureRegistry>,
     pub templates: TemplateRegistry,
-    /// Raw msgpack snapshot bytes for parquet export (live mode only).
-    pub snapshots: Arc<Mutex<VecDeque<Vec<u8>>>>,
+    /// The live agent being recorded (live mode only). Its temporary archive
+    /// is the capture's data and what a save copies.
+    pub live_session: Mutex<Option<super::live::LiveSession>>,
     pub live: AtomicBool,
     /// Original parquet file path (file mode only).
     pub parquet_path: RwLock<Option<PathBuf>>,
@@ -150,7 +151,7 @@ impl AppState {
             sections: Default::default(),
             captures: Arc::new(CaptureRegistry::new(data, None, None, None)),
             templates,
-            snapshots: Arc::new(Mutex::new(VecDeque::new())),
+            live_session: Mutex::new(None),
             live: AtomicBool::new(false),
             parquet_path: RwLock::new(None),
             experiment_parquet_path: RwLock::new(None),
@@ -186,6 +187,20 @@ impl AppState {
         self.captures
             .get(CaptureId::Baseline)
             .expect("baseline capture is always present")
+    }
+
+    /// Make `session` the live capture: its reader the baseline, its
+    /// archive what saves copy. The baseline reader, `parquet_path` and the
+    /// session slot change under the session lock, and
+    /// a save reads the archive path and its hold under the same lock, so
+    /// two resets racing each other leave the view, the saves and the
+    /// running recording on the same session. The session replaced is
+    /// dropped, which stops its recording.
+    pub fn install_live(&self, session: super::live::LiveSession) {
+        let mut slot = self.live_session.lock();
+        self.replace_baseline(session.reader());
+        *self.parquet_path.write() = Some(session.path().to_path_buf());
+        *slot = Some(session);
     }
 
     /// Replace the baseline data store (used by upload/connect handlers).

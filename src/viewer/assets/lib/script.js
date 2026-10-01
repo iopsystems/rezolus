@@ -79,7 +79,11 @@ const fetchBackendState = async () => {
 
 const startRecording = async () => {
     try {
-        await ViewerApi.reset();
+        const res = await ViewerApi.reset();
+        if (res?.status !== 'success') {
+            notify('error', `Could not reconnect: ${res?.error ?? 'unknown error'}`);
+            return;
+        }
         clearViewerCaches();
         setRecording(true);
         m.redraw();
@@ -93,7 +97,7 @@ const stopRecording = () => {
 };
 
 const saveCapture = async () => {
-    const result = await showSaveModal('rezolus-capture', '.parquet');
+    const result = await showSaveModal('rezolus-capture', '.dendro');
     if (!result) return;
     const filename = result.filename;
     const a = document.createElement('a');
@@ -181,17 +185,29 @@ const uploadParquet = async (file) => {
 let liveRefreshInProgress = false;
 
 const refreshCurrentSection = async () => {
-    if (liveRefreshInProgress) return;
-    if (!getRecording() || !chartsState.isDefaultZoom()) return;
-
-    const currentRoute = m.route.get();
-    if (!currentRoute) return;
-
-    const section = currentRoute.replace(/^\//, '');
-    if (!section || section === 'query') return;
+    if (liveRefreshInProgress || !getRecording()) return;
 
     liveRefreshInProgress = true;
     try {
+        // A live recording that stopped (the agent refused a reconnect, or a
+        // write failed) no longer advances. Say so until dismissed, and stop
+        // presenting the view as recording. Checked before the zoom and route
+        // checks, so it is seen from a zoomed chart or the query page too.
+        const meta = await ViewerApi.getMetadata();
+        const liveError = meta?.data?.liveError;
+        if (liveError) {
+            stopRecording();
+            notify('error', `Live recording stopped: ${liveError}. Record again to reconnect.`, 2147483647);
+            m.redraw();
+            return;
+        }
+
+        if (!chartsState.isDefaultZoom()) return;
+        const currentRoute = m.route.get();
+        if (!currentRoute) return;
+        const section = currentRoute.replace(/^\//, '');
+        if (!section || section === 'query') return;
+
         const data = await ViewerApi.getSection(section, true);
 
         // freshMetadata: TSDB grows continuously in live mode; without

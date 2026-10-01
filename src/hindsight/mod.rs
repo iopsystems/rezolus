@@ -3,11 +3,12 @@ use super::*;
 use std::fs::OpenOptions;
 use std::path::Path;
 
-mod buffer;
+pub(crate) mod buffer;
 mod config;
 mod http;
-mod state;
+pub(crate) mod state;
 
+use crate::recorder::stream::{ConnectError, StreamEvent, StreamSchemas, Subscription};
 use buffer::HindsightBuffer;
 pub use config::Config;
 use state::{DumpToFileRequest, DumpToFileResponse, SharedState, TimeRange};
@@ -16,7 +17,8 @@ pub fn command() -> Command {
     Command::new("hindsight")
         .about("Continuously record to a rolling on-disk buffer for after-the-fact snapshots")
         .long_about(
-            "Long-running daemon that pulls from a Rezolus agent and keeps a rolling,\n\
+            "Long-running daemon that subscribes to a Rezolus agent's replication stream\n\
+             (/metrics/stream, served by agents from 5.21.0) and keeps a rolling,\n\
              high-resolution buffer on disk. When an incident happens you snapshot the\n\
              buffer to a `.dendro` file — effectively recording the minutes *before* the trigger,\n\
              at a resolution finer than your normal observability stack keeps.\n\n\
@@ -57,8 +59,8 @@ pub fn command() -> Command {
         )
 }
 
-/// Runs the Rezolus `flight-recorder`: a Rezolus client that pulls from the
-/// agent's msgpack endpoint and keeps a rolling archive buffer covering the
+/// Runs the Rezolus `flight-recorder`: a Rezolus client that subscribes to the
+/// agent's replication stream and keeps a rolling archive buffer covering the
 /// configured lookback. On SIGHUP it writes the buffer to a timestamped file
 /// beside the output path; on SIGTERM or SIGINT it does the same and exits.
 ///
@@ -217,41 +219,53 @@ pub fn run(config: Config) {
         "hindsight.rez"
     });
 
-    // Probe the endpoint once: it must exist, and the sampling interval has to
-    // leave room for the scrape it implies.
-    let start = Instant::now();
-    let latency = if let Ok(response) = blocking_client.get(url.clone()).send() {
-        if let Ok(body) = response.bytes() {
-            let latency = start.elapsed();
-            debug!("sampling latency: {} us", latency.as_micros());
-            debug!("body size: {}", body.len());
-            latency
-        } else {
-            error!("error reading metrics endpoint");
-            std::process::exit(1);
-        }
-    } else {
-        error!("error reading metrics endpoint");
-        std::process::exit(1);
-    };
-
-    if config.general().interval().as_micros() < (latency.as_micros() * 2) {
-        error!("the sampling interval is too short to reliably record");
-        error!(
-            "set the interval to at least: {} us",
-            latency.as_micros() * 2
-        );
-        std::process::exit(1);
-    }
-
     let interval_dur: Duration = config.general().interval().into();
     let lookback: Duration = config.general().duration().into();
+    let timeout = crate::recorder::tick_timeout(interval_dur);
 
-    // Row stamps are `anchor + monotonic elapsed`, exactly as in the recorder,
-    // so a wall-clock step cannot bake a decreasing timestamp into a sealed
-    // segment; the raw reading rides along as a per-row observation instead.
-    let clock_anchor_wall_ns = wall_ns();
-    let clock_anchor_mono = Instant::now();
+    // Subscribe before the buffer exists. The handshake's anchor is the
+    // buffer's timeline (rows carry the agent's own stamps, as a recording of
+    // the stream does), and an agent that cannot stream is refused before
+    // anything is written.
+    let connected = rt.block_on(async {
+        tokio::time::timeout(
+            timeout,
+            Subscription::connect(&async_client, &url, interval_dur),
+        )
+        .await
+    });
+    let subscription = match connected {
+        Ok(Ok(sub)) => sub,
+        Ok(Err(ConnectError::Unsupported(e))) => {
+            let version = agent_version.as_deref().unwrap_or("of unknown version");
+            error!("the agent at {url} ({version}) cannot serve its replication stream: {e}");
+            error!(
+                "hindsight records an agent over /metrics/stream, which agents from 5.21.0 \
+                 serve; check that the path is reachable if a proxy sits in between"
+            );
+            std::process::exit(1);
+        }
+        Ok(Err(ConnectError::Unreachable(e))) => {
+            error!("could not subscribe to the agent at {url}: {e}");
+            std::process::exit(1);
+        }
+        Err(_) => {
+            error!(
+                "could not subscribe to the agent at {url}: no handshake within {}",
+                humantime::format_duration(timeout)
+            );
+            std::process::exit(1);
+        }
+    };
+    let source = subscription
+        .source()
+        .cloned()
+        .expect("connect returns only once the handshake has been applied");
+    // An anchor of 0 means the handshake carried none; use the local clock.
+    let clock_anchor_wall_ns = u64::try_from(source.clock_anchor_wall_ns)
+        .ok()
+        .filter(|a| *a != 0)
+        .unwrap_or_else(wall_ns);
 
     let seed = crate::recorder::rez_v3_writer::ManifestSeed {
         labels: crate::recorder::rez::build_labels("rezolus", agent_systeminfo.as_deref(), &[]),
@@ -265,7 +279,7 @@ pub fn run(config: Config) {
         clock_anchor_wall_ns,
     };
 
-    // Segment size tracks the scrape interval rather than being fixed: the
+    // Segment size tracks the interval rather than being fixed: the
     // writer's 900 rows is a segment per ~15 minutes at the default 1 s
     // interval, which a faster buffer wants smaller. Everything else about the
     // seal policy — the byte cap and the age cap — stays the writer's.
@@ -311,11 +325,35 @@ pub fn run(config: Config) {
         });
     }
 
-    let capture_failed = rt.block_on(async move {
+    let (refused, capture_failed) = rt.block_on(async move {
         // The stop's capture failed: exit 1 rather than 0, so a supervisor
         // can tell the buffer was not saved.
         let mut capture_failed = false;
         let mut interval = crate::common::aligned_interval(interval_dur);
+        // The agent refused a reconnect: capture the buffer, then exit.
+        let mut refused = false;
+        // Whether the capture that ends the run has started. A capture
+        // already in flight when the refusal arrives was snapshotted before
+        // it, so the refusal starts one of its own after that.
+        let mut refusal_capture_started = false;
+
+        // The subscription runs on its own task and hands each interval over;
+        // the loop below writes them, maintains the buffer on its own tick, and
+        // serves dumps, and none of that waits on the socket.
+        let (stream_tx, mut stream_rx) = tokio::sync::mpsc::channel::<(usize, StreamEvent)>(
+            crate::recorder::STREAM_QUEUE_PER_ENDPOINT,
+        );
+        tokio::spawn(crate::recorder::stream::pump(
+            0,
+            subscription,
+            async_client,
+            url.clone(),
+            interval_dur,
+            timeout,
+            stream_tx,
+        ));
+        let mut schemas = StreamSchemas::default();
+        let mut epoch = source.uuid.clone();
 
         // Dumps run OFF this loop — that is the whole shape of what follows.
         // Every dump is spawned and its result comes back asynchronously,
@@ -370,19 +408,28 @@ pub fn run(config: Config) {
 
                 Some(response) = capture_rx.recv() => {
                     capturing = false;
-                    // Back to RUNNING BEFORE the log line, so a signal sent on
-                    // seeing that line is acted on as a new request rather than
-                    // as one made during the capture. A compare-and-swap: the
-                    // signal task runs on another thread, and a stop it stored
-                    // since must not be overwritten.
-                    let terminating = signals::STATE
-                        .compare_exchange(
-                            signals::CAPTURING,
-                            signals::RUNNING,
-                            Ordering::SeqCst,
-                            Ordering::SeqCst,
-                        )
-                        .is_err();
+                    // The run ends after this capture if a stop was asked for,
+                    // or if it is the capture a refusal started.
+                    let stop = signals::STATE.load(Ordering::SeqCst) == signals::TERMINATING
+                        || (refused && refusal_capture_started);
+                    // Otherwise back to RUNNING BEFORE the log line, so a
+                    // signal sent on seeing that line is acted on as a new
+                    // request rather than as one made during the capture.
+                    // After a refusal, CAPTURING instead: the check below
+                    // starts the capture that ends the run. A compare-and-swap:
+                    // the signal task runs on another thread, and a stop it
+                    // stored since must not be overwritten.
+                    let terminating = stop || {
+                        let next = if refused { signals::CAPTURING } else { signals::RUNNING };
+                        signals::STATE
+                            .compare_exchange(
+                                signals::CAPTURING,
+                                next,
+                                Ordering::SeqCst,
+                                Ordering::SeqCst,
+                            )
+                            .is_err()
+                    };
                     if terminating && response.error.is_some() {
                         capture_failed = true;
                     }
@@ -396,52 +443,58 @@ pub fn run(config: Config) {
                 // it.
                 Some(_) = signal_rx.recv() => {}
 
-                _ = interval.tick() => {
-                    let start = Instant::now();
-
-                    if let Ok(response) = async_client.get(url.clone()).send().await {
-                        if let Ok(body) = response.bytes().await {
-                            let latency = start.elapsed();
-
-                            debug!("sampling latency: {} us", latency.as_micros());
-                            debug!("body size: {}", body.len());
-
-                            let (anchored_ns, wall_offset_ns) = crate::recorder::anchored_stamp(
-                                clock_anchor_wall_ns,
-                                clock_anchor_mono.elapsed(),
-                                wall_ns(),
-                            );
-
-                            // `Snapshot::from_msgpack`, not a bare `from_slice`:
-                            // the same depth-capped, trailing-byte-checked
-                            // decode as the recorder's `.rez`-mode call site —
-                            // hindsight is the same always-on ingest path,
-                            // scraping whatever msgpack endpoint it's pointed
-                            // at, and is the most exposed process of the two
-                            // (it runs unattended, indefinitely).
-                            match metriken_exposition::Snapshot::from_msgpack(&body) {
-                                Ok(snapshot) => {
-                                    if let Err(e) =
-                                        buffer.ingest(&snapshot, anchored_ns, wall_offset_ns)
-                                    {
-                                        fatal(&e, &buffer_path);
-                                    }
-                                    shared_state.record_tick();
-                                }
-                                Err(e) => warn!("msgpack decode error: {e}"),
-                            }
-                        } else {
-                            error!("failed to read response");
-                            std::process::exit(1);
+                Some((_, event)) = stream_rx.recv() => match event {
+                    StreamEvent::Interval(applied) => {
+                        match ingest_interval(&mut buffer, &mut schemas, applied) {
+                            Ok(passes) => (0..passes).for_each(|_| shared_state.record_tick()),
+                            Err(e) => fatal(&e, &buffer_path),
                         }
-                    } else {
-                        error!("failed to get metrics");
-                        std::process::exit(1);
+                        // Seal and evict with each interval, as each scrape
+                        // did. The select is biased toward this arm, so while
+                        // intervals keep arriving the tick arm below may not
+                        // run, and sealing must not wait on it.
+                        if let Err(e) = buffer.maintain() {
+                            fatal(&e, &buffer_path);
+                        }
+                        shared_state.set_at_retention_bound(buffer.at_retention_bound());
                     }
+                    StreamEvent::Dropped(e) => {
+                        warn!("the agent's stream ended ({e}); reconnecting");
+                    }
+                    StreamEvent::Connected(source) => {
+                        info!("the agent's stream reconnected");
+                        if source.uuid != epoch {
+                            warn!(
+                                "the agent restarted (producer epoch {} -> {}); its \
+                                 counters started again from zero",
+                                epoch.as_deref().unwrap_or("unknown"),
+                                source.uuid.as_deref().unwrap_or("unknown")
+                            );
+                            epoch = source.uuid;
+                        }
+                    }
+                    StreamEvent::Refused(e) => {
+                        error!(
+                            "the agent at {url} can no longer serve /metrics/stream ({e}); \
+                             capturing the buffer and exiting"
+                        );
+                        refused = true;
+                        // A capture already asked for (or a stop's) serves;
+                        // otherwise ask for one. A compare-and-swap, as the
+                        // signal task may change the state meanwhile.
+                        let _ = signals::STATE.compare_exchange(
+                            signals::RUNNING,
+                            signals::CAPTURING,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        );
+                    }
+                },
 
-                    // Every tick, scrape or not: this is where segments
-                    // seal, where retention runs, and where a writer that
-                    // died asynchronously is noticed.
+                _ = interval.tick() => {
+                    // Every tick, whether or not an interval arrived: this
+                    // is where segments seal, where retention runs, and where
+                    // a writer that died asynchronously is noticed.
                     if let Err(e) = buffer.maintain() {
                         fatal(&e, &buffer_path);
                     }
@@ -470,6 +523,9 @@ pub fn run(config: Config) {
                         );
                     }
                     capturing = true;
+                    if refused {
+                        refusal_capture_started = true;
+                    }
                     info!("capture in progress; the recording continues");
                     // NOT `output`. An HTTP dump writes there because its
                     // caller asked for exactly that path; a signal-triggered
@@ -504,14 +560,14 @@ pub fn run(config: Config) {
             info!("waiting for {} dump(s) in flight", dumps.len());
             while dumps.join_next().await.is_some() {}
         }
-        capture_failed
+        (refused, capture_failed)
     });
 
     // Reached once the loop has stopped. Dropping `staging` deletes the buffer
     // directory, and the log drain flushes; both have to happen before `exit`,
     // which runs no destructors.
     drop(staging);
-    if capture_failed {
+    if refused || capture_failed {
         drop(_log_drain);
         std::process::exit(1);
     }
@@ -695,6 +751,44 @@ fn log_capture(response: &DumpToFileResponse) {
     }
 }
 
+/// Write one streamed interval into `buffer`, and return how many passes it
+/// held (one, unless a relay batched several). Shared by hindsight and the
+/// viewer's live mode, which both record an agent's stream into a buffer.
+///
+/// `Err` is a row that would not decode or a write that failed; either ends
+/// the recording. Sealing and retention are the caller's, on its own tick
+/// ([`HindsightBuffer::maintain`]). A row naming a schema this connection has not sent is
+/// skipped and logged.
+pub(crate) fn ingest_interval(
+    buffer: &mut HindsightBuffer,
+    schemas: &mut StreamSchemas,
+    applied: crate::recorder::stream::Applied,
+) -> Result<usize, String> {
+    if applied.gap {
+        warn!(
+            "the stream jumped to interval {}; the intervals before it produced no frame",
+            applied.seq
+        );
+    }
+    let passes = applied.for_writer()?;
+    let n = passes.len();
+    let before = schemas.unresolved;
+    for pass in passes {
+        // `for_writer` refuses a stamp before the epoch.
+        let ts = pass.ts as u64;
+        let wall_offset = pass.wall_offset;
+        let snapshot = schemas.snapshot(pass)?;
+        buffer.ingest(&snapshot, ts, wall_offset)?;
+    }
+    if schemas.unresolved > before {
+        warn!(
+            "{} streamed rows named a schema this connection had not sent; skipped",
+            schemas.unresolved - before
+        );
+    }
+    Ok(n)
+}
+
 /// A buffer write that failed is not recoverable in place — but everything
 /// committed before it is, and unlike the ring it is in a file anything can
 /// open. Say where before exiting.
@@ -716,7 +810,7 @@ fn wall_ns() -> u64 {
 
 /// The recording's file-level metadata, matching what `rezolus record` writes
 /// so a dump is indistinguishable from a recording to every consumer.
-fn buffer_metadata(
+pub(crate) fn buffer_metadata(
     interval: Duration,
     systeminfo: &Option<String>,
     descriptions: &Option<String>,

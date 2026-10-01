@@ -42,7 +42,6 @@
 
 #![cfg(unix)]
 
-use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -50,7 +49,6 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use metriken_exposition::{Counter, Snapshot, SnapshotV2};
 use rusqlite::{Connection, OpenFlags};
 
 /// The scrape interval every test here runs at.
@@ -65,68 +63,167 @@ const INTERVAL: Duration = Duration::from_millis(100);
 /// run in ~2 s.
 const WIDE: usize = 2000;
 
+/// The agent's width for the SIGHUP test, whose whole-file capture is several
+/// times faster than a ranged dump; see that test for the calibration.
+const WIDE_SIGHUP: usize = 4000;
+
 // ---------------------------------------------------------------------------
 // The stand-in agent, as in `record_lifecycle.rs`
 // ---------------------------------------------------------------------------
 
-/// One msgpack snapshot carrying a single counter attributed to the `fake`
-/// sampler. `tick` varies the value so consecutive scrapes are not deduped
-/// into a single row by the `.rez` writer.
-fn snapshot_bytes(tick: u64, width: usize) -> Vec<u8> {
-    let mut metadata = HashMap::new();
-    metadata.insert("sampler".to_string(), "fake".to_string());
-    let snapshot = Snapshot::V2(SnapshotV2 {
-        systemtime: SystemTime::now(),
-        duration: Duration::from_millis(1),
-        metadata: HashMap::new(),
-        counters: (0..width)
-            .map(|i| Counter::new(format!("fake_ops_{i}"), tick + i as u64, metadata.clone()))
-            .collect(),
-        gauges: Vec::new(),
-        histograms: Vec::new(),
-    });
-    rmp_serde::encode::to_vec(&snapshot).expect("failed to encode the fake snapshot")
+/// The table the fake agent's group is recorded as: `<sampler>/<group>`.
+const TABLE: &str = "fake/ops";
+
+/// Minimal stand-in for a 6.0 agent, which hindsight records over its
+/// replication stream: serves `/metrics/stream` (see [`serve_stream`]) and 404s
+/// the optional metadata routes, which hindsight treats as absent. Returns the
+/// bound port; the accept loop is detached and dies with the test process.
+fn spawn_fake_agent(width: usize) -> u16 {
+    spawn_agent(width, None)
 }
 
-/// Minimal stand-in for the agent's msgpack endpoint: answers
-/// `/metrics/binary` with a snapshot and 404s the optional metadata routes,
-/// which hindsight treats as absent. Returns the bound port; the accept loop is
-/// detached and dies with the test process.
-fn spawn_fake_agent(width: usize) -> u16 {
+/// As [`spawn_fake_agent`], but the first subscription gets `frames` frames
+/// and is then closed, and every later one gets a 404: an agent replaced by
+/// one that cannot stream, or a proxy that stopped routing the path.
+fn spawn_fake_agent_that_stops(width: usize, frames: u64) -> u16 {
+    spawn_agent(width, Some(frames))
+}
+
+fn spawn_agent(width: usize, frames: Option<u64>) -> u16 {
+    let subscriptions = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the fake agent");
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        let mut tick = 0u64;
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
-            let mut buf = [0u8; 8192];
-            let Ok(n) = stream.read(&mut buf) else {
-                continue;
-            };
-            if n == 0 {
-                continue;
-            }
-            let req = String::from_utf8_lossy(&buf[..n]);
-            let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
-            if path.starts_with("/metrics/binary") {
-                tick += 1;
-                let body = snapshot_bytes(tick, width);
-                let head = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/msgpack\r\n\
-                     Content-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                let _ = stream.write_all(head.as_bytes());
-                let _ = stream.write_all(&body);
-            } else {
+            let subscriptions = subscriptions.clone();
+            // A thread per connection: a subscription holds its connection
+            // for the whole run.
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 8192];
+                let Ok(n) = stream.read(&mut buf) else {
+                    return;
+                };
+                if n == 0 {
+                    return;
+                }
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
+                let first = || subscriptions.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+                if path.starts_with("/metrics/stream") && (frames.is_none() || first()) {
+                    serve_stream(stream, &path, width, frames);
+                    return;
+                }
                 let _ = stream.write_all(
                     b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
                 );
-            }
-            let _ = stream.flush();
+                let _ = stream.flush();
+            });
         }
     });
     port
+}
+
+fn wall_ns() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64
+}
+
+/// The agent's replication stream, as `/metrics/stream` serves it: the
+/// preamble and a handshake, then one rows frame per requested interval
+/// carrying `width` counters (`fake_ops_0`..) in the `fake/ops` acquisition
+/// group, the schema on the first row only, until hindsight hangs up. Each
+/// frame's values differ, so consecutive rows are not deduped.
+fn serve_stream(mut stream: std::net::TcpStream, path: &str, width: usize, frames: Option<u64>) {
+    use dendro::replicate::{wire, Frame};
+    use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc};
+
+    let interval = path
+        .split_once("interval=")
+        .map(|(_, v)| v.split('&').next().unwrap_or(v).replace("%20", " "))
+        .and_then(|v| humantime::parse_duration(&v).ok())
+        .unwrap_or(INTERVAL);
+    let head = "HTTP/1.1 200 OK\r\n\
+                Content-Type: application/vnd.rezolus.replication.v1+dendro\r\n\
+                Connection: close\r\n\r\n";
+    let mut bytes = head.as_bytes().to_vec();
+    wire::write_preamble(&mut bytes).unwrap();
+    wire::encode_frame(
+        &Frame::Handshake {
+            source: 0,
+            uuid: Some("fake-epoch".to_string()),
+            labels: Default::default(),
+            metadata: Default::default(),
+            clock_anchor_wall_ns: wall_ns() as i64,
+            complete: false,
+        },
+        &mut bytes,
+    )
+    .unwrap();
+    if stream
+        .write_all(&bytes)
+        .and_then(|()| stream.flush())
+        .is_err()
+    {
+        return;
+    }
+
+    let schema = GroupSchema {
+        counters: (0..width)
+            .map(|i| MetricDesc {
+                name: format!("0x{i}"),
+                metadata: [("metric".to_string(), format!("fake_ops_{i}"))]
+                    .into_iter()
+                    .collect(),
+            })
+            .collect(),
+        gauges: Vec::new(),
+        histograms: Vec::new(),
+    };
+    for seq in 0u64.. {
+        if frames.is_some_and(|n| seq >= n) {
+            // Closing the connection is how the stream ends.
+            return;
+        }
+        std::thread::sleep(interval);
+        let ts = wall_ns();
+        let group = GroupSnapshot {
+            name: TABLE.to_string(),
+            schema_hash: schema.hash(),
+            schema: Some(Arc::new(schema.clone())),
+            window: Some(metriken::Window::new(ts - 1_000_000, ts)),
+            counters: (0..width).map(|i| Some(seq + 1 + i as u64)).collect(),
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        };
+        let anchor = (seq == 0).then(|| (&schema).into());
+        let row = rez::wal::encode_wal_group_row(&rez::wal::wal_group_row(&group, anchor)).unwrap();
+        let mut bytes = Vec::new();
+        wire::encode_frame(
+            &Frame::Rows {
+                source: 0,
+                seq,
+                index_state: dendro::replicate::NO_INDEX_STATE,
+                rows: vec![dendro::archive::WalRow {
+                    stream: TABLE.to_string(),
+                    ts: ts as i64,
+                    wall_offset: 0,
+                    row,
+                }],
+            },
+            &mut bytes,
+        )
+        .unwrap();
+        if stream
+            .write_all(&bytes)
+            .and_then(|()| stream.flush())
+            .is_err()
+        {
+            return;
+        }
+    }
 }
 
 /// A blocking HTTP client. `reqwest` is built here with `rustls-no-provider`,
@@ -731,14 +828,14 @@ fn assert_strictly_increasing(what: &str, stamps: &[u64]) {
 fn sealing_continues_while_dumps_are_in_flight() {
     // The body is dropped rather than saved: writing it to disk is time
     // between dumps, which the fixture check below counts against coverage.
-    sealing_continues_through("GET /dump", 12, |h| h.dump_bytes().0);
+    sealing_continues_through("GET /dump", 12, WIDE, |h| h.dump_bytes().0);
 }
 
 /// The same claim over `POST /dump/file` — the path that writes the daemon's
 /// configured output file, and the one an operator triggers remotely.
 #[test]
 fn sealing_continues_while_file_dumps_are_in_flight() {
-    sealing_continues_through("POST /dump/file", 12, |h| h.dump_to_file());
+    sealing_continues_through("POST /dump/file", 12, WIDE, |h| h.dump_to_file());
 }
 
 /// The same claim over SIGHUP — `systemctl kill -sHUP rezolus-hindsight`, the
@@ -757,11 +854,18 @@ fn sealing_continues_while_file_dumps_are_in_flight() {
 /// only calibration worth anything here: at 12 segments a capture finished in
 /// ~66 ms, inside a single 100 ms tick, and this test passed on a daemon that
 /// paused; at 40 it took ~220 ms and the daemon still got 3 of the 4 seals the
-/// assertion demands through the gaps; at 60 it takes ~330 ms and a paused
-/// daemon is not close.
+/// assertion demands through the gaps; at 60 it took ~330 ms and a paused
+/// daemon was not close.
+///
+/// That calibration was for a V2 agent, whose table carries a window pair per
+/// metric. Hindsight records the stream now, and a V3 group's table has one
+/// window pair for the whole group, so at 2,000 counters a capture of 60
+/// segments fell to 67–77 ms and the fixture check failed. At
+/// [`WIDE_SIGHUP`] = 4,000 it took 169–215 ms over five runs. At 8,000 it
+/// took ~410 ms, but seals then fell behind the ticks on one run in three.
 #[test]
 fn sealing_continues_while_a_sighup_capture_is_in_flight() {
-    sealing_continues_through("SIGHUP", 60, |h| h.capture_via_sighup());
+    sealing_continues_through("SIGHUP", 60, WIDE_SIGHUP, |h| h.capture_via_sighup());
 }
 
 /// A stop signal while a SIGHUP capture is in flight stops the daemon after
@@ -776,7 +880,7 @@ fn a_stop_during_a_capture_waits_for_it_then_stops_the_daemon() {
     // well inside it.
     h.wait_until(
         "a buffer big enough that a capture outlasts a signal",
-        |s| s.segments("fake") >= 12,
+        |s| s.segments(TABLE) >= 12,
     );
 
     h.signal(libc::SIGHUP);
@@ -819,7 +923,7 @@ fn a_sighup_during_a_capture_does_not_stop_the_daemon() {
     let mut h = Hindsight::start(2, WIDE);
     h.wait_until(
         "a buffer big enough that a capture outlasts a signal",
-        |s| s.segments("fake") >= 12,
+        |s| s.segments(TABLE) >= 12,
     );
     h.signal(libc::SIGHUP);
     h.wait_for_log("capture in progress", Duration::from_secs(10));
@@ -836,11 +940,7 @@ fn a_sighup_during_a_capture_does_not_stop_the_daemon() {
             .is_none(),
         "a SIGHUP during a capture must not stop the daemon"
     );
-    assert!(
-        h.log_has("SIGHUP ignored"),
-        "{}",
-        h.log_text()
-    );
+    assert!(h.log_has("SIGHUP ignored"), "{}", h.log_text());
 }
 
 /// Exactly one non-empty signal-triggered capture beside `output`, and
@@ -893,12 +993,13 @@ const SEGMENT_ROWS: u64 = 2;
 fn sealing_continues_through(
     trigger: &str,
     min_segments: u64,
+    width: usize,
     mut dump: impl FnMut(&Hindsight) -> Duration,
 ) {
-    let h = Hindsight::start(SEGMENT_ROWS as usize, WIDE);
+    let h = Hindsight::start(SEGMENT_ROWS as usize, width);
 
     let before = h.wait_until("a buffer big enough to make a dump slow", |s| {
-        s.segments("fake") >= min_segments
+        s.segments(TABLE) >= min_segments
     });
 
     // Back-to-back dumps. Each one opens its own connection, takes its own read
@@ -931,7 +1032,7 @@ fn sealing_continues_through(
         }
     }
     let elapsed = started.elapsed();
-    let (a, b) = (before.segments("fake"), after.segments("fake"));
+    let (a, b) = (before.segments(TABLE), after.segments(TABLE));
     let ticks = after.ticks_recorded - before.ticks_recorded;
 
     println!(
@@ -1043,10 +1144,10 @@ fn a_dump_cuts_the_timeline_at_its_snapshot_and_seals_the_live_tail() {
         // Wait for a buffer that has sealed AND is part-way into its next
         // segment.
         let at_dump = h.wait_until("a partly-filled WAL over sealed segments", |s| {
-            s.segments("fake") >= 2 && (1..=2).contains(&s.table("fake").live_wal_rows)
+            s.segments(TABLE) >= 2 && (1..=2).contains(&s.table(TABLE).live_wal_rows)
         });
-        let live_before = at_dump.table("fake").live_wal_rows;
-        let segments_before = at_dump.segments("fake");
+        let live_before = at_dump.table(TABLE).live_wal_rows;
+        let segments_before = at_dump.segments(TABLE);
         h.dump_to(&dest);
         // Read /status again AFTER the dump so the live-row count at the moment
         // the snapshot was taken is BRACKETED rather than guessed. The buffer is
@@ -1054,7 +1155,7 @@ fn a_dump_cuts_the_timeline_at_its_snapshot_and_seals_the_live_tail() {
         // bet on how long the dump takes — and on a loaded CI runner that bet
         // loses (observed: 1 row before, a 7-row tail).
         let after = h.status();
-        let live_after = after.table("fake").live_wal_rows;
+        let live_after = after.table(TABLE).live_wal_rows;
         // The bracket holds only if nothing sealed between the two reads.
         // Retention here is 15 minutes, so the segment count only rises: a
         // change means a seal emptied the WAL in between, and then
@@ -1063,9 +1164,9 @@ fn a_dump_cuts_the_timeline_at_its_snapshot_and_seals_the_live_tail() {
         // new rows can leave `live_after >= live_before` (observed: 2 before,
         // 5 after, a 1-row tail). So that draw is taken again, like a dump
         // that landed on a seal boundary.
-        let sealed_between = after.segments("fake") != segments_before;
+        let sealed_between = after.segments(TABLE) != segments_before;
 
-        let dumped = read_rez(&dest, "fake");
+        let dumped = read_rez(&dest, TABLE);
         // True of every dump taken here, not only the one that is kept.
         assert!(
             dumped.wal.is_empty(),
@@ -1133,9 +1234,9 @@ fn a_dump_cuts_the_timeline_at_its_snapshot_and_seals_the_live_tail() {
     // AND to seal at least one segment past them, then find the tail's rows in
     // a sealed segment and NOT in the live WAL.
     h.wait_until("the source to seal past the dump", |s| {
-        s.segments("fake") > dumped.segments.len() as u64
+        s.segments(TABLE) > dumped.segments.len() as u64
     });
-    let source = read_rez(&h.buffer, "fake");
+    let source = read_rez(&h.buffer, TABLE);
     let source_timeline = source.timeline();
     assert_strictly_increasing("the source", &source_timeline);
 
@@ -1200,7 +1301,7 @@ fn a_dump_cuts_the_timeline_at_its_snapshot_and_seals_the_live_tail() {
             .map(|s| s.first_ts)
             .collect::<Vec<_>>()
     );
-    let reread = read_rez(&dest, "fake");
+    let reread = read_rez(&dest, TABLE);
     assert_eq!(
         reread.timeline(),
         dump_timeline,
@@ -1236,7 +1337,7 @@ fn a_dump_opens_in_the_ordinary_rez_tools() {
     // yields no sample and reports the metric as missing. Reproduced against
     // `rezolus record --duration 600ms`, so it is not something a dump does.
     let status = h.wait_until("more than a second of buffered rows", |s| {
-        s.segments("fake") >= 3 && s.rows >= 25
+        s.segments(TABLE) >= 3 && s.rows >= 25
     });
     h.dump_to(&dest);
 
@@ -1348,7 +1449,7 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
     // stopped growing on its own: SQLite is now recycling the log at every
     // autocheckpoint, which is the state a dump interrupts.
     h.wait_until("a buffer big enough to make a dump slow", |s| {
-        s.segments("fake") >= 12
+        s.segments(TABLE) >= 12
     });
     let plateau = {
         let deadline = Instant::now() + Duration::from_secs(60);
@@ -1526,6 +1627,53 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
     );
 }
 
+/// An agent that stops serving its stream, and answers the reconnect with a
+/// 404, ends the daemon. Before it exits, hindsight writes the buffer to a
+/// timestamped file beside `output`, where a SIGHUP capture goes, and it exits
+/// with status 1.
+#[test]
+fn a_refused_reconnect_captures_the_buffer_then_exits() {
+    let agent = spawn_fake_agent_that_stops(1, 20);
+    let mut h = Hindsight::try_start_as(agent, 8, "dendro")
+        .unwrap_or_else(|why| panic!("rezolus hindsight failed to come up: {why}"));
+    let status = h.wait_for_exit(Duration::from_secs(60));
+    assert_eq!(status.code(), Some(1), "{}", h.log_text());
+    assert!(
+        h.log_has("can no longer serve /metrics/stream"),
+        "{}",
+        h.log_text()
+    );
+    let dir = h.output.parent().unwrap();
+    let captures: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("snapshot-") && n.ends_with(".dendro"))
+        })
+        .collect();
+    assert_eq!(captures.len(), 1, "one capture beside output: {captures:?}");
+
+    // The capture holds the rows recorded before the refusal: the stand-in
+    // agent sent 20 intervals of one counter. The claim is about rows, so
+    // read `recording metadata`'s per-table row count.
+    let meta = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .args(["recording", "metadata", "-i"])
+        .arg(&captures[0])
+        .output()
+        .expect("failed to run rezolus recording metadata");
+    let stdout = String::from_utf8_lossy(&meta.stdout);
+    let rows: u64 = stdout
+        .lines()
+        .find_map(|line| {
+            let mut words = line.split_whitespace();
+            (words.next() == Some(TABLE)).then(|| words.next()?.parse().ok())?
+        })
+        .unwrap_or_else(|| panic!("no {TABLE} table in the capture:\n{stdout}"));
+    assert!(rows >= 10, "the capture holds the recorded rows:\n{stdout}");
+}
+
 /// A `.dendro` output keeps the buffer as a dendro archive, and its dumps
 /// are dendro archives that the ordinary readers open, finished and
 /// queryable, while the buffer runs on.
@@ -1543,7 +1691,7 @@ fn a_dendro_buffer_dumps_a_dendro_archive() {
         h.buffer.display()
     );
     h.wait_until("more than a second of buffered rows", |s| {
-        s.segments("fake") >= 3 && s.rows >= 25
+        s.segments(TABLE) >= 3 && s.rows >= 25
     });
     let dir = tempfile::tempdir().unwrap();
     let dest = dir.path().join("dump.dendro");
@@ -1598,7 +1746,7 @@ fn a_second_stop_exits_at_once_and_removes_the_buffer() {
     let mut h = Hindsight::start(2, WIDE);
     h.wait_until(
         "a buffer big enough that a capture outlasts a signal",
-        |s| s.segments("fake") >= 12,
+        |s| s.segments(TABLE) >= 12,
     );
     h.signal(libc::SIGTERM);
     h.wait_for_log("capture in progress", Duration::from_secs(10));
