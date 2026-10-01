@@ -91,7 +91,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
         .into());
     }
 
-    let bpf = BpfBuilder::new(
+    let cgroup_attribution = config.cgroup_attribution_or(NAME, true);
+
+    let mut builder = BpfBuilder::new(
         &config,
         NAME,
         BpfProgStats {
@@ -102,33 +104,48 @@ fn init(config: Arc<Config>) -> SamplerResult {
     )
     .enabled_programs(enabled_programs)
     .cpu_counters("events", events, &EVENTS_ACQ)
-    .packed_counters(
-        "cgroup_task_switch",
-        &CGROUP_TLB_FLUSH_TASK_SWITCH,
-        &CGROUP_EVENTS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_remote_shootdown",
-        &CGROUP_TLB_FLUSH_REMOTE_SHOOTDOWN,
-        &CGROUP_EVENTS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_local_shootdown",
-        &CGROUP_TLB_FLUSH_LOCAL_SHOOTDOWN,
-        &CGROUP_EVENTS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_local_mm_shootdown",
-        &CGROUP_TLB_FLUSH_LOCAL_MM_SHOOTDOWN,
-        &CGROUP_EVENTS_ACQ,
-    )
-    .packed_counters(
-        "cgroup_remote_send_ipi",
-        &CGROUP_TLB_FLUSH_REMOTE_SEND_IPI,
-        &CGROUP_EVENTS_ACQ,
-    )
-    .ringbuf_handler("cgroup_info", handle_cgroup_info)
-    .build()?;
+    // The switch is read-only data the verifier folds at load (see
+    // `cgroup_attribution` in mod.bpf.c); the cgroup maps and their series
+    // exist only when it is on.
+    .pre_load(move |open| {
+        open.maps
+            .rodata_data
+            .as_mut()
+            .expect("the program declares read-only data")
+            .cgroup_attribution = cgroup_attribution as u8;
+    });
+
+    if cgroup_attribution {
+        builder = builder
+            .packed_counters(
+                "cgroup_task_switch",
+                &CGROUP_TLB_FLUSH_TASK_SWITCH,
+                &CGROUP_EVENTS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_remote_shootdown",
+                &CGROUP_TLB_FLUSH_REMOTE_SHOOTDOWN,
+                &CGROUP_EVENTS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_local_shootdown",
+                &CGROUP_TLB_FLUSH_LOCAL_SHOOTDOWN,
+                &CGROUP_EVENTS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_local_mm_shootdown",
+                &CGROUP_TLB_FLUSH_LOCAL_MM_SHOOTDOWN,
+                &CGROUP_EVENTS_ACQ,
+            )
+            .packed_counters(
+                "cgroup_remote_send_ipi",
+                &CGROUP_TLB_FLUSH_REMOTE_SEND_IPI,
+                &CGROUP_EVENTS_ACQ,
+            )
+            .ringbuf_handler("cgroup_info", handle_cgroup_info);
+    }
+
+    let bpf = builder.build()?;
 
     Ok(Some(Box::new(bpf)))
 }
