@@ -439,6 +439,14 @@ pub fn run(config: Config) {
                             Ok(passes) => (0..passes).for_each(|_| shared_state.record_tick()),
                             Err(e) => fatal(&e, &buffer_path),
                         }
+                        // Seal and evict with each interval, as each scrape
+                        // did. The select is biased toward this arm, so while
+                        // intervals keep arriving the tick arm below may not
+                        // run, and sealing must not wait on it.
+                        if let Err(e) = buffer.maintain() {
+                            fatal(&e, &buffer_path);
+                        }
+                        shared_state.set_at_retention_bound(buffer.at_retention_bound());
                     }
                     StreamEvent::Dropped(e) => {
                         warn!("the agent's stream ended ({e}); reconnecting");
