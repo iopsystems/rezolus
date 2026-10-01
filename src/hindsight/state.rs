@@ -19,7 +19,8 @@ use super::buffer::Summary;
 pub struct SharedState {
     /// The buffer `.rez` the loop is writing.
     pub buffer_path: PathBuf,
-    /// Where `/dump/file` and SIGHUP write the buffer out.
+    /// Where `/dump/file` writes the buffer out, and the path a signal-
+    /// triggered capture's timestamped file is named after.
     pub output_path: PathBuf,
     /// Sampling interval.
     pub interval: Duration,
