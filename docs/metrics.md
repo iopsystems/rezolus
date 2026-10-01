@@ -39,6 +39,7 @@ default: see [cpu_usage](#cpu_usage).
 
 ## Table of Contents
 
+- [Per-cgroup and per-task series](#per-cgroup-and-per-task-series)
 - [Block I/O](#block-io)
   - [blockio_latency](#blockio_latency)
   - [blockio_requests](#blockio_requests)
