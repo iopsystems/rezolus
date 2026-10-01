@@ -32,15 +32,17 @@ pub fn command() -> Command {
              in the archive format before 6.0; any other output is a .dendro archive. See\n\
              config/hindsight.toml for a documented starting point.\n\n\
              TRIGGERING A SNAPSHOT: send SIGHUP to write the buffer to a timestamped file beside\n\
-             the output path (rezolus-<UTC time>.dendro for output rezolus.dendro) without\n\
+             the output path (rezolus-20260915T204500Z.dendro for output rezolus.dendro) without\n\
              stopping the daemon. A SIGHUP during a capture is ignored. Optionally set\n\
              [general] listen to enable an HTTP endpoint for remote status/dump requests;\n\
              POST /dump/file writes the output path itself. Either way the recording keeps\n\
              running for the whole of the snapshot — a capture costs no samples, including\n\
              the samples taken while it is being written.\n\n\
              STOPPING: SIGTERM or SIGINT (what systemctl stop and ctrl-c send) captures the\n\
-             buffer the same way, then exits with status 0. A stop during a SIGHUP capture\n\
-             exits when that capture completes; a second stop exits at once with status 2.\n\n\
+             buffer the same way, then exits with status 0, or 1 if that capture failed. A\n\
+             stop during a SIGHUP capture exits when that capture completes. A second stop\n\
+             exits at once with status 2, removing the buffer directory and abandoning the\n\
+             capture in progress.\n\n\
              EXAMPLE:\n    \
              # Run the rolling-buffer daemon using the example config\n    \
              rezolus hindsight config/hindsight.toml",
@@ -89,11 +91,10 @@ pub fn run(config: Config) {
         .build()
         .expect("failed to launch async runtime");
 
-    // Wakes the recording loop when a signal changes the signal state, so a
-    // capture starts on the signal rather than on the next tick. The loop reads
-    // the state itself —
-    // this only says "look again" — so a dropped or full channel costs nothing
-    // but the tick of latency the loop used to have anyway.
+    // Wakes the recording loop after a signal changes `signals::STATE`, so a
+    // capture starts without waiting for a tick. The loop reads the state
+    // itself; a full channel already holds a wake, so dropping another loses
+    // nothing.
     let (signal_tx, mut signal_rx) = tokio::sync::mpsc::channel::<()>(1);
     listen_for_signals(&rt, signal_tx);
 
@@ -209,6 +210,7 @@ pub fn run(config: Config) {
             std::process::exit(1);
         }
     };
+    signals::set_buffer_dir(staging.path());
     let buffer_path = staging.path().join(if dendro {
         "hindsight.dendro"
     } else {
@@ -309,7 +311,10 @@ pub fn run(config: Config) {
         });
     }
 
-    rt.block_on(async move {
+    let capture_failed = rt.block_on(async move {
+        // The stop's capture failed: exit 1 rather than 0, so a supervisor
+        // can tell the buffer was not saved.
+        let mut capture_failed = false;
         let mut interval = crate::common::aligned_interval(interval_dur);
 
         // Dumps run OFF this loop — that is the whole shape of what follows.
@@ -365,12 +370,21 @@ pub fn run(config: Config) {
 
                 Some(response) = capture_rx.recv() => {
                     capturing = false;
-                    let terminating = signals::STATE.load(Ordering::SeqCst) == signals::TERMINATING;
                     // Back to RUNNING BEFORE the log line, so a signal sent on
                     // seeing that line is acted on as a new request rather than
-                    // as one made during the capture.
-                    if !terminating {
-                        signals::STATE.store(signals::RUNNING, Ordering::SeqCst);
+                    // as one made during the capture. A compare-and-swap: the
+                    // signal task runs on another thread, and a stop it stored
+                    // since must not be overwritten.
+                    let terminating = signals::STATE
+                        .compare_exchange(
+                            signals::CAPTURING,
+                            signals::RUNNING,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        )
+                        .is_err();
+                    if terminating && response.error.is_some() {
+                        capture_failed = true;
                     }
                     log_capture(&response);
                     if terminating {
@@ -442,15 +456,18 @@ pub fn run(config: Config) {
             // during it exits when it completes.
             if !capturing {
                 let state = signals::STATE.load(Ordering::SeqCst);
-                if state == signals::TERMINATING {
-                    // A stop with no capture left to wait for.
-                    break;
-                }
-                if state == signals::CAPTURING || state == signals::STOPPING {
-                    // A stop's capture is the last: the loop exits when it
-                    // completes.
+                if state != signals::RUNNING {
+                    // A capture was asked for and has not started. If a stop
+                    // was asked for too (STOPPING, or TERMINATING when it came
+                    // after a SIGHUP), this capture is the last: the loop exits
+                    // when it completes.
                     if state == signals::STOPPING {
-                        signals::STATE.store(signals::TERMINATING, Ordering::SeqCst);
+                        let _ = signals::STATE.compare_exchange(
+                            signals::STOPPING,
+                            signals::TERMINATING,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        );
                     }
                     capturing = true;
                     info!("capture in progress; the recording continues");
@@ -487,16 +504,39 @@ pub fn run(config: Config) {
             info!("waiting for {} dump(s) in flight", dumps.len());
             while dumps.join_next().await.is_some() {}
         }
+        capture_failed
     });
 
-    // Only reached on a clean exit; the buffer directory goes with it.
+    // Reached once the loop has stopped. Dropping `staging` deletes the buffer
+    // directory, and the log drain flushes; both have to happen before `exit`,
+    // which runs no destructors.
     drop(staging);
+    if capture_failed {
+        drop(_log_drain);
+        std::process::exit(1);
+    }
 }
 
-/// What signals have asked of hindsight, apart from the recorder's state in
-/// `main.rs`.
+/// Hindsight's signal state. Separate from `crate::STATE`, which the recorder
+/// uses.
 mod signals {
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::AtomicUsize;
+    use std::sync::Mutex;
+
+    /// The buffer directory, for a forced exit to remove.
+    static BUFFER_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+    pub fn set_buffer_dir(dir: &Path) {
+        *BUFFER_DIR.lock().unwrap_or_else(|e| e.into_inner()) = Some(dir.to_path_buf());
+    }
+
+    /// Remove the buffer directory, for an exit that skips destructors.
+    pub fn remove_buffer_dir() {
+        if let Some(dir) = BUFFER_DIR.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
 
     /// What signals have asked of the daemon. Read and written by the signal
     /// task and the recording loop.
@@ -507,7 +547,8 @@ mod signals {
     /// A capture was asked for (SIGHUP) or is in flight; recording continues
     /// after it.
     pub const CAPTURING: usize = 1;
-    /// A stop was asked for and a capture is in flight: exit when it completes.
+    /// A stop was asked for while a capture was asked for or in flight: exit
+    /// once that capture completes.
     pub const TERMINATING: usize = 2;
     /// A stop was asked for with no capture in flight: capture, then exit.
     pub const STOPPING: usize = 3;
@@ -522,27 +563,41 @@ enum Request {
     Stop,
 }
 
-/// Apply a signal to [`signals::STATE`]. A capture asked for while one is in
-/// flight is ignored. A stop during a capture exits when that capture completes,
-/// and a second stop exits at once with status 2.
+/// Apply a signal to [`signals::STATE`]. A SIGHUP while a capture is pending
+/// or in progress is ignored. A stop while a capture is pending or in progress
+/// exits once that capture completes, and a second stop exits at once with
+/// status 2. The state changes by compare-and-swap, because the recording loop
+/// changes it from another thread.
 fn on_signal(request: Request) {
-    let state = signals::STATE.load(Ordering::SeqCst);
-    match (request, state) {
-        (Request::Capture, signals::RUNNING) => {
-            info!("SIGHUP: capturing the buffer; the recording continues");
-            signals::STATE.store(signals::CAPTURING, Ordering::SeqCst);
+    let mut from = signals::RUNNING;
+    let applied = signals::STATE.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |state| {
+        from = state;
+        match (request, state) {
+            (Request::Capture, signals::RUNNING) => Some(signals::CAPTURING),
+            (Request::Stop, signals::RUNNING) => Some(signals::STOPPING),
+            (Request::Stop, signals::CAPTURING) => Some(signals::TERMINATING),
+            _ => None,
         }
-        (Request::Capture, _) => info!("SIGHUP: a capture is already in progress"),
-        (Request::Stop, signals::RUNNING) => {
-            info!("stop requested: capturing the buffer, then exiting");
-            signals::STATE.store(signals::STOPPING, Ordering::SeqCst);
+    });
+    match (request, applied.is_ok(), from) {
+        (Request::Capture, true, _) => {
+            info!("SIGHUP: capturing the buffer; the recording continues")
         }
-        (Request::Stop, signals::CAPTURING) => {
-            info!("stop requested: exiting when the capture in progress completes");
-            signals::STATE.store(signals::TERMINATING, Ordering::SeqCst);
+        (Request::Capture, false, _) => {
+            info!("SIGHUP ignored: a capture is pending or in progress")
         }
-        (Request::Stop, _) => {
-            info!("second stop requested: exiting now");
+        (Request::Stop, true, signals::RUNNING) => {
+            info!("stop requested: capturing the buffer, then exiting")
+        }
+        (Request::Stop, true, _) => {
+            info!("stop requested: exiting once the capture in progress completes")
+        }
+        (Request::Stop, false, _) => {
+            // `exit` runs no destructors and the log drain may not flush, so
+            // the buffer directory is removed here and the line goes straight
+            // to stderr.
+            eprintln!("second stop requested: exiting now");
+            signals::remove_buffer_dir();
             std::process::exit(2);
         }
     }

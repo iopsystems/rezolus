@@ -158,7 +158,8 @@ struct Hindsight {
     /// The rolling buffer the daemon is writing — its private staging file,
     /// taken from the daemon's own startup log rather than guessed at.
     buffer: PathBuf,
-    /// Where `POST /dump/file` and a SIGHUP capture write — `[general] output`.
+    /// `[general] output`: where `POST /dump/file` writes. A signal-triggered
+    /// capture writes a timestamped file beside it.
     output: PathBuf,
     /// Every log line the daemon has written since startup. Kept rather than
     /// discarded because the SIGHUP path has no reply channel: "capture
@@ -836,7 +837,7 @@ fn a_sighup_during_a_capture_does_not_stop_the_daemon() {
         "a SIGHUP during a capture must not stop the daemon"
     );
     assert!(
-        h.log_has("a capture is already in progress"),
+        h.log_has("SIGHUP ignored"),
         "{}",
         h.log_text()
     );
@@ -1565,5 +1566,49 @@ fn a_dendro_buffer_dumps_a_dendro_archive() {
         queried.status.success() && stdout.contains("fake_ops_0"),
         "a dump must be queryable\nstdout:\n{stdout}\nstderr:\n{}",
         String::from_utf8_lossy(&queried.stderr)
+    );
+}
+
+/// A stop sent straight after a SIGHUP, before the loop has started that
+/// capture, still gets the capture: the loop takes it, then exits. Repeated,
+/// because the window is a single pass of the loop.
+#[test]
+fn a_stop_right_after_a_sighup_still_captures() {
+    for attempt in 0..5 {
+        let mut h = Hindsight::start(2, 1);
+        h.wait_until("some buffered rows", |s| s.rows >= 5);
+        h.signal(libc::SIGHUP);
+        h.signal(libc::SIGTERM);
+        let status = h.wait_for_exit(Duration::from_secs(30));
+        assert!(status.success(), "attempt {attempt}: exited with {status}");
+        assert!(
+            h.log_has("capture complete"),
+            "attempt {attempt}: no capture\n{}",
+            h.log_text()
+        );
+    }
+}
+
+/// A second stop while the first one's capture is in progress exits at once
+/// with status 2 and removes the buffer directory, which `exit` would
+/// otherwise leave behind. The second signal is sent once the capture has
+/// started: two signals sent back to back can arrive as one.
+#[test]
+fn a_second_stop_exits_at_once_and_removes_the_buffer() {
+    let mut h = Hindsight::start(2, WIDE);
+    h.wait_until(
+        "a buffer big enough that a capture outlasts a signal",
+        |s| s.segments("fake") >= 12,
+    );
+    h.signal(libc::SIGTERM);
+    h.wait_for_log("capture in progress", Duration::from_secs(10));
+    h.signal(libc::SIGTERM);
+    let status = h.wait_for_exit(Duration::from_secs(30));
+    assert_eq!(status.code(), Some(2), "{}", h.log_text());
+    let dir = h.buffer.parent().expect("the buffer has a directory");
+    assert!(
+        !dir.exists(),
+        "the buffer directory {} is left behind",
+        dir.display()
     );
 }

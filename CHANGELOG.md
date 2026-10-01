@@ -1,16 +1,5 @@
 ## [Unreleased]
 
-### Fixed
-
-- **Hindsight exits on SIGTERM and SIGINT.** One handler took SIGHUP, SIGTERM
-  and SIGINT alike, and treated a first signal as "capture and keep
-  recording", so `systemctl stop` and `restart` captured the buffer, kept
-  running until `TimeoutStopSec` (120 s), and were then SIGKILLed, which left
-  the buffer's staging directory behind. SIGTERM and SIGINT now capture the
-  buffer and exit with status 0; a stop during a SIGHUP capture exits when that
-  capture completes, and a second stop exits at once. SIGHUP captures and keeps
-  recording, and a SIGHUP during a capture is ignored.
-
 ### Removed
 
 - **Ubuntu 20.04 (focal) packages are no longer built.** Focal ships clang 10,
@@ -347,6 +336,15 @@
 
 ### Fixed
 
+- **Hindsight exits on SIGTERM and SIGINT.** Hindsight treated SIGTERM and
+  SIGINT like SIGHUP: it captured the buffer and kept recording. `systemctl
+  stop` and `restart` therefore waited out `TimeoutStopSec` (120 s) and
+  SIGKILLed the daemon, leaving its buffer directory behind. SIGTERM and
+  SIGINT now capture the buffer and exit with status 0, or 1 if that capture
+  failed. A stop during a SIGHUP capture exits when that capture completes;
+  a second stop exits at once with status 2 and removes the buffer
+  directory. SIGHUP captures and keeps recording, and a SIGHUP during a
+  capture is ignored.
 - A dendro archive's metric that first appears in a later segment of its
   table, or only in the live tail, can be queried; the reader learned a
   table's metric names from its first segment alone (metriken-archive
