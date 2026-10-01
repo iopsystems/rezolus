@@ -11,6 +11,11 @@
 
 ### Changed
 
+- A recording streamed into a `.dendro` decodes each row once. The recorder
+  decoded every streamed payload twice, once to rebuild the row endpoint's
+  envelope and once to build the snapshot the writer takes. At 100 ms under
+  process churn on a 32-core host the recorder used 24–27% less CPU over four
+  180 s windows (25.9–37.4 s → 19.6–27.5 s).
 - The agent converts each acquisition group's schema for `/metrics/stream`
   and `/metrics/rows` once per schema change instead of on every sampling
   pass (metriken-archive 0.3.0's `SchemaCache`), and a changed schema is put

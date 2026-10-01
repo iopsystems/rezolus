@@ -1571,15 +1571,13 @@ impl RezStream {
         };
         let cache = schemas.entry(endpoint).or_default();
         let before = cache.unresolved;
-        for pass in &passes {
+        for pass in passes {
             let ts = u64::try_from(pass.ts)
                 .map_err(|_| format!("{url} stamped a pass at {} ns, before the epoch", pass.ts))?;
-            self.last_stamp.insert(endpoint, (ts, pass.wall_offset));
+            let wall_offset = pass.wall_offset;
+            self.last_stamp.insert(endpoint, (ts, wall_offset));
             let snapshot = cache.snapshot(pass)?;
-            staged.push(
-                rec.stage(&snapshot, ts, pass.wall_offset)
-                    .map_err(archive_err)?,
-            );
+            staged.push(rec.stage(&snapshot, ts, wall_offset).map_err(archive_err)?);
         }
         if cache.unresolved > before {
             warn!(
