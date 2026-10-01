@@ -113,6 +113,9 @@ pub struct AppState {
     /// is the capture's data and what a save copies.
     pub live_session: Mutex<Option<super::live::LiveSession>>,
     pub live: AtomicBool,
+    /// The opened archive file being followed while its writer appends
+    /// (file mode only). Replacing the baseline ends it.
+    pub follow: Mutex<Option<super::follow::Follow>>,
     /// Original parquet file path (file mode only).
     pub parquet_path: RwLock<Option<PathBuf>>,
     /// Temp parquet path for the HTTP-attached experiment capture.
@@ -153,6 +156,7 @@ impl AppState {
             templates,
             live_session: Mutex::new(None),
             live: AtomicBool::new(false),
+            follow: Mutex::new(None),
             parquet_path: RwLock::new(None),
             experiment_parquet_path: RwLock::new(None),
             cli_experiment_path: RwLock::new(None),
@@ -204,9 +208,17 @@ impl AppState {
     }
 
     /// Replace the baseline data store (used by upload/connect handlers).
-    /// The display filename is carried on the data source itself.
+    /// The display filename is carried on the data source itself. A followed
+    /// archive stops being followed: it is no longer what the page shows.
     pub fn replace_baseline(&self, data: Arc<dyn MetricsSource>) {
+        self.follow.lock().take();
         self.captures.set_baseline_data(data);
+    }
+
+    /// Whether the opened archive file is being followed: it was not
+    /// finalized at the last reopen, so its range can still grow.
+    pub fn following(&self) -> bool {
+        self.follow.lock().as_ref().is_some_and(|f| f.active())
     }
 
     pub fn combined_ab(&self) -> bool {

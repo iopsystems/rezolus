@@ -8,6 +8,7 @@
 //! - [`routes`] — HTTP routing and read-side handlers
 //! - [`actions`] — mutating handlers (upload, attach, save, connect, …)
 //!   and the live-mode ingest loop
+//! - [`follow`] — reopening an opened archive file while its writer appends
 //! - [`capture_registry`] — baseline/experiment slot registry
 //! - [`proxy_allow`] — host-pattern allowlist for `--proxy-allow`
 
@@ -38,6 +39,7 @@ mod proxy_allow;
 
 mod ab_extract;
 mod actions;
+mod follow;
 mod live;
 pub(crate) mod metadata;
 mod report_save;
@@ -846,6 +848,31 @@ fn init_file_mode_rez(
     let identities =
         dashboard::capture_alias::assign_capture_identities(&ordered_labels, &all_labels);
 
+    // An archive a writer is still appending to (a running hindsight buffer,
+    // a `record` in progress) is followed: each recording shown is read
+    // through a `LiveReader` that a `follow::Follow` thread reopens until the
+    // writer finalizes. Only the SQLite containers (dendro and `.rez` v3) can
+    // grow in place; a tar `.rez` is written whole.
+    let growable = crate::recorder::rez::detect_rez_format(path).ok()
+        == Some(crate::recorder::rez::RezFormat::V3Sqlite);
+    let following = growable && order.iter().any(|&i| !readers[i].1.complete());
+    let mut followed: Vec<Arc<rez::live::LiveReader>> = Vec::new();
+    let mut source = |labels: &BTreeMap<String, String>,
+                      reader: crate::rez_reader::RezReader|
+     -> Arc<dyn metriken_query::MetricsSource> {
+        if !following {
+            return Arc::new(reader);
+        }
+        let live = Arc::new(rez::live::LiveReader::from_reader(
+            path,
+            labels.clone(),
+            reader,
+            Arc::clone(&pool),
+        ));
+        followed.push(Arc::clone(&live));
+        live
+    };
+
     let mut slots: Vec<Option<(BTreeMap<String, String>, crate::rez_reader::RezReader)>> =
         readers.into_iter().map(Some).collect();
 
@@ -880,7 +907,7 @@ fn init_file_mode_rez(
         .unwrap_or_else(|| identities[0].alias.clone());
 
     let state = AppState::with_pool(
-        std::sync::Arc::new(b_reader) as std::sync::Arc<dyn metriken_query::MetricsSource>,
+        source(&b_labels, b_reader),
         registry.clone(),
         Arc::clone(&pool),
     );
@@ -904,11 +931,27 @@ fn init_file_mode_rez(
         let file_meta = file_meta_json(&reader);
         state.captures.attach_capture(
             &identities[pos].id,
-            std::sync::Arc::new(reader) as std::sync::Arc<dyn metriken_query::MetricsSource>,
+            source(&labels, reader),
             systeminfo,
             file_meta,
             Some(identities[pos].alias.clone()),
         );
+    }
+
+    if following {
+        match follow::Follow::start(followed, follow::FOLLOW_INTERVAL) {
+            Ok(f) => {
+                info!(
+                    "{} is not finalized; following it while its writer appends",
+                    path.display()
+                );
+                *state.follow.lock() = Some(f);
+            }
+            Err(e) => warn!(
+                "could not follow {}: {e}; showing it as it was when opened",
+                path.display()
+            ),
+        }
     }
 
     info!("Generating dashboards...");

@@ -191,15 +191,22 @@ pub fn run_tui(state: AppState, live: bool, _rt: &tokio::runtime::Runtime) {
 
     // Whether the visible screen needs re-querying + redrawing this
     // iteration. Live mode is always dirty (new samples arrive each tick);
-    // file mode is dirty only after input/resize (the data never changes),
+    // file mode is dirty only after input/resize (the data never changes,
+    // unless the file is being followed, which is handled as live mode),
     // so an idle file-mode TUI does no work between keystrokes instead of
     // re-running PromQL for every visible plot every second.
     let mut dirty = true;
+    // A followed archive file grows like a live recording until its writer
+    // finalizes it; one more pass after that shows the last rows read.
+    let mut was_following = false;
 
     loop {
+        let following = state.following();
+        let advancing = live || following || was_following;
+        was_following = following;
         // In live mode, refresh the nav so newly-seen sections appear (and
         // vanished ones are pruned), preserving loaded bodies and selection.
-        if live {
+        if advancing {
             metadata::regenerate_dashboards(&state);
             app.reconcile_sections(initial_sections(&state));
             // In live mode the archive is typically empty at startup: the

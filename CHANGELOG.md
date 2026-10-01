@@ -142,6 +142,18 @@
 
 ### Added
 
+- **The viewer follows an archive file that is still being written.**
+  `rezolus view` on a `.dendro` or `.rez` (v3) that is not finalized, such as
+  a running hindsight buffer or a `rezolus record` in progress, reopens it
+  every 2 seconds, and the page refreshes the current section every 5
+  seconds as in live mode. Before, the view showed the file as it was when
+  the viewer opened it. The page keeps its file-mode behavior (file name,
+  `from`/`to` in a link, A/B compare); `/api/v1/mode` reports `following`
+  rather than `live`. A zoomed window whose start retention evicted is cut
+  to the new start, or reset to the full range when none of it is left.
+  Following stops when the writer finalizes the file or the file is
+  removed; a finalized file is not reopened. `--tui` redraws a followed file
+  each second. In compare mode only the baseline's charts refresh.
 - `memory_pagecache` sampler (opt-in): the page cache's traffic per mount,
   and per cgroup with `cgroup_attribution = true`. Buffered read calls and
   bytes from one `fentry` on `filemap_read`, pages filled by the filling

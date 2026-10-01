@@ -7,7 +7,7 @@ import { FileUpload, CompareLanding, splitAlias } from './ui/landing.js';
 import { notify, showSaveModal } from './ui/overlays.js';
 import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore, seedEventsFromMetadata } from './selection/selection.js';
 import { clearMetadataCache, processDashboardData, nativeInterval, stepAtLeast, CAPTURE_EXPERIMENT } from './data.js';
-import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, resetLinkedViewState, reapplyFileMetadata, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
+import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, resetLinkedViewState, reapplyFileMetadata, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections, stopRefreshing, noteRecordingExtent } from './app.js';
 
 // Splash: mounted on body before any async bootstrap step so the page
 // never shows a blank document while we fetch state. Replaced by the
@@ -35,6 +35,9 @@ let fileChecksum = null;
 let fileMetadata = null;
 let selectionPayload = null;
 let liveMode = false;
+// The opened file is an archive still being written; see `following` in
+// app.js.
+let followMode = false;
 let baselineAlias = null;
 // The baseline's [minTime, maxTime] in seconds, so a link's from/to can be
 // clamped before the first section loads.
@@ -201,6 +204,14 @@ const refreshCurrentSection = async () => {
             m.redraw();
             return;
         }
+
+        // A followed archive that its writer finalized no longer grows, so
+        // this refresh is the last one.
+        if (followMode && meta?.data?.following !== true) {
+            followMode = false;
+            stopRefreshing();
+        }
+        noteRecordingExtent(meta);
 
         if (!chartsState.isDefaultZoom()) return;
         const currentRoute = m.route.get();
@@ -380,6 +391,7 @@ const bootstrap = async () => {
             return;
         }
         liveMode = response.live === true;
+        followMode = response.following === true;
         compareMode = response.compare_mode === true;
         categoryName = response.category || null;
         combinedAB = response.combined_ab === true;
@@ -438,6 +450,7 @@ const bootstrap = async () => {
         fileMetadata,
         selectionPayload,
         liveMode,
+        following: followMode,
         compareMode,
         combinedAB,
         reportMode,
@@ -454,7 +467,7 @@ const bootstrap = async () => {
         onStopRecording: stopRecording,
         onSaveCapture: saveCapture,
         onUploadParquet: uploadParquet,
-        onRefresh: liveMode ? refreshCurrentSection : null,
+        onRefresh: (liveMode || followMode) ? refreshCurrentSection : null,
     });
 };
 

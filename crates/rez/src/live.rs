@@ -57,6 +57,26 @@ impl LiveReader {
         })
     }
 
+    /// Wrap `reader`, already open on the recording labelled `labels` of the
+    /// archive at `path`. For a caller that opened every recording once and
+    /// chose which to show, such as the viewer's file mode: the archive is
+    /// not opened again, and [`refresh`](Self::refresh) finds the recording
+    /// by `labels` exactly, as it does after [`open`](Self::open).
+    pub fn from_reader(
+        path: &Path,
+        labels: BTreeMap<String, String>,
+        reader: RezReader,
+        pool: Arc<BufferPool>,
+    ) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            pool,
+            labels,
+            current: RwLock::new(Arc::new(reader)),
+            name: None,
+        }
+    }
+
     /// Report `name` as the filename: for a temporary archive whose own name
     /// says nothing, such as the viewer's live mode naming the agent.
     pub fn named(mut self, name: String) -> Self {
@@ -81,6 +101,13 @@ impl LiveReader {
     /// The reader queries go to now.
     pub fn current(&self) -> Arc<RezReader> {
         Arc::clone(&self.current.read().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Whether the recording was finalized as of the last open. A writer
+    /// that exits cleanly finalizes it; until then a refresh can find more
+    /// rows.
+    pub fn complete(&self) -> bool {
+        self.current().complete()
     }
 
     /// The archive's path.

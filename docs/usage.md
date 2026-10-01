@@ -54,6 +54,10 @@ The buffer is an ordinary `.dendro` recording trimmed to the configured
 lookback, so you can open it with `rezolus view` or the MCP tools _while it is
 being written_, and a snapshot is a consistent point-in-time copy taken without
 pausing the recording — however it is triggered, by signal or over HTTP.
+`rezolus view` follows a running buffer: the end of its range advances with
+the writer, and its start moves forward as retention evicts old rows (see
+[Viewer](#viewer)). The buffer is `hindsight.dendro` (or `hindsight.rez`) in
+a temporary directory under `buffer_dir`, removed when hindsight exits.
 
 An `output` ending in `.rez` keeps the buffer and its snapshots in the archive
 format before 6.0, several times larger where threads and cgroups come and go.
@@ -317,6 +321,20 @@ served by agents from 5.21.0 when `snapshot_format` is `"v3"`, the default)
 into a temporary `.dendro` archive under the system temp directory, which
 the view reads as it grows and which is deleted when the viewer exits. Save
 capture downloads a copy of it as `rezolus-capture.dendro`.
+
+A `.dendro` or `.rez` file that is still being written, such as a running
+hindsight buffer or a `rezolus record` in progress, is followed: the viewer
+reopens it every 2 seconds and the page refreshes the current section every
+5 seconds, as for a live agent. The page keeps its file-mode behavior: the
+file name, the `from`/`to` range in a link, and A/B compare for a
+two-recording archive. When retention evicts the start of a zoomed window,
+the window is cut to the new start, or reset to the full range when none of
+it is left. Following stops when the writer finalizes the file (`record`
+exits) or the file is removed. Hindsight removes its buffer when it exits,
+without finalizing it; after that, charts already loaded stay on the page,
+and data the page had not yet read cannot be read. In compare mode only the
+baseline's charts refresh; the experiment's are read again when the section
+is reloaded. A finalized file is opened once and not reopened.
 
 Prefer the terminal? Pass `--tui` to render in the terminal instead of the
 browser — a curated live overview plus a drill-down browser of the same
