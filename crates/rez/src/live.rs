@@ -69,9 +69,9 @@ impl LiveReader {
     /// recording is found again by the full label set it had when opened.
     ///
     /// The new reader opens each table again on its first query, reading
-    /// every segment's footer. Decoded blocks are found in the shared
-    /// `BufferPool` when metriken-query keys them by content (0.33.4 and
-    /// later); before that, the query decodes the segments it touches again.
+    /// every segment's footer. Sealed segments' decoded blocks are found in
+    /// the shared `BufferPool`, which metriken-query keys by segment content
+    /// from 0.33.4.
     pub fn refresh(&self) -> Result<(), Error> {
         let (_, reader) = quiet(|| pick_exact(&self.path, &self.labels, &self.pool))?;
         *self.current.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(reader);

@@ -190,7 +190,8 @@ impl AppState {
     }
 
     /// Make `session` the live capture: its reader the baseline, its
-    /// archive what saves copy. All three change under the session lock, and
+    /// archive what saves copy. The baseline reader, `parquet_path` and the
+    /// session slot change under the session lock, and
     /// a save reads the archive path and its hold under the same lock, so
     /// two resets racing each other leave the view, the saves and the
     /// running recording on the same session. The session replaced is

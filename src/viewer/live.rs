@@ -36,6 +36,8 @@ static LIVE_THREADS: Mutex<Vec<std::thread::JoinHandle<()>>> = Mutex::new(Vec::n
 /// every live archive directory. For a normal exit after the sessions were
 /// dropped: a thread finishes once its channel closes, and the directory is
 /// removed after its writer has closed, so no file appears in it mid-removal.
+/// A thread still running at the deadline is left running, and its directory
+/// is removed regardless.
 pub fn finish_live_sessions(within: Duration) {
     let threads = std::mem::take(&mut *LIVE_THREADS.lock().unwrap_or_else(|e| e.into_inner()));
     let deadline = std::time::Instant::now() + within;
@@ -50,8 +52,8 @@ pub fn finish_live_sessions(within: Duration) {
     remove_live_dirs();
 }
 
-/// Remove every live archive directory. For an exit path that skips
-/// destructors and cannot wait, such as a signal handler.
+/// Remove every live archive directory. For an exit while sessions are still
+/// alive, whose recording threads will not finish first.
 pub fn remove_live_dirs() {
     let dirs = std::mem::take(&mut *LIVE_DIRS.lock().unwrap_or_else(|e| e.into_inner()));
     for dir in dirs {
@@ -204,10 +206,17 @@ impl LiveSession {
             .name("rezolus-live".to_string())
             .spawn(move || recording.run(rx))
             .map_err(|e| format!("could not start the live recording: {e}"))?;
-        LIVE_THREADS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(thread);
+        {
+            // Join the threads of sessions already ended, so the list holds
+            // only live ones.
+            let mut threads = LIVE_THREADS.lock().unwrap_or_else(|e| e.into_inner());
+            let (done, live): (Vec<_>, Vec<_>) = threads.drain(..).partition(|t| t.is_finished());
+            for t in done {
+                let _ = t.join();
+            }
+            *threads = live;
+            threads.push(thread);
+        }
 
         Ok(Self {
             url: url.clone(),
@@ -489,6 +498,42 @@ mod tests {
         drop(tx);
         std::thread::spawn(move || rec.run(rx)).join().unwrap();
         assert!(stopped.lock().unwrap().is_none());
+    }
+
+    /// `refresh` finds its recording by its full label set, so a second
+    /// recording whose labels include all of the first's, added after the
+    /// open, does not make it ambiguous.
+    #[test]
+    fn a_refresh_keeps_its_recording_when_a_superset_recording_appears() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grow.dendro");
+        let mut writer =
+            metriken_archive::ArchiveWriter::create(&path, Default::default()).unwrap();
+        let first = [("source".to_string(), "rezolus".to_string())].into();
+        let mut a = writer
+            .add_source(first, Default::default(), ANCHOR)
+            .unwrap();
+        let staged = a.stage(&tick(0), ANCHOR, 0).unwrap();
+        writer.commit(vec![staged]).unwrap();
+        a.sync().unwrap();
+        let live = LiveReader::open(&path, None, BufferPool::new(64 << 20)).unwrap();
+
+        let second = [
+            ("source".to_string(), "rezolus".to_string()),
+            ("host".to_string(), "b".to_string()),
+        ]
+        .into();
+        let mut b = writer
+            .add_source(second, Default::default(), ANCHOR)
+            .unwrap();
+        let staged = b.stage(&tick(0), ANCHOR, 0).unwrap();
+        writer.commit(vec![staged]).unwrap();
+        b.sync().unwrap();
+
+        live.refresh()
+            .expect("the first recording is found by its labels");
+        drop((a, b));
+        writer.join().unwrap();
     }
 
     /// A selector that matches several recordings is refused, as the
