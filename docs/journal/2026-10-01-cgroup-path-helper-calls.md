@@ -7,7 +7,8 @@ that include `src/agent/bpf/cgroup.h` remain.**
 
 The per-cgroup path of `syscall_counts` measured 176–188 ns per syscall on
 bare metal against 39–42 ns without it (#1391, `docs/metrics.md`, "Per-cgroup
-and per-task series"). `perf bench syscall basic` ran 20% slower with it on.
+and per-task series"). That run had five samplers enabled; the run below has
+`syscall_counts` alone, and main measures 140–151 ns there. `perf bench syscall basic` ran 20% slower with it on.
 The question was whether that path could be made cheap enough to keep on by
 default, rather than whether to turn it off.
 
@@ -63,11 +64,12 @@ branch were built in the same job and run in alternation. systemslab
 | branch, off | 27 | 24 | 424 B |
 | main, off | 33 | 31 | 448 B |
 
-The cgroup path went from about 110 ns per syscall to about 9 ns. The
-off-path program went from 31–33 ns to 24–27 ns. `bpf_stats` times the
-program only, so the trace record the classic tracepoint built before the
-program ran is not in these numbers. Its saving is real but not measured
-here.
+The cgroup path went from 109–118 ns per syscall (on minus off, main) to
+9–12 ns (branch). The off-path program went from 31–33 ns to 24–27 ns with
+nearly the same instructions (448 B and 424 B); I don't know what accounts for
+the 6–7 ns. `bpf_stats` times the program only, so the trace record the
+classic tracepoint built before the program ran is not in these numbers, and
+its cost was not measured.
 
 Correctness: in every on arm, the sum of `cgroup_syscall` equals the sum of
 `syscall` to within the events between the two reads (ratio 1.0000).

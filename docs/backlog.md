@@ -1039,7 +1039,7 @@ bare-metal probe-cost bench for anything at request rate).
 - **Per-cgroup path: read the task group once, through BTF** — Open.
   `syscall_counts` is converted (`current_task_group()` and
   `handle_new_cgroup_read()` in `src/agent/bpf/cgroup.h`): its cgroup path
-  went from about 110 ns to about 9 ns per syscall on bare metal. The other
+  went from 109–118 ns to 9–12 ns per syscall on bare metal. The other
   samplers including `cgroup.h` still make five to seven helper calls per
   event: `cpu_usage`, `cpu_migrations`, `cpu_perf`, `cpu_tlb_flush`,
   `scheduler_runqueue` (two tasks per switch, so it needs a task-pointer

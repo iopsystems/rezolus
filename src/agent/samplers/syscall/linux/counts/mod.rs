@@ -245,5 +245,9 @@ impl OpenSkelExt for ModSkel<'_> {
             "{NAME} sys_enter_btf() BPF instruction count: {}",
             self.progs.sys_enter_btf.insn_cnt()
         );
+        debug!(
+            "{NAME} sys_enter_raw() BPF instruction count: {}",
+            self.progs.sys_enter_raw.insn_cnt()
+        );
     }
 }
