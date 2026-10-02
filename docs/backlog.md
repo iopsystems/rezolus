@@ -1048,9 +1048,10 @@ bare-metal probe-cost bench for anything at request rate).
   attribution cost is 6.5–11 ns from 1 to 24 processes in one cgroup, and
   the change from 1 to 24 is within noise (+1.5 ns in one run, −0.7 ns in
   the other). Per-CPU cache-line-padded banks per cgroup, the layout of
-  `counters` (768 KiB per CPU for `syscall_counts`: 24 MiB at 32 possible
-  CPUs, 768 MiB if sized by `MAX_CPUS`), are not needed there. Reopen on a
-  host with more cores or two sockets.
+  `FilesystemCounters` (768 KiB per CPU for `syscall_counts`: 24 MiB at 32
+  possible CPUs, 768 MiB if sized by `MAX_CPUS`), are not needed there and
+  were judged too expensive (2026-10-02). If a larger host shows contention,
+  look for a cheaper fix than per-CPU banks over all 4096 cgroup slots.
   `docs/journal/2026-10-01-cgroup-path-helper-calls.md`.
 - **Write-amplification decomposition dashboard** — DONE as the ext4
   dashboard's Write Path group: application bytes (`ext4_write_bytes`),
