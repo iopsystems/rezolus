@@ -167,6 +167,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     ];
 
     let task_attribution = config.task_attribution(NAME);
+    let cgroup_attribution = config.cgroup_attribution_or(NAME, true);
 
     let mut builder = BpfBuilder::new(
         &config,
@@ -180,14 +181,6 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .cpu_counters("cpu_usage", cpu_usage, &CPU_USAGE_ACQ)
     .cpu_counters("softirq", softirq, &SOFTIRQ_ACQ)
     .cpu_counters("softirq_time", softirq_time, &SOFTIRQ_TIME_ACQ)
-    .packed_counters("cgroup_user", &CGROUP_CPU_USAGE_USER, &CGROUP_USAGE_ACQ)
-    .packed_counters("cgroup_system", &CGROUP_CPU_USAGE_SYSTEM, &CGROUP_USAGE_ACQ)
-    .packed_counters(
-        "cgroup_exited",
-        &CGROUP_CPU_USAGE_EXITED,
-        &CGROUP_EXITED_ACQ,
-    )
-    .ringbuf_handler("cgroup_info", handle_cgroup_info)
     // BTF present: use the fentry twins (cheaper dispatch), disable the
     // kprobe/raw fallbacks. Without BTF: the reverse. cpuacct_account_field and
     // sched_process_exit both switch on the same signal.
@@ -219,7 +212,24 @@ fn init(config: Arc<Config>) -> SamplerResult {
             .as_mut()
             .expect("the program declares read-only data")
             .task_attribution = task_attribution as u8;
+        open.maps
+            .rodata_data
+            .as_mut()
+            .expect("the program declares read-only data")
+            .cgroup_attribution = cgroup_attribution as u8;
     });
+
+    if cgroup_attribution {
+        builder = builder
+            .packed_counters("cgroup_user", &CGROUP_CPU_USAGE_USER, &CGROUP_USAGE_ACQ)
+            .packed_counters("cgroup_system", &CGROUP_CPU_USAGE_SYSTEM, &CGROUP_USAGE_ACQ)
+            .packed_counters(
+                "cgroup_exited",
+                &CGROUP_CPU_USAGE_EXITED,
+                &CGROUP_EXITED_ACQ,
+            )
+            .ringbuf_handler("cgroup_info", handle_cgroup_info);
+    }
 
     if task_attribution {
         builder = builder

@@ -23,6 +23,13 @@
 
 #define TASK_RUNNING 0
 
+// Per-cgroup attribution is the config option `cgroup_attribution`, on by
+// default for this sampler. Written into read-only data before load, so with
+// it off the verifier removes the per-cgroup path (the task-group read, the
+// new-cgroup check and the per-cgroup adds) rather than testing a flag on
+// every event.
+const volatile __u8 cgroup_attribution = 0;
+
 // counter positions
 #define IVCSW 0
 #define RUNQ_WAIT 1
@@ -210,7 +217,7 @@ static __always_inline int account__sched_switch(u64* ctx) {
     u32 next_pid = BPF_CORE_READ(next, pid);
 
     // read the prev task cgroup details and push to ringbuf if new cgroup
-    void* prev_task_group = BPF_CORE_READ(prev, sched_task_group);
+    void* prev_task_group = cgroup_attribution ? BPF_CORE_READ(prev, sched_task_group) : NULL;
     if (prev_task_group) {
         u32 id = BPF_CORE_READ(prev, sched_task_group, css.id);
 
@@ -297,7 +304,7 @@ static __always_inline int account__sched_switch(u64* ctx) {
     // - calculate how long next task was enqueued, update hist
 
     // read the next task cgroup details and push to ringbuf if new cgroup
-    void* next_task_group = BPF_CORE_READ(next, sched_task_group);
+    void* next_task_group = cgroup_attribution ? BPF_CORE_READ(next, sched_task_group) : NULL;
     if (next_task_group) {
         u32 id = BPF_CORE_READ(next, sched_task_group, css.id);
 

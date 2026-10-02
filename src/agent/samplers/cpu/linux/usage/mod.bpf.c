@@ -13,6 +13,13 @@
 #define MAX_CPUS 1024
 #define SOFTIRQ_GROUP_WIDTH 16
 
+// Per-cgroup attribution is the config option `cgroup_attribution`, on by
+// default for this sampler. Written into read-only data before load, so with
+// it off the verifier removes the per-cgroup path (the task-group read, the
+// new-cgroup check and the per-cgroup adds) rather than testing a flag on
+// every event.
+const volatile __u8 cgroup_attribution = 0;
+
 // cpu usage stat index
 // (https://elixir.bootlin.com/linux/v6.9-rc4/source/include/linux/kernel_stat.h#L20)
 #define USER 0
@@ -425,6 +432,9 @@ static __always_inline int handle_cpuacct_account_field(struct task_struct* task
         array_add(&task_cpu_usage, pid, delta_total);
     }
 
+    if (!cgroup_attribution)
+        return 0;
+
     struct task_group* tg = BPF_CORE_READ(task, sched_task_group);
     if (!tg)
         return 0;
@@ -486,7 +496,7 @@ static __always_inline int account__sched_process_exit(u64* ctx) {
             array_add(&cpu_usage, CPU_USAGE_GROUP_WIDTH * cpu + EXITED_OFFSET, *usage);
         }
 
-        struct task_group* tg = BPF_CORE_READ(task, sched_task_group);
+        struct task_group* tg = cgroup_attribution ? BPF_CORE_READ(task, sched_task_group) : NULL;
         if (tg) {
             int cgroup_id = BPF_CORE_READ(tg, css.id);
 

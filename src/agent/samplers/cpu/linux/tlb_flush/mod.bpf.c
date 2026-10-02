@@ -17,6 +17,13 @@
 #define COUNTER_GROUP_WIDTH 8
 #define MAX_CPUS 1024
 
+// Per-cgroup attribution is the config option `cgroup_attribution`, on by
+// default for this sampler. Written into read-only data before load, so with
+// it off the verifier removes the per-cgroup path (the task-group read, the
+// new-cgroup check and the per-cgroup adds) rather than testing a flag on
+// every event.
+const volatile __u8 cgroup_attribution = 0;
+
 #define REASON_TASK_SWITCH 0
 #define REASON_REMOTE_SHOOTDOWN 1
 #define REASON_LOCAL_SHOOTDOWN 2
@@ -125,7 +132,7 @@ int BPF_PROG(tlb_flush, int reason, u64 pages) {
 
     struct task_struct* current = (struct task_struct*)bpf_get_current_task();
 
-    void* task_group = BPF_CORE_READ(current, sched_task_group);
+    void* task_group = cgroup_attribution ? BPF_CORE_READ(current, sched_task_group) : NULL;
     if (task_group) {
         int cgroup_id = BPF_CORE_READ(current, sched_task_group, css.id);
 
@@ -181,7 +188,7 @@ int BPF_KPROBE(tlb_finish_mmu) {
 
     struct task_struct* current = (struct task_struct*)bpf_get_current_task();
 
-    void* task_group = BPF_CORE_READ(current, sched_task_group);
+    void* task_group = cgroup_attribution ? BPF_CORE_READ(current, sched_task_group) : NULL;
     if (task_group) {
         int cgroup_id = BPF_CORE_READ(current, sched_task_group, css.id);
 
