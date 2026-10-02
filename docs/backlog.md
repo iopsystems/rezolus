@@ -1044,7 +1044,11 @@ bare-metal probe-cost bench for anything at request rate).
   event: `cpu_usage`, `cpu_migrations`, `cpu_perf`, `cpu_tlb_flush`,
   `scheduler_runqueue` (two tasks per switch, so it needs a task-pointer
   variant), `cpu_bandwidth`, `ext4_ops`, `xfs_log`, `memory_pagecache`.
-  Contention on the shared per-cgroup counters from many CPUs is unmeasured.
+  Contention on the shared per-cgroup counters measured on delta: no
+  growth in the attribution cost from 1 to 24 processes in one cgroup
+  (7–11 ns), so per-CPU per-cgroup counters (17 MiB at 32 CPUs for
+  `syscall_counts`) are not needed there. Reopen on a host with more cores
+  or two sockets.
   `docs/journal/2026-10-01-cgroup-path-helper-calls.md`.
 - **Write-amplification decomposition dashboard** — DONE as the ext4
   dashboard's Write Path group: application bytes (`ext4_write_bytes`),

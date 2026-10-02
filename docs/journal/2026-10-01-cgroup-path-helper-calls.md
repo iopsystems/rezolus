@@ -87,6 +87,51 @@ ops/s across arms with no consistent order between the branch and main.
   `scheduler_runqueue` reads both `prev` and `next` from the `sched_switch`
   arguments rather than `current`, so it needs a variant of
   `current_task_group()` that takes a task pointer.
-- Contention on the shared per-cgroup counters is not measured.
-  `perf bench syscall basic` is single-threaded. A multi-threaded service in
-  one cgroup adds to the same cache line from every CPU.
+
+## Contention on the shared per-cgroup counters
+
+Each per-cgroup counter is one u64 that every CPU adds to atomically, and
+adjacent css ids share a cache line. `perf bench syscall basic` is
+single-threaded, so the numbers above say nothing about many CPUs adding to
+one counter. Per-CPU per-cgroup counters would remove the sharing, at
+`MAX_CGROUPS` × 8 B × CPUs per series: `syscall_counts` has 17 series, so
+544 KiB today would become 17 MiB at 32 CPUs and 102 MiB at 192. Measured
+first to see whether that is needed.
+
+Method: N processes, each pinned to its own CPU from CPU 8 up, each calling
+`getppid()` in a loop for 5 s. In `same` mode all N are in one cgroup with
+the CPU controller (`/rzb/same`, css id 82); in `distinct` mode each has its
+own (`/rzb/c0`.., css ids 84 upward, so eight to a cache line). Only
+`syscall_counts` enabled, built from main at `f8338afe`, two passes per arm.
+delta (EPYC 4564P, 16 cores, SMT on; CPU n and n+16 are siblings), 6.12.90.
+systemslab `01a0fb2e-4ed1-719e-7bda-5235ea3bd625` and
+`01a0fb3b-29a2-7106-09af-288d22a9d330`.
+
+`sys_enter_btf`, ns per run, two passes, from the second run:
+
+| procs, mode | on | off | on minus off |
+|---|---|---|---|
+| 1 | 34.0, 33.4 | 25.4, 25.9 | 8–9 |
+| 8, same | 33.1, 33.2 | 25.7, 25.3 | 7–8 |
+| 16, same | 33.8, 34.0 | 27.3, 25.6 | 7–8 |
+| 24, same | 39.2, 37.8 | 29.2, 28.8 | 9–10 |
+| 24, distinct | 39.4, 37.8 | 29.1, 28.9 | 9–10 |
+
+The first run gives 8–11 ns at the same points. The attribution cost stays
+at 7–11 ns from one process to 24 in one cgroup, so contention on the shared
+counter did not show here. The rise of about 4 ns at 24 processes is in the
+off arm too: at 24 the processes fill both SMT threads of the cores they run
+on, which slows the program whether or not it adds to a cgroup counter.
+
+The host's own Rezolus 5.20 agent ran throughout with two `sys_enter`
+programs. Its `syscall_counts` program (5,776 B, the old per-cgroup path)
+read 142–169 ns per run in every arm and mode, so it showed no contention
+either. Its other program (112 B) went from about 70 ns to 144–186 ns at 16
+and 24 processes in `same` mode, and to 96–105 ns at 24 in `distinct` mode.
+That program, not either per-cgroup path, is the likely reason `same` mode
+had lower total throughput than `distinct` in most arms, including with our
+agent stopped. I don't know what it shares between processes of one cgroup.
+
+Not covered: a host with more cores, two sockets, or a different CPU vendor.
+On this host per-CPU per-cgroup counters are not needed for
+`syscall_counts`.
