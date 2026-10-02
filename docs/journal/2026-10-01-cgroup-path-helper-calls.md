@@ -132,10 +132,10 @@ over `rezolus_bpf_run_count`, all of its programs together. systemslab
 `cpu_usage` moved outside noise. `cpu_usage`'s figure averages all its
 programs, including the softirq ones, which have no cgroup path; I did not
 break it down per program. `syscall_counts` was converted in #1392 and is
-the control. Delta reported four samplers unsupported on every pass. Its
-status names the reason only for `xfs_log` (delta has no XFS); `cpu_perf`
-has no run count, presumably because the host's own agent holds the PMU, and
-`cpu_bandwidth` has none either. In a KVM guest with the image's agent
+the control. Of the nine samplers enabled on delta, `xfs_log` reported
+unsupported (delta has no XFS) and `cpu_perf` has no run count, presumably
+because the host's own agent holds the PMU; `cpu_bandwidth` was not enabled
+there. In a KVM guest with the image's agent
 stopped and a loop-mounted XFS, all ten enabled samplers loaded healthy,
 including `cpu_perf`, `xfs_log` and `cpu_bandwidth`. The nine with
 `cgroup_attribution` produced per-cgroup series with values; `cpu_bandwidth`
