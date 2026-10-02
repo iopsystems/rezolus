@@ -202,15 +202,24 @@ systemslab `01a0fdef-f946-7164-7cd1-07ed97d89014` and
 `01a0fdff-07de-7132-0e7b-aec2acad7321`.
 
 With nothing else on the syscall tracepoints, the raw tracepoints cut the
-overhead per syscall from about 347 ns to about 226 ns. On delta the host's
-own agent keeps classic programs on `sys_enter` and `sys_exit`, so the kernel
-builds the trace record on every syscall anyway and main's classic programs
-run from the same dispatch at little extra cost; the raw tracepoint adds a
-second callback and dispatch, about 60 ns per syscall there (from the means
-of the six passes: 545 ns per syscall on main, 607 ns on the branch). A host where
-another tool holds classic programs on these tracepoints pays that; a host
-where Rezolus is the only tracer, the case the defaults are for, gains the
-larger amount.
+overhead per syscall from about 346 ns to about 226 ns. On delta the branch
+was slower in all six pairs, by 30–58 ns per syscall in five and 140 ns in
+one; delta's own baseline moved between about 440 and 535 ns per syscall
+from pass to pass.
+
+The likely explanation, not tested: the host's own agent on delta keeps
+classic programs on `sys_enter` and `sys_exit`. Classic programs on one
+trace event share a single trace-record build and program-array run, so
+main's classic programs add little there (main cost about 60 ns over no
+agent of ours on delta, against 346 ns in the guest), while a raw tracepoint
+registers a callback of its own. The two hosts also differ in hardware,
+kernel point release and virtualization. The direct test, the guest with one
+classic program attached or delta with the host agent stopped, was not run.
+If the explanation holds, a host where another tool keeps classic programs
+on these tracepoints pays tens of nanoseconds per syscall for the move, and
+a host where Rezolus is the only syscall tracer gains the larger amount.
+`syscall_counts` made the same move in #1392 and would have the same
+tradeoff; that was not measured either.
 
 ## Contention on the shared per-cgroup counters
 

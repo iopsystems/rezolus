@@ -29,9 +29,10 @@
   `sys_enter` and `sys_exit` as raw tracepoints (`tp_btf`, or `raw_tp`
   without kernel BTF) instead of the `raw_syscalls` tracepoints: with no
   other syscall tracer on the host, its overhead per syscall falls from about
-  347 ns to 226 ns in a KVM guest. Where another tool keeps classic programs
-  on those tracepoints, the raw tracepoint is a second dispatch and costs
-  about 60 ns per syscall more than before. The series are unchanged.
+  346 ns to 226 ns in a KVM guest. On a bare-metal host where another agent
+  kept classic programs on those tracepoints it cost 30–58 ns per syscall more
+  in five of six passes; the likely cause is that the raw tracepoint is a
+  second dispatch there, not tested. The series are unchanged.
 - **Groups of slots travel long on the agent's stream.**
   `/metrics/stream?layout=long` sends a group whose metrics are all counter
   or gauge groups (per task, per cgroup, per CPU) as values keyed by
