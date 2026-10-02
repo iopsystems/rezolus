@@ -362,7 +362,9 @@ static __noinline int handle_new_task(struct task_struct* task) {
 // kernel_has_btf() (see disabled_programs/required_programs in mod.rs). Only
 // `task` is used -- the kernel bumps task->utime/stime before calling
 // cpuacct_account_field, so we read those rather than the passed index/delta.
-static __always_inline int handle_cpuacct_account_field(struct task_struct* task) {
+// `btf` is a compile-time constant: true in the fentry program, whose `task`
+// is a BTF pointer (see task_group_of() in cgroup.h).
+static __always_inline int handle_cpuacct_account_field(struct task_struct* task, bool btf) {
     u32 cpu, idx;
     u64 curr_utime, curr_stime;
     u64 *last_utime, *last_stime;
@@ -435,15 +437,14 @@ static __always_inline int handle_cpuacct_account_field(struct task_struct* task
     if (!cgroup_attribution)
         return 0;
 
-    struct task_group* tg = BPF_CORE_READ(task, sched_task_group);
-    if (!tg)
+    u32 cgroup_id = 0;
+    u64 serial_nr = 0;
+    struct task_group* tg = task_group_of(task, btf, &cgroup_id, &serial_nr);
+    if (!tg || cgroup_id >= MAX_CGROUPS)
         return 0;
 
-    int cgroup_id = BPF_CORE_READ(tg, css.id);
-    if (cgroup_id < 0 || cgroup_id >= MAX_CGROUPS)
-        return 0;
-
-    int ret = handle_new_cgroup(task, &cgroup_serial_numbers, &cgroup_info);
+    int ret = handle_new_cgroup_read(&tg->css, cgroup_id, serial_nr, &cgroup_serial_numbers,
+                                     &cgroup_info);
     if (ret == 0) {
         // New cgroup detected, zero the counters
         u64 zero = 0;
@@ -465,15 +466,15 @@ static __always_inline int handle_cpuacct_account_field(struct task_struct* task
 
 SEC("fentry/cpuacct_account_field")
 int BPF_PROG(cpuacct_account_field_fentry, struct task_struct* task, u32 index, u64 delta) {
-    return handle_cpuacct_account_field(task);
+    return handle_cpuacct_account_field(task, true);
 }
 
 SEC("kprobe/cpuacct_account_field")
 int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index, u64 delta) {
-    return handle_cpuacct_account_field(task);
+    return handle_cpuacct_account_field(task, false);
 }
 
-static __always_inline int account__sched_process_exit(u64* ctx) {
+static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
     /* TP_PROTO(struct task_struct *p) */
     struct task_struct* task = (struct task_struct*)ctx[0];
 
@@ -496,10 +497,11 @@ static __always_inline int account__sched_process_exit(u64* ctx) {
             array_add(&cpu_usage, CPU_USAGE_GROUP_WIDTH * cpu + EXITED_OFFSET, *usage);
         }
 
-        struct task_group* tg = cgroup_attribution ? BPF_CORE_READ(task, sched_task_group) : NULL;
+        u32 cgroup_id = 0;
+        u64 serial_nr = 0;
+        struct task_group* tg =
+            cgroup_attribution ? task_group_of(task, btf, &cgroup_id, &serial_nr) : NULL;
         if (tg) {
-            int cgroup_id = BPF_CORE_READ(tg, css.id);
-
             if (cgroup_id > 0 && cgroup_id < MAX_CGROUPS) {
                 array_add(&cgroup_exited, cgroup_id, *usage);
             }
@@ -591,12 +593,12 @@ int softirq_exit(struct trace_event_raw_softirq* args) {
 
 SEC("tp_btf/sched_process_exit")
 int handle__sched_process_exit_btf(u64* ctx) {
-    return account__sched_process_exit(ctx);
+    return account__sched_process_exit(ctx, true);
 }
 
 SEC("raw_tp/sched_process_exit")
 int handle__sched_process_exit_raw(u64* ctx) {
-    return account__sched_process_exit(ctx);
+    return account__sched_process_exit(ctx, false);
 }
 
 char LICENSE[] SEC("license") = "GPL";

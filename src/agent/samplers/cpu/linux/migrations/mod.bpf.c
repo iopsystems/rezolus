@@ -70,7 +70,9 @@ struct {
     __type(value, u32); // cpu
 } last_cpu SEC(".maps");
 
-static __always_inline int account__sched_switch(u64* ctx) {
+// `btf` is a compile-time constant: true in the tp_btf program, whose task
+// arguments are BTF pointers (see task_group_of() in cgroup.h).
+static __always_inline int account__sched_switch(u64* ctx, bool btf) {
     /* TP_PROTO(bool preempt, struct task_struct *prev, struct task_struct *next) */
     struct task_struct* next = (struct task_struct*)ctx[2];
 
@@ -99,13 +101,14 @@ static __always_inline int account__sched_switch(u64* ctx) {
             array_incr(&migrations, to_idx);
 
             // handle per-cgroup accounting
-            // runtime NULL check (bpf_core_field_exists is compile-time only)
-            void* task_group = cgroup_attribution ? BPF_CORE_READ(next, sched_task_group) : NULL;
-            if (task_group) {
-                u32 cgroup_id = BPF_CORE_READ(next, sched_task_group, css.id);
-
+            u32 cgroup_id = 0;
+            u64 serial_nr = 0;
+            struct task_group* tg =
+                cgroup_attribution ? task_group_of(next, btf, &cgroup_id, &serial_nr) : NULL;
+            if (tg) {
                 if (cgroup_id < MAX_CGROUPS) {
-                    int ret = handle_new_cgroup(next, &cgroup_serial_numbers, &cgroup_info);
+                    int ret = handle_new_cgroup_read(&tg->css, cgroup_id, serial_nr,
+                                                     &cgroup_serial_numbers, &cgroup_info);
 
                     if (ret == 0) {
                         // New cgroup detected, zero the counter
@@ -129,12 +132,12 @@ static __always_inline int account__sched_switch(u64* ctx) {
 
 SEC("tp_btf/sched_switch")
 int handle__sched_switch_btf(u64* ctx) {
-    return account__sched_switch(ctx);
+    return account__sched_switch(ctx, true);
 }
 
 SEC("raw_tp/sched_switch")
 int handle__sched_switch_raw(u64* ctx) {
-    return account__sched_switch(ctx);
+    return account__sched_switch(ctx, false);
 }
 
 char LICENSE[] SEC("license") = "GPL";
