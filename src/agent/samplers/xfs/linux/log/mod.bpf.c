@@ -52,9 +52,9 @@ struct xlog___rz {
 } __attribute__((preserve_access_index));
 
 // The begin/end pairs, each with its own start slot on the thread.
-#define PAIR_SPACE 0      // xfs_log_grant_sleep -> xfs_log_grant_wake
-#define PAIR_FORCE 1      // xfs_log_force fentry -> fexit
-#define PAIR_FORCE_SEQ 2  // xfs_log_force_seq (or _lsn) fentry -> fexit
+#define PAIR_SPACE 0     // xfs_log_grant_sleep -> xfs_log_grant_wake
+#define PAIR_FORCE 1     // xfs_log_force fentry -> fexit
+#define PAIR_FORCE_SEQ 2 // xfs_log_force_seq (or _lsn) fentry -> fexit
 #define PAIR_COUNT 3
 
 // What a pair publishes as: the `wait` label's index. Both force pairs are
@@ -108,7 +108,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CPUS* MAX_FILESYSTEMS* COUNTER_GROUP_WIDTH);
+    __uint(max_entries, MAX_CPUS * MAX_FILESYSTEMS * COUNTER_GROUP_WIDTH);
 } counters SEC(".maps");
 
 // Latency histograms, host-wide, one per wait.

@@ -43,7 +43,7 @@
 // The order MUST match the `counters` vec in mod.rs.
 #define C_READS 0
 #define C_READ_BYTES 1
-#define C_ADDED 2  // + reason
+#define C_ADDED 2 // + reason
 #define C_EVICTED 6
 #define C_FAULTS 7
 
@@ -89,7 +89,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CPUS* MAX_FILESYSTEMS* COUNTER_GROUP_WIDTH);
+    __uint(max_entries, MAX_CPUS * MAX_FILESYSTEMS * COUNTER_GROUP_WIDTH);
 } counters SEC(".maps");
 
 /*

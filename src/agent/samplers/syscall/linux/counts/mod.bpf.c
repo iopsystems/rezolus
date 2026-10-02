@@ -213,15 +213,17 @@ struct {
     __uint(max_entries, MAX_CGROUPS);
 } cgroup_syscall_sync SEC(".maps");
 
-SEC("tracepoint/raw_syscalls/sys_enter")
-int sys_enter(struct trace_event_raw_sys_enter* args) {
+// `btf` is a compile-time constant from each program below: the tp_btf
+// program reads the task group through a BTF task pointer, the raw_tp one
+// through bpf_probe_read_kernel() (see current_task_group() in cgroup.h).
+static __always_inline int account_sys_enter(long id, bool btf) {
     u32 offset, idx, group = 0;
 
-    if (args->id < 0) {
+    if (id < 0) {
         return 0;
     }
 
-    u32 syscall_id = args->id;
+    u32 syscall_id = id;
     offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
 
     // for some syscalls, we track counts by "family" of syscall. check the
@@ -238,16 +240,17 @@ int sys_enter(struct trace_event_raw_sys_enter* args) {
     idx = offset + group;
     array_incr(&counters, idx);
 
-    struct task_struct* current = (struct task_struct*)bpf_get_current_task();
+    if (!cgroup_attribution) {
+        return 0;
+    }
 
-    // runtime NULL check (bpf_core_field_exists is a compile-time BTF check)
-    void* task_group = cgroup_attribution ? BPF_CORE_READ(current, sched_task_group) : NULL;
-    if (task_group) {
-        u32 cgroup_id = BPF_CORE_READ(current, sched_task_group, css.id);
-
+    u32 cgroup_id = 0;
+    u64 serial_nr = 0;
+    struct task_group* tg = current_task_group(btf, &cgroup_id, &serial_nr);
+    if (tg) {
         if (cgroup_id < MAX_CGROUPS) {
-
-            int ret = handle_new_cgroup(current, &cgroup_serial_numbers, &cgroup_info);
+            int ret = handle_new_cgroup_read(&tg->css, cgroup_id, serial_nr, &cgroup_serial_numbers,
+                                             &cgroup_info);
 
             if (ret == 0) {
                 // New cgroup detected, zero all counters
@@ -328,6 +331,20 @@ int sys_enter(struct trace_event_raw_sys_enter* args) {
     }
 
     return 0;
+}
+
+// sys_enter's arguments are (struct pt_regs *regs, long id). A raw
+// tracepoint program is handed them as they are; the classic tracepoint this
+// replaces had the kernel copy the syscall number and all six arguments into a
+// trace record before the program ran.
+SEC("tp_btf/sys_enter")
+int sys_enter_btf(u64* ctx) {
+    return account_sys_enter((long)ctx[1], true);
+}
+
+SEC("raw_tp/sys_enter")
+int sys_enter_raw(u64* ctx) {
+    return account_sys_enter((long)ctx[1], false);
 }
 
 char LICENSE[] SEC("license") = "GPL";

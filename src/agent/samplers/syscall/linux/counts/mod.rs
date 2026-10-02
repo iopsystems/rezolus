@@ -1,5 +1,5 @@
 //! Collects Syscall stats using BPF and traces:
-//! * `raw_syscalls/sys_enter`
+//! * `sys_enter` (raw tracepoint: `tp_btf`, or `raw_tp` without kernel BTF)
 //!
 //! And produces these stats:
 //! * `syscall`
@@ -93,6 +93,11 @@ fn init(config: Arc<Config>) -> SamplerResult {
     )
     .cpu_counters("counters", counters, &COUNTERS_ACQ)
     .map("syscall_lut", syscall_lut())
+    .disabled_programs(if kernel_has_btf() {
+        &["sys_enter_raw"]
+    } else {
+        &["sys_enter_btf"]
+    })
     // The switch is read-only data the verifier folds at load (see
     // `cgroup_attribution` in mod.bpf.c); the cgroup maps and their series
     // exist only when it is on.
@@ -237,8 +242,8 @@ impl SkelExt for ModSkel<'_> {
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
         debug!(
-            "{NAME} sys_enter() BPF instruction count: {}",
-            self.progs.sys_enter.insn_cnt()
+            "{NAME} sys_enter_btf() BPF instruction count: {}",
+            self.progs.sys_enter_btf.insn_cnt()
         );
     }
 }
