@@ -186,6 +186,31 @@
 
 ### Added
 
+- **The viewer follows an archive file that is still being written.**
+  `rezolus view` on a `.dendro` or `.rez` (v3) that is not finalized, such as
+  a running hindsight buffer or a `rezolus record` in progress, reopens it
+  and the page refreshes the current section every 5 seconds as in live
+  mode. Before, the view showed the file as it was when the viewer opened
+  it. On each reopen of a `.dendro` the viewer reads its writer heartbeat:
+  while a writer is running it reopens every 2 seconds however rarely rows
+  arrive. When no writer is running (heartbeat unchanged for three
+  intervals: a killed or paused writer, a `rezolus recording snapshot`
+  copy, or a `cp` of a running archive), and for a file with no heartbeat
+  (a `.rez`), it reopens every 2 seconds while rows arrive and doubles the
+  wait after a reopen that finds no new row, up to 60 seconds; a writer
+  that beats again returns it to 2 seconds. Following stops when the writer
+  finalizes the file, when the file is removed, or when another file is
+  loaded. The page keeps its file-mode behavior (file name,
+  `from`/`to` in a link, A/B compare); `/api/v1/mode` reports `following`
+  rather than `live`. A zoomed window whose start retention evicted is cut
+  to the new start, or reset to the full range when none of it is left. In
+  compare mode the experiment's charts are fetched again when its range
+  changes. A finalized file is not reopened, and an archive whose recordings
+  share a label set is not followed. `--tui` redraws a followed file each
+  second.
+- In live mode and when following a file, the full range that chart
+  drill-down zooms within now advances with the recording; before, it was
+  fixed at the extent when the first zoom happened.
 - `memory_pagecache` sampler (opt-in): the page cache's traffic per mount,
   and per cgroup with `cgroup_attribution = true`. Buffered read calls and
   bytes from one `fentry` on `filemap_read`, pages filled by the filling

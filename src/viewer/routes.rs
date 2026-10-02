@@ -205,6 +205,10 @@ async fn mode(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     };
     Json(serde_json::json!({
         "live": state.live.load(Ordering::Relaxed),
+        // An opened archive file that was not finalized when opened, and is
+        // still followed: the page refreshes as in live mode and keeps its
+        // file-mode UI.
+        "following": state.following(),
         "loaded": loaded,
         "compare_mode": state.captures.experiment_attached(),
         "combined_ab": state.combined_ab(),
@@ -541,6 +545,13 @@ async fn metadata(
         if let Some(why) = state.live_session.lock().as_ref().and_then(|s| s.stopped()) {
             meta["liveError"] = serde_json::json!(why);
         }
+        // Whether a followed archive file is still followed. The page stops
+        // refreshing once this is false or absent (the file was finalized or
+        // removed, or the baseline was replaced). A file whose writer has
+        // stopped stays followed, at a longer wait.
+        if state.follow.lock().is_some() {
+            meta["following"] = serde_json::json!(state.following());
+        }
     }
     if let Some(alias) = state.captures.alias_by_id(capture) {
         meta["alias"] = serde_json::json!(alias);
@@ -674,5 +685,47 @@ mod live_error_tests {
 
         let running = state_with(LiveSession::for_test(&path, None));
         assert!(metadata_of(running).await.get("liveError").is_none());
+    }
+}
+
+#[cfg(test)]
+mod follow_tests {
+    use super::*;
+
+    fn view(path: &std::path::Path) -> Arc<AppState> {
+        let matches = crate::viewer::command().get_matches_from(["view", path.to_str().unwrap()]);
+        let config = crate::viewer::Config::try_from(matches).unwrap();
+        Arc::new(crate::viewer::init_file_mode(
+            &config,
+            path,
+            &::dashboard::TemplateRegistry::empty(),
+            metriken_query::BufferPool::new(64 << 20),
+        ))
+    }
+
+    async fn mode_and_metadata(state: Arc<AppState>) -> (serde_json::Value, serde_json::Value) {
+        let Json(mode) = mode(State(Arc::clone(&state))).await;
+        let Json(meta) = metadata(State(state), Query(CaptureParam { capture: None })).await;
+        (mode, serde_json::to_value(meta).unwrap()["data"].clone())
+    }
+
+    /// The page learns that a file is followed from `following` in the mode
+    /// response, which is distinct from `live`, and from the baseline's
+    /// metadata, which says when the follow has ended.
+    #[tokio::test]
+    async fn a_followed_file_is_reported_apart_from_live_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("buffer.dendro");
+        crate::dendro_copy::fixtures::recorded(&path, 3, false);
+        let (mode, meta) = mode_and_metadata(view(&path)).await;
+        assert_eq!(mode["following"], true);
+        assert_eq!(mode["live"], false);
+        assert_eq!(meta["following"], true);
+
+        let done = dir.path().join("done.dendro");
+        crate::dendro_copy::fixtures::recorded(&done, 3, true);
+        let (mode, meta) = mode_and_metadata(view(&done)).await;
+        assert_eq!(mode["following"], false);
+        assert!(meta.get("following").is_none());
     }
 }

@@ -6,8 +6,8 @@ import { ViewerApi } from './viewer_api.js';
 import { FileUpload, CompareLanding, splitAlias } from './ui/landing.js';
 import { notify, showSaveModal } from './ui/overlays.js';
 import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore, seedEventsFromMetadata } from './selection/selection.js';
-import { clearMetadataCache, processDashboardData, nativeInterval, stepAtLeast, CAPTURE_EXPERIMENT } from './data.js';
-import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, resetLinkedViewState, reapplyFileMetadata, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
+import { clearMetadataCache, processDashboardData, nativeInterval, stepAtLeast, sameExtent, CAPTURE_EXPERIMENT } from './data.js';
+import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, resetLinkedViewState, reapplyFileMetadata, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections, stopRefreshing, noteRecordingExtent } from './app.js';
 
 // Splash: mounted on body before any async bootstrap step so the page
 // never shows a blank document while we fetch state. Replaced by the
@@ -35,6 +35,9 @@ let fileChecksum = null;
 let fileMetadata = null;
 let selectionPayload = null;
 let liveMode = false;
+// The opened file is an archive still being written; see `following` in
+// app.js.
+let followMode = false;
 let baselineAlias = null;
 // The baseline's [minTime, maxTime] in seconds, so a link's from/to can be
 // clamped before the first section loads.
@@ -183,6 +186,8 @@ const uploadParquet = async (file) => {
 };
 
 let liveRefreshInProgress = false;
+// The baseline extent the last poll of a followed file saw.
+let lastFollowExtent = null;
 
 const refreshCurrentSection = async () => {
     if (liveRefreshInProgress || !getRecording()) return;
@@ -198,6 +203,26 @@ const refreshCurrentSection = async () => {
         if (liveError) {
             stopRecording();
             notify('error', `Live recording stopped: ${liveError}. Record again to reconnect.`, 2147483647);
+            m.redraw();
+            return;
+        }
+
+        // The follow of an archive file ended (it was finalized or removed,
+        // or the baseline was replaced), so this refresh is the last one.
+        if (followMode && meta?.data?.following !== true) {
+            followMode = false;
+            stopRefreshing();
+        }
+        await noteRecordingExtent(meta);
+
+        // A followed file whose extent is unchanged since the last poll has
+        // no new rows to show, so the section is not queried again. The
+        // redraw lets compare charts fetch the experiment if its range
+        // changed. The poll after a follow ends always queries.
+        const extent = { start: meta?.data?.minTime, end: meta?.data?.maxTime };
+        const unchanged = followMode && sameExtent(extent, lastFollowExtent);
+        lastFollowExtent = extent;
+        if (unchanged) {
             m.redraw();
             return;
         }
@@ -380,6 +405,7 @@ const bootstrap = async () => {
             return;
         }
         liveMode = response.live === true;
+        followMode = response.following === true;
         compareMode = response.compare_mode === true;
         categoryName = response.category || null;
         combinedAB = response.combined_ab === true;
@@ -438,6 +464,7 @@ const bootstrap = async () => {
         fileMetadata,
         selectionPayload,
         liveMode,
+        following: followMode,
         compareMode,
         combinedAB,
         reportMode,
@@ -454,7 +481,7 @@ const bootstrap = async () => {
         onStopRecording: stopRecording,
         onSaveCapture: saveCapture,
         onUploadParquet: uploadParquet,
-        onRefresh: liveMode ? refreshCurrentSection : null,
+        onRefresh: (liveMode || followMode) ? refreshCurrentSection : null,
     });
 };
 

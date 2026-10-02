@@ -227,6 +227,9 @@ const fetchExperimentResult = (vnode) => {
         vnode.state.error = 'compare: query skipped (unresolved cgroup pattern)';
         return;
     }
+    // The range this fetch is for, so the view can fetch again when the
+    // experiment's range is replaced (a followed archive grew).
+    vnode.state._fetchedRange = vnode.attrs.experimentQueryRange;
     vnode.state._fetchInFlight = true;
     (async () => {
         try {
@@ -529,6 +532,15 @@ export const CompareChartWrapper = {
             const want = effectiveExperimentStep(vnode.attrs, { step: 0 });
             if (want > 0 && vnode.state._lastFetchedStep != null
                 && want !== vnode.state._lastFetchedStep) {
+                fetchExperimentResult(vnode);
+                fetchExtraCaptures(vnode);
+            } else if (vnode.state._lastFetchedStep != null
+                && vnode.attrs.experimentQueryRange !== vnode.state._fetchedRange) {
+                // The experiment's range was replaced on a refresh of a
+                // followed archive: fetch it again over the new range, and
+                // drop spectra fetched over the old one.
+                vnode.state._spectrumByKind = {};
+                vnode.state._spectrumPending = null;
                 fetchExperimentResult(vnode);
                 fetchExtraCaptures(vnode);
             }

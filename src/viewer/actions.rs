@@ -476,6 +476,7 @@ pub async fn attach_experiment(
     // HTTP-attached experiments don't carry an alias today; the
     // parameter is here so a future `x-rezolus-alias` header can thread
     // one through without further signature changes.
+    state.unfollow_capture(super::capture_registry::EXPERIMENT_ID);
     state.captures.attach_experiment(
         Arc::new(exp_reader) as Arc<dyn MetricsSource>,
         sysinfo.clone(),
@@ -496,6 +497,7 @@ pub async fn attach_experiment(
 
 /// Detach the currently attached experiment (if any) and clean up its temp file.
 pub async fn detach_experiment(State(state): State<Arc<AppState>>) -> Response {
+    state.unfollow_capture(super::capture_registry::EXPERIMENT_ID);
     state.captures.detach_experiment();
     if let Some(path) = state.experiment_parquet_path.write().take() {
         let _ = std::fs::remove_file(&path);

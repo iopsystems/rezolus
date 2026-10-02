@@ -57,6 +57,31 @@ impl LiveReader {
         })
     }
 
+    /// Wrap `reader`, already open on the recording labelled `labels` of the
+    /// archive at `path`. For a caller that opened every recording once and
+    /// chose which to show, such as the viewer's file mode: the archive is
+    /// not opened again, and [`refresh`](Self::refresh) finds the recording
+    /// by `labels` exactly, as it does after [`open`](Self::open).
+    ///
+    /// A refresh takes the first recording whose label set equals `labels`.
+    /// When two recordings of the archive have the same label set, both
+    /// readers wrapping them read the first one after a refresh, so a caller
+    /// must not wrap recordings whose label sets are equal.
+    pub fn from_reader(
+        path: &Path,
+        labels: BTreeMap<String, String>,
+        reader: RezReader,
+        pool: Arc<BufferPool>,
+    ) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            pool,
+            labels,
+            current: RwLock::new(Arc::new(reader)),
+            name: None,
+        }
+    }
+
     /// Report `name` as the filename: for a temporary archive whose own name
     /// says nothing, such as the viewer's live mode naming the agent.
     pub fn named(mut self, name: String) -> Self {
@@ -68,19 +93,39 @@ impl LiveReader {
     /// Logging is off during the reopen, as for [`open`](Self::open). The
     /// recording is found again by the full label set it had when opened.
     ///
-    /// The new reader opens each table again on its first query, reading
-    /// every segment's footer. Sealed segments' decoded blocks are found in
-    /// the shared `BufferPool`, which metriken-query keys by segment content
-    /// from 0.33.4.
+    /// A reopen opens every recording of the archive and parses each table's
+    /// segment footers. Sealed segments' decoded blocks are found in the
+    /// shared `BufferPool`, which metriken-query keys by segment content from
+    /// 0.33.4. A caller refreshing several readers of one archive can open it
+    /// once and hand each its recording with [`replace`](Self::replace).
     pub fn refresh(&self) -> Result<(), Error> {
         let (_, reader) = quiet(|| pick_exact(&self.path, &self.labels, &self.pool))?;
-        *self.current.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(reader);
+        self.replace(reader);
         Ok(())
+    }
+
+    /// Make `reader` the one queries go to. It must be a newer open of this
+    /// reader's recording: the one labelled [`labels`](Self::labels) in the
+    /// archive at [`path`](Self::path).
+    pub fn replace(&self, reader: RezReader) {
+        *self.current.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(reader);
+    }
+
+    /// The full label set of the recording this reader reads.
+    pub fn labels(&self) -> &BTreeMap<String, String> {
+        &self.labels
     }
 
     /// The reader queries go to now.
     pub fn current(&self) -> Arc<RezReader> {
         Arc::clone(&self.current.read().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Whether the recording was finalized as of the last open. `record`
+    /// finalizes on a clean exit; a killed writer's file, or a `cp` or
+    /// `recording snapshot` of a running archive, is not finalized.
+    pub fn complete(&self) -> bool {
+        self.current().complete()
     }
 
     /// The archive's path.
