@@ -21,6 +21,13 @@
 
 ### Changed
 
+- A live viewer, or a viewer following an archive file, reuses each
+  table's state across reopens (metriken-query 0.34.1, metriken-archive
+  0.3.3): the first query after a reopen reads only the segments sealed
+  since and the live tail. On a 30-minute recording of a per-task group it
+  took 2.7x a warm query, and takes 1.2-1.3x. Reuse needs the file at the
+  path to be the one the previous reader read; a file renamed over it, as
+  `recording filter` without `-o` does, is read afresh.
 - **Groups of slots travel long on the agent's stream.**
   `/metrics/stream?layout=long` sends a group whose metrics are all counter
   or gauge groups (per task, per cgroup, per CPU) as values keyed by
