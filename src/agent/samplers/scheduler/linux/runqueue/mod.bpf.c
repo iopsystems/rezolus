@@ -10,6 +10,7 @@
 // to calculate the runqueue latency, running time, and off-cpu time.
 
 #include <vmlinux.h>
+#include "../../../agent/bpf/btf_read.h"
 #include "../../../agent/bpf/cgroup.h"
 #include "../../../agent/bpf/helpers.h"
 #include <bpf/bpf_core_read.h>
@@ -159,7 +160,7 @@ struct {
 } cgroup_offcpu SEC(".maps");
 
 /* record enqueue timestamp */
-static __always_inline int trace_enqueue(u32 tgid, u32 pid) {
+static __always_inline int trace_enqueue(u32 pid) {
     u64 ts;
 
     if (!pid) {
@@ -171,18 +172,20 @@ static __always_inline int trace_enqueue(u32 tgid, u32 pid) {
     return 0;
 }
 
-static __always_inline int account__sched_wakeup(u64* ctx) {
+// `btf` is a compile-time constant: true in the tp_btf programs, whose task
+// arguments are BTF pointers (see BTF_READ in btf_read.h).
+static __always_inline int account__sched_wakeup(u64* ctx, bool btf) {
     /* TP_PROTO(struct task_struct *p) */
     struct task_struct* p = (void*)ctx[0];
 
-    return trace_enqueue(BPF_CORE_READ(p, tgid), BPF_CORE_READ(p, pid));
+    return trace_enqueue(BTF_READ(btf, p, pid));
 }
 
-static __always_inline int account__sched_wakeup_new(u64* ctx) {
+static __always_inline int account__sched_wakeup_new(u64* ctx, bool btf) {
     /* TP_PROTO(struct task_struct *p) */
     struct task_struct* p = (void*)ctx[0];
 
-    return trace_enqueue(BPF_CORE_READ(p, tgid), BPF_CORE_READ(p, pid));
+    return trace_enqueue(BTF_READ(btf, p, pid));
 }
 
 // `btf` is a compile-time constant: true in the tp_btf program, whose task
@@ -215,8 +218,8 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
     // bucket accrued 59-189 samples/s while the machine was otherwise idle.
     // `trace_enqueue()` already skips pid 0 on the wakeup path; skipping it here
     // keeps the switch path consistent with it.
-    u32 prev_pid = BPF_CORE_READ(prev, pid);
-    u32 next_pid = BPF_CORE_READ(next, pid);
+    u32 prev_pid = BTF_READ(btf, prev, pid);
+    u32 next_pid = BTF_READ(btf, next, pid);
 
     // read the prev task cgroup details and push to ringbuf if new cgroup
     u32 id = 0;
@@ -248,7 +251,7 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
     // prev task is moving from running
     // - update prev->pid enqueued_at with now
     // - calculate how long prev task was running and update hist
-    if (get_task_state(prev) == TASK_RUNNING) {
+    if (get_task_state_btf(prev, btf) == TASK_RUNNING) {
         // The idle task is always TASK_RUNNING, so a CPU simply waking up to run
         // something counted as an involuntary context switch -- nothing was
         // competing for the CPU, and no task was preempted. The inflation is
@@ -382,22 +385,22 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
 
 SEC("tp_btf/sched_wakeup")
 int handle__sched_wakeup_btf(u64* ctx) {
-    return account__sched_wakeup(ctx);
+    return account__sched_wakeup(ctx, true);
 }
 
 SEC("raw_tp/sched_wakeup")
 int handle__sched_wakeup_raw(u64* ctx) {
-    return account__sched_wakeup(ctx);
+    return account__sched_wakeup(ctx, false);
 }
 
 SEC("tp_btf/sched_wakeup_new")
 int handle__sched_wakeup_new_btf(u64* ctx) {
-    return account__sched_wakeup_new(ctx);
+    return account__sched_wakeup_new(ctx, true);
 }
 
 SEC("raw_tp/sched_wakeup_new")
 int handle__sched_wakeup_new_raw(u64* ctx) {
-    return account__sched_wakeup_new(ctx);
+    return account__sched_wakeup_new(ctx, false);
 }
 
 SEC("tp_btf/sched_switch")

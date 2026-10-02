@@ -30,6 +30,20 @@ static __always_inline __s64 get_task_state(void* task) {
     return BPF_CORE_READ((struct task_struct___o*)task, state);
 }
 
+/*
+ * get_task_state_btf - get_task_state() with a direct load where @task is a
+ * BTF pointer. @btf is a compile-time constant, true in a tp_btf or fentry
+ * program whose @task is an argument (see BTF_READ in btf_read.h).
+ */
+static __always_inline __s64 get_task_state_btf(void* task, bool btf) {
+    struct task_struct___x* t = task;
+    struct task_struct___o* o = task;
+
+    if (bpf_core_field_exists(t->__state))
+        return btf ? t->__state : BPF_CORE_READ(t, __state);
+    return btf ? o->state : BPF_CORE_READ(o, state);
+}
+
 /**
  * commit 309dca309fc3 ("block: store a block_device pointer in struct bio")
  * adds a new member bi_bdev which is a pointer to struct block_device

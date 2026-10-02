@@ -4,6 +4,7 @@
 // This BPF program tracks CPU migrations using software events.
 
 #include <vmlinux.h>
+#include "../../../agent/bpf/btf_read.h"
 #include "../../../agent/bpf/cgroup.h"
 #include "../../../agent/bpf/helpers.h"
 #include <bpf/bpf_helpers.h>
@@ -77,7 +78,7 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
     struct task_struct* next = (struct task_struct*)ctx[2];
 
     u32 cpu = bpf_get_smp_processor_id();
-    u32 next_pid = BPF_CORE_READ(next, pid);
+    u32 next_pid = BTF_READ(btf, next, pid);
 
     // Skip kernel threads and idle task (pid 0)
     if (next_pid == 0) {
