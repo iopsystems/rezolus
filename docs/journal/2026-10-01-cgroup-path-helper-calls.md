@@ -1,7 +1,7 @@
 # The per-cgroup path's cost is its helper calls
 
 **Status: every sampler with a per-event cgroup path converted and measured.
-`syscall_counts` first, the other seven after (see "The other samplers").
+`syscall_counts` first, the other eight after (see "The other samplers").
 `cpu_bandwidth` reads a css only on throttle events and keeps its
 `bpf_probe_read_kernel()` path.**
 
@@ -100,9 +100,15 @@ delegates to `handle_new_cgroup_read()`.
 | `ext4_ops`, `xfs_log`, `memory_pagecache` | their hooks | `bpf_get_current_task_btf()`, which they already used |
 
 Each `raw_tp` or `kprobe` twin passes `btf = false` and makes three helper
-calls per task instead of seven; compiled, each BTF program has three fewer
-`bpf_probe_read_kernel()` calls than its twin (six for `scheduler_runqueue`),
-and the twins contain no direct loads.
+calls per task where it made six or seven. The exception is
+`sched_process_exit`'s raw twin in `cpu_usage`, which read only the task group
+and its id and now also reads the serial number: three where it made two, once
+per process exit. Compiled, each BTF program that takes its task as an
+argument has three fewer `bpf_probe_read_kernel()` calls than its twin (six
+for `scheduler_runqueue`), and the twins contain no direct loads.
+`cpu_tlb_flush`'s two programs have the same count, because the BTF one
+carries `current_task_group()`'s fallback for kernels before 5.11; the
+verifier removes it at load where `bpf_get_current_task_btf()` exists.
 
 Measured on delta with all of these samplers enabled, main and the branch
 built in one job and run in alternation, two passes each, under
@@ -122,14 +128,18 @@ over `rezolus_bpf_run_count`, all of its programs together. systemslab
 | `cpu_usage` | 100, 108 | 103, 98 |
 | `syscall_counts` | 34, 33 | 34, 34 |
 
-`cpu_migrations` takes its cgroup path only on a migration, and `cpu_usage`'s
-figure is mostly its softirq programs, which have no cgroup path; neither
-moved outside noise. `syscall_counts` was converted in #1392 and is the
-control. `cpu_perf` and `xfs_log` did not load on delta (the host's agent
-holds the PMU, and delta has no XFS). In a KVM guest with the image's agent
-stopped and a loop-mounted XFS, all ten samplers with `cgroup_attribution`
-loaded healthy, including `cpu_perf`, `xfs_log` and `cpu_bandwidth`, and each
-produced per-cgroup series with values (systemslab
+`cpu_migrations` takes its cgroup path only on a migration; neither it nor
+`cpu_usage` moved outside noise. `cpu_usage`'s figure averages all its
+programs, including the softirq ones, which have no cgroup path; I did not
+break it down per program. `syscall_counts` was converted in #1392 and is
+the control. Delta reported four samplers unsupported on every pass. Its
+status names the reason only for `xfs_log` (delta has no XFS); `cpu_perf`
+has no run count, presumably because the host's own agent holds the PMU, and
+`cpu_bandwidth` has none either. In a KVM guest with the image's agent
+stopped and a loop-mounted XFS, all ten enabled samplers loaded healthy,
+including `cpu_perf`, `xfs_log` and `cpu_bandwidth`. The nine with
+`cgroup_attribution` produced per-cgroup series with values; `cpu_bandwidth`
+had none, with no CPU quota set (systemslab
 `01a0fd03-ebf4-718d-088c-ee4af495caf1`).
 
 Not run: a kernel from 5.8 to 5.10, where the BTF programs take the

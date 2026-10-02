@@ -51,7 +51,7 @@ these samplers (711 K), and at 564–582 K with them on.
 
 Since #1392, `syscall_counts` reads the task group once, as direct loads from
 a BTF task pointer, from a `tp_btf` program, and the other samplers in the
-table do the same since the change after it. The table above is the cost
+table do the same since #1397. The table above is the cost
 before either. Measured on the same bare-metal host with `syscall_counts`
 alone enabled, the two builds run in alternation, under
 `perf bench sched pipe` and `perf bench syscall basic`:
@@ -72,9 +72,9 @@ passes each:
 | `ext4_ops` | 208–217 ns | 148–156 ns |
 | `memory_pagecache` | 207–271 ns | 155–187 ns |
 
-`cpu_migrations` and `cpu_usage` did not change outside noise: the first
-reaches its cgroup path only on a migration, and the second's average is
-mostly its softirq programs.
+`cpu_migrations` and `cpu_usage` did not change outside noise. The first
+reaches its cgroup path only on a migration; the second's average includes
+its softirq programs, which have no cgroup path.
 
 A task is attributed to its CPU controller's task group. A service whose
 cgroup has no CPU controller of its own is counted under the nearest
