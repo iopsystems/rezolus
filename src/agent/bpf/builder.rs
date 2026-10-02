@@ -1305,7 +1305,7 @@ where
     ///
     /// // On x86_64, only attach the tracepoint version
     /// BpfBuilder::new(...)
-    ///     .enabled_programs(&["tlb_flush"])
+    ///     .enabled_programs(&["tlb_flush_btf"])
     ///     .build()?;
     /// ```
     pub fn enabled_programs(mut self, names: &[&'static str]) -> Self {

@@ -82,8 +82,14 @@ fn init(config: Arc<Config>) -> SamplerResult {
     // Select the appropriate BPF program based on architecture
     // x86_64: use tlb_flush tracepoint (provides detailed reason codes)
     // ARM64: use tlb_finish_mmu kprobe (basic counting, no reason breakdown)
+    // The tracepoint as tp_btf where the kernel has BTF (the per-cgroup path
+    // reads the task group through a BTF pointer), raw_tp otherwise.
     #[cfg(target_arch = "x86_64")]
-    let enabled_programs = &["tlb_flush"];
+    let enabled_programs: &[&'static str] = if kernel_has_btf() {
+        &["tlb_flush_btf"]
+    } else {
+        &["tlb_flush_raw"]
+    };
 
     #[cfg(target_arch = "aarch64")]
     let enabled_programs = &["tlb_finish_mmu"];
@@ -182,10 +188,16 @@ impl SkelExt for ModSkel<'_> {
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
         #[cfg(target_arch = "x86_64")]
-        debug!(
-            "{NAME} tlb_flush() BPF instruction count: {}",
-            self.progs.tlb_flush.insn_cnt()
-        );
+        {
+            debug!(
+                "{NAME} tlb_flush_btf() BPF instruction count: {}",
+                self.progs.tlb_flush_btf.insn_cnt()
+            );
+            debug!(
+                "{NAME} tlb_flush_raw() BPF instruction count: {}",
+                self.progs.tlb_flush_raw.insn_cnt()
+            );
+        }
 
         #[cfg(target_arch = "aarch64")]
         debug!(
