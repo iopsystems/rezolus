@@ -199,7 +199,8 @@ static __always_inline int account_sys_enter(void) {
 // a BTF pointer (see BTF_READ in btf_read.h).
 static __always_inline long exit_syscall_nr(struct pt_regs* regs, bool btf) {
 #if defined(__TARGET_ARCH_x86)
-    return (long)BTF_READ(btf, regs, orig_ax);
+    // x86's syscall_get_nr() returns orig_ax as an int
+    return (long)(int)BTF_READ(btf, regs, orig_ax);
 #elif defined(__TARGET_ARCH_arm64)
     return (long)BTF_READ(btf, regs, syscallno);
 #else
