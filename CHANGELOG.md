@@ -34,6 +34,13 @@
   layout is recorded through the wide one, and `record` logs that when it
   connects. The
   response names the layout served in `x-rezolus-layout`.
+- metriken-query 0.34.0, metriken-exposition 0.21.4, metriken-archive 0.3.2
+  and dendro 0.3.4. A query whose metric is in the recording but matches
+  nothing in the range answers empty instead of "metric not found";
+  `rezolus mcp query` prints "No series matched." for it, and a metric read
+  with a function for another kind (`rate()` of a gauge) says which kind it
+  is. Archives written through the new writer carry a heartbeat while their
+  writer runs.
 - metriken-query 0.33.6 and metriken-archive 0.3.1. A segment's decoded
   blocks are cached by its bytes, so a reader reopened over the same archive
   finds the blocks the previous one decoded. A query range that starts or

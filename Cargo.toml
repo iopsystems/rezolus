@@ -16,10 +16,10 @@ libc = "0.2.186"
 libloading = "0.8"
 log = "0.4.29"
 metriken = "0.11.2"
-metriken-exposition = "0.21.3"
-metriken-query = { version = "0.33.6", default-features = false }
+metriken-exposition = "0.21.4"
+metriken-query = { version = "0.34.0", default-features = false }
 metriken-segment = { version = "0.1.6", default-features = false }
-metriken-archive = { version = "0.3.1", default-features = false }
+metriken-archive = { version = "0.3.2", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
@@ -46,7 +46,7 @@ dashboard = { path = "crates/dashboard" }
 # `FrameReader` skip frame kinds it does not know. 0.3.1 adds
 # `last_caller_row_at_or_before`, which the reader for dendro archives uses
 # to find the identity index's `Full` to replay from.
-dendro = { version = "0.3.3", default-features = false }
+dendro = { version = "0.3.4", default-features = false }
 rez = { path = "crates/rez" }
 report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
@@ -55,7 +55,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "6.0.0-alpha.18"
+version = "6.0.0-alpha.19"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true

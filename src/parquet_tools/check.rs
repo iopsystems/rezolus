@@ -310,7 +310,8 @@ fn evaluate(reader: &dyn MetricsSource, kpi: &Kpi, check: &Check) -> Result<Wind
     };
     match series.len() {
         0 => Err(format!(
-            "no data: `{query}` matched no series (metric absent from the recording?)"
+            "no data: `{query}` matched no series in the recording's range (the metric \
+             exists; check its label matchers)"
         )),
         1 => Ok(evaluate_series(&series[0], check, step)),
         n => Err(format!(
