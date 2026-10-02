@@ -31,7 +31,7 @@
   other syscall tracer on the host, its overhead per syscall falls from about
   347 ns to 226 ns in a KVM guest. Where another tool keeps classic programs
   on those tracepoints, the raw tracepoint is a second dispatch and costs
-  about 45 ns per syscall more than before. The series are unchanged.
+  about 60 ns per syscall more than before. The series are unchanged.
 - **Groups of slots travel long on the agent's stream.**
   `/metrics/stream?layout=long` sends a group whose metrics are all counter
   or gauge groups (per task, per cgroup, per CPU) as values keyed by

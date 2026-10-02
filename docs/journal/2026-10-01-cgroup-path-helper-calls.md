@@ -206,7 +206,8 @@ overhead per syscall from about 347 ns to about 226 ns. On delta the host's
 own agent keeps classic programs on `sys_enter` and `sys_exit`, so the kernel
 builds the trace record on every syscall anyway and main's classic programs
 run from the same dispatch at little extra cost; the raw tracepoint adds a
-second callback and dispatch, about 45 ns per syscall there. A host where
+second callback and dispatch, about 60 ns per syscall there (from the means
+of the six passes: 545 ns per syscall on main, 607 ns on the branch). A host where
 another tool holds classic programs on these tracepoints pays that; a host
 where Rezolus is the only tracer, the case the defaults are for, gains the
 larger amount.
