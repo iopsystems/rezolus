@@ -132,20 +132,20 @@ over `rezolus_bpf_run_count`, all of its programs together. systemslab
 `cpu_usage` moved outside noise. `cpu_usage`'s figure averages all its
 programs, including the softirq ones, which have no cgroup path; I did not
 break it down per program. `syscall_counts` was converted in #1392 and is
-the control. Of the nine samplers enabled on delta, `xfs_log` reported
-unsupported (delta has no XFS) and `cpu_perf` has no run count, presumably
-because the host's own agent holds the PMU; `cpu_bandwidth` was not enabled
-there. In a KVM guest with the image's agent
+the control. Nine of these samplers were enabled on delta, whose status
+lists eleven with four unsupported. `xfs_log` and `cpu_perf` were among the
+unsupported: delta has no XFS, and the host's own agent presumably holds the
+PMU. `cpu_bandwidth` was not enabled there. In a KVM guest with the image's agent
 stopped and a loop-mounted XFS, all ten enabled samplers loaded healthy,
 including `cpu_perf`, `xfs_log` and `cpu_bandwidth`. The nine with
 `cgroup_attribution` produced per-cgroup series with values; `cpu_bandwidth`
 had none, with no CPU quota set (systemslab
 `01a0fd03-ebf4-718d-088c-ee4af495caf1`).
 
-Not run: a kernel from 5.8 to 5.10, where the BTF programs take the
-`bpf_get_current_task_btf()` fallback in `current_task_group()` but still use
-direct loads from typed arguments in `task_group_of()`, and a kernel without
-BTF, where the `raw_tp` and `kprobe` twins load.
+Not run: a kernel from 5.8 to 5.10, where `current_task_group()` falls back
+to `bpf_get_current_task()` and three probe reads but `task_group_of()` still
+makes direct loads from typed arguments, and a kernel without BTF, where the
+`raw_tp` and `kprobe` twins load.
 
 ## Contention on the shared per-cgroup counters
 

@@ -22,8 +22,8 @@
 ### Changed
 
 - Every sampler with a per-event cgroup path reads the task group once, as
-  direct loads from a BTF task pointer where the program is `tp_btf` or
-  `fentry`, instead of through up to seven `bpf_probe_read_kernel()` calls:
+  direct loads from a BTF task pointer where the program is `tp_btf`,
+  `fentry` or `fexit`, instead of through up to seven `bpf_probe_read_kernel()` calls:
   `cpu_usage`, `cpu_migrations`, `cpu_perf`, `cpu_tlb_flush`,
   `scheduler_runqueue`, `ext4_ops`, `xfs_log` and `memory_pagecache`, after
   `syscall_counts`. `cpu_tlb_flush` attaches to `tlb_flush` as `tp_btf`
