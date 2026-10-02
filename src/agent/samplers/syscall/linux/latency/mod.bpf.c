@@ -16,6 +16,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
+#include "../../../agent/bpf/btf_read.h"
 
 #define COUNTER_GROUP_WIDTH 24
 #define HISTOGRAM_BUCKETS HISTOGRAM_BUCKETS_POW_3
@@ -177,8 +178,12 @@ struct {
     __uint(max_entries, MAX_SYSCALL_ID);
 } syscall_lut SEC(".maps");
 
-SEC("tracepoint/raw_syscalls/sys_enter")
-int sys_enter(struct trace_event_raw_sys_enter* args) {
+// sys_enter's and sys_exit's arguments are (struct pt_regs *regs, long id) and
+// (struct pt_regs *regs, long ret). A raw tracepoint program is handed them as
+// they are; the classic tracepoints these replace had the kernel copy the
+// syscall number and six arguments, or the return value, into a trace record
+// before the program ran.
+static __always_inline int account_sys_enter(void) {
     u64 id = bpf_get_current_pid_tgid();
     u32 tid = id;
     u64 ts;
@@ -188,17 +193,32 @@ int sys_enter(struct trace_event_raw_sys_enter* args) {
     return 0;
 }
 
-SEC("tracepoint/raw_syscalls/sys_exit")
-int sys_exit(struct trace_event_raw_sys_exit* args) {
+// The syscall number at exit, read from the registers as the kernel's
+// syscall_get_nr() does and as the classic sys_exit tracepoint reported it.
+// `btf` is a compile-time constant: true in the tp_btf program, whose `regs` is
+// a BTF pointer (see BTF_READ in btf_read.h).
+static __always_inline long exit_syscall_nr(struct pt_regs* regs, bool btf) {
+#if defined(__TARGET_ARCH_x86)
+    // x86's syscall_get_nr() returns orig_ax as an int
+    return (long)(int)BTF_READ(btf, regs, orig_ax);
+#elif defined(__TARGET_ARCH_arm64)
+    return (long)BTF_READ(btf, regs, syscallno);
+#else
+#error "syscall_latency: unsupported architecture"
+#endif
+}
+
+static __always_inline int account_sys_exit(struct pt_regs* regs, bool btf) {
     u64 id = bpf_get_current_pid_tgid();
     u64 *start_ts, lat = 0;
     u32 tid = id, group = 0;
 
-    if (args->id < 0) {
+    long nr = exit_syscall_nr(regs, btf);
+    if (nr < 0) {
         return 0;
     }
 
-    u32 syscall_id = args->id;
+    u32 syscall_id = nr;
 
     start_ts = bpf_map_lookup_elem(&start, &tid);
 
@@ -275,6 +295,26 @@ int sys_exit(struct trace_event_raw_sys_exit* args) {
     }
 
     return 0;
+}
+
+SEC("tp_btf/sys_enter")
+int sys_enter_btf(u64* ctx) {
+    return account_sys_enter();
+}
+
+SEC("raw_tp/sys_enter")
+int sys_enter_raw(u64* ctx) {
+    return account_sys_enter();
+}
+
+SEC("tp_btf/sys_exit")
+int sys_exit_btf(u64* ctx) {
+    return account_sys_exit((struct pt_regs*)ctx[0], true);
+}
+
+SEC("raw_tp/sys_exit")
+int sys_exit_raw(u64* ctx) {
+    return account_sys_exit((struct pt_regs*)ctx[0], false);
 }
 
 char LICENSE[] SEC("license") = "GPL";

@@ -1,6 +1,6 @@
 //! Collects Syscall stats using BPF and traces:
-//! * `raw_syscalls/sys_enter`
-//! * `raw_syscalls/sys_exit`
+//! * `sys_enter` and `sys_exit` (raw tracepoints: `tp_btf`, or `raw_tp`
+//!   without kernel BTF)
 //!
 //! And produces these stats:
 //! * `syscall_latency`
@@ -63,6 +63,11 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .histogram("event_latency", &SYSCALL_EVENT_LATENCY, &LATENCIES_ACQ)
     .histogram("sync_latency", &SYSCALL_SYNC_LATENCY, &LATENCIES_ACQ)
     .map("syscall_lut", syscall_lut())
+    .disabled_programs(if kernel_has_btf() {
+        &["sys_enter_raw", "sys_exit_raw"]
+    } else {
+        &["sys_enter_btf", "sys_exit_btf"]
+    })
     .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -104,12 +109,20 @@ impl SkelExt for ModSkel<'_> {
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
         debug!(
-            "{NAME} sys_enter() BPF instruction count: {}",
-            self.progs.sys_enter.insn_cnt()
+            "{NAME} sys_enter_btf() BPF instruction count: {}",
+            self.progs.sys_enter_btf.insn_cnt()
         );
         debug!(
-            "{NAME} sys_exit() BPF instruction count: {}",
-            self.progs.sys_exit.insn_cnt()
+            "{NAME} sys_enter_raw() BPF instruction count: {}",
+            self.progs.sys_enter_raw.insn_cnt()
+        );
+        debug!(
+            "{NAME} sys_exit_btf() BPF instruction count: {}",
+            self.progs.sys_exit_btf.insn_cnt()
+        );
+        debug!(
+            "{NAME} sys_exit_raw() BPF instruction count: {}",
+            self.progs.sys_exit_raw.insn_cnt()
         );
     }
 }
