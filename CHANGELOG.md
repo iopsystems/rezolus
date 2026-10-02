@@ -21,6 +21,12 @@
 
 ### Changed
 
+- `syscall_counts` attaches to `sys_enter` as a raw tracepoint (`tp_btf`,
+  or `raw_tp` without kernel BTF) instead of the `raw_syscalls/sys_enter`
+  tracepoint, and its per-cgroup path reads the task group once, as direct
+  loads from a BTF task pointer on kernels from 5.11. On bare metal (EPYC
+  4564P, 6.12) the program costs 33–39 ns per syscall with
+  `cgroup_attribution` on, down from 140–151 ns. The series are unchanged.
 - `cpu_usage`, `cpu_migrations`, `cpu_tlb_flush`, `scheduler_runqueue` and
   `syscall_counts` honour `cgroup_attribution`, on by default as for
   `cpu_perf`, so nothing changes unless a config sets it. With

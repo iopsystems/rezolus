@@ -37,13 +37,18 @@ Zen 4, Debian 13, 6.12) and in a 56-vCPU KVM guest (Zen 2 host):
 
 | Sampler, hook | Bare metal on | Bare metal off | Guest on | Guest off |
 |---|---|---|---|---|
-| `syscall_counts`, `sys_enter` | 176–188 ns | 39–42 ns | 250–291 ns | 62–75 ns |
+| `syscall_counts`, `sys_enter` | 33–39 ns | 24–27 ns | | |
 | `cpu_tlb_flush`, `tlb_flush` | 180–197 ns | 36–39 ns | 293–352 ns | 72–76 ns |
 | `scheduler_runqueue`, `sched_switch` | 491–575 ns | 213–256 ns | 629–775 ns | 240–349 ns |
 | `cpu_usage`, `cpuacct_account_field` | 502–599 ns | 285–351 ns | 416–776 ns | 238–518 ns |
 | `cpu_migrations`, `sched_switch` | 77–98 ns | 77–90 ns | 106–126 ns | 107–132 ns |
 | `ext4_ops`, fsync and write end hooks | | | 531–537 ns | 266–271 ns |
 
+`syscall_counts` reads the task group once, as direct loads from a BTF task
+pointer, from a `tp_btf` program. Before that change its row read 176–188 ns
+on and 39–42 ns off on bare metal, and 250–291 ns and 62–75 ns in the guest.
+The other samplers in the table still read the task group through
+`bpf_probe_read_kernel()` calls.
 `cpu_migrations`'s cgroup path runs only on a migration, so it costs nothing
 per switch. On bare metal, `perf bench syscall basic` ran at 715 K ops/s with
 the five samplers' cgroup paths off, the same as without these samplers
