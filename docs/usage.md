@@ -245,9 +245,13 @@ one to the current container — as does rewriting it with `combine`, `filter` o
 A `.dendro` records each Rezolus agent from its replication stream
 (`/metrics/stream`). The agent pushes one frame per `--interval`, carrying
 only the acquisition groups it re-read since the last frame, stamped when the
-agent sampled rather than when the recorder asked. Which task or cgroup each
-slot means travels in each group's schema, and the `.dendro` takes it from
-there into its occupant streams. A Prometheus endpoint cannot stream, so it is
+agent sampled rather than when the recorder asked. A group of slots (per
+task, per cgroup, per CPU) arrives keyed by occupant, and each occupant's
+labels arrive when it appears on the connection, so a task starting or
+exiting costs that task's labels rather than the group's whole member list.
+The `.dendro` writes those labels into its occupant streams. An agent that
+serves only the wide layout, where each change resends the group's member
+list, is recorded all the same. A Prometheus endpoint cannot stream, so it is
 scraped each tick, and one run can hold both kinds, each endpoint its own
 recording:
 

@@ -20,8 +20,10 @@ pub(crate) mod stream;
 #[cfg(test)]
 pub(crate) use ::rez::rez_stream;
 pub(crate) use ::rez::{
-    parquet_ingest, rez, rez_sqlite, rez_v3_rewrite, rez_v3_writer, schema, seal_policy, wal, wire,
+    parquet_ingest, rez, rez_sqlite, rez_v3_rewrite, rez_v3_writer, seal_policy, wire,
 };
+#[cfg(test)]
+pub(crate) use ::rez::{schema, wal};
 
 /// True when the recording should be written as an archive of recordings: a
 /// `.rez`, or a dendro archive (`.dendro`).
@@ -623,7 +625,7 @@ async fn open_stream(
     ep.agent = fetch_agent_metadata(client, &ep.config.url).await;
     let sub = match tokio::time::timeout(
         timeout,
-        stream::Subscription::connect(client, &ep.config.url, interval),
+        stream::Subscription::connect(client, &ep.config.url, interval, stream::Layout::Long),
     )
     .await
     {
@@ -655,6 +657,16 @@ async fn open_stream(
         );
     }
 
+    if sub.layout() != stream::Layout::Long {
+        // Recorded all the same: the decoder reads either layout. Said
+        // because a group of slots then resends its member list on every
+        // change of occupant.
+        info!(
+            "{}: the agent serves only the wide stream layout; groups of slots carry \
+             their whole member list on each change",
+            ep.config.url
+        );
+    }
     if ep.config.source.is_none() {
         ep.config.source = Some("rezolus".to_string());
     }
@@ -1465,9 +1477,9 @@ enum Sink {
         writer: metriken_archive::ArchiveWriter,
         /// The archive's path; the writer does not report it.
         path: std::path::PathBuf,
-        /// Streamed endpoints only: per endpoint, the schema each stream's rows
-        /// align with, to rebuild the snapshots the writer ingests.
-        schemas: BTreeMap<usize, stream::StreamSchemas>,
+        /// Streamed endpoints only: per endpoint, the decoder that turns its
+        /// rows back into the groups the writer stages.
+        decoders: BTreeMap<usize, metriken_archive::StreamDecoder>,
     },
 }
 
@@ -1538,8 +1550,8 @@ impl RezStream {
     /// Stage one interval off an endpoint's replication stream.
     ///
     /// [`stage`](Self::stage) for the stream path, which writes `.dendro`
-    /// only: each pass is rebuilt into the V3 snapshot the writer ingests
-    /// (see `stream::StreamSchemas`).
+    /// only: each pass's rows are decoded by the endpoint's
+    /// `metriken_archive::StreamDecoder` and staged with `stage_streamed`.
     ///
     /// The stamp is the producer's: an interval carries when the agent
     /// sampled, and there is no recorder-side reading to prefer over it.
@@ -1553,7 +1565,7 @@ impl RezStream {
         let Sink::Dendro {
             recs,
             staged,
-            schemas,
+            decoders,
             ..
         } = &mut self.sink
         else {
@@ -1569,21 +1581,24 @@ impl RezStream {
                  would be discarded"
             ));
         };
-        let cache = schemas.entry(endpoint).or_default();
-        let before = cache.unresolved;
+        let decoder = decoders.entry(endpoint).or_default();
+        let before = decoder.unresolved;
         for pass in passes {
             let ts = u64::try_from(pass.ts)
                 .map_err(|_| format!("{url} stamped a pass at {} ns, before the epoch", pass.ts))?;
             let wall_offset = pass.wall_offset;
             self.last_stamp.insert(endpoint, (ts, wall_offset));
-            let snapshot = cache.snapshot(pass)?;
-            staged.push(rec.stage(&snapshot, ts, wall_offset).map_err(archive_err)?);
+            let groups = decoder.decode(pass.rows)?;
+            staged.push(
+                rec.stage_streamed(groups, ts, wall_offset)
+                    .map_err(archive_err)?,
+            );
         }
-        if cache.unresolved > before {
+        if decoder.unresolved > before {
             warn!(
                 "{url}: {} streamed rows named a schema this connection had not sent; \
                  skipped",
-                cache.unresolved - before
+                decoder.unresolved - before
             );
         }
         Ok(())
@@ -1873,7 +1888,7 @@ fn start_rez_recorder(
             )
             .map_err(|e| format!("failed to create {}: {e}", config.output.display()))?,
             path: config.output.clone(),
-            schemas: BTreeMap::new(),
+            decoders: BTreeMap::new(),
         }
     } else {
         Sink::Rez {
@@ -2460,6 +2475,7 @@ pub fn run(mut config: RecordingConfig) {
                 client.clone(),
                 url,
                 interval_dur,
+                stream::Layout::Long,
                 scrape_timeout,
                 stream_tx.clone(),
             ));

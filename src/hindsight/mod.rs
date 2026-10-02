@@ -8,7 +8,7 @@ mod config;
 mod http;
 pub(crate) mod state;
 
-use crate::recorder::stream::{ConnectError, StreamEvent, StreamSchemas, Subscription};
+use crate::recorder::stream::{ConnectError, Layout, StreamEvent, Subscription};
 use buffer::HindsightBuffer;
 pub use config::Config;
 use state::{DumpToFileRequest, DumpToFileResponse, SharedState, TimeRange};
@@ -227,14 +227,31 @@ pub fn run(config: Config) {
     // buffer's timeline (rows carry the agent's own stamps, as a recording of
     // the stream does), and an agent that cannot stream is refused before
     // anything is written.
+    // A dendro buffer takes groups of slots long; a `.rez` buffer records
+    // snapshots, which only the wide layout can rebuild.
+    let layout = if writes_dendro(&output) {
+        Layout::Long
+    } else {
+        Layout::Wide
+    };
     let connected = rt.block_on(async {
         tokio::time::timeout(
             timeout,
-            Subscription::connect(&async_client, &url, interval_dur),
+            Subscription::connect(&async_client, &url, interval_dur, layout),
         )
         .await
     });
     let subscription = match connected {
+        // A `.rez` buffer records snapshots, which a long row cannot be
+        // rebuilt into. An agent serves the layout asked for, so this is an
+        // agent that ignored the request.
+        Ok(Ok(sub)) if layout == Layout::Wide && sub.layout() == Layout::Long => {
+            error!(
+                "the agent at {url} serves the long stream layout where the wide one was \
+                 asked for; a .rez buffer cannot record it. Use a .dendro output"
+            );
+            std::process::exit(1);
+        }
         Ok(Ok(sub)) => sub,
         Ok(Err(ConnectError::Unsupported(e))) => {
             let version = agent_version.as_deref().unwrap_or("of unknown version");
@@ -349,10 +366,11 @@ pub fn run(config: Config) {
             async_client,
             url.clone(),
             interval_dur,
+            layout,
             timeout,
             stream_tx,
         ));
-        let mut schemas = StreamSchemas::default();
+        let mut decoder = metriken_archive::StreamDecoder::new();
         let mut epoch = source.uuid.clone();
 
         // Dumps run OFF this loop — that is the whole shape of what follows.
@@ -445,7 +463,7 @@ pub fn run(config: Config) {
 
                 Some((_, event)) = stream_rx.recv() => match event {
                     StreamEvent::Interval(applied) => {
-                        match ingest_interval(&mut buffer, &mut schemas, applied) {
+                        match ingest_interval(&mut buffer, &mut decoder, applied) {
                             Ok(passes) => (0..passes).for_each(|_| shared_state.record_tick()),
                             Err(e) => fatal(&e, &buffer_path),
                         }
@@ -764,7 +782,7 @@ fn log_capture(response: &DumpToFileResponse) {
 /// skipped and logged.
 pub(crate) fn ingest_interval(
     buffer: &mut HindsightBuffer,
-    schemas: &mut StreamSchemas,
+    decoder: &mut metriken_archive::StreamDecoder,
     applied: crate::recorder::stream::Applied,
 ) -> Result<usize, String> {
     if applied.gap {
@@ -775,18 +793,18 @@ pub(crate) fn ingest_interval(
     }
     let passes = applied.for_writer()?;
     let n = passes.len();
-    let before = schemas.unresolved;
+    let before = decoder.unresolved;
     for pass in passes {
         // `for_writer` refuses a stamp before the epoch.
         let ts = pass.ts as u64;
         let wall_offset = pass.wall_offset;
-        let snapshot = schemas.snapshot(pass)?;
-        buffer.ingest(&snapshot, ts, wall_offset)?;
+        let groups = decoder.decode(pass.rows)?;
+        buffer.ingest_streamed(groups, ts, wall_offset)?;
     }
-    if schemas.unresolved > before {
+    if decoder.unresolved > before {
         warn!(
             "{} streamed rows named a schema this connection had not sent; skipped",
-            schemas.unresolved - before
+            decoder.unresolved - before
         );
     }
     Ok(n)

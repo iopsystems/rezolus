@@ -21,6 +21,34 @@
 
 ### Changed
 
+- **Groups of slots travel long on the agent's stream.**
+  `/metrics/stream?layout=long` sends a group whose metrics are all counter
+  or gauge groups (per task, per cgroup, per CPU) as values keyed by
+  occupant, with each occupant's labels sent once on `<group>/occupants`
+  when it first appears to the subscription. A task starting or exiting
+  then costs that task's labels instead of the group's whole member list.
+  The agent builds the wide snapshot only when something reads it, so an
+  agent that is only streamed long never builds it. `record` to `.dendro`,
+  hindsight and the live viewer ask for the long layout; a `.rez` hindsight
+  buffer asks for the wide one. An agent that does not serve the long
+  layout is recorded through the wide one, and `record` logs that when it
+  connects. The response names the layout served in `x-rezolus-layout`.
+- metriken-query 0.34.0, metriken-exposition 0.21.4, metriken-archive 0.3.2
+  and dendro 0.3.4. A query whose metric is in the recording but matches
+  nothing in the range answers empty instead of "metric not found";
+  `rezolus mcp query` prints "No series matched." for it, and a metric read
+  with a function for another kind (`rate()` of a gauge) says which kind it
+  is. Archives written through the new writer carry a heartbeat while their
+  writer runs.
+- Every sampler with a per-event cgroup path reads the task group once, as
+  direct loads from a BTF task pointer where the program is `tp_btf`,
+  `fentry` or `fexit`, instead of through up to seven `bpf_probe_read_kernel()` calls:
+  `cpu_usage`, `cpu_migrations`, `cpu_perf`, `cpu_tlb_flush`,
+  `scheduler_runqueue`, `ext4_ops`, `xfs_log` and `memory_pagecache`, after
+  `syscall_counts`. `cpu_tlb_flush` attaches to `tlb_flush` as `tp_btf`
+  where the kernel has BTF. On bare metal (EPYC 4564P, 6.12),
+  `scheduler_runqueue` costs 137–139 ns per run against 280–328 ns before,
+  and `cpu_tlb_flush` 37–45 ns against 146–162 ns. The series are unchanged.
 - `syscall_counts` attaches to `sys_enter` as a raw tracepoint (`tp_btf`,
   or `raw_tp` without kernel BTF) instead of the `raw_syscalls/sys_enter`
   tracepoint, and its per-cgroup path reads the task group once, as direct

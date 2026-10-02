@@ -185,7 +185,9 @@ static __always_inline int account__sched_wakeup_new(u64* ctx) {
     return trace_enqueue(BPF_CORE_READ(p, tgid), BPF_CORE_READ(p, pid));
 }
 
-static __always_inline int account__sched_switch(u64* ctx) {
+// `btf` is a compile-time constant: true in the tp_btf program, whose task
+// arguments are BTF pointers (see task_group_of() in cgroup.h).
+static __always_inline int account__sched_switch(u64* ctx, bool btf) {
     /* TP_PROTO(bool preempt, struct task_struct *prev,
      *      struct task_struct *next)
      */
@@ -217,14 +219,16 @@ static __always_inline int account__sched_switch(u64* ctx) {
     u32 next_pid = BPF_CORE_READ(next, pid);
 
     // read the prev task cgroup details and push to ringbuf if new cgroup
-    void* prev_task_group = cgroup_attribution ? BPF_CORE_READ(prev, sched_task_group) : NULL;
-    if (prev_task_group) {
-        u32 id = BPF_CORE_READ(prev, sched_task_group, css.id);
-
+    u32 id = 0;
+    u64 serial_nr = 0;
+    struct task_group* prev_tg =
+        cgroup_attribution ? task_group_of(prev, btf, &id, &serial_nr) : NULL;
+    if (prev_tg) {
         if (id < MAX_CGROUPS) {
             prev_cgroup_id = id;
 
-            int ret = handle_new_cgroup(prev, &cgroup_serial_numbers, &cgroup_info);
+            int ret = handle_new_cgroup_read(&prev_tg->css, id, serial_nr, &cgroup_serial_numbers,
+                                             &cgroup_info);
 
             if (ret == 0) {
                 // New cgroup detected, zero the counters
@@ -304,14 +308,14 @@ static __always_inline int account__sched_switch(u64* ctx) {
     // - calculate how long next task was enqueued, update hist
 
     // read the next task cgroup details and push to ringbuf if new cgroup
-    void* next_task_group = cgroup_attribution ? BPF_CORE_READ(next, sched_task_group) : NULL;
-    if (next_task_group) {
-        u32 id = BPF_CORE_READ(next, sched_task_group, css.id);
-
+    struct task_group* next_tg =
+        cgroup_attribution ? task_group_of(next, btf, &id, &serial_nr) : NULL;
+    if (next_tg) {
         if (id < MAX_CGROUPS) {
             next_cgroup_id = id;
 
-            int ret = handle_new_cgroup(next, &cgroup_serial_numbers, &cgroup_info);
+            int ret = handle_new_cgroup_read(&next_tg->css, id, serial_nr, &cgroup_serial_numbers,
+                                             &cgroup_info);
 
             if (ret == 0) {
                 // New cgroup detected, zero the counters
@@ -398,12 +402,12 @@ int handle__sched_wakeup_new_raw(u64* ctx) {
 
 SEC("tp_btf/sched_switch")
 int handle__sched_switch_btf(u64* ctx) {
-    return account__sched_switch(ctx);
+    return account__sched_switch(ctx, true);
 }
 
 SEC("raw_tp/sched_switch")
 int handle__sched_switch_raw(u64* ctx) {
-    return account__sched_switch(ctx);
+    return account__sched_switch(ctx, false);
 }
 
 char LICENSE[] SEC("license") = "GPL";

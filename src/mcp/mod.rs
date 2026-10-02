@@ -1029,6 +1029,9 @@ fn format_query_result(result: &QueryResult) -> String {
         QueryResult::Vector { result } => {
             writeln!(&mut output, "Instant Vector Result:").unwrap();
             writeln!(&mut output, "======================").unwrap();
+            if result.is_empty() {
+                writeln!(&mut output, "No series matched.").unwrap();
+            }
             for sample in result {
                 let bound = sample
                     .interval
@@ -1047,6 +1050,9 @@ fn format_query_result(result: &QueryResult) -> String {
         QueryResult::Matrix { result } => {
             writeln!(&mut output, "Range Vector Result:").unwrap();
             writeln!(&mut output, "====================").unwrap();
+            if result.is_empty() {
+                writeln!(&mut output, "No series matched.").unwrap();
+            }
             for series in result {
                 writeln!(&mut output, "{}:", format_metric(&series.metric)).unwrap();
                 writeln!(

@@ -7,14 +7,13 @@
 //!
 //! # No identity index
 //!
-//! The agent sends no [`Frame::Index`](dendro::replicate::Frame::Index). What
-//! a slot means travels in the
-//! group's schema (each member's labels, including its `__uid__`), which the
-//! payload carries whenever it changes. Every rows frame therefore names
+//! The agent sends no [`Frame::Index`](dendro::replicate::Frame::Index). For
+//! a group sent wide, what a slot means travels in the group's schema (each
+//! member's labels, including its `__uid__`), which the payload carries
+//! whenever it changes. For a group sent long (`?layout=long`), each
+//! occupant's labels travel on `<group>/occupants`. Every rows frame names
 //! dendro's [`NO_INDEX_STATE`](dendro::replicate::NO_INDEX_STATE), which a
-//! subscriber always treats as
-//! resolvable. `.rez --stream`, the one consumer of an index, was removed in
-//! 6.0.
+//! subscriber always treats as resolvable.
 //!
 //! # Time is the producer's
 //!
@@ -53,8 +52,8 @@
 //!
 //! Building the frames is metriken-archive's
 //! [`FrameProducer`](metriken_archive::stream::FrameProducer), which reads
-//! the agent's [`AgentRow`](crate::recorder::wire::AgentRow)s directly (they
-//! implement its `StreamRow`). The agent keeps the transport: the HTTP route,
+//! the agent's [`AgentRow`](crate::recorder::wire::AgentRow)s (wide layout)
+//! or `EncodedStreamGroup`s (long layout). The agent keeps the transport: the HTTP route,
 //! the content type, each subscription's timer and interval index, and the
 //! rules for which rows a subscriber is sent.
 

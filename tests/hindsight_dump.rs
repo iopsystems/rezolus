@@ -998,9 +998,22 @@ fn sealing_continues_through(
 ) {
     let h = Hindsight::start(SEGMENT_ROWS as usize, width);
 
-    let before = h.wait_until("a buffer big enough to make a dump slow", |s| {
+    h.wait_until("a buffer big enough to make a dump slow", |s| {
         s.segments(TABLE) >= min_segments
     });
+    // A dump has to outlast a tick for the window below to test anything,
+    // and how big a buffer that takes depends on the host: a fast runner
+    // copied this one in 85 ms against a 100 ms tick. Grow the buffer until
+    // one dump takes a tick and a half, or a minute has gone by.
+    let mut target = min_segments;
+    let calibrating = Instant::now() + Duration::from_secs(60);
+    while dump(&h) < INTERVAL * 3 / 2 && Instant::now() < calibrating {
+        target *= 2;
+        h.wait_until("a buffer big enough to make a dump slow", |s| {
+            s.segments(TABLE) >= target
+        });
+    }
+    let before = h.status();
 
     // Back-to-back dumps. Each one opens its own connection, takes its own read
     // mark, and copies every segment in the buffer.

@@ -85,7 +85,11 @@ target/release/rezolus record --url http://localhost:4241 -o out.dendro         
 # after one interval, at least a second. A wrapped command that exits on its own waits for
 # each agent's frame stamped at or after the exit (bounded by interval + scrape timeout).
 # When every endpoint has been refused the run ends; each refused endpoint gets a line.
-# Identity travels in each group's schema; the agent sends no index frames. --stream was
+# Groups of slots arrive in the long layout (/metrics/stream?layout=long: values keyed by
+# occupant, each occupant's labels once on <group>/occupants; metriken_archive::StreamDecoder
+# and SourceRecorder::stage_streamed); other groups carry their schema when it changes. An
+# agent that serves only the wide layout is recorded through the same decoder. A .rez
+# hindsight buffer asks for the wide layout. The agent sends no index frames. --stream was
 # removed before 6.0.0 (clap's unknown-argument error): the output format picks the transport.
 
 # Viewer - web dashboard for parquet files, live agents, or upload mode

@@ -91,7 +91,9 @@ struct {
 
 // attach a tracepoint on sched_switch for per-cgroup accounting
 
-static __always_inline int account__sched_switch(u64* ctx) {
+// `btf` is a compile-time constant: true in the tp_btf program, whose task
+// arguments are BTF pointers (see task_group_of() in cgroup.h).
+static __always_inline int account__sched_switch(u64* ctx, bool btf) {
     /* TP_PROTO(bool preempt, struct task_struct *prev,
      *      struct task_struct *next)
      */
@@ -104,14 +106,16 @@ static __always_inline int account__sched_switch(u64* ctx) {
     u64 c = bpf_perf_event_read(&cycles, BPF_F_CURRENT_CPU);
     u64 i = bpf_perf_event_read(&instructions, BPF_F_CURRENT_CPU);
 
-    if (bpf_core_field_exists(prev->sched_task_group)) {
-        int cgroup_id = BPF_CORE_READ(prev, sched_task_group, css.id);
+    u32 cgroup_id = 0;
+    u64 serial_nr = 0;
+    struct task_group* tg = bpf_core_field_exists(prev->sched_task_group)
+                                ? task_group_of(prev, btf, &cgroup_id, &serial_nr)
+                                : NULL;
 
+    if (tg) {
         if (cgroup_id < MAX_CGROUPS) {
-
-            // we check to see if this is a new cgroup by checking the serial number
-
-            int ret = handle_new_cgroup(prev, &cgroup_serial_numbers, &cgroup_info);
+            int ret = handle_new_cgroup_read(&tg->css, cgroup_id, serial_nr,
+                                             &cgroup_serial_numbers, &cgroup_info);
 
             if (ret == 0) {
                 // New cgroup detected, zero the counters
@@ -150,12 +154,12 @@ static __always_inline int account__sched_switch(u64* ctx) {
 
 SEC("tp_btf/sched_switch")
 int handle__sched_switch_btf(u64* ctx) {
-    return account__sched_switch(ctx);
+    return account__sched_switch(ctx, true);
 }
 
 SEC("raw_tp/sched_switch")
 int handle__sched_switch_raw(u64* ctx) {
-    return account__sched_switch(ctx);
+    return account__sched_switch(ctx, false);
 }
 
 char LICENSE[] SEC("license") = "GPL";
