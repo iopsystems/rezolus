@@ -181,14 +181,16 @@ impl SkelExt for ModSkel<'_> {
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
         #[cfg(target_arch = "x86_64")]
-        debug!(
-            "{NAME} tlb_flush_btf() BPF instruction count: {}",
-            self.progs.tlb_flush_btf.insn_cnt()
-        );
-        debug!(
-            "{NAME} tlb_flush_raw() BPF instruction count: {}",
-            self.progs.tlb_flush_raw.insn_cnt()
-        );
+        {
+            debug!(
+                "{NAME} tlb_flush_btf() BPF instruction count: {}",
+                self.progs.tlb_flush_btf.insn_cnt()
+            );
+            debug!(
+                "{NAME} tlb_flush_raw() BPF instruction count: {}",
+                self.progs.tlb_flush_raw.insn_cnt()
+            );
+        }
 
         #[cfg(target_arch = "aarch64")]
         debug!(

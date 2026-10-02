@@ -161,8 +161,8 @@ static __always_inline struct task_group* current_task_group(bool btf, u32* cgro
  * @cgroup_serial_numbers: Map storing serial numbers for cgroup tracking
  * @cgroup_info_ringbuf: Ringbuf for passing cgroup info to userspace
  *
- * This function is similar to handle_new_cgroup but works with a css pointer
- * directly instead of extracting it from a task_struct.
+ * For a caller that holds a css rather than a task: reads the id and serial
+ * number from it and hands them to handle_new_cgroup_read().
  *
  * Returns:
  *  - 0 on success
