@@ -46,7 +46,7 @@ dashboard = { path = "crates/dashboard" }
 # `FrameReader` skip frame kinds it does not know. 0.3.1 adds
 # `last_caller_row_at_or_before`, which the reader for dendro archives uses
 # to find the identity index's `Full` to replay from.
-dendro = { version = "0.3.3", default-features = false }
+dendro = { version = "0.3.4", default-features = false }
 rez = { path = "crates/rez" }
 report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
