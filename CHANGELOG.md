@@ -21,6 +21,15 @@
 
 ### Changed
 
+- Every sampler with a per-event cgroup path reads the task group once, as
+  direct loads from a BTF task pointer where the program is `tp_btf`,
+  `fentry` or `fexit`, instead of through up to seven `bpf_probe_read_kernel()` calls:
+  `cpu_usage`, `cpu_migrations`, `cpu_perf`, `cpu_tlb_flush`,
+  `scheduler_runqueue`, `ext4_ops`, `xfs_log` and `memory_pagecache`, after
+  `syscall_counts`. `cpu_tlb_flush` attaches to `tlb_flush` as `tp_btf`
+  where the kernel has BTF. On bare metal (EPYC 4564P, 6.12),
+  `scheduler_runqueue` costs 137–139 ns per run against 280–328 ns before,
+  and `cpu_tlb_flush` 37–45 ns against 146–162 ns. The series are unchanged.
 - `syscall_counts` attaches to `sys_enter` as a raw tracepoint (`tp_btf`,
   or `raw_tp` without kernel BTF) instead of the `raw_syscalls/sys_enter`
   tracepoint, and its per-cgroup path reads the task group once, as direct

@@ -826,15 +826,15 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   limit: the kernel allocates the CPU controller's `css.id` lowest-free with no
   upper bound (`kernel/cgroup/cgroup.c`, `cgroup_idr_alloc(&ss->css_idr, NULL,
   2, 0, …)`). A cgroup whose id is 4,096 or more returns `-1` from
-  `handle_new_cgroup` and `handle_new_cgroup_from_css` (`cgroup.h:42`, `:126`) and is skipped at every other use of the
-  id (`cpu/linux/usage/mod.bpf.c:361`, `:421`), with no counter and nothing in
+  `handle_new_cgroup_read` (`src/agent/bpf/cgroup.h`) and is skipped at every
+  other use of the id (each sampler checks `cgroup_id < MAX_CGROUPS`), with no counter and nothing in
   `rezolus status`. That happens once more than about 4,094 CPU-controller
   cgroups are live, counting dying ones that still hold their ids. Count the
   drops in BPF, surface them as a metric and a `status` degradation, and then
   decide whether the cap should be larger or sized to the host.
 - **A cgroup can go unnamed while the `cgroup_info` ringbuf is full** — Open.
-  `handle_new_cgroup` returns `-1` without advancing the serial number, so a
-  later event retries (`cgroup.h:59-65`, `:144-149`), but until one arrives the cgroup's
+  `handle_new_cgroup_read` returns `-1` without advancing the serial number,
+  so a later event retries (`src/agent/bpf/cgroup.h`), but until one arrives the cgroup's
   values have no `name`. Count ringbuf-full drops next to the overflow count,
   so an unrecorded or unnamed cgroup is visible either way.
 - **Tasks cannot overflow the same way** — By design. `MAX_PID = 4194304`
@@ -1036,14 +1036,14 @@ bare-metal probe-cost bench for anything at request rate).
   the task's start slot) is the way to have both. Gaps entry, Deferred,
   "`ext4_ops` probe cost". The 2026-10-01 entry below found most of the
   path's cost in `bpf_probe_read_kernel()` calls; try that first.
-- **Per-cgroup path: read the task group once, through BTF** — Open.
-  `syscall_counts` is converted (`current_task_group()` and
-  `handle_new_cgroup_read()` in `src/agent/bpf/cgroup.h`): its cgroup path
-  went from 109–118 ns to 9–12 ns per syscall on bare metal. The other
-  samplers including `cgroup.h` still make five to seven helper calls per
-  event: `cpu_usage`, `cpu_migrations`, `cpu_perf`, `cpu_tlb_flush`,
-  `scheduler_runqueue` (two tasks per switch, so it needs a task-pointer
-  variant), `cpu_bandwidth`, `ext4_ops`, `xfs_log`, `memory_pagecache`.
+- **Per-cgroup path: read the task group once, through BTF** — DONE.
+  `syscall_counts` (#1392): its cgroup path went from 109–118 ns to 9–12 ns
+  per syscall on bare metal. Every other sampler with a per-event cgroup
+  path followed (`task_group_of()` in `src/agent/bpf/cgroup.h`);
+  `scheduler_runqueue` went from about 300 to 138 ns per run and
+  `cpu_tlb_flush` from about 150 to 40. `cpu_bandwidth` reads a css only on
+  throttle events and keeps its helper-call path. Not run on a 5.8–5.10 kernel or one
+  without BTF.
   Contention on the shared per-cgroup counters measured on delta: the
   attribution cost is 6.5–11 ns from 1 to 24 processes in one cgroup, and
   the change from 1 to 24 is within noise (+1.5 ns in one run, −0.7 ns in
