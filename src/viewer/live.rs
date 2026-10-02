@@ -18,7 +18,7 @@ use tracing::{error, info, warn};
 
 use super::actions::AgentInfo;
 use crate::hindsight::buffer::HindsightBuffer;
-use crate::recorder::stream::{ConnectError, StreamEvent, StreamSchemas, Subscription};
+use crate::recorder::stream::{ConnectError, Layout, StreamEvent, Subscription};
 
 /// The interval the live view subscribes at.
 pub const LIVE_INTERVAL: Duration = Duration::from_secs(1);
@@ -116,29 +116,31 @@ impl LiveSession {
         pool: Arc<BufferPool>,
     ) -> Result<Self, String> {
         let timeout = crate::recorder::tick_timeout(LIVE_INTERVAL);
-        let subscription =
-            match tokio::time::timeout(timeout, Subscription::connect(client, url, LIVE_INTERVAL))
-                .await
-            {
-                Ok(Ok(sub)) => sub,
-                Ok(Err(ConnectError::Unsupported(e))) => {
-                    return Err(format!(
-                        "the agent at {url} ({}) cannot serve its replication stream: {e}. \
-                         Live mode reads /metrics/stream, which agents from 5.21.0 serve \
-                         when snapshot_format is \"v3\".",
-                        info.version
-                    ))
-                }
-                Ok(Err(ConnectError::Unreachable(e))) => {
-                    return Err(format!("could not subscribe to the agent at {url}: {e}"))
-                }
-                Err(_) => {
-                    return Err(format!(
-                        "could not subscribe to the agent at {url}: no handshake within {}",
-                        humantime::format_duration(timeout)
-                    ))
-                }
-            };
+        let subscription = match tokio::time::timeout(
+            timeout,
+            Subscription::connect(client, url, LIVE_INTERVAL, Layout::Long),
+        )
+        .await
+        {
+            Ok(Ok(sub)) => sub,
+            Ok(Err(ConnectError::Unsupported(e))) => {
+                return Err(format!(
+                    "the agent at {url} ({}) cannot serve its replication stream: {e}. \
+                     Live mode reads /metrics/stream, which agents from 5.21.0 serve \
+                     when snapshot_format is \"v3\".",
+                    info.version
+                ))
+            }
+            Ok(Err(ConnectError::Unreachable(e))) => {
+                return Err(format!("could not subscribe to the agent at {url}: {e}"))
+            }
+            Err(_) => {
+                return Err(format!(
+                    "could not subscribe to the agent at {url}: no handshake within {}",
+                    humantime::format_duration(timeout)
+                ))
+            }
+        };
         let source = subscription
             .source()
             .cloned()
@@ -188,6 +190,7 @@ impl LiveSession {
             client.clone(),
             url.clone(),
             LIVE_INTERVAL,
+            Layout::Long,
             timeout,
             tx,
         )));
@@ -301,12 +304,12 @@ impl Recording {
     /// session was dropped), a write fails, or the agent refuses a reconnect.
     fn run(mut self, mut rx: tokio::sync::mpsc::Receiver<(usize, StreamEvent)>) {
         let label = self.label.clone();
-        let mut schemas = StreamSchemas::default();
+        let mut decoder = metriken_archive::StreamDecoder::new();
         while let Some((_, event)) = rx.blocking_recv() {
             match event {
                 StreamEvent::Interval(applied) => {
                     let written =
-                        crate::hindsight::ingest_interval(&mut self.buffer, &mut schemas, applied)
+                        crate::hindsight::ingest_interval(&mut self.buffer, &mut decoder, applied)
                             .and_then(|_| self.buffer.maintain());
                     if let Err(e) = written {
                         error!("{label}: the live recording stopped: {e}");

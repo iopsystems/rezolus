@@ -21,6 +21,25 @@
 
 ### Changed
 
+- **Groups of slots travel long on the agent's stream.**
+  `/metrics/stream?layout=long` sends a group whose metrics are all counter
+  or gauge groups (per task, per cgroup, per CPU) as values keyed by
+  occupant, with each occupant's labels sent once on `<group>/occupants`
+  when it first appears to the subscription. A task starting or exiting
+  then costs that task's labels instead of the group's whole member list.
+  The agent builds the wide snapshot only when something reads it, so an
+  agent that is only streamed long never builds it. `record` to `.dendro`,
+  hindsight and the live viewer ask for the long layout; a `.rez` hindsight
+  buffer asks for the wide one. An agent that does not serve the long
+  layout is recorded through the wide one, and `record` logs that when it
+  connects. The response names the layout served in `x-rezolus-layout`.
+- metriken-query 0.34.0, metriken-exposition 0.21.4, metriken-archive 0.3.2
+  and dendro 0.3.4. A query whose metric is in the recording but matches
+  nothing in the range answers empty instead of "metric not found";
+  `rezolus mcp query` prints "No series matched." for it, and a metric read
+  with a function for another kind (`rate()` of a gauge) says which kind it
+  is. Archives written through the new writer carry a heartbeat while their
+  writer runs.
 - Every sampler with a per-event cgroup path reads the task group once, as
   direct loads from a BTF task pointer where the program is `tp_btf`,
   `fentry` or `fexit`, instead of through up to seven `bpf_probe_read_kernel()` calls:

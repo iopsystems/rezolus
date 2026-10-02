@@ -169,6 +169,36 @@ impl HindsightBuffer {
         Ok(())
     }
 
+    /// Append one pass taken off the stream. A dendro buffer stages the
+    /// groups as they arrived; a `.rez` buffer rebuilds the snapshot, which
+    /// needs every group wide.
+    pub fn ingest_streamed(
+        &mut self,
+        groups: Vec<metriken_archive::StreamedGroup>,
+        anchored_ts: u64,
+        wall_offset_ns: i64,
+    ) -> Result<(), String> {
+        match &mut self.writer {
+            Writer::Rez { .. } => {
+                let snapshot = crate::recorder::stream::wide_snapshot(
+                    groups,
+                    anchored_ts as i64,
+                    wall_offset_ns,
+                )?;
+                return self.ingest(&snapshot, anchored_ts, wall_offset_ns);
+            }
+            Writer::Dendro { rec, writer } => {
+                let staged = rec
+                    .stage_streamed(groups, anchored_ts, wall_offset_ns)
+                    .map_err(archive_err)?;
+                writer.commit(vec![staged]).map_err(archive_err)?;
+            }
+        }
+        self.newest_ts = Some(self.newest_ts.map_or(anchored_ts, |t| t.max(anchored_ts)));
+        self.first_ts.get_or_insert(anchored_ts);
+        Ok(())
+    }
+
     /// Whether retention has begun: the buffer is now dropping as much as it
     /// takes in rather than still filling.
     ///

@@ -439,9 +439,8 @@ pub fn detect_anomalies(
         if let Some(metric_name) = metric_hint {
             let mut error_msg = format!(
                 "Query returned no data points: {}\n\nThis usually means:\n\
-                1. The metric doesn't exist in this recording\n\
-                2. The label selector filters out all series\n\
-                3. The time range is too short for rate calculations\n",
+                1. The label selector filters out all series\n\
+                2. The time range is too short for rate calculations\n",
                 query
             );
 
