@@ -1051,7 +1051,15 @@ bare-metal probe-cost bench for anything at request rate).
   `FilesystemCounters` (768 KiB per CPU for `syscall_counts`: 24 MiB at 32
   possible CPUs, 768 MiB if sized by `MAX_CPUS`), are not needed there and
   were judged too expensive (2026-10-02). If a larger host shows contention,
-  look for a cheaper fix than per-CPU banks over all 4096 cgroup slots.
+  two layouts keep far fewer counters:
+  - One pending bank per CPU for the cgroup that CPU last counted: the hot
+    path adds to its own cache line, and when the next event's cgroup
+    differs it first adds the bank into the shared array. About 200 B per
+    CPU. The reader adds the pending banks to the shared array, and a flush
+    racing a read needs a per-CPU sequence count or a tolerated transient.
+  - Shared arrays per last-level cache instead of per CPU: atomics stay, but
+    only CPUs sharing an L3 add to one line. 768 KiB per L3 domain for
+    `syscall_counts`, with no flush and no race.
   `docs/journal/2026-10-01-cgroup-path-helper-calls.md`.
 - **Write-amplification decomposition dashboard** — DONE as the ext4
   dashboard's Write Path group: application bytes (`ext4_write_bytes`),
