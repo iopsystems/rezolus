@@ -1045,8 +1045,9 @@ bare-metal probe-cost bench for anything at request rate).
   `scheduler_runqueue` (two tasks per switch, so it needs a task-pointer
   variant), `cpu_bandwidth`, `ext4_ops`, `xfs_log`, `memory_pagecache`.
   Contention on the shared per-cgroup counters measured on delta: the
-  attribution cost is 7.5–11 ns from 1 to 24 processes in one cgroup, about
-  1 ns more at 24, equal in one shared cgroup and one cgroup each. Per-CPU
+  attribution cost is 6.5–11 ns from 1 to 24 processes in one cgroup, and
+  the change from 1 to 24 is within noise (+1.5 ns in one run, −0.7 ns in
+  the other). Per-CPU
   per-cgroup counters (17 MiB at 32 possible CPUs for `syscall_counts`) are
   not needed there. Reopen on a host with more cores
   or two sockets.

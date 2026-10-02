@@ -102,8 +102,8 @@ change too. This section measures whether that is needed.
 Method: N processes, each pinned to its own CPU from CPU 8 up, each calling
 `getppid()` in a loop for 5 s. In `same` mode all N are in one cgroup with
 the CPU controller (`/rzb/same`, css id 82). In `distinct` mode each has its
-own (`/rzb/c0` upward, css ids 84 upward). Those ids still share cache lines
-eight to a line, so `distinct` is not a control with no sharing; the
+own (`/rzb/c0` upward, css ids 84 upward). Those ids still share cache lines,
+up to eight to a line, so `distinct` is not a control with no sharing; the
 comparison that carries the result is 1 process against 24. Only
 `syscall_counts` was enabled, built from main at `f8338afe`, two passes per
 arm. Host: delta (EPYC 4564P, 16 cores, SMT on; CPU n and n+16 are
@@ -126,13 +126,13 @@ is the range over every on and off pairing:
 | 24, same | 39.2, 37.8 | 29.2, 28.8 | 8.6–10.4 |
 | 24, distinct | 39.4, 37.8 | 29.1, 28.9 | 8.7–10.5 |
 
-The first run gives 7.5–11.0 ns at the same points. From 1 to 24 processes
-the program got 3.8–6.0 ns slower with attribution on and 2.9–3.8 ns slower
-with it off, so the attribution cost grew by about 1 ns at 24. It grew by
-the same amount in `same` and `distinct` mode, so the extra nanosecond does
-not come from sharing one cgroup's counter. At 24 processes, eight cores
-(CPUs 8–15 and their siblings 24–31) each run two of the processes, which
-slows the program in both arms.
+The first run gives 7.5–11.0 ns at the same points. Taking the mean of the
+two passes, the attribution cost changed from 1 process to 24 by +1.5 ns in
+the second run and by −0.7 ns in the first, and within each run it changed by
+the same amount in `same` and `distinct` mode. That is within noise. The
+program itself got 3–6 ns slower at 24 processes in both arms. At 24, eight
+cores (CPUs 8–15 and their siblings 24–31) each run two of the processes,
+which likely accounts for that.
 
 The host's own Rezolus 5.20 agent ran throughout with two `sys_enter`
 programs. Its `syscall_counts` program (5,776 B, the old per-cgroup path)
@@ -145,9 +145,9 @@ by thread id, eight ids to a cache line, and has no per-cgroup state. A
 likely cause is false sharing between processes with adjacent ids; I did not
 check how the ids fell in each mode.
 
-Total throughput varied by up to 15% between passes of the same setup, as
+Total throughput varied by up to 23% between passes of the same setup, as
 much as most of the gaps between `same` and `distinct`, so it does not
-separate the arms. The `syscall_latency` program's extra 80–110 ns may
+separate the arms. The `syscall_latency` program's extra 70–115 ns may
 contribute to `same` mode's lower throughput in most arms.
 
 Not covered: a host with more cores, two sockets, or a different CPU vendor.
