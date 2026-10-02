@@ -21,6 +21,17 @@
 
 ### Changed
 
+- `scheduler_runqueue`, `cpu_migrations` and `cpu_usage` read the task's pid,
+  state and CPU times as direct loads from BTF pointers instead of
+  `bpf_probe_read_kernel()` calls; on bare metal (EPYC 4564P, 6.12)
+  `scheduler_runqueue` costs 91–95 ns per run against 136–142 ns, and
+  `cpu_migrations` 38–39 ns against 56–59 ns. `syscall_latency` attaches to
+  `sys_enter` and `sys_exit` as raw tracepoints (`tp_btf`, or `raw_tp`
+  without kernel BTF) instead of the `raw_syscalls` tracepoints: with no
+  other syscall tracer on the host, its overhead per syscall falls from about
+  347 ns to 226 ns in a KVM guest. Where another tool keeps classic programs
+  on those tracepoints, the raw tracepoint is a second dispatch and costs
+  about 45 ns per syscall more than before. The series are unchanged.
 - **Groups of slots travel long on the agent's stream.**
   `/metrics/stream?layout=long` sends a group whose metrics are all counter
   or gauge groups (per task, per cgroup, per CPU) as values keyed by
