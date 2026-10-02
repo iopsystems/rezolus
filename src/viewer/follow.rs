@@ -7,22 +7,25 @@
 //!
 //! In a dendro archive each followed recording's source carries a writer
 //! heartbeat, which a running writer bumps every few seconds whether or not
-//! it has rows to commit. Each reopen also reads the catalog's sources and
+//! it has rows to commit. Each reopen first reads the catalog's sources and
 //! judges each followed recording's writer with a
-//! [`dendro::archive::HeartbeatWatch`]:
+//! [`dendro::archive::HeartbeatWatch`], then sets the wait before the next
+//! reopen:
 //!
-//! - any writer live: reopen every [`FOLLOW_INTERVAL`], however slowly rows
-//!   arrive;
-//! - every writer stopped or finalized, none live: the follow ends. A writer
-//!   reads as stopped when its heartbeat has not changed for
-//!   [`dendro::archive::STOPPED_AFTER_INTERVALS`] heartbeat intervals: it was
-//!   killed, or the file is a copy of a running archive;
-//! - a writer whose state is unknown (a `.rez`, or a dendro archive with no
-//!   heartbeat): reopen every [`FOLLOW_INTERVAL`] while rows arrive, and
-//!   after a reopen that finds no new row double the wait, up to
-//!   [`MAX_WAIT`].
+//! - any writer live: [`FOLLOW_INTERVAL`], however slowly rows arrive;
+//! - otherwise, every recording's writer either stopped or finalized: the
+//!   writer reads as stopped when its heartbeat has not changed for
+//!   [`dendro::archive::STOPPED_AFTER_INTERVALS`] heartbeat intervals of
+//!   this reader's clock. It was killed, it is paused or blocked, or the
+//!   file is a copy of a running archive. A paused writer that beats again
+//!   reads as live again, so the follow does not end: the wait backs off as
+//!   below, and returns to [`FOLLOW_INTERVAL`] once a writer beats;
+//! - otherwise, some recording has no heartbeat (a `.rez`, or a dendro
+//!   source whose writer did not record one): [`FOLLOW_INTERVAL`] while rows
+//!   arrive, and after a reopen that finds no new row the wait doubles, up
+//!   to [`MAX_WAIT`].
 //!
-//! The follow also ends when every recording is finalized, when the file is
+//! The follow ends when every recording is finalized, when the file is
 //! removed, or when the baseline is replaced. The page reads the `following`
 //! flag in `/api/v1/mode` and the baseline's metadata.
 
@@ -40,15 +43,16 @@ use tracing::{info, warn};
 
 use crate::rez_reader::RezReader;
 
-/// How often a growing archive is reopened, and the wait after a reopen that
-/// found a new row. The page refreshes every 5 s, so a reopen at 2 s puts the
-/// rows it shows at most about 2 s behind the writer's last commit. A reopen
-/// opens every recording of the archive and parses each table's segment
-/// footers, once per reopen however many recordings are shown.
+/// How often a growing archive, or one whose writer is live, is reopened.
+/// The page refreshes every 5 s, so a reopen at 2 s puts the rows it shows
+/// at most about 2 s behind the writer's last commit. A reopen opens every
+/// recording of the archive and parses each table's segment footers, once
+/// per reopen however many recordings are shown; a reopen of a dendro
+/// archive also opens its catalog read-only once to read `sources`.
 pub const FOLLOW_INTERVAL: Duration = Duration::from_secs(2);
 
-/// The longest wait between two reopens of an archive that has not grown and
-/// whose writers' state is unknown.
+/// The longest wait between two reopens of an archive that has not grown
+/// and has no live writer.
 pub const MAX_WAIT: Duration = Duration::from_secs(60);
 
 /// Readers of one archive being followed. Dropping it stops the thread.
@@ -58,6 +62,9 @@ pub struct Follow {
     /// causes by unparking it.
     stop: Arc<AtomicBool>,
     thread: std::thread::Thread,
+    /// The thread, for a test to join after the drop.
+    #[cfg(test)]
+    handle: Option<std::thread::JoinHandle<()>>,
 }
 
 struct Followed {
@@ -66,7 +73,7 @@ struct Followed {
     /// Whether the file is a dendro archive, whose sources carry a writer
     /// heartbeat. A `.rez` has none.
     dendro: bool,
-    /// The wait after a reopen that found a new row.
+    /// The wait while the archive grows or a writer is live.
     base: Duration,
     /// Each followed capture's id and reader.
     readers: Mutex<Vec<(String, Arc<LiveReader>)>>,
@@ -80,23 +87,59 @@ struct Progress {
     newest: Option<u64>,
     /// When `newest` last advanced, or when the follow started.
     grew_at: Instant,
+    /// When a reopen last read a writer as live, or when the follow started.
+    live_at: Instant,
     /// The wait before the next reopen.
     wait: Duration,
     /// Whether `wait` has reached [`MAX_WAIT`] since the last growth, so
     /// reaching it, and growing again after it, are each logged once.
     capped: bool,
+    /// Whether the last reopen read every writer as stopped (none live, none
+    /// unknown), so entering and leaving that state are each logged once.
+    stopped: bool,
     /// Whether the last reopen failed, so a run of failures is logged once.
     failing: bool,
+    /// Whether the last read of a dendro archive's sources failed, logged
+    /// once per run of failures as `failing` is.
+    catalog_failing: bool,
     /// One heartbeat watch per followed recording, by its label set.
     watches: BTreeMap<BTreeMap<String, String>, HeartbeatWatch>,
+}
+
+/// One followed recording's writer, as a reopen reads it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Writer {
+    Live,
+    Stopped,
+    Complete,
+    /// No heartbeat to judge by.
+    Unknown,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Set by [`start_parked`]: a follow started on this thread keeps its
+    /// thread parked until it is dropped, so a test drives every reopen.
+    static START_PARKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` with every follow it starts on this thread parked: the thread
+/// never reopens the archive, and the test drives every reopen through
+/// [`Follow::refresh_at`].
+#[cfg(test)]
+pub(crate) fn start_parked<T>(f: impl FnOnce() -> T) -> T {
+    START_PARKED.with(|p| p.set(true));
+    let out = f();
+    START_PARKED.with(|p| p.set(false));
+    out
 }
 
 impl Follow {
     /// Start reopening the archive behind `readers` on a thread of its own,
     /// since a reopen does blocking IO, waiting `interval` between reopens
-    /// while it grows. Each entry is a capture id and the reader serving it.
-    /// The readers must all read one archive, and no two of them may have
-    /// the same label set (see [`LiveReader::from_reader`]).
+    /// while it grows or a writer is live. Each entry is a capture id and the
+    /// reader serving it. The readers must all read one archive, and no two
+    /// of them may have the same label set (see [`LiveReader::from_reader`]).
     pub fn start(
         readers: Vec<(String, Arc<LiveReader>)>,
         pool: Arc<BufferPool>,
@@ -109,6 +152,7 @@ impl Follow {
             .unwrap_or_default();
         let newest = newest_row(&readers);
         let dendro = metriken_archive::DendroCatalog::is_archive(&path).unwrap_or(false);
+        let started = Instant::now();
         let inner = Arc::new(Followed {
             path,
             pool,
@@ -117,19 +161,32 @@ impl Follow {
             readers: Mutex::new(readers),
             progress: Mutex::new(Progress {
                 newest,
-                grew_at: Instant::now(),
+                grew_at: started,
+                live_at: started,
                 wait: interval,
                 capped: false,
+                stopped: false,
                 failing: false,
+                catalog_failing: false,
                 watches: BTreeMap::new(),
             }),
             done: AtomicBool::new(false),
         });
+        #[cfg(test)]
+        let parked = START_PARKED.with(|p| p.get());
+        #[cfg(not(test))]
+        let parked = false;
         let stop = Arc::new(AtomicBool::new(false));
         let (thread_inner, thread_stop) = (Arc::clone(&inner), Arc::clone(&stop));
         let handle = std::thread::Builder::new()
             .name("rezolus-follow".to_string())
             .spawn(move || {
+                if parked {
+                    while !thread_stop.load(Ordering::Acquire) {
+                        std::thread::park();
+                    }
+                    return;
+                }
                 loop {
                     let deadline = Instant::now() + thread_inner.wait();
                     // `park_timeout` can return early, spuriously or from
@@ -157,6 +214,8 @@ impl Follow {
             inner,
             stop,
             thread: handle.thread().clone(),
+            #[cfg(test)]
+            handle: Some(handle),
         })
     }
 
@@ -175,13 +234,17 @@ impl Follow {
         }
     }
 
-    /// Stop the thread without ending the follow, so a test drives every
-    /// reopen through [`refresh_at`](Self::refresh_at) with no reopen of the
-    /// thread's own in between.
+    /// Drop the follow and wait up to `within` for its thread to exit.
+    /// Returns whether it did.
     #[cfg(test)]
-    pub fn stop_thread(&self) {
-        self.stop.store(true, Ordering::Release);
-        self.thread.unpark();
+    pub fn drop_and_join(mut self, within: Duration) -> bool {
+        let handle = self.handle.take().expect("the thread is joined once");
+        drop(self);
+        let deadline = Instant::now() + within;
+        while !handle.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        handle.is_finished() && handle.join().is_ok()
     }
 
     /// The capture ids still followed.
@@ -232,10 +295,11 @@ impl Followed {
         self.progress.lock().wait
     }
 
-    /// Reopen the archive once and hand each reader its recording, then set
-    /// the wait before the next reopen. `now` is the time of this reopen. A
-    /// reader whose recording cannot be read keeps its previous view, and a
-    /// run of failures is logged once. Returns whether to keep following.
+    /// Read the writers' heartbeats, reopen the archive and hand each reader
+    /// its recording, then set the wait before the next reopen. `now` is the
+    /// time of this reopen. A reader whose recording cannot be read keeps
+    /// its previous view, and a run of failures is logged once. Returns
+    /// whether to keep following.
     fn step(&self, now: Instant) -> bool {
         if self.done.load(Ordering::Acquire) {
             return false;
@@ -249,9 +313,13 @@ impl Followed {
         if readers.is_empty() {
             return false;
         }
+        let mut progress = self.progress.lock();
+
+        // The catalog first: a source it reads as finalized is finalized in
+        // the open that follows, so the two cannot disagree that way round.
+        let writers = self.writers(&readers, &mut progress, now);
 
         let opened = quiet(|| RezReader::open_recordings(&self.path, Arc::clone(&self.pool)));
-        let mut progress = self.progress.lock();
         let failure = match opened {
             Ok(mut recordings) => {
                 let mut missing = None;
@@ -281,11 +349,16 @@ impl Followed {
             return false;
         }
 
-        let states = self.writer_states(&readers, &mut progress, now);
         let newest = newest_row(&readers);
-        if states.contains(&WriterState::Live) {
-            // A writer is running: keep the shortest wait however long it
-            // goes between rows.
+        if writers.contains(&Writer::Live) {
+            if progress.stopped {
+                info!(
+                    "{path}: its writer is beating again; checking it every {}",
+                    humantime::format_duration(self.base)
+                );
+                progress.stopped = false;
+            }
+            progress.live_at = now;
             progress.wait = self.base;
             progress.capped = false;
             if newest > progress.newest {
@@ -294,17 +367,31 @@ impl Followed {
             }
             return true;
         }
-        if !states.contains(&WriterState::Unknown) {
-            info!(
-                "{path}: its writer stopped (killed, or the file is a copy); no longer \
-                 following it"
-            );
-            return false;
-        }
 
-        // No writer is known to be running: back off while nothing arrives.
+        let stopped = writers.contains(&Writer::Stopped) && !writers.contains(&Writer::Unknown);
+        if stopped && !progress.stopped {
+            progress.stopped = true;
+            // From the last reopen that read a writer as live, so it is the
+            // silence this reader saw, to within one wait.
+            let quiet_for = now.saturating_duration_since(progress.live_at);
+            info!(
+                "{path}: its writer has not beaten in {} (killed, paused, or the file is a \
+                 copy); checking it every {}",
+                humantime::format_duration(Duration::from_secs(quiet_for.as_secs())),
+                humantime::format_duration(MAX_WAIT)
+            );
+        }
+        self.back_off(&mut progress, newest, now, !stopped);
+        true
+    }
+
+    /// Double the wait after a reopen that found no new row, up to
+    /// [`MAX_WAIT`], or reset it after one that found one. With `log`,
+    /// reaching the cap and growing again after it are each logged once.
+    fn back_off(&self, progress: &mut Progress, newest: Option<u64>, now: Instant, log: bool) {
+        let path = self.path.display();
         if newest > progress.newest {
-            if progress.capped {
+            if progress.capped && log {
                 info!(
                     "{path} grew again; checking it every {}",
                     humantime::format_duration(self.base)
@@ -314,10 +401,12 @@ impl Followed {
             progress.grew_at = now;
             progress.wait = self.base;
             progress.capped = false;
-        } else {
-            progress.wait = progress.wait.saturating_mul(2).min(MAX_WAIT);
-            if progress.wait == MAX_WAIT && !progress.capped {
-                progress.capped = true;
+            return;
+        }
+        progress.wait = progress.wait.saturating_mul(2).min(MAX_WAIT);
+        if progress.wait == MAX_WAIT && !progress.capped {
+            progress.capped = true;
+            if log {
                 let idle = now.saturating_duration_since(progress.grew_at);
                 info!(
                     "{path} has not grown in {}; checking it every {}",
@@ -326,26 +415,37 @@ impl Followed {
                 );
             }
         }
-        true
     }
-}
 
-impl Followed {
     /// Each followed recording's writer, judged from its heartbeat. Reads
     /// the catalog's sources once; a recording is matched to the source with
-    /// its exact label set. Every recording of a `.rez`, or of a dendro
-    /// archive whose sources cannot be read, is
-    /// [`Unknown`](WriterState::Unknown).
-    fn writer_states(
+    /// its exact label set. Every recording of a `.rez`, of a dendro archive
+    /// whose sources cannot be read, or without a matching source is
+    /// [`Unknown`](Writer::Unknown). A failed read is logged once per run of
+    /// failures.
+    fn writers(
         &self,
         readers: &[(String, Arc<LiveReader>)],
         progress: &mut Progress,
         now: Instant,
-    ) -> Vec<WriterState> {
+    ) -> Vec<Writer> {
         let sources = if self.dendro {
-            dendro::archive::Archive::open(&self.path)
-                .and_then(|a| a.read_sources())
-                .ok()
+            match dendro::archive::Archive::open(&self.path).and_then(|a| a.read_sources()) {
+                Ok(sources) => {
+                    progress.catalog_failing = false;
+                    Some(sources)
+                }
+                Err(e) => {
+                    if !progress.catalog_failing {
+                        warn!(
+                            "{}: could not read its writers' heartbeats: {e}",
+                            self.path.display()
+                        );
+                        progress.catalog_failing = true;
+                    }
+                    None
+                }
+            }
         } else {
             None
         };
@@ -355,13 +455,20 @@ impl Followed {
                 let source = sources
                     .as_ref()
                     .and_then(|s| s.iter().find(|s| s.meta.labels == *reader.labels()));
-                match source {
-                    Some(source) => progress
-                        .watches
-                        .entry(reader.labels().clone())
-                        .or_default()
-                        .observe(source, now),
-                    None => WriterState::Unknown,
+                let Some(source) = source else {
+                    return Writer::Unknown;
+                };
+                let state = progress
+                    .watches
+                    .entry(reader.labels().clone())
+                    .or_default()
+                    .observe(source, now);
+                match state {
+                    WriterState::Live => Writer::Live,
+                    WriterState::Stopped => Writer::Stopped,
+                    WriterState::Complete => Writer::Complete,
+                    WriterState::Unknown => Writer::Unknown,
+                    _ => Writer::Unknown,
                 }
             })
             .collect()
@@ -386,11 +493,16 @@ fn quiet<T>(f: impl FnOnce() -> T) -> T {
 mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use metriken_archive::{ArchiveWriter, SourceRecorder, WriterConfig};
 
+    use metriken_query::MetricsSource;
+    use rez::live::LiveReader;
+
     use super::FOLLOW_INTERVAL;
+    use crate::rez_reader::RezReader;
 
     use crate::dendro_copy::fixtures::{recorded, tick, ANCHOR, SECOND};
     use crate::viewer::state::AppState;
@@ -420,21 +532,19 @@ mod tests {
         source.sync().unwrap();
     }
 
-    /// Open `path` the way `rezolus view <path>` does.
-    /// The follow's own thread is stopped, so every reopen is the test's.
+    /// Open `path` the way `rezolus view <path>` does. The follow's thread
+    /// starts parked, so every reopen is the test's.
     fn view(path: &Path) -> AppState {
         let matches = crate::viewer::command().get_matches_from(["view", path.to_str().unwrap()]);
         let config = crate::viewer::Config::try_from(matches).unwrap();
-        let state = crate::viewer::init_file_mode(
-            &config,
-            path,
-            &::dashboard::TemplateRegistry::empty(),
-            metriken_query::BufferPool::new(64 << 20),
-        );
-        if let Some(follow) = state.follow.lock().as_ref() {
-            follow.stop_thread();
-        }
-        state
+        super::start_parked(|| {
+            crate::viewer::init_file_mode(
+                &config,
+                path,
+                &::dashboard::TemplateRegistry::empty(),
+                metriken_query::BufferPool::new(64 << 20),
+            )
+        })
     }
 
     /// `end_time` from the `/api/v1/sections` payload, in ms.
@@ -493,6 +603,64 @@ mod tests {
         assert!(!state.follow.lock().as_ref().unwrap().refresh_now());
         assert!(!state.following());
         assert_eq!(end_ms(&state), (ANCHOR + 4 * SECOND) / 1_000_000);
+    }
+
+    /// A follow of the only recording at `path`, started as file mode starts
+    /// one but waiting `interval`, with its thread running.
+    fn follow_running(path: &Path, interval: Duration) -> (super::Follow, Arc<LiveReader>) {
+        let pool = metriken_query::BufferPool::new(64 << 20);
+        let (labels, reader) = RezReader::open_recordings(path, Arc::clone(&pool))
+            .unwrap()
+            .remove(0);
+        let live = Arc::new(LiveReader::from_reader(
+            path,
+            labels,
+            reader,
+            Arc::clone(&pool),
+        ));
+        let readers = vec![("baseline".to_string(), Arc::clone(&live))];
+        (super::Follow::start(readers, pool, interval).unwrap(), live)
+    }
+
+    /// The follow's own thread reopens the archive: rows a writer commits
+    /// after the open are read without a test calling `refresh_at`.
+    #[test]
+    fn the_follow_thread_reads_new_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("threaded.dendro");
+        let (mut writer, mut source) = writer(&path);
+        write(&mut writer, &mut source, 0..3);
+        let (follow, live) = follow_running(&path, Duration::from_millis(20));
+        assert_eq!(live.time_range_ns().unwrap().1, ANCHOR + 2 * SECOND);
+
+        write(&mut writer, &mut source, 3..10);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while live.time_range_ns().unwrap().1 != ANCHOR + 9 * SECOND {
+            assert!(
+                Instant::now() < deadline,
+                "the thread did not read the new rows within 5 s"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(follow.active());
+        drop(follow);
+        drop((source, writer));
+    }
+
+    /// Dropping a follow wakes its thread from a long wait, and it exits.
+    #[test]
+    fn dropping_the_follow_ends_its_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("idle.dendro");
+        recorded(&path, 5, false);
+        let (follow, _live) = follow_running(&path, Duration::from_secs(60));
+        // Let the thread reach its 60 s wait; a drop before the thread first
+        // runs would end it without testing the wake-up.
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            follow.drop_and_join(Duration::from_secs(5)),
+            "the thread exits on drop, not after its 60 s wait"
+        );
     }
 
     /// Commit one row at `minute` minutes past the anchor.
@@ -558,13 +726,14 @@ mod tests {
         assert!(state.following());
     }
 
-    /// A writer that goes away without finalizing (a killed hindsight, a
-    /// crashed `record`) leaves its heartbeat fixed. The follow continues
-    /// until three heartbeat intervals have passed, then ends.
+    /// A writer whose heartbeat stays fixed (killed, or paused: Ctrl-Z, a
+    /// stalled disk) reads as stopped after three heartbeat intervals. The
+    /// follow does not end: the wait backs off to 60 s, and returns to 2 s
+    /// once the writer beats again.
     #[test]
-    fn a_writer_that_stops_ends_the_follow_after_three_intervals() {
+    fn a_stopped_writer_is_checked_less_often_until_it_beats_again() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("killed.dendro");
+        let path = dir.path().join("paused.dendro");
         recorded(&path, 5, false);
         let state = view(&path);
         let guard = state.follow.lock();
@@ -573,20 +742,26 @@ mod tests {
         let start = Instant::now();
         assert!(follow.refresh_at(start), "first look: not yet judged");
         assert!(follow.refresh_at(start + BEAT * 3 - Duration::from_millis(1)));
-        assert_eq!(follow.wait(), FOLLOW_INTERVAL);
-        assert!(
-            !follow.refresh_at(start + BEAT * 3),
-            "a heartbeat fixed for three intervals ends the follow"
-        );
+        assert_eq!(follow.wait(), FOLLOW_INTERVAL, "live until three intervals");
+        let mut clock = start + BEAT * 3;
+        for expected in [4, 8, 16, 32, 60, 60] {
+            assert!(follow.refresh_at(clock), "a stopped writer stays followed");
+            assert_eq!(follow.wait(), Duration::from_secs(expected));
+            clock += follow.wait();
+        }
+
+        beat(&path);
+        assert!(follow.refresh_at(clock));
+        assert_eq!(follow.wait(), FOLLOW_INTERVAL, "a beat ends the backoff");
         drop(guard);
-        assert!(!state.following());
+        assert!(state.following());
     }
 
     /// A copy of a running archive carries the heartbeat columns, and no
-    /// writer bumps the copy. Its follow ends after three intervals, while
-    /// the original, whose writer beats, stays followed.
+    /// writer bumps the copy. After three intervals it reads as stopped and
+    /// backs off, while the original, whose writer beats, stays at 2 s.
     #[test]
-    fn a_copy_of_a_running_archive_ends_the_follow() {
+    fn a_copy_of_a_running_archive_backs_off() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("running.dendro");
         let (mut writer, mut source) = writer(&path);
@@ -606,10 +781,16 @@ mod tests {
             if beats {
                 beat(&path);
             }
-            assert_eq!(follow.refresh_at(start + BEAT * 3), beats);
+            assert!(follow.refresh_at(start + BEAT * 3));
+            let expected = if beats {
+                FOLLOW_INTERVAL
+            } else {
+                FOLLOW_INTERVAL * 2
+            };
+            assert_eq!(follow.wait(), expected);
         }
         assert!(original.following());
-        assert!(!copied.following());
+        assert!(copied.following());
         drop((source, writer));
     }
 

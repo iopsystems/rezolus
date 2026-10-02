@@ -121,9 +121,9 @@ impl LiveReader {
         Arc::clone(&self.current.read().unwrap_or_else(|e| e.into_inner()))
     }
 
-    /// Whether the recording was finalized as of the last open. A writer
-    /// finalizes it on a clean exit. A recording whose writer was killed, or
-    /// one copied from a running writer, is never finalized.
+    /// Whether the recording was finalized as of the last open. `record`
+    /// finalizes on a clean exit; a killed writer's file, or a `cp` or
+    /// `recording snapshot` of a running archive, is not finalized.
     pub fn complete(&self) -> bool {
         self.current().complete()
     }
