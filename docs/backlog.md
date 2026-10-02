@@ -1034,7 +1034,18 @@ bare-metal probe-cost bench for anything at request rate).
   default-on question is the 1.13 µs per pair that stays; making the cgroup
   path cheaper (per-CPU cgroup banks, or caching the cgroup id and serial in
   the task's start slot) is the way to have both. Gaps entry, Deferred,
-  "`ext4_ops` probe cost".
+  "`ext4_ops` probe cost". The 2026-10-01 entry below found most of the
+  path's cost in `bpf_probe_read_kernel()` calls; try that first.
+- **Per-cgroup path: read the task group once, through BTF** — Open.
+  `syscall_counts` is converted (`current_task_group()` and
+  `handle_new_cgroup_read()` in `src/agent/bpf/cgroup.h`): its cgroup path
+  went from 109–118 ns to 9–12 ns per syscall on bare metal. The other
+  samplers including `cgroup.h` still make five to seven helper calls per
+  event: `cpu_usage`, `cpu_migrations`, `cpu_perf`, `cpu_tlb_flush`,
+  `scheduler_runqueue` (two tasks per switch, so it needs a task-pointer
+  variant), `cpu_bandwidth`, `ext4_ops`, `xfs_log`, `memory_pagecache`.
+  Contention on the shared per-cgroup counters from many CPUs is unmeasured.
+  `docs/journal/2026-10-01-cgroup-path-helper-calls.md`.
 - **Write-amplification decomposition dashboard** — DONE as the ext4
   dashboard's Write Path group: application bytes (`ext4_write_bytes`),
   writeback bytes, journal bytes, device bytes on one axis, each term drawn

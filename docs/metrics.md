@@ -37,7 +37,7 @@ Zen 4, Debian 13, 6.12) and in a 56-vCPU KVM guest (Zen 2 host):
 
 | Sampler, hook | Bare metal on | Bare metal off | Guest on | Guest off |
 |---|---|---|---|---|
-| `syscall_counts`, `sys_enter` | 176–188 ns | 39–42 ns | 250–291 ns | 62–75 ns |
+| `syscall_counts`, `sys_enter` (before #1392) | 176–188 ns | 39–42 ns | 250–291 ns | 62–75 ns |
 | `cpu_tlb_flush`, `tlb_flush` | 180–197 ns | 36–39 ns | 293–352 ns | 72–76 ns |
 | `scheduler_runqueue`, `sched_switch` | 491–575 ns | 213–256 ns | 629–775 ns | 240–349 ns |
 | `cpu_usage`, `cpuacct_account_field` | 502–599 ns | 285–351 ns | 416–776 ns | 238–518 ns |
@@ -45,9 +45,20 @@ Zen 4, Debian 13, 6.12) and in a 56-vCPU KVM guest (Zen 2 host):
 | `ext4_ops`, fsync and write end hooks | | | 531–537 ns | 266–271 ns |
 
 `cpu_migrations`'s cgroup path runs only on a migration, so it costs nothing
-per switch. On bare metal, `perf bench syscall basic` ran at 715 K ops/s with
-the five samplers' cgroup paths off, the same as without these samplers
-(711 K), and at 564–582 K with them on.
+per switch. On bare metal, before #1392, `perf bench syscall basic` ran at
+715 K ops/s with the five samplers' cgroup paths off, the same as without
+these samplers (711 K), and at 564–582 K with them on.
+
+Since #1392, `syscall_counts` reads the task group once, as direct loads from
+a BTF task pointer, from a `tp_btf` program. The other samplers in the table
+still read it through `bpf_probe_read_kernel()` calls. Measured on the same
+bare-metal host with `syscall_counts` alone enabled, the two builds run in
+alternation, under `perf bench sched pipe` and `perf bench syscall basic`:
+
+| `syscall_counts`, `sys_enter` | On | Off |
+|---|---|---|
+| before #1392 | 140–151 ns | 31–33 ns |
+| since #1392 | 33–39 ns | 24–27 ns |
 
 A task is attributed to its CPU controller's task group. A service whose
 cgroup has no CPU controller of its own is counted under the nearest
