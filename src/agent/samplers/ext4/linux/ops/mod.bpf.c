@@ -52,9 +52,9 @@ const volatile __u8 cgroup_attribution = 0;
 // per-filesystem counters: one bank of COUNTER_GROUP_WIDTH per (CPU, slot).
 // Three runs of OP_COUNT plus one; the order MUST match the `counters` vec in
 // mod.rs.
-#define C_OPS 0    // + op: calls completed
-#define C_TIME 4   // + op: nanoseconds the calls held the thread, summed
-#define C_ERRORS 8 // + op: calls that returned an error
+#define C_OPS 0         // + op: calls completed
+#define C_TIME 4        // + op: nanoseconds the calls held the thread, summed
+#define C_ERRORS 8      // + op: calls that returned an error
 #define C_WRITE_BYTES 12
 
 // Per-thread start state: one slot per operation, so nested operations on one
@@ -96,7 +96,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CPUS * MAX_FILESYSTEMS * COUNTER_GROUP_WIDTH);
+    __uint(max_entries, MAX_CPUS* MAX_FILESYSTEMS* COUNTER_GROUP_WIDTH);
 } counters SEC(".maps");
 
 // Latency histograms, host-wide, one per operation.

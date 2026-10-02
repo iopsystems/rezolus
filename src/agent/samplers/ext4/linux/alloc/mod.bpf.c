@@ -81,7 +81,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CPUS * MAX_FILESYSTEMS * COUNTER_GROUP_WIDTH);
+    __uint(max_entries, MAX_CPUS* MAX_FILESYSTEMS* COUNTER_GROUP_WIDTH);
 } counters SEC(".maps");
 
 // Allocated extent length, in filesystem blocks.
@@ -142,7 +142,7 @@ static int __always_inline handle_mballoc_alloc(void* ctx) {
 
 // ext4_writepages_result fires once per writeback pass over an inode.
 static int __always_inline handle_writepages_result(u32 slot, struct writeback_control* wbc,
-                                                    int ret, int pages_written) {
+                                                     int ret, int pages_written) {
     long skipped;
 
     counter_incr(slot, C_WRITEPAGES);
@@ -233,7 +233,8 @@ int BPF_PROG(ext4_writepages_result_raw, struct inode* inode, struct writeback_c
 }
 
 SEC("tp_btf/ext4_trim_extent")
-int BPF_PROG(ext4_trim_extent_btf, struct super_block* sb, unsigned int group, int start, int len) {
+int BPF_PROG(ext4_trim_extent_btf, struct super_block* sb, unsigned int group, int start,
+             int len) {
     if (len > 0) {
         counter_add(fs_slot(sb_dev(sb)), C_TRIMMED_BLOCKS, (u64)len);
     }
@@ -241,7 +242,8 @@ int BPF_PROG(ext4_trim_extent_btf, struct super_block* sb, unsigned int group, i
 }
 
 SEC("raw_tp/ext4_trim_extent")
-int BPF_PROG(ext4_trim_extent_raw, struct super_block* sb, unsigned int group, int start, int len) {
+int BPF_PROG(ext4_trim_extent_raw, struct super_block* sb, unsigned int group, int start,
+             int len) {
     if (len > 0) {
         counter_add(fs_slot(sb_dev(sb)), C_TRIMMED_BLOCKS, (u64)len);
     }
