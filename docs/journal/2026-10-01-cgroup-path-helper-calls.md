@@ -90,47 +90,65 @@ ops/s across arms with no consistent order between the branch and main.
 
 ## Contention on the shared per-cgroup counters
 
-Each per-cgroup counter is one u64 that every CPU adds to atomically, and
-adjacent css ids share a cache line. `perf bench syscall basic` is
+Each per-cgroup counter is one u64 that every CPU adds to atomically, and up
+to eight adjacent css ids share a cache line. `perf bench syscall basic` is
 single-threaded, so the numbers above say nothing about many CPUs adding to
 one counter. Per-CPU per-cgroup counters would remove the sharing, at
-`MAX_CGROUPS` × 8 B × CPUs per series: `syscall_counts` has 17 series, so
-544 KiB today would become 17 MiB at 32 CPUs and 102 MiB at 192. Measured
-first to see whether that is needed.
+`MAX_CGROUPS` × 8 B × possible CPUs per series. `syscall_counts` has 17
+series, so 544 KiB today would become 17 MiB at 32 possible CPUs and 102 MiB
+at 192. A per-CPU array also cannot be `BPF_F_MMAPABLE`, so the reader would
+change too. This section measures whether that is needed.
 
 Method: N processes, each pinned to its own CPU from CPU 8 up, each calling
 `getppid()` in a loop for 5 s. In `same` mode all N are in one cgroup with
-the CPU controller (`/rzb/same`, css id 82); in `distinct` mode each has its
-own (`/rzb/c0`.., css ids 84 upward, so eight to a cache line). Only
-`syscall_counts` enabled, built from main at `f8338afe`, two passes per arm.
-delta (EPYC 4564P, 16 cores, SMT on; CPU n and n+16 are siblings), 6.12.90.
-systemslab `01a0fb2e-4ed1-719e-7bda-5235ea3bd625` and
+the CPU controller (`/rzb/same`, css id 82). In `distinct` mode each has its
+own (`/rzb/c0` upward, css ids 84 upward). Those ids still share cache lines
+eight to a line, so `distinct` is not a control with no sharing; the
+comparison that carries the result is 1 process against 24. Only
+`syscall_counts` was enabled, built from main at `f8338afe`, two passes per
+arm. Host: delta (EPYC 4564P, 16 cores, SMT on; CPU n and n+16 are
+siblings), 6.12.90. systemslab `01a0fb2e-4ed1-719e-7bda-5235ea3bd625` and
 `01a0fb3b-29a2-7106-09af-288d22a9d330`.
 
-`sys_enter_btf`, ns per run, two passes, from the second run:
+The agent published a `/rzb/same` series with css id 82. It does that only
+after a task in that cgroup has run the per-cgroup path, which then adds at
+that id, so the path resolved the shared cgroup. The value of that counter
+was not checked against the benchmark's syscall count.
+
+`sys_enter_btf`, ns per run, two passes, from the second run. The last column
+is the range over every on and off pairing:
 
 | procs, mode | on | off | on minus off |
 |---|---|---|---|
-| 1 | 34.0, 33.4 | 25.4, 25.9 | 8–9 |
-| 8, same | 33.1, 33.2 | 25.7, 25.3 | 7–8 |
-| 16, same | 33.8, 34.0 | 27.3, 25.6 | 7–8 |
-| 24, same | 39.2, 37.8 | 29.2, 28.8 | 9–10 |
-| 24, distinct | 39.4, 37.8 | 29.1, 28.9 | 9–10 |
+| 1 | 34.0, 33.4 | 25.4, 25.9 | 7.5–8.6 |
+| 8, same | 33.1, 33.2 | 25.7, 25.3 | 7.4–7.9 |
+| 16, same | 33.8, 34.0 | 27.3, 25.6 | 6.5–8.4 |
+| 24, same | 39.2, 37.8 | 29.2, 28.8 | 8.6–10.4 |
+| 24, distinct | 39.4, 37.8 | 29.1, 28.9 | 8.7–10.5 |
 
-The first run gives 8–11 ns at the same points. The attribution cost stays
-at 7–11 ns from one process to 24 in one cgroup, so contention on the shared
-counter did not show here. The rise of about 4 ns at 24 processes is in the
-off arm too: at 24 the processes fill both SMT threads of the cores they run
-on, which slows the program whether or not it adds to a cgroup counter.
+The first run gives 7.5–11.0 ns at the same points. From 1 to 24 processes
+the program got 3.8–6.0 ns slower with attribution on and 2.9–3.8 ns slower
+with it off, so the attribution cost grew by about 1 ns at 24. It grew by
+the same amount in `same` and `distinct` mode, so the extra nanosecond does
+not come from sharing one cgroup's counter. At 24 processes, eight cores
+(CPUs 8–15 and their siblings 24–31) each run two of the processes, which
+slows the program in both arms.
 
 The host's own Rezolus 5.20 agent ran throughout with two `sys_enter`
 programs. Its `syscall_counts` program (5,776 B, the old per-cgroup path)
 read 142–169 ns per run in every arm and mode, so it showed no contention
-either. Its other program (112 B) went from about 70 ns to 144–186 ns at 16
-and 24 processes in `same` mode, and to 96–105 ns at 24 in `distinct` mode.
-That program, not either per-cgroup path, is the likely reason `same` mode
-had lower total throughput than `distinct` in most arms, including with our
-agent stopped. I don't know what it shares between processes of one cgroup.
+either. Its other program (112 B), which by its size and the 5.20 source is
+the `syscall_latency` entry program, went from about 70 ns to
+144–186 ns at 16 and 24 processes in `same` mode, and to 96–105 ns at 24 in
+`distinct` mode. That program stores a start timestamp in an array indexed
+by thread id, eight ids to a cache line, and has no per-cgroup state. A
+likely cause is false sharing between processes with adjacent ids; I did not
+check how the ids fell in each mode.
+
+Total throughput varied by up to 15% between passes of the same setup, as
+much as most of the gaps between `same` and `distinct`, so it does not
+separate the arms. The `syscall_latency` program's extra 80–110 ns may
+contribute to `same` mode's lower throughput in most arms.
 
 Not covered: a host with more cores, two sockets, or a different CPU vendor.
 On this host per-CPU per-cgroup counters are not needed for
