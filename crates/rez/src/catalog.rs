@@ -60,10 +60,21 @@ impl Container {
         })
     }
 
-    /// Opening `path` as this container again, for a table read later.
+    /// Opening `path` as this container again, for a table read later. The
+    /// file at `path` now is the only one it opens: once another file is at
+    /// `path`, such as a filtered copy renamed over it, it returns an error.
     pub fn reopen(self, path: &Path) -> metriken_archive::Reopen {
         let path = path.to_path_buf();
-        Arc::new(move || self.open(&path))
+        let opened = crate::live::FileId::of(&path);
+        Arc::new(move || {
+            if opened.is_some() && crate::live::FileId::of(&path) != opened {
+                return Err(format!(
+                    "{} was replaced after it was opened",
+                    path.display()
+                ));
+            }
+            self.open(&path)
+        })
     }
 }
 

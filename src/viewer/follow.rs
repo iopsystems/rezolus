@@ -319,13 +319,15 @@ impl Followed {
         // the open that follows, so the two cannot disagree that way round.
         let writers = self.writers(&readers, &mut progress, now);
 
-        let opened = quiet(|| RezReader::open_recordings(&self.path, Arc::clone(&self.pool)));
+        let (opened, file) = rez::live::open_file(&self.path, || {
+            quiet(|| RezReader::open_recordings(&self.path, Arc::clone(&self.pool)))
+        });
         let failure = match opened {
             Ok(mut recordings) => {
                 let mut missing = None;
                 for (_, reader) in &readers {
                     match recordings.iter().position(|(l, _)| l == reader.labels()) {
-                        Some(at) => reader.replace(recordings.swap_remove(at).1),
+                        Some(at) => reader.replace(recordings.swap_remove(at).1, file),
                         None => {
                             missing = Some(format!("no recording labelled {:?}", reader.labels()))
                         }

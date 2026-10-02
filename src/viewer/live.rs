@@ -446,6 +446,146 @@ mod tests {
         assert_eq!(result[0].value.1, 988.0);
     }
 
+    /// A query's answer with each series' labels sorted.
+    fn answer(live: &LiveReader, query: &str) -> Vec<String> {
+        let (lo, hi) = live.time_range_ns().unwrap();
+        let metriken_query::QueryResult::Matrix { result } = live
+            .query_range(query, lo as f64 / 1e9, hi as f64 / 1e9, 1.0)
+            .unwrap()
+        else {
+            panic!("a range query gives a matrix");
+        };
+        let mut out: Vec<String> = result
+            .into_iter()
+            .map(|m| {
+                let labels: std::collections::BTreeMap<_, _> = m.metric.into_iter().collect();
+                format!("{labels:?} {:?}", m.values)
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    const QUERIES: &[&str] = &["rate(task_ops[3s])", "mem_free"];
+
+    /// Refreshed as rows arrive and segments seal, a reader answers as a
+    /// fresh open of the archive does.
+    #[test]
+    fn a_refreshed_reader_answers_as_a_fresh_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("live.dendro");
+        let mut buffer = buffer(&path);
+        record(&mut buffer, 0..3);
+        let pool = BufferPool::new(64 << 20);
+        let live = LiveReader::open(&path, None, Arc::clone(&pool)).unwrap();
+        for step in 1..6u64 {
+            for q in QUERIES {
+                answer(&live, q);
+            }
+            record(&mut buffer, step * 4 - 1..step * 4 + 3);
+            live.refresh().unwrap();
+            let fresh = LiveReader::open(&path, None, Arc::clone(&pool)).unwrap();
+            for q in QUERIES {
+                assert_eq!(answer(&live, q), answer(&fresh, q), "{q} at step {step}");
+            }
+        }
+    }
+
+    /// Two archives with the same ticks, and so segments with the same
+    /// sequence numbers, row counts and spans, whose `mem_free` differs.
+    fn two_archives(dir: &Path) -> (PathBuf, PathBuf) {
+        let (path, other) = (dir.join("live.dendro"), dir.join("other.dendro"));
+        let mut a = buffer(&path);
+        record(&mut a, 0..10);
+        drop(a);
+        let mut b = buffer(&other);
+        for i in 0..10 {
+            let mut snapshot = tick(i);
+            let metriken_exposition::Snapshot::V3(v3) = &mut snapshot else {
+                unreachable!("the fixture is a V3 snapshot");
+            };
+            for group in &mut v3.groups {
+                for gauge in group.gauges.iter_mut().flatten() {
+                    *gauge += 5_000;
+                }
+            }
+            b.ingest(&snapshot, ANCHOR + i * SECOND, 0).unwrap();
+            b.maintain().unwrap();
+        }
+        b.sync().unwrap();
+        drop(b);
+        (path, other)
+    }
+
+    fn rename_over(from: &Path, to: &Path) {
+        for suffix in ["", "-wal", "-shm"] {
+            let src = format!("{}{suffix}", from.display());
+            if Path::new(&src).exists() {
+                std::fs::rename(&src, format!("{}{suffix}", to.display())).unwrap();
+            }
+        }
+    }
+
+    /// A file renamed over the path is read afresh, even where its segments
+    /// have the same sequence numbers, row counts and spans as the file it
+    /// replaced.
+    #[test]
+    fn a_file_renamed_over_the_path_is_read_afresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, other) = two_archives(dir.path());
+        let pool = BufferPool::new(64 << 20);
+        let live = LiveReader::open(&path, None, Arc::clone(&pool)).unwrap();
+        let before = answer(&live, "mem_free");
+        rename_over(&other, &path);
+        live.refresh().unwrap();
+        let fresh = LiveReader::open(&path, None, Arc::clone(&pool)).unwrap();
+        let after = answer(&live, "mem_free");
+        assert_ne!(after, before, "the fixture's two files differ");
+        assert_eq!(after, answer(&fresh, "mem_free"));
+    }
+
+    /// A file renamed over the path after a refresh and before the first
+    /// query is not read by that reader: its tables refuse to open, and the
+    /// next refresh reads the new file.
+    #[test]
+    fn a_file_renamed_over_the_path_after_a_refresh_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, other) = two_archives(dir.path());
+        let pool = BufferPool::new(64 << 20);
+        let live = LiveReader::open(&path, None, Arc::clone(&pool)).unwrap();
+        let before = answer(&live, "mem_free");
+        live.refresh().unwrap();
+        rename_over(&other, &path);
+        let (lo, hi) = live.time_range_ns().unwrap();
+        let mixed = live.query_range("mem_free", lo as f64 / 1e9, hi as f64 / 1e9, 1.0);
+        let values = match mixed {
+            Ok(metriken_query::QueryResult::Matrix { result }) => {
+                result.into_iter().flat_map(|m| m.values).collect()
+            }
+            _ => Vec::new(),
+        };
+        assert!(values.is_empty(), "read from the replaced file: {values:?}");
+
+        live.refresh().unwrap();
+        let fresh = LiveReader::open(&path, None, Arc::clone(&pool)).unwrap();
+        let after = answer(&live, "mem_free");
+        assert_ne!(after, before);
+        assert_eq!(after, answer(&fresh, "mem_free"));
+    }
+
+    /// `open_file` gives the file's id when the file at the path did not
+    /// change during the open, and none when it did.
+    #[cfg(unix)]
+    #[test]
+    fn open_file_gives_an_id_only_for_an_unchanged_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, other) = two_archives(dir.path());
+        let ((), same) = rez::live::open_file(&path, || ());
+        assert!(same.is_some());
+        let ((), changed) = rez::live::open_file(&path, || rename_over(&other, &path));
+        assert_eq!(changed, None);
+    }
+
     /// A selector matches a recording whose labels include every pair in it,
     /// as the `--recording` selectors do, and one that matches none is an
     /// error.
