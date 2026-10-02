@@ -134,11 +134,12 @@ impl Config {
 
     /// Whether `name` attributes its events to the calling thread's cgroup
     /// (per-sampler override, falling back to the `defaults` section, then
-    /// off). Consumed by the samplers whose per-cgroup path is a measured
-    /// share of their probe cost (`ext4_ops`, `xfs_log`, `memory_pagecache`):
-    /// with it off, the `cgroup_*` series are absent and the path is not in
-    /// the loaded program. `cpu_perf` defaults it on; see
-    /// `cgroup_attribution_or`.
+    /// off). The request-path samplers read it this way (`ext4_ops`,
+    /// `xfs_log`, `memory_pagecache`): with it off, the `cgroup_*` series are
+    /// absent and the path is not in the loaded program. The samplers whose
+    /// per-cgroup series predate the option (`cpu_usage`, `cpu_migrations`,
+    /// `cpu_perf`, `cpu_tlb_flush`, `scheduler_runqueue`, `syscall_counts`)
+    /// default it on; see `cgroup_attribution_or`.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn cgroup_attribution(&self, name: &str) -> bool {
         self.cgroup_attribution_or(name, false)

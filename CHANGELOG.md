@@ -32,8 +32,7 @@
   hindsight and the live viewer ask for the long layout; a `.rez` hindsight
   buffer asks for the wide one. An agent that does not serve the long
   layout is recorded through the wide one, and `record` logs that when it
-  connects. The
-  response names the layout served in `x-rezolus-layout`.
+  connects. The response names the layout served in `x-rezolus-layout`.
 - metriken-query 0.34.0, metriken-exposition 0.21.4, metriken-archive 0.3.2
   and dendro 0.3.4. A query whose metric is in the recording but matches
   nothing in the range answers empty instead of "metric not found";
@@ -41,6 +40,22 @@
   with a function for another kind (`rate()` of a gauge) says which kind it
   is. Archives written through the new writer carry a heartbeat while their
   writer runs.
+- `syscall_counts` attaches to `sys_enter` as a raw tracepoint (`tp_btf`,
+  or `raw_tp` without kernel BTF) instead of the `raw_syscalls/sys_enter`
+  tracepoint, and its per-cgroup path reads the task group once, as direct
+  loads from a BTF task pointer on kernels from 5.11. On bare metal (EPYC
+  4564P, 6.12) the program costs 33–39 ns per syscall with
+  `cgroup_attribution` on, down from 140–151 ns. The series are unchanged.
+- `cpu_usage`, `cpu_migrations`, `cpu_tlb_flush`, `scheduler_runqueue` and
+  `syscall_counts` honour `cgroup_attribution`, on by default as for
+  `cpu_perf`, so nothing changes unless a config sets it. With
+  `cgroup_attribution = false` the per-cgroup path (the task-group read, the
+  new-cgroup check and the per-cgroup adds) is folded out of each sampler's
+  hook and the `cgroup_*` series are absent; host-level series are
+  unchanged. A config that already sets `[defaults] cgroup_attribution =
+  false` now reaches these five samplers as well. `docs/metrics.md` lists
+  every sampler with the option and its default. The cgroups view finds
+  cgroup names from any per-cgroup series when `cgroup_cpu_usage` is absent.
 - metriken-query 0.33.6 and metriken-archive 0.3.1. A segment's decoded
   blocks are cached by its bytes, so a reader reopened over the same archive
   finds the blocks the previous one decoded. A query range that starts or
