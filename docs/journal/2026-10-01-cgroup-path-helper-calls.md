@@ -93,11 +93,16 @@ ops/s across arms with no consistent order between the branch and main.
 Each per-cgroup counter is one u64 that every CPU adds to atomically, and up
 to eight adjacent css ids share a cache line. `perf bench syscall basic` is
 single-threaded, so the numbers above say nothing about many CPUs adding to
-one counter. Per-CPU per-cgroup counters would remove the sharing, at
-`MAX_CGROUPS` × 8 B × possible CPUs per series. `syscall_counts` has 17
-series, so 544 KiB today would become 17 MiB at 32 possible CPUs and 102 MiB
-at 192. A per-CPU array also cannot be `BPF_F_MMAPABLE`, so the reader would
-change too. This section measures whether that is needed.
+one counter. The fix would be the layout `counters` and the filesystem
+samplers already use: one mmapable array of per-CPU banks, each padded to
+whole cache lines, indexed `(cpu * MAX_CGROUPS + cgroup) * width + counter`
+and summed over CPUs by the reader. For `syscall_counts` the bank is 17
+counters padded to 24 (192 B), so each CPU needs 4096 × 192 B = 768 KiB,
+against 544 KiB for the whole of today's 17 shared arrays. Sized by
+`MAX_CPUS` (1024), as the filesystem banks are, that is 768 MiB allocated
+eagerly; the filesystem banks get away with it because they have 64 slots,
+not 4096. Sized to the possible CPUs at load, it is 24 MiB at 32 and 144 MiB
+at 192. This section measures whether that is needed.
 
 Method: N processes, each pinned to its own CPU from CPU 8 up, each calling
 `getppid()` in a loop for 5 s. In `same` mode all N are in one cgroup with
