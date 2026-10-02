@@ -1047,10 +1047,19 @@ bare-metal probe-cost bench for anything at request rate).
   Contention on the shared per-cgroup counters measured on delta: the
   attribution cost is 6.5–11 ns from 1 to 24 processes in one cgroup, and
   the change from 1 to 24 is within noise (+1.5 ns in one run, −0.7 ns in
-  the other). Per-CPU
-  per-cgroup counters (17 MiB at 32 possible CPUs for `syscall_counts`) are
-  not needed there. Reopen on a host with more cores
-  or two sockets.
+  the other). Per-CPU cache-line-padded banks per cgroup, the layout of
+  `FilesystemCounters` (768 KiB per CPU for `syscall_counts`: 24 MiB at 32
+  possible CPUs, 768 MiB if sized by `MAX_CPUS`), are not needed there and
+  were judged too expensive (2026-10-02). If a larger host shows contention,
+  two layouts keep far fewer counters:
+  - One pending bank per CPU for the cgroup that CPU last counted: the hot
+    path adds to its own cache line, and when the next event's cgroup
+    differs it first adds the bank into the shared array. About 200 B per
+    CPU. The reader adds the pending banks to the shared array, and a flush
+    racing a read needs a per-CPU sequence count or a tolerated transient.
+  - Shared arrays per last-level cache instead of per CPU: atomics stay, but
+    only CPUs sharing an L3 add to one line. 768 KiB per L3 domain for
+    `syscall_counts`, with no flush and no race.
   `docs/journal/2026-10-01-cgroup-path-helper-calls.md`.
 - **Write-amplification decomposition dashboard** — DONE as the ext4
   dashboard's Write Path group: application bytes (`ext4_write_bytes`),

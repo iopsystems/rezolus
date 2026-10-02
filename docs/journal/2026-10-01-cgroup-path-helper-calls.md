@@ -93,11 +93,22 @@ ops/s across arms with no consistent order between the branch and main.
 Each per-cgroup counter is one u64 that every CPU adds to atomically, and up
 to eight adjacent css ids share a cache line. `perf bench syscall basic` is
 single-threaded, so the numbers above say nothing about many CPUs adding to
-one counter. Per-CPU per-cgroup counters would remove the sharing, at
-`MAX_CGROUPS` × 8 B × possible CPUs per series. `syscall_counts` has 17
-series, so 544 KiB today would become 17 MiB at 32 possible CPUs and 102 MiB
-at 192. A per-CPU array also cannot be `BPF_F_MMAPABLE`, so the reader would
-change too. This section measures whether that is needed.
+one counter. The fix would be the layout of `FilesystemCounters`
+(`src/agent/bpf/counters.rs`), with the cgroup in place of the filesystem
+slot: one mmapable array of per-CPU banks, each padded to
+whole cache lines, indexed `(cpu * MAX_CGROUPS + cgroup) * width + counter`
+and summed over CPUs by the reader. For `syscall_counts` the bank is 17
+counters padded to 24 (192 B), so each CPU needs 4096 × 192 B = 768 KiB,
+against 544 KiB for the whole of today's 17 shared arrays. Sized by
+`MAX_CPUS` (1024), as the filesystem banks are, that is 768 MiB allocated
+eagerly. The filesystem banks stay at 8–12 MiB because they have 64 slots,
+not 4096. Sized to the possible CPUs at load, it is 24 MiB at 32 and 144 MiB
+at 192. No map in the repo is sized that way today: it needs
+`set_max_entries` before load and a reader that maps fewer than `MAX_CPUS`
+banks. The possible-CPU count is the highest possible CPU id plus one, so a
+VM that advertises hotplug capacity pays for the CPUs it could have. That
+memory was judged too expensive for the default (2026-10-02). This section
+measures whether it is needed.
 
 Method: N processes, each pinned to its own CPU from CPU 8 up, each calling
 `getppid()` in a loop for 5 s. In `same` mode all N are in one cgroup with
