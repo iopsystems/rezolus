@@ -147,6 +147,80 @@ to `bpf_get_current_task()` and three probe reads but `task_group_of()` still
 makes direct loads from typed arguments, and a kernel without BTF, where the
 `raw_tp` and `kprobe` twins load.
 
+## The task reads outside the cgroup path
+
+The same helper calls read other task fields on every event.
+`BTF_READ(btf, ptr, field)` in `src/agent/bpf/btf_read.h` is a plain load
+where `btf` is true and `BPF_CORE_READ` otherwise, and
+`get_task_state_btf()` in `core_fixes.h` is the same for the task state:
+
+- `scheduler_runqueue`: `pid` in `sched_wakeup` and `sched_wakeup_new`
+  (which also read `tgid` and never used it), `pid` of `prev` and `next` and
+  `prev`'s state in `sched_switch`.
+- `cpu_migrations`: `next`'s `pid`.
+- `cpu_usage`: `pid`, `start_time`, `utime` and `stime` on every tick.
+  `handle_new_task` takes `pid` and `start_time` from the caller instead of
+  reading them again. The exit program reads `pid` directly, and
+  `softirq_exit` takes the pid from `bpf_get_current_pid_tgid()`.
+- `syscall_latency`: moved from the `raw_syscalls/sys_enter` and `sys_exit`
+  classic tracepoints to `tp_btf`/`raw_tp` twins, as `syscall_counts` was in
+  #1392. The exit program reads the syscall number from `regs` as x86's and
+  arm64's `syscall_get_nr()` do: `orig_ax` truncated to an int, and
+  `syscallno`.
+
+Measured on delta with these five samplers enabled, main and the branch
+alternated, two passes each, under `perf bench sched pipe`,
+`perf bench syscall basic` and 16 CPUs of busy loop; ns per run over each
+sampler's programs (systemslab `01a0fde2-f883-71f2-04fa-03929d34218c`):
+
+| sampler | main | branch |
+|---|---|---|
+| `scheduler_runqueue` | 141.5, 136.1 | 94.5, 91.4 |
+| `cpu_migrations` | 58.8, 56.0 | 39.0, 38.0 |
+| `syscall_latency` | 72.7, 69.0 | 69.1, 66.9 |
+| `cpu_usage` | 100.5, 139.2 | 107.3, 115.7 |
+| `syscall_counts` (control) | 34.5, 34.2 | 36.0, 35.2 |
+
+`cpu_usage`'s run counts varied fourfold between passes (0.51 M to 2.06 M),
+so its average moves with the mix of its programs and does not separate the
+builds. `syscall_latency` recorded 99.99% of the syscalls `syscall_counts`
+counted in every pass, on both builds.
+
+### The tracepoint move depends on what else is attached
+
+`syscall_latency`'s programs cost about the same per run either way; the
+change is in what the kernel does around them. Throughput with
+`syscall_latency` alone enabled, `perf bench syscall basic`, six
+alternations each:
+
+| host | none | main (classic) | branch (raw) |
+|---|---|---|---|
+| delta, the host's 5.20 agent attached | 1.87–2.27 M | 1.78–1.89 M | 1.49–1.71 M |
+| KVM guest, no other syscall tracer | 6.32–6.35 M | 1.97–1.99 M | 2.60–2.62 M |
+
+systemslab `01a0fdef-f946-7164-7cd1-07ed97d89014` and
+`01a0fdff-07de-7132-0e7b-aec2acad7321`.
+
+With nothing else on the syscall tracepoints, the raw tracepoints cut the
+overhead per syscall from about 346 ns to about 226 ns. On delta the branch
+was slower in all six pairs, by 30–58 ns per syscall in five and 140 ns in
+one; delta's own baseline moved between about 440 and 535 ns per syscall
+from pass to pass.
+
+The likely explanation, not tested: the host's own agent on delta keeps
+classic programs on `sys_enter` and `sys_exit`. Classic programs on one
+trace event share a single trace-record build and program-array run, so
+main's classic programs add little there (main cost about 60 ns over no
+agent of ours on delta, against 346 ns in the guest), while a raw tracepoint
+registers a callback of its own. The two hosts also differ in hardware,
+kernel point release and virtualization. The direct test, the guest with one
+classic program attached or delta with the host agent stopped, was not run.
+If the explanation holds, a host where another tool keeps classic programs
+on these tracepoints pays tens of nanoseconds per syscall for the move, and
+a host where Rezolus is the only syscall tracer gains the larger amount.
+`syscall_counts` made the same move in #1392 and would have the same
+tradeoff; that was not measured either.
+
 ## Contention on the shared per-cgroup counters
 
 Each per-cgroup counter is one u64 that every CPU adds to atomically, and up

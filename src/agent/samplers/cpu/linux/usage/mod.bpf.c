@@ -2,6 +2,7 @@
 // Copyright (c) 2024 The Rezolus Authors
 
 #include <vmlinux.h>
+#include "../../../agent/bpf/btf_read.h"
 #include "../../../agent/bpf/cgroup.h"
 #include "../../../agent/bpf/helpers.h"
 #include "../../../agent/bpf/task.h"
@@ -301,15 +302,15 @@ static __always_inline int send_task_info(struct task_struct* task) {
  * (docs/principles.md principle 18). Its CPU is in the totals meanwhile, and
  * in the exited counters if it exits before a send succeeds.
  */
-static __noinline int handle_new_task(struct task_struct* task) {
+//
+// The caller reads `pid` and `start_time`, directly where its `task` is a BTF
+// pointer, and passes them in; the reads left here are on the new-task path.
+static __noinline int handle_new_task(struct task_struct* task, u32 pid, u64 start_time) {
     if (!task)
         return -1;
 
-    u32 pid = BPF_CORE_READ(task, pid);
     if (pid == 0 || pid >= MAX_PID)
         return -1;
-
-    u64 start_time = BPF_CORE_READ(task, start_time);
 
     u64* last_start = bpf_map_lookup_elem(&task_start_times, &pid);
     if (!last_start)
@@ -373,14 +374,14 @@ static __always_inline int handle_cpuacct_account_field(struct task_struct* task
     if (!task)
         return 0;
 
-    pid = BPF_CORE_READ(task, pid);
+    pid = BTF_READ(btf, task, pid);
     if (pid == 0 || pid >= MAX_PID)
         return 0;
 
-    handle_new_task(task);
+    handle_new_task(task, pid, BTF_READ(btf, task, start_time));
 
-    curr_utime = BPF_CORE_READ(task, utime);
-    curr_stime = BPF_CORE_READ(task, stime);
+    curr_utime = BTF_READ(btf, task, utime);
+    curr_stime = BTF_READ(btf, task, stime);
 
     last_utime = bpf_map_lookup_elem(&task_utime, &pid);
     last_stime = bpf_map_lookup_elem(&task_stime, &pid);
@@ -478,7 +479,7 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
     /* TP_PROTO(struct task_struct *p) */
     struct task_struct* task = (struct task_struct*)ctx[0];
 
-    u32 pid = BPF_CORE_READ(task, pid);
+    u32 pid = BTF_READ(btf, task, pid);
     if (pid == 0 || pid >= MAX_PID)
         return 0;
 
@@ -574,8 +575,8 @@ int softirq_exit(struct trace_event_raw_softirq* args) {
         return 0;
     }
 
-    struct task_struct* current = (struct task_struct*)bpf_get_current_task();
-    int pid = BPF_CORE_READ(current, pid);
+    // the current task's pid, the low half of pid_tgid, without a kernel read
+    u32 pid = (u32)bpf_get_current_pid_tgid();
 
     dur = bpf_ktime_get_ns() - *start_ts;
 
