@@ -1036,14 +1036,14 @@ bare-metal probe-cost bench for anything at request rate).
   the task's start slot) is the way to have both. Gaps entry, Deferred,
   "`ext4_ops` probe cost". The 2026-10-01 entry below found most of the
   path's cost in `bpf_probe_read_kernel()` calls; try that first.
-- **Per-cgroup path: read the task group once, through BTF** — Open.
-  `syscall_counts` is converted (`current_task_group()` and
-  `handle_new_cgroup_read()` in `src/agent/bpf/cgroup.h`): its cgroup path
-  went from 109–118 ns to 9–12 ns per syscall on bare metal. The other
-  samplers including `cgroup.h` still make five to seven helper calls per
-  event: `cpu_usage`, `cpu_migrations`, `cpu_perf`, `cpu_tlb_flush`,
-  `scheduler_runqueue` (two tasks per switch, so it needs a task-pointer
-  variant), `cpu_bandwidth`, `ext4_ops`, `xfs_log`, `memory_pagecache`.
+- **Per-cgroup path: read the task group once, through BTF** — DONE.
+  `syscall_counts` (#1392): its cgroup path went from 109–118 ns to 9–12 ns
+  per syscall on bare metal. Every other sampler with a per-event cgroup
+  path followed (`task_group_of()` in `src/agent/bpf/cgroup.h`);
+  `scheduler_runqueue` went from about 300 to 138 ns per run and
+  `cpu_tlb_flush` from about 150 to 40. `cpu_bandwidth` reads a css only on
+  throttle events and keeps its helper-call path. Not run on a 5.8–5.10 kernel or one
+  without BTF.
   Contention on the shared per-cgroup counters measured on delta: the
   attribution cost is 6.5–11 ns from 1 to 24 processes in one cgroup, and
   the change from 1 to 24 is within noise (+1.5 ns in one run, −0.7 ns in

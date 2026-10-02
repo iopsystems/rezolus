@@ -50,15 +50,31 @@ per switch. On bare metal, before #1392, `perf bench syscall basic` ran at
 these samplers (711 K), and at 564–582 K with them on.
 
 Since #1392, `syscall_counts` reads the task group once, as direct loads from
-a BTF task pointer, from a `tp_btf` program. The other samplers in the table
-still read it through `bpf_probe_read_kernel()` calls. Measured on the same
-bare-metal host with `syscall_counts` alone enabled, the two builds run in
-alternation, under `perf bench sched pipe` and `perf bench syscall basic`:
+a BTF task pointer, from a `tp_btf` program, and the other samplers in the
+table do the same since the change after it. The table above is the cost
+before either. Measured on the same bare-metal host with `syscall_counts`
+alone enabled, the two builds run in alternation, under
+`perf bench sched pipe` and `perf bench syscall basic`:
 
 | `syscall_counts`, `sys_enter` | On | Off |
 |---|---|---|
 | before #1392 | 140–151 ns | 31–33 ns |
 | since #1392 | 33–39 ns | 24–27 ns |
+
+For the other samplers, with all of them enabled and each sampler's programs
+averaged together (`rezolus_bpf_run_time` over `rezolus_bpf_run_count`), two
+passes each:
+
+| Sampler | Before | After |
+|---|---|---|
+| `scheduler_runqueue` | 280–328 ns | 137–139 ns |
+| `cpu_tlb_flush` | 146–162 ns | 37–45 ns |
+| `ext4_ops` | 208–217 ns | 148–156 ns |
+| `memory_pagecache` | 207–271 ns | 155–187 ns |
+
+`cpu_migrations` and `cpu_usage` did not change outside noise: the first
+reaches its cgroup path only on a migration, and the second's average is
+mostly its softirq programs.
 
 A task is attributed to its CPU controller's task group. A service whose
 cgroup has no CPU controller of its own is counted under the nearest
