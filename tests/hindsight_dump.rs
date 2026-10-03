@@ -263,7 +263,9 @@ impl Hindsight {
             if Instant::now() >= deadline {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("timed out waiting for it to start buffering".to_string());
+                return Err(format!(
+                    "timed out waiting for it to start buffering; its stderr:\n{startup}"
+                ));
             }
         };
         // Drain the rest so the daemon can never block on a full stderr pipe,
