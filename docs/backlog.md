@@ -1032,7 +1032,7 @@ bare-metal probe-cost bench for anything at request rate).
   only syscall tracer. They save about 82 ns per syscall there and cost about
   121 ns more beside another tool's classic programs (measured in a KVM
   guest, both samplers on; `docs/journal/2026-10-01-cgroup-path-helper-calls.md`).
-- **One Rezolus program per hook** — Open, design decided. Merge the samplers
+- **One Rezolus program per hook** — In progress: `syscall` done; `blockio` and `scheduler` remain. Merge the samplers
   that share a hook into combined samplers with one program per hook:
   `syscall` (`syscall_counts`, `syscall_latency`), `blockio`
   (`blockio_latency`, `blockio_requests`), `scheduler`

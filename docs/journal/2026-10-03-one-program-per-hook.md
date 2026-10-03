@@ -1,6 +1,6 @@
 # One Rezolus program per hook
 
-**Status: open. Measured, design decided, nothing built.**
+**Status: in progress. Step 1, `syscall`, built and measured; `blockio` and `scheduler` remain.**
 
 ## Goal
 
@@ -178,3 +178,66 @@ For each family:
    extract-features change for all three families.
 2. `blockio`.
 3. `scheduler`.
+
+## Step 1: `syscall`
+
+`src/agent/samplers/syscall/linux/syscall/`: one BPF object with a
+`tp_btf`/`raw_tp` pair on `sys_enter` and on `sys_exit`. `sys_enter` counts
+the syscall, attributes it to a cgroup, then takes the latency start stamp.
+The stamp comes last so that the latency does not include the counting. On
+main the stamp was a separate program, and the attach order decided whether
+the counting fell inside it. `sys_exit` records the latency.
+
+The parts are the rodata switches `counts`, `latency` and
+`cgroup_attribution`. A part that is off loads no code: with `latency` off
+the `sys_exit` programs are not loaded. It registers no metrics, its
+acquisition group is bounded to no members, and its maps are left out of the
+object with `set_autocreate(false)`. With `latency` off, that means no 32 MiB
+`start` array, as when `syscall_latency` was disabled before.
+
+The config translation, the unknown-section warning and the extract-features
+change (`MERGED_SAMPLERS`, record schema version 3) are in the same change.
+The translation carries `cgroup_attribution` only from `syscall_counts`; on
+`syscall_latency` it did nothing, so it is reported and dropped.
+
+Measured on delta against main (main: `syscall_counts` and `syscall_latency`;
+branch: `syscall`; both with the per-cgroup path on). systemslab
+`01a10270-7d0f-7130-d983-3b1b369f2faf`, run on the branch before the stamp
+moved and the maps were left out. Neither change alters the work per syscall.
+
+| | main | `syscall` |
+|---|---|---|
+| programs on the syscall path | 3: `sys_enter` 32.6 and 63.9 ns, `sys_exit` 61.6 ns | 2: `sys_enter` 76.8 ns, `sys_exit` 60.7 ns |
+| program time per syscall, `bpf_stats` on | 158.1 ns | 137.5 ns |
+| `cgroup_syscall` / `syscall` | 1.0000 | 1.0000 |
+| latency samples / `syscall` | 0.9998 | 0.9999 |
+
+Program time is what `bpf_stats` times inside the programs. It does not
+include the dispatch around each program, and it does include the timing
+overhead itself, which is now paid twice per syscall instead of three times.
+Throughput with `bpf_stats` off, `perf bench syscall basic`, six
+alternations: main 1.41–1.61 M ops/s, `syscall` 1.58–1.68 M. `syscall` was
+faster in all six pairs, by 7–27 ns per syscall in five and 80 ns in one
+(median 26 ns).
+
+Each part was loaded in a KVM guest (systemslab
+`01a10279-8cb4-7129-eafa-b720500f8c70`) and checked against what should be
+present:
+
+| config | programs | maps created | series with values |
+|---|---|---|---|
+| default | `sys_enter`, `sys_exit` | all | `syscall`, `cgroup_syscall`, `syscall_latency` |
+| `latency = false` | `sys_enter` | no `start`, no histograms | `syscall`, `cgroup_syscall` |
+| `counts = false` | `sys_enter`, `sys_exit` | no `counters`, no cgroup maps | `syscall_latency` |
+| `cgroup_attribution = false` | `sys_enter`, `sys_exit` | no cgroup maps | `syscall`, `syscall_latency` |
+| old sections, `syscall_latency` off | `sys_enter` | no `start`, no histograms | `syscall`, `cgroup_syscall` |
+
+Every case loaded healthy, with `sampler="syscall"` on its series. The old
+sections were read with the two deprecation warnings, and a
+`[samplers.not_a_sampler]` section was reported.
+
+Against the GO criteria: same series and values, apart from the label: yes.
+Cheaper by about one dispatch per program removed: by 26 ns median, against
+38 ns per empty program on `sys_enter` measured over 0 to 4 programs, and
+faster in every pair. Verifier on the oldest kernel: only 6.12 was run.
+
