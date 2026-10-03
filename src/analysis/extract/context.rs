@@ -96,6 +96,16 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "xfs_stats",
 ];
 
+/// Samplers merged into one so that each kernel hook carries one Rezolus
+/// program (docs/journal/2026-10-03-one-program-per-hook.md): the old name, as
+/// recordings made before the merge carry it in their `sampler` label, and the
+/// sampler it became. `extract::subsystem_of` reads an old label as the new
+/// name, so recordings from before and after report the same subsystem.
+pub(crate) const MERGED_SAMPLERS: &[(&str, &str)] = &[
+    ("syscall_counts", "syscall"),
+    ("syscall_latency", "syscall"),
+];
+
 /// Explicit metric-name -> sampler mapping for metrics whose name cannot be
 /// resolved against [`EXPECTED_SUBSYSTEMS`] by exact match or `_`-boundary
 /// prefix (e.g. `cpu_cycles` has no `cpu_perf`-prefixed spelling, and
@@ -129,16 +139,6 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
 /// doesn't. See that test's doc comment for what it can't check (metrics
 /// the agent's own `attribute_sampler` calls `unattributed`, and samplers
 /// not registered on whatever platform compiled the test).
-/// Samplers merged into one so that each kernel hook carries one Rezolus
-/// program (docs/journal/2026-10-03-one-program-per-hook.md): the old name, as
-/// recordings made before the merge carry it in their `sampler` label, and the
-/// sampler it became. `extract::subsystem_of` reads an old label as the new
-/// name, so recordings from before and after report the same subsystem.
-pub(crate) const MERGED_SAMPLERS: &[(&str, &str)] = &[
-    ("syscall_counts", "syscall"),
-    ("syscall_latency", "syscall"),
-];
-
 pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("blockio_bytes", "blockio_requests"),
     ("blockio_errors", "blockio_requests"),

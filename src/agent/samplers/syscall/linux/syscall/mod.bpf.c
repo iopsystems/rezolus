@@ -377,17 +377,11 @@ struct {
 // `btf` is a compile-time constant from each program below: the tp_btf
 // program reads the task group through a BTF task pointer, the raw_tp one
 // through bpf_probe_read_kernel() (see current_task_group() in cgroup.h).
-static __always_inline int account_sys_enter(long id, bool btf) {
+static __always_inline void count_syscall(long id, bool btf) {
     u32 offset, idx, group = 0;
 
-    if (latency) {
-        u32 tid = bpf_get_current_pid_tgid();
-        u64 ts = bpf_ktime_get_ns();
-        bpf_map_update_elem(&start, &tid, &ts, 0);
-    }
-
-    if (!counts || id < 0) {
-        return 0;
+    if (id < 0) {
+        return;
     }
 
     u32 syscall_id = id;
@@ -408,7 +402,7 @@ static __always_inline int account_sys_enter(long id, bool btf) {
     array_incr(&counters, idx);
 
     if (!cgroup_attribution) {
-        return 0;
+        return;
     }
 
     u32 cgroup_id = 0;
@@ -495,6 +489,23 @@ static __always_inline int account_sys_enter(long id, bool btf) {
                 break;
             }
         }
+    }
+
+    return;
+}
+
+// The start stamp is taken after the counts, as near the syscall as the
+// program gets, so that the latency does not include the counting (and the
+// cgroup path) done on the way in.
+static __always_inline int account_sys_enter(long id, bool btf) {
+    if (counts) {
+        count_syscall(id, btf);
+    }
+
+    if (latency) {
+        u32 tid = bpf_get_current_pid_tgid();
+        u64 ts = bpf_ktime_get_ns();
+        bpf_map_update_elem(&start, &tid, &ts, 0);
     }
 
     return 0;

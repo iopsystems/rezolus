@@ -46,7 +46,7 @@ become straightforward once Rezolus is collecting guest-side telemetry.
   combination above lets the operator give concrete, evidence-backed advice:
   add data-loader workers, move to faster storage, change instance shape, batch
   differently.
-- **Syscall and scheduler behavior.** `syscall_counts` / `syscall_latency` and
+- **Syscall and scheduler behavior.** The `syscall` sampler's counts and latencies and
   runqueue depth can point at pathological behavior (excessive `futex`, lock
   contention, oversubscribed vCPUs) the tenant would never attribute correctly.
 

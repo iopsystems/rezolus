@@ -114,7 +114,6 @@ fn init(config: Arc<Config>) -> SamplerResult {
     };
     if !latency {
         disabled.extend(["sys_exit_btf", "sys_exit_raw"]);
-        disabled.dedup();
     }
 
     let mut builder = BpfBuilder::new(
@@ -140,6 +139,66 @@ fn init(config: Arc<Config>) -> SamplerResult {
         rodata.counts = counts as u8;
         rodata.latency = latency as u8;
         rodata.cgroup_attribution = cgroup_attribution as u8;
+
+        // A part that is off has its maps left out of the object, as the
+        // separate sampler's would have been (`start` alone is 32 MiB of
+        // kernel memory). libbpf poisons the references to a map it does not
+        // create, and those references sit in code the verifier removes.
+        let maps = &mut open.maps;
+        let mut skip: Vec<&mut libbpf_rs::OpenMapMut<'_>> = Vec::new();
+        if !latency {
+            skip.extend([
+                &mut maps.start,
+                &mut maps.other_latency,
+                &mut maps.read_latency,
+                &mut maps.write_latency,
+                &mut maps.poll_latency,
+                &mut maps.lock_latency,
+                &mut maps.time_latency,
+                &mut maps.sleep_latency,
+                &mut maps.socket_latency,
+                &mut maps.yield_latency,
+                &mut maps.filesystem_latency,
+                &mut maps.memory_latency,
+                &mut maps.process_latency,
+                &mut maps.query_latency,
+                &mut maps.ipc_latency,
+                &mut maps.timer_latency,
+                &mut maps.event_latency,
+                &mut maps.sync_latency,
+            ]);
+        }
+        if !counts {
+            skip.push(&mut maps.counters);
+        }
+        if !cgroup_attribution {
+            skip.extend([
+                &mut maps.cgroup_info,
+                &mut maps.cgroup_serial_numbers,
+                &mut maps.cgroup_syscall_other,
+                &mut maps.cgroup_syscall_read,
+                &mut maps.cgroup_syscall_write,
+                &mut maps.cgroup_syscall_poll,
+                &mut maps.cgroup_syscall_lock,
+                &mut maps.cgroup_syscall_time,
+                &mut maps.cgroup_syscall_sleep,
+                &mut maps.cgroup_syscall_socket,
+                &mut maps.cgroup_syscall_yield,
+                &mut maps.cgroup_syscall_filesystem,
+                &mut maps.cgroup_syscall_memory,
+                &mut maps.cgroup_syscall_process,
+                &mut maps.cgroup_syscall_query,
+                &mut maps.cgroup_syscall_ipc,
+                &mut maps.cgroup_syscall_timer,
+                &mut maps.cgroup_syscall_event,
+                &mut maps.cgroup_syscall_sync,
+            ]);
+        }
+        for map in skip {
+            if let Err(e) = map.set_autocreate(false) {
+                debug!("{NAME}: could not leave a map out of the object: {e}");
+            }
+        }
     });
 
     if counts {

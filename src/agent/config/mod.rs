@@ -37,10 +37,16 @@ const OPT_IN_SAMPLERS: &[&str] = &[
 
 /// Samplers that were merged into one, so that each kernel hook carries one
 /// Rezolus program (docs/journal/2026-10-03-one-program-per-hook.md): the new
-/// sampler, and for each old sampler the part of the new one it became.
-const MERGED_SAMPLERS: &[(&str, &[(&str, &str)])] = &[(
+/// sampler, and for each old sampler the part of the new one it became and
+/// whether it had a per-cgroup path (so its `cgroup_attribution` carries over).
+type MergedPart = (&'static str, &'static str, bool);
+
+const MERGED_SAMPLERS: &[(&str, &[MergedPart])] = &[(
     "syscall",
-    &[("syscall_counts", "counts"), ("syscall_latency", "latency")],
+    &[
+        ("syscall_counts", "counts", true),
+        ("syscall_latency", "latency", false),
+    ],
 )];
 
 fn listen() -> String {
@@ -112,17 +118,18 @@ impl Config {
     /// Each part's switch is the old sampler's resolved `enabled` (its own
     /// section, else `[defaults]`, else on), so an old section that is absent
     /// neither adds nor drops a part. The merged sampler is enabled when any
-    /// part is. An old section's `cgroup_attribution` becomes the merged
-    /// section's. A section for the merged sampler wins over old ones, which
+    /// part is. The `cgroup_attribution` of an old sampler that had a
+    /// per-cgroup path becomes the merged section's; on one that had none it
+    /// did nothing, and is reported and dropped. A section for the merged sampler wins over old ones, which
     /// are then reported as ignored.
     fn translate_merged_samplers(&mut self) -> Vec<String> {
         let mut warnings = Vec::new();
         for (merged, parts) in MERGED_SAMPLERS {
-            if !parts.iter().any(|(old, _)| self.samplers.contains_key(*old)) {
+            if !parts.iter().any(|(old, _, _)| self.samplers.contains_key(*old)) {
                 continue;
             }
             if self.samplers.contains_key(*merged) {
-                for (old, _) in parts.iter() {
+                for (old, _, _) in parts.iter() {
                     if self.samplers.remove(*old).is_some() {
                         warnings.push(format!(
                             "[samplers.{old}] is ignored: the sampler is now part of \
@@ -135,7 +142,7 @@ impl Config {
             let default_on = self.defaults.enabled().unwrap_or(enabled());
             let mut section = SamplerConfig::default();
             let mut any_on = false;
-            for (old, part) in parts.iter() {
+            for (old, part, attributes) in parts.iter() {
                 let old_section = self.samplers.remove(*old);
                 let on = old_section
                     .as_ref()
@@ -145,7 +152,14 @@ impl Config {
                 any_on |= on;
                 if let Some(old_section) = old_section {
                     if let Some(attribution) = old_section.cgroup_attribution() {
-                        section.set_cgroup_attribution(attribution);
+                        if *attributes {
+                            section.set_cgroup_attribution(attribution);
+                        } else {
+                            warnings.push(format!(
+                                "[samplers.{old}] cgroup_attribution is ignored: {old} had no \
+                                 per-cgroup series"
+                            ));
+                        }
                     }
                     warnings.push(format!(
                         "[samplers.{old}] is deprecated: the sampler is now part `{part}` of \
@@ -343,9 +357,13 @@ mod tests {
         assert!(c.part("syscall", "counts"));
         assert!(!c.part("syscall", "latency"));
 
-        // cgroup_attribution carries over.
+        // cgroup_attribution carries over from the part that had a cgroup
+        // path, and only from that one.
         let (c, _) = translated("[samplers.syscall_counts]\ncgroup_attribution = false\n");
         assert!(!c.cgroup_attribution_or("syscall", true));
+        let (c, w) = translated("[samplers.syscall_latency]\ncgroup_attribution = false\n");
+        assert!(c.cgroup_attribution_or("syscall", true));
+        assert!(w.iter().any(|w| w.contains("cgroup_attribution is ignored")));
 
         // A section for the merged sampler wins; the old one is reported.
         let (c, w) = translated(
