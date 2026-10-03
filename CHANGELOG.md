@@ -28,10 +28,11 @@ more samplers and the hindsight stop fix from 6.0, backported in #1406.
 - `scheduler_runqueue`, `cpu_migrations` and `cpu_usage` read the task's
   pid, state and CPU times as direct loads from BTF pointers.
   `syscall_latency` attaches to `sys_enter` and `sys_exit` as raw
-  tracepoints instead of the `raw_syscalls` tracepoints. With another tool's
-  classic programs on those tracepoints, raw tracepoints cost more per
-  syscall than classic ones (about 121 ns for the two syscall samplers
-  together, measured on 6.0), and less without one (about 82 ns).
+  tracepoints instead of the `raw_syscalls` tracepoints. With `bpftrace`
+  keeping classic programs on those tracepoints, the two syscall samplers
+  together cost about 121 ns more per syscall than on classic tracepoints;
+  with no other syscall tracer they cost about 82 ns less (KVM guest,
+  measured on 6.0).
 - The series of every sampler above are unchanged. Kernels older than 5.11
   keep the `bpf_probe_read_kernel()` paths.
 

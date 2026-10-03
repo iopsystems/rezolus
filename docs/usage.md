@@ -71,7 +71,7 @@ sudo systemctl kill -sHUP rezolus-hindsight
 ```
 
 SIGHUP writes the buffer to a timestamped file beside `output` (for
-`rezolus.dendro`, `rezolus-20260915T204500Z.dendro`) and keeps recording; a
+`rezolus.rez`, `rezolus-20260915T204500Z.rez`) and keeps recording; a
 SIGHUP during a capture is ignored. SIGTERM or SIGINT, which `systemctl stop`
 and ctrl-c send, does the same capture and then exits with status 0, or 1 if
 the capture failed. A stop during a SIGHUP capture exits when that capture
