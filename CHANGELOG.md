@@ -28,6 +28,10 @@
   took 2.7x a warm query, and takes 1.2-1.3x. Reuse needs the file at the
   path to be the one the previous reader read; a file renamed over it, as
   `recording filter` without `-o` does, is read afresh.
+- metriken-query 0.34.2: an aggregation with several groups advances them
+  together. On a 9.6-hour recording of a per-task group, `sum by (comm)
+  (irate(task_cpu_usage[5s]))` took 192 s (wide) or 423-603 s (long) and
+  takes 13-16 s.
 - **Groups of slots travel long on the agent's stream.**
   `/metrics/stream?layout=long` sends a group whose metrics are all counter
   or gauge groups (per task, per cgroup, per CPU) as values keyed by
