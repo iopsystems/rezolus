@@ -1036,7 +1036,7 @@ bare-metal probe-cost bench for anything at request rate).
   that share a hook into combined samplers with one program per hook:
   `syscall` (`syscall_counts`, `syscall_latency`), `blockio`
   (`blockio_latency`, `blockio_requests`), `scheduler`
-  (`scheduler_runqueue`, `cpu_migrations`). Each extra program costs 25–40 ns
+  (`scheduler_runqueue`, `cpu_migrations`). Each extra program costs 30–40 ns
   per event on bare metal. Old config sections are translated at load with a
   warning. `docs/journal/2026-10-03-one-program-per-hook.md`.
 - **Per-cgroup path: read the task group once, through BTF** — DONE.
