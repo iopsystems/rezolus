@@ -23,7 +23,7 @@ host-level series are unchanged.
 | `cpu_perf` | on | `cgroup_cpu_cycles`, `cgroup_cpu_instructions` (off also drops the `sched_switch` program) |
 | `cpu_tlb_flush` | on | `cgroup_cpu_tlb_flush` |
 | `scheduler_runqueue` | on | `cgroup_scheduler_runqueue_wait`, `cgroup_scheduler_offcpu`, `cgroup_scheduler_context_switch` |
-| `syscall_counts` | on | `cgroup_syscall` |
+| `syscall` | on | `cgroup_syscall` |
 | `ext4_ops` | off | `cgroup_ext4_ops`, `cgroup_ext4_op_time` |
 | `xfs_log` | off | `cgroup_xfs_log_waits`, `cgroup_xfs_log_wait_time` |
 | `memory_pagecache` | off | `cgroup_pagecache_*` |
@@ -49,7 +49,7 @@ per switch. On bare metal, before #1392, `perf bench syscall basic` ran at
 715 K ops/s with the five samplers' cgroup paths off, the same as without
 these samplers (711 K), and at 564–582 K with them on.
 
-Since #1392, `syscall_counts` reads the task group once, as direct loads from
+Since #1392, `syscall_counts` (now part of `syscall`) reads the task group once, as direct loads from
 a BTF task pointer, from a `tp_btf` program, and the other samplers in the
 table do the same since #1397. The table above is the cost
 before either. Measured on the same bare-metal host with `syscall_counts`
@@ -126,8 +126,7 @@ default: see [cpu_usage](#cpu_usage).
   - [scheduler_runqueue](#scheduler_runqueue)
 - [Hardware Sensors](#hardware-sensors)
 - [Syscall](#syscall)
-  - [syscall_counts](#syscall_counts)
-  - [syscall_latency](#syscall_latency)
+  - [syscall](#syscall-1)
 - [TCP](#tcp)
   - [tcp_connect_latency](#tcp_connect_latency)
   - [tcp_packet_latency](#tcp_packet_latency)
@@ -1286,22 +1285,27 @@ applications are interacting with the operating system, helping identify
 inefficient patterns, excessive system call usage, or system call latency issues
 that can impact performance.
 
-### syscall_counts
+### syscall
 
-Instruments syscall enter to gather syscall counts. This helps to identify
-excessive system calls or unexpected patterns of system call usage.
+Instruments syscall enter and exit, with one program on each, to gather
+syscall counts and syscall latency distributions. It replaced the
+`syscall_counts` and `syscall_latency` samplers, which each had a program on
+`sys_enter` (see docs/journal/2026-10-03-one-program-per-hook.md); a config
+that still names them is read as `[samplers.syscall]`, with a warning. Its
+two parts are the options `counts` and `latency`, both on by default, and
+`cgroup_attribution` applies to the counts.
+
+The counts help to identify excessive system calls or unexpected patterns of
+system call usage.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
 | `syscall` | The number of syscalls by operation type on a per-CPU basis | `op={other,read,write,poll,lock,time,sleep,socket,yield,filesystem,memory,process,query,ipc,timer,event,sync}`, `id`: the CPU the syscall entered on |
 | `cgroup_syscall` | The number of syscalls by operation type on a per-cgroup basis | `op={other,read,write,poll,lock,time,sleep,socket,yield,filesystem,memory,process,query,ipc,timer,event,sync}`, `name`: the name of the cgroup | |
 
-### syscall_latency
-
-Instruments syscall enter and exit to gather syscall latency distributions.
-These metrics track how long system calls take to complete, which can reveal
-performance issues in the kernel or resource contention. High system call
-latencies may indicate system-level bottlenecks.
+The latency distributions track how long system calls take to complete,
+which can reveal performance issues in the kernel or resource contention.
+High system call latencies may indicate system-level bottlenecks.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|

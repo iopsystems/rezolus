@@ -21,6 +21,18 @@
 
 ### Changed
 
+- **`syscall_counts` and `syscall_latency` are one sampler, `syscall`,** with
+  one program on `sys_enter` and one on `sys_exit` instead of two programs on
+  `sys_enter`; each program on a hook costs its own dispatch, measured at
+  38 ns per syscall on bare metal. Its parts are the options `counts` and
+  `latency` in `[samplers.syscall]`, both on by default. A config that still
+  names `[samplers.syscall_counts]` or `[samplers.syscall_latency]` is read
+  as `[samplers.syscall]` with a warning, keeping each old section's
+  `enabled` and `cgroup_attribution`; a section naming no known sampler is
+  now reported. Metric names are unchanged. The `sampler` label, `rezolus
+  status`, `rezolus_bpf_run_time` and the archive table keys now say
+  `syscall`. `extract-features` reads the old sampler labels as `syscall`,
+  and its record is schema version 3.
 - `scheduler_runqueue`, `cpu_migrations` and `cpu_usage` read the task's pid,
   state and CPU times as direct loads from BTF pointers instead of
   `bpf_probe_read_kernel()` calls; on bare metal (EPYC 4564P, 6.12)

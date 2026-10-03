@@ -440,7 +440,7 @@ mod tests {
     /// means engine behavior changed — re-review the new capture before
     /// re-pasting; don't just make the test pass.
     const GOLDEN: &str = r#"{
-  "schema_version": 2,
+  "schema_version": 3,
   "context": {
     "source": "rezolus",
     "duration_s": 120.0,
@@ -484,8 +484,7 @@ mod tests {
         "network_interfaces",
         "network_traffic",
         "rezolus_rusage",
-        "syscall_counts",
-        "syscall_latency",
+        "syscall",
         "tcp_connect_latency",
         "tcp_packet_latency",
         "tcp_receive",

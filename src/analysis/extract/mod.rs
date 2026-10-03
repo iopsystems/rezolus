@@ -242,7 +242,10 @@ pub(crate) fn subsystem_of(
 ) -> String {
     for labels in label_sets {
         if let Some(s) = labels.get("sampler") {
-            return s.clone();
+            return context::MERGED_SAMPLERS
+                .iter()
+                .find(|(old, _)| old == s)
+                .map_or_else(|| s.clone(), |(_, merged)| merged.to_string());
         }
     }
     if !infer {
@@ -632,7 +635,7 @@ mod tests {
         assert_eq!(subsystem_of("memory_free", &[], true), "memory_meminfo");
         // a cgroup_* metric: declared inside its owning sampler's own
         // module (there is no separate cgroup sampler).
-        assert_eq!(subsystem_of("cgroup_syscall", &[], true), "syscall_counts");
+        assert_eq!(subsystem_of("cgroup_syscall", &[], true), "syscall");
     }
 
     #[test]
