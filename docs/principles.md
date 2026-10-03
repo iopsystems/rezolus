@@ -763,11 +763,17 @@ land, items are ticked off or removed; new drift gets added.
 Combine separate samplers that share a hook to halve the
 entry/exit tax:
 
-- `sched_switch`: `cpu/migrations` + `cpu/perf` + `scheduler/runqueue`
-  (3 attaches → 1 sampler with a shared probe).
-- `block_rq_complete`: `blockio/latency` + `blockio/requests` (2 → 1).
-- `sys_enter` / `sys_exit`: `syscall/latency` + `syscall/counts` (2+2
-  attaches → 1+1).
+- ~~`sched_switch`: `cpu/migrations` + `cpu/perf` + `scheduler/runqueue`
+  (3 attaches → 1 sampler with a shared probe).~~ Done as the `scheduler`
+  sampler (`scheduler_runqueue` + `cpu_migrations`, 3 attaches → 2).
+  `cpu_perf` stays apart: its program exists only for per-cgroup cycles and
+  instructions, and the rest of it is per-CPU perf counters.
+- ~~`block_rq_complete`: `blockio/latency` + `blockio/requests` (2 → 1).~~
+  Done: the `blockio` sampler.
+- ~~`sys_enter` / `sys_exit`: `syscall/latency` + `syscall/counts` (2+2
+  attaches → 1+1).~~ Done: the `syscall` sampler.
+
+See docs/journal/2026-10-03-one-program-per-hook.md.
 
 ### `fentry` migration (principle 4)
 
@@ -794,7 +800,7 @@ can sum downstream via the Rezolus Exporter):
 
 - `network/traffic`, `network/interfaces`.
 - `tcp/traffic`, `tcp/retransmit`.
-- `blockio/requests`.
+- `blockio/blockio`.
 - ~~`syscall/counts`~~ — migrated: `syscall{op}` is per-CPU.
 
 ### Centralize `MAX_CPUS = 1024` (principles 6, 12)

@@ -168,16 +168,16 @@ enabled = true
 # Each sampler can then be individually configured to override the defaults. All
 # of the configuration options in the `[defaults]` section are allowed.
 
-# BPF sampler that instruments the block_io request queue to measure each phase
-# of a request's life: how long it waited in the queue (`blockio_queue_latency`),
-# how long the device then took (`blockio_device_latency`), and the two together
-# (`blockio_total_latency`).
-[samplers.blockio_latency]
-
-# BPF sampler that instruments block_io request queue. Produces per-op
-# completion counts, byte counters, size histograms, terminal-failure
-# counters bucketed by error class, and requeue counters.
-[samplers.blockio_requests]
+# BPF sampler that traces block IO request completion and requeue: operations,
+# bytes, sizes, errors and requeues by op, and the latency of each phase of a
+# request's life, from the kernel's own per-request timestamps: how long it
+# waited in the queue (`blockio_queue_latency`), how long the device then took
+# (`blockio_device_latency`), and the two together (`blockio_total_latency`).
+# Replaces `blockio_requests` and `blockio_latency`; a config that still names
+# them is read as this section, with a warning.
+[samplers.blockio]
+# requests = false   # drop the operation, byte, size, error and requeue counts
+# latency = false    # drop the latency histograms
 
 # BPF sampler that collects CPU CFS bandwidth control and throttling stats
 [samplers.cpu_bandwidth]
@@ -198,10 +198,6 @@ enabled = true
 
 # Performance counter based sampler that gathers L3 cache accesses and misses.
 [samplers.cpu_l3]
-
-# Instruments CPU migrations.
-[samplers.cpu_migrations]
-# cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
 
 # Instruments CPU frequency, instructions, and cycles using perf counters.
 # The per-cgroup series read the counters on every context switch, which on a
@@ -382,8 +378,12 @@ enabled = false
 [samplers.rezolus_rusage]
 
 # BPF sampler that instruments scheduler events and measures runqueue latency,
-# process running time, and context switch information.
-[samplers.scheduler_runqueue]
+# process running time, context switches and CPU migrations, with one program
+# on each scheduler hook. Replaces `scheduler_runqueue` and `cpu_migrations`;
+# a config that still names them is read as this section, with a warning.
+[samplers.scheduler]
+# runqueue = false             # drop runqueue latency, running and off-cpu time, context switches
+# migrations = false           # drop the CPU migration counts
 # cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
 
 # Read-only Linux thermal, hwmon and cooling-device telemetry: temperatures,
@@ -395,13 +395,14 @@ enabled = false
 enabled = false
 # interval = "5s"
 
-# BPF sampler that instruments syscall enter to gather syscall counts.
-[samplers.syscall_counts]
+# BPF sampler that instruments syscall enter and exit to gather syscall counts
+# and syscall latency distributions, one program on each. Replaces
+# `syscall_counts` and `syscall_latency`; a config that still names them is
+# read as this section, with a warning.
+[samplers.syscall]
+# counts = false               # drop the syscall counts (and their per-cgroup series)
+# latency = false              # drop the latency histograms and the sys_exit program
 # cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
-
-# BPF sampler that instruments syscall enter and exit to gather syscall latency
-# distributions.
-[samplers.syscall_latency]
 
 # BPF sampler that probes TCP connect (active open) to measure latency when
 # establishing connections.

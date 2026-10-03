@@ -32,6 +32,58 @@
   together. On a 9.6-hour recording of a per-task group, `sum by (comm)
   (irate(task_cpu_usage[5s]))` took 192 s (wide) or 423-603 s (long) and
   takes 13-16 s.
+- **`scheduler_runqueue` and `cpu_migrations` are one sampler,
+  `scheduler`,** with one program on `sched_switch` instead of two (and
+  `cpu_perf`'s, which stays a sampler of its own). The migration count
+  reuses the runqueue part's read of the next task's cgroup. Its parts are
+  the options `runqueue` and `migrations` in `[samplers.scheduler]`, both on
+  by default, and `cgroup_attribution` applies to both. A config that still
+  names `[samplers.scheduler_runqueue]` or `[samplers.cpu_migrations]` is
+  read as `[samplers.scheduler]` with a warning. The merged sampler has one
+  `cgroup_attribution`; if the two old samplers resolved it differently
+  (counting `[defaults]` and their default of on), it is on, so no series
+  that was exported disappears, and the difference is reported. Metric names
+  are unchanged; the `sampler` label, `rezolus status`,
+  `rezolus_bpf_run_time` and the archive table keys now say `scheduler`, and
+  the migration acquisition groups are named `scheduler_migrations` and
+  `scheduler_cgroup_migrations`. `extract-features` reads the old sampler
+  labels as `scheduler`, and its record is schema version 5.
+- **`blockio_requests` and `blockio_latency` are one sampler, `blockio`,**
+  with one program on `block_rq_complete` instead of two; the request's
+  fields are read once, as direct loads where the kernel has BTF. Its parts
+  are the options `requests` and `latency` in `[samplers.blockio]`, both on
+  by default. A config that still names `[samplers.blockio_requests]` or
+  `[samplers.blockio_latency]` is read as `[samplers.blockio]` with a
+  warning. Metric names are unchanged; the `sampler` label, `rezolus status`,
+  `rezolus_bpf_run_time` and the archive table keys now say `blockio`.
+  `extract-features` reads the old sampler labels as `blockio`, and its
+  record is schema version 4.
+- **`syscall_counts` and `syscall_latency` are one sampler, `syscall`,** with
+  one program on `sys_enter` and one on `sys_exit` instead of two programs on
+  `sys_enter`; each program on a hook costs its own dispatch, measured at
+  38 ns per syscall on bare metal. Its parts are the options `counts` and
+  `latency` in `[samplers.syscall]`, both on by default. A config that still
+  names `[samplers.syscall_counts]` or `[samplers.syscall_latency]` is read
+  as `[samplers.syscall]` with a warning, keeping each old section's
+  `enabled` and `cgroup_attribution`; a section naming no known sampler is
+  now reported. Metric names are unchanged. The `sampler` label, `rezolus
+  status`, `rezolus_bpf_run_time` and the archive table keys now say
+  `syscall`. `extract-features` reads the old sampler labels as `syscall`,
+  and its record is schema version 3.
+- `scheduler_runqueue`, `cpu_migrations` and `cpu_usage` read the task's pid,
+  state and CPU times as direct loads from BTF pointers instead of
+  `bpf_probe_read_kernel()` calls; on bare metal (EPYC 4564P, 6.12)
+  `scheduler_runqueue` costs 91–95 ns per run against 136–142 ns, and
+  `cpu_migrations` 38–39 ns against 56–59 ns. `syscall_latency` attaches to
+  `sys_enter` and `sys_exit` as raw tracepoints (`tp_btf`, or `raw_tp`
+  without kernel BTF) instead of the `raw_syscalls` tracepoints: with no
+  other syscall tracer on the host, its overhead per syscall falls from about
+  346 ns to 226 ns in a KVM guest. Where another tool keeps classic programs
+  on those tracepoints, classic programs share its trace-record build and
+  dispatch and the raw tracepoints do not: with `bpftrace` attached, the two
+  syscall samplers together cost about 121 ns per syscall more than on
+  classic tracepoints, against 82 ns less without it. The series are
+  unchanged.
 - **Groups of slots travel long on the agent's stream.**
   `/metrics/stream?layout=long` sends a group whose metrics are all counter
   or gauge groups (per task, per cgroup, per CPU) as values keyed by

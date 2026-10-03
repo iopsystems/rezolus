@@ -19,11 +19,10 @@ host-level series are unchanged.
 | Sampler | `cgroup_attribution` default | Series it controls |
 |---|---|---|
 | `cpu_usage` | on | `cgroup_cpu_usage`, `cgroup_cpu_usage_exited_tasks` |
-| `cpu_migrations` | on | `cgroup_cpu_migrations` |
 | `cpu_perf` | on | `cgroup_cpu_cycles`, `cgroup_cpu_instructions` (off also drops the `sched_switch` program) |
 | `cpu_tlb_flush` | on | `cgroup_cpu_tlb_flush` |
-| `scheduler_runqueue` | on | `cgroup_scheduler_runqueue_wait`, `cgroup_scheduler_offcpu`, `cgroup_scheduler_context_switch` |
-| `syscall_counts` | on | `cgroup_syscall` |
+| `scheduler` | on | `cgroup_scheduler_runqueue_wait`, `cgroup_scheduler_offcpu`, `cgroup_scheduler_context_switch`, `cgroup_cpu_migrations` |
+| `syscall` | on | `cgroup_syscall` |
 | `ext4_ops` | off | `cgroup_ext4_ops`, `cgroup_ext4_op_time` |
 | `xfs_log` | off | `cgroup_xfs_log_waits`, `cgroup_xfs_log_wait_time` |
 | `memory_pagecache` | off | `cgroup_pagecache_*` |
@@ -49,7 +48,7 @@ per switch. On bare metal, before #1392, `perf bench syscall basic` ran at
 715 K ops/s with the five samplers' cgroup paths off, the same as without
 these samplers (711 K), and at 564–582 K with them on.
 
-Since #1392, `syscall_counts` reads the task group once, as direct loads from
+Since #1392, `syscall_counts` (now part of `syscall`) reads the task group once, as direct loads from
 a BTF task pointer, from a `tp_btf` program, and the other samplers in the
 table do the same since #1397. The table above is the cost
 before either. Measured on the same bare-metal host with `syscall_counts`
@@ -87,14 +86,12 @@ default: see [cpu_usage](#cpu_usage).
 
 - [Per-cgroup and per-task series](#per-cgroup-and-per-task-series)
 - [Block I/O](#block-io)
-  - [blockio_latency](#blockio_latency)
-  - [blockio_requests](#blockio_requests)
+  - [blockio](#blockio)
 - [CPU](#cpu)
   - [cpu_bandwidth](#cpu_bandwidth)
   - [cpu_cores](#cpu_cores)
   - [cpu_frequency](#cpu_frequency)
   - [cpu_l3](#cpu_l3)
-  - [cpu_migrations](#cpu_migrations)
   - [cpu_perf](#cpu_perf)
   - [cpu_power](#cpu_power)
   - [cpu_tlb_flush](#cpu_tlb_flush)
@@ -123,11 +120,10 @@ default: see [cpu_usage](#cpu_usage).
   - [network_interfaces](#network_interfaces)
   - [network_traffic](#network_traffic)
 - [Scheduler](#scheduler)
-  - [scheduler_runqueue](#scheduler_runqueue)
+  - [scheduler](#scheduler-1)
 - [Hardware Sensors](#hardware-sensors)
 - [Syscall](#syscall)
-  - [syscall_counts](#syscall_counts)
-  - [syscall_latency](#syscall_latency)
+  - [syscall](#syscall-1)
 - [TCP](#tcp)
   - [tcp_connect_latency](#tcp_connect_latency)
   - [tcp_packet_latency](#tcp_packet_latency)
@@ -141,10 +137,16 @@ default: see [cpu_usage](#cpu_usage).
 
 Samplers for measuring how disk and storage devices are performing.
 
-### blockio_latency
+### blockio
 
-This sampler instruments the block I/O request queue to measure request latency
-distribution.
+This sampler traces block I/O request completion and requeue, with one
+program on each. It replaced the `blockio_requests` and `blockio_latency`
+samplers, which each had a program on `block_rq_complete` (see
+docs/journal/2026-10-03-one-program-per-hook.md); a config that still names
+them is read as `[samplers.blockio]`, with a warning. Its two parts are the
+options `requests` and `latency`, both on by default.
+
+The latency part measures the distribution of each phase of a request's life:
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
@@ -152,13 +154,10 @@ distribution.
 | `blockio_queue_latency` | Distribution of time requests spent queued before the device began servicing them, in nanoseconds. This is the component that grows under saturation, where device latency alone stays flat. A request that goes straight to the driver has no queue phase and records no sample, so on such a device the histogram is present but empty | `op={read,write,flush,discard}` |
 | `blockio_total_latency` | Distribution of end-to-end latency in nanoseconds, from the request entering the queue until it completed — queue and device together. Measured directly rather than summed, because two histograms cannot be added | `op={read,write,flush,discard}` |
 
-### blockio_requests
-
-This sampler instruments the block I/O request queue to get counts of requests,
-number of bytes by request type, and size distribution. These metrics help
-monitor I/O throughput and understand the characteristics of disk access
-patterns. This information is useful for storage system tuning, application
-optimization, and capacity planning.
+The requests part counts requests and bytes by request type and records the
+size distribution. These metrics help monitor I/O throughput and understand
+the characteristics of disk access patterns. This information is useful for
+storage system tuning, application optimization, and capacity planning.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
@@ -217,17 +216,6 @@ memory access patterns or programs competing for cache space.
 |--------|-------------|----------|
 | `cpu_l3_access` | The number of L3 cache access | |
 | `cpu_l3_miss` | The number of L3 cache miss | |
-
-### cpu_migrations
-
-Tracks when tasks move from one CPU to another. This is measured per-CPU with
-conditionality to track system dynamics and per-cgroup to understand which
-containers might be experiencing high rates of CPU migration.
-
-| Metric | Description | Metadata |
-|--------|-------------|----------|
-| `cpu_migration` | The number of CPU migrations | `direction={from,to}` |
-| `cgroup_cpu_migration` | The number of CPU migrations on a per-cgroup basis | `name`: the name of the cgroup |
 
 ### cpu_perf
 
@@ -1203,10 +1191,19 @@ responsiveness, throughput, and overall system performance. These metrics
 provide insights into how efficiently the scheduler is managing processes and
 CPU resources.
 
-### scheduler_runqueue
+### scheduler
 
-Instruments scheduler events and measures runqueue latency, process running
-time, and context switch information. These metrics help understand how long
+Instruments scheduler events, with one program on each scheduler hook, and
+measures runqueue latency, process running time, context switches and CPU
+migrations. It replaced the `scheduler_runqueue` and `cpu_migrations`
+samplers, which each had a program on `sched_switch` (see
+docs/journal/2026-10-03-one-program-per-hook.md); a config that still names
+them is read as `[samplers.scheduler]`, with a warning. Its two parts are the
+options `runqueue` and `migrations`, both on by default, and
+`cgroup_attribution` applies to both.
+
+The runqueue part measures runqueue latency, process running time, and
+context switch information. These metrics help understand how long
 processes wait before getting CPU time, how long they run once scheduled, and
 how frequently they're switched out. High runqueue latencies can indicate CPU
 contention or scheduling inefficiencies that directly impact application
@@ -1218,6 +1215,15 @@ performance and responsiveness.
 | `scheduler_running` | Distribution of the amount of time tasks were on-CPU | |
 | `scheduler_offcpu` | Distribution of the amount of time tasks were off-CPU | |
 | `scheduler_context_switch` | The number of involuntary context switches | `kind=involuntary` |
+
+The migrations part tracks when tasks move from one CPU to another, per CPU
+and per cgroup, to show which containers might be experiencing high rates of
+CPU migration.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `cpu_migrations` | The number of CPU migrations | `direction={from,to}` |
+| `cgroup_cpu_migrations` | The number of CPU migrations on a per-cgroup basis | `name`: the name of the cgroup |
 
 ## Hardware Sensors
 
@@ -1286,22 +1292,27 @@ applications are interacting with the operating system, helping identify
 inefficient patterns, excessive system call usage, or system call latency issues
 that can impact performance.
 
-### syscall_counts
+### syscall
 
-Instruments syscall enter to gather syscall counts. This helps to identify
-excessive system calls or unexpected patterns of system call usage.
+Instruments syscall enter and exit, with one program on each, to gather
+syscall counts and syscall latency distributions. It replaced the
+`syscall_counts` and `syscall_latency` samplers, which each had a program on
+`sys_enter` (see docs/journal/2026-10-03-one-program-per-hook.md); a config
+that still names them is read as `[samplers.syscall]`, with a warning. Its
+two parts are the options `counts` and `latency`, both on by default, and
+`cgroup_attribution` applies to the counts.
+
+The counts help to identify excessive system calls or unexpected patterns of
+system call usage.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
 | `syscall` | The number of syscalls by operation type on a per-CPU basis | `op={other,read,write,poll,lock,time,sleep,socket,yield,filesystem,memory,process,query,ipc,timer,event,sync}`, `id`: the CPU the syscall entered on |
 | `cgroup_syscall` | The number of syscalls by operation type on a per-cgroup basis | `op={other,read,write,poll,lock,time,sleep,socket,yield,filesystem,memory,process,query,ipc,timer,event,sync}`, `name`: the name of the cgroup | |
 
-### syscall_latency
-
-Instruments syscall enter and exit to gather syscall latency distributions.
-These metrics track how long system calls take to complete, which can reveal
-performance issues in the kernel or resource contention. High system call
-latencies may indicate system-level bottlenecks.
+The latency distributions track how long system calls take to complete,
+which can reveal performance issues in the kernel or resource contention.
+High system call latencies may indicate system-level bottlenecks.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|

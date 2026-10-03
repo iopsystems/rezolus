@@ -114,7 +114,8 @@ static __always_inline void account(u32 rx_or_tx_bytes, u32 rx_or_tx_packets, u3
  * for direct accesses just as it does inside `BPF_CORE_READ`.
  *
  * Which pair attaches is decided in `mod.rs` by `kernel_has_btf()`; the other
- * is disabled, never loaded. Same two-program shape `cpu_migrations` uses.
+ * is disabled, never loaded. Same two-program shape the `scheduler` sampler
+ * uses for `sched_switch`.
  */
 
 SEC("tp_btf/netif_receive_skb")

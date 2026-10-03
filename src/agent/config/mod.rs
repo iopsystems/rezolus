@@ -35,6 +35,37 @@ const OPT_IN_SAMPLERS: &[&str] = &[
     "xfs_log",
 ];
 
+/// An old sampler, the part of the merged sampler it became, and whether it
+/// had a per-cgroup path (so its `cgroup_attribution` carries over).
+type MergedPart = (&'static str, &'static str, bool);
+
+/// Samplers that were merged into one, so that each kernel hook carries one
+/// Rezolus program (docs/journal/2026-10-03-one-program-per-hook.md): the new
+/// sampler and its old ones.
+const MERGED_SAMPLERS: &[(&str, &[MergedPart])] = &[
+    (
+        "syscall",
+        &[
+            ("syscall_counts", "counts", true),
+            ("syscall_latency", "latency", false),
+        ],
+    ),
+    (
+        "blockio",
+        &[
+            ("blockio_requests", "requests", false),
+            ("blockio_latency", "latency", false),
+        ],
+    ),
+    (
+        "scheduler",
+        &[
+            ("scheduler_runqueue", "runqueue", true),
+            ("cpu_migrations", "migrations", true),
+        ],
+    ),
+];
+
 fn listen() -> String {
     "0.0.0.0:4241".into()
 }
@@ -68,12 +99,19 @@ impl Config {
             })
             .unwrap();
 
-        let config: Config = toml::from_str(&content)
+        let mut config: Config = toml::from_str(&content)
             .map_err(|e| {
                 eprintln!("failed to parse config file: {e}");
                 std::process::exit(1);
             })
             .unwrap();
+
+        for warning in config.translate_merged_samplers() {
+            eprintln!("config: {warning}");
+        }
+        for warning in config.unknown_names() {
+            eprintln!("config: {warning}");
+        }
 
         config.general.check();
         config.scheduler.check();
@@ -86,6 +124,142 @@ impl Config {
         }
 
         Ok(config)
+    }
+
+    /// Rewrite the sections of samplers that were merged into one as the
+    /// merged sampler's section, so an old config keeps its meaning, and
+    /// return a warning for each section rewritten or ignored.
+    ///
+    /// Each part's switch is the old sampler's resolved `enabled` (its own
+    /// section, else `[defaults]`, else on), so an old section that is absent
+    /// neither adds nor drops a part. The merged sampler is enabled when any
+    /// part is. The `cgroup_attribution` of an old sampler that had a
+    /// per-cgroup path becomes the merged section's; on one that had none it
+    /// did nothing, and is reported and dropped. A section for the merged sampler wins over old ones, which
+    /// are then reported as ignored.
+    fn translate_merged_samplers(&mut self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        for (merged, parts) in MERGED_SAMPLERS {
+            if !parts
+                .iter()
+                .any(|(old, _, _)| self.samplers.contains_key(*old))
+            {
+                continue;
+            }
+            if self.samplers.contains_key(*merged) {
+                for (old, _, _) in parts.iter() {
+                    if self.samplers.remove(*old).is_some() {
+                        warnings.push(format!(
+                            "[samplers.{old}] is ignored: the sampler is now part of \
+                             [samplers.{merged}], which this config also sets"
+                        ));
+                    }
+                }
+                continue;
+            }
+            let default_on = self.defaults.enabled().unwrap_or(enabled());
+            // Every sampler merged so far defaulted `cgroup_attribution` on.
+            let default_attribution = self.defaults.cgroup_attribution().unwrap_or(true);
+            let mut section = SamplerConfig::default();
+            let mut any_on = false;
+            let mut any_explicit = false;
+            // Each enabled part's effective `cgroup_attribution` as its old
+            // sampler resolved it: its own section, else [defaults], else on.
+            let mut attributions: Vec<(&str, bool)> = Vec::new();
+            for (old, part, attributes) in parts.iter() {
+                let old_section = self.samplers.remove(*old);
+                let on = old_section
+                    .as_ref()
+                    .and_then(|s| s.enabled())
+                    .unwrap_or(default_on);
+                section.set_part(part, on);
+                any_on |= on;
+                let explicit = old_section.as_ref().and_then(|s| s.cgroup_attribution());
+                if *attributes {
+                    any_explicit |= explicit.is_some();
+                    if on {
+                        attributions.push((old, explicit.unwrap_or(default_attribution)));
+                    }
+                } else if explicit.is_some() {
+                    warnings.push(format!(
+                        "[samplers.{old}] cgroup_attribution is ignored: {old} had no \
+                         per-cgroup series"
+                    ));
+                }
+                if old_section.is_some() {
+                    warnings.push(format!(
+                        "[samplers.{old}] is deprecated: the sampler is now part `{part}` of \
+                         [samplers.{merged}] (read as {part} = {on})"
+                    ));
+                }
+            }
+            // The merged sampler has one `cgroup_attribution` for every part.
+            // If the parts' old samplers disagreed, it is on, so no series
+            // that was exported disappears, and the difference is reported.
+            if any_explicit {
+                let attribution = attributions.iter().any(|(_, on)| *on);
+                if attributions.iter().any(|(_, on)| *on != attribution) {
+                    let list: Vec<String> = attributions
+                        .iter()
+                        .map(|(old, on)| format!("{old} {}", if *on { "on" } else { "off" }))
+                        .collect();
+                    warnings.push(format!(
+                        "cgroup_attribution differed between the samplers [samplers.{merged}] \
+                         replaces ({}); it has one setting for every part, taken as on",
+                        list.join(", ")
+                    ));
+                }
+                section.set_cgroup_attribution(attribution);
+            }
+            section.set_enabled(any_on);
+            self.samplers.insert(merged.to_string(), section);
+        }
+        warnings
+    }
+
+    /// A warning for each section that names no known sampler, and for each
+    /// part switch set on a sampler that has no such part (`counts` on
+    /// `blockio`, say), which would otherwise be ignored without a word.
+    fn unknown_names(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let mut names: Vec<&String> = self.samplers.keys().collect();
+        names.sort();
+        for name in names {
+            if !crate::analysis::extract::context::EXPECTED_SUBSYSTEMS.contains(&name.as_str()) {
+                warnings.push(format!(
+                    "[samplers.{name}] names no known sampler and is ignored"
+                ));
+                continue;
+            }
+            let valid: Vec<&str> = MERGED_SAMPLERS
+                .iter()
+                .find(|(merged, _)| merged == name)
+                .map(|(_, parts)| parts.iter().map(|(_, part, _)| *part).collect())
+                .unwrap_or_default();
+            for part in self.samplers[name].parts_set() {
+                if !valid.contains(&part) {
+                    warnings.push(format!(
+                        "[samplers.{name}] {part} is ignored: {name} has no part named {part}"
+                    ));
+                }
+            }
+        }
+        for part in self.defaults.parts_set() {
+            warnings.push(format!(
+                "[defaults] {part} is ignored: parts are set per sampler"
+            ));
+        }
+        warnings
+    }
+
+    /// Whether `part` of the merged sampler `name` is on: its section's
+    /// switch, else on. The sampler's own `enabled` gates every part.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn part(&self, name: &str, part: &str) -> bool {
+        self.samplers
+            .get(name)
+            .and_then(|v| v.part(part))
+            .unwrap_or(true)
     }
 
     pub fn log(&self) -> &Log {
@@ -137,8 +311,8 @@ impl Config {
     /// off). The request-path samplers read it this way (`ext4_ops`,
     /// `xfs_log`, `memory_pagecache`): with it off, the `cgroup_*` series are
     /// absent and the path is not in the loaded program. The samplers whose
-    /// per-cgroup series predate the option (`cpu_usage`, `cpu_migrations`,
-    /// `cpu_perf`, `cpu_tlb_flush`, `scheduler_runqueue`, `syscall_counts`)
+    /// per-cgroup series predate the option (`cpu_usage`, `cpu_perf`,
+    /// `cpu_tlb_flush`, `scheduler`, `syscall`)
     /// default it on; see `cgroup_attribution_or`.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn cgroup_attribution(&self, name: &str) -> bool {
@@ -223,6 +397,124 @@ mod tests {
         );
         assert!(c.cgroup_attribution("ext4_ops"));
         assert!(!c.cgroup_attribution("xfs_log"));
+    }
+
+    /// An old section keeps its meaning: each part is the old sampler's
+    /// resolved enable, the merged sampler is on when any part is, and an
+    /// old `cgroup_attribution` carries over.
+    #[test]
+    fn old_sections_of_a_merged_sampler_are_translated() {
+        fn translated(toml: &str) -> (Config, Vec<String>) {
+            let mut c = config(toml);
+            let w = c.translate_merged_samplers();
+            (c, w)
+        }
+
+        // No old section: nothing changes, and every part is on.
+        let (c, w) = translated("");
+        assert!(w.is_empty());
+        assert!(c.enabled("syscall"));
+        assert!(c.part("syscall", "counts") && c.part("syscall", "latency"));
+
+        // One part switched off.
+        let (c, w) = translated("[samplers.syscall_latency]\nenabled = false\n");
+        assert_eq!(w.len(), 1);
+        assert!(c.enabled("syscall"));
+        assert!(c.part("syscall", "counts"));
+        assert!(!c.part("syscall", "latency"));
+
+        // Both off: the merged sampler is off.
+        let (c, _) = translated(
+            "[samplers.syscall_counts]\nenabled = false\n[samplers.syscall_latency]\nenabled = false\n",
+        );
+        assert!(!c.enabled("syscall"));
+
+        // [defaults] off, one old sampler on: only that part, and an absent
+        // old section follows [defaults] rather than turning its part on.
+        let (c, _) =
+            translated("[defaults]\nenabled = false\n[samplers.syscall_counts]\nenabled = true\n");
+        assert!(c.enabled("syscall"));
+        assert!(c.part("syscall", "counts"));
+        assert!(!c.part("syscall", "latency"));
+
+        // cgroup_attribution carries over from the part that had a cgroup
+        // path, and only from that one.
+        let (c, _) = translated("[samplers.syscall_counts]\ncgroup_attribution = false\n");
+        assert!(!c.cgroup_attribution_or("syscall", true));
+        let (c, w) = translated("[samplers.syscall_latency]\ncgroup_attribution = false\n");
+        assert!(c.cgroup_attribution_or("syscall", true));
+        assert!(w
+            .iter()
+            .any(|w| w.contains("cgroup_attribution is ignored")));
+
+        // A section for the merged sampler wins; the old one is reported.
+        let (c, w) = translated(
+            "[samplers.syscall]\nlatency = true\n[samplers.syscall_latency]\nenabled = false\n",
+        );
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("ignored"));
+        assert!(c.part("syscall", "latency"));
+    }
+
+    #[test]
+    fn old_scheduler_sections_are_translated() {
+        let mut c = config("[samplers.cpu_migrations]\nenabled = false\n");
+        c.translate_merged_samplers();
+        assert!(c.enabled("scheduler"));
+        assert!(c.part("scheduler", "runqueue"));
+        assert!(!c.part("scheduler", "migrations"));
+
+        // Both old samplers had a cgroup_attribution and the merged sampler
+        // has one. Each part's is what its old sampler resolved (an absent
+        // section defaults on); if they differ it is on, and reported.
+        let mut c = config("[samplers.cpu_migrations]\ncgroup_attribution = false\n");
+        let w = c.translate_merged_samplers();
+        assert!(c.cgroup_attribution_or("scheduler", true));
+        assert!(w.iter().any(|w| w.contains("differed")));
+
+        let mut c = config(
+            "[samplers.scheduler_runqueue]\ncgroup_attribution = false\n[samplers.cpu_migrations]\ncgroup_attribution = false\n",
+        );
+        let w = c.translate_merged_samplers();
+        assert!(!c.cgroup_attribution_or("scheduler", true));
+        assert!(!w.iter().any(|w| w.contains("differed")));
+
+        // [defaults] off and one old sampler on: they differ, so it is on.
+        let mut c = config(
+            "[defaults]\ncgroup_attribution = false\n[samplers.scheduler_runqueue]\ncgroup_attribution = true\n",
+        );
+        let w = c.translate_merged_samplers();
+        assert!(c.cgroup_attribution_or("scheduler", false));
+        assert!(w.iter().any(|w| w.contains("differed")));
+
+        // A part that is off does not count.
+        let mut c = config(
+            "[samplers.scheduler_runqueue]\ncgroup_attribution = false\n[samplers.cpu_migrations]\nenabled = false\n",
+        );
+        let w = c.translate_merged_samplers();
+        assert!(!c.cgroup_attribution_or("scheduler", true));
+        assert!(!w.iter().any(|w| w.contains("differed")));
+    }
+
+    #[test]
+    fn old_blockio_sections_are_translated() {
+        let mut c = config("[samplers.blockio_latency]\nenabled = false\n");
+        let w = c.translate_merged_samplers();
+        assert_eq!(w.len(), 1);
+        assert!(c.enabled("blockio"));
+        assert!(c.part("blockio", "requests"));
+        assert!(!c.part("blockio", "latency"));
+    }
+
+    #[test]
+    fn unknown_sections_and_parts_are_reported() {
+        let c = config(
+            "[samplers.not_a_sampler]\nenabled = true\n[samplers.blockio]\ncounts = false\nlatency = false\n[samplers.syscall]\ncounts = false\n",
+        );
+        let w = c.unknown_names();
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(w[0].contains("blockio") && w[0].contains("counts"));
+        assert!(w[1].contains("not_a_sampler"));
     }
 
     /// The config the packages install (`config/agent.toml`, which the deb

@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Clone)]
 pub struct Sampler {
     #[serde(default)]
     enabled: Option<bool>,
@@ -34,6 +34,24 @@ pub struct Sampler {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     task_attribution: Option<bool>,
+    /// The parts of a sampler that merged several older ones, each on by
+    /// default (`syscall`: `counts`, `latency`; `blockio`: `requests`,
+    /// `latency`; `scheduler`: `runqueue`, `migrations`). See `Config::part`.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[serde(default)]
+    counts: Option<bool>,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[serde(default)]
+    latency: Option<bool>,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[serde(default)]
+    requests: Option<bool>,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[serde(default)]
+    runqueue: Option<bool>,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[serde(default)]
+    migrations: Option<bool>,
 }
 
 impl Sampler {
@@ -59,6 +77,59 @@ impl Sampler {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn task_attribution(&self) -> Option<bool> {
         self.task_attribution
+    }
+
+    /// The part switches this section sets, by name.
+    pub(super) fn parts_set(&self) -> Vec<&'static str> {
+        let mut parts = Vec::new();
+        if self.counts.is_some() {
+            parts.push("counts");
+        }
+        if self.latency.is_some() {
+            parts.push("latency");
+        }
+        if self.requests.is_some() {
+            parts.push("requests");
+        }
+        if self.runqueue.is_some() {
+            parts.push("runqueue");
+        }
+        if self.migrations.is_some() {
+            parts.push("migrations");
+        }
+        parts
+    }
+
+    /// The switch for one part of a merged sampler, if the section sets it.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn part(&self, part: &str) -> Option<bool> {
+        match part {
+            "counts" => self.counts,
+            "latency" => self.latency,
+            "requests" => self.requests,
+            "runqueue" => self.runqueue,
+            "migrations" => self.migrations,
+            _ => None,
+        }
+    }
+
+    pub(super) fn set_enabled(&mut self, on: bool) {
+        self.enabled = Some(on);
+    }
+
+    pub(super) fn set_cgroup_attribution(&mut self, on: bool) {
+        self.cgroup_attribution = Some(on);
+    }
+
+    pub(super) fn set_part(&mut self, part: &str, on: bool) {
+        match part {
+            "counts" => self.counts = Some(on),
+            "latency" => self.latency = Some(on),
+            "requests" => self.requests = Some(on),
+            "runqueue" => self.runqueue = Some(on),
+            "migrations" => self.migrations = Some(on),
+            _ => unreachable!("no part named {part}"),
+        }
     }
 
     pub fn check(&self, name: &str) {

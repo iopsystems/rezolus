@@ -1027,6 +1027,20 @@ bare-metal probe-cost bench for anything at request rate).
   the task's start slot) is the way to have both. Gaps entry, Deferred,
   "`ext4_ops` probe cost". The 2026-10-01 entry below found most of the
   path's cost in `bpf_probe_read_kernel()` calls; try that first.
+- **Syscall tracepoint type beside another syscall tracer** — Decided
+  (2026-10-02): keep raw tracepoints, on the assumption that Rezolus is the
+  only syscall tracer. They save about 82 ns per syscall there and cost about
+  121 ns more beside another tool's classic programs (measured in a KVM
+  guest, both samplers on; `docs/journal/2026-10-01-cgroup-path-helper-calls.md`).
+- **One Rezolus program per hook** — DONE. The samplers that shared a hook
+  were merged into combined samplers with one program per hook: `syscall`
+  (`syscall_counts`, `syscall_latency`), `blockio` (`blockio_latency`,
+  `blockio_requests`) and `scheduler` (`scheduler_runqueue`,
+  `cpu_migrations`). Each extra program had cost up to about 40 ns per event
+  on bare metal. Old config sections are translated at load with a warning.
+  `cpu_perf`'s `sched_switch` program, `tcp_destroy_sock` and the ext4
+  pair stay apart, as the entry decided.
+  `docs/journal/2026-10-03-one-program-per-hook.md`.
 - **Per-cgroup path: read the task group once, through BTF** — DONE.
   `syscall_counts` (#1392): its cgroup path went from 109–118 ns to 9–12 ns
   per syscall on bare metal. Every other sampler with a per-event cgroup

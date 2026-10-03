@@ -64,7 +64,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     // direct load, `raw_tp` to a `bpf_probe_read_kernel` CALL. On a probe
     // whose whole body is ~45 ns, that is most of the cost (#1218).
     //
-    // Same shape `cpu_migrations` uses for `sched_switch`.
+    // Same shape the `scheduler` sampler uses for `sched_switch`.
     .disabled_programs(if kernel_has_btf() {
         &["netif_receive_skb_raw", "net_dev_start_xmit_raw"]
     } else {

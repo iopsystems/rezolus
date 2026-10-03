@@ -17,7 +17,7 @@ libloading = "0.8"
 log = "0.4.29"
 metriken = "0.11.2"
 metriken-exposition = "0.21.4"
-metriken-query = { version = "0.34.1", default-features = false }
+metriken-query = { version = "0.34.2", default-features = false }
 metriken-segment = { version = "0.1.6", default-features = false }
 metriken-archive = { version = "0.3.3", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
@@ -55,7 +55,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "6.0.0-alpha.24"
+version = "6.0.0-alpha.27"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true
