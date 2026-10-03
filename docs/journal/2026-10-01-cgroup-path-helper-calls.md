@@ -239,6 +239,9 @@ only syscall tracer, the move saves about 82 ns per syscall. With another
 tool's classic programs on the same tracepoints, it costs about 121 ns more.
 The spread across the five passes was under 2.5% in every condition.
 
+Decided 2026-10-02: keep the raw tracepoints, on the assumption that
+Rezolus is the only syscall tracer on the host.
+
 ## Contention on the shared per-cgroup counters
 
 Each per-cgroup counter is one u64 that every CPU adds to atomically, and up
