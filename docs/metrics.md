@@ -1222,8 +1222,8 @@ CPU migration.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `cpu_migration` | The number of CPU migrations | `direction={from,to}` |
-| `cgroup_cpu_migration` | The number of CPU migrations on a per-cgroup basis | `name`: the name of the cgroup |
+| `cpu_migrations` | The number of CPU migrations | `direction={from,to}` |
+| `cgroup_cpu_migrations` | The number of CPU migrations on a per-cgroup basis | `name`: the name of the cgroup |
 
 ## Hardware Sensors
 

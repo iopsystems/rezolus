@@ -28,9 +28,10 @@
   options `runqueue` and `migrations` in `[samplers.scheduler]`, both on by
   default, and `cgroup_attribution` applies to both. A config that still
   names `[samplers.scheduler_runqueue]` or `[samplers.cpu_migrations]` is
-  read as `[samplers.scheduler]` with a warning; if the two old sections set
-  `cgroup_attribution` differently, the first is used and the second
-  reported. Metric names are unchanged; the `sampler` label, `rezolus
+  read as `[samplers.scheduler]` with a warning. The merged sampler has one
+  `cgroup_attribution`; if the two old samplers resolved it differently
+  (counting `[defaults]` and their default of on), it is on, so no series
+  that was exported disappears, and the difference is reported. Metric names are unchanged; the `sampler` label, `rezolus
   status`, `rezolus_bpf_run_time` and the archive table keys now say
   `scheduler`, and the migration acquisition groups are named
   `scheduler_migrations` and `scheduler_cgroup_migrations`.

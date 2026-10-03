@@ -158,8 +158,14 @@ impl Config {
                 continue;
             }
             let default_on = self.defaults.enabled().unwrap_or(enabled());
+            // Every sampler merged so far defaulted `cgroup_attribution` on.
+            let default_attribution = self.defaults.cgroup_attribution().unwrap_or(true);
             let mut section = SamplerConfig::default();
             let mut any_on = false;
+            let mut any_explicit = false;
+            // Each enabled part's effective `cgroup_attribution` as its old
+            // sampler resolved it: its own section, else [defaults], else on.
+            let mut attributions: Vec<(&str, bool)> = Vec::new();
             for (old, part, attributes) in parts.iter() {
                 let old_section = self.samplers.remove(*old);
                 let on = old_section
@@ -168,34 +174,42 @@ impl Config {
                     .unwrap_or(default_on);
                 section.set_part(part, on);
                 any_on |= on;
-                if let Some(old_section) = old_section {
-                    if let Some(attribution) = old_section.cgroup_attribution() {
-                        if *attributes {
-                            match section.cgroup_attribution() {
-                                // Two old samplers became parts of one, and
-                                // `cgroup_attribution` is the merged
-                                // sampler's: the first set wins.
-                                Some(earlier) if earlier != attribution => {
-                                    warnings.push(format!(
-                                        "[samplers.{old}] cgroup_attribution = {attribution} is \
-                                         ignored: [samplers.{merged}] has one setting for every \
-                                         part, taken as {earlier}"
-                                    ));
-                                }
-                                _ => section.set_cgroup_attribution(attribution),
-                            }
-                        } else {
-                            warnings.push(format!(
-                                "[samplers.{old}] cgroup_attribution is ignored: {old} had no \
-                                 per-cgroup series"
-                            ));
-                        }
+                let explicit = old_section.as_ref().and_then(|s| s.cgroup_attribution());
+                if *attributes {
+                    any_explicit |= explicit.is_some();
+                    if on {
+                        attributions.push((old, explicit.unwrap_or(default_attribution)));
                     }
+                } else if explicit.is_some() {
+                    warnings.push(format!(
+                        "[samplers.{old}] cgroup_attribution is ignored: {old} had no \
+                         per-cgroup series"
+                    ));
+                }
+                if old_section.is_some() {
                     warnings.push(format!(
                         "[samplers.{old}] is deprecated: the sampler is now part `{part}` of \
                          [samplers.{merged}] (read as {part} = {on})"
                     ));
                 }
+            }
+            // The merged sampler has one `cgroup_attribution` for every part.
+            // If the parts' old samplers disagreed, it is on, so no series
+            // that was exported disappears, and the difference is reported.
+            if any_explicit {
+                let attribution = attributions.iter().any(|(_, on)| *on);
+                if attributions.iter().any(|(_, on)| *on != attribution) {
+                    let list: Vec<String> = attributions
+                        .iter()
+                        .map(|(old, on)| format!("{old} {}", if *on { "on" } else { "off" }))
+                        .collect();
+                    warnings.push(format!(
+                        "cgroup_attribution differed between the samplers [samplers.{merged}] \
+                         replaces ({}); it has one setting for every part, taken as on",
+                        list.join(", ")
+                    ));
+                }
+                section.set_cgroup_attribution(attribution);
             }
             section.set_enabled(any_on);
             self.samplers.insert(merged.to_string(), section);
@@ -450,16 +464,36 @@ mod tests {
         assert!(c.part("scheduler", "runqueue"));
         assert!(!c.part("scheduler", "migrations"));
 
-        // Both old samplers had a cgroup_attribution; the merged sampler has
-        // one, the first set, and a conflicting second is reported.
+        // Both old samplers had a cgroup_attribution and the merged sampler
+        // has one. Each part's is what its old sampler resolved (an absent
+        // section defaults on); if they differ it is on, and reported.
+        let mut c = config("[samplers.cpu_migrations]\ncgroup_attribution = false\n");
+        let w = c.translate_merged_samplers();
+        assert!(c.cgroup_attribution_or("scheduler", true));
+        assert!(w.iter().any(|w| w.contains("differed")));
+
         let mut c = config(
-            "[samplers.scheduler_runqueue]\ncgroup_attribution = false\n[samplers.cpu_migrations]\ncgroup_attribution = true\n",
+            "[samplers.scheduler_runqueue]\ncgroup_attribution = false\n[samplers.cpu_migrations]\ncgroup_attribution = false\n",
         );
         let w = c.translate_merged_samplers();
         assert!(!c.cgroup_attribution_or("scheduler", true));
-        assert!(w
-            .iter()
-            .any(|w| w.contains("cgroup_attribution = true is ignored")));
+        assert!(!w.iter().any(|w| w.contains("differed")));
+
+        // [defaults] off and one old sampler on: they differ, so it is on.
+        let mut c = config(
+            "[defaults]\ncgroup_attribution = false\n[samplers.scheduler_runqueue]\ncgroup_attribution = true\n",
+        );
+        let w = c.translate_merged_samplers();
+        assert!(c.cgroup_attribution_or("scheduler", false));
+        assert!(w.iter().any(|w| w.contains("differed")));
+
+        // A part that is off does not count.
+        let mut c = config(
+            "[samplers.scheduler_runqueue]\ncgroup_attribution = false\n[samplers.cpu_migrations]\nenabled = false\n",
+        );
+        let w = c.translate_merged_samplers();
+        assert!(!c.cgroup_attribution_or("scheduler", true));
+        assert!(!w.iter().any(|w| w.contains("differed")));
     }
 
     #[test]
