@@ -395,13 +395,14 @@ enabled = false
 enabled = false
 # interval = "5s"
 
-# BPF sampler that instruments syscall enter to gather syscall counts.
-[samplers.syscall_counts]
+# BPF sampler that instruments syscall enter and exit to gather syscall counts
+# and syscall latency distributions, one program on each. Replaces
+# `syscall_counts` and `syscall_latency`; a config that still names them is
+# read as this section, with a warning.
+[samplers.syscall]
+# counts = false               # drop the syscall counts (and their per-cgroup series)
+# latency = false              # drop the latency histograms and the sys_exit program
 # cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
-
-# BPF sampler that instruments syscall enter and exit to gather syscall latency
-# distributions.
-[samplers.syscall_latency]
 
 # BPF sampler that probes TCP connect (active open) to measure latency when
 # establishing connections.

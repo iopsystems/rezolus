@@ -3,11 +3,5 @@ mod linux;
 
 #[cfg(not(target_os = "linux"))]
 mod stats {
-    mod counts {
-        include!("./linux/counts/stats.rs");
-    }
-
-    mod latency {
-        include!("./linux/latency/stats.rs");
-    }
+    include!("./linux/syscall/stats.rs");
 }

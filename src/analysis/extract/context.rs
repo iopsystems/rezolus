@@ -86,8 +86,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "network_traffic",
     "rezolus_rusage",
     "scheduler_runqueue",
-    "syscall_counts",
-    "syscall_latency",
+    "syscall",
     "tcp_connect_latency",
     "tcp_packet_latency",
     "tcp_receive",
@@ -130,6 +129,16 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
 /// doesn't. See that test's doc comment for what it can't check (metrics
 /// the agent's own `attribute_sampler` calls `unattributed`, and samplers
 /// not registered on whatever platform compiled the test).
+/// Samplers merged into one so that each kernel hook carries one Rezolus
+/// program (docs/journal/2026-10-03-one-program-per-hook.md): the old name, as
+/// recordings made before the merge carry it in their `sampler` label, and the
+/// sampler it became. `extract::subsystem_of` reads an old label as the new
+/// name, so recordings from before and after report the same subsystem.
+pub(crate) const MERGED_SAMPLERS: &[(&str, &str)] = &[
+    ("syscall_counts", "syscall"),
+    ("syscall_latency", "syscall"),
+];
+
 pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("blockio_bytes", "blockio_requests"),
     ("blockio_errors", "blockio_requests"),
@@ -162,7 +171,7 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("cgroup_scheduler_context_switch", "scheduler_runqueue"),
     ("cgroup_scheduler_offcpu", "scheduler_runqueue"),
     ("cgroup_scheduler_runqueue_wait", "scheduler_runqueue"),
-    ("cgroup_syscall", "syscall_counts"),
+    ("cgroup_syscall", "syscall"),
     ("cgroup_xfs_log_wait_time", "xfs_log"),
     ("cgroup_xfs_log_waits", "xfs_log"),
     ("core_c10_residency", "cpu_power"),
@@ -352,7 +361,6 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("sensor_voltage", "hw_sensors"),
     ("softirq", "cpu_usage"),
     ("softirq_time", "cpu_usage"),
-    ("syscall", "syscall_counts"),
     ("task_cpu_usage", "cpu_usage"),
     ("tcp_bytes", "tcp_traffic"),
     ("tcp_jitter", "tcp_receive"),
@@ -411,7 +419,7 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
 /// `CLAUDE.md` (`blockio/{latency,requests}`,
 /// `cpu/{bandwidth,migrations,perf,tlb_flush,usage}`,
 /// `network/{interfaces,traffic}`, `scheduler/runqueue`,
-/// `syscall/{counts,latency}`,
+/// `syscall/syscall`,
 /// `tcp/{connect_latency,packet_latency,receive,retransmit,traffic}`) —
 /// cross-checked independently rather than assumed from that doc. Sorted
 /// alphabetically.
@@ -431,8 +439,7 @@ const BPF_SAMPLERS: &[&str] = &[
     "network_interfaces",
     "network_traffic",
     "scheduler_runqueue",
-    "syscall_counts",
-    "syscall_latency",
+    "syscall",
     "tcp_connect_latency",
     "tcp_packet_latency",
     "tcp_receive",

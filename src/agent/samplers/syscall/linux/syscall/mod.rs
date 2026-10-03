@@ -1,14 +1,22 @@
-//! Collects Syscall stats using BPF and traces:
-//! * `sys_enter` (raw tracepoint: `tp_btf`, or `raw_tp` without kernel BTF)
+//! Collects syscall counts and latencies using BPF and traces:
+//! * `sys_enter` and `sys_exit` (raw tracepoints: `tp_btf`, or `raw_tp`
+//!   without kernel BTF)
 //!
 //! And produces these stats:
-//! * `syscall`
-//! * `cgroup_syscall`
+//! * `syscall` (part `counts`)
+//! * `cgroup_syscall` (part `counts`, with `cgroup_attribution`)
+//! * `syscall_latency` (part `latency`)
+//!
+//! One program per hook: this sampler replaced `syscall_counts` and
+//! `syscall_latency`, which each had a program on `sys_enter`
+//! (docs/journal/2026-10-03-one-program-per-hook.md). The parts are the
+//! config options `counts` and `latency`, both on by default; a config that
+//! still names the old samplers is translated at load (`Config::load`).
 
-const NAME: &str = "syscall_counts";
+const NAME: &str = "syscall";
 
 mod bpf {
-    include!(concat!(env!("OUT_DIR"), "/syscall_counts.bpf.rs"));
+    include!(concat!(env!("OUT_DIR"), "/syscall_syscall.bpf.rs"));
 }
 
 mod stats;
@@ -60,6 +68,22 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
+    let counts = config.part(NAME, "counts");
+    let latency = config.part(NAME, "latency");
+    if !counts && !latency {
+        return Ok(None);
+    }
+
+    // A part that is off registers no metrics, so its groups have no
+    // members; bound them, or every snapshot would carry them empty (the
+    // sampler is live, so `bound_groups_without_a_live_sampler` skips them).
+    if !counts {
+        COUNTERS_ACQ.set_member_bound(0);
+    }
+    if !latency {
+        LATENCIES_ACQ.set_member_bound(0);
+    }
+
     let counters = vec![
         &SYSCALL_OTHER,
         &SYSCALL_READ,
@@ -80,7 +104,18 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &SYSCALL_SYNC,
     ];
 
-    let cgroup_attribution = config.cgroup_attribution_or(NAME, true);
+    let cgroup_attribution = counts && config.cgroup_attribution_or(NAME, true);
+
+    // One of each tp_btf/raw_tp twin, and no exit program without latency.
+    let mut disabled: Vec<&'static str> = if kernel_has_btf() {
+        vec!["sys_enter_raw", "sys_exit_raw"]
+    } else {
+        vec!["sys_enter_btf", "sys_exit_btf"]
+    };
+    if !latency {
+        disabled.extend(["sys_exit_btf", "sys_exit_raw"]);
+        disabled.dedup();
+    }
 
     let mut builder = BpfBuilder::new(
         &config,
@@ -91,23 +126,56 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    .cpu_counters("counters", counters, &COUNTERS_ACQ)
     .map("syscall_lut", syscall_lut())
-    .disabled_programs(if kernel_has_btf() {
-        &["sys_enter_raw"]
-    } else {
-        &["sys_enter_btf"]
-    })
-    // The switch is read-only data the verifier folds at load (see
-    // `cgroup_attribution` in mod.bpf.c); the cgroup maps and their series
-    // exist only when it is on.
+    .disabled_programs(&disabled)
+    // The switches are read-only data the verifier folds at load (see
+    // `counts`, `latency` and `cgroup_attribution` in mod.bpf.c); a part's
+    // maps and series exist only when it is on.
     .pre_load(move |open| {
-        open.maps
+        let rodata = open
+            .maps
             .rodata_data
             .as_mut()
-            .expect("the program declares read-only data")
-            .cgroup_attribution = cgroup_attribution as u8;
+            .expect("the program declares read-only data");
+        rodata.counts = counts as u8;
+        rodata.latency = latency as u8;
+        rodata.cgroup_attribution = cgroup_attribution as u8;
     });
+
+    if counts {
+        builder = builder.cpu_counters("counters", counters, &COUNTERS_ACQ);
+    }
+
+    if latency {
+        // All 17 syscall-class latency histograms share ONE group: they are
+        // LIKE ENTITIES (one "syscall latency" family, distinguished by the
+        // `op` label) read as a single sweep — see stats.rs's `LATENCIES_ACQ`
+        // doc comment. `BpfBuilder` batches every `.histogram()` call below
+        // (same group reference) into one `HistogramBatch`, so it is stamped
+        // once per refresh, not 17 times.
+        builder = builder
+            .histogram("other_latency", &SYSCALL_OTHER_LATENCY, &LATENCIES_ACQ)
+            .histogram("read_latency", &SYSCALL_READ_LATENCY, &LATENCIES_ACQ)
+            .histogram("write_latency", &SYSCALL_WRITE_LATENCY, &LATENCIES_ACQ)
+            .histogram("poll_latency", &SYSCALL_POLL_LATENCY, &LATENCIES_ACQ)
+            .histogram("lock_latency", &SYSCALL_LOCK_LATENCY, &LATENCIES_ACQ)
+            .histogram("time_latency", &SYSCALL_TIME_LATENCY, &LATENCIES_ACQ)
+            .histogram("sleep_latency", &SYSCALL_SLEEP_LATENCY, &LATENCIES_ACQ)
+            .histogram("socket_latency", &SYSCALL_SOCKET_LATENCY, &LATENCIES_ACQ)
+            .histogram("yield_latency", &SYSCALL_YIELD_LATENCY, &LATENCIES_ACQ)
+            .histogram(
+                "filesystem_latency",
+                &SYSCALL_FILESYSTEM_LATENCY,
+                &LATENCIES_ACQ,
+            )
+            .histogram("memory_latency", &SYSCALL_MEMORY_LATENCY, &LATENCIES_ACQ)
+            .histogram("process_latency", &SYSCALL_PROCESS_LATENCY, &LATENCIES_ACQ)
+            .histogram("query_latency", &SYSCALL_QUERY_LATENCY, &LATENCIES_ACQ)
+            .histogram("ipc_latency", &SYSCALL_IPC_LATENCY, &LATENCIES_ACQ)
+            .histogram("timer_latency", &SYSCALL_TIMER_LATENCY, &LATENCIES_ACQ)
+            .histogram("event_latency", &SYSCALL_EVENT_LATENCY, &LATENCIES_ACQ)
+            .histogram("sync_latency", &SYSCALL_SYNC_LATENCY, &LATENCIES_ACQ);
+    }
 
     if cgroup_attribution {
         builder = builder
@@ -234,6 +302,23 @@ impl SkelExt for ModSkel<'_> {
             "cgroup_syscall_sync" => &self.maps.cgroup_syscall_sync,
             "counters" => &self.maps.counters,
             "syscall_lut" => &self.maps.syscall_lut,
+            "other_latency" => &self.maps.other_latency,
+            "read_latency" => &self.maps.read_latency,
+            "write_latency" => &self.maps.write_latency,
+            "poll_latency" => &self.maps.poll_latency,
+            "lock_latency" => &self.maps.lock_latency,
+            "time_latency" => &self.maps.time_latency,
+            "sleep_latency" => &self.maps.sleep_latency,
+            "socket_latency" => &self.maps.socket_latency,
+            "yield_latency" => &self.maps.yield_latency,
+            "filesystem_latency" => &self.maps.filesystem_latency,
+            "memory_latency" => &self.maps.memory_latency,
+            "process_latency" => &self.maps.process_latency,
+            "query_latency" => &self.maps.query_latency,
+            "ipc_latency" => &self.maps.ipc_latency,
+            "timer_latency" => &self.maps.timer_latency,
+            "event_latency" => &self.maps.event_latency,
+            "sync_latency" => &self.maps.sync_latency,
             _ => unimplemented!(),
         }
     }
@@ -248,6 +333,14 @@ impl OpenSkelExt for ModSkel<'_> {
         debug!(
             "{NAME} sys_enter_raw() BPF instruction count: {}",
             self.progs.sys_enter_raw.insn_cnt()
+        );
+        debug!(
+            "{NAME} sys_exit_btf() BPF instruction count: {}",
+            self.progs.sys_exit_btf.insn_cnt()
+        );
+        debug!(
+            "{NAME} sys_exit_raw() BPF instruction count: {}",
+            self.progs.sys_exit_raw.insn_cnt()
         );
     }
 }
