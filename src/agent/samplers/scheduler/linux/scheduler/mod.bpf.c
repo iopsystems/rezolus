@@ -6,8 +6,14 @@
 // <https://github.com/iovisor/bcc/> and has been modified for use within
 // Rezolus.
 
-// This BPF program probes enqueue and dequeue from the scheduler runqueue
-// to calculate the runqueue latency, running time, and off-cpu time.
+// One program per scheduler hook for the `scheduler` sampler. The wakeups
+// stamp a task's enqueue, and `sched_switch` measures runqueue latency,
+// running time, off-cpu time and context switches (the part `runqueue`) and
+// counts CPU migrations (the part `migrations`). Each part is switched by
+// read-only data written before load, so a part that is off is not in the
+// loaded program. Before this `scheduler_runqueue` and `cpu_migrations` were
+// two samplers with a program each on `sched_switch`, and each program on a
+// hook pays its own dispatch (docs/journal/2026-10-03-one-program-per-hook.md).
 
 #include <vmlinux.h>
 #include "../../../agent/bpf/btf_read.h"
@@ -31,11 +37,20 @@
 // every event.
 const volatile __u8 cgroup_attribution = 0;
 
+// The sampler's parts, the config options `runqueue` and `migrations` (both on
+// by default). With `runqueue` off the wakeup programs are not loaded.
+const volatile __u8 runqueue = 0;
+const volatile __u8 migrations = 0;
+
 // counter positions
 #define IVCSW 0
 #define RUNQ_WAIT 1
 #define DISCARDED 2
 #define VCSW 3
+
+// migration counter positions
+#define FROM 0
+#define TO 1
 
 // counters (see constants defined at top)
 struct {
@@ -159,11 +174,43 @@ struct {
     __uint(max_entries, MAX_CGROUPS);
 } cgroup_offcpu SEC(".maps");
 
+/*
+ * migrations
+ */
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CPUS* COUNTER_GROUP_WIDTH);
+} migrations_counts SEC(".maps");
+
+// per-cgroup migration counts
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CGROUPS);
+} cgroup_cpu_migrations SEC(".maps");
+
+// For storing the CPU a process was last seen on
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, MAX_PID);
+    __type(key, u32);   // pid
+    __type(value, u32); // cpu
+} last_cpu SEC(".maps");
+
+// `btf` is a compile-time constant: true in the tp_btf program, whose task
+// arguments are BTF pointers (see task_group_of() in cgroup.h).
+
 /* record enqueue timestamp */
 static __always_inline int trace_enqueue(u32 pid) {
     u64 ts;
 
-    if (!pid) {
+    if (!runqueue || !pid) {
         return 0;
     }
 
@@ -188,15 +235,40 @@ static __always_inline int account__sched_wakeup_new(u64* ctx, bool btf) {
     return trace_enqueue(BTF_READ(btf, p, pid));
 }
 
+// The cgroup id of `task`, or MAX_CGROUPS when it has none to count against.
+// A cgroup seen for the first time is sent to userspace and its counters are
+// zeroed, for each part that is on: a part that is off has no maps.
+static __always_inline u32 resolve_cgroup(struct task_struct* task, bool btf) {
+    u32 id = 0;
+    u64 serial_nr = 0;
+    struct task_group* tg = task_group_of(task, btf, &id, &serial_nr);
+    if (!tg || id >= MAX_CGROUPS) {
+        return MAX_CGROUPS;
+    }
+
+    if (handle_new_cgroup_read(&tg->css, id, serial_nr, &cgroup_serial_numbers, &cgroup_info) ==
+        0) {
+        u64 zero = 0;
+        if (runqueue) {
+            bpf_map_update_elem(&cgroup_ivcsw, &id, &zero, BPF_ANY);
+            bpf_map_update_elem(&cgroup_vcsw, &id, &zero, BPF_ANY);
+            bpf_map_update_elem(&cgroup_runq_wait, &id, &zero, BPF_ANY);
+            bpf_map_update_elem(&cgroup_offcpu, &id, &zero, BPF_ANY);
+        }
+        if (migrations) {
+            bpf_map_update_elem(&cgroup_cpu_migrations, &id, &zero, BPF_ANY);
+        }
+    }
+
+    return id;
+}
+
+// The runqueue part of a switch. Returns next's cgroup id (MAX_CGROUPS when
+// not attributed), which the migrations part reuses.
 // `btf` is a compile-time constant: true in the tp_btf program, whose task
 // arguments are BTF pointers (see task_group_of() in cgroup.h).
-static __always_inline int account__sched_switch(u64* ctx, bool btf) {
-    /* TP_PROTO(bool preempt, struct task_struct *prev,
-     *      struct task_struct *next)
-     */
-    struct task_struct* prev = (struct task_struct*)ctx[1];
-    struct task_struct* next = (struct task_struct*)ctx[2];
-
+static __always_inline u32 runqueue_switch(struct task_struct* prev, struct task_struct* next,
+                                           u32 next_pid, u32 processor_id, bool btf) {
     u32 idx;
     // prev and next can belong to different cgroups; track each separately so
     // runqueue wait and off-cpu time are never charged to prev's cgroup.
@@ -205,7 +277,6 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
     u32 next_cgroup_id = MAX_CGROUPS;
     u64 *tsp, delta_ns, offcpu_ns;
 
-    u32 processor_id = bpf_get_smp_processor_id();
     u64 ts = bpf_ktime_get_ns();
 
     // The idle task (pid 0) is not a runqueue participant: it never waits to be
@@ -219,29 +290,10 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
     // `trace_enqueue()` already skips pid 0 on the wakeup path; skipping it here
     // keeps the switch path consistent with it.
     u32 prev_pid = BTF_READ(btf, prev, pid);
-    u32 next_pid = BTF_READ(btf, next, pid);
 
     // read the prev task cgroup details and push to ringbuf if new cgroup
-    u32 id = 0;
-    u64 serial_nr = 0;
-    struct task_group* prev_tg =
-        cgroup_attribution ? task_group_of(prev, btf, &id, &serial_nr) : NULL;
-    if (prev_tg) {
-        if (id < MAX_CGROUPS) {
-            prev_cgroup_id = id;
-
-            int ret = handle_new_cgroup_read(&prev_tg->css, id, serial_nr, &cgroup_serial_numbers,
-                                             &cgroup_info);
-
-            if (ret == 0) {
-                // New cgroup detected, zero the counters
-                u64 zero = 0;
-                bpf_map_update_elem(&cgroup_ivcsw, &prev_cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_vcsw, &prev_cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_runq_wait, &prev_cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_offcpu, &prev_cgroup_id, &zero, BPF_ANY);
-            }
-        }
+    if (cgroup_attribution) {
+        prev_cgroup_id = resolve_cgroup(prev, btf);
     }
 
     // if prev was TASK_RUNNING, calculate how long prev was running, increment hist
@@ -311,24 +363,8 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
     // - calculate how long next task was enqueued, update hist
 
     // read the next task cgroup details and push to ringbuf if new cgroup
-    struct task_group* next_tg =
-        cgroup_attribution ? task_group_of(next, btf, &id, &serial_nr) : NULL;
-    if (next_tg) {
-        if (id < MAX_CGROUPS) {
-            next_cgroup_id = id;
-
-            int ret = handle_new_cgroup_read(&next_tg->css, id, serial_nr, &cgroup_serial_numbers,
-                                             &cgroup_info);
-
-            if (ret == 0) {
-                // New cgroup detected, zero the counters
-                u64 zero = 0;
-                bpf_map_update_elem(&cgroup_ivcsw, &next_cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_vcsw, &next_cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_runq_wait, &next_cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_offcpu, &next_cgroup_id, &zero, BPF_ANY);
-            }
-        }
+    if (cgroup_attribution) {
+        next_cgroup_id = resolve_cgroup(next, btf);
     }
 
     if (next_pid) {
@@ -378,6 +414,72 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
                 *tsp = 0;
             }
         }
+    }
+
+    return next_cgroup_id;
+}
+
+
+// The migrations part of a switch. `next_cgroup_id` is next's cgroup when the
+// runqueue part already resolved it (`next_cgroup_known`); otherwise it is
+// resolved here, and only on a migration, as `cpu_migrations` did.
+static __always_inline void migrations_switch(struct task_struct* next, u32 next_pid, u32 cpu,
+                                              u32 next_cgroup_id, bool next_cgroup_known,
+                                              bool btf) {
+    // Skip kernel threads and idle task (pid 0)
+    if (next_pid == 0) {
+        return;
+    }
+
+    // find the last cpu the task ran on
+    u32* last_cpu_ptr = bpf_map_lookup_elem(&last_cpu, &next_pid);
+
+    // check the ptr and that the last cpu is known (it is stored one-indexed)
+    if (last_cpu_ptr && *last_cpu_ptr) {
+        // convert to zero-indexed
+        u32 old_cpu = *last_cpu_ptr - 1;
+
+        // check if this is a migration
+        if (old_cpu != cpu) {
+            u32 from_idx = old_cpu * COUNTER_GROUP_WIDTH + FROM;
+            u32 to_idx = cpu * COUNTER_GROUP_WIDTH + TO;
+
+            array_incr(&migrations_counts, from_idx);
+            array_incr(&migrations_counts, to_idx);
+
+            // handle per-cgroup accounting
+            if (cgroup_attribution) {
+                u32 cgroup_id = next_cgroup_known ? next_cgroup_id : resolve_cgroup(next, btf);
+                if (cgroup_id < MAX_CGROUPS) {
+                    array_incr(&cgroup_cpu_migrations, cgroup_id);
+                }
+            }
+        }
+    }
+
+    // store the current cpu for the next task (converted to one-indexed)
+    u32 stored = cpu + 1;
+    bpf_map_update_elem(&last_cpu, &next_pid, &stored, BPF_ANY);
+}
+
+// `btf` is a compile-time constant: true in the tp_btf program.
+static __always_inline int account__sched_switch(u64* ctx, bool btf) {
+    /* TP_PROTO(bool preempt, struct task_struct *prev,
+     *      struct task_struct *next)
+     */
+    struct task_struct* prev = (struct task_struct*)ctx[1];
+    struct task_struct* next = (struct task_struct*)ctx[2];
+
+    u32 processor_id = bpf_get_smp_processor_id();
+    u32 next_pid = BTF_READ(btf, next, pid);
+    u32 next_cgroup_id = MAX_CGROUPS;
+
+    if (runqueue) {
+        next_cgroup_id = runqueue_switch(prev, next, next_pid, processor_id, btf);
+    }
+
+    if (migrations) {
+        migrations_switch(next, next_pid, processor_id, next_cgroup_id, runqueue, btf);
     }
 
     return 0;

@@ -36,7 +36,7 @@ pub struct Sampler {
     task_attribution: Option<bool>,
     /// The parts of a sampler that merged several older ones, each on by
     /// default (`syscall`: `counts`, `latency`; `blockio`: `requests`,
-    /// `latency`). See `Config::part`.
+    /// `latency`; `scheduler`: `runqueue`, `migrations`). See `Config::part`.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     counts: Option<bool>,
@@ -46,6 +46,12 @@ pub struct Sampler {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     requests: Option<bool>,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[serde(default)]
+    runqueue: Option<bool>,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[serde(default)]
+    migrations: Option<bool>,
 }
 
 impl Sampler {
@@ -85,6 +91,12 @@ impl Sampler {
         if self.requests.is_some() {
             parts.push("requests");
         }
+        if self.runqueue.is_some() {
+            parts.push("runqueue");
+        }
+        if self.migrations.is_some() {
+            parts.push("migrations");
+        }
         parts
     }
 
@@ -95,6 +107,8 @@ impl Sampler {
             "counts" => self.counts,
             "latency" => self.latency,
             "requests" => self.requests,
+            "runqueue" => self.runqueue,
+            "migrations" => self.migrations,
             _ => None,
         }
     }
@@ -112,6 +126,8 @@ impl Sampler {
             "counts" => self.counts = Some(on),
             "latency" => self.latency = Some(on),
             "requests" => self.requests = Some(on),
+            "runqueue" => self.runqueue = Some(on),
+            "migrations" => self.migrations = Some(on),
             _ => unreachable!("no part named {part}"),
         }
     }

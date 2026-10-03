@@ -22,10 +22,6 @@ pub mod stats {
         include!("./linux/l3/stats.rs");
     }
 
-    mod migrations {
-        include!("./linux/migrations/stats.rs");
-    }
-
     mod perf {
         include!("./linux/perf/stats.rs");
     }

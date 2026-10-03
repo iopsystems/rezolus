@@ -59,7 +59,6 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "cpu_dtlb",
     "cpu_frequency",
     "cpu_l3",
-    "cpu_migrations",
     "cpu_perf",
     "cpu_power",
     "cpu_tlb_flush",
@@ -84,7 +83,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "network_interfaces",
     "network_traffic",
     "rezolus_rusage",
-    "scheduler_runqueue",
+    "scheduler",
     "syscall",
     "tcp_connect_latency",
     "tcp_packet_latency",
@@ -105,6 +104,8 @@ pub(crate) const MERGED_SAMPLERS: &[(&str, &str)] = &[
     ("syscall_latency", "syscall"),
     ("blockio_requests", "blockio"),
     ("blockio_latency", "blockio"),
+    ("scheduler_runqueue", "scheduler"),
+    ("cpu_migrations", "scheduler"),
 ];
 
 /// Explicit metric-name -> sampler mapping for metrics whose name cannot be
@@ -148,7 +149,7 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("cgroup_cpu_bandwidth_throttled_time", "cpu_bandwidth"),
     ("cgroup_cpu_cycles", "cpu_perf"),
     ("cgroup_cpu_instructions", "cpu_perf"),
-    ("cgroup_cpu_migrations", "cpu_migrations"),
+    ("cgroup_cpu_migrations", "scheduler"),
     ("cgroup_cpu_throttled", "cpu_bandwidth"),
     ("cgroup_cpu_throttled_time", "cpu_bandwidth"),
     ("cgroup_cpu_tlb_flush", "cpu_tlb_flush"),
@@ -159,9 +160,9 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("cgroup_pagecache_pages_added", "memory_pagecache"),
     ("cgroup_pagecache_read_bytes", "memory_pagecache"),
     ("cgroup_pagecache_reads", "memory_pagecache"),
-    ("cgroup_scheduler_context_switch", "scheduler_runqueue"),
-    ("cgroup_scheduler_offcpu", "scheduler_runqueue"),
-    ("cgroup_scheduler_runqueue_wait", "scheduler_runqueue"),
+    ("cgroup_scheduler_context_switch", "scheduler"),
+    ("cgroup_scheduler_offcpu", "scheduler"),
+    ("cgroup_scheduler_runqueue_wait", "scheduler"),
     ("cgroup_syscall", "syscall"),
     ("cgroup_xfs_log_wait_time", "xfs_log"),
     ("cgroup_xfs_log_waits", "xfs_log"),
@@ -181,6 +182,9 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("cpu_dram_energy", "cpu_power"),
     ("cpu_igpu_energy", "cpu_power"),
     ("cpu_instructions", "cpu_perf"),
+    // `cpu_migrations` is the `scheduler` sampler's, after the sampler of
+    // that name was merged into it.
+    ("cpu_migrations", "scheduler"),
     ("cpu_mperf", "cpu_frequency"),
     ("cpu_package_energy", "cpu_power"),
     ("cpu_platform_energy", "cpu_power"),
@@ -339,10 +343,6 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("rezolus_memory_page_faults", "rezolus_rusage"),
     ("rezolus_memory_page_reclaims", "rezolus_rusage"),
     ("rezolus_memory_usage_resident_set_size", "rezolus_rusage"),
-    ("scheduler_context_switch", "scheduler_runqueue"),
-    ("scheduler_discarded_samples", "scheduler_runqueue"),
-    ("scheduler_offcpu", "scheduler_runqueue"),
-    ("scheduler_running", "scheduler_runqueue"),
     ("sensor_cooling_state", "hw_sensors"),
     ("sensor_current", "hw_sensors"),
     ("sensor_fan_pwm", "hw_sensors"),
@@ -408,8 +408,8 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
 /// which one ran. Harvested by reading every `stats.rs` that declares
 /// `rezolus_bpf_run_count`; matches the "BPF-enabled samplers" list in
 /// `CLAUDE.md` (`blockio/blockio`,
-/// `cpu/{bandwidth,migrations,perf,tlb_flush,usage}`,
-/// `network/{interfaces,traffic}`, `scheduler/runqueue`,
+/// `cpu/{bandwidth,perf,tlb_flush,usage}`,
+/// `network/{interfaces,traffic}`, `scheduler/scheduler`,
 /// `syscall/syscall`,
 /// `tcp/{connect_latency,packet_latency,receive,retransmit,traffic}`) —
 /// cross-checked independently rather than assumed from that doc. Sorted
@@ -417,7 +417,6 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
 const BPF_SAMPLERS: &[&str] = &[
     "blockio",
     "cpu_bandwidth",
-    "cpu_migrations",
     "cpu_perf",
     "cpu_tlb_flush",
     "cpu_usage",
@@ -428,7 +427,7 @@ const BPF_SAMPLERS: &[&str] = &[
     "memory_writeback",
     "network_interfaces",
     "network_traffic",
-    "scheduler_runqueue",
+    "scheduler",
     "syscall",
     "tcp_connect_latency",
     "tcp_packet_latency",
@@ -647,7 +646,7 @@ mod tests {
     fn coverage_diffs_present_against_universe() {
         let mut present = BTreeSet::new();
         present.insert("cpu_usage".to_string());
-        present.insert("scheduler_runqueue".to_string());
+        present.insert("scheduler".to_string());
         present.insert("unattributed".to_string());
         // empty uncertainty sets preserve old (pre-inference) behavior.
         let c = build_coverage(
@@ -661,7 +660,7 @@ mod tests {
             c.subsystems_present,
             vec![
                 "cpu_usage".to_string(),
-                "scheduler_runqueue".to_string(),
+                "scheduler".to_string(),
                 "unattributed".to_string()
             ]
         );
@@ -688,9 +687,7 @@ mod tests {
             },
         );
         // pruned domains' samplers are excluded from absent...
-        assert!(!c
-            .subsystems_absent
-            .contains(&"scheduler_runqueue".to_string()));
+        assert!(!c.subsystems_absent.contains(&"scheduler".to_string()));
         assert!(!c.subsystems_absent.contains(&"blockio".to_string()));
         // ...but not fabricated into present either.
         assert!(c.subsystems_present.is_empty());

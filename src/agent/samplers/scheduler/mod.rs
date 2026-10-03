@@ -3,7 +3,5 @@ mod linux;
 
 #[cfg(not(target_os = "linux"))]
 mod stats {
-    mod runqueue {
-        include!("./linux/runqueue/stats.rs");
-    }
+    include!("./linux/scheduler/stats.rs");
 }

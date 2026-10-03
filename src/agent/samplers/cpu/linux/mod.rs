@@ -4,7 +4,6 @@ mod cores;
 mod dtlb;
 mod frequency;
 mod l3;
-mod migrations;
 mod perf;
 mod power;
 mod tlb_flush;

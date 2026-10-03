@@ -30,7 +30,8 @@
 /// v3: `syscall_counts` and `syscall_latency` are the one subsystem `syscall`,
 /// read from the old labels too (`context::MERGED_SAMPLERS`).
 /// v4: likewise `blockio_requests` and `blockio_latency` as `blockio`.
-pub const RECORD_SCHEMA_VERSION: u32 = 4;
+/// v5: likewise `scheduler_runqueue` and `cpu_migrations` as `scheduler`.
+pub const RECORD_SCHEMA_VERSION: u32 = 5;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -462,7 +463,7 @@ mod tests {
     fn record_wire_shape_is_pinned() {
         let v = serde_json::to_value(sample_record()).unwrap();
         let expected = serde_json::json!({
-            "schema_version": 4,
+            "schema_version": 5,
             "context": {
                 "source": "rezolus",
                 "agent_version": "1.2.3",

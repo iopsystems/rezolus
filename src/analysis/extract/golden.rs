@@ -61,8 +61,8 @@ fn snap_with_histograms(
 
 /// 121 snapshots at exactly 1s cadence (120s duration, interval 1.0):
 /// - `test_requests` (tcp_traffic): linear counter, +100/s -> constant rate
-/// - `test_stepped` (scheduler_runqueue): +10/s until t=60, +1000/s after
-/// - `test_depth` (scheduler_runqueue): constant gauge 5
+/// - `test_stepped` (scheduler): +10/s until t=60, +1000/s after
+/// - `test_depth` (scheduler): constant gauge 5
 fn build_fixture() -> (tempfile::TempDir, std::path::PathBuf) {
     let mut recorder = RezRecorder::new(
         [
@@ -94,14 +94,14 @@ fn build_fixture() -> (tempfile::TempDir, std::path::PathBuf) {
                     Counter::new(
                         "test_stepped".to_string(),
                         stepped,
-                        labels("test_stepped", "scheduler_runqueue"),
+                        labels("test_stepped", "scheduler"),
                     )
                     .with_window(window),
                 ],
                 vec![Gauge::new(
                     "test_depth".to_string(),
                     5,
-                    labels("test_depth", "scheduler_runqueue"),
+                    labels("test_depth", "scheduler"),
                 )
                 .with_window(window)],
             ),
@@ -274,7 +274,7 @@ mod tests {
         // sampler labels stamped
         assert_eq!(
             record.metrics[0].labels.get("sampler").map(String::as_str),
-            Some("scheduler_runqueue")
+            Some("scheduler")
         );
         // coverage: both fixture samplers present, e.g. blockio absent
         assert!(record
@@ -440,14 +440,14 @@ mod tests {
     /// means engine behavior changed — re-review the new capture before
     /// re-pasting; don't just make the test pass.
     const GOLDEN: &str = r#"{
-  "schema_version": 4,
+  "schema_version": 5,
   "context": {
     "source": "rezolus",
     "duration_s": 120.0,
     "sampling_interval_s": 1.0,
     "coverage": {
       "subsystems_present": [
-        "scheduler_runqueue",
+        "scheduler",
         "tcp_traffic"
       ],
       "subsystems_absent": [
@@ -458,7 +458,6 @@ mod tests {
         "cpu_dtlb",
         "cpu_frequency",
         "cpu_l3",
-        "cpu_migrations",
         "cpu_perf",
         "cpu_power",
         "cpu_tlb_flush",
@@ -498,7 +497,7 @@ mod tests {
       "name": "test_depth",
       "metric_type": "gauge",
       "labels": {
-        "sampler": "scheduler_runqueue"
+        "sampler": "scheduler"
       },
       "tier": "Summary",
       "status": "Constant",
@@ -538,7 +537,7 @@ mod tests {
       "name": "test_stepped",
       "metric_type": "counter",
       "labels": {
-        "sampler": "scheduler_runqueue"
+        "sampler": "scheduler"
       },
       "tier": "Full",
       "status": "Analyzed",

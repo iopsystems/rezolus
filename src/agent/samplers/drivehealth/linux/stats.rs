@@ -11,7 +11,7 @@ pub const MAX_DRIVES: usize = 64;
 // `include!`d directly on non-Linux platforms (see `drivehealth/mod.rs`'s
 // `#[cfg(not(target_os = "linux"))] mod stats` fallback) to keep metric
 // identity stable across platforms. Same cross-platform-name mechanism as
-// the BPF samplers (e.g. `cpu_migrations`'s `MIGRATIONS_ACQ`) — see
+// the BPF samplers (e.g. `cpu_tlb_flush`'s groups) — see
 // `crate::agent::samplers::bpf_sampler_name`'s doc comment.
 //
 /// ONE group for the entire drivehealth sweep: `read_all(&drives)` plus the

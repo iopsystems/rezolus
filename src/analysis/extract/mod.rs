@@ -604,7 +604,7 @@ mod tests {
     fn subsystem_of_infers_from_name_prefix_when_unlabeled() {
         assert_eq!(
             subsystem_of("scheduler_runqueue_latency", &[], true),
-            "scheduler_runqueue"
+            "scheduler"
         );
         assert_eq!(subsystem_of("cpu_usage", &[], true), "cpu_usage");
         assert_eq!(
@@ -622,6 +622,8 @@ mod tests {
             ("syscall_latency", "syscall"),
             ("blockio_requests", "blockio"),
             ("blockio_latency", "blockio"),
+            ("scheduler_runqueue", "scheduler"),
+            ("cpu_migrations", "scheduler"),
         ] {
             let labels = vec![BTreeMap::from([("sampler".to_string(), old.to_string())])];
             assert_eq!(subsystem_of("rezolus_bpf_run_time", &labels, true), merged);

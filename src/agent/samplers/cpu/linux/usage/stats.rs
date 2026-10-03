@@ -34,9 +34,9 @@ pub static SOFTIRQ_TIME_ACQ: AcquisitionGroup = AcquisitionGroup::new(
 // are the `cgroup_cpu_usage` metric family (distinguished by the `state`
 // label), and principle 18's like-entities rule collapses same-family
 // instances into one read section regardless of how many separate BPF maps
-// back them — the same rule that already collapses `scheduler_runqueue`'s
-// `cpu_counters()`-backed softirq breakdown and `syscall_latency`'s 16
-// op-class histograms (each its own map) into one group apiece.
+// back them — the same rule that already collapses the `scheduler` sampler's
+// `cpu_counters()`-backed counters and the `syscall` sampler's 17 op-class
+// latency histograms (each its own map) into one group apiece.
 // `CGROUP_CPU_USAGE_EXITED` is a distinct metric name (a subset quantity,
 // not another state of the same family — see its doc comment in this
 // file) and gets its own group. `TASK_CPU_USAGE` is a third, separate
