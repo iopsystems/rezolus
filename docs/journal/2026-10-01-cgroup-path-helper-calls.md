@@ -217,7 +217,7 @@ for another tool, with empty classic programs on both tracepoints. The old
 build is b98bfdee, from before #1392, with both syscall samplers on classic
 tracepoints. The new build is main after this change, with both on raw
 tracepoints. Both had `syscall_counts` and `syscall_latency` enabled, with
-`cgroup_attribution = false` on `syscall_counts` so the bodies match, and
+`cgroup_attribution = false` on `syscall_counts` so the cgroup path is out of both builds, and
 each condition ran five alternations of `perf bench syscall basic`
 (systemslab `01a10010-52d0-71c4-2f0f-66a2d2693e5d`). Time per syscall, from
 the mean throughput:
@@ -225,7 +225,7 @@ the mean throughput:
 | condition | ns per syscall | added by our agent |
 |---|---|---|
 | nothing attached | 157 | |
-| old, classic tracepoints | 542 | 386 |
+| old, classic tracepoints | 542 | 385 |
 | new, raw tracepoints | 460 | 304 |
 | `bpftrace` only | 374 | |
 | `bpftrace` and old | 576 | 202 |
@@ -233,7 +233,7 @@ the mean throughput:
 
 The explanation holds. The raw tracepoints cost our agent about the same
 with or without the other tracer: 304 and 323 ns. The classic tracepoints
-cost 386 ns alone and 202 ns beside `bpftrace`, whose 218 ns of its own
+cost 385 ns alone and 202 ns beside `bpftrace`, whose 217 ns of its own
 includes the record build and dispatch they then share. With Rezolus as the
 only syscall tracer, the move saves about 82 ns per syscall. With another
 tool's classic programs on the same tracepoints, it costs about 121 ns more.

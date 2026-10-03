@@ -1031,7 +1031,7 @@ bare-metal probe-cost bench for anything at request rate).
   decision pending. `syscall_counts` and `syscall_latency` attach to
   `sys_enter`/`sys_exit` as raw tracepoints (#1392, #1400). That saves about
   82 ns per syscall where Rezolus is the only syscall tracer and costs about
-  121 ns more where another tool keeps classic programs on those tracepoints,
+  121 ns more (measured in a KVM guest, both samplers on) where another tool keeps classic programs on those tracepoints,
   because classic programs share one trace-record build and dispatch
   (`docs/journal/2026-10-01-cgroup-path-helper-calls.md`, "The tracepoint move
   depends on what else is attached"). Options: keep raw; a config choice;
