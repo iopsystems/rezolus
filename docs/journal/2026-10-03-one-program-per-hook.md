@@ -57,15 +57,16 @@ with `bpftool prog loadall ... autoattach`, six alternations
 | empty programs | `sys_enter`, ns per syscall (median, range) | `sched_switch`, µs per pipe round trip (median, range) |
 |---|---|---|
 | 0 | 447 (441–524) | 7.58 (7.49–7.72) |
-| 1 | 475 (473–559) | 7.66 |
-| 2 | 503 (497–601) | 7.68 |
+| 1 | 475 (473–559) | 7.66 (7.57–7.73) |
+| 2 | 503 (497–601) | 7.68 (7.65–7.77) |
 | 4 | 599 (550–650) | 7.81 (7.76–8.11) |
 
 Only 0 against 4 separates outside the spread of the passes. Over that span
 a program costs 38 ns per syscall on `sys_enter`. On `sched_switch` it is at
 most 29 ns per program per switch: 230 ns per round trip for four programs,
-and a round trip is at least two switches. So 30–40 ns per program per event
-on bare metal, and 50–64 ns in the guest.
+and a round trip is at least two switches. So on bare metal a program costs
+38 ns per syscall on `sys_enter` and at most 29 ns per switch on
+`sched_switch`, and 50–64 ns per syscall in the guest.
 
 ## Decision
 
@@ -82,8 +83,9 @@ any of them. The maintainer preferred one sampler per hook family.
 | `scheduler` | `scheduler_runqueue`, `cpu_migrations` | one `sched_switch`, the two wakeups |
 
 Also considered: a dispatcher program per hook that tail-calls each
-sampler's program. It keeps the sampler code apart, but tail calls do not
-cross the `tp_btf`/`raw_tp` twins cleanly and cost a few nanoseconds each.
+sampler's program. It keeps the sampler code apart. It was not measured or
+prototyped, and was set aside because it keeps a program per sampler on the
+hook path, now behind a tail call instead of a dispatch.
 
 Left out of this effort:
 
@@ -92,8 +94,9 @@ Left out of this effort:
   read from user space. Folding it into `scheduler` would make that sampler
   own PMU events. `sched_switch` goes from three Rezolus programs to two.
 - **`ext4_journal` and `ext4_ops`.** `ext4_ops` is opt-in, and an O_DSYNC
-  write on delta's loop-mounted ext4 took 250–400 µs (systemslab
-  `01a0fcf6-7b9e-715a-6a63-3c0d6d56c249`), against 30–40 ns per dispatch.
+  write on delta's loop-mounted ext4 took 250–450 µs (20,000 writes in 5 and
+  8 s, timed to the second; systemslab `01a0fcf6-7b9e-715a-6a63-3c0d6d56c249`),
+  against tens of nanoseconds per dispatch.
 - **`tcp_destroy_sock`.** It fires once per socket close, and one of its two
   programs is a classic tracepoint, which has a different dispatch path.
 
@@ -102,8 +105,8 @@ Left out of this effort:
 - **Config.** `[samplers.syscall]` and the like are the new sections. Each
   part of a merged sampler has its own switch in the section (`counts`,
   `latency` and so on), so `syscall_latency`'s exit program can still be left
-  out, and its own `cgroup_attribution` where the old samplers each had one
-  (`scheduler_runqueue` and `cpu_migrations`). A config that still names an
+  out, and its own `cgroup_attribution` where the old sampler had one
+  (`syscall_counts`, `scheduler_runqueue` and `cpu_migrations`). A config that still names an
   old section is translated at load, with a warning, so that it keeps its
   meaning:
   - each part's switch is the old sampler's resolved enable (its own
@@ -123,7 +126,8 @@ Left out of this effort:
   `src/agent/samplers/mod.rs`), so each merged sampler's stats must sit
   under its module: `cpu_migrations`' metrics move from `cpu::linux` to
   `scheduler::linux`, or they resolve to `unattributed`. The static
-  `sampler = "..."` metadata in the old `stats.rs` files goes with them.
+  `sampler = "..."` metadata in the old `stats.rs` files is updated to the
+  new name.
 - **What is keyed on the sampler name.** Recordings from before and after
   read the same for anything queried by metric name. Not for what is keyed
   on `sampler`:
