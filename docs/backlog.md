@@ -1027,16 +1027,18 @@ bare-metal probe-cost bench for anything at request rate).
   the task's start slot) is the way to have both. Gaps entry, Deferred,
   "`ext4_ops` probe cost". The 2026-10-01 entry below found most of the
   path's cost in `bpf_probe_read_kernel()` calls; try that first.
-- **Syscall tracepoint type beside another syscall tracer** — Open,
-  decision pending. `syscall_counts` and `syscall_latency` attach to
-  `sys_enter`/`sys_exit` as raw tracepoints (#1392, #1400). That saves about
-  82 ns per syscall where Rezolus is the only syscall tracer and costs about
-  121 ns more (measured in a KVM guest, both samplers on) where another tool keeps classic programs on those tracepoints,
-  because classic programs share one trace-record build and dispatch
-  (`docs/journal/2026-10-01-cgroup-path-helper-calls.md`, "The tracepoint move
-  depends on what else is attached"). Options: keep raw; a config choice;
-  or pick at load by checking for classic programs already attached, which
-  misses a tracer that arrives later.
+- **Syscall tracepoint type beside another syscall tracer** — Decided
+  (2026-10-02): keep raw tracepoints, on the assumption that Rezolus is the
+  only syscall tracer. They save about 82 ns per syscall there and cost about
+  121 ns more beside another tool's classic programs (measured in a KVM
+  guest, both samplers on; `docs/journal/2026-10-01-cgroup-path-helper-calls.md`).
+- **One Rezolus program per hook** — Open, design decided. Merge the samplers
+  that share a hook into combined samplers with one program per hook:
+  `syscall` (`syscall_counts`, `syscall_latency`), `blockio`
+  (`blockio_latency`, `blockio_requests`), `scheduler`
+  (`scheduler_runqueue`, `cpu_migrations`). Each extra program costs 25–40 ns
+  per event on bare metal. Old config sections are translated at load with a
+  warning. `docs/journal/2026-10-03-one-program-per-hook.md`.
 - **Per-cgroup path: read the task group once, through BTF** — DONE.
   `syscall_counts` (#1392): its cgroup path went from 109–118 ns to 9–12 ns
   per syscall on bare metal. Every other sampler with a per-event cgroup
