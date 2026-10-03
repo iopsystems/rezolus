@@ -27,8 +27,47 @@ pub struct LiveReader {
     /// Which recording: the full label set of the one first opened.
     labels: BTreeMap<String, String>,
     current: RwLock<Arc<RezReader>>,
+    /// The file the current reader is known to read; `None` when that is
+    /// not known.
+    file: std::sync::Mutex<Option<FileId>>,
     /// What [`MetricsSource::filename`] reports, when not the archive's own.
     name: Option<String>,
+}
+
+/// The device and inode of a file. A file renamed over another, as
+/// `recording filter` does to its input, has a different one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileId(u64, u64);
+
+impl FileId {
+    /// The id of the file at `path`; `None` when it cannot be read, and on a
+    /// platform without inodes.
+    pub(crate) fn of(path: &Path) -> Option<FileId> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let m = std::fs::metadata(path).ok()?;
+            Some(FileId(m.dev(), m.ino()))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            None
+        }
+    }
+}
+
+/// Run `open` on the file at `path`, and return its result with the file's
+/// id when the file at `path` was the same before and after the open; `None`
+/// when it changed, or cannot be told. A reader opened from a path reads its
+/// tables from the path again on their first query, and refuses to once
+/// another file is there (see `Container::reopen`), so this is the only file
+/// the reader reads.
+pub fn open_file<T>(path: &Path, open: impl FnOnce() -> T) -> (T, Option<FileId>) {
+    let before = FileId::of(path);
+    let opened = open();
+    let after = FileId::of(path);
+    (opened, before.filter(|b| Some(*b) == after))
 }
 
 impl LiveReader {
@@ -47,12 +86,15 @@ impl LiveReader {
         selector: Option<BTreeMap<String, String>>,
         pool: Arc<BufferPool>,
     ) -> Result<Self, Error> {
-        let (labels, reader) = quiet(|| pick(path, selector.as_ref(), &pool))?;
+        let (picked, file) = open_file(path, || quiet(|| pick(path, selector.as_ref(), &pool)));
+        let (labels, reader) = picked?;
+        reader.keep_handover();
         Ok(Self {
             path: path.to_path_buf(),
             pool,
             labels,
             current: RwLock::new(Arc::new(reader)),
+            file: std::sync::Mutex::new(file),
             name: None,
         })
     }
@@ -73,11 +115,15 @@ impl LiveReader {
         reader: RezReader,
         pool: Arc<BufferPool>,
     ) -> Self {
+        reader.keep_handover();
         Self {
             path: path.to_path_buf(),
             pool,
             labels,
             current: RwLock::new(Arc::new(reader)),
+            // Which file `reader` read is not known, so the first refresh
+            // does not reuse it.
+            file: std::sync::Mutex::new(None),
             name: None,
         }
     }
@@ -93,21 +139,37 @@ impl LiveReader {
     /// Logging is off during the reopen, as for [`open`](Self::open). The
     /// recording is found again by the full label set it had when opened.
     ///
-    /// A reopen opens every recording of the archive and parses each table's
-    /// segment footers. Sealed segments' decoded blocks are found in the
-    /// shared `BufferPool`, which metriken-query keys by segment content from
-    /// 0.33.4. A caller refreshing several readers of one archive can open it
-    /// once and hand each its recording with [`replace`](Self::replace).
+    /// A reopen opens every recording of the archive and reads the catalog;
+    /// a table is built on its first query after the reopen, from the state
+    /// the previous reader saved for it when both reads were of the same
+    /// file (see [`replace`](Self::replace)). A caller
+    /// refreshing several readers of one archive can open it once and hand
+    /// each its recording with [`replace`](Self::replace).
     pub fn refresh(&self) -> Result<(), Error> {
-        let (_, reader) = quiet(|| pick_exact(&self.path, &self.labels, &self.pool))?;
-        self.replace(reader);
+        let (picked, file) = open_file(&self.path, || {
+            quiet(|| pick_exact(&self.path, &self.labels, &self.pool))
+        });
+        self.replace(picked?.1, file);
         Ok(())
     }
 
     /// Make `reader` the one queries go to. It must be a newer open of this
     /// reader's recording: the one labelled [`labels`](Self::labels) in the
-    /// archive at [`path`](Self::path).
-    pub fn replace(&self, reader: RezReader) {
+    /// archive at [`path`](Self::path). `file` is the file it read, as
+    /// [`open_file`] reports it.
+    ///
+    /// When `file` is the file the current reader read, `reader` starts
+    /// each table from the state the current reader saved for it
+    /// (`ArchiveReader::reuse_from`): a table whose previous reader saved
+    /// state reads only the segments sealed since and the live tail.
+    pub fn replace(&self, reader: RezReader, file: Option<FileId>) {
+        let mut current_file = self.file.lock().unwrap_or_else(|e| e.into_inner());
+        if file.is_some() && file == *current_file {
+            reader.reuse_from(&self.current());
+        } else {
+            reader.keep_handover();
+        }
+        *current_file = file;
         *self.current.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(reader);
     }
 

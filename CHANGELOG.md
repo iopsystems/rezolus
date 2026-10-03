@@ -21,6 +21,17 @@
 
 ### Changed
 
+- A live viewer, or a viewer following an archive file, reuses each
+  table's state across reopens (metriken-query 0.34.1, metriken-archive
+  0.3.3): the first query after a reopen reads only the segments sealed
+  since and the live tail. On a 30-minute recording of a per-task group it
+  took 2.7x a warm query, and takes 1.2-1.3x. Reuse needs the file at the
+  path to be the one the previous reader read; a file renamed over it, as
+  `recording filter` without `-o` does, is read afresh.
+- metriken-query 0.34.2: an aggregation with several groups advances them
+  together. On a 9.6-hour recording of a per-task group, `sum by (comm)
+  (irate(task_cpu_usage[5s]))` took 192 s (wide) or 423-603 s (long) and
+  takes 13-16 s.
 - **`scheduler_runqueue` and `cpu_migrations` are one sampler,
   `scheduler`,** with one program on `sched_switch` instead of two (and
   `cpu_perf`'s, which stays a sampler of its own). The migration count

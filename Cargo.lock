@@ -2252,9 +2252,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-archive"
-version = "0.3.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58b9b5e0dddc1b91995a33a369f40584dd0fd0dc73ac447ce3ab9ca72b36484b"
+checksum = "f0d1cc589b26ed0b4d20b0fe3a6430da5daf1a8f1d9df8a84bd0f083299f2cfb"
 dependencies = [
  "arrow",
  "bytes",
@@ -2312,12 +2312,13 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.34.0"
+version = "0.34.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fad0c0499e3b4d7de83048803c3e0b585fb81771d4ee53cc2a69e08d45ab4edb"
+checksum = "a9817972cd7c870e71340c7ab05f72ea32af01ffa0dd71e7477d3d3cc1f363c2"
 dependencies = [
  "arrow",
  "bytes",
+ "foldhash 0.2.0",
  "histogram",
  "lru",
  "metriken-exposition",
@@ -3067,7 +3068,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "6.0.0-alpha.26"
+version = "6.0.0-alpha.27"
 dependencies = [
  "allan",
  "anyhow",

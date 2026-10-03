@@ -135,9 +135,12 @@ fn from_catalog_path(
     let Some(container) = Container::of_path(path)? else {
         return Ok(None);
     };
+    // The reopen notes the file first, so a file swapped in before the
+    // catalog open below is refused on a table's first read.
+    let reopen = container.reopen(path);
     Ok(Some(ArchiveReader::from_catalog(
         container.open(path)?,
-        Some(container.reopen(path)),
+        Some(reopen),
         pool,
         Some(Arc::new(IdentityIndex)),
     )?))
