@@ -1,6 +1,6 @@
 # One Rezolus program per hook
 
-**Status: in progress. Steps 1 and 2, `syscall` and `blockio`, built and measured; `scheduler` remains.**
+**Status: done. All three steps built and measured: `syscall`, `blockio` and `scheduler`. `cpu_perf`, `tcp_destroy_sock` and the ext4 pair stay apart, as decided.**
 
 ## Goal
 
@@ -308,4 +308,85 @@ case.
 Against the GO criteria: same series, with the latency and size samples in
 the same proportion to operations as on main; the program time per
 completion halved; and only 6.12 and the `tp_btf` programs were run.
+
+## Step 3: `scheduler`
+
+`src/agent/samplers/scheduler/linux/scheduler/`: one BPF object with a
+`tp_btf`/`raw_tp` pair on `sched_switch` and on each wakeup. The switch
+program runs the runqueue part, which returns the next task's cgroup id, and
+then the migrations part, which reuses that id. With the runqueue part off,
+the migrations part resolves the id itself, and only on a migration, as
+`cpu_migrations` did. One `resolve_cgroup()` reads the task group, checks for
+a new cgroup and zeroes the per-cgroup counters of each part that is on. The
+two old samplers each kept their own serial map; now there is one, and every
+path that sees a new serial zeroes every enabled part. The migration counter
+map is `migrations_counts`, since `migrations` is the part's switch.
+
+The parts are `runqueue` and `migrations`. A part that is off leaves out its
+maps: `last_cpu` (16 MiB) for migrations, the three per-pid stamp arrays
+(32 MiB each) for the runqueue. Its groups are bounded, and the wakeup
+programs load only with the runqueue part. Each combination of parts has its
+own cgroup identity and ringbuf handler, so a new cgroup's labels go only to
+metrics that are backed. The migration groups are renamed
+`scheduler_migrations` and `scheduler_cgroup_migrations`, because a group's
+name starts with its sampler's. `cpu_perf` keeps its own program on
+`sched_switch`, so the hook goes from three Rezolus programs to two.
+
+Both old samplers had a `cgroup_attribution`, and the merged sampler has one.
+The translation takes each enabled part's value as its old sampler resolved
+it (its own section, else `[defaults]`, else on). If they differ the merged
+value is on, so no exported series disappears, and the difference is
+reported. The first version compared only explicit values, and the review
+found that `[samplers.cpu_migrations] cgroup_attribution = false`, the old
+packaged config's commented example, would then have dropped the runqueue
+part's per-cgroup series with no warning.
+
+Measured on delta against main, the `sched_switch` program time per switch
+(`bpf_stats`), five alternations of `perf bench sched pipe -l 500000` pinned
+to two CPUs (systemslab `01a102c3-1b62-71ee-0b50-fa8e6c935170`):
+
+| pipe CPUs | main (2 programs) | `scheduler` (1 program) | `scheduler` cheaper in |
+|---|---|---|---|
+| 8 and 9, separate cores | 177.2–188.8 ns | 163.1–174.5 ns | 5 of 5 pairs, by 13–20 ns |
+| 8 and 24, one core's two threads | 176.9–186.1 ns | 163.3–180.1 ns | 5 of 5 pairs, by 3–18 ns |
+
+On separate cores the pipe throughput was also higher in all five pairs, by
+0.4–1.3%. That is about 20 ns per switch, which includes the saved dispatch
+that `bpf_stats` does not time. Unpinned (CPUs 8–31), passes alternated
+between about 1.1 M and 2.2 M switches as the scheduler placed the two tasks,
+and the per-switch figures do not compare.
+
+The first run, unpinned, checked the counts and loaded each part
+(systemslab `01a102b6-0ea5-71f3-857a-c46e93993eb5`):
+
+| | main | `scheduler` |
+|---|---|---|
+| `cgroup_scheduler_context_switch` / `scheduler_context_switch` | 1.0000 | 1.0000 |
+| migrations from / to | 1.0000 | 1.0000 |
+| `cgroup_cpu_migrations` / migrations | 1.0000 | 1.0000–1.0005 |
+
+| config | wakeup programs added | maps checked | series with values |
+|---|---|---|---|
+| default | both | `last_cpu`, `migrations_counts`, `enqueued_at`, `runqlat`, `cgroup_info` | all ten |
+| `runqueue = false` | none | no `enqueued_at`, no `runqlat` | `cpu_migrations`, `cgroup_cpu_migrations` |
+| `migrations = false` | both | no `last_cpu`, no `migrations_counts` | the eight runqueue series |
+| `cgroup_attribution = false` | both | no `cgroup_info` | the six host-level series |
+| old sections, runqueue off | none | no `enqueued_at`, no `runqlat` | `cpu_migrations`, `cgroup_cpu_migrations` |
+
+delta's own agent has programs and maps of the same names, so the table gives
+what this agent added. Every case loaded healthy with `sampler="scheduler"`.
+The review loaded all twelve combinations of the switches and twins in a
+verifier on a 7.0 kernel; on delta only 6.12 and the `tp_btf` programs ran.
+
+Against the GO criteria: same series, with the per-cgroup and direction
+ratios as on main; cheaper in every pinned pair; and only 6.12 and 7.0, not
+the oldest kernel.
+
+## Outcome
+
+| hook | Rezolus programs before | after | measured on delta |
+|---|---|---|---|
+| `sys_enter` | 2 | 1 | median 26 ns per syscall cheaper in throughput |
+| `block_rq_complete` | 2 | 1 | program time per completion 202 to 98 ns |
+| `sched_switch` | 3 | 2 (`cpu_perf` stays) | 13–20 ns per switch cheaper in program time |
 

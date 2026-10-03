@@ -1032,14 +1032,15 @@ bare-metal probe-cost bench for anything at request rate).
   only syscall tracer. They save about 82 ns per syscall there and cost about
   121 ns more beside another tool's classic programs (measured in a KVM
   guest, both samplers on; `docs/journal/2026-10-01-cgroup-path-helper-calls.md`).
-- **One Rezolus program per hook** — In progress: `syscall` and `blockio`
-  done; `scheduler` remains. Merge the samplers
-  that share a hook into combined samplers with one program per hook:
-  `syscall` (`syscall_counts`, `syscall_latency`), `blockio`
-  (`blockio_latency`, `blockio_requests`), `scheduler`
-  (`scheduler_runqueue`, `cpu_migrations`). Each extra program costs up to about
-  40 ns per event on bare metal. Old config sections are translated at load with a
-  warning. `docs/journal/2026-10-03-one-program-per-hook.md`.
+- **One Rezolus program per hook** — DONE. The samplers that shared a hook
+  were merged into combined samplers with one program per hook: `syscall`
+  (`syscall_counts`, `syscall_latency`), `blockio` (`blockio_latency`,
+  `blockio_requests`) and `scheduler` (`scheduler_runqueue`,
+  `cpu_migrations`). Each extra program had cost up to about 40 ns per event
+  on bare metal. Old config sections are translated at load with a warning.
+  `cpu_perf`'s `sched_switch` program, `tcp_destroy_sock` and the ext4
+  pair stay apart, as the entry decided.
+  `docs/journal/2026-10-03-one-program-per-hook.md`.
 - **Per-cgroup path: read the task group once, through BTF** — DONE.
   `syscall_counts` (#1392): its cgroup path went from 109–118 ns to 9–12 ns
   per syscall on bare metal. Every other sampler with a per-event cgroup
