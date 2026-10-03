@@ -201,7 +201,24 @@ impl Hindsight {
 
     /// [`try_start`](Self::try_start) with the output's extension, which
     /// picks the buffer's container: `rez` or `dendro`.
+    ///
+    /// The daemon exits at startup when its first scrape takes more than half
+    /// the interval. With a dozen daemons and wide stand-in agents running in
+    /// parallel in a debug build, CI's first scrape has taken 51 ms against
+    /// the 100 ms `INTERVAL`, so that exit is retried; any other is returned.
     fn try_start_as(agent: u16, segment_rows: usize, ext: &str) -> Result<Self, String> {
+        let mut attempt = 1;
+        loop {
+            match Self::try_start_once(agent, segment_rows, ext) {
+                Err(why) if attempt < 5 && why.contains("interval is too short") => {
+                    attempt += 1;
+                }
+                started => return started,
+            }
+        }
+    }
+
+    fn try_start_once(agent: u16, segment_rows: usize, ext: &str) -> Result<Self, String> {
         let dir = tempfile::tempdir().expect("failed to create a temp dir");
         let config = dir.path().join("hindsight.toml");
         let output = dir.path().join(format!("snapshot.{ext}"));
