@@ -299,7 +299,8 @@ the same names, so the table gives what this agent added:
 | `requests = false` | `block_rq_complete` | no `counters`, no `requeues` | the three latency phases |
 | old sections, `blockio_latency` off | `block_rq_complete`, `block_rq_requeue` | no latency histograms | `blockio_bytes`, `blockio_operations`, `blockio_size` |
 
-Every case loaded healthy with `sampler="blockio"`, and the old sections were
+The maps column checks four maps by name: `counters`, `requeues`, and two
+of the twelve latency histograms. Every case loaded healthy with `sampler="blockio"`, and the old sections were
 read with the two deprecation warnings. No errors or requeues occurred in
 the run, so `blockio_errors` and `blockio_requeues` had no values in any
 case.
