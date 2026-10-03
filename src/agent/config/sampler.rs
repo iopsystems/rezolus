@@ -35,13 +35,17 @@ pub struct Sampler {
     #[serde(default)]
     task_attribution: Option<bool>,
     /// The parts of a sampler that merged several older ones, each on by
-    /// default (`syscall`: `counts`, `latency`). See `Config::part`.
+    /// default (`syscall`: `counts`, `latency`; `blockio`: `requests`,
+    /// `latency`). See `Config::part`.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     counts: Option<bool>,
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     latency: Option<bool>,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[serde(default)]
+    requests: Option<bool>,
 }
 
 impl Sampler {
@@ -75,6 +79,7 @@ impl Sampler {
         match part {
             "counts" => self.counts,
             "latency" => self.latency,
+            "requests" => self.requests,
             _ => None,
         }
     }
@@ -91,6 +96,7 @@ impl Sampler {
         match part {
             "counts" => self.counts = Some(on),
             "latency" => self.latency = Some(on),
+            "requests" => self.requests = Some(on),
             _ => unreachable!("no part named {part}"),
         }
     }

@@ -115,7 +115,7 @@ fn build_fixture() -> (tempfile::TempDir, std::path::PathBuf) {
 }
 
 /// As `build_fixture`, but with a fourth metric: a histogram
-/// (`test_latency`, subsystem `blockio_latency`) incrementing a handful of
+/// (`test_latency`, subsystem `blockio`) incrementing a handful of
 /// values per snapshot so its quantile-over-time series varies. Kept
 /// separate from `build_fixture` so the golden/determinism/invariant tests
 /// above are unaffected if this attempt is ever pared back.
@@ -149,7 +149,7 @@ fn build_fixture_with_histogram() -> (tempfile::TempDir, std::path::PathBuf) {
                 vec![metriken_exposition::Histogram::new(
                     "test_latency".to_string(),
                     h,
-                    histogram_labels("test_latency", "blockio_latency"),
+                    histogram_labels("test_latency", "blockio"),
                 )
                 .with_window(window)],
             ),
@@ -276,7 +276,7 @@ mod tests {
             record.metrics[0].labels.get("sampler").map(String::as_str),
             Some("scheduler_runqueue")
         );
-        // coverage: both fixture samplers present, e.g. blockio_latency absent
+        // coverage: both fixture samplers present, e.g. blockio absent
         assert!(record
             .context
             .coverage
@@ -286,7 +286,7 @@ mod tests {
             .context
             .coverage
             .subsystems_absent
-            .contains(&"blockio_latency".to_string()));
+            .contains(&"blockio".to_string()));
         // selection accounting is consistent
         assert_eq!(
             record.selection.full_detail_count + record.selection.summary_count,
@@ -440,7 +440,7 @@ mod tests {
     /// means engine behavior changed — re-review the new capture before
     /// re-pasting; don't just make the test pass.
     const GOLDEN: &str = r#"{
-  "schema_version": 3,
+  "schema_version": 4,
   "context": {
     "source": "rezolus",
     "duration_s": 120.0,
@@ -451,8 +451,7 @@ mod tests {
         "tcp_traffic"
       ],
       "subsystems_absent": [
-        "blockio_latency",
-        "blockio_requests",
+        "blockio",
         "cpu_bandwidth",
         "cpu_branch",
         "cpu_cores",

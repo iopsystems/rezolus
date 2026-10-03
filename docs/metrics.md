@@ -87,8 +87,7 @@ default: see [cpu_usage](#cpu_usage).
 
 - [Per-cgroup and per-task series](#per-cgroup-and-per-task-series)
 - [Block I/O](#block-io)
-  - [blockio_latency](#blockio_latency)
-  - [blockio_requests](#blockio_requests)
+  - [blockio](#blockio)
 - [CPU](#cpu)
   - [cpu_bandwidth](#cpu_bandwidth)
   - [cpu_cores](#cpu_cores)
@@ -140,10 +139,16 @@ default: see [cpu_usage](#cpu_usage).
 
 Samplers for measuring how disk and storage devices are performing.
 
-### blockio_latency
+### blockio
 
-This sampler instruments the block I/O request queue to measure request latency
-distribution.
+This sampler traces block I/O request completion and requeue, with one
+program on each. It replaced the `blockio_requests` and `blockio_latency`
+samplers, which each had a program on `block_rq_complete` (see
+docs/journal/2026-10-03-one-program-per-hook.md); a config that still names
+them is read as `[samplers.blockio]`, with a warning. Its two parts are the
+options `requests` and `latency`, both on by default.
+
+The latency part measures the distribution of each phase of a request's life:
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
@@ -151,13 +156,10 @@ distribution.
 | `blockio_queue_latency` | Distribution of time requests spent queued before the device began servicing them, in nanoseconds. This is the component that grows under saturation, where device latency alone stays flat. A request that goes straight to the driver has no queue phase and records no sample, so on such a device the histogram is present but empty | `op={read,write,flush,discard}` |
 | `blockio_total_latency` | Distribution of end-to-end latency in nanoseconds, from the request entering the queue until it completed — queue and device together. Measured directly rather than summed, because two histograms cannot be added | `op={read,write,flush,discard}` |
 
-### blockio_requests
-
-This sampler instruments the block I/O request queue to get counts of requests,
-number of bytes by request type, and size distribution. These metrics help
-monitor I/O throughput and understand the characteristics of disk access
-patterns. This information is useful for storage system tuning, application
-optimization, and capacity planning.
+The requests part counts requests and bytes by request type and records the
+size distribution. These metrics help monitor I/O throughput and understand
+the characteristics of disk access patterns. This information is useful for
+storage system tuning, application optimization, and capacity planning.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|

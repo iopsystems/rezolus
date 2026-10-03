@@ -63,7 +63,7 @@ pub static SAMPLERS: [SamplerEntry] = [..];
 /// # Naming rule
 ///
 /// A group's `name` must be `<sampler>_<shortname>`, where `<sampler>` is
-/// the Linux sampler name (e.g. `"blockio_requests"`) and `<shortname>` is
+/// the Linux sampler name (e.g. `"blockio"`) and `<shortname>` is
 /// the map/builder-call it brackets (e.g. `"errors"`), UNLESS `<shortname>`
 /// is identical to `<sampler>` itself — a full duplicate that would stutter
 /// (`cpu_usage_cpu_usage`) — in which case use a short, unambiguous token

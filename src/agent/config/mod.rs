@@ -42,13 +42,22 @@ type MergedPart = (&'static str, &'static str, bool);
 /// Samplers that were merged into one, so that each kernel hook carries one
 /// Rezolus program (docs/journal/2026-10-03-one-program-per-hook.md): the new
 /// sampler and its old ones.
-const MERGED_SAMPLERS: &[(&str, &[MergedPart])] = &[(
-    "syscall",
-    &[
-        ("syscall_counts", "counts", true),
-        ("syscall_latency", "latency", false),
-    ],
-)];
+const MERGED_SAMPLERS: &[(&str, &[MergedPart])] = &[
+    (
+        "syscall",
+        &[
+            ("syscall_counts", "counts", true),
+            ("syscall_latency", "latency", false),
+        ],
+    ),
+    (
+        "blockio",
+        &[
+            ("blockio_requests", "requests", false),
+            ("blockio_latency", "latency", false),
+        ],
+    ),
+];
 
 fn listen() -> String {
     "0.0.0.0:4241".into()
@@ -379,6 +388,16 @@ mod tests {
         assert_eq!(w.len(), 1);
         assert!(w[0].contains("ignored"));
         assert!(c.part("syscall", "latency"));
+    }
+
+    #[test]
+    fn old_blockio_sections_are_translated() {
+        let mut c = config("[samplers.blockio_latency]\nenabled = false\n");
+        let w = c.translate_merged_samplers();
+        assert_eq!(w.len(), 1);
+        assert!(c.enabled("blockio"));
+        assert!(c.part("blockio", "requests"));
+        assert!(!c.part("blockio", "latency"));
     }
 
     /// The config the packages install (`config/agent.toml`, which the deb

@@ -216,7 +216,7 @@ Samplers live in `src/agent/samplers/{category}/`. Each sampler:
 
 Samplers with eBPF programs (Linux only) have a `mod.bpf.c` file alongside the Rust module. The BPF programs are compiled at build time by `build.rs`.
 
-BPF-enabled samplers: `blockio/{latency,requests}`, `cpu/{bandwidth,migrations,perf,tlb_flush,usage}`, `network/{interfaces,traffic}`, `scheduler/runqueue`, `syscall/syscall`, `tcp/{connect_latency,packet_latency,receive,retransmit,traffic}`.
+BPF-enabled samplers: `blockio/blockio`, `cpu/{bandwidth,migrations,perf,tlb_flush,usage}`, `network/{interfaces,traffic}`, `scheduler/runqueue`, `syscall/syscall`, `tcp/{connect_latency,packet_latency,receive,retransmit,traffic}`.
 
 ### eBPF Build System
 

@@ -52,8 +52,7 @@ use crate::analysis::record::{Context, Coverage};
 /// `src/agent/samplers/mod.rs` catches drift when samplers are added.
 /// (Deliberately excludes the synthetic `unattributed`.)
 pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
-    "blockio_latency",
-    "blockio_requests",
+    "blockio",
     "cpu_bandwidth",
     "cpu_branch",
     "cpu_cores",
@@ -104,6 +103,8 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
 pub(crate) const MERGED_SAMPLERS: &[(&str, &str)] = &[
     ("syscall_counts", "syscall"),
     ("syscall_latency", "syscall"),
+    ("blockio_requests", "blockio"),
+    ("blockio_latency", "blockio"),
 ];
 
 /// Explicit metric-name -> sampler mapping for metrics whose name cannot be
@@ -140,16 +141,6 @@ pub(crate) const MERGED_SAMPLERS: &[(&str, &str)] = &[
 /// the agent's own `attribute_sampler` calls `unattributed`, and samplers
 /// not registered on whatever platform compiled the test).
 pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
-    ("blockio_bytes", "blockio_requests"),
-    ("blockio_errors", "blockio_requests"),
-    ("blockio_operations", "blockio_requests"),
-    ("blockio_queue_latency", "blockio_latency"),
-    // None of the three phase metrics is prefix-recoverable: the sampler is
-    // `blockio_latency`, and no phase name starts with `blockio_latency_`.
-    ("blockio_device_latency", "blockio_latency"),
-    ("blockio_requeues", "blockio_requests"),
-    ("blockio_size", "blockio_requests"),
-    ("blockio_total_latency", "blockio_latency"),
     ("cgroup_cpu_bandwidth_period_duration", "cpu_bandwidth"),
     ("cgroup_cpu_bandwidth_periods", "cpu_bandwidth"),
     ("cgroup_cpu_bandwidth_quota", "cpu_bandwidth"),
@@ -416,7 +407,7 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
 /// baked into each BPF-backed `stats.rs`), so the name alone can't tell you
 /// which one ran. Harvested by reading every `stats.rs` that declares
 /// `rezolus_bpf_run_count`; matches the "BPF-enabled samplers" list in
-/// `CLAUDE.md` (`blockio/{latency,requests}`,
+/// `CLAUDE.md` (`blockio/blockio`,
 /// `cpu/{bandwidth,migrations,perf,tlb_flush,usage}`,
 /// `network/{interfaces,traffic}`, `scheduler/runqueue`,
 /// `syscall/syscall`,
@@ -424,8 +415,7 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
 /// cross-checked independently rather than assumed from that doc. Sorted
 /// alphabetically.
 const BPF_SAMPLERS: &[&str] = &[
-    "blockio_latency",
-    "blockio_requests",
+    "blockio",
     "cpu_bandwidth",
     "cpu_migrations",
     "cpu_perf",
@@ -676,7 +666,7 @@ mod tests {
             ]
         );
         // absent list is the known universe minus present, sorted; spot-check
-        assert!(c.subsystems_absent.contains(&"blockio_latency".to_string()));
+        assert!(c.subsystems_absent.contains(&"blockio".to_string()));
         assert!(!c.subsystems_absent.contains(&"cpu_usage".to_string()));
         assert!(!c.subsystems_absent.contains(&"unattributed".to_string()));
         let mut sorted = c.subsystems_absent.clone();
@@ -701,10 +691,7 @@ mod tests {
         assert!(!c
             .subsystems_absent
             .contains(&"scheduler_runqueue".to_string()));
-        assert!(!c.subsystems_absent.contains(&"blockio_latency".to_string()));
-        assert!(!c
-            .subsystems_absent
-            .contains(&"blockio_requests".to_string()));
+        assert!(!c.subsystems_absent.contains(&"blockio".to_string()));
         // ...but not fabricated into present either.
         assert!(c.subsystems_present.is_empty());
         // unrelated domains are unaffected.

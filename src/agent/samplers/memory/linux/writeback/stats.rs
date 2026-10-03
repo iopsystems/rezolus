@@ -15,7 +15,7 @@ static LATENCY_HISTOGRAM_MAX: u8 = 64;
 // Linux-only.
 //
 // Two groups (principle 18): every counter lives in one `counters` map read
-// in one sweep, as `blockio_requests` reads ops and bytes from one map; the
+// in one sweep, as `blockio` reads ops and bytes from one map; the
 // throttle histogram is its own family.
 pub static COUNTERS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("memory_writeback"),

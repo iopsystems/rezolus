@@ -15,11 +15,12 @@ static LATENCY_HISTOGRAM_MAX: u8 = 64;
 // identity stable across platforms, while `mod.rs`'s BPF sampler code is
 // Linux-only.
 //
-// Groups follow principle 18's like-entities rule as `blockio_latency` applies
-// it: the six commit-phase histograms are one family distinguished by the
-// `phase` label and share a group; the checkpoint and lock-stall histograms
-// are each their own family; every counter lives in one `counters` map read
-// in one sweep, as `blockio_requests` reads ops and bytes from one map.
+// Groups follow principle 18's like-entities rule as `blockio`'s latency
+// phases apply it: the six commit-phase histograms are one family
+// distinguished by the `phase` label and share a group; the checkpoint and
+// lock-stall histograms are each their own family; every counter lives in one
+// `counters` map read in one sweep, as `blockio` reads ops and bytes from one
+// map.
 pub static COMMIT_LATENCIES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("ext4_journal"),
     "ext4_journal_commit_latencies",

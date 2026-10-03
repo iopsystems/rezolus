@@ -21,6 +21,16 @@
 
 ### Changed
 
+- **`blockio_requests` and `blockio_latency` are one sampler, `blockio`,**
+  with one program on `block_rq_complete` instead of two; the request's
+  fields are read once, as direct loads where the kernel has BTF. Its parts
+  are the options `requests` and `latency` in `[samplers.blockio]`, both on
+  by default. A config that still names `[samplers.blockio_requests]` or
+  `[samplers.blockio_latency]` is read as `[samplers.blockio]` with a
+  warning. Metric names are unchanged; the `sampler` label, `rezolus status`,
+  `rezolus_bpf_run_time` and the archive table keys now say `blockio`.
+  `extract-features` reads the old sampler labels as `blockio`, and its
+  record is schema version 4.
 - **`syscall_counts` and `syscall_latency` are one sampler, `syscall`,** with
   one program on `sys_enter` and one on `sys_exit` instead of two programs on
   `sys_enter`; each program on a hook costs its own dispatch, measured at
