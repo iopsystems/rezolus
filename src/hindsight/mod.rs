@@ -516,16 +516,24 @@ pub fn run(config: Config) {
     if capture_failed {
         exit_flushed(1);
     }
+    // A static is never dropped, so returning from here would leave the
+    // capture's last lines in the writer's queue.
+    flush_log();
 }
 
 /// The log writer's guard. Logging is non-blocking, so a line logged just
-/// before `exit` is lost unless the guard is dropped first; `exit` runs no
-/// destructors.
+/// before the process ends is lost unless the guard is dropped first: `exit`
+/// runs no destructors, and a static is never dropped.
 static LOG_DRAIN: std::sync::Mutex<Option<LogDrain>> = std::sync::Mutex::new(None);
+
+/// Write out the queued log lines. Lines logged afterwards are discarded.
+fn flush_log() {
+    drop(LOG_DRAIN.lock().unwrap_or_else(|e| e.into_inner()).take());
+}
 
 /// Flush the log, then exit with `code`.
 fn exit_flushed(code: i32) -> ! {
-    drop(LOG_DRAIN.lock().unwrap_or_else(|e| e.into_inner()).take());
+    flush_log();
     std::process::exit(code);
 }
 

@@ -243,13 +243,18 @@ impl Hindsight {
         // spawns the listener — so `ready()` below waits for that separately.
         let mut log = BufReader::new(child.stderr.take().expect("stderr was piped"));
         let deadline = Instant::now() + Duration::from_secs(60);
+        // Every line so far, so a daemon that exits during startup says why.
+        let mut startup = String::new();
         let buffer = loop {
             let mut line = String::new();
             if log.read_line(&mut line).unwrap_or(0) == 0 {
                 let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("exited during startup; last line: {line:?}"));
+                let status = child.wait();
+                return Err(format!(
+                    "exited during startup ({status:?}); its stderr:\n{startup}"
+                ));
             }
+            startup.push_str(&line);
             if let Some(rest) = line.split(" in ").nth(1) {
                 if line.contains("buffering") {
                     break PathBuf::from(rest.trim());
