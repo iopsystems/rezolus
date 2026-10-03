@@ -137,7 +137,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div class="p-5 font-mono text-base leading-8">
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo systemctl start rezolus-hindsight</code></div>
 <div class="mt-3 text-slate-500 text-sm"># Trigger a snapshot on demand (signal or HTTP)</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo pkill -HUP -f rezolus-hindsight</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo systemctl kill -sHUP rezolus-hindsight</code></div>
 <div class="mt-3 text-slate-500 text-sm"># Or via the HTTP API for scripted triggers</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">curl -X POST http://localhost:4243/snapshot</code></div>
 </div>

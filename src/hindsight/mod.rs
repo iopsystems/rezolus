@@ -29,11 +29,18 @@ pub fn command() -> Command {
              ([general] interval, e.g. 1s), how far back the buffer reaches ([general] duration,\n\
              e.g. 15m), the agent to read from ([general] source), and the snapshot output path\n\
              ([general] output). See config/hindsight.toml for a documented starting point.\n\n\
-             TRIGGERING A SNAPSHOT: send SIGHUP to write the buffer to the output file without\n\
-             stopping the daemon. Optionally set [general] listen to enable an HTTP endpoint for\n\
-             remote status/dump requests instead. Either way the recording keeps running for the\n\
-             whole of the snapshot — a capture costs no samples, including the samples taken\n\
-             while it is being written.\n\n\
+             TRIGGERING A SNAPSHOT: send SIGHUP to write the buffer to a timestamped file beside\n\
+             the output path (rezolus-20260915T204500Z.rez for output rezolus.rez) without\n\
+             stopping the daemon. A SIGHUP during a capture is ignored. Optionally set\n\
+             [general] listen to enable an HTTP endpoint for remote status/dump requests;\n\
+             POST /dump/file writes the output path itself. Either way the recording keeps\n\
+             running for the whole of the snapshot — a capture costs no samples, including\n\
+             the samples taken while it is being written.\n\n\
+             STOPPING: SIGTERM or SIGINT (what systemctl stop and ctrl-c send) captures the\n\
+             buffer the same way, then exits with status 0, or 1 if that capture failed. A\n\
+             stop during a SIGHUP capture exits when that capture completes. A second stop\n\
+             exits at once with status 2, removing the buffer directory and abandoning the\n\
+             capture in progress.\n\n\
              EXAMPLE:\n    \
              # Run the rolling-buffer daemon using the example config\n    \
              rezolus hindsight config/hindsight.toml",
@@ -50,7 +57,8 @@ pub fn command() -> Command {
 
 /// Runs the Rezolus `flight-recorder`: a Rezolus client that pulls from the
 /// agent's msgpack endpoint and keeps a rolling `.rez` buffer covering the
-/// configured lookback. On SIGHUP it writes the buffer out to the output file.
+/// configured lookback. On SIGHUP it writes the buffer to a timestamped file
+/// beside the output path; on SIGTERM or SIGINT it does the same and exits.
 ///
 /// This is intended to be run as a daemon that allows retroactive collection of
 /// high-resolution metrics in the event of an anomaly. To be effective the
@@ -80,29 +88,12 @@ pub fn run(config: Config) {
         .build()
         .expect("failed to launch async runtime");
 
-    // Wakes the recording loop when a signal changes STATE, so a capture starts
-    // on the signal rather than on the next tick. The loop reads STATE itself —
-    // this only says "look again" — so a dropped or full channel costs nothing
-    // but the tick of latency the loop used to have anyway.
+    // Wakes the recording loop after a signal changes `signals::STATE`, so a
+    // capture starts without waiting for a tick. The loop reads the state
+    // itself; a full channel already holds a wake, so dropping another loses
+    // nothing.
     let (signal_tx, mut signal_rx) = tokio::sync::mpsc::channel::<()>(1);
-
-    ctrlc::set_handler(move || {
-        let state = STATE.load(Ordering::SeqCst);
-
-        if state == RUNNING {
-            info!("triggering buffer capture");
-            STATE.store(CAPTURING, Ordering::SeqCst);
-        } else if state == CAPTURING {
-            info!("waiting for capture to complete before exiting");
-            STATE.store(TERMINATING, Ordering::SeqCst);
-        } else {
-            info!("terminating immediately");
-            std::process::exit(2);
-        }
-
-        let _ = signal_tx.try_send(());
-    })
-    .expect("failed to set ctrl-c handler");
+    listen_for_signals(&rt, signal_tx);
 
     let url = config.general().url();
 
@@ -219,6 +210,7 @@ pub fn run(config: Config) {
             std::process::exit(1);
         }
     };
+    signals::set_buffer_dir(staging.path());
     let buffer_path = staging.path().join(if dendro {
         "hindsight.dendro"
     } else {
@@ -319,7 +311,10 @@ pub fn run(config: Config) {
         });
     }
 
-    rt.block_on(async move {
+    let capture_failed = rt.block_on(async move {
+        // The stop's capture failed: exit 1 rather than 0, so a supervisor
+        // can tell the buffer was not saved.
+        let mut capture_failed = false;
         let mut interval = crate::common::aligned_interval(interval_dur);
 
         // Dumps run OFF this loop — that is the whole shape of what follows.
@@ -337,7 +332,7 @@ pub fn run(config: Config) {
         // not one another dump renamed into place a moment later. Waiting for
         // the gate happens on the spawned task, so the loop keeps ticking.
         let dump_gate = Arc::new(tokio::sync::Mutex::new(()));
-        // The SIGHUP/ctrl-c capture, which has no caller to reply to: it
+        // The signal-triggered capture, which has no caller to reply to: it
         // reports back here so its completion is logged from the loop and the
         // state machine advances in one place.
         let (capture_tx, mut capture_rx) = tokio::sync::mpsc::channel::<DumpToFileResponse>(1);
@@ -375,12 +370,22 @@ pub fn run(config: Config) {
 
                 Some(response) = capture_rx.recv() => {
                     capturing = false;
-                    let terminating = STATE.load(Ordering::SeqCst) == TERMINATING;
-                    // Back to RUNNING BEFORE the log line, so a second signal
-                    // sent on seeing that line reads as a new capture rather
-                    // than as "terminate once the capture is done".
-                    if !terminating {
-                        STATE.store(RUNNING, Ordering::SeqCst);
+                    // Unless a stop was asked for, back to RUNNING BEFORE the
+                    // log line, so a signal sent on seeing that line is acted
+                    // on as a new request rather than as one made during the
+                    // capture. A compare-and-swap: the signal task runs on
+                    // another thread, and a stop it stored since must not be
+                    // overwritten.
+                    let terminating = signals::STATE
+                        .compare_exchange(
+                            signals::CAPTURING,
+                            signals::RUNNING,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        )
+                        .is_err();
+                    if terminating && response.error.is_some() {
+                        capture_failed = true;
                     }
                     log_capture(&response);
                     if terminating {
@@ -388,7 +393,8 @@ pub fn run(config: Config) {
                     }
                 }
 
-                // A signal changed STATE; the check below acts on it.
+                // A signal changed the signal state; the check below acts on
+                // it.
                 Some(_) = signal_rx.recv() => {}
 
                 _ = interval.tick() => {
@@ -444,18 +450,26 @@ pub fn run(config: Config) {
                 }
             }
 
-            // A SIGHUP / ctrl-c capture, started here and finished on the
-            // `capture_rx` arm above. The recording goes on running underneath
-            // it — the state stays CAPTURING so a second signal still means
-            // "exit when this finishes", but the loop is free the whole time.
+            // A signal-triggered capture (SIGHUP, or the capture a stop
+            // takes), started here and finished on the `capture_rx` arm above.
+            // The recording goes on running underneath it, and the loop is
+            // free the whole time. A SIGHUP during it is ignored; a stop
+            // during it exits when it completes.
             if !capturing {
-                let state = STATE.load(Ordering::SeqCst);
-                if state >= TERMINATING {
-                    // Signalled twice before the capture even began: the second
-                    // signal asked to stop, and there is nothing to wait for.
-                    break;
-                }
-                if state == CAPTURING {
+                let state = signals::STATE.load(Ordering::SeqCst);
+                if state != signals::RUNNING {
+                    // A capture was asked for and has not started. If a stop
+                    // was asked for too (STOPPING, or TERMINATING when it came
+                    // after a SIGHUP), this capture is the last: the loop exits
+                    // when it completes.
+                    if state == signals::STOPPING {
+                        let _ = signals::STATE.compare_exchange(
+                            signals::STOPPING,
+                            signals::TERMINATING,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        );
+                    }
                     capturing = true;
                     info!("capture in progress; the recording continues");
                     // NOT `output`. An HTTP dump writes there because its
@@ -491,10 +505,135 @@ pub fn run(config: Config) {
             info!("waiting for {} dump(s) in flight", dumps.len());
             while dumps.join_next().await.is_some() {}
         }
+        capture_failed
     });
 
-    // Only reached on a clean exit; the buffer directory goes with it.
+    // Reached once the loop has stopped. Dropping `staging` deletes the buffer
+    // directory, and the log drain flushes; both have to happen before `exit`,
+    // which runs no destructors.
     drop(staging);
+    if capture_failed {
+        drop(_log_drain);
+        std::process::exit(1);
+    }
+}
+
+/// Hindsight's signal state. Separate from `crate::STATE`, which the recorder
+/// uses.
+mod signals {
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Mutex;
+
+    /// The buffer directory, for a forced exit to remove.
+    static BUFFER_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+    pub fn set_buffer_dir(dir: &Path) {
+        *BUFFER_DIR.lock().unwrap_or_else(|e| e.into_inner()) = Some(dir.to_path_buf());
+    }
+
+    /// Remove the buffer directory, for an exit that skips destructors.
+    pub fn remove_buffer_dir() {
+        if let Some(dir) = BUFFER_DIR.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    /// What signals have asked of the daemon. Read and written by the signal
+    /// task and the recording loop.
+    pub static STATE: AtomicUsize = AtomicUsize::new(RUNNING);
+
+    /// Recording, with no capture asked for.
+    pub const RUNNING: usize = 0;
+    /// A capture was asked for (SIGHUP) or is in flight; recording continues
+    /// after it.
+    pub const CAPTURING: usize = 1;
+    /// A stop was asked for while a capture was asked for or in flight: exit
+    /// once that capture completes.
+    pub const TERMINATING: usize = 2;
+    /// A stop was asked for with no capture in flight: capture, then exit.
+    pub const STOPPING: usize = 3;
+}
+
+/// What a signal asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Request {
+    /// SIGHUP: capture the buffer and keep recording.
+    Capture,
+    /// SIGTERM or SIGINT: capture the buffer, then exit.
+    Stop,
+}
+
+/// Apply a signal to [`signals::STATE`]. A SIGHUP while a capture is pending
+/// or in progress is ignored. A stop while a capture is pending or in progress
+/// exits once that capture completes, and a second stop exits at once with
+/// status 2. The state changes by compare-and-swap, because the recording loop
+/// changes it from another thread.
+fn on_signal(request: Request) {
+    let mut from = signals::STATE.load(Ordering::SeqCst);
+    let applied = loop {
+        let to = match (request, from) {
+            (Request::Capture, signals::RUNNING) => signals::CAPTURING,
+            (Request::Stop, signals::RUNNING) => signals::STOPPING,
+            (Request::Stop, signals::CAPTURING) => signals::TERMINATING,
+            _ => break false,
+        };
+        match signals::STATE.compare_exchange(from, to, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => break true,
+            Err(now) => from = now,
+        }
+    };
+    match (request, applied, from) {
+        (Request::Capture, true, _) => {
+            info!("SIGHUP: capturing the buffer; the recording continues")
+        }
+        (Request::Capture, false, _) => {
+            info!("SIGHUP ignored: a capture is pending or in progress")
+        }
+        (Request::Stop, true, signals::RUNNING) => {
+            info!("stop requested: capturing the buffer, then exiting")
+        }
+        (Request::Stop, true, _) => {
+            info!("stop requested: exiting once the capture in progress completes")
+        }
+        (Request::Stop, false, _) => {
+            // `exit` runs no destructors and the log drain may not flush, so
+            // the buffer directory is removed here and the line goes straight
+            // to stderr.
+            eprintln!("second stop requested: exiting now");
+            signals::remove_buffer_dir();
+            std::process::exit(2);
+        }
+    }
+}
+
+/// Route SIGHUP to a capture and SIGTERM and SIGINT to a stop, waking the
+/// recording loop through `wake` after each.
+fn listen_for_signals(rt: &tokio::runtime::Runtime, wake: tokio::sync::mpsc::Sender<()>) {
+    use tokio::signal::unix::{signal, SignalKind};
+    let _guard = rt.enter();
+    let listen = |kind: SignalKind| {
+        signal(kind).unwrap_or_else(|e| {
+            error!("could not listen for signals: {e}");
+            std::process::exit(1);
+        })
+    };
+    let (mut hup, mut term, mut int) = (
+        listen(SignalKind::hangup()),
+        listen(SignalKind::terminate()),
+        listen(SignalKind::interrupt()),
+    );
+    rt.spawn(async move {
+        loop {
+            let request = tokio::select! {
+                _ = hup.recv() => Request::Capture,
+                _ = term.recv() => Request::Stop,
+                _ = int.recv() => Request::Stop,
+            };
+            on_signal(request);
+            let _ = wake.try_send(());
+        }
+    });
 }
 
 /// Write the buffer out to the configured output path.
@@ -537,7 +676,7 @@ fn shutdown_capture_path(output: &Path, now_ns: u64) -> PathBuf {
     output.with_file_name(name)
 }
 
-/// Report a SIGHUP / ctrl-c capture. It is the only trace such a capture
+/// Report a signal-triggered capture. It is the only trace such a capture
 /// leaves: there is no caller to answer, so a failure that is not logged here
 /// is a failure nobody ever hears about.
 fn log_capture(response: &DumpToFileResponse) {
