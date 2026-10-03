@@ -102,10 +102,8 @@ impl Config {
         for warning in config.translate_merged_samplers() {
             eprintln!("config: {warning}");
         }
-        for name in config.samplers.keys() {
-            if !crate::analysis::extract::context::EXPECTED_SUBSYSTEMS.contains(&name.as_str()) {
-                eprintln!("config: [samplers.{name}] names no known sampler and is ignored");
-            }
+        for warning in config.unknown_names() {
+            eprintln!("config: {warning}");
         }
 
         config.general.check();
@@ -182,6 +180,41 @@ impl Config {
             }
             section.set_enabled(any_on);
             self.samplers.insert(merged.to_string(), section);
+        }
+        warnings
+    }
+
+    /// A warning for each section that names no known sampler, and for each
+    /// part switch set on a sampler that has no such part (`counts` on
+    /// `blockio`, say), which would otherwise be ignored without a word.
+    fn unknown_names(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let mut names: Vec<&String> = self.samplers.keys().collect();
+        names.sort();
+        for name in names {
+            if !crate::analysis::extract::context::EXPECTED_SUBSYSTEMS.contains(&name.as_str()) {
+                warnings.push(format!(
+                    "[samplers.{name}] names no known sampler and is ignored"
+                ));
+                continue;
+            }
+            let valid: Vec<&str> = MERGED_SAMPLERS
+                .iter()
+                .find(|(merged, _)| merged == name)
+                .map(|(_, parts)| parts.iter().map(|(_, part, _)| *part).collect())
+                .unwrap_or_default();
+            for part in self.samplers[name].parts_set() {
+                if !valid.contains(&part) {
+                    warnings.push(format!(
+                        "[samplers.{name}] {part} is ignored: {name} has no part named {part}"
+                    ));
+                }
+            }
+        }
+        for part in self.defaults.parts_set() {
+            warnings.push(format!(
+                "[defaults] {part} is ignored: parts are set per sampler"
+            ));
         }
         warnings
     }
@@ -398,6 +431,17 @@ mod tests {
         assert!(c.enabled("blockio"));
         assert!(c.part("blockio", "requests"));
         assert!(!c.part("blockio", "latency"));
+    }
+
+    #[test]
+    fn unknown_sections_and_parts_are_reported() {
+        let c = config(
+            "[samplers.not_a_sampler]\nenabled = true\n[samplers.blockio]\ncounts = false\nlatency = false\n[samplers.syscall]\ncounts = false\n",
+        );
+        let w = c.unknown_names();
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(w[0].contains("blockio") && w[0].contains("counts"));
+        assert!(w[1].contains("not_a_sampler"));
     }
 
     /// The config the packages install (`config/agent.toml`, which the deb

@@ -1,6 +1,6 @@
 # One Rezolus program per hook
 
-**Status: in progress. Step 1, `syscall`, built and measured; `blockio` and `scheduler` remain.**
+**Status: in progress. Steps 1 and 2, `syscall` and `blockio`, built and measured; `scheduler` remains.**
 
 ## Goal
 
@@ -255,4 +255,56 @@ Against the GO criteria:
   the paired wins are the evidence.
 - Verifier on the oldest kernel: only 6.12 was run, and only the `tp_btf`
   programs.
+
+## Step 2: `blockio`
+
+`src/agent/samplers/blockio/linux/blockio/`: one BPF object with a
+`tp_btf`/`raw_tp` pair on `block_rq_complete` and on `block_rq_requeue`. The
+completion handler takes the timestamp first, reads the request's
+`cmd_flags` once, counts the request (ops, bytes, size, errors), then records
+the latency phases from the kernel's per-request timestamps. In the `tp_btf`
+program the request's fields are direct loads (`BTF_READ`); on main each of
+the two programs read them through `BPF_CORE_READ`, `blockio_latency` four
+fields and `blockio_requests` one. The parts are the switches `requests` and
+`latency`. With `requests` off the requeue programs are not loaded, and a
+part that is off leaves its maps out, as in step 1. Neither old sampler had
+a per-cgroup path.
+
+Measured on delta against main, three alternating passes of 200,000 direct
+4 KiB writes and reads on a loop device backed by tmpfs (systemslab
+`01a10297-7c33-712d-d81b-d09c124c998a`):
+
+| | main | `blockio` |
+|---|---|---|
+| programs on `block_rq_complete` | 2: 144.9–147.0 ns and 55.7–57.3 ns | 1: 97.0–99.2 ns |
+| program time per completion | 201.6–204.3 ns | 97.0–99.2 ns |
+| total, device and queue latency samples / operations | 1.0000, 0.9999, 0.9999 | 1.0000, 0.9999, 0.9999 |
+| size samples / operations | 0.9998–0.9999 | 0.9998–0.9999 |
+
+The program time halved. The reads are the likely reason: the two programs
+on main made five `bpf_probe_read_kernel()` calls per completion between
+them, and the merged `tp_btf` program makes none. Both old programs are
+named `block_rq_complete_btf`, so the run does not say which of the two
+costs was which sampler's. The dispatch saved, one per completion, is on top and is not in these
+numbers. A block IO costs microseconds, so neither saving was visible in the
+IO rate, which this run timed only to the second.
+
+Each part was loaded on delta. delta's own agent has programs and maps with
+the same names, so the table gives what this agent added:
+
+| config | programs added | maps checked | series with values |
+|---|---|---|---|
+| default | `block_rq_complete`, `block_rq_requeue` | `counters`, `requeues`, two latency histograms | the three latency phases, `blockio_bytes`, `blockio_operations`, `blockio_size` |
+| `latency = false` | `block_rq_complete`, `block_rq_requeue` | no latency histograms | `blockio_bytes`, `blockio_operations`, `blockio_size` |
+| `requests = false` | `block_rq_complete` | no `counters`, no `requeues` | the three latency phases |
+| old sections, `blockio_latency` off | `block_rq_complete`, `block_rq_requeue` | no latency histograms | `blockio_bytes`, `blockio_operations`, `blockio_size` |
+
+Every case loaded healthy with `sampler="blockio"`, and the old sections were
+read with the two deprecation warnings. No errors or requeues occurred in
+the run, so `blockio_errors` and `blockio_requeues` had no values in any
+case.
+
+Against the GO criteria: same series, with the latency and size samples in
+the same proportion to operations as on main; the program time per
+completion halved; and only 6.12 and the `tp_btf` programs were run.
 

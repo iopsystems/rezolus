@@ -613,6 +613,21 @@ mod tests {
         );
     }
 
+    /// A recording made before a merge carries the old sampler's name in its
+    /// `sampler` label; it reads as the merged sampler.
+    #[test]
+    fn subsystem_of_reads_merged_samplers_old_labels_as_the_new_name() {
+        for (old, merged) in [
+            ("syscall_counts", "syscall"),
+            ("syscall_latency", "syscall"),
+            ("blockio_requests", "blockio"),
+            ("blockio_latency", "blockio"),
+        ] {
+            let labels = vec![BTreeMap::from([("sampler".to_string(), old.to_string())])];
+            assert_eq!(subsystem_of("rezolus_bpf_run_time", &labels, true), merged);
+        }
+    }
+
     #[test]
     fn subsystem_of_longest_prefix_wins() {
         // blockio is a real sampler name; a metric name extending it with

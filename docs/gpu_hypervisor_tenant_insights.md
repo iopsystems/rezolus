@@ -31,8 +31,8 @@ become straightforward once Rezolus is collecting guest-side telemetry.
   my job is slow."
 
 ### Where the GPU is *waiting* (the host-side context the tenant can't see)
-- **Data-loading and I/O stalls.** `blockio_latency`, `blockio_requests`, and
-  `blockio_size` expose storage as the reason GPUs sit idle between steps.
+- **Data-loading and I/O stalls.** The `blockio` sampler's latency phases,
+  request counts and `blockio_size` expose storage as the reason GPUs sit idle between steps.
 - **CPU starvation feeding the GPU.** `cpu_usage`, `scheduler_runqueue` (runqueue
   latency), and `cpu_migrations` show when the data pipeline (augmentation,
   tokenization, collation) is CPU-bound and can't keep the accelerator fed.
@@ -76,7 +76,7 @@ capacity planning, oversubscription decisions, and fairness.
 
 ### Noisy-neighbor and contention detection
 - **Cross-tenant interference.** Correlating guest-side `scheduler_runqueue`
-  latency, `cpu_migrations`, `blockio_latency`, and `tcp_retransmit` with host
+  latency, `cpu_migrations`, block IO latency, and `tcp_retransmit` with host
   occupancy reveals when one tenant's behavior degrades a co-located tenant —
   something invisible from host counters alone.
 - **vCPU oversubscription health.** Runqueue latency on the guest is a direct

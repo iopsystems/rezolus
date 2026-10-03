@@ -73,6 +73,21 @@ impl Sampler {
         self.task_attribution
     }
 
+    /// The part switches this section sets, by name.
+    pub(super) fn parts_set(&self) -> Vec<&'static str> {
+        let mut parts = Vec::new();
+        if self.counts.is_some() {
+            parts.push("counts");
+        }
+        if self.latency.is_some() {
+            parts.push("latency");
+        }
+        if self.requests.is_some() {
+            parts.push("requests");
+        }
+        parts
+    }
+
     /// The switch for one part of a merged sampler, if the section sets it.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn part(&self, part: &str) -> Option<bool> {
