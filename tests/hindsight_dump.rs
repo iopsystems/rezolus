@@ -1416,14 +1416,14 @@ fn a_dump_opens_in_the_ordinary_rez_tools() {
 ///
 /// - **A short dump costs little or nothing**, because it is bounded by the
 ///   dump's duration and often lands entirely inside the space the file
-///   already has. Measured here across runs: a ~250-330 ms dump moved the
-///   sidecar by between **0 and 185 KB**, depending on how much headroom the
-///   log happened to have left when it started.
+///   already has. Measured here across runs: a ~130-220 ms dump moved the
+///   sidecar by **20-41 KB**, depending on how much headroom the log
+///   happened to have left when it started.
 /// - **A long one grows it at the writer's WAL byte rate** and keeps the space
-///   afterwards: on top of a 4.67 MB plateau, **+9.1 to +13.9 MB over ~2.2 s
-///   of continuous dumping (3.7-6.4 MB/s)** — a 3-4x sidecar — and **+0 B** in
-///   the second after the last dump returned, every run. The growth is
-///   `rate x duration` and stops dead when the read mark is released.
+///   afterwards: on top of a 4.78 MB plateau, **+2.7 to +9.4 MB over ~2.1 s
+///   of continuous dumping (1.3-4.3 MB/s)**, and **+0 to +21 KB** in the
+///   second after the last dump returned. The growth is `rate x duration`
+///   and stops when the read mark is released.
 ///
 /// The shape is asserted; the magnitude is reported, because it is not
 /// portable — it is the writer's WAL write rate, which depends on the host,
@@ -1447,6 +1447,13 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
     /// its configured rate; a failure here means the growth never happened, not
     /// that it was merely slow.
     const SUSTAINED_MAX: Duration = Duration::from_secs(60);
+    /// How far past its unpinned high-water the sidecar has to grow while
+    /// the read mark is held: 256 pages. Without a held mark it creeps by
+    /// one page in the same window (see the assertion below), so this
+    /// separates the two by two orders of magnitude, and it is a fixed size
+    /// rather than a fraction of the plateau, so a host that commits slowly
+    /// reaches it within the deadline.
+    const GROWTH: u64 = 1 << 20;
 
     let h = Hindsight::start(2, WIDE);
     let dir = tempfile::tempdir().unwrap();
@@ -1510,7 +1517,7 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
     // of the configured rate. A fixed window asserts the host's throughput; a
     // target with a generous deadline asserts the mechanism.
     let before = size();
-    let target = plateau + plateau / 2;
+    let target = plateau + GROWTH;
     let deadline = Instant::now() + SUSTAINED_MAX;
     let started = Instant::now();
     let (mut dumps, mut busy, mut longest_gap) = (0u32, Duration::ZERO, Duration::ZERO);
@@ -1600,15 +1607,14 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
          {held:?} window) — the read mark lapsed rather than being held across \
          the window"
     );
-    // Past the UNPINNED high-water, by half again. The threshold is what makes
+    // Past the UNPINNED high-water, by `GROWTH`. The threshold is what makes
     // this test mean anything: with the read mark removed the sidecar still
     // creeps — it went up by 4,120 B, one page, in the same window — because
     // each individual statement takes a brief mark of its own. `during >
     // before` is true of that too. What only a HELD mark can do is push the
-    // file past the size autocheckpoint would otherwise cap it at, and that is
-    // a factor of thousands away from a page, not a percentage.
+    // file past the size autocheckpoint would otherwise cap it at.
     assert!(
-        during >= plateau + plateau / 2,
+        during >= target,
         "the sidecar must grow past its unpinned high-water while a dump holds \
          the log open: plateau {plateau} B, {before} B before, {during} B \
          after {held:?} of dumps — either nothing was committed during them, \
