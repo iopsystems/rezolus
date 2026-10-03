@@ -222,8 +222,8 @@ pub(crate) fn validate_no_nulls(record: &OverviewRecord) -> Result<(), String> {
 /// 3. Name-prefix inference: the longest sampler name in
 ///    [`context::EXPECTED_SUBSYSTEMS`] that is a `_`-boundary prefix of the
 ///    metric name (an exact match, or `name.starts_with("{sampler}_")`).
-///    Longest match wins so e.g. a name starting with `blockio_latency_`
-///    prefers `blockio_latency` over a shorter unrelated match.
+///    Longest match wins, so a shorter sampler name that is also a prefix
+///    of the metric name does not.
 ///
 /// Falls back to `unattributed` when nothing disambiguates — a genuinely
 /// foreign/future metric name, an ambiguous one, or inference not trusted
@@ -613,14 +613,26 @@ mod tests {
         );
     }
 
+    /// A recording made before a merge carries the old sampler's name in its
+    /// `sampler` label; it reads as the merged sampler.
+    #[test]
+    fn subsystem_of_reads_merged_samplers_old_labels_as_the_new_name() {
+        for (old, merged) in [
+            ("syscall_counts", "syscall"),
+            ("syscall_latency", "syscall"),
+            ("blockio_requests", "blockio"),
+            ("blockio_latency", "blockio"),
+        ] {
+            let labels = vec![BTreeMap::from([("sampler".to_string(), old.to_string())])];
+            assert_eq!(subsystem_of("rezolus_bpf_run_time", &labels, true), merged);
+        }
+    }
+
     #[test]
     fn subsystem_of_longest_prefix_wins() {
-        // blockio_latency is a real sampler name; a metric name extending it
-        // with a further `_`-boundary suffix must still resolve to it.
-        assert_eq!(
-            subsystem_of("blockio_latency_p50", &[], true),
-            "blockio_latency"
-        );
+        // blockio is a real sampler name; a metric name extending it with
+        // further `_`-boundary suffixes must still resolve to it.
+        assert_eq!(subsystem_of("blockio_latency_p50", &[], true), "blockio");
     }
 
     #[test]
