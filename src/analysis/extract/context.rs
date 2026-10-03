@@ -179,12 +179,12 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("cpu_core_energy", "cpu_power"),
     ("cpu_cores_energy", "cpu_power"),
     ("cpu_cycles", "cpu_perf"),
-    // `cpu_migrations` is the `scheduler` sampler's, after the sampler of
-    // that name was merged into it.
-    ("cpu_migrations", "scheduler"),
     ("cpu_dram_energy", "cpu_power"),
     ("cpu_igpu_energy", "cpu_power"),
     ("cpu_instructions", "cpu_perf"),
+    // `cpu_migrations` is the `scheduler` sampler's, after the sampler of
+    // that name was merged into it.
+    ("cpu_migrations", "scheduler"),
     ("cpu_mperf", "cpu_frequency"),
     ("cpu_package_energy", "cpu_power"),
     ("cpu_platform_energy", "cpu_power"),

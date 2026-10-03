@@ -347,12 +347,13 @@ to two CPUs (systemslab `01a102c3-1b62-71ee-0b50-fa8e6c935170`):
 
 | pipe CPUs | main (2 programs) | `scheduler` (1 program) | `scheduler` cheaper in |
 |---|---|---|---|
-| 8 and 9, separate cores | 177.2–188.8 ns | 163.1–174.5 ns | 5 of 5 pairs, by 13–20 ns |
+| 8 and 9, separate cores | 177.2–188.8 ns | 163.1–174.5 ns | 5 of 5 pairs, by 9–18 ns |
 | 8 and 24, one core's two threads | 176.9–186.1 ns | 163.3–180.1 ns | 5 of 5 pairs, by 3–18 ns |
 
 On separate cores the pipe throughput was also higher in all five pairs, by
-0.4–1.3%. That is about 20 ns per switch, which includes the saved dispatch
-that `bpf_stats` does not time. Unpinned (CPUs 8–31), passes alternated
+0.4–1.3%: 33–110 ns per round trip (median 88), which includes the saved
+dispatch that `bpf_stats` does not time. A round trip made about 2.15
+switches in these passes. Unpinned (CPUs 8–31), passes alternated
 between about 1.1 M and 2.2 M switches as the scheduler placed the two tasks,
 and the per-switch figures do not compare.
 
@@ -388,5 +389,5 @@ the oldest kernel.
 |---|---|---|---|
 | `sys_enter` | 2 | 1 | median 26 ns per syscall cheaper in throughput |
 | `block_rq_complete` | 2 | 1 | program time per completion 202 to 98 ns |
-| `sched_switch` | 3 | 2 (`cpu_perf` stays) | 13–20 ns per switch cheaper in program time |
+| `sched_switch` | 3 | 2 (`cpu_perf` stays) | 3–18 ns per switch cheaper in program time, in every pinned pair |
 
