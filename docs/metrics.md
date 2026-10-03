@@ -19,10 +19,9 @@ host-level series are unchanged.
 | Sampler | `cgroup_attribution` default | Series it controls |
 |---|---|---|
 | `cpu_usage` | on | `cgroup_cpu_usage`, `cgroup_cpu_usage_exited_tasks` |
-| `cpu_migrations` | on | `cgroup_cpu_migrations` |
 | `cpu_perf` | on | `cgroup_cpu_cycles`, `cgroup_cpu_instructions` (off also drops the `sched_switch` program) |
 | `cpu_tlb_flush` | on | `cgroup_cpu_tlb_flush` |
-| `scheduler_runqueue` | on | `cgroup_scheduler_runqueue_wait`, `cgroup_scheduler_offcpu`, `cgroup_scheduler_context_switch` |
+| `scheduler` | on | `cgroup_scheduler_runqueue_wait`, `cgroup_scheduler_offcpu`, `cgroup_scheduler_context_switch`, `cgroup_cpu_migrations` |
 | `syscall` | on | `cgroup_syscall` |
 | `ext4_ops` | off | `cgroup_ext4_ops`, `cgroup_ext4_op_time` |
 | `xfs_log` | off | `cgroup_xfs_log_waits`, `cgroup_xfs_log_wait_time` |
@@ -93,7 +92,6 @@ default: see [cpu_usage](#cpu_usage).
   - [cpu_cores](#cpu_cores)
   - [cpu_frequency](#cpu_frequency)
   - [cpu_l3](#cpu_l3)
-  - [cpu_migrations](#cpu_migrations)
   - [cpu_perf](#cpu_perf)
   - [cpu_power](#cpu_power)
   - [cpu_tlb_flush](#cpu_tlb_flush)
@@ -122,7 +120,7 @@ default: see [cpu_usage](#cpu_usage).
   - [network_interfaces](#network_interfaces)
   - [network_traffic](#network_traffic)
 - [Scheduler](#scheduler)
-  - [scheduler_runqueue](#scheduler_runqueue)
+  - [scheduler](#scheduler-1)
 - [Hardware Sensors](#hardware-sensors)
 - [Syscall](#syscall)
   - [syscall](#syscall-1)
@@ -218,17 +216,6 @@ memory access patterns or programs competing for cache space.
 |--------|-------------|----------|
 | `cpu_l3_access` | The number of L3 cache access | |
 | `cpu_l3_miss` | The number of L3 cache miss | |
-
-### cpu_migrations
-
-Tracks when tasks move from one CPU to another. This is measured per-CPU with
-conditionality to track system dynamics and per-cgroup to understand which
-containers might be experiencing high rates of CPU migration.
-
-| Metric | Description | Metadata |
-|--------|-------------|----------|
-| `cpu_migration` | The number of CPU migrations | `direction={from,to}` |
-| `cgroup_cpu_migration` | The number of CPU migrations on a per-cgroup basis | `name`: the name of the cgroup |
 
 ### cpu_perf
 
@@ -1204,10 +1191,19 @@ responsiveness, throughput, and overall system performance. These metrics
 provide insights into how efficiently the scheduler is managing processes and
 CPU resources.
 
-### scheduler_runqueue
+### scheduler
 
-Instruments scheduler events and measures runqueue latency, process running
-time, and context switch information. These metrics help understand how long
+Instruments scheduler events, with one program on each scheduler hook, and
+measures runqueue latency, process running time, context switches and CPU
+migrations. It replaced the `scheduler_runqueue` and `cpu_migrations`
+samplers, which each had a program on `sched_switch` (see
+docs/journal/2026-10-03-one-program-per-hook.md); a config that still names
+them is read as `[samplers.scheduler]`, with a warning. Its two parts are the
+options `runqueue` and `migrations`, both on by default, and
+`cgroup_attribution` applies to both.
+
+The runqueue part measures runqueue latency, process running time, and
+context switch information. These metrics help understand how long
 processes wait before getting CPU time, how long they run once scheduled, and
 how frequently they're switched out. High runqueue latencies can indicate CPU
 contention or scheduling inefficiencies that directly impact application
@@ -1219,6 +1215,15 @@ performance and responsiveness.
 | `scheduler_running` | Distribution of the amount of time tasks were on-CPU | |
 | `scheduler_offcpu` | Distribution of the amount of time tasks were off-CPU | |
 | `scheduler_context_switch` | The number of involuntary context switches | `kind=involuntary` |
+
+The migrations part tracks when tasks move from one CPU to another, per CPU
+and per cgroup, to show which containers might be experiencing high rates of
+CPU migration.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `cpu_migration` | The number of CPU migrations | `direction={from,to}` |
+| `cgroup_cpu_migration` | The number of CPU migrations on a per-cgroup basis | `name`: the name of the cgroup |
 
 ## Hardware Sensors
 

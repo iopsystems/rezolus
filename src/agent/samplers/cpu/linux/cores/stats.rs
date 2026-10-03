@@ -7,7 +7,7 @@ use linkme::distributed_slice;
 // directly on non-Linux platforms (see `cpu/mod.rs`'s
 // `#[cfg(not(target_os = "linux"))] pub mod stats` fallback) to keep metric
 // identity stable across platforms. Same cross-platform-name mechanism as
-// the BPF samplers in this family (e.g. `cpu_migrations`'s `MIGRATIONS_ACQ`)
+// the BPF samplers in this family (e.g. `cpu_tlb_flush`'s groups)
 // — see `crate::agent::samplers::bpf_sampler_name`'s doc comment.
 //
 /// Brackets the single `/sys/devices/system/cpu/online` read + parse (single

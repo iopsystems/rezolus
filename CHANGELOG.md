@@ -21,6 +21,21 @@
 
 ### Changed
 
+- **`scheduler_runqueue` and `cpu_migrations` are one sampler,
+  `scheduler`,** with one program on `sched_switch` instead of two (and
+  `cpu_perf`'s, which stays a sampler of its own). The migration count reuses
+  the runqueue part's read of the next task's cgroup. Its parts are the
+  options `runqueue` and `migrations` in `[samplers.scheduler]`, both on by
+  default, and `cgroup_attribution` applies to both. A config that still
+  names `[samplers.scheduler_runqueue]` or `[samplers.cpu_migrations]` is
+  read as `[samplers.scheduler]` with a warning; if the two old sections set
+  `cgroup_attribution` differently, the first is used and the second
+  reported. Metric names are unchanged; the `sampler` label, `rezolus
+  status`, `rezolus_bpf_run_time` and the archive table keys now say
+  `scheduler`, and the migration acquisition groups are named
+  `scheduler_migrations` and `scheduler_cgroup_migrations`.
+  `extract-features` reads the old sampler labels as `scheduler`, and its
+  record is schema version 5.
 - **`blockio_requests` and `blockio_latency` are one sampler, `blockio`,**
   with one program on `block_rq_complete` instead of two; the request's
   fields are read once, as direct loads where the kernel has BTF. Its parts

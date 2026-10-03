@@ -199,10 +199,6 @@ enabled = true
 # Performance counter based sampler that gathers L3 cache accesses and misses.
 [samplers.cpu_l3]
 
-# Instruments CPU migrations.
-[samplers.cpu_migrations]
-# cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
-
 # Instruments CPU frequency, instructions, and cycles using perf counters.
 # The per-cgroup series read the counters on every context switch, which on a
 # VM with an emulated PMU is a hypervisor exit per read; set
@@ -382,8 +378,12 @@ enabled = false
 [samplers.rezolus_rusage]
 
 # BPF sampler that instruments scheduler events and measures runqueue latency,
-# process running time, and context switch information.
-[samplers.scheduler_runqueue]
+# process running time, context switches and CPU migrations, with one program
+# on each scheduler hook. Replaces `scheduler_runqueue` and `cpu_migrations`;
+# a config that still names them is read as this section, with a warning.
+[samplers.scheduler]
+# runqueue = false             # drop runqueue latency, running and off-cpu time, context switches
+# migrations = false           # drop the CPU migration counts
 # cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
 
 # Read-only Linux thermal, hwmon and cooling-device telemetry: temperatures,

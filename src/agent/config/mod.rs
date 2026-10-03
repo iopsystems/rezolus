@@ -57,6 +57,13 @@ const MERGED_SAMPLERS: &[(&str, &[MergedPart])] = &[
             ("blockio_latency", "latency", false),
         ],
     ),
+    (
+        "scheduler",
+        &[
+            ("scheduler_runqueue", "runqueue", true),
+            ("cpu_migrations", "migrations", true),
+        ],
+    ),
 ];
 
 fn listen() -> String {
@@ -164,7 +171,19 @@ impl Config {
                 if let Some(old_section) = old_section {
                     if let Some(attribution) = old_section.cgroup_attribution() {
                         if *attributes {
-                            section.set_cgroup_attribution(attribution);
+                            match section.cgroup_attribution() {
+                                // Two old samplers became parts of one, and
+                                // `cgroup_attribution` is the merged
+                                // sampler's: the first set wins.
+                                Some(earlier) if earlier != attribution => {
+                                    warnings.push(format!(
+                                        "[samplers.{old}] cgroup_attribution = {attribution} is \
+                                         ignored: [samplers.{merged}] has one setting for every \
+                                         part, taken as {earlier}"
+                                    ));
+                                }
+                                _ => section.set_cgroup_attribution(attribution),
+                            }
                         } else {
                             warnings.push(format!(
                                 "[samplers.{old}] cgroup_attribution is ignored: {old} had no \
@@ -278,8 +297,8 @@ impl Config {
     /// off). The request-path samplers read it this way (`ext4_ops`,
     /// `xfs_log`, `memory_pagecache`): with it off, the `cgroup_*` series are
     /// absent and the path is not in the loaded program. The samplers whose
-    /// per-cgroup series predate the option (`cpu_usage`, `cpu_migrations`,
-    /// `cpu_perf`, `cpu_tlb_flush`, `scheduler_runqueue`, `syscall`)
+    /// per-cgroup series predate the option (`cpu_usage`, `cpu_perf`,
+    /// `cpu_tlb_flush`, `scheduler`, `syscall`)
     /// default it on; see `cgroup_attribution_or`.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn cgroup_attribution(&self, name: &str) -> bool {
@@ -421,6 +440,26 @@ mod tests {
         assert_eq!(w.len(), 1);
         assert!(w[0].contains("ignored"));
         assert!(c.part("syscall", "latency"));
+    }
+
+    #[test]
+    fn old_scheduler_sections_are_translated() {
+        let mut c = config("[samplers.cpu_migrations]\nenabled = false\n");
+        c.translate_merged_samplers();
+        assert!(c.enabled("scheduler"));
+        assert!(c.part("scheduler", "runqueue"));
+        assert!(!c.part("scheduler", "migrations"));
+
+        // Both old samplers had a cgroup_attribution; the merged sampler has
+        // one, the first set, and a conflicting second is reported.
+        let mut c = config(
+            "[samplers.scheduler_runqueue]\ncgroup_attribution = false\n[samplers.cpu_migrations]\ncgroup_attribution = true\n",
+        );
+        let w = c.translate_merged_samplers();
+        assert!(!c.cgroup_attribution_or("scheduler", true));
+        assert!(w
+            .iter()
+            .any(|w| w.contains("cgroup_attribution = true is ignored")));
     }
 
     #[test]

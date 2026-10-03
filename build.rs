@@ -118,7 +118,6 @@ mod bpf {
     const SOURCES: &[(&str, &str)] = &[
         ("blockio", "blockio"),
         ("cpu", "bandwidth"),
-        ("cpu", "migrations"),
         ("cpu", "perf"),
         ("cpu", "tlb_flush"),
         ("cpu", "usage"),
@@ -129,7 +128,7 @@ mod bpf {
         ("memory", "writeback"),
         ("network", "interfaces"),
         ("network", "traffic"),
-        ("scheduler", "runqueue"),
+        ("scheduler", "scheduler"),
         ("syscall", "syscall"),
         ("tcp", "connect_latency"),
         ("tcp", "packet_latency"),

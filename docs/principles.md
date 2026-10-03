@@ -763,9 +763,11 @@ land, items are ticked off or removed; new drift gets added.
 Combine separate samplers that share a hook to halve the
 entry/exit tax:
 
-- `sched_switch`: `cpu/migrations` + `cpu/perf` + `scheduler/runqueue`
-  (3 attaches → 1 sampler with a shared probe). Planned as `scheduler`
-  (`scheduler_runqueue` + `cpu_migrations`), leaving `cpu_perf` apart.
+- ~~`sched_switch`: `cpu/migrations` + `cpu/perf` + `scheduler/runqueue`
+  (3 attaches → 1 sampler with a shared probe).~~ Done as the `scheduler`
+  sampler (`scheduler_runqueue` + `cpu_migrations`, 3 attaches → 2).
+  `cpu_perf` stays apart: its program exists only for per-cgroup cycles and
+  instructions, and the rest of it is per-CPU perf counters.
 - ~~`block_rq_complete`: `blockio/latency` + `blockio/requests` (2 → 1).~~
   Done: the `blockio` sampler.
 - ~~`sys_enter` / `sys_exit`: `syscall/latency` + `syscall/counts` (2+2

@@ -14,7 +14,7 @@ use linkme::distributed_slice;
 /// Brackets the `counters` cpu_counters refresh (single writer: this
 /// sampler's own BPF refresh path).
 pub static COUNTERS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("scheduler_runqueue"),
+    crate::agent::samplers::bpf_sampler_name("scheduler"),
     "scheduler_runqueue_counters",
 );
 
@@ -24,15 +24,15 @@ static COUNTERS_ACQ_REG: &'static AcquisitionGroup = &COUNTERS_ACQ;
 /// One group per histogram map read (each `Histogram` reads exactly one
 /// BPF map per refresh, so there is no multi-map section to share).
 pub static RUNQLAT_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("scheduler_runqueue"),
+    crate::agent::samplers::bpf_sampler_name("scheduler"),
     "scheduler_runqueue_runqlat",
 );
 pub static RUNNING_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("scheduler_runqueue"),
+    crate::agent::samplers::bpf_sampler_name("scheduler"),
     "scheduler_runqueue_running",
 );
 pub static OFFCPU_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("scheduler_runqueue"),
+    crate::agent::samplers::bpf_sampler_name("scheduler"),
     "scheduler_runqueue_offcpu",
 );
 
@@ -52,15 +52,15 @@ static OFFCPU_ACQ_REG: &'static AcquisitionGroup = &OFFCPU_ACQ;
 // `cgroup_scheduler_runqueue_wait`/`cgroup_scheduler_offcpu` are distinct
 // families and keep their own groups.
 pub static CGROUP_WAIT_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
-    crate::agent::samplers::bpf_sampler_name("scheduler_runqueue"),
+    crate::agent::samplers::bpf_sampler_name("scheduler"),
     "scheduler_runqueue_cgroup_wait",
 );
 pub static CGROUP_OFFCPU_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
-    crate::agent::samplers::bpf_sampler_name("scheduler_runqueue"),
+    crate::agent::samplers::bpf_sampler_name("scheduler"),
     "scheduler_runqueue_cgroup_offcpu",
 );
 pub static CGROUP_CONTEXT_SWITCH_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
-    crate::agent::samplers::bpf_sampler_name("scheduler_runqueue"),
+    crate::agent::samplers::bpf_sampler_name("scheduler"),
     "scheduler_runqueue_cgroup_context_switch",
 );
 
@@ -78,14 +78,14 @@ static CGROUP_CONTEXT_SWITCH_ACQ_REG: &'static AcquisitionGroup = &CGROUP_CONTEX
 #[metric(
     name = "rezolus_bpf_run_count",
     description = "The number of times Rezolus BPF programs have been run",
-    metadata = { sampler = "scheduler_runqueue"}
+    metadata = { sampler = "scheduler"}
 )]
 pub static BPF_RUN_COUNT: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "rezolus_bpf_run_time",
     description = "The amount of time Rezolus BPF programs have been executing",
-    metadata = { unit = "nanoseconds", sampler = "scheduler_runqueue"}
+    metadata = { unit = "nanoseconds", sampler = "scheduler"}
 )]
 pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
 
@@ -174,3 +174,51 @@ pub static CGROUP_SCHEDULER_IVCSW: CounterGroup = CounterGroup::new(MAX_CGROUPS)
     metadata = { kind = "voluntary", acq_group = "scheduler_runqueue_cgroup_context_switch" }
 )]
 pub static CGROUP_SCHEDULER_VCSW: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+
+// The `scheduler` sampler replaced `scheduler_runqueue` and `cpu_migrations`.
+// The runqueue groups keep their names; the migration groups are renamed from
+// `cpu_migrations_*`, since a group's name starts with its sampler's.
+/// Brackets the `migrations` cpu_counters refresh (single writer: this
+/// sampler's own BPF refresh path).
+pub static MIGRATIONS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    crate::agent::samplers::bpf_sampler_name("scheduler"),
+    "scheduler_migrations",
+);
+
+// Reader-stamped (mmap-direct `PackedCounters`) group for the per-cgroup
+// migration count — see `docs/principles.md` principle 18 and
+// `crate::agent::timing::AcquisitionGroup::set_reader_stamped`.
+pub static CGROUP_MIGRATIONS_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+    crate::agent::samplers::bpf_sampler_name("scheduler"),
+    "scheduler_cgroup_migrations",
+);
+
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static MIGRATIONS_ACQ_REG: &'static AcquisitionGroup = &MIGRATIONS_ACQ;
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static CGROUP_MIGRATIONS_ACQ_REG: &'static AcquisitionGroup = &CGROUP_MIGRATIONS_ACQ;
+
+/*
+ * migrations
+ */
+
+#[metric(
+    name = "cpu_migrations",
+    description = "The number of process CPU migrations",
+    metadata = { direction = "from", acq_group = "scheduler_migrations" }
+)]
+pub static CPU_MIGRATIONS_FROM: CounterGroup = CounterGroup::new(MAX_CPUS);
+
+#[metric(
+    name = "cpu_migrations",
+    description = "The number of process CPU migrations",
+    metadata = { direction = "to", acq_group = "scheduler_migrations" }
+)]
+pub static CPU_MIGRATIONS_TO: CounterGroup = CounterGroup::new(MAX_CPUS);
+
+#[metric(
+    name = "cgroup_cpu_migrations",
+    description = "The number of times a process in a cgroup migrated from one CPU to another",
+    metadata = { acq_group = "scheduler_cgroup_migrations" }
+)]
+pub static CGROUP_CPU_MIGRATIONS: CounterGroup = CounterGroup::new(MAX_CGROUPS);
