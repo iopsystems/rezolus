@@ -79,7 +79,8 @@ pub fn command() -> Command {
 pub fn run(config: Config) {
     let config: Arc<Config> = config.into();
 
-    let _log_drain = configure_logging(config.log().level().to_tracing_level());
+    *LOG_DRAIN.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some(configure_logging(config.log().level().to_tracing_level()));
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -101,7 +102,7 @@ pub fn run(config: Config) {
         Ok(c) => c,
         Err(e) => {
             error!("error connecting to Rezolus: {e}");
-            std::process::exit(1);
+            exit_flushed(1);
         }
     };
 
@@ -153,7 +154,7 @@ pub fn run(config: Config) {
         Ok(c) => c,
         Err(e) => {
             error!("error connecting to Rezolus: {e}");
-            std::process::exit(1);
+            exit_flushed(1);
         }
     };
 
@@ -169,7 +170,7 @@ pub fn run(config: Config) {
         .open(&output)
     {
         error!("failed to open destination file: {e}");
-        std::process::exit(1);
+        exit_flushed(1);
     }
     // A `.dendro` output selects a dendro buffer, written through
     // metriken-archive; anything else is a `.rez` buffer, as before. Opt-in,
@@ -197,7 +198,7 @@ pub fn run(config: Config) {
              `StateDirectory=rezolus`.",
             buffer_dir.display()
         );
-        std::process::exit(1);
+        exit_flushed(1);
     }
 
     // The buffer lives in a private directory inside it, so its `-wal`/`-shm`
@@ -207,7 +208,7 @@ pub fn run(config: Config) {
         Ok(t) => t,
         Err(error) => {
             eprintln!("could not open a buffer directory in: {buffer_dir:?}\n{error}");
-            std::process::exit(1);
+            exit_flushed(1);
         }
     };
     signals::set_buffer_dir(staging.path());
@@ -228,11 +229,11 @@ pub fn run(config: Config) {
             latency
         } else {
             error!("error reading metrics endpoint");
-            std::process::exit(1);
+            exit_flushed(1);
         }
     } else {
         error!("error reading metrics endpoint");
-        std::process::exit(1);
+        exit_flushed(1);
     };
 
     if config.general().interval().as_micros() < (latency.as_micros() * 2) {
@@ -241,7 +242,7 @@ pub fn run(config: Config) {
             "set the interval to at least: {} us",
             latency.as_micros() * 2
         );
-        std::process::exit(1);
+        exit_flushed(1);
     }
 
     let interval_dur: Duration = config.general().interval().into();
@@ -285,7 +286,7 @@ pub fn run(config: Config) {
         Ok(b) => b,
         Err(e) => {
             error!("failed to create the hindsight buffer: {e}");
-            std::process::exit(1);
+            exit_flushed(1);
         }
     };
     info!(
@@ -433,11 +434,11 @@ pub fn run(config: Config) {
                             }
                         } else {
                             error!("failed to read response");
-                            std::process::exit(1);
+                            exit_flushed(1);
                         }
                     } else {
                         error!("failed to get metrics");
-                        std::process::exit(1);
+                        exit_flushed(1);
                     }
 
                     // Every tick, scrape or not: this is where segments
@@ -513,9 +514,19 @@ pub fn run(config: Config) {
     // which runs no destructors.
     drop(staging);
     if capture_failed {
-        drop(_log_drain);
-        std::process::exit(1);
+        exit_flushed(1);
     }
+}
+
+/// The log writer's guard. Logging is non-blocking, so a line logged just
+/// before `exit` is lost unless the guard is dropped first; `exit` runs no
+/// destructors.
+static LOG_DRAIN: std::sync::Mutex<Option<LogDrain>> = std::sync::Mutex::new(None);
+
+/// Flush the log, then exit with `code`.
+fn exit_flushed(code: i32) -> ! {
+    drop(LOG_DRAIN.lock().unwrap_or_else(|e| e.into_inner()).take());
+    std::process::exit(code);
 }
 
 /// Hindsight's signal state. Separate from `crate::STATE`, which the recorder
@@ -615,7 +626,7 @@ fn listen_for_signals(rt: &tokio::runtime::Runtime, wake: tokio::sync::mpsc::Sen
     let listen = |kind: SignalKind| {
         signal(kind).unwrap_or_else(|e| {
             error!("could not listen for signals: {e}");
-            std::process::exit(1);
+            exit_flushed(1);
         })
     };
     let (mut hup, mut term, mut int) = (
@@ -708,7 +719,7 @@ fn fatal(error: &str, buffer_path: &Path) -> ! {
         "note: everything recorded so far is readable at {}",
         buffer_path.display()
     );
-    std::process::exit(1);
+    exit_flushed(1);
 }
 
 fn wall_ns() -> u64 {
