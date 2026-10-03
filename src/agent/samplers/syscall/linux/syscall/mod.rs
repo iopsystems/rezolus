@@ -74,7 +74,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    // A part that is off registers no metrics, so its groups have no
+    // A part that is off backs none of its metrics, so its groups have no
     // members; bound them, or every snapshot would carry them empty (the
     // sampler is live, so `bound_groups_without_a_live_sampler` skips them).
     if !counts {

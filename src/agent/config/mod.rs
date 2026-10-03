@@ -35,12 +35,13 @@ const OPT_IN_SAMPLERS: &[&str] = &[
     "xfs_log",
 ];
 
-/// Samplers that were merged into one, so that each kernel hook carries one
-/// Rezolus program (docs/journal/2026-10-03-one-program-per-hook.md): the new
-/// sampler, and for each old sampler the part of the new one it became and
-/// whether it had a per-cgroup path (so its `cgroup_attribution` carries over).
+/// An old sampler, the part of the merged sampler it became, and whether it
+/// had a per-cgroup path (so its `cgroup_attribution` carries over).
 type MergedPart = (&'static str, &'static str, bool);
 
+/// Samplers that were merged into one, so that each kernel hook carries one
+/// Rezolus program (docs/journal/2026-10-03-one-program-per-hook.md): the new
+/// sampler and its old ones.
 const MERGED_SAMPLERS: &[(&str, &[MergedPart])] = &[(
     "syscall",
     &[
@@ -125,7 +126,10 @@ impl Config {
     fn translate_merged_samplers(&mut self) -> Vec<String> {
         let mut warnings = Vec::new();
         for (merged, parts) in MERGED_SAMPLERS {
-            if !parts.iter().any(|(old, _, _)| self.samplers.contains_key(*old)) {
+            if !parts
+                .iter()
+                .any(|(old, _, _)| self.samplers.contains_key(*old))
+            {
                 continue;
             }
             if self.samplers.contains_key(*merged) {
@@ -352,7 +356,8 @@ mod tests {
 
         // [defaults] off, one old sampler on: only that part, and an absent
         // old section follows [defaults] rather than turning its part on.
-        let (c, _) = translated("[defaults]\nenabled = false\n[samplers.syscall_counts]\nenabled = true\n");
+        let (c, _) =
+            translated("[defaults]\nenabled = false\n[samplers.syscall_counts]\nenabled = true\n");
         assert!(c.enabled("syscall"));
         assert!(c.part("syscall", "counts"));
         assert!(!c.part("syscall", "latency"));
@@ -363,7 +368,9 @@ mod tests {
         assert!(!c.cgroup_attribution_or("syscall", true));
         let (c, w) = translated("[samplers.syscall_latency]\ncgroup_attribution = false\n");
         assert!(c.cgroup_attribution_or("syscall", true));
-        assert!(w.iter().any(|w| w.contains("cgroup_attribution is ignored")));
+        assert!(w
+            .iter()
+            .any(|w| w.contains("cgroup_attribution is ignored")));
 
         // A section for the merged sampler wins; the old one is reported.
         let (c, w) = translated(

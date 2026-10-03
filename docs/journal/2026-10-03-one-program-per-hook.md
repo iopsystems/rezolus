@@ -190,7 +190,7 @@ the counting fell inside it. `sys_exit` records the latency.
 
 The parts are the rodata switches `counts`, `latency` and
 `cgroup_attribution`. A part that is off loads no code: with `latency` off
-the `sys_exit` programs are not loaded. It registers no metrics, its
+the `sys_exit` programs are not loaded. Its metrics have no values, its
 acquisition group is bounded to no members, and its maps are left out of the
 object with `set_autocreate(false)`. With `latency` off, that means no 32 MiB
 `start` array, as when `syscall_latency` was disabled before.
@@ -212,6 +212,11 @@ moved and the maps were left out. Neither change alters the work per syscall.
 | `cgroup_syscall` / `syscall` | 1.0000 | 1.0000 |
 | latency samples / `syscall` | 0.9998 | 0.9999 |
 
+Those two rows come from one pass each, with `bpf_stats` on, and in that
+pass `perf bench syscall basic` ran slower on the branch (1.19 M ops/s
+against 1.25 M on main, about 45 ns per syscall). It is a single unpaired
+sample, against the six paired passes below.
+
 Program time is what `bpf_stats` times inside the programs. It does not
 include the dispatch around each program, and it does include the timing
 overhead itself, which is now paid twice per syscall instead of three times.
@@ -232,12 +237,22 @@ present:
 | `cgroup_attribution = false` | `sys_enter`, `sys_exit` | no cgroup maps | `syscall`, `syscall_latency` |
 | old sections, `syscall_latency` off | `sys_enter` | no `start`, no histograms | `syscall`, `cgroup_syscall` |
 
-Every case loaded healthy, with `sampler="syscall"` on its series. The old
+The maps column is inferred from four maps checked by name: `start`,
+`read_latency`, `counters` and `cgroup_info`. Every case loaded healthy, with
+`sampler="syscall"` on its series. The old
 sections were read with the two deprecation warnings, and a
 `[samplers.not_a_sampler]` section was reported.
 
-Against the GO criteria: same series and values, apart from the label: yes.
-Cheaper by about one dispatch per program removed: by 26 ns median, against
-38 ns per empty program on `sys_enter` measured over 0 to 4 programs, and
-faster in every pair. Verifier on the oldest kernel: only 6.12 was run.
+Against the GO criteria:
+
+- Same series, apart from the label, and the counts and latency samples are
+  as consistent with each other as on main. The two builds ran one after
+  the other, so their values were not compared one for one.
+- Cheaper: faster in all six paired passes, by a median of 26 ns per
+  syscall, against the 38 ns per empty program measured on `sys_enter`. The
+  ranges of the passes overlap (1.58–1.61 M ops/s is in both), so the
+  criterion's "outside the spread of the passes" is not met by the ranges;
+  the paired wins are the evidence.
+- Verifier on the oldest kernel: only 6.12 was run, and only the `tp_btf`
+  programs.
 
