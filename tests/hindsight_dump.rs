@@ -47,6 +47,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -93,6 +94,12 @@ fn snapshot_bytes(tick: u64, width: usize) -> Vec<u8> {
 /// which hindsight treats as absent. Returns the bound port; the accept loop is
 /// detached and dies with the test process.
 fn spawn_fake_agent(width: usize) -> u16 {
+    spawn_switchable_agent(width, Arc::new(AtomicBool::new(false)))
+}
+
+/// [`spawn_fake_agent`], with a switch: while `down` is set, a scrape is
+/// closed without a response, as from an agent that is restarting.
+fn spawn_switchable_agent(width: usize, down: Arc<AtomicBool>) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the fake agent");
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
@@ -108,6 +115,9 @@ fn spawn_fake_agent(width: usize) -> u16 {
             }
             let req = String::from_utf8_lossy(&buf[..n]);
             let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
+            if path.starts_with("/metrics/binary") && down.load(Ordering::SeqCst) {
+                continue;
+            }
             if path.starts_with("/metrics/binary") {
                 tick += 1;
                 let body = snapshot_bytes(tick, width);
@@ -558,6 +568,8 @@ impl Hindsight {
 #[derive(Debug, serde::Deserialize)]
 struct Status {
     ticks_recorded: u64,
+    failed_scrapes: u64,
+    agent_unreachable_since: Option<u64>,
     rows: u64,
     tables: Vec<TableStatus>,
 }
@@ -834,6 +846,50 @@ fn a_stop_signal_captures_the_buffer_then_exits() {
     );
     assert!(h.log_has("capture complete"), "{}", h.log_text());
     assert_one_shutdown_capture(&h);
+}
+
+/// An agent that stops answering (a restart, a package upgrade) leaves a gap
+/// in the recording. The daemon stays up, keeps its buffer, reports the outage
+/// in `/status`, and records again once the agent answers.
+#[test]
+fn an_agent_outage_is_a_gap_not_an_exit() {
+    let down = Arc::new(AtomicBool::new(false));
+    let agent = spawn_switchable_agent(1, Arc::clone(&down));
+    let mut h = Hindsight::try_start(agent, 2)
+        .unwrap_or_else(|why| panic!("rezolus hindsight failed to come up: {why}"));
+    let before = h.wait_until("some buffered rows", |s| s.rows >= 5);
+    assert_eq!(before.failed_scrapes, 0);
+    assert_eq!(before.agent_unreachable_since, None);
+
+    down.store(true, Ordering::SeqCst);
+    let during = h.wait_until("several failed scrapes", |s| s.failed_scrapes >= 5);
+    assert!(
+        during.agent_unreachable_since.is_some(),
+        "the outage is not reported: {during:?}"
+    );
+    assert!(
+        during.rows >= before.rows,
+        "the buffer lost rows during the outage: {} then {}",
+        before.rows,
+        during.rows
+    );
+    assert!(
+        h.child.try_wait().expect("try_wait failed").is_none(),
+        "rezolus hindsight exited during the outage\n{}",
+        h.log_text()
+    );
+
+    down.store(false, Ordering::SeqCst);
+    let ticks = during.ticks_recorded;
+    let after = h.wait_until("recording to resume", |s| {
+        s.agent_unreachable_since.is_none() && s.ticks_recorded > ticks + 3
+    });
+    assert!(
+        after.rows > during.rows,
+        "no rows after the outage: {after:?}"
+    );
+    assert!(h.log_has("recording a gap"), "{}", h.log_text());
+    assert!(h.log_has("answered again"), "{}", h.log_text());
 }
 
 /// A SIGHUP during a capture is ignored: the daemon keeps recording after the

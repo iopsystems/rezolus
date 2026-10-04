@@ -78,6 +78,13 @@ the capture failed. A stop during a SIGHUP capture exits when that capture
 completes. A second stop exits at once with status 2, removing the buffer
 directory and abandoning the capture in progress.
 
+If the agent stops answering (it restarts, or a scrape takes longer than the
+interval, returns an error status or does not decode), Hindsight keeps running
+and keeps its buffer: that tick has no row, and it tries again on the next.
+It logs a warning when the first scrape fails and a line when the agent
+answers again. While scrapes are failing, `/status` reports when the outage
+began.
+
 Hindsight can also expose an optional HTTP endpoint for remote buffer
 management — see [HTTP Endpoint](#http-endpoint-optional) below.
 
@@ -664,7 +671,9 @@ listen = "127.0.0.1:4242"
 Available endpoints:
 
 - `GET /status` — returns buffer status: the time range actually retained, rows
-  and segments per sampler, on-disk size, and whether retention has started
+  and segments per sampler, on-disk size, whether retention has started, the
+  number of failed scrapes (`failed_scrapes`), and when the current outage
+  began (`agent_unreachable_since`, null while the agent is answering)
 - `GET /dump` — downloads the buffer as a `.rez` archive
 - `POST /dump/file` — writes the buffer to the configured output file
 

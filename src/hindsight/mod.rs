@@ -338,6 +338,9 @@ pub fn run(config: Config) {
         // state machine advances in one place.
         let (capture_tx, mut capture_rx) = tokio::sync::mpsc::channel::<DumpToFileResponse>(1);
         let mut capturing = false;
+        // While scrapes are failing: when the first one failed, and how many
+        // have since. Logged once as it starts and once as it ends.
+        let mut outage: Option<(Instant, u64)> = None;
 
         loop {
             tokio::select! {
@@ -399,46 +402,48 @@ pub fn run(config: Config) {
                 Some(_) = signal_rx.recv() => {}
 
                 _ = interval.tick() => {
-                    let start = Instant::now();
-
-                    if let Ok(response) = async_client.get(url.clone()).send().await {
-                        if let Ok(body) = response.bytes().await {
-                            let latency = start.elapsed();
-
-                            debug!("sampling latency: {} us", latency.as_micros());
-                            debug!("body size: {}", body.len());
-
+                    // A failed scrape is a gap in the recording, not a reason
+                    // to exit: the agent restarting (a package upgrade, say)
+                    // must not cost the buffer. The tick is skipped, the
+                    // buffer is still maintained below, and the next tick
+                    // tries again.
+                    match scrape(&async_client, &url, interval_dur).await {
+                        Ok(snapshot) => {
                             let (anchored_ns, wall_offset_ns) = crate::recorder::anchored_stamp(
                                 clock_anchor_wall_ns,
                                 clock_anchor_mono.elapsed(),
                                 wall_ns(),
                             );
-
-                            // `Snapshot::from_msgpack`, not a bare `from_slice`:
-                            // the same depth-capped, trailing-byte-checked
-                            // decode as the recorder's `.rez`-mode call site —
-                            // hindsight is the same always-on ingest path,
-                            // scraping whatever msgpack endpoint it's pointed
-                            // at, and is the most exposed process of the two
-                            // (it runs unattended, indefinitely).
-                            match metriken_exposition::Snapshot::from_msgpack(&body) {
-                                Ok(snapshot) => {
-                                    if let Err(e) =
-                                        buffer.ingest(&snapshot, anchored_ns, wall_offset_ns)
-                                    {
-                                        fatal(&e, &buffer_path);
-                                    }
-                                    shared_state.record_tick();
-                                }
-                                Err(e) => warn!("msgpack decode error: {e}"),
+                            if let Err(e) = buffer.ingest(&snapshot, anchored_ns, wall_offset_ns) {
+                                fatal(&e, &buffer_path);
                             }
-                        } else {
-                            error!("failed to read response");
-                            exit_flushed(1);
+                            shared_state.record_tick();
+                            if let Some((since, failed)) = outage.take() {
+                                info!(
+                                    "the agent answered again after {failed} failed scrape(s) \
+                                     over {:.1}s; recording resumed",
+                                    since.elapsed().as_secs_f64()
+                                );
+                                shared_state.set_agent_unreachable_since(None);
+                            }
                         }
-                    } else {
-                        error!("failed to get metrics");
-                        exit_flushed(1);
+                        Err(e) => {
+                            shared_state.record_failed_scrape();
+                            match &mut outage {
+                                Some((_, failed)) => {
+                                    *failed += 1;
+                                    debug!("scrape failed: {e}");
+                                }
+                                None => {
+                                    warn!(
+                                        "scrape failed: {e}; recording a gap and retrying \
+                                         every interval"
+                                    );
+                                    outage = Some((Instant::now(), 1));
+                                    shared_state.set_agent_unreachable_since(Some(wall_ns()));
+                                }
+                            }
+                        }
                     }
 
                     // Every tick, scrape or not: this is where segments
@@ -716,6 +721,39 @@ fn log_capture(response: &DumpToFileResponse) {
             response.path.display()
         );
     }
+}
+
+/// Pull one snapshot from the agent. A request that does not finish within
+/// `timeout` (the interval), a connection error, a non-2xx status and a body
+/// that does not decode are all a failed scrape.
+async fn scrape(
+    client: &reqwest::Client,
+    url: &reqwest::Url,
+    timeout: Duration,
+) -> Result<metriken_exposition::Snapshot, String> {
+    let start = Instant::now();
+    let response = client
+        .get(url.clone())
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(|e| format!("no response from {url}: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("{url} answered {status}"));
+    }
+    let body = response
+        .bytes()
+        .await
+        .map_err(|e| format!("reading the response from {url} failed: {e}"))?;
+    debug!("sampling latency: {} us", start.elapsed().as_micros());
+    debug!("body size: {}", body.len());
+    // `Snapshot::from_msgpack`, not a bare `from_slice`: the same depth-capped,
+    // trailing-byte-checked decode as the recorder's `.rez`-mode call site.
+    // hindsight is the same always-on ingest path, scraping whatever msgpack
+    // endpoint it's pointed at, and it runs unattended indefinitely.
+    metriken_exposition::Snapshot::from_msgpack(&body)
+        .map_err(|e| format!("the response from {url} did not decode: {e}"))
 }
 
 /// A buffer write that failed is not recoverable in place — but everything
