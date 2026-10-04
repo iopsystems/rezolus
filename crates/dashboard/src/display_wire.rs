@@ -1,5 +1,6 @@
 //! Display-mode wire encoding, shared by the server (axum) and WASM viewers so
-//! both backends produce byte-identical decimated responses. The query itself is
+//! both backends produce the same decimated layout (an aggregate's values can
+//! differ in the last bits, from summation order). The query itself is
 //! a metriken-query `query_range_display`; this module owns the reducer options,
 //! the compact binary column layout, and the result → bytes dispatch. Each shell
 //! wraps the bytes its own way (axum `Response` vs a wasm-bindgen return).
