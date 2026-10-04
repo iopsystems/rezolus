@@ -216,7 +216,7 @@ fn read_tools() -> Vec<Value> {
         },
         {
             "name": "extract_features",
-            "description": "Extract a deterministic, versioned overview record of a recording's Rezolus-native features (per-metric stats, noise classification, anomalies, regime shifts, acquisition-window uncertainty, top-N correlations, resource rankings, subsystem coverage) as JSON. The record is the structured input for bottleneck assessment. Requires a recording of at least 10 seconds.",
+            "description": "Extract a versioned overview record, deterministic on a given host, of a recording's Rezolus-native features (per-metric stats, noise classification, anomalies, regime shifts, acquisition-window uncertainty, top-N correlations, resource rankings, subsystem coverage) as JSON. The record is the structured input for bottleneck assessment. Requires a recording of at least 10 seconds.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

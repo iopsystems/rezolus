@@ -467,9 +467,10 @@ impl Viewer {
         }
     }
 
-    /// Display-mode range query. Returns the compact binary body (byte-identical
-    /// to the server's — both go through `dashboard::display_wire`) so the shared
-    /// frontend decodes it the same way. A non-series result (scalar/vector) is
+    /// Display-mode range query. Returns the compact binary body (the server's
+    /// layout — both go through `dashboard::display_wire`; an aggregate's values
+    /// can differ in the last bits) so the shared frontend decodes it the same
+    /// way. A non-series result (scalar/vector) is
     /// surfaced as an error so the frontend falls back to the JSON query path,
     /// matching the server. `band` is `"lo,hi"` (empty → interquartile default).
     #[allow(clippy::too_many_arguments)]
