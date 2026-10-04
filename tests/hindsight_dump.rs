@@ -912,7 +912,9 @@ fn an_agent_outage_is_a_gap_not_an_exit() {
 
 /// A hung agent, which accepts a scrape and never answers, cannot hold the
 /// loop: the scrape times out and counts as failed, and a stop still captures
-/// and exits within one scrape timeout (5 s at this interval).
+/// and exits within one scrape timeout (5 s at this interval). The bound is
+/// below two timeouts, which is what a stop took while the loop still started
+/// scrapes during the stop's capture.
 #[test]
 fn a_hung_agent_times_out_and_a_stop_still_exits() {
     let mode = Arc::new(AtomicU8::new(AGENT_UP));
@@ -936,7 +938,7 @@ fn a_hung_agent_times_out_and_a_stop_still_exits() {
     let took = stopped.elapsed();
     assert!(status.success(), "exited with {status}\n{}", h.log_text());
     assert!(
-        took < Duration::from_secs(15),
+        took < Duration::from_secs(9),
         "a stop took {took:?} with the agent hung\n{}",
         h.log_text()
     );

@@ -98,7 +98,17 @@ pub fn run(config: Config) {
 
     let url = config.general().url();
 
-    let blocking_client = match reqwest::blocking::Client::builder().http1_only().build() {
+    // Long enough that a scrape slower than the interval still lands (the
+    // ticks it overruns are skipped), short enough that a hung agent cannot
+    // hold startup, the loop, or with it a stop, for long.
+    let scrape_timeout =
+        (Duration::from(config.general().interval()) * 3).max(Duration::from_secs(5));
+
+    let blocking_client = match reqwest::blocking::Client::builder()
+        .http1_only()
+        .timeout(scrape_timeout)
+        .build()
+    {
         Ok(c) => c,
         Err(e) => {
             error!("error connecting to Rezolus: {e}");
@@ -344,10 +354,6 @@ pub fn run(config: Config) {
         let mut outage: Option<(Instant, u64)> = None;
         // The agent process the last snapshot came from.
         let mut epoch = agent_epoch.clone();
-        // Long enough that a scrape slower than the interval still lands (the
-        // ticks it overruns are skipped, as before), short enough that a hung
-        // agent cannot hold the loop, and with it a stop, for long.
-        let scrape_timeout = (interval_dur * 3).max(Duration::from_secs(5));
 
         loop {
             tokio::select! {
@@ -408,7 +414,11 @@ pub fn run(config: Config) {
                 // it.
                 Some(_) = signal_rx.recv() => {}
 
-                _ = interval.tick() => {
+                // Not while a stop's capture runs: the capture is a point-in-time
+                // copy, so a row scraped now never reaches it, and a scrape
+                // against a hung agent would hold the exit for a timeout.
+                _ = interval.tick(), if !(capturing
+                    && signals::STATE.load(Ordering::SeqCst) == signals::TERMINATING) => {
                     // A failed scrape is a gap in the recording, not a reason
                     // to exit: the agent restarting (a package upgrade, say)
                     // must not cost the buffer. The tick is skipped, the
