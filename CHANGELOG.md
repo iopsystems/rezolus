@@ -21,6 +21,14 @@
 
 ### Changed
 
+- metriken-query 0.34.3 and metriken-archive 0.3.4. `rate`/`irate`, alone
+  or under `sum`/`avg`/`min`/`max`/`count`, are computed in one pass over a
+  recording's columns: on a 9.6-hour recording of a per-task group at a 1 s
+  step, a warm `sum(irate(...))` took 9.7-14 s and takes 0.9-1.2 s, and
+  `sum by (comm)` took 10-15 s and takes 1.1-1.4 s. Reading a per-task
+  group stored long peaks at 0.98 GB of memory, against 1.65 GB before. An
+  aggregate's values and bands can differ from earlier releases in the
+  last bits of a float.
 - A live viewer, or a viewer following an archive file, reuses each
   table's state across reopens (metriken-query 0.34.1, metriken-archive
   0.3.3): the first query after a reopen reads only the segments sealed
