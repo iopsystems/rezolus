@@ -201,25 +201,9 @@ pub fn run(config: Config) {
         exit_flushed(1);
     }
 
-    // The buffer lives in a private directory inside it, so its `-wal`/`-shm`
-    // sidecars cannot collide with anything and the whole lot is removed
-    // together when the daemon exits cleanly.
-    let staging = match tempfile::TempDir::new_in(&buffer_dir) {
-        Ok(t) => t,
-        Err(error) => {
-            eprintln!("could not open a buffer directory in: {buffer_dir:?}\n{error}");
-            exit_flushed(1);
-        }
-    };
-    signals::set_buffer_dir(staging.path());
-    let buffer_path = staging.path().join(if dendro {
-        "hindsight.dendro"
-    } else {
-        "hindsight.rez"
-    });
-
     // Probe the endpoint once: it must exist, and the sampling interval has to
-    // leave room for the scrape it implies.
+    // leave room for the scrape it implies. Before the staging directory is
+    // created, so an exit here leaves nothing in `buffer_dir`.
     let start = Instant::now();
     let latency = if let Ok(response) = blocking_client.get(url.clone()).send() {
         if let Ok(body) = response.bytes() {
@@ -244,6 +228,23 @@ pub fn run(config: Config) {
         );
         exit_flushed(1);
     }
+
+    // The buffer lives in a private directory inside it, so its `-wal`/`-shm`
+    // sidecars cannot collide with anything and the whole lot is removed
+    // together when the daemon exits cleanly.
+    let staging = match tempfile::TempDir::new_in(&buffer_dir) {
+        Ok(t) => t,
+        Err(error) => {
+            eprintln!("could not open a buffer directory in: {buffer_dir:?}\n{error}");
+            exit_flushed(1);
+        }
+    };
+    signals::set_buffer_dir(staging.path());
+    let buffer_path = staging.path().join(if dendro {
+        "hindsight.dendro"
+    } else {
+        "hindsight.rez"
+    });
 
     let interval_dur: Duration = config.general().interval().into();
     let lookback: Duration = config.general().duration().into();
@@ -341,6 +342,12 @@ pub fn run(config: Config) {
         // While scrapes are failing: when the first one failed, and how many
         // have since. Logged once as it starts and once as it ends.
         let mut outage: Option<(Instant, u64)> = None;
+        // The agent process the last snapshot came from.
+        let mut epoch = agent_epoch.clone();
+        // Long enough that a scrape slower than the interval still lands (the
+        // ticks it overruns are skipped, as before), short enough that a hung
+        // agent cannot hold the loop, and with it a stop, for long.
+        let scrape_timeout = (interval_dur * 3).max(Duration::from_secs(5));
 
         loop {
             tokio::select! {
@@ -407,8 +414,29 @@ pub fn run(config: Config) {
                     // must not cost the buffer. The tick is skipped, the
                     // buffer is still maintained below, and the next tick
                     // tries again.
-                    match scrape(&async_client, &url, interval_dur).await {
+                    // Taken before the scrape, so a timed-out attempt dates
+                    // the outage from when it began rather than when it gave up.
+                    let (attempt_at, attempt_wall_ns) = (Instant::now(), wall_ns());
+                    match scrape(&async_client, &url, scrape_timeout).await {
                         Ok(snapshot) => {
+                            // Each snapshot names the agent process that made
+                            // it. A restart between two scrapes fails neither,
+                            // so this is the only place one is noticed.
+                            let now = crate::recorder::snapshot_producer_epoch(&snapshot);
+                            if let Some(now) = now {
+                                if epoch.as_deref() != Some(now) {
+                                    if epoch.is_some() {
+                                        warn!(
+                                            "the agent restarted (producer epoch {} -> {now}); \
+                                             its counters start again from zero, and the \
+                                             buffer's metadata still describes the agent \
+                                             hindsight started with",
+                                            epoch.as_deref().unwrap_or_default()
+                                        );
+                                    }
+                                    epoch = Some(now.to_string());
+                                }
+                            }
                             let (anchored_ns, wall_offset_ns) = crate::recorder::anchored_stamp(
                                 clock_anchor_wall_ns,
                                 clock_anchor_mono.elapsed(),
@@ -420,11 +448,11 @@ pub fn run(config: Config) {
                             shared_state.record_tick();
                             if let Some((since, failed)) = outage.take() {
                                 info!(
-                                    "the agent answered again after {failed} failed scrape(s) \
+                                    "a scrape succeeded after {failed} failed scrape(s) \
                                      over {:.1}s; recording resumed",
                                     since.elapsed().as_secs_f64()
                                 );
-                                shared_state.set_agent_unreachable_since(None);
+                                shared_state.set_scrapes_failing_since(None);
                             }
                         }
                         Err(e) => {
@@ -439,8 +467,8 @@ pub fn run(config: Config) {
                                         "scrape failed: {e}; recording a gap and retrying \
                                          every interval"
                                     );
-                                    outage = Some((Instant::now(), 1));
-                                    shared_state.set_agent_unreachable_since(Some(wall_ns()));
+                                    outage = Some((attempt_at, 1));
+                                    shared_state.set_scrapes_failing_since(Some(attempt_wall_ns));
                                 }
                             }
                         }
@@ -724,7 +752,7 @@ fn log_capture(response: &DumpToFileResponse) {
 }
 
 /// Pull one snapshot from the agent. A request that does not finish within
-/// `timeout` (the interval), a connection error, a non-2xx status and a body
+/// `timeout`, a connection error, a non-2xx status and a body
 /// that does not decode are all a failed scrape.
 async fn scrape(
     client: &reqwest::Client,

@@ -38,8 +38,8 @@ pub struct SharedState {
     /// status, or a body that did not decode). Each is a tick with no row.
     failed_scrapes: AtomicU64,
     /// When the current run of failed scrapes began, in ns since the epoch;
-    /// 0 while the agent is answering.
-    agent_unreachable_since_ns: AtomicU64,
+    /// 0 while scrapes succeed.
+    scrapes_failing_since_ns: AtomicU64,
 }
 
 impl SharedState {
@@ -57,7 +57,7 @@ impl SharedState {
             ticks: AtomicU64::new(0),
             at_retention_bound: AtomicBool::new(false),
             failed_scrapes: AtomicU64::new(0),
-            agent_unreachable_since_ns: AtomicU64::new(0),
+            scrapes_failing_since_ns: AtomicU64::new(0),
         }
     }
 
@@ -71,13 +71,13 @@ impl SharedState {
 
     /// `Some(ns since the epoch)` when a run of failed scrapes begins, `None`
     /// when the agent answers again.
-    pub fn set_agent_unreachable_since(&self, since_ns: Option<u64>) {
-        self.agent_unreachable_since_ns
+    pub fn set_scrapes_failing_since(&self, since_ns: Option<u64>) {
+        self.scrapes_failing_since_ns
             .store(since_ns.unwrap_or(0), Ordering::Relaxed);
     }
 
-    pub fn agent_unreachable_since_ns(&self) -> Option<u64> {
-        match self.agent_unreachable_since_ns.load(Ordering::Relaxed) {
+    pub fn scrapes_failing_since_ns(&self) -> Option<u64> {
+        match self.scrapes_failing_since_ns.load(Ordering::Relaxed) {
             0 => None,
             ns => Some(ns),
         }

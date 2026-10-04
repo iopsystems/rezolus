@@ -47,7 +47,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -94,16 +94,26 @@ fn snapshot_bytes(tick: u64, width: usize) -> Vec<u8> {
 /// which hindsight treats as absent. Returns the bound port; the accept loop is
 /// detached and dies with the test process.
 fn spawn_fake_agent(width: usize) -> u16 {
-    spawn_switchable_agent(width, Arc::new(AtomicBool::new(false)))
+    spawn_switchable_agent(width, Arc::new(AtomicU8::new(AGENT_UP)))
 }
 
-/// [`spawn_fake_agent`], with a switch: while `down` is set, a scrape is
-/// closed without a response, as from an agent that is restarting.
-fn spawn_switchable_agent(width: usize, down: Arc<AtomicBool>) -> u16 {
+/// [`spawn_switchable_agent`] modes.
+const AGENT_UP: u8 = 0;
+/// A scrape's connection is closed without a response, as from an agent that
+/// is restarting.
+const AGENT_CLOSES: u8 = 1;
+/// A scrape's connection is held open and never answered, as from a hung
+/// agent.
+const AGENT_HANGS: u8 = 2;
+
+/// [`spawn_fake_agent`], answering scrapes as `mode` says at the time.
+fn spawn_switchable_agent(width: usize, mode: Arc<AtomicU8>) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the fake agent");
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
         let mut tick = 0u64;
+        // Connections a hung agent holds open; never answered or closed.
+        let mut held = Vec::new();
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
             let mut buf = [0u8; 8192];
@@ -115,8 +125,15 @@ fn spawn_switchable_agent(width: usize, down: Arc<AtomicBool>) -> u16 {
             }
             let req = String::from_utf8_lossy(&buf[..n]);
             let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
-            if path.starts_with("/metrics/binary") && down.load(Ordering::SeqCst) {
-                continue;
+            if path.starts_with("/metrics/binary") {
+                match mode.load(Ordering::SeqCst) {
+                    AGENT_CLOSES => continue,
+                    AGENT_HANGS => {
+                        held.push(stream);
+                        continue;
+                    }
+                    _ => {}
+                }
             }
             if path.starts_with("/metrics/binary") {
                 tick += 1;
@@ -569,7 +586,7 @@ impl Hindsight {
 struct Status {
     ticks_recorded: u64,
     failed_scrapes: u64,
-    agent_unreachable_since: Option<u64>,
+    scrapes_failing_since: Option<u64>,
     rows: u64,
     tables: Vec<TableStatus>,
 }
@@ -853,18 +870,19 @@ fn a_stop_signal_captures_the_buffer_then_exits() {
 /// in `/status`, and records again once the agent answers.
 #[test]
 fn an_agent_outage_is_a_gap_not_an_exit() {
-    let down = Arc::new(AtomicBool::new(false));
-    let agent = spawn_switchable_agent(1, Arc::clone(&down));
+    let mode = Arc::new(AtomicU8::new(AGENT_UP));
+    let agent = spawn_switchable_agent(1, Arc::clone(&mode));
     let mut h = Hindsight::try_start(agent, 2)
         .unwrap_or_else(|why| panic!("rezolus hindsight failed to come up: {why}"));
+    // A scrape slower than the timeout on a loaded runner would fail before
+    // the outage starts, so the counts below are relative.
     let before = h.wait_until("some buffered rows", |s| s.rows >= 5);
-    assert_eq!(before.failed_scrapes, 0);
-    assert_eq!(before.agent_unreachable_since, None);
 
-    down.store(true, Ordering::SeqCst);
-    let during = h.wait_until("several failed scrapes", |s| s.failed_scrapes >= 5);
+    mode.store(AGENT_CLOSES, Ordering::SeqCst);
+    let failed = before.failed_scrapes;
+    let during = h.wait_until("several failed scrapes", |s| s.failed_scrapes >= failed + 5);
     assert!(
-        during.agent_unreachable_since.is_some(),
+        during.scrapes_failing_since.is_some(),
         "the outage is not reported: {during:?}"
     );
     assert!(
@@ -879,17 +897,50 @@ fn an_agent_outage_is_a_gap_not_an_exit() {
         h.log_text()
     );
 
-    down.store(false, Ordering::SeqCst);
+    mode.store(AGENT_UP, Ordering::SeqCst);
     let ticks = during.ticks_recorded;
     let after = h.wait_until("recording to resume", |s| {
-        s.agent_unreachable_since.is_none() && s.ticks_recorded > ticks + 3
+        s.scrapes_failing_since.is_none() && s.ticks_recorded > ticks + 3
     });
     assert!(
         after.rows > during.rows,
         "no rows after the outage: {after:?}"
     );
     assert!(h.log_has("recording a gap"), "{}", h.log_text());
-    assert!(h.log_has("answered again"), "{}", h.log_text());
+    assert!(h.log_has("recording resumed"), "{}", h.log_text());
+}
+
+/// A hung agent, which accepts a scrape and never answers, cannot hold the
+/// loop: the scrape times out and counts as failed, and a stop still captures
+/// and exits within one scrape timeout (5 s at this interval).
+#[test]
+fn a_hung_agent_times_out_and_a_stop_still_exits() {
+    let mode = Arc::new(AtomicU8::new(AGENT_UP));
+    let agent = spawn_switchable_agent(1, Arc::clone(&mode));
+    let mut h = Hindsight::try_start(agent, 2)
+        .unwrap_or_else(|why| panic!("rezolus hindsight failed to come up: {why}"));
+    let before = h.wait_until("some buffered rows", |s| s.rows >= 5);
+
+    mode.store(AGENT_HANGS, Ordering::SeqCst);
+    let failed = before.failed_scrapes;
+    let during = h.wait_until("a timed-out scrape", |s| s.failed_scrapes > failed);
+    assert!(
+        during.scrapes_failing_since.is_some(),
+        "the outage is not reported: {during:?}"
+    );
+
+    // The loop is now waiting on another hung scrape.
+    let stopped = Instant::now();
+    h.signal(libc::SIGTERM);
+    let status = h.wait_for_exit(Duration::from_secs(30));
+    let took = stopped.elapsed();
+    assert!(status.success(), "exited with {status}\n{}", h.log_text());
+    assert!(
+        took < Duration::from_secs(15),
+        "a stop took {took:?} with the agent hung\n{}",
+        h.log_text()
+    );
+    assert!(h.log_has("capture complete"), "{}", h.log_text());
 }
 
 /// A SIGHUP during a capture is ignored: the daemon keeps recording after the

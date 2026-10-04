@@ -117,8 +117,9 @@ pub struct StatusResponse {
     /// Scrapes that failed since startup; each is a tick with no row.
     pub failed_scrapes: u64,
     /// When the current run of failed scrapes began (seconds since the
-    /// epoch), or null while the agent is answering.
-    pub agent_unreachable_since: Option<u64>,
+    /// epoch), or null while scrapes succeed. Any failure counts: no response
+    /// in time, an error status, or a body that did not decode.
+    pub scrapes_failing_since: Option<u64>,
     /// The span actually retained. It reaches at least the lookback once the
     /// buffer is full, and typically a little further: retention drops whole
     /// segments rather than rewriting them.
@@ -254,7 +255,7 @@ async fn status(State(state): State<Arc<AppState>>) -> Response {
         sampling_interval_ms: shared.interval.as_millis() as u64,
         ticks_recorded: shared.ticks(),
         failed_scrapes: shared.failed_scrapes(),
-        agent_unreachable_since: shared.agent_unreachable_since_ns().map(to_secs),
+        scrapes_failing_since: shared.scrapes_failing_since_ns().map(to_secs),
         oldest_timestamp: summary.first_ts.map(to_secs),
         newest_timestamp: summary.last_ts.map(to_secs),
         retained_secs: summary.retained().map(|d| d.as_secs()),

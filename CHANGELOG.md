@@ -8,12 +8,17 @@
   directory behind; with `Restart=on-failure` each agent restart added
   another. A failed scrape is now a tick with no row: Hindsight keeps its
   buffer, keeps sealing and evicting, and tries again on the next tick. A
-  scrape that takes longer than the interval, returns an error status or
-  does not decode counts as failed; the scrape had no timeout, so a hung
-  agent also stalled the loop and stops. Hindsight logs a warning when the
-  first scrape fails and a line when the agent answers again, and `/status`
-  gains `failed_scrapes` and `agent_unreachable_since`. An agent that cannot
-  be reached at startup still exits, before any buffer exists.
+  scrape that gets no response within three intervals or 5 s, whichever is
+  longer, returns an error status or does not decode counts as failed. The
+  scrape had no timeout, so a hung agent also stalled the loop and stops. A
+  scrape slower than the interval but inside the timeout is still recorded,
+  as before. Hindsight logs a warning when the first scrape fails, a line
+  when one succeeds again, and a warning when the agent's producer epoch
+  changes (a restart between two scrapes fails neither). `/status` gains
+  `failed_scrapes` and `scrapes_failing_since`. An agent that cannot be
+  reached at startup still exits; the probe now runs before the staging
+  directory is created, so that exit no longer leaves an empty one in
+  `buffer_dir`.
 
 ## [5.25.0] - 2026-10-03
 
