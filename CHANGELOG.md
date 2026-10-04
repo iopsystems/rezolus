@@ -1,5 +1,53 @@
 ## [Unreleased]
 
+The per-cgroup BPF cost reductions, the `cgroup_attribution` option for five
+more samplers and the hindsight stop fix from 6.0, backported in #1406.
+
+### Changed
+
+- `cpu_usage`, `cpu_migrations`, `cpu_tlb_flush`, `scheduler_runqueue` and
+  `syscall_counts` honour `cgroup_attribution`, on by default as for
+  `cpu_perf`, so nothing changes unless a config sets it. With
+  `cgroup_attribution = false` the per-cgroup path (the task-group read, the
+  new-cgroup check and the per-cgroup adds) is folded out of each sampler's
+  hook and the `cgroup_*` series are absent; host-level series are
+  unchanged. A config that already sets `[defaults] cgroup_attribution =
+  false` now reaches these five samplers as well. The cgroups view finds
+  cgroup names from any per-cgroup series when `cgroup_cpu_usage` is absent.
+- `syscall_counts` attaches to `sys_enter` as a raw tracepoint (`tp_btf`,
+  or `raw_tp` without kernel BTF) instead of the `raw_syscalls/sys_enter`
+  tracepoint, and its per-cgroup path reads the task group once, as direct
+  loads from a BTF task pointer on kernels from 5.11. On bare metal (EPYC
+  4564P, 6.12, measured on 6.0) the program costs 33–39 ns per syscall with
+  `cgroup_attribution` on, down from 140–151 ns.
+- Every sampler with a per-event cgroup path reads the task group once, as
+  direct loads from a BTF task pointer where the program is `tp_btf`,
+  `fentry` or `fexit`, instead of through up to seven
+  `bpf_probe_read_kernel()` calls. `cpu_tlb_flush` attaches to `tlb_flush`
+  as `tp_btf` where the kernel has BTF.
+- `scheduler_runqueue`, `cpu_migrations` and `cpu_usage` read the task's
+  pid, state and CPU times as direct loads from BTF pointers.
+  `syscall_latency` attaches to `sys_enter` and `sys_exit` as raw
+  tracepoints instead of the `raw_syscalls` tracepoints. With `bpftrace`
+  keeping classic programs on those tracepoints, the two syscall samplers
+  together cost about 121 ns more per syscall than on classic tracepoints;
+  with no other syscall tracer they cost about 82 ns less (KVM guest,
+  measured on 6.0).
+- The series of every sampler above are unchanged. Kernels older than 5.11
+  keep the `bpf_probe_read_kernel()` paths.
+
+### Fixed
+
+- **Hindsight exits on SIGTERM and SIGINT.** Hindsight treated SIGTERM and
+  SIGINT like SIGHUP: it captured the buffer and kept recording. `systemctl
+  stop` and `restart` therefore waited out `TimeoutStopSec` (120 s) and
+  SIGKILLed the daemon, leaving its buffer directory behind. SIGTERM and
+  SIGINT now capture the buffer and exit with status 0, or 1 if that capture
+  failed. A stop during a SIGHUP capture exits when that capture completes;
+  a second stop exits at once with status 2 and removes the buffer
+  directory. SIGHUP captures and keeps recording, and a SIGHUP during a
+  capture is ignored.
+
 ## [5.24.0] - 2026-09-29
 
 The filesystem telemetry and the attribution options from 6.0, backported in

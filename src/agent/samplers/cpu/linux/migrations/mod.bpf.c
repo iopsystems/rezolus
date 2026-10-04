@@ -4,6 +4,7 @@
 // This BPF program tracks CPU migrations using software events.
 
 #include <vmlinux.h>
+#include "../../../agent/bpf/btf_read.h"
 #include "../../../agent/bpf/cgroup.h"
 #include "../../../agent/bpf/helpers.h"
 #include <bpf/bpf_helpers.h>
@@ -16,6 +17,13 @@
 
 #define FROM 0
 #define TO 1
+
+// Per-cgroup attribution is the config option `cgroup_attribution`, on by
+// default for this sampler. Written into read-only data before load, so with
+// it off the verifier removes the per-cgroup path (the task-group read, the
+// new-cgroup check and the per-cgroup adds) rather than testing a flag on
+// every event.
+const volatile __u8 cgroup_attribution = 0;
 
 // dummy instance for skeleton to generate definition
 struct cgroup_info _cgroup_info = {};
@@ -63,12 +71,14 @@ struct {
     __type(value, u32); // cpu
 } last_cpu SEC(".maps");
 
-static __always_inline int account__sched_switch(u64* ctx) {
+// `btf` is a compile-time constant: true in the tp_btf program, whose task
+// arguments are BTF pointers (see task_group_of() in cgroup.h).
+static __always_inline int account__sched_switch(u64* ctx, bool btf) {
     /* TP_PROTO(bool preempt, struct task_struct *prev, struct task_struct *next) */
     struct task_struct* next = (struct task_struct*)ctx[2];
 
     u32 cpu = bpf_get_smp_processor_id();
-    u32 next_pid = BPF_CORE_READ(next, pid);
+    u32 next_pid = BTF_READ(btf, next, pid);
 
     // Skip kernel threads and idle task (pid 0)
     if (next_pid == 0) {
@@ -92,13 +102,14 @@ static __always_inline int account__sched_switch(u64* ctx) {
             array_incr(&migrations, to_idx);
 
             // handle per-cgroup accounting
-            // runtime NULL check (bpf_core_field_exists is compile-time only)
-            void* task_group = BPF_CORE_READ(next, sched_task_group);
-            if (task_group) {
-                u32 cgroup_id = BPF_CORE_READ(next, sched_task_group, css.id);
-
+            u32 cgroup_id = 0;
+            u64 serial_nr = 0;
+            struct task_group* tg =
+                cgroup_attribution ? task_group_of(next, btf, &cgroup_id, &serial_nr) : NULL;
+            if (tg) {
                 if (cgroup_id < MAX_CGROUPS) {
-                    int ret = handle_new_cgroup(next, &cgroup_serial_numbers, &cgroup_info);
+                    int ret = handle_new_cgroup_read(&tg->css, cgroup_id, serial_nr,
+                                                     &cgroup_serial_numbers, &cgroup_info);
 
                     if (ret == 0) {
                         // New cgroup detected, zero the counter
@@ -122,12 +133,12 @@ static __always_inline int account__sched_switch(u64* ctx) {
 
 SEC("tp_btf/sched_switch")
 int handle__sched_switch_btf(u64* ctx) {
-    return account__sched_switch(ctx);
+    return account__sched_switch(ctx, true);
 }
 
 SEC("raw_tp/sched_switch")
 int handle__sched_switch_raw(u64* ctx) {
-    return account__sched_switch(ctx);
+    return account__sched_switch(ctx, false);
 }
 
 char LICENSE[] SEC("license") = "GPL";

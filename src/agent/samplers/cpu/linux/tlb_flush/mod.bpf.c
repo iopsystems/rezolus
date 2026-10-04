@@ -17,6 +17,13 @@
 #define COUNTER_GROUP_WIDTH 8
 #define MAX_CPUS 1024
 
+// Per-cgroup attribution is the config option `cgroup_attribution`, on by
+// default for this sampler. Written into read-only data before load, so with
+// it off the verifier removes the per-cgroup path (the task-group read, the
+// new-cgroup check and the per-cgroup adds) rather than testing a flag on
+// every event.
+const volatile __u8 cgroup_attribution = 0;
+
 #define REASON_TASK_SWITCH 0
 #define REASON_REMOTE_SHOOTDOWN 1
 #define REASON_LOCAL_SHOOTDOWN 2
@@ -107,8 +114,10 @@ struct {
     __uint(max_entries, MAX_CGROUPS);
 } cgroup_remote_send_ipi SEC(".maps");
 
-SEC("raw_tp/tlb_flush")
-int BPF_PROG(tlb_flush, int reason, u64 pages) {
+// `btf` is a compile-time constant: true in the tp_btf program, which can read
+// the current task through a BTF pointer (see current_task_group() in
+// cgroup.h).
+static __always_inline int account_tlb_flush(int reason, bool btf) {
     u32 offset, idx;
 
     // defensive bounds check: a future kernel could add reason codes beyond
@@ -123,15 +132,14 @@ int BPF_PROG(tlb_flush, int reason, u64 pages) {
 
     array_incr(&events, idx);
 
-    struct task_struct* current = (struct task_struct*)bpf_get_current_task();
-
-    void* task_group = BPF_CORE_READ(current, sched_task_group);
-    if (task_group) {
-        int cgroup_id = BPF_CORE_READ(current, sched_task_group, css.id);
-
+    u32 cgroup_id = 0;
+    u64 serial_nr = 0;
+    struct task_group* tg =
+        cgroup_attribution ? current_task_group(btf, &cgroup_id, &serial_nr) : NULL;
+    if (tg) {
         if (cgroup_id < MAX_CGROUPS) {
-
-            int ret = handle_new_cgroup(current, &cgroup_serial_numbers, &cgroup_info);
+            int ret = handle_new_cgroup_read(&tg->css, cgroup_id, serial_nr, &cgroup_serial_numbers,
+                                             &cgroup_info);
 
             if (ret == 0) {
                 // New cgroup detected, zero the counters
@@ -168,6 +176,16 @@ int BPF_PROG(tlb_flush, int reason, u64 pages) {
     return 0;
 }
 
+SEC("tp_btf/tlb_flush")
+int BPF_PROG(tlb_flush_btf, int reason, u64 pages) {
+    return account_tlb_flush(reason, true);
+}
+
+SEC("raw_tp/tlb_flush")
+int BPF_PROG(tlb_flush_raw, int reason, u64 pages) {
+    return account_tlb_flush(reason, false);
+}
+
 // ARM64 kprobe version - tlb_finish_mmu is called after TLB batch operations
 // This provides basic TLB flush counting without reason breakdown
 SEC("kprobe/tlb_finish_mmu")
@@ -179,14 +197,14 @@ int BPF_KPROBE(tlb_finish_mmu) {
 
     array_incr(&events, idx);
 
-    struct task_struct* current = (struct task_struct*)bpf_get_current_task();
-
-    void* task_group = BPF_CORE_READ(current, sched_task_group);
-    if (task_group) {
-        int cgroup_id = BPF_CORE_READ(current, sched_task_group, css.id);
-
+    u32 cgroup_id = 0;
+    u64 serial_nr = 0;
+    struct task_group* tg =
+        cgroup_attribution ? current_task_group(false, &cgroup_id, &serial_nr) : NULL;
+    if (tg) {
         if (cgroup_id < MAX_CGROUPS) {
-            int ret = handle_new_cgroup(current, &cgroup_serial_numbers, &cgroup_info);
+            int ret = handle_new_cgroup_read(&tg->css, cgroup_id, serial_nr, &cgroup_serial_numbers,
+                                             &cgroup_info);
 
             if (ret == 0) {
                 // New cgroup detected, zero the counters

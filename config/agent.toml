@@ -199,6 +199,7 @@ enabled = true
 
 # Instruments CPU migrations.
 [samplers.cpu_migrations]
+# cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
 
 # Instruments CPU frequency, instructions, and cycles using perf counters.
 # The per-cgroup series read the counters on every context switch, which on a
@@ -218,6 +219,7 @@ enabled = true
 
 # BPF sampler that gathers TLB flush event counts by reason.
 [samplers.cpu_tlb_flush]
+# cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
 
 # Instruments CPU usage by state with BPF on linux. On macos
 # host_processor_info() is used. Per-thread series (task_cpu_usage) are off by
@@ -225,6 +227,7 @@ enabled = true
 # either way. See docs/metrics.md#cpu_usage.
 [samplers.cpu_usage]
 # task_attribution = true   # export task_cpu_usage, one series per thread
+# cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
 
 # Reports per-drive temperature for NVMe and SATA drives via read-only
 # pass-through ioctls (like smartctl) — no kernel module required. Drives are
@@ -379,6 +382,7 @@ enabled = false
 # BPF sampler that instruments scheduler events and measures runqueue latency,
 # process running time, and context switch information.
 [samplers.scheduler_runqueue]
+# cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
 
 # Read-only Linux thermal, hwmon and cooling-device telemetry: temperatures,
 # power, bus voltage/current, fan RPM/PWM and cooling state. This sampler is
@@ -391,6 +395,7 @@ enabled = false
 
 # BPF sampler that instruments syscall enter to gather syscall counts.
 [samplers.syscall_counts]
+# cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
 
 # BPF sampler that instruments syscall enter and exit to gather syscall latency
 # distributions.

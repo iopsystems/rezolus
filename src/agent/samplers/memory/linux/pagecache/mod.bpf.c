@@ -253,20 +253,16 @@ static __always_inline u32 cgroup_slot(void) {
         return MAX_CGROUPS;
     }
 
-    struct task_struct* task = bpf_get_current_task_btf();
-
-    // runtime NULL check (bpf_core_field_exists is a compile-time BTF check)
-    void* task_group = BPF_CORE_READ(task, sched_task_group);
-    if (!task_group) {
+    u32 cgroup_id = 0;
+    u64 serial_nr = 0;
+    struct task_group* tg =
+        task_group_of(bpf_get_current_task_btf(), true, &cgroup_id, &serial_nr);
+    if (!tg || cgroup_id >= MAX_CGROUPS) {
         return MAX_CGROUPS;
     }
 
-    u32 cgroup_id = BPF_CORE_READ(task, sched_task_group, css.id);
-    if (cgroup_id >= MAX_CGROUPS) {
-        return MAX_CGROUPS;
-    }
-
-    if (handle_new_cgroup(task, &cgroup_serial_numbers, &cgroup_info) == 0) {
+    if (handle_new_cgroup_read(&tg->css, cgroup_id, serial_nr, &cgroup_serial_numbers,
+                               &cgroup_info) == 0) {
         // New cgroup detected, zero all counters
         u64 zero = 0;
         bpf_map_update_elem(&cgroup_reads, &cgroup_id, &zero, BPF_ANY);

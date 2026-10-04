@@ -2,6 +2,7 @@
 // Copyright (c) 2024 The Rezolus Authors
 
 #include <vmlinux.h>
+#include "../../../agent/bpf/btf_read.h"
 #include "../../../agent/bpf/cgroup.h"
 #include "../../../agent/bpf/helpers.h"
 #include "../../../agent/bpf/task.h"
@@ -12,6 +13,13 @@
 #define CPU_USAGE_GROUP_WIDTH 8
 #define MAX_CPUS 1024
 #define SOFTIRQ_GROUP_WIDTH 16
+
+// Per-cgroup attribution is the config option `cgroup_attribution`, on by
+// default for this sampler. Written into read-only data before load, so with
+// it off the verifier removes the per-cgroup path (the task-group read, the
+// new-cgroup check and the per-cgroup adds) rather than testing a flag on
+// every event.
+const volatile __u8 cgroup_attribution = 0;
 
 // cpu usage stat index
 // (https://elixir.bootlin.com/linux/v6.9-rc4/source/include/linux/kernel_stat.h#L20)
@@ -294,15 +302,15 @@ static __always_inline int send_task_info(struct task_struct* task) {
  * (docs/principles.md principle 18). Its CPU is in the totals meanwhile, and
  * in the exited counters if it exits before a send succeeds.
  */
-static __noinline int handle_new_task(struct task_struct* task) {
+//
+// The caller reads `pid` and `start_time`, directly where its `task` is a BTF
+// pointer, and passes them in; the reads left here are on the new-task path.
+static __noinline int handle_new_task(struct task_struct* task, u32 pid, u64 start_time) {
     if (!task)
         return -1;
 
-    u32 pid = BPF_CORE_READ(task, pid);
     if (pid == 0 || pid >= MAX_PID)
         return -1;
-
-    u64 start_time = BPF_CORE_READ(task, start_time);
 
     u64* last_start = bpf_map_lookup_elem(&task_start_times, &pid);
     if (!last_start)
@@ -355,7 +363,9 @@ static __noinline int handle_new_task(struct task_struct* task) {
 // kernel_has_btf() (see disabled_programs/required_programs in mod.rs). Only
 // `task` is used -- the kernel bumps task->utime/stime before calling
 // cpuacct_account_field, so we read those rather than the passed index/delta.
-static __always_inline int handle_cpuacct_account_field(struct task_struct* task) {
+// `btf` is a compile-time constant: true in the fentry program, whose `task`
+// is a BTF pointer (see task_group_of() in cgroup.h).
+static __always_inline int handle_cpuacct_account_field(struct task_struct* task, bool btf) {
     u32 cpu, idx;
     u64 curr_utime, curr_stime;
     u64 *last_utime, *last_stime;
@@ -364,14 +374,14 @@ static __always_inline int handle_cpuacct_account_field(struct task_struct* task
     if (!task)
         return 0;
 
-    pid = BPF_CORE_READ(task, pid);
+    pid = BTF_READ(btf, task, pid);
     if (pid == 0 || pid >= MAX_PID)
         return 0;
 
-    handle_new_task(task);
+    handle_new_task(task, pid, BTF_READ(btf, task, start_time));
 
-    curr_utime = BPF_CORE_READ(task, utime);
-    curr_stime = BPF_CORE_READ(task, stime);
+    curr_utime = BTF_READ(btf, task, utime);
+    curr_stime = BTF_READ(btf, task, stime);
 
     last_utime = bpf_map_lookup_elem(&task_utime, &pid);
     last_stime = bpf_map_lookup_elem(&task_stime, &pid);
@@ -425,15 +435,17 @@ static __always_inline int handle_cpuacct_account_field(struct task_struct* task
         array_add(&task_cpu_usage, pid, delta_total);
     }
 
-    struct task_group* tg = BPF_CORE_READ(task, sched_task_group);
-    if (!tg)
+    if (!cgroup_attribution)
         return 0;
 
-    int cgroup_id = BPF_CORE_READ(tg, css.id);
-    if (cgroup_id < 0 || cgroup_id >= MAX_CGROUPS)
+    u32 cgroup_id = 0;
+    u64 serial_nr = 0;
+    struct task_group* tg = task_group_of(task, btf, &cgroup_id, &serial_nr);
+    if (!tg || cgroup_id >= MAX_CGROUPS)
         return 0;
 
-    int ret = handle_new_cgroup(task, &cgroup_serial_numbers, &cgroup_info);
+    int ret = handle_new_cgroup_read(&tg->css, cgroup_id, serial_nr, &cgroup_serial_numbers,
+                                     &cgroup_info);
     if (ret == 0) {
         // New cgroup detected, zero the counters
         u64 zero = 0;
@@ -455,19 +467,19 @@ static __always_inline int handle_cpuacct_account_field(struct task_struct* task
 
 SEC("fentry/cpuacct_account_field")
 int BPF_PROG(cpuacct_account_field_fentry, struct task_struct* task, u32 index, u64 delta) {
-    return handle_cpuacct_account_field(task);
+    return handle_cpuacct_account_field(task, true);
 }
 
 SEC("kprobe/cpuacct_account_field")
 int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index, u64 delta) {
-    return handle_cpuacct_account_field(task);
+    return handle_cpuacct_account_field(task, false);
 }
 
-static __always_inline int account__sched_process_exit(u64* ctx) {
+static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
     /* TP_PROTO(struct task_struct *p) */
     struct task_struct* task = (struct task_struct*)ctx[0];
 
-    u32 pid = BPF_CORE_READ(task, pid);
+    u32 pid = BTF_READ(btf, task, pid);
     if (pid == 0 || pid >= MAX_PID)
         return 0;
 
@@ -486,10 +498,11 @@ static __always_inline int account__sched_process_exit(u64* ctx) {
             array_add(&cpu_usage, CPU_USAGE_GROUP_WIDTH * cpu + EXITED_OFFSET, *usage);
         }
 
-        struct task_group* tg = BPF_CORE_READ(task, sched_task_group);
+        u32 cgroup_id = 0;
+        u64 serial_nr = 0;
+        struct task_group* tg =
+            cgroup_attribution ? task_group_of(task, btf, &cgroup_id, &serial_nr) : NULL;
         if (tg) {
-            int cgroup_id = BPF_CORE_READ(tg, css.id);
-
             if (cgroup_id > 0 && cgroup_id < MAX_CGROUPS) {
                 array_add(&cgroup_exited, cgroup_id, *usage);
             }
@@ -562,8 +575,8 @@ int softirq_exit(struct trace_event_raw_softirq* args) {
         return 0;
     }
 
-    struct task_struct* current = (struct task_struct*)bpf_get_current_task();
-    int pid = BPF_CORE_READ(current, pid);
+    // the current task's pid, the low half of pid_tgid, without a kernel read
+    u32 pid = (u32)bpf_get_current_pid_tgid();
 
     dur = bpf_ktime_get_ns() - *start_ts;
 
@@ -581,12 +594,12 @@ int softirq_exit(struct trace_event_raw_softirq* args) {
 
 SEC("tp_btf/sched_process_exit")
 int handle__sched_process_exit_btf(u64* ctx) {
-    return account__sched_process_exit(ctx);
+    return account__sched_process_exit(ctx, true);
 }
 
 SEC("raw_tp/sched_process_exit")
 int handle__sched_process_exit_raw(u64* ctx) {
-    return account__sched_process_exit(ctx);
+    return account__sched_process_exit(ctx, false);
 }
 
 char LICENSE[] SEC("license") = "GPL";
