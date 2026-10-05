@@ -206,10 +206,41 @@ restart boundary nobody observed).
 Name and semantics follow dendro's `keys::PRODUCER_EPOCH`, so an archive written
 here reads the same to any consumer of that format.
 
-**Known limitation:** if the agent restarts mid-recording, the recording's
-metadata still carries the epoch observed when it opened — there is no plumbing
-yet to amend it in place. The recorder logs a warning naming both epochs.
-Persisting the full history as dendro's `producer_epochs` is the fix.
+**When the agent restarts mid-recording**, an archive (`.dendro` or `.rez`,
+written by `record` or by `hindsight`) is amended once the first row from the
+new process is staged: `producer_epoch` becomes the new epoch,
+[`producer_epochs`](#producer_epochs) gains an entry, and `version`,
+`systeminfo` and `descriptions` are read again from the new process. A parquet
+recording writes its metadata once, when it closes: `producer_epoch` is the
+last epoch seen, `version`, `systeminfo` and `descriptions` are what the agent
+reported when the recording opened, and there is no history; the recorder's
+warning naming both epochs is the record of the restart.
+
+### `producer_epochs`
+
+Every producer epoch an archive observed, in order, as a JSON array:
+
+```json
+[
+  {"epoch": "0b1c…", "from_ts": 1789425944000000000, "version": "6.0.0"},
+  {"epoch": "7f3e…", "from_ts": 1789426011000000000, "version": "6.0.1"}
+]
+```
+
+`from_ts` is the timestamp of the first row from that process; every cumulative
+counter reset there. The last entry is the current epoch, also under
+`producer_epoch`. Written only when a restart is seen: absent means the archive
+saw one process. The first entry is the epoch the archive opened with, from its
+first row. `version` is what the process reported, and is missing from an epoch
+that came and went before its metadata could be fetched.
+
+Name, shape, `epoch` and `from_ts` follow dendro's `keys::PRODUCER_EPOCHS`;
+`version` is rezolus's addition.
+
+After a restart, `version` and `systeminfo` describe the newest process, and
+`descriptions` is the union of every process's descriptions (the newest wins
+for a metric in both), so the rows from before the restart keep theirs. A
+`version` set with `record --metadata` is kept.
 
 ### `sampling_interval_ms`
 

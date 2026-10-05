@@ -26,6 +26,7 @@
 //! reused (measured 1.004–1.011× live), and stays bounded *after a spike*
 //! because `auto_vacuum=INCREMENTAL` lets the writer trickle pages back.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -53,6 +54,9 @@ pub struct HindsightBuffer {
     /// [`at_retention_bound`](Self::at_retention_bound) can be answered
     /// exactly. It is not affected by eviction, which is the point.
     first_ts: Option<u64>,
+    /// The recording's metadata as last written: a `.rez` writer replaces
+    /// the whole map, so an update sends this back with the change merged in.
+    metadata: BTreeMap<String, String>,
 }
 
 /// The container the buffer is written in.
@@ -111,6 +115,7 @@ impl HindsightBuffer {
         };
         let mut writer = metriken_archive::ArchiveWriter::create(path, config)
             .map_err(|e| format!("failed to create {}: {e}", path.display()))?;
+        let metadata = seed.metadata.clone();
         let rec = writer
             .add_source(seed.labels, seed.metadata, seed.clock_anchor_wall_ns)
             .map_err(archive_err)?;
@@ -119,6 +124,7 @@ impl HindsightBuffer {
             lookback,
             newest_ts: None,
             first_ts: None,
+            metadata,
         })
     }
 
@@ -135,6 +141,7 @@ impl HindsightBuffer {
         policy: SealPolicy,
     ) -> Result<Self, String> {
         let mut archive = RezArchive::create(path)?;
+        let metadata = seed.metadata.clone();
         let writer = archive.add_recording(seed)?;
         Ok(Self {
             writer: Writer::Rez {
@@ -144,7 +151,32 @@ impl HindsightBuffer {
             lookback,
             newest_ts: None,
             first_ts: None,
+            metadata,
         })
+    }
+
+    /// Write agent restarts into the buffer's metadata: see
+    /// [`crate::recorder::restart::metadata_patch`].
+    pub fn record_restarts(
+        &mut self,
+        restarts: &[crate::recorder::restart::Restart],
+        agent: &crate::recorder::restart::Agent,
+    ) -> Result<(), String> {
+        let patch = crate::recorder::restart::metadata_patch(
+            &self.metadata,
+            self.first_ts.unwrap_or_default(),
+            restarts,
+            agent,
+            &|_| false,
+        );
+        let mut merged = self.metadata.clone();
+        merged.extend(patch.clone());
+        match &mut self.writer {
+            Writer::Rez { rec, .. } => rec.update_metadata(merged.clone())?,
+            Writer::Dendro { rec, .. } => rec.update_metadata(patch).map_err(archive_err)?,
+        }
+        self.metadata = merged;
+        Ok(())
     }
 
     /// Append one snapshot. Every tick is committed as it arrives, so

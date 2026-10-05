@@ -283,6 +283,14 @@ pub fn run(config: Config) {
         .ok()
         .filter(|a| *a != 0)
         .unwrap_or_else(wall_ns);
+    // The handshake names the process whose rows arrive, so its epoch is the
+    // one the buffer opens with; `/status` is the fallback for a handshake
+    // that carried none.
+    let agent_epoch = source
+        .uuid
+        .clone()
+        .filter(|u| !u.is_empty())
+        .or(agent_epoch);
 
     let seed = crate::recorder::rez_v3_writer::ManifestSeed {
         labels: crate::recorder::rez::build_labels("rezolus", agent_systeminfo.as_deref(), &[]),
@@ -360,6 +368,8 @@ pub fn run(config: Config) {
         let (stream_tx, mut stream_rx) = tokio::sync::mpsc::channel::<(usize, StreamEvent)>(
             crate::recorder::STREAM_QUEUE_PER_ENDPOINT,
         );
+        // For the restarted agent's metadata; the pump owns the other.
+        let metadata_client = async_client.clone();
         tokio::spawn(crate::recorder::stream::pump(
             0,
             subscription,
@@ -372,6 +382,8 @@ pub fn run(config: Config) {
         ));
         let mut decoder = metriken_archive::StreamDecoder::new();
         let mut epoch = source.uuid.clone();
+        // Agent restarts not yet written into the buffer's metadata.
+        let mut restarts: Vec<crate::recorder::restart::Restart> = Vec::new();
 
         // Dumps run OFF this loop — that is the whole shape of what follows.
         // Every dump is spawned and its result comes back asynchronously,
@@ -463,9 +475,26 @@ pub fn run(config: Config) {
 
                 Some((_, event)) = stream_rx.recv() => match event {
                     StreamEvent::Interval(applied) => {
+                        let first_ts = applied
+                            .rows
+                            .iter()
+                            .filter_map(|r| u64::try_from(r.ts).ok())
+                            .min();
                         match ingest_interval(&mut buffer, &mut decoder, applied) {
                             Ok(passes) => (0..passes).for_each(|_| shared_state.record_tick()),
                             Err(e) => fatal(&e, &buffer_path),
+                        }
+                        // A restart is written into the buffer's metadata
+                        // once a row from the new process is in it.
+                        if let Some(ts) = first_ts {
+                            for r in &mut restarts {
+                                r.from_ts.get_or_insert(ts);
+                            }
+                        }
+                        if !restarts.is_empty() && restarts.iter().all(|r| r.from_ts.is_some()) {
+                            let pending = std::mem::take(&mut restarts);
+                            record_restarts(&mut buffer, &pending, &metadata_client, &url, timeout)
+                                .await;
                         }
                         // Seal and evict with each interval, as each scrape
                         // did. The select is biased toward this arm, so while
@@ -488,6 +517,12 @@ pub fn run(config: Config) {
                                 epoch.as_deref().unwrap_or("unknown"),
                                 source.uuid.as_deref().unwrap_or("unknown")
                             );
+                            if let Some(new) = source.uuid.as_deref().filter(|u| !u.is_empty()) {
+                                restarts.push(crate::recorder::restart::Restart {
+                                    epoch: new.to_string(),
+                                    from_ts: None,
+                                });
+                            }
                             epoch = source.uuid;
                         }
                     }
@@ -780,6 +815,34 @@ fn log_capture(response: &DumpToFileResponse) {
 /// the recording. Sealing and retention are the caller's, on its own tick
 /// ([`HindsightBuffer::maintain`]). A row naming a schema this connection has not sent is
 /// skipped and logged.
+/// Write agent restarts into the buffer's metadata, with the version,
+/// systeminfo and descriptions the new process reports (fetched within
+/// `timeout`). See [`crate::recorder::restart::metadata_patch`]. A failure is
+/// logged; the recording goes on.
+async fn record_restarts(
+    buffer: &mut HindsightBuffer,
+    restarts: &[crate::recorder::restart::Restart],
+    client: &reqwest::Client,
+    url: &reqwest::Url,
+    timeout: Duration,
+) {
+    let fetched = tokio::time::timeout(timeout, crate::recorder::fetch_agent_metadata(client, url))
+        .await
+        .unwrap_or_default();
+    let agent = crate::recorder::restart::Agent {
+        version: fetched.version,
+        systeminfo: fetched.systeminfo,
+        descriptions: fetched.descriptions,
+    };
+    match buffer.record_restarts(restarts, &agent) {
+        Ok(()) => info!(
+            "the buffer's metadata now records the agent restart (producer_epochs; version {})",
+            agent.version.as_deref().unwrap_or("not reported")
+        ),
+        Err(e) => warn!("the agent restart could not be written into the buffer's metadata: {e}"),
+    }
+}
+
 pub(crate) fn ingest_interval(
     buffer: &mut HindsightBuffer,
     decoder: &mut metriken_archive::StreamDecoder,

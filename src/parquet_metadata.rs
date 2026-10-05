@@ -46,6 +46,18 @@ pub const KEY_VERSION: &str = "version";
 /// this says nothing about it; that needs a per-counter generation.
 pub const KEY_PRODUCER_EPOCH: &str = "producer_epoch";
 
+/// Every producer epoch a recording observed, in order: a JSON array of
+/// `{"epoch": <id>, "from_ts": <first row timestamp>, "version": <agent
+/// version>}`. Written when the agent restarts mid-recording; absent when no
+/// restart was seen. The last entry is the current epoch, which is also under
+/// [`KEY_PRODUCER_EPOCH`]. Every cumulative counter reset at each entry's
+/// `from_ts` after the first.
+///
+/// Name, shape and the first two fields follow dendro's
+/// `keys::PRODUCER_EPOCHS`; `version` is rezolus's addition, so a reader can
+/// tell which agent build wrote the rows from each point on.
+pub const KEY_PRODUCER_EPOCHS: &str = "producer_epochs";
+
 /// Sampling interval in milliseconds, e.g. `"1000"`. Must be identical
 /// across files before they can be combined.
 pub const KEY_SAMPLING_INTERVAL_MS: &str = "sampling_interval_ms";

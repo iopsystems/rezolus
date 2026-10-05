@@ -79,17 +79,29 @@ const TABLE: &str = "fake/ops";
 /// the optional metadata routes, which hindsight treats as absent. Returns the
 /// bound port; the accept loop is detached and dies with the test process.
 fn spawn_fake_agent(width: usize) -> u16 {
-    spawn_agent(width, None)
+    spawn_agent(width, None, false)
 }
 
 /// As [`spawn_fake_agent`], but the first subscription gets `frames` frames
 /// and is then closed, and every later one gets a 404: an agent replaced by
 /// one that cannot stream, or a proxy that stopped routing the path.
 fn spawn_fake_agent_that_stops(width: usize, frames: u64) -> u16 {
-    spawn_agent(width, Some(frames))
+    spawn_agent(width, Some(frames), false)
 }
 
-fn spawn_agent(width: usize, frames: Option<u64>) -> u16 {
+/// As [`spawn_fake_agent`], but the first subscription gets `frames` frames
+/// and is then closed, as when the agent restarts; every later one streams
+/// under [`RESTARTED_EPOCH`].
+fn spawn_fake_agent_that_restarts(width: usize, frames: u64) -> u16 {
+    spawn_agent(width, Some(frames), true)
+}
+
+/// The producer epoch the stand-in agent streams under, before and after a
+/// restart.
+const EPOCH: &str = "fake-epoch";
+const RESTARTED_EPOCH: &str = "fake-epoch-2";
+
+fn spawn_agent(width: usize, frames: Option<u64>, restarts: bool) -> u16 {
     let subscriptions = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the fake agent");
     let port = listener.local_addr().unwrap().port();
@@ -110,8 +122,16 @@ fn spawn_agent(width: usize, frames: Option<u64>) -> u16 {
                 let req = String::from_utf8_lossy(&buf[..n]);
                 let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
                 let first = || subscriptions.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+                if path.starts_with("/metrics/stream") && restarts {
+                    if first() {
+                        serve_stream(stream, &path, width, frames, EPOCH);
+                    } else {
+                        serve_stream(stream, &path, width, None, RESTARTED_EPOCH);
+                    }
+                    return;
+                }
                 if path.starts_with("/metrics/stream") && (frames.is_none() || first()) {
-                    serve_stream(stream, &path, width, frames);
+                    serve_stream(stream, &path, width, frames, EPOCH);
                     return;
                 }
                 let _ = stream.write_all(
@@ -136,7 +156,13 @@ fn wall_ns() -> u64 {
 /// carrying `width` counters (`fake_ops_0`..) in the `fake/ops` acquisition
 /// group, the schema on the first row only, until hindsight hangs up. Each
 /// frame's values differ, so consecutive rows are not deduped.
-fn serve_stream(mut stream: std::net::TcpStream, path: &str, width: usize, frames: Option<u64>) {
+fn serve_stream(
+    mut stream: std::net::TcpStream,
+    path: &str,
+    width: usize,
+    frames: Option<u64>,
+    epoch: &str,
+) {
     use dendro::replicate::{wire, Frame};
     use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc};
 
@@ -153,7 +179,7 @@ fn serve_stream(mut stream: std::net::TcpStream, path: &str, width: usize, frame
     wire::encode_frame(
         &Frame::Handshake {
             source: 0,
-            uuid: Some("fake-epoch".to_string()),
+            uuid: Some(epoch.to_string()),
             labels: Default::default(),
             metadata: Default::default(),
             clock_anchor_wall_ns: wall_ns() as i64,
@@ -1691,6 +1717,79 @@ fn a_refused_reconnect_captures_the_buffer_then_exits() {
         })
         .unwrap_or_else(|| panic!("no {TABLE} table in the capture:\n{stdout}"));
     assert!(rows >= 10, "the capture holds the recorded rows:\n{stdout}");
+}
+
+/// An agent that restarts while hindsight runs is recorded in the buffer's
+/// metadata: `producer_epochs` gains the new process from its first row, and
+/// `producer_epoch` names it.
+#[test]
+fn an_agent_restart_is_written_into_a_dendro_buffers_metadata() {
+    use metriken_archive::Catalog;
+
+    let agent = spawn_fake_agent_that_restarts(1, 10);
+    let h = Hindsight::try_start_as(agent, 2, "dendro")
+        .unwrap_or_else(|why| panic!("rezolus hindsight failed to come up: {why}"));
+    h.wait_for_log("now records the agent restart", Duration::from_secs(30));
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("dump.dendro");
+    h.dump_to(&dest);
+
+    let catalog = metriken_archive::DendroCatalog::open(&dest).expect("the dump opens");
+    let sources = catalog.sources().unwrap();
+    let metadata = &sources[0].metadata;
+    assert_eq!(
+        metadata.get("producer_epoch").map(String::as_str),
+        Some(RESTARTED_EPOCH),
+        "{metadata:?}"
+    );
+    let epochs: serde_json::Value = serde_json::from_str(
+        metadata
+            .get("producer_epochs")
+            .unwrap_or_else(|| panic!("no producer_epochs: {metadata:?}")),
+    )
+    .unwrap();
+    let epochs = epochs.as_array().unwrap();
+    assert_eq!(epochs.len(), 2, "{epochs:?}");
+    assert_eq!(epochs[0]["epoch"], EPOCH);
+    assert_eq!(epochs[1]["epoch"], RESTARTED_EPOCH);
+    assert!(
+        epochs[1]["from_ts"].as_u64() > epochs[0]["from_ts"].as_u64(),
+        "the new epoch starts after the first: {epochs:?}"
+    );
+}
+
+/// As [`an_agent_restart_is_written_into_a_dendro_buffers_metadata`], for a
+/// `.rez` buffer, whose writer replaces the whole metadata map: the restart is
+/// recorded and the keys written at startup are kept.
+#[test]
+fn an_agent_restart_is_written_into_a_rez_buffers_metadata() {
+    let agent = spawn_fake_agent_that_restarts(1, 10);
+    let h = Hindsight::try_start(agent, 2)
+        .unwrap_or_else(|why| panic!("rezolus hindsight failed to come up: {why}"));
+    h.wait_for_log("now records the agent restart", Duration::from_secs(30));
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("dump.rez");
+    h.dump_to(&dest);
+
+    let conn = Connection::open_with_flags(&dest, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .unwrap_or_else(|e| panic!("failed to open {}: {e}", dest.display()));
+    let json: String = conn
+        .query_row("SELECT metadata FROM recordings", [], |row| row.get(0))
+        .expect("one recording");
+    let metadata: std::collections::BTreeMap<String, String> = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        metadata.get("producer_epoch").map(String::as_str),
+        Some(RESTARTED_EPOCH),
+        "{metadata:?}"
+    );
+    assert!(
+        metadata.contains_key("sampling_interval_ms"),
+        "a startup key is kept: {metadata:?}"
+    );
+    let epochs: serde_json::Value =
+        serde_json::from_str(&metadata["producer_epochs"]).expect("producer_epochs parses");
+    assert_eq!(epochs[0]["epoch"], EPOCH, "{epochs}");
+    assert_eq!(epochs[1]["epoch"], RESTARTED_EPOCH, "{epochs}");
 }
 
 /// A `.dendro` output keeps the buffer as a dendro archive, and its dumps

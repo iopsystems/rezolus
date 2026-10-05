@@ -652,6 +652,12 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   record the new occupant's labels (#1232), so a conversion keeps what the file
   records. Reopen only if a recording from that range needs per-task
   attribution badly enough to accept unlabelled occupants.
+- **Show agent restarts from `producer_epochs`** — Open. `record` and
+  `hindsight` write dendro's `producer_epochs` when the agent restarts
+  mid-recording (`docs/journal/2026-10-05-metadata-after-agent-restart.md`),
+  but nothing reads it: the viewer could mark each `from_ts` on the timeline
+  and `mcp describe-recording` could list the epochs and versions. Reopen when
+  a recording that spans an upgrade is being investigated.
 
 ## Stream consumers and membership as events (6.0)
 

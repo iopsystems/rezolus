@@ -94,6 +94,9 @@ pub struct EndpointState {
     /// `ts + wall_offset` on the agent's clock; `None` when that interval
     /// carried no rows.
     pub last_frame_wall_ns: Option<u64>,
+    /// Agent restarts seen and not yet written into the recording's
+    /// metadata, oldest first. See `recorder::restart`.
+    pub restarts: Vec<super::restart::Restart>,
 }
 
 impl EndpointState {
@@ -110,6 +113,15 @@ impl EndpointState {
             streaming: false,
             frames: 0,
             last_frame_wall_ns: None,
+            restarts: Vec::new(),
+        }
+    }
+
+    /// Give each restart waiting for its first row the stamp of `ts`, the
+    /// first row just staged from this endpoint.
+    pub fn note_first_row(&mut self, ts: u64) {
+        for restart in &mut self.restarts {
+            restart.from_ts.get_or_insert(ts);
         }
     }
 
