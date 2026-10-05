@@ -21,6 +21,17 @@
 
 ### Changed
 
+- **An agent restart is written into the recording's metadata.** When the
+  agent restarts mid-recording, an archive written by `record` or `hindsight`
+  (`.dendro` or `.rez`) is amended once the first row from the new process is
+  staged: `producer_epoch` becomes the new epoch, `producer_epochs` (dendro's
+  key) lists every epoch with the timestamp of its first row and the version
+  it reported, and `version`, `systeminfo` and `descriptions` are read again
+  from the new process. `descriptions` keeps the earlier process's entries,
+  so the rows from before the restart stay described. A `version` set with
+  `--metadata` is kept. Before, the metadata described only the process the
+  recording opened with, and a log warning was the only record of the
+  restart. A parquet recording still has no history.
 - metriken-query 0.34.4 and metriken-archive 0.3.4. `rate`/`irate`, alone
   or under `sum`/`avg`/`min`/`max`/`count`, are computed in one pass over a
   `.dendro` or `.rez` archive's columns, including in an expression that

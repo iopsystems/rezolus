@@ -283,6 +283,14 @@ pub fn run(config: Config) {
         .ok()
         .filter(|a| *a != 0)
         .unwrap_or_else(wall_ns);
+    // The handshake names the process whose rows arrive, so its epoch is the
+    // one the buffer opens with; `/status` is the fallback for a handshake
+    // that carried none.
+    let agent_epoch = source
+        .uuid
+        .clone()
+        .filter(|u| !u.is_empty())
+        .or(agent_epoch);
 
     let seed = crate::recorder::rez_v3_writer::ManifestSeed {
         labels: crate::recorder::rez::build_labels("rezolus", agent_systeminfo.as_deref(), &[]),
@@ -360,6 +368,8 @@ pub fn run(config: Config) {
         let (stream_tx, mut stream_rx) = tokio::sync::mpsc::channel::<(usize, StreamEvent)>(
             crate::recorder::STREAM_QUEUE_PER_ENDPOINT,
         );
+        // For the restarted agent's metadata; the pump owns the other.
+        let metadata_client = async_client.clone();
         tokio::spawn(crate::recorder::stream::pump(
             0,
             subscription,
@@ -372,6 +382,11 @@ pub fn run(config: Config) {
         ));
         let mut decoder = metriken_archive::StreamDecoder::new();
         let mut epoch = source.uuid.clone();
+        // Agent restarts not yet written into the buffer's metadata.
+        let mut restarts: Vec<crate::recorder::restart::Restart> = Vec::new();
+        // Fetches of the restarted agent's metadata that failed or found
+        // another process; see `record_restarts`.
+        let mut restart_fetches = 0u32;
 
         // Dumps run OFF this loop — that is the whole shape of what follows.
         // Every dump is spawned and its result comes back asynchronously,
@@ -463,9 +478,32 @@ pub fn run(config: Config) {
 
                 Some((_, event)) = stream_rx.recv() => match event {
                     StreamEvent::Interval(applied) => {
+                        let first_ts = applied
+                            .rows
+                            .iter()
+                            .filter_map(|r| u64::try_from(r.ts).ok())
+                            .min();
                         match ingest_interval(&mut buffer, &mut decoder, applied) {
                             Ok(passes) => (0..passes).for_each(|_| shared_state.record_tick()),
                             Err(e) => fatal(&e, &buffer_path),
+                        }
+                        // A restart is written into the buffer's metadata
+                        // once a row from the new process is in it.
+                        if let Some(ts) = first_ts {
+                            for r in &mut restarts {
+                                r.from_ts.get_or_insert(ts);
+                            }
+                        }
+                        if !restarts.is_empty() && restarts.iter().all(|r| r.from_ts.is_some()) {
+                            record_restarts(
+                                &mut buffer,
+                                &mut restarts,
+                                &mut restart_fetches,
+                                &metadata_client,
+                                &url,
+                                timeout,
+                            )
+                            .await;
                         }
                         // Seal and evict with each interval, as each scrape
                         // did. The select is biased toward this arm, so while
@@ -488,6 +526,15 @@ pub fn run(config: Config) {
                                 epoch.as_deref().unwrap_or("unknown"),
                                 source.uuid.as_deref().unwrap_or("unknown")
                             );
+                            if let Some(new) = source.uuid.as_deref().filter(|u| !u.is_empty()) {
+                                restarts.push(crate::recorder::restart::Restart {
+                                    epoch: new.to_string(),
+                                    from_ts: None,
+                                    rows_before: buffer.has_rows(),
+                                });
+                                // The newest process gets its own attempts.
+                                restart_fetches = 0;
+                            }
                             epoch = source.uuid;
                         }
                     }
@@ -769,6 +816,52 @@ fn log_capture(response: &DumpToFileResponse) {
             summary.bytes,
             response.path.display()
         );
+    }
+}
+
+/// Write the agent restarts in `restarts` into the buffer's metadata, with the
+/// version, systeminfo and descriptions the new process reports (see
+/// [`crate::recorder::fetch_restarted_agent`] and
+/// [`crate::recorder::restart::metadata_patch`]). A fetch that fails or finds
+/// another process leaves `restarts` for the next interval; after
+/// [`crate::recorder::restart::FETCH_ATTEMPTS`] fetches in all, counted in `fetches`,
+/// the epochs are then written without the process's metadata. A write that
+/// fails is logged, and the recording goes on.
+async fn record_restarts(
+    buffer: &mut HindsightBuffer,
+    restarts: &mut Vec<crate::recorder::restart::Restart>,
+    fetches: &mut u32,
+    client: &reqwest::Client,
+    url: &reqwest::Url,
+    timeout: Duration,
+) {
+    use crate::recorder::restart::{Agent, FETCH_ATTEMPTS};
+    let Some(newest) = restarts.last() else {
+        return;
+    };
+    let agent =
+        match crate::recorder::fetch_restarted_agent(client, url, &newest.epoch, timeout).await {
+            Some(agent) => agent,
+            None if *fetches + 1 < FETCH_ATTEMPTS => {
+                *fetches += 1;
+                return;
+            }
+            None => {
+                warn!(
+                    "could not read the restarted agent's version, systeminfo and \
+                     descriptions; the buffer's metadata records the restart without them"
+                );
+                Agent::default()
+            }
+        };
+    *fetches = 0;
+    let pending = std::mem::take(restarts);
+    match buffer.record_restarts(&pending, &agent) {
+        Ok(()) => info!(
+            "the buffer's metadata now records the agent restart (producer_epochs; version {})",
+            agent.version.as_deref().unwrap_or("not reported")
+        ),
+        Err(e) => warn!("the agent restart could not be written into the buffer's metadata: {e}"),
     }
 }
 

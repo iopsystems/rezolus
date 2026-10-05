@@ -4,6 +4,7 @@ mod child;
 mod config;
 mod endpoint;
 mod prometheus;
+pub(crate) mod restart;
 /// Consuming an agent replication stream — #1224 Phase 3, how a `.dendro`
 /// records a Rezolus agent.
 pub(crate) mod stream;
@@ -396,7 +397,7 @@ async fn probe_endpoint(
 
 /// Fetch systeminfo, descriptions, sampler status and version from a Rezolus
 /// agent.
-async fn fetch_agent_metadata(client: &Client, base_url: &Url) -> AgentMetadata {
+pub(crate) async fn fetch_agent_metadata(client: &Client, base_url: &Url) -> AgentMetadata {
     let mut info_url = base_url.clone();
     info_url.set_path("/systeminfo");
     let systeminfo = match client.get(info_url).send().await {
@@ -552,17 +553,13 @@ fn snapshot_producer_stamp(snapshot: &metriken_exposition::Snapshot) -> Option<(
     Some((u64::try_from(ts).ok()?, wall_offset))
 }
 
-/// Warn once when the agent's epoch changes mid-recording.
+/// Note a change of the agent's epoch mid-recording, read off a snapshot.
 ///
-/// The recording's metadata records the epoch observed when it opened, and
-/// there is no plumbing yet to amend it in place — the streaming writer owns
-/// the connection on its own thread. So the rows after a restart are stamped
-/// with the epoch of the run before it, which is wrong in a way nothing
-/// downstream can detect.
-///
-/// Saying so in the log is not a fix and is not pretending to be one. It is
-/// the difference between an operator having a chance to notice and having
-/// none. Persisting the history as dendro's `producer_epochs` is the fix.
+/// An archive (`.dendro` or `.rez`) records the restart in its metadata once a
+/// row from the new process is staged: see [`apply_restarts`]. A parquet
+/// recording writes its metadata once, when it closes, with no history, and a
+/// raw one has none, so for those the warning is the only record of the
+/// restart.
 fn note_epoch_change(ep: &mut EndpointState, snapshot: &metriken_exposition::Snapshot) {
     if let Some(seen) = snapshot_producer_epoch(snapshot) {
         note_epoch(ep, seen);
@@ -583,11 +580,132 @@ fn note_epoch(ep: &mut EndpointState, seen: &str) {
         Some(known) => {
             warn!(
                 "{}: the agent restarted mid-recording (producer epoch {known} -> {seen}); \
-                 every cumulative counter reset at this point, and rows from here on are \
-                 stamped with the earlier epoch",
+                 every cumulative counter reset at this point",
                 ep.config.source_label()
             );
             ep.agent.producer_epoch = Some(seen.to_string());
+            ep.restarts.push(restart::Restart {
+                epoch: seen.to_string(),
+                from_ts: None,
+                rows_before: ep.rows_staged,
+            });
+            // The fetches so far were for an earlier process; the newest
+            // gets its own attempts.
+            ep.restart_fetches = 0;
+        }
+    }
+}
+
+/// What the restarted agent at `base_url` reports about itself, fetched
+/// within `timeout`: `None` when nothing answered, or when `/status` names an
+/// epoch other than `epoch`, the one the restart is for (the agent restarted
+/// again). An agent whose `/status`
+/// carries no epoch cannot be checked, and what it reported is taken.
+pub(crate) async fn fetch_restarted_agent(
+    client: &Client,
+    base_url: &Url,
+    epoch: &str,
+    timeout: Duration,
+) -> Option<restart::Agent> {
+    let fetch = async {
+        let text = |path: &'static str| {
+            let mut url = base_url.clone();
+            url.set_path(path);
+            async move {
+                match client.get(url).send().await {
+                    Ok(r) if r.status().is_success() => r.text().await.ok(),
+                    _ => None,
+                }
+            }
+        };
+        let systeminfo = text("/systeminfo").await;
+        let descriptions = text("/metrics/descriptions").await;
+        let (version, reported_epoch, _) = fetch_agent_identity(client, base_url).await;
+        (
+            restart::Agent {
+                version,
+                systeminfo,
+                descriptions,
+            },
+            reported_epoch,
+        )
+    };
+    let (agent, reported_epoch) = tokio::time::timeout(timeout, fetch).await.ok()?;
+    match reported_epoch.as_deref() {
+        Some(reported) if reported != epoch => None,
+        Some(_) => Some(agent),
+        None if agent.version.is_some()
+            || agent.systeminfo.is_some()
+            || agent.descriptions.is_some() =>
+        {
+            Some(agent)
+        }
+        None => None,
+    }
+}
+
+/// Write each agent restart into its recording's metadata once a row from the
+/// new process has been staged: the epoch history, and the version,
+/// systeminfo and descriptions the new process reports (see
+/// [`fetch_restarted_agent`] and [`restart::metadata_patch`]). A fetch that
+/// fails or finds another process is tried on up to
+/// [`restart::FETCH_ATTEMPTS`] ticks in all, and the epochs are then written without
+/// the process's metadata; on the `last` call, at shutdown, there is no next
+/// tick, so they are written at once. A `version` set with `--metadata` is
+/// kept. Without
+/// an archive there is nothing to amend, and the restarts are dropped;
+/// [`note_epoch`] has already logged them.
+async fn apply_restarts(
+    endpoints: &mut [EndpointState],
+    mut archive: Option<&mut RezStream>,
+    client: &Client,
+    user_metadata: &[(String, String)],
+    timeout: Duration,
+    last: bool,
+) {
+    let version_pinned = user_metadata
+        .iter()
+        .any(|(k, _)| k == parquet_metadata::KEY_VERSION);
+    for (idx, ep) in endpoints.iter_mut().enumerate() {
+        let Some(archive) = archive.as_deref_mut() else {
+            ep.restarts.clear();
+            continue;
+        };
+        let Some(newest) = ep.restarts.last() else {
+            continue;
+        };
+        if ep.restarts.iter().any(|r| r.from_ts.is_none()) {
+            continue;
+        }
+        let label = ep.config.source_label().to_string();
+        let agent =
+            match fetch_restarted_agent(client, &ep.config.url, &newest.epoch, timeout).await {
+                Some(agent) => agent,
+                None if !last && ep.restart_fetches + 1 < restart::FETCH_ATTEMPTS => {
+                    ep.restart_fetches += 1;
+                    continue;
+                }
+                None => {
+                    warn!(
+                        "{label}: could not read the restarted agent's version, systeminfo \
+                         and descriptions; the recording's metadata records the restart \
+                         without them"
+                    );
+                    restart::Agent::default()
+                }
+            };
+        ep.restart_fetches = 0;
+        let restarts = std::mem::take(&mut ep.restarts);
+        match archive.record_restarts(idx, &restarts, &agent, version_pinned) {
+            Ok(()) => info!(
+                "{label}: the recording's metadata now records the agent restart \
+                 (producer_epochs; version {})",
+                agent.version.as_deref().unwrap_or("not reported")
+            ),
+            Err(e) => warn!(
+                "{label}: the agent restart could not be written into the recording's \
+                 metadata: {e}"
+            ),
         }
     }
 }
@@ -978,9 +1096,21 @@ fn handle_stream_event(
                     applied.seq
                 );
             }
+            let first_ts = applied
+                .rows
+                .iter()
+                .filter_map(|r| u64::try_from(r.ts).ok())
+                .min();
             if let Some(rec) = rez_recorder {
-                if let Err(e) = rec.stage_stream(idx, &endpoints[idx].config.url, applied) {
-                    failed.get_or_insert(e);
+                match rec.stage_stream(idx, &endpoints[idx].config.url, applied) {
+                    Ok(()) => {
+                        if let Some(ts) = first_ts {
+                            endpoints[idx].note_row_staged(ts);
+                        }
+                    }
+                    Err(e) => {
+                        failed.get_or_insert(e);
+                    }
                 }
             }
         }
@@ -1427,6 +1557,9 @@ struct RezStream {
     /// map: adding a run event means sending the seed back with the event
     /// merged in, and the writer does not hand the seed back.
     metadata: BTreeMap<usize, BTreeMap<String, String>>,
+    /// The first stamp each recording ingested: where the epoch it opened
+    /// with begins, should the agent restart. See `recorder::restart`.
+    first_stamp: BTreeMap<usize, u64>,
     /// The last stamp each recording ingested, for its closing clock
     /// observation.
     ///
@@ -1517,6 +1650,7 @@ impl RezStream {
         anchored_ts: u64,
         wall_offset_ns: i64,
     ) -> Result<(), String> {
+        self.first_stamp.entry(endpoint).or_insert(anchored_ts);
         self.last_stamp
             .insert(endpoint, (anchored_ts, wall_offset_ns));
         let missing = || {
@@ -1587,6 +1721,7 @@ impl RezStream {
             let ts = u64::try_from(pass.ts)
                 .map_err(|_| format!("{url} stamped a pass at {} ns, before the epoch", pass.ts))?;
             let wall_offset = pass.wall_offset;
+            self.first_stamp.entry(endpoint).or_insert(ts);
             self.last_stamp.insert(endpoint, (ts, wall_offset));
             let groups = decoder.decode(pass.rows)?;
             staged.push(
@@ -1679,14 +1814,11 @@ impl RezStream {
 
     /// Add `events` to every open recording's `KEY_EVENTS` payload.
     ///
-    /// Each recording's stored map is cloned, the events merged in
+    /// Each recording's stored map is cloned and the events merged in
     /// (`merge_events_into`, which parses what is there and dedups by id),
-    /// and the result sent through the writer: to a `.rez` as a whole-map
-    /// replacement, and to a dendro archive as a patch of the one key, since
-    /// dendro merges a patch key by key. The stored copy is updated only once
-    /// the writer accepts it, so a failed update can be retried with the same
-    /// input. Every recording is attempted even if an earlier one failed; the
-    /// first error is reported.
+    /// and the one key is written through [`patch_metadata`](Self::patch_metadata).
+    /// Every recording is attempted even if an earlier one failed; the first
+    /// error is reported.
     fn merge_events(&mut self, events: &[Event]) -> Result<(), String> {
         let mut first_err = None;
         let indices: Vec<usize> = match &self.sink {
@@ -1701,31 +1833,77 @@ impl RezStream {
                 continue;
             };
             let mut merged = current.clone();
-            let result =
-                merge_events_into(&mut merged, events).and_then(|()| match &mut self.sink {
-                    Sink::Rez { recs, .. } => recs[&idx].update_metadata(merged.clone()),
-                    Sink::Dendro { recs, .. } => {
-                        let patch = merged
-                            .get(crate::parquet_metadata::KEY_EVENTS)
-                            .map(|v| (crate::parquet_metadata::KEY_EVENTS.to_string(), v.clone()))
-                            .into_iter()
-                            .collect();
-                        recs.get_mut(&idx)
-                            .expect("the index came from this map")
-                            .update_metadata(patch)
-                            .map_err(archive_err)
-                    }
-                });
-            match result {
-                Ok(()) => {
-                    self.metadata.insert(idx, merged);
-                }
-                Err(e) => {
-                    first_err.get_or_insert(e);
-                }
+            let result = merge_events_into(&mut merged, events).and_then(|()| {
+                let patch = merged
+                    .remove_entry(crate::parquet_metadata::KEY_EVENTS)
+                    .into_iter()
+                    .collect();
+                self.patch_metadata(idx, patch)
+            });
+            if let Err(e) = result {
+                first_err.get_or_insert(e);
             }
         }
         first_err.map_or(Ok(()), Err)
+    }
+
+    /// Replace the keys in `patch` in one recording's metadata, keeping every
+    /// other key.
+    ///
+    /// Sent to a dendro archive as the patch itself, since dendro merges a
+    /// patch key by key, and to a `.rez` as the whole merged map, since its
+    /// writer replaces the map. The stored copy is updated only once the
+    /// writer accepts it, so a failed update can be retried with the same
+    /// input.
+    fn patch_metadata(
+        &mut self,
+        idx: usize,
+        patch: BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        let Some(current) = self.metadata.get(&idx) else {
+            return Err(format!(
+                "the recording for endpoint {idx} has no metadata to update"
+            ));
+        };
+        let mut merged = current.clone();
+        merged.extend(patch.clone());
+        match &mut self.sink {
+            Sink::Rez { recs, .. } => {
+                let rec = recs
+                    .get(&idx)
+                    .ok_or_else(|| format!("no recording is open for endpoint {idx}"))?;
+                rec.update_metadata(merged.clone())?;
+            }
+            Sink::Dendro { recs, .. } => {
+                let rec = recs
+                    .get_mut(&idx)
+                    .ok_or_else(|| format!("no recording is open for endpoint {idx}"))?;
+                rec.update_metadata(patch).map_err(archive_err)?;
+            }
+        }
+        self.metadata.insert(idx, merged);
+        Ok(())
+    }
+
+    /// Record the agent restarts waiting on endpoint `idx` in its recording's
+    /// metadata: see [`restart::metadata_patch`]. `version_pinned` means the
+    /// user set `version` with `--metadata`, which a restart does not
+    /// overwrite.
+    fn record_restarts(
+        &mut self,
+        idx: usize,
+        restarts: &[restart::Restart],
+        agent: &restart::Agent,
+        version_pinned: bool,
+    ) -> Result<(), String> {
+        let Some(current) = self.metadata.get(&idx) else {
+            return Err(format!(
+                "the recording for endpoint {idx} has no metadata to update"
+            ));
+        };
+        let first_ts = self.first_stamp.get(&idx).copied();
+        let patch = restart::metadata_patch(current, first_ts, restarts, agent, version_pinned);
+        self.patch_metadata(idx, patch)
     }
 
     /// Run every recording's seal check.
@@ -1773,6 +1951,7 @@ impl RezStream {
             sink,
             seen_labels: _,
             metadata: _,
+            first_stamp: _,
             last_stamp,
         } = self;
         // This recording's own last observation. The argument is the fallback
@@ -1900,6 +2079,7 @@ fn start_rez_recorder(
     let mut stream = RezStream {
         sink,
         metadata: BTreeMap::new(),
+        first_stamp: BTreeMap::new(),
         last_stamp: BTreeMap::new(),
         seen_labels: BTreeMap::new(),
     };
@@ -2785,14 +2965,17 @@ pub fn run(mut config: RecordingConfig) {
                                 // `snapshot_producer_stamp`.
                                 let (ts, wall_offset) = snapshot_producer_stamp(&snapshot)
                                     .unwrap_or((anchored_ns, wall_offset_ns));
-                                if let Err(e) = rec.stage(
+                                match rec.stage(
                                     idx,
                                     &endpoints[idx].config.url,
                                     &snapshot,
                                     ts,
                                     wall_offset,
                                 ) {
-                                    ingest_failed.get_or_insert(e);
+                                    Ok(()) => endpoints[idx].note_row_staged(ts),
+                                    Err(e) => {
+                                        ingest_failed.get_or_insert(e);
+                                    }
                                 }
                             }
                             continue;
@@ -2875,6 +3058,15 @@ pub fn run(mut config: RecordingConfig) {
             ) {
                 ingest_failed.get_or_insert(e);
             }
+            apply_restarts(
+                &mut endpoints,
+                rez_recorder.as_mut(),
+                &client,
+                &config.metadata,
+                scrape_timeout,
+                false,
+            )
+            .await;
 
             let pending_indices: Vec<usize> = endpoints
                 .iter()
@@ -3150,20 +3342,28 @@ pub fn run(mut config: RecordingConfig) {
             } else {
                 tokio::time::sleep(interval_dur.min(Duration::from_secs(2))).await;
             }
-            let failed = failed
-                .or_else(|| {
-                    drain_stream_events(
-                        &mut stream_rx,
-                        &mut endpoints,
-                        rez_recorder.as_mut(),
-                        wall_now_ns(),
-                    )
-                })
-                .or_else(|| {
-                    rez_recorder
-                        .as_mut()
-                        .and_then(|rec| rec.commit_tick().err())
-                });
+            let failed = failed.or_else(|| {
+                drain_stream_events(
+                    &mut stream_rx,
+                    &mut endpoints,
+                    rez_recorder.as_mut(),
+                    wall_now_ns(),
+                )
+            });
+            apply_restarts(
+                &mut endpoints,
+                rez_recorder.as_mut(),
+                &client,
+                &config.metadata,
+                scrape_timeout,
+                true,
+            )
+            .await;
+            let failed = failed.or_else(|| {
+                rez_recorder
+                    .as_mut()
+                    .and_then(|rec| rec.commit_tick().err())
+            });
             if let Some(e) = failed {
                 eprintln!("error: recording failed: {e}");
                 recording_failed.store(true, Ordering::SeqCst);

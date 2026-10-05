@@ -56,7 +56,15 @@ enum Streams {
     /// later subscription gets a 404, as a proxy that stopped routing the
     /// path would answer.
     OnceThen404(u64),
+    /// One subscription gets this many frames and is then closed, as when the
+    /// agent restarts; every later one streams under a new producer epoch,
+    /// and `/` then reports a new version.
+    Restarts(u64),
 }
+
+/// The epoch and `/` version the restarting agent reports before and after.
+const BEFORE_RESTART: (&str, &str) = ("fake-epoch", "6.0.0");
+const AFTER_RESTART: (&str, &str) = ("fake-epoch-2", "6.0.1");
 
 /// A 6.0-version agent whose stream closes after `frames` frames, and whose
 /// stream route answers 404 to the reconnect. Reports itself as 6.0.0 on
@@ -143,15 +151,27 @@ fn serve_agent(listener: TcpListener, streams: Streams, banner: Option<&'static 
                         Streams::OnceThen404(_) => {
                             subscriptions.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0
                         }
+                        Streams::Restarts(_) => true,
                     }
                 {
-                    let frames = match streams {
-                        Streams::OnceThen404(n) => Some(n),
-                        _ => None,
+                    let (frames, epoch) = match streams {
+                        Streams::OnceThen404(n) => (Some(n), BEFORE_RESTART.0),
+                        Streams::Restarts(n) => {
+                            if subscriptions.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0
+                            {
+                                (Some(n), BEFORE_RESTART.0)
+                            } else {
+                                (None, AFTER_RESTART.0)
+                            }
+                        }
+                        _ => (None, BEFORE_RESTART.0),
                     };
-                    serve_stream(stream, &path, frames);
+                    serve_stream(stream, &path, frames, epoch);
                     return;
                 } else if let (Some(version), "/") = (banner, path.as_str()) {
+                    let restarted = matches!(streams, Streams::Restarts(_))
+                        && subscriptions.load(std::sync::atomic::Ordering::SeqCst) > 1;
+                    let version = if restarted { AFTER_RESTART.1 } else { version };
                     let body = format!("Rezolus {version} Agent\n");
                     let head = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\
@@ -182,7 +202,7 @@ fn wall_ns() -> u64 {
 /// preamble and a handshake, then one rows frame per requested interval carrying one
 /// counter in the `fake/ops` acquisition group, until the recorder hangs up or
 /// `frames` have been sent.
-fn serve_stream(mut stream: std::net::TcpStream, path: &str, frames: Option<u64>) {
+fn serve_stream(mut stream: std::net::TcpStream, path: &str, frames: Option<u64>, epoch: &str) {
     use dendro::replicate::{wire, Frame};
     use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc};
 
@@ -202,7 +222,7 @@ fn serve_stream(mut stream: std::net::TcpStream, path: &str, frames: Option<u64>
     wire::encode_frame(
         &Frame::Handshake {
             source: 0,
-            uuid: Some("fake-epoch".to_string()),
+            uuid: Some(epoch.to_string()),
             labels: Default::default(),
             metadata: Default::default(),
             clock_anchor_wall_ns: anchor as i64,
@@ -745,6 +765,73 @@ fn a_dendro_streams_an_agent_and_scrapes_a_prometheus_exporter_into_one_archive(
         let n = rows(recording.id, table);
         assert!(n > 0, "{source}'s {table} holds rows");
     }
+}
+
+/// An agent that restarts mid-recording is recorded in the archive's
+/// metadata: `producer_epochs` gains the new process from its first row, and
+/// `producer_epoch` and `version` name the new process, which reports a new
+/// version.
+#[test]
+fn an_agent_restart_is_written_into_the_recording_metadata() {
+    use metriken_archive::Catalog;
+
+    let agent = spawn_agent(Streams::Restarts(5), Some(BEFORE_RESTART.1));
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("restart.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{agent}"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("3s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "the run must record through the restart (status {:?})\nstderr:\n{stderr}",
+        out.status.code()
+    );
+    assert!(
+        stderr.contains("now records the agent restart"),
+        "the restart is written into the metadata:\n{stderr}"
+    );
+
+    let catalog = metriken_archive::DendroCatalog::open(&output).expect("the archive opens");
+    let sources = catalog.sources().expect("the catalog reads");
+    assert_eq!(sources.len(), 1, "{sources:?}");
+    let metadata = &sources[0].metadata;
+    assert_eq!(
+        metadata.get("producer_epoch").map(String::as_str),
+        Some(AFTER_RESTART.0),
+        "{metadata:?}"
+    );
+    assert_eq!(
+        metadata.get("version").map(String::as_str),
+        Some(AFTER_RESTART.1),
+        "{metadata:?}"
+    );
+    let epochs: serde_json::Value = serde_json::from_str(
+        metadata
+            .get("producer_epochs")
+            .unwrap_or_else(|| panic!("no producer_epochs: {metadata:?}")),
+    )
+    .unwrap();
+    let epochs = epochs.as_array().unwrap();
+    assert_eq!(epochs.len(), 2, "{epochs:?}");
+    assert_eq!(epochs[0]["epoch"], BEFORE_RESTART.0);
+    assert_eq!(epochs[0]["version"], BEFORE_RESTART.1);
+    assert_eq!(epochs[1]["epoch"], AFTER_RESTART.0);
+    assert_eq!(epochs[1]["version"], AFTER_RESTART.1);
+    assert!(
+        epochs[1]["from_ts"].as_u64() > epochs[0]["from_ts"].as_u64(),
+        "the new epoch starts after the first: {epochs:?}"
+    );
 }
 
 /// An agent that cannot serve `/metrics/stream` is refused for a `.dendro`,
