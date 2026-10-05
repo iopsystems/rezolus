@@ -97,6 +97,9 @@ pub struct EndpointState {
     /// Agent restarts seen and not yet written into the recording's
     /// metadata, oldest first. See `recorder::restart`.
     pub restarts: Vec<super::restart::Restart>,
+    /// Fetches of the restarted agent's metadata that failed or found another
+    /// process, for the restarts above.
+    pub restart_fetches: u32,
 }
 
 impl EndpointState {
@@ -114,6 +117,7 @@ impl EndpointState {
             frames: 0,
             last_frame_wall_ns: None,
             restarts: Vec::new(),
+            restart_fetches: 0,
         }
     }
 

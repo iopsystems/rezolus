@@ -592,38 +592,107 @@ fn note_epoch(ep: &mut EndpointState, seen: &str) {
     }
 }
 
+/// What the restarted agent at `base_url` reports about itself, fetched
+/// within `timeout`: `None` when nothing answered, or when `/status` names an
+/// epoch other than `epoch`, the one the restart is for (the agent restarted
+/// again, or the answer came from the old process). An agent whose `/status`
+/// carries no epoch cannot be checked, and what it reported is taken.
+pub(crate) async fn fetch_restarted_agent(
+    client: &Client,
+    base_url: &Url,
+    epoch: &str,
+    timeout: Duration,
+) -> Option<restart::Agent> {
+    let fetch = async {
+        let text = |path: &'static str| {
+            let mut url = base_url.clone();
+            url.set_path(path);
+            async move {
+                match client.get(url).send().await {
+                    Ok(r) if r.status().is_success() => r.text().await.ok(),
+                    _ => None,
+                }
+            }
+        };
+        let systeminfo = text("/systeminfo").await;
+        let descriptions = text("/metrics/descriptions").await;
+        let (version, reported_epoch, _) = fetch_agent_identity(client, base_url).await;
+        (
+            restart::Agent {
+                version,
+                systeminfo,
+                descriptions,
+            },
+            reported_epoch,
+        )
+    };
+    let (agent, reported_epoch) = tokio::time::timeout(timeout, fetch).await.ok()?;
+    match reported_epoch.as_deref() {
+        Some(reported) if reported != epoch => None,
+        Some(_) => Some(agent),
+        None if agent.version.is_some()
+            || agent.systeminfo.is_some()
+            || agent.descriptions.is_some() =>
+        {
+            Some(agent)
+        }
+        None => None,
+    }
+}
+
 /// Write each agent restart into its recording's metadata once a row from the
 /// new process has been staged: the epoch history, and the version,
-/// systeminfo and descriptions the new process reports (fetched here, within
-/// `timeout`). See [`restart::metadata_patch`]. Keys the user set with
-/// `--metadata` are kept. Without an archive there is nothing to amend, and the
-/// restarts are dropped; [`note_epoch`] has already logged them.
+/// systeminfo and descriptions the new process reports (see
+/// [`fetch_restarted_agent`] and [`restart::metadata_patch`]). A fetch that
+/// fails or finds another process is tried again on the next tick, up to
+/// [`restart::FETCH_ATTEMPTS`] times, and the epochs are then written without
+/// the process's metadata; on the `last` call, at shutdown, there is no next
+/// tick, so they are written at once. A `version` set with `--metadata` is
+/// kept. Without
+/// an archive there is nothing to amend, and the restarts are dropped;
+/// [`note_epoch`] has already logged them.
 async fn apply_restarts(
     endpoints: &mut [EndpointState],
     mut archive: Option<&mut RezStream>,
     client: &Client,
     user_metadata: &[(String, String)],
     timeout: Duration,
+    last: bool,
 ) {
+    let version_pinned = user_metadata
+        .iter()
+        .any(|(k, _)| k == parquet_metadata::KEY_VERSION);
     for (idx, ep) in endpoints.iter_mut().enumerate() {
-        if ep.restarts.is_empty() || ep.restarts.iter().any(|r| r.from_ts.is_none()) {
+        let Some(archive) = archive.as_deref_mut() else {
+            ep.restarts.clear();
+            continue;
+        };
+        let Some(newest) = ep.restarts.last() else {
+            continue;
+        };
+        if ep.restarts.iter().any(|r| r.from_ts.is_none()) {
             continue;
         }
+        let label = ep.config.source_label().to_string();
+        let agent =
+            match fetch_restarted_agent(client, &ep.config.url, &newest.epoch, timeout).await {
+                Some(agent) => agent,
+                None if !last && ep.restart_fetches + 1 < restart::FETCH_ATTEMPTS => {
+                    ep.restart_fetches += 1;
+                    continue;
+                }
+                None => {
+                    warn!(
+                        "{label}: could not read the restarted agent's version, systeminfo \
+                         and descriptions; the recording's metadata records the restart \
+                         without them"
+                    );
+                    restart::Agent::default()
+                }
+            };
+        ep.restart_fetches = 0;
         let restarts = std::mem::take(&mut ep.restarts);
-        let Some(archive) = archive.as_deref_mut() else {
-            continue;
-        };
-        let fetched = tokio::time::timeout(timeout, fetch_agent_metadata(client, &ep.config.url))
-            .await
-            .unwrap_or_default();
-        let agent = restart::Agent {
-            version: fetched.version,
-            systeminfo: fetched.systeminfo,
-            descriptions: fetched.descriptions,
-        };
-        let user = |key: &str| user_metadata.iter().any(|(k, _)| k == key);
-        let label = ep.config.source_label();
-        match archive.record_restarts(idx, &restarts, &agent, &user) {
+        match archive.record_restarts(idx, &restarts, &agent, version_pinned) {
             Ok(()) => info!(
                 "{label}: the recording's metadata now records the agent restart \
                  (producer_epochs; version {})",
@@ -1813,22 +1882,23 @@ impl RezStream {
     }
 
     /// Record the agent restarts waiting on endpoint `idx` in its recording's
-    /// metadata: see [`restart::metadata_patch`]. `user_keys` are the keys the
-    /// user set with `--metadata`, which a restart does not overwrite.
+    /// metadata: see [`restart::metadata_patch`]. `version_pinned` means the
+    /// user set `version` with `--metadata`, which a restart does not
+    /// overwrite.
     fn record_restarts(
         &mut self,
         idx: usize,
         restarts: &[restart::Restart],
         agent: &restart::Agent,
-        user_keys: &dyn Fn(&str) -> bool,
+        version_pinned: bool,
     ) -> Result<(), String> {
         let Some(current) = self.metadata.get(&idx) else {
             return Err(format!(
                 "the recording for endpoint {idx} has no metadata to update"
             ));
         };
-        let first_ts = self.first_stamp.get(&idx).copied().unwrap_or_default();
-        let patch = restart::metadata_patch(current, first_ts, restarts, agent, user_keys);
+        let first_ts = self.first_stamp.get(&idx).copied();
+        let patch = restart::metadata_patch(current, first_ts, restarts, agent, version_pinned);
         self.patch_metadata(idx, patch)
     }
 
@@ -2990,6 +3060,7 @@ pub fn run(mut config: RecordingConfig) {
                 &client,
                 &config.metadata,
                 scrape_timeout,
+                false,
             )
             .await;
 
@@ -3281,6 +3352,7 @@ pub fn run(mut config: RecordingConfig) {
                 &client,
                 &config.metadata,
                 scrape_timeout,
+                true,
             )
             .await;
             let failed = failed.or_else(|| {

@@ -171,7 +171,10 @@ the recorder's own build. The two are separate processes and routinely
 different versions, and the question this answers ("which build produced these
 numbers?") is about the agent. The recorder reads it from the agent's `/status`
 endpoint, falling back to the `Rezolus <version> Agent` banner on `/` for
-agents older than `/status` (5.16.0). Not user-editable.
+agents older than `/status` (5.16.0). `record --metadata version=...`
+overrides it. When the agent restarts mid-recording, an archive's `version`
+becomes the new process's (see [`producer_epochs`](#producer_epochs)), unless
+it was set with `--metadata`.
 
 **Absent, rather than empty, when there is nothing to record**: a Prometheus
 source has no agent, and recorders that predate the capture wrote no version
@@ -197,9 +200,11 @@ zeroes on read, did not restart the process — so this key says nothing about i
 That needs a generation per counter, which is row data rather than file
 metadata.
 
-**Set at record time** from the agent's `/status`, and re-checked against every
-snapshot's metadata, which is the channel that can catch a restart *between* two
-scrapes. Absent for a Prometheus source, and for an agent old enough to predate
+**Set at record time** from the agent's `/status`, or, for a recording taken
+off the agent's stream, from the stream handshake, which names the process
+whose rows arrive. It is re-checked against every scraped snapshot's metadata
+and every stream reconnect's handshake, which is how a restart *between* two
+readings is caught. Absent for a Prometheus source, and for an agent old enough to predate
 it (the `/` banner fallback deliberately yields no epoch rather than inventing a
 restart boundary nobody observed).
 
@@ -231,8 +236,12 @@ Every producer epoch an archive observed, in order, as a JSON array:
 counter reset there. The last entry is the current epoch, also under
 `producer_epoch`. Written only when a restart is seen: absent means the archive
 saw one process. The first entry is the epoch the archive opened with, from its
-first row. `version` is what the process reported, and is missing from an epoch
-that came and went before its metadata could be fetched.
+first row; it is left out when the agent restarted before that epoch's first
+row was recorded. `version` is what the process reported. It is missing from
+an epoch that came and went before its metadata could be fetched, from one
+whose metadata could not be read (three tries, one tick apart, each checked
+against the epoch `/status` reports), and from the opening epoch when
+`version` was set with `--metadata`.
 
 Name, shape, `epoch` and `from_ts` follow dendro's `keys::PRODUCER_EPOCHS`;
 `version` is rezolus's addition.

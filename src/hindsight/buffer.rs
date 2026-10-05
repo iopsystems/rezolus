@@ -164,10 +164,10 @@ impl HindsightBuffer {
     ) -> Result<(), String> {
         let patch = crate::recorder::restart::metadata_patch(
             &self.metadata,
-            self.first_ts.unwrap_or_default(),
+            self.first_ts,
             restarts,
             agent,
-            &|_| false,
+            false,
         );
         let mut merged = self.metadata.clone();
         merged.extend(patch.clone());

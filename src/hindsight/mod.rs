@@ -384,6 +384,9 @@ pub fn run(config: Config) {
         let mut epoch = source.uuid.clone();
         // Agent restarts not yet written into the buffer's metadata.
         let mut restarts: Vec<crate::recorder::restart::Restart> = Vec::new();
+        // Fetches of the restarted agent's metadata that failed or found
+        // another process; see `record_restarts`.
+        let mut restart_fetches = 0u32;
 
         // Dumps run OFF this loop — that is the whole shape of what follows.
         // Every dump is spawned and its result comes back asynchronously,
@@ -492,9 +495,15 @@ pub fn run(config: Config) {
                             }
                         }
                         if !restarts.is_empty() && restarts.iter().all(|r| r.from_ts.is_some()) {
-                            let pending = std::mem::take(&mut restarts);
-                            record_restarts(&mut buffer, &pending, &metadata_client, &url, timeout)
-                                .await;
+                            record_restarts(
+                                &mut buffer,
+                                &mut restarts,
+                                &mut restart_fetches,
+                                &metadata_client,
+                                &url,
+                                timeout,
+                            )
+                            .await;
                         }
                         // Seal and evict with each interval, as each scrape
                         // did. The select is biased toward this arm, so while
@@ -807,34 +816,44 @@ fn log_capture(response: &DumpToFileResponse) {
     }
 }
 
-/// Write one streamed interval into `buffer`, and return how many passes it
-/// held (one, unless a relay batched several). Shared by hindsight and the
-/// viewer's live mode, which both record an agent's stream into a buffer.
-///
-/// `Err` is a row that would not decode or a write that failed; either ends
-/// the recording. Sealing and retention are the caller's, on its own tick
-/// ([`HindsightBuffer::maintain`]). A row naming a schema this connection has not sent is
-/// skipped and logged.
-/// Write agent restarts into the buffer's metadata, with the version,
-/// systeminfo and descriptions the new process reports (fetched within
-/// `timeout`). See [`crate::recorder::restart::metadata_patch`]. A failure is
-/// logged; the recording goes on.
+/// Write the agent restarts in `restarts` into the buffer's metadata, with the
+/// version, systeminfo and descriptions the new process reports (see
+/// [`crate::recorder::fetch_restarted_agent`] and
+/// [`crate::recorder::restart::metadata_patch`]). A fetch that fails or finds
+/// another process leaves `restarts` for the next interval, up to
+/// [`crate::recorder::restart::FETCH_ATTEMPTS`] times counted in `fetches`;
+/// the epochs are then written without the process's metadata. A write that
+/// fails is logged, and the recording goes on.
 async fn record_restarts(
     buffer: &mut HindsightBuffer,
-    restarts: &[crate::recorder::restart::Restart],
+    restarts: &mut Vec<crate::recorder::restart::Restart>,
+    fetches: &mut u32,
     client: &reqwest::Client,
     url: &reqwest::Url,
     timeout: Duration,
 ) {
-    let fetched = tokio::time::timeout(timeout, crate::recorder::fetch_agent_metadata(client, url))
-        .await
-        .unwrap_or_default();
-    let agent = crate::recorder::restart::Agent {
-        version: fetched.version,
-        systeminfo: fetched.systeminfo,
-        descriptions: fetched.descriptions,
+    use crate::recorder::restart::{Agent, FETCH_ATTEMPTS};
+    let Some(newest) = restarts.last() else {
+        return;
     };
-    match buffer.record_restarts(restarts, &agent) {
+    let agent =
+        match crate::recorder::fetch_restarted_agent(client, url, &newest.epoch, timeout).await {
+            Some(agent) => agent,
+            None if *fetches + 1 < FETCH_ATTEMPTS => {
+                *fetches += 1;
+                return;
+            }
+            None => {
+                warn!(
+                    "could not read the restarted agent's version, systeminfo and \
+                     descriptions; the buffer's metadata records the restart without them"
+                );
+                Agent::default()
+            }
+        };
+    *fetches = 0;
+    let pending = std::mem::take(restarts);
+    match buffer.record_restarts(&pending, &agent) {
         Ok(()) => info!(
             "the buffer's metadata now records the agent restart (producer_epochs; version {})",
             agent.version.as_deref().unwrap_or("not reported")
@@ -843,6 +862,14 @@ async fn record_restarts(
     }
 }
 
+/// Write one streamed interval into `buffer`, and return how many passes it
+/// held (one, unless a relay batched several). Shared by hindsight and the
+/// viewer's live mode, which both record an agent's stream into a buffer.
+///
+/// `Err` is a row that would not decode or a write that failed; either ends
+/// the recording. Sealing and retention are the caller's, on its own tick
+/// ([`HindsightBuffer::maintain`]). A row naming a schema this connection has not sent is
+/// skipped and logged.
 pub(crate) fn ingest_interval(
     buffer: &mut HindsightBuffer,
     decoder: &mut metriken_archive::StreamDecoder,

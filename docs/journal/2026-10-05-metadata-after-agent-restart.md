@@ -33,7 +33,12 @@ metadata, the restarts seen and what the new process reports:
 - `version` and `systeminfo` become the new process's when it reports them.
 - `descriptions` becomes the union of old and new, the new text winning for a
   metric in both, so rows from before the restart keep their descriptions.
-- A key the user set with `record --metadata` (in practice `version`) is kept.
+- A `version` set with `record --metadata` is kept, and the opening epoch's
+  entry then has no `version`, since the pinned value is the user's label and
+  not what the process reported. `systeminfo` and `descriptions` follow the
+  agent: at open the agent's values already win over `--metadata` for those.
+- The opening epoch gets an entry only if a row from it was recorded before
+  the restart.
 
 Decided: one `version` for the archive (the newest) plus a version per epoch in
 `producer_epochs`, rather than a separate version history key. A reader that
@@ -45,13 +50,18 @@ precedes it.
 A restart is noted when the epoch changes (`note_epoch` in
 `src/recorder/mod.rs`; the `Connected` arm in `src/hindsight/mod.rs`). Its
 `from_ts` is the first row staged afterwards. Once every pending restart has a
-`from_ts`, the new process's metadata is fetched (`fetch_agent_metadata`,
-bounded by the scrape timeout) and the patch applied: `record` does this after
-draining each tick's stream events and once more at shutdown
-(`apply_restarts`), hindsight after the interval that carried the first row
-(`record_restarts`). Two restarts between fetches each get an entry; the one
+`from_ts`, the new process's version, systeminfo and descriptions are fetched
+(`fetch_restarted_agent`, bounded by the scrape timeout) and the patch
+applied: `record` does this after draining each tick's stream events and once
+more at shutdown (`apply_restarts`), hindsight after the interval that carried
+the first row (`record_restarts`). The fetch is checked against the epoch
+`/status` reports. A fetch that fails, or that finds another process (the
+agent restarted again, or the old one answered), is tried again on the next
+tick, up to three times (`restart::FETCH_ATTEMPTS`); after that, or at
+`record`'s shutdown, the epochs are written without the process's metadata and
+a warning says so. Two restarts between fetches each get an entry; the one
 that came and went has no `version`, since only the newest process can be
-asked.
+asked. The fetch blocks the tick it runs on, once per restart.
 
 The two archive formats take the patch differently, through the same helper
 on each side (`RezStream::patch_metadata`, `HindsightBuffer::record_restarts`):
@@ -72,6 +82,11 @@ already used it.
   record of the restart.
 - Nothing reads `producer_epochs` yet. The viewer and `mcp describe-recording`
   could show restart points; that is follow-up work.
+- The live viewer (`rezolus view http://agent`, `src/viewer/live.rs`) records
+  into a temporary dendro archive and still only warns on a restart, so a
+  capture saved from it keeps the opening metadata.
+- dendro's `EVENTS` convention has a `producer_epoch` event kind for a counter
+  reset; this writes the `producer_epochs` key, not an event.
 - 5.x is unchanged: its `.rez` metadata is per recording and 5.25.1 logs a
   warning on an epoch change.
 
