@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [5.25.1] - 2026-10-04
+
 ### Fixed
 
 - **Hindsight records through an agent outage.** A failed scrape exited
@@ -1898,7 +1900,8 @@ focal.
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.25.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.25.1...HEAD
+[5.25.1]: https://github.com/iopsystems/rezolus/compare/v5.25.0...v5.25.1
 [5.25.0]: https://github.com/iopsystems/rezolus/compare/v5.24.0...v5.25.0
 [5.24.0]: https://github.com/iopsystems/rezolus/compare/v5.23.1...v5.24.0
 [5.23.1]: https://github.com/iopsystems/rezolus/compare/v5.22.1...v5.23.1
