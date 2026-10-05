@@ -98,7 +98,17 @@ pub fn run(config: Config) {
 
     let url = config.general().url();
 
-    let blocking_client = match reqwest::blocking::Client::builder().http1_only().build() {
+    // Long enough that a scrape slower than the interval still lands (the
+    // ticks it overruns are skipped), short enough that a hung agent cannot
+    // hold startup, the loop, or with it a stop, for long.
+    let scrape_timeout =
+        (Duration::from(config.general().interval()) * 3).max(Duration::from_secs(5));
+
+    let blocking_client = match reqwest::blocking::Client::builder()
+        .http1_only()
+        .timeout(scrape_timeout)
+        .build()
+    {
         Ok(c) => c,
         Err(e) => {
             error!("error connecting to Rezolus: {e}");
@@ -201,25 +211,9 @@ pub fn run(config: Config) {
         exit_flushed(1);
     }
 
-    // The buffer lives in a private directory inside it, so its `-wal`/`-shm`
-    // sidecars cannot collide with anything and the whole lot is removed
-    // together when the daemon exits cleanly.
-    let staging = match tempfile::TempDir::new_in(&buffer_dir) {
-        Ok(t) => t,
-        Err(error) => {
-            eprintln!("could not open a buffer directory in: {buffer_dir:?}\n{error}");
-            exit_flushed(1);
-        }
-    };
-    signals::set_buffer_dir(staging.path());
-    let buffer_path = staging.path().join(if dendro {
-        "hindsight.dendro"
-    } else {
-        "hindsight.rez"
-    });
-
     // Probe the endpoint once: it must exist, and the sampling interval has to
-    // leave room for the scrape it implies.
+    // leave room for the scrape it implies. Before the staging directory is
+    // created, so an exit here leaves nothing in `buffer_dir`.
     let start = Instant::now();
     let latency = if let Ok(response) = blocking_client.get(url.clone()).send() {
         if let Ok(body) = response.bytes() {
@@ -244,6 +238,23 @@ pub fn run(config: Config) {
         );
         exit_flushed(1);
     }
+
+    // The buffer lives in a private directory inside it, so its `-wal`/`-shm`
+    // sidecars cannot collide with anything and the whole lot is removed
+    // together when the daemon exits cleanly.
+    let staging = match tempfile::TempDir::new_in(&buffer_dir) {
+        Ok(t) => t,
+        Err(error) => {
+            eprintln!("could not open a buffer directory in: {buffer_dir:?}\n{error}");
+            exit_flushed(1);
+        }
+    };
+    signals::set_buffer_dir(staging.path());
+    let buffer_path = staging.path().join(if dendro {
+        "hindsight.dendro"
+    } else {
+        "hindsight.rez"
+    });
 
     let interval_dur: Duration = config.general().interval().into();
     let lookback: Duration = config.general().duration().into();
@@ -338,6 +349,11 @@ pub fn run(config: Config) {
         // state machine advances in one place.
         let (capture_tx, mut capture_rx) = tokio::sync::mpsc::channel::<DumpToFileResponse>(1);
         let mut capturing = false;
+        // While scrapes are failing: when the first one failed, and how many
+        // have since. Logged once as it starts and once as it ends.
+        let mut outage: Option<(Instant, u64)> = None;
+        // The agent process the last snapshot came from.
+        let mut epoch = agent_epoch.clone();
 
         loop {
             tokio::select! {
@@ -398,47 +414,74 @@ pub fn run(config: Config) {
                 // it.
                 Some(_) = signal_rx.recv() => {}
 
-                _ = interval.tick() => {
-                    let start = Instant::now();
-
-                    if let Ok(response) = async_client.get(url.clone()).send().await {
-                        if let Ok(body) = response.bytes().await {
-                            let latency = start.elapsed();
-
-                            debug!("sampling latency: {} us", latency.as_micros());
-                            debug!("body size: {}", body.len());
-
+                // Not while a stop's capture runs: the capture is a point-in-time
+                // copy, so a row scraped now never reaches it, and a scrape
+                // against a hung agent would hold the exit for a timeout.
+                _ = interval.tick(), if !(capturing
+                    && signals::STATE.load(Ordering::SeqCst) == signals::TERMINATING) => {
+                    // A failed scrape is a gap in the recording, not a reason
+                    // to exit: the agent restarting (a package upgrade, say)
+                    // must not cost the buffer. The tick is skipped, the
+                    // buffer is still maintained below, and the next tick
+                    // tries again.
+                    // Taken before the scrape, so a timed-out attempt dates
+                    // the outage from when it began rather than when it gave up.
+                    let (attempt_at, attempt_wall_ns) = (Instant::now(), wall_ns());
+                    match scrape(&async_client, &url, scrape_timeout).await {
+                        Ok(snapshot) => {
+                            // Each snapshot names the agent process that made
+                            // it. A restart between two scrapes fails neither,
+                            // so this is the only place one is noticed.
+                            let now = crate::recorder::snapshot_producer_epoch(&snapshot);
+                            if let Some(now) = now {
+                                if epoch.as_deref() != Some(now) {
+                                    if epoch.is_some() {
+                                        warn!(
+                                            "the agent restarted (producer epoch {} -> {now}); \
+                                             its counters start again from zero, and the \
+                                             buffer's metadata still describes the agent \
+                                             hindsight started with",
+                                            epoch.as_deref().unwrap_or_default()
+                                        );
+                                    }
+                                    epoch = Some(now.to_string());
+                                }
+                            }
                             let (anchored_ns, wall_offset_ns) = crate::recorder::anchored_stamp(
                                 clock_anchor_wall_ns,
                                 clock_anchor_mono.elapsed(),
                                 wall_ns(),
                             );
-
-                            // `Snapshot::from_msgpack`, not a bare `from_slice`:
-                            // the same depth-capped, trailing-byte-checked
-                            // decode as the recorder's `.rez`-mode call site —
-                            // hindsight is the same always-on ingest path,
-                            // scraping whatever msgpack endpoint it's pointed
-                            // at, and is the most exposed process of the two
-                            // (it runs unattended, indefinitely).
-                            match metriken_exposition::Snapshot::from_msgpack(&body) {
-                                Ok(snapshot) => {
-                                    if let Err(e) =
-                                        buffer.ingest(&snapshot, anchored_ns, wall_offset_ns)
-                                    {
-                                        fatal(&e, &buffer_path);
-                                    }
-                                    shared_state.record_tick();
-                                }
-                                Err(e) => warn!("msgpack decode error: {e}"),
+                            if let Err(e) = buffer.ingest(&snapshot, anchored_ns, wall_offset_ns) {
+                                fatal(&e, &buffer_path);
                             }
-                        } else {
-                            error!("failed to read response");
-                            exit_flushed(1);
+                            shared_state.record_tick();
+                            if let Some((since, failed)) = outage.take() {
+                                info!(
+                                    "a scrape succeeded after {failed} failed scrape(s) \
+                                     over {:.1}s; recording resumed",
+                                    since.elapsed().as_secs_f64()
+                                );
+                                shared_state.set_scrapes_failing_since(None);
+                            }
                         }
-                    } else {
-                        error!("failed to get metrics");
-                        exit_flushed(1);
+                        Err(e) => {
+                            shared_state.record_failed_scrape();
+                            match &mut outage {
+                                Some((_, failed)) => {
+                                    *failed += 1;
+                                    debug!("scrape failed: {e}");
+                                }
+                                None => {
+                                    warn!(
+                                        "scrape failed: {e}; recording a gap and retrying \
+                                         every interval"
+                                    );
+                                    outage = Some((attempt_at, 1));
+                                    shared_state.set_scrapes_failing_since(Some(attempt_wall_ns));
+                                }
+                            }
+                        }
                     }
 
                     // Every tick, scrape or not: this is where segments
@@ -716,6 +759,39 @@ fn log_capture(response: &DumpToFileResponse) {
             response.path.display()
         );
     }
+}
+
+/// Pull one snapshot from the agent. A request that does not finish within
+/// `timeout`, a connection error, a non-2xx status and a body
+/// that does not decode are all a failed scrape.
+async fn scrape(
+    client: &reqwest::Client,
+    url: &reqwest::Url,
+    timeout: Duration,
+) -> Result<metriken_exposition::Snapshot, String> {
+    let start = Instant::now();
+    let response = client
+        .get(url.clone())
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(|e| format!("no response from {url}: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("{url} answered {status}"));
+    }
+    let body = response
+        .bytes()
+        .await
+        .map_err(|e| format!("reading the response from {url} failed: {e}"))?;
+    debug!("sampling latency: {} us", start.elapsed().as_micros());
+    debug!("body size: {}", body.len());
+    // `Snapshot::from_msgpack`, not a bare `from_slice`: the same depth-capped,
+    // trailing-byte-checked decode as the recorder's `.rez`-mode call site.
+    // hindsight is the same always-on ingest path, scraping whatever msgpack
+    // endpoint it's pointed at, and it runs unattended indefinitely.
+    metriken_exposition::Snapshot::from_msgpack(&body)
+        .map_err(|e| format!("the response from {url} did not decode: {e}"))
 }
 
 /// A buffer write that failed is not recoverable in place — but everything

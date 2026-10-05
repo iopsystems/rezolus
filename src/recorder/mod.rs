@@ -496,7 +496,7 @@ pub(crate) fn parse_root_version(body: &str) -> Option<String> {
 /// counter in the payload restarted from zero together, and no comparison of
 /// the values can say so — a counter that reset and one that wrapped both just
 /// went down.
-fn snapshot_producer_epoch(snapshot: &metriken_exposition::Snapshot) -> Option<&str> {
+pub(crate) fn snapshot_producer_epoch(snapshot: &metriken_exposition::Snapshot) -> Option<&str> {
     use metriken_exposition::Snapshot;
     let metadata = match snapshot {
         Snapshot::V1(s) => &s.metadata,

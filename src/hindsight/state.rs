@@ -34,6 +34,12 @@ pub struct SharedState {
     /// keeps the span it RETAINS permanently just under the lookback — see
     /// [`super::buffer::HindsightBuffer::at_retention_bound`].
     at_retention_bound: AtomicBool,
+    /// Scrapes that failed since startup (no response in time, an error
+    /// status, or a body that did not decode). Each is a tick with no row.
+    failed_scrapes: AtomicU64,
+    /// When the current run of failed scrapes began, in ns since the epoch;
+    /// 0 while scrapes succeed.
+    scrapes_failing_since_ns: AtomicU64,
 }
 
 impl SharedState {
@@ -50,6 +56,30 @@ impl SharedState {
             lookback,
             ticks: AtomicU64::new(0),
             at_retention_bound: AtomicBool::new(false),
+            failed_scrapes: AtomicU64::new(0),
+            scrapes_failing_since_ns: AtomicU64::new(0),
+        }
+    }
+
+    pub fn record_failed_scrape(&self) {
+        self.failed_scrapes.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn failed_scrapes(&self) -> u64 {
+        self.failed_scrapes.load(Ordering::Relaxed)
+    }
+
+    /// `Some(ns since the epoch)` when a run of failed scrapes begins, `None`
+    /// when the agent answers again.
+    pub fn set_scrapes_failing_since(&self, since_ns: Option<u64>) {
+        self.scrapes_failing_since_ns
+            .store(since_ns.unwrap_or(0), Ordering::Relaxed);
+    }
+
+    pub fn scrapes_failing_since_ns(&self) -> Option<u64> {
+        match self.scrapes_failing_since_ns.load(Ordering::Relaxed) {
+            0 => None,
+            ns => Some(ns),
         }
     }
 
