@@ -530,7 +530,10 @@ pub fn run(config: Config) {
                                 restarts.push(crate::recorder::restart::Restart {
                                     epoch: new.to_string(),
                                     from_ts: None,
+                                    rows_before: buffer.has_rows(),
                                 });
+                                // The newest process gets its own attempts.
+                                restart_fetches = 0;
                             }
                             epoch = source.uuid;
                         }
@@ -820,8 +823,8 @@ fn log_capture(response: &DumpToFileResponse) {
 /// version, systeminfo and descriptions the new process reports (see
 /// [`crate::recorder::fetch_restarted_agent`] and
 /// [`crate::recorder::restart::metadata_patch`]). A fetch that fails or finds
-/// another process leaves `restarts` for the next interval, up to
-/// [`crate::recorder::restart::FETCH_ATTEMPTS`] times counted in `fetches`;
+/// another process leaves `restarts` for the next interval; after
+/// [`crate::recorder::restart::FETCH_ATTEMPTS`] fetches in all, counted in `fetches`,
 /// the epochs are then written without the process's metadata. A write that
 /// fails is logged, and the recording goes on.
 async fn record_restarts(

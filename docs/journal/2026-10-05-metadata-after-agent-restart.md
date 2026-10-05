@@ -56,8 +56,8 @@ applied: `record` does this after draining each tick's stream events and once
 more at shutdown (`apply_restarts`), hindsight after the interval that carried
 the first row (`record_restarts`). The fetch is checked against the epoch
 `/status` reports. A fetch that fails, or that finds another process (the
-agent restarted again, or the old one answered), is tried again on the next
-tick, up to three times (`restart::FETCH_ATTEMPTS`); after that, or at
+agent restarted again), is tried on up to three ticks in all
+(`restart::FETCH_ATTEMPTS`); after that, or at
 `record`'s shutdown, the epochs are written without the process's metadata and
 a warning says so. Two restarts between fetches each get an entry; the one
 that came and went has no `version`, since only the newest process can be

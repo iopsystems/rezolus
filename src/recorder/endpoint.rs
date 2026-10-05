@@ -100,6 +100,8 @@ pub struct EndpointState {
     /// Fetches of the restarted agent's metadata that failed or found another
     /// process, for the restarts above.
     pub restart_fetches: u32,
+    /// Whether any row has been staged into this endpoint's recording.
+    pub rows_staged: bool,
 }
 
 impl EndpointState {
@@ -118,12 +120,14 @@ impl EndpointState {
             last_frame_wall_ns: None,
             restarts: Vec::new(),
             restart_fetches: 0,
+            rows_staged: false,
         }
     }
 
-    /// Give each restart waiting for its first row the stamp of `ts`, the
-    /// first row just staged from this endpoint.
-    pub fn note_first_row(&mut self, ts: u64) {
+    /// A row stamped `ts` was just staged into this endpoint's recording: it
+    /// is the first row of each restart still waiting for one.
+    pub fn note_row_staged(&mut self, ts: u64) {
+        self.rows_staged = true;
         for restart in &mut self.restarts {
             restart.from_ts.get_or_insert(ts);
         }

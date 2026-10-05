@@ -231,6 +231,11 @@ impl HindsightBuffer {
         Ok(())
     }
 
+    /// Whether any row has been written into the buffer.
+    pub fn has_rows(&self) -> bool {
+        self.first_ts.is_some()
+    }
+
     /// Whether retention has begun: the buffer is now dropping as much as it
     /// takes in rather than still filling.
     ///

@@ -23,6 +23,10 @@ pub struct Restart {
     /// The timestamp of the first row staged from the new process; `None`
     /// until one is.
     pub from_ts: Option<u64>,
+    /// Whether any row had been recorded when the restart was seen. Taken
+    /// then rather than worked out from timestamps, since the old and new
+    /// processes' clocks need not agree.
+    pub rows_before: bool,
 }
 
 /// How many times the restarted agent's metadata is fetched, one tick apart,
@@ -69,9 +73,8 @@ pub fn metadata_patch(
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or_default();
     // The opening epoch has rows only if one was recorded before the first
-    // restart's first row.
-    let opened_with_rows =
-        first_ts.filter(|first| restarts[0].from_ts.is_none_or(|from| *first < from));
+    // restart was seen.
+    let opened_with_rows = first_ts.filter(|_| restarts[0].rows_before);
     if let (true, Some(first), Some(epoch)) = (
         epochs.is_empty(),
         opened_with_rows,
@@ -167,6 +170,7 @@ mod tests {
         Restart {
             epoch: epoch.to_string(),
             from_ts: Some(from_ts),
+            rows_before: true,
         }
     }
 
@@ -286,11 +290,15 @@ mod tests {
     fn an_opening_epoch_with_no_rows_before_the_restart_gets_no_entry() {
         // The first row staged is the new process's: the recording's first
         // stamp and the restart's are the same row.
+        let no_rows = Restart {
+            rows_before: false,
+            ..restart("e2", 500)
+        };
         for first_ts in [Some(500), None] {
             let patch = metadata_patch(
                 &opened("e1", "6.0.0"),
                 first_ts,
-                &[restart("e2", 500)],
+                std::slice::from_ref(&no_rows),
                 &agent("6.0.1"),
                 false,
             );
@@ -300,6 +308,21 @@ mod tests {
                 "first_ts {first_ts:?}"
             );
         }
+    }
+
+    #[test]
+    fn an_opening_epoch_with_rows_keeps_its_entry_whatever_the_new_clock_reads() {
+        // The new process's clock is behind the old one's first row, as after
+        // a reboot before NTP has run.
+        let patch = metadata_patch(
+            &opened("e1", "6.0.0"),
+            Some(900),
+            &[restart("e2", 500)],
+            &agent("6.0.1"),
+            false,
+        );
+        assert_eq!(epochs(&patch)[0]["epoch"], "e1");
+        assert_eq!(epochs(&patch)[0]["from_ts"], 900);
     }
 
     #[test]

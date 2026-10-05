@@ -587,7 +587,11 @@ fn note_epoch(ep: &mut EndpointState, seen: &str) {
             ep.restarts.push(restart::Restart {
                 epoch: seen.to_string(),
                 from_ts: None,
+                rows_before: ep.rows_staged,
             });
+            // The fetches so far were for an earlier process; the newest
+            // gets its own attempts.
+            ep.restart_fetches = 0;
         }
     }
 }
@@ -595,7 +599,7 @@ fn note_epoch(ep: &mut EndpointState, seen: &str) {
 /// What the restarted agent at `base_url` reports about itself, fetched
 /// within `timeout`: `None` when nothing answered, or when `/status` names an
 /// epoch other than `epoch`, the one the restart is for (the agent restarted
-/// again, or the answer came from the old process). An agent whose `/status`
+/// again). An agent whose `/status`
 /// carries no epoch cannot be checked, and what it reported is taken.
 pub(crate) async fn fetch_restarted_agent(
     client: &Client,
@@ -644,8 +648,8 @@ pub(crate) async fn fetch_restarted_agent(
 /// new process has been staged: the epoch history, and the version,
 /// systeminfo and descriptions the new process reports (see
 /// [`fetch_restarted_agent`] and [`restart::metadata_patch`]). A fetch that
-/// fails or finds another process is tried again on the next tick, up to
-/// [`restart::FETCH_ATTEMPTS`] times, and the epochs are then written without
+/// fails or finds another process is tried on up to
+/// [`restart::FETCH_ATTEMPTS`] ticks in all, and the epochs are then written without
 /// the process's metadata; on the `last` call, at shutdown, there is no next
 /// tick, so they are written at once. A `version` set with `--metadata` is
 /// kept. Without
@@ -1101,7 +1105,7 @@ fn handle_stream_event(
                 match rec.stage_stream(idx, &endpoints[idx].config.url, applied) {
                     Ok(()) => {
                         if let Some(ts) = first_ts {
-                            endpoints[idx].note_first_row(ts);
+                            endpoints[idx].note_row_staged(ts);
                         }
                     }
                     Err(e) => {
@@ -2968,7 +2972,7 @@ pub fn run(mut config: RecordingConfig) {
                                     ts,
                                     wall_offset,
                                 ) {
-                                    Ok(()) => endpoints[idx].note_first_row(ts),
+                                    Ok(()) => endpoints[idx].note_row_staged(ts),
                                     Err(e) => {
                                         ingest_failed.get_or_insert(e);
                                     }
