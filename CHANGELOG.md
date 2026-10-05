@@ -21,11 +21,11 @@
 
 ### Changed
 
-- metriken-query 0.34.3 and metriken-archive 0.3.4. `rate`/`irate`, alone
+- metriken-query 0.34.4 and metriken-archive 0.3.4. `rate`/`irate`, alone
   or under `sum`/`avg`/`min`/`max`/`count`, are computed in one pass over a
-  `.dendro` or `.rez` archive's columns when every metric in the expression
-  is in one table. An expression that reads two tables (such as
-  `sum(irate(cpu_usage[5m])) / cpu_cores`), a `.parquet` file, raw rate
+  `.dendro` or `.rez` archive's columns, including in an expression that
+  reads several tables of one recording (such as
+  `sum(irate(cpu_usage[5m])) / cpu_cores`). A `.parquet` file, raw rate
   mode, and a query joining samplers of different cadence are computed per
   series as before. On a 9.6-hour recording of a per-task group at a 1 s
   step, a warm `sum(irate(...))` took 9.7 s (table stored long) or 14 s
@@ -33,7 +33,9 @@
   15 s and takes 1.07 s or 1.38 s (these "before" figures are from the same
   runs; the 0.34.2 entry below was measured under heavier load). A
   `sum(irate(...))` over the table stored long peaks at 0.98 GB of memory
-  footprint, against 1.65 GB. A query reads segments on up to 8 threads (one
+  footprint, against 1.65 GB. `sum(irate(task_cpu_usage[5s])) / cpu_cores` over
+  the table stored wide took 23-44 s end to end in `rezolus mcp query` and
+  takes 10.8-13.7 s, on a loaded machine. A query reads segments on up to 8 threads (one
   per core, at most 8); the browser viewer runs a query on one thread. An
   aggregate's values and bands can differ in the last bits of a float from
   earlier releases, between hosts with different core counts, and between
