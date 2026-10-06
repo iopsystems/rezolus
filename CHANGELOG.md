@@ -32,15 +32,22 @@
   `--metadata` is kept. Before, the metadata described only the process the
   recording opened with, and a log warning was the only record of the
   restart. A parquet recording still has no history.
-- metriken-query 0.34.5 and metriken-archive 0.3.5. The viewer's charts are
+- metriken-query 0.34.6 and metriken-archive 0.3.5. The viewer's charts are
   reduced to their point budget while the query is computed, instead of
   after the full-resolution result is built. On a 9.6-hour recording of a
-  per-task group, an unaggregated `irate(...)` chart took 9.4 GB of memory
-  and 6.0 s and takes about 450 MB and 2.8 s, and a `sum by (comm)` chart
-  took 1.3 GB and takes about 500 MB. Opening a long table for its first
-  query takes about 1.5 s instead of 2.7 s. Every series of a chart now
-  shares one set of buckets, set by the chart's time range:
-  - a series covering part of the range is bucketed like the rest;
+  per-task group stored long, an unaggregated `irate(...)` chart took 9.4 GB
+  of memory and 6.0 s and takes 434-486 MB and 2.7 s, and a
+  `sum by (comm)` chart took 1.3 GB and takes about 500 MB. Stored wide,
+  the `irate(...)` chart took 8.7 GB and takes about 1.5 GB. On the same
+  recording, a query over a small part of the range, whose time is mostly
+  spent opening the table, takes 1.5-1.65 s instead of 2.7-3.0 s. Every
+  series of a chart now shares one set of buckets, set by the chart's time
+  range and step:
+  - a chart whose range fits its point budget at its step shows every
+    point, at any interval;
+  - otherwise the buckets are one of the round widths, from 1 s up, so a
+    series covering part of the range is bucketed like the rest and can get
+    wider buckets than before;
   - a bucket holding one point shows it at its own time;
   - a chart in raw rate mode, or of a histogram, keeps to its point budget.
 - metriken-query 0.34.4 and metriken-archive 0.3.4. `rate`/`irate`, alone
