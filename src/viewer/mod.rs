@@ -282,6 +282,19 @@ pub fn command() -> Command {
                 .value_parser(value_parser!(usize))
                 .action(clap::ArgAction::Set),
         )
+        .arg(
+            clap::Arg::new("QUERY_CONCURRENCY")
+                .long("query-concurrency")
+                .value_name("N")
+                .help(
+                    "Queries the dashboard runs at once; others wait for one to \
+                     finish. Each rate query reads on up to 8 threads and holds \
+                     its own memory, so a lower value bounds peak RSS. Overrides \
+                     REZOLUS_QUERY_CONCURRENCY. Default: half the CPUs, 2 to 8.",
+                )
+                .value_parser(value_parser!(usize))
+                .action(clap::ArgAction::Set),
+        )
 }
 
 pub struct Config {
@@ -296,6 +309,8 @@ pub struct Config {
     proxy_allow: proxy_allow::Allowlist,
     /// Buffer pool budget in bytes. Defaults to `DEFAULT_CACHE_SIZE_BYTES`.
     cache_size_bytes: usize,
+    /// Queries run at once. Defaults to `state::default_query_concurrency`.
+    query_concurrency: usize,
     /// Render a terminal UI instead of the web dashboard.
     tui: bool,
     /// Label selectors naming which recordings of a multi-recording `.rez`
@@ -385,6 +400,18 @@ impl TryFrom<ArgMatches> for Config {
             .map(|mb| mb * 1024 * 1024)
             .unwrap_or(state::DEFAULT_CACHE_SIZE_BYTES);
 
+        // Queries at once: CLI flag > env var > half the CPUs.
+        let query_concurrency = args
+            .get_one::<usize>("QUERY_CONCURRENCY")
+            .copied()
+            .or_else(|| {
+                std::env::var("REZOLUS_QUERY_CONCURRENCY")
+                    .ok()
+                    .and_then(|s| s.parse::<usize>().ok())
+            })
+            .unwrap_or_else(state::default_query_concurrency)
+            .max(1);
+
         Ok(Config {
             source,
             experiment_path,
@@ -398,6 +425,7 @@ impl TryFrom<ArgMatches> for Config {
             templates_dir: args.get_one::<PathBuf>("templates").cloned(),
             proxy_allow,
             cache_size_bytes,
+            query_concurrency,
             tui: args.get_flag("TUI"),
             baseline_recording: crate::mcp::RecordingSelector::parse(
                 BASELINE_FLAG,
@@ -421,7 +449,7 @@ pub fn run(config: Config) {
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .worker_threads(1)
+        .worker_threads(2)
         .thread_name("rezolus")
         .build()
         .expect("failed to launch async runtime");
@@ -476,6 +504,8 @@ pub fn run(config: Config) {
     };
 
     state.set_proxy(config.proxy_allow.clone());
+    state.set_query_concurrency(config.query_concurrency);
+    info!("Queries at once: {}", config.query_concurrency);
     if state.proxy.enabled() {
         if state.proxy.allow.is_any() {
             warn!(

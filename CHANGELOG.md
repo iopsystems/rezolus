@@ -32,6 +32,16 @@
   `--metadata` is kept. Before, the metadata described only the process the
   recording opened with, and a log warning was the only record of the
   restart. A parquet recording still has no history.
+- `rezolus view` runs dashboard queries on a pool of threads, several at
+  once, instead of one at a time on the server's single worker. A slow query
+  no longer holds up the cheap panels and page requests behind it.
+  `--query-concurrency N` (or `REZOLUS_QUERY_CONCURRENCY`) sets how many run
+  at once; the default is half the CPUs, from 2 to 8. Each rate query reads
+  on up to 8 threads and holds its own memory, so a lower value bounds peak
+  memory. Loading every section of a dashboard for a 9.6-hour recording on
+  a 16-CPU host, the median query waited 267-287 ms instead of 1.2 s and
+  the 90th percentile 2.4-2.6 s instead of 14-15 s; the viewer's peak
+  memory footprint over the load was 2.4 GB, against 2.8 GB before.
 - metriken-query 0.34.7 and metriken-archive 0.3.5. The viewer's charts are
   reduced to their point budget while the query is computed, instead of
   after the full-resolution result is built. A `sum`, `avg`, `min`, `max`

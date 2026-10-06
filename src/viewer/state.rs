@@ -137,6 +137,18 @@ pub struct AppState {
     /// The default is `DEFAULT_CACHE_SIZE_BYTES`; set `REZOLUS_CACHE_MB` or
     /// pass `--cache-size-mb` to override.
     pub pool: Arc<BufferPool>,
+    /// The queries that may read the recording at once; see
+    /// [`default_query_concurrency`] and `--query-concurrency`.
+    pub queries: Arc<tokio::sync::Semaphore>,
+}
+
+/// The default number of queries the viewer runs at once: half the CPUs,
+/// at least 2 and at most 8. A rate query reads a recording on up to 8
+/// threads of its own, and each running query holds its own memory.
+pub fn default_query_concurrency() -> usize {
+    std::thread::available_parallelism()
+        .map_or(2, |n| n.get() / 2)
+        .clamp(2, 8)
 }
 
 impl AppState {
@@ -167,7 +179,13 @@ impl AppState {
             combined_ab_marker: RwLock::new(None),
             trimmed_report_marker: RwLock::new(None),
             pool,
+            queries: Arc::new(tokio::sync::Semaphore::new(default_query_concurrency())),
         }
+    }
+
+    /// Let `n` queries read the recording at once, at least 1.
+    pub fn set_query_concurrency(&mut self, n: usize) {
+        self.queries = Arc::new(tokio::sync::Semaphore::new(n.max(1)));
     }
 
     /// Enable the URL proxy with the given hostname allowlist.

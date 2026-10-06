@@ -310,32 +310,35 @@ async fn metrics_handler(
     State(state): State<Arc<AppState>>,
     Query(p): Query<MetricsParam>,
 ) -> Response {
-    let capture_id = p
-        .capture
-        .as_deref()
-        .unwrap_or(capture_registry::BASELINE_ID);
-    let Some(data) = state.captures.get_by_id(capture_id) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let source = p.source.clone().unwrap_or_else(|| data.source());
-    let descriptions = state
-        .captures
-        .file_metadata_by_id(capture_id)
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .map(|v| dashboard::metric_catalog::resolve_descriptions(&v, &source))
-        .unwrap_or_default();
-    let metrics = dashboard::metric_catalog::assemble_catalog(
-        data.as_ref(),
-        &descriptions,
-        p.source.as_deref(),
-    );
-    let body = dashboard::metric_catalog::MetricsResponse { source, metrics };
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json")],
-        serde_json::to_string(&body).unwrap(),
-    )
-        .into_response()
+    on_query_slot(&state, move |state| {
+        let capture_id = p
+            .capture
+            .as_deref()
+            .unwrap_or(capture_registry::BASELINE_ID);
+        let Some(data) = state.captures.get_by_id(capture_id) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        let source = p.source.clone().unwrap_or_else(|| data.source());
+        let descriptions = state
+            .captures
+            .file_metadata_by_id(capture_id)
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .map(|v| dashboard::metric_catalog::resolve_descriptions(&v, &source))
+            .unwrap_or_default();
+        let metrics = dashboard::metric_catalog::assemble_catalog(
+            data.as_ref(),
+            &descriptions,
+            p.source.as_deref(),
+        );
+        let body = dashboard::metric_catalog::MetricsResponse { source, metrics };
+        (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            serde_json::to_string(&body).unwrap(),
+        )
+            .into_response()
+    })
+    .await
 }
 
 // ── Sample timestamps (jitter visualization) ───────────────────────────
@@ -352,14 +355,17 @@ async fn timestamps_handler(
 ) -> Response {
     let capture_id = p
         .capture
-        .as_deref()
-        .unwrap_or(capture_registry::BASELINE_ID);
-    let Some(data) = state.captures.get_by_id(capture_id) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let source = p.source.clone().unwrap_or_else(|| data.source());
-    let timestamps = data.sample_timestamps();
-    Json(TimestampsResponse { source, timestamps }).into_response()
+        .clone()
+        .unwrap_or_else(|| capture_registry::BASELINE_ID.to_string());
+    on_query_slot(&state, move |state| {
+        let Some(data) = state.captures.get_by_id(capture_id.as_str()) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        let source = p.source.clone().unwrap_or_else(|| data.source());
+        let timestamps = data.sample_timestamps();
+        Json(TimestampsResponse { source, timestamps }).into_response()
+    })
+    .await
 }
 
 // ── PromQL handlers ───────────────────────────────────────────────────
@@ -396,6 +402,28 @@ struct RangeQueryParams {
     rate_mode: Option<String>,
 }
 
+/// Run `f`, which reads the recording, on tokio's blocking pool once one of
+/// the viewer's query slots ([`AppState::queries`]) is free. The async
+/// workers stay free for requests that do not read the recording, and a slow
+/// query holds one slot rather than the server.
+async fn on_query_slot<T, F>(state: &Arc<AppState>, f: F) -> T
+where
+    T: Send + 'static,
+    F: FnOnce(&AppState) -> T + Send + 'static,
+{
+    let permit = Arc::clone(&state.queries)
+        .acquire_owned()
+        .await
+        .expect("the query semaphore is never closed");
+    let state = Arc::clone(state);
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        f(&state)
+    })
+    .await
+    .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
+}
+
 /// Run `f` against the resolved capture's data source; on a missing
 /// capture, return a `capture_not_found` ApiResponse.
 fn run_query<F>(state: &AppState, capture: Option<&str>, f: F) -> Json<ApiResponse<QueryResult>>
@@ -419,25 +447,31 @@ async fn instant_query(
     Query(params): Query<QueryParams>,
     State(state): State<Arc<AppState>>,
 ) -> Json<ApiResponse<QueryResult>> {
-    run_query(&state, params.capture.as_deref(), |data| {
-        data.query(&params.query, params.time)
+    on_query_slot(&state, move |state| {
+        run_query(state, params.capture.as_deref(), |data| {
+            data.query(&params.query, params.time)
+        })
     })
+    .await
 }
 
 async fn range_query(
     Query(params): Query<RangeQueryParams>,
     State(state): State<Arc<AppState>>,
 ) -> Response {
-    if params.format.as_deref() == Some("display") {
-        return range_query_display(&state, &params);
-    }
-    let qopts = metriken_query::QueryOptions::with_rate_mode(display_wire::parse_rate_mode(
-        params.rate_mode.as_deref(),
-    ));
-    run_query(&state, params.capture.as_deref(), |data| {
-        data.query_range_opts(&params.query, params.start, params.end, params.step, &qopts)
+    on_query_slot(&state, move |state| {
+        if params.format.as_deref() == Some("display") {
+            return range_query_display(state, &params);
+        }
+        let qopts = metriken_query::QueryOptions::with_rate_mode(display_wire::parse_rate_mode(
+            params.rate_mode.as_deref(),
+        ));
+        run_query(state, params.capture.as_deref(), |data| {
+            data.query_range_opts(&params.query, params.start, params.end, params.step, &qopts)
+        })
+        .into_response()
     })
-    .into_response()
+    .await
 }
 
 /// Display-mode range query: decimate to per-bucket boxplots and return the
@@ -727,5 +761,149 @@ mod follow_tests {
         let (mode, meta) = mode_and_metadata(view(&done)).await;
         assert_eq!(mode["following"], false);
         assert!(meta.get("following").is_none());
+    }
+}
+
+#[cfg(test)]
+mod query_slot_tests {
+    use super::*;
+    use metriken_query::MetricsSource;
+    use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::sync::mpsc;
+
+    /// An empty recording whose instant queries wait, once inside it, until
+    /// the test releases them or 5 s pass.
+    struct Gated {
+        inner: metriken_query::MemoryStore,
+        entered: mpsc::SyncSender<()>,
+        release: parking_lot::Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl MetricsSource for Gated {
+        fn query_range_opts(
+            &self,
+            expr: &str,
+            start: f64,
+            end: f64,
+            step: f64,
+            opts: &metriken_query::QueryOptions,
+        ) -> Result<QueryResult, QueryError> {
+            self.inner.query_range_opts(expr, start, end, step, opts)
+        }
+        fn query(&self, expr: &str, time: Option<f64>) -> Result<QueryResult, QueryError> {
+            self.entered.send(()).unwrap();
+            // Bounded, so a handler that blocks the async worker fails the
+            // test instead of hanging it.
+            let _ = self
+                .release
+                .lock()
+                .recv_timeout(std::time::Duration::from_secs(5));
+            MetricsSource::query(&self.inner, expr, time)
+        }
+        fn columns(&self, query: &str) -> Result<HashSet<String>, QueryError> {
+            MetricsSource::columns(&self.inner, query)
+        }
+        fn time_range(&self) -> Option<(f64, f64)> {
+            MetricsSource::time_range(&self.inner)
+        }
+        fn interval(&self) -> f64 {
+            MetricsSource::interval(&self.inner)
+        }
+        fn source(&self) -> String {
+            MetricsSource::source(&self.inner)
+        }
+        fn version(&self) -> String {
+            MetricsSource::version(&self.inner)
+        }
+        fn filename(&self) -> Option<String> {
+            MetricsSource::filename(&self.inner)
+        }
+        fn metadata_get(&self, key: &str) -> Option<String> {
+            MetricsSource::metadata_get(&self.inner, key)
+        }
+        fn file_metadata(&self) -> HashMap<String, String> {
+            MetricsSource::file_metadata(&self.inner)
+        }
+        fn counter_names(&self) -> Vec<String> {
+            MetricsSource::counter_names(&self.inner)
+        }
+        fn gauge_names(&self) -> Vec<String> {
+            MetricsSource::gauge_names(&self.inner)
+        }
+        fn histogram_names(&self) -> Vec<String> {
+            MetricsSource::histogram_names(&self.inner)
+        }
+        fn counter_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
+            MetricsSource::counter_labels(&self.inner, name)
+        }
+        fn gauge_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
+            MetricsSource::gauge_labels(&self.inner, name)
+        }
+        fn histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
+            MetricsSource::histogram_labels(&self.inner, name)
+        }
+        fn time_range_ns(&self) -> Option<(u64, u64)> {
+            MetricsSource::time_range_ns(&self.inner)
+        }
+    }
+
+    fn params() -> Query<QueryParams> {
+        Query(QueryParams {
+            query: "up".to_string(),
+            time: None,
+            capture: None,
+        })
+    }
+
+    /// A query that is reading the recording holds one query slot, not the
+    /// server: on a single async worker, a request that does not read the
+    /// recording is answered meanwhile, and with one slot a second query
+    /// waits for the first.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_query_holds_a_slot_and_not_the_server() {
+        let (entered_tx, entered) = mpsc::sync_channel(2);
+        let (release, release_rx) = mpsc::channel();
+        let gated = Gated {
+            inner: metriken_query::MemoryStore::builder().build(),
+            entered: entered_tx,
+            release: parking_lot::Mutex::new(release_rx),
+        };
+        let mut state = AppState::new(Arc::new(gated), ::dashboard::TemplateRegistry::empty());
+        state.set_query_concurrency(1);
+        let state = Arc::new(state);
+
+        let first = tokio::spawn(instant_query(params(), State(Arc::clone(&state))));
+        let entered = Arc::new(parking_lot::Mutex::new(entered));
+        let wait_entered = |entered: Arc<parking_lot::Mutex<mpsc::Receiver<()>>>| {
+            tokio::task::spawn_blocking(move || {
+                entered
+                    .lock()
+                    .recv_timeout(std::time::Duration::from_secs(5))
+            })
+        };
+        wait_entered(Arc::clone(&entered)).await.unwrap().unwrap();
+
+        // Spawned, so it needs the async worker as a request does.
+        let Json(mode) = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            tokio::spawn(mode(State(Arc::clone(&state)))),
+        )
+        .await
+        .expect("a request that does not read the recording is answered")
+        .unwrap();
+        assert!(mode.is_object());
+
+        let second = tokio::spawn(instant_query(params(), State(Arc::clone(&state))));
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            entered.lock().try_recv().is_err(),
+            "the second query waits for the slot"
+        );
+
+        release.send(()).unwrap();
+        let Json(_) = first.await.unwrap();
+        wait_entered(Arc::clone(&entered)).await.unwrap().unwrap();
+        release.send(()).unwrap();
+        let Json(_) = second.await.unwrap();
     }
 }
