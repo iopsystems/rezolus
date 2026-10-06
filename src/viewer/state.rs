@@ -37,14 +37,24 @@ pub const DEFAULT_CACHE_SIZE_BYTES: usize = 500 * 1024 * 1024;
 pub struct LazySectionStore {
     context: dashboard::dashboard::DashboardContext,
     cached_bodies: HashMap<String, serde_json::Value>,
+    /// Distinct for every store made, so a section generated from one
+    /// store is not cached in the store that replaced it.
+    id: u64,
 }
 
 impl LazySectionStore {
     pub fn new(context: dashboard::dashboard::DashboardContext) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         Self {
             context,
             cached_bodies: HashMap::new(),
+            id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
+    }
+
+    /// This store's id: see [`insert`](Self::insert).
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     pub fn sections(&self) -> &[dashboard::Section] {
@@ -68,17 +78,39 @@ impl LazySectionStore {
         route: &str,
         data: &dyn MetricsSource,
     ) -> Option<&serde_json::Value> {
-        let key = format!("{}.json", &route[1..]);
+        let key = Self::key(route);
         if !self.cached_bodies.contains_key(&key) {
-            let mut view = dashboard::dashboard::generate_section(data, route, &self.context)?;
-            view.set_filename(data.filename_or_default());
-            if let Some(size) = self.context.filesize {
-                view.set_filesize(size);
-            }
-            let value = serde_json::to_value(&view).ok()?;
+            let value = self.generate(route, data)?;
             self.cached_bodies.insert(key.clone(), value);
         }
         self.cached_bodies.get(&key)
+    }
+
+    fn key(route: &str) -> String {
+        format!("{}.json", &route[1..])
+    }
+
+    /// The section at `route` if it has been generated.
+    pub fn cached(&self, route: &str) -> Option<&serde_json::Value> {
+        self.cached_bodies.get(&Self::key(route))
+    }
+
+    /// Generate the section at `route` from `data`, without caching it.
+    pub fn generate(&self, route: &str, data: &dyn MetricsSource) -> Option<serde_json::Value> {
+        let mut view = dashboard::dashboard::generate_section(data, route, &self.context)?;
+        view.set_filename(data.filename_or_default());
+        if let Some(size) = self.context.filesize {
+            view.set_filesize(size);
+        }
+        serde_json::to_value(&view).ok()
+    }
+
+    /// Cache `value` as the section at `route`, if it was generated from
+    /// the store with id `from`, which is this one.
+    pub fn insert(&mut self, from: u64, route: &str, value: serde_json::Value) {
+        if from == self.id {
+            self.cached_bodies.insert(Self::key(route), value);
+        }
     }
 }
 
@@ -137,14 +169,15 @@ pub struct AppState {
     /// The default is `DEFAULT_CACHE_SIZE_BYTES`; set `REZOLUS_CACHE_MB` or
     /// pass `--cache-size-mb` to override.
     pub pool: Arc<BufferPool>,
-    /// The queries that may read the recording at once; see
+    /// One permit per query that may read the recording at once; see
     /// [`default_query_concurrency`] and `--query-concurrency`.
     pub queries: Arc<tokio::sync::Semaphore>,
 }
 
 /// The default number of queries the viewer runs at once: half the CPUs,
-/// at least 2 and at most 8. A rate query reads a recording on up to 8
-/// threads of its own, and each running query holds its own memory.
+/// at least 2 and at most 8. A batched read of archive segments uses up to
+/// `min(CPUs, 8)` threads of its own, so N slots can run up to 8 * N read
+/// threads.
 pub fn default_query_concurrency() -> usize {
     std::thread::available_parallelism()
         .map_or(2, |n| n.get() / 2)

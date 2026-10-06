@@ -156,10 +156,26 @@ async fn data(State(state): State<Arc<AppState>>, AxumPath(path): AxumPath<Strin
     let stem = path.strip_suffix(".json").unwrap_or(&path);
     let route = format!("/{stem}");
 
-    let value = {
-        let data = state.baseline_data();
-        let mut store = state.sections.write();
-        store.get_or_generate(&route, data.as_ref()).cloned()
+    // A section not yet generated reads the recording to find its series,
+    // so it is generated in a query slot, under the read lock: `mode` and
+    // `sections` are answered meanwhile. Two requests for the same new
+    // section can both generate it; the second insert replaces the first.
+    // A store replaced meanwhile (a reset or an attach) does not take it.
+    let cached = state.sections.read().cached(&route).cloned();
+    let value = match cached {
+        Some(value) => Some(value),
+        None => {
+            on_query_slot(&state, move |state| {
+                let data = state.baseline_data();
+                let (id, value) = {
+                    let store = state.sections.read();
+                    (store.id(), store.generate(&route, data.as_ref())?)
+                };
+                state.sections.write().insert(id, &route, value.clone());
+                Some(value)
+            })
+            .await
+        }
     };
 
     let Some(mut value) = value else {
@@ -405,7 +421,9 @@ struct RangeQueryParams {
 /// Run `f`, which reads the recording, on tokio's blocking pool once one of
 /// the viewer's query slots ([`AppState::queries`]) is free. The async
 /// workers stay free for requests that do not read the recording, and a slow
-/// query holds one slot rather than the server.
+/// query holds one slot rather than the server. The slot is held until `f`
+/// returns, including after the client disconnects. A panic in `f` releases
+/// it and is raised again in the handler.
 async fn on_query_slot<T, F>(state: &Arc<AppState>, f: F) -> T
 where
     T: Send + 'static,
@@ -446,11 +464,12 @@ where
 async fn instant_query(
     Query(params): Query<QueryParams>,
     State(state): State<Arc<AppState>>,
-) -> Json<ApiResponse<QueryResult>> {
+) -> Response {
     on_query_slot(&state, move |state| {
         run_query(state, params.capture.as_deref(), |data| {
             data.query(&params.query, params.time)
         })
+        .into_response()
     })
     .await
 }
@@ -769,14 +788,29 @@ mod query_slot_tests {
     use super::*;
     use metriken_query::MetricsSource;
     use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
+    use std::time::Duration;
 
-    /// An empty recording whose instant queries wait, once inside it, until
-    /// the test releases them or 5 s pass.
+    /// An empty recording whose reads wait, once inside it, until the test
+    /// releases them or 5 s pass. The wait is bounded so that a handler that
+    /// blocks the async worker fails the test instead of hanging it.
     struct Gated {
         inner: metriken_query::MemoryStore,
         entered: mpsc::SyncSender<()>,
         release: parking_lot::Mutex<mpsc::Receiver<()>>,
+        /// Panic in the next read instead of waiting.
+        panic_once: AtomicBool,
+    }
+
+    impl Gated {
+        fn wait(&self) {
+            if self.panic_once.swap(false, Ordering::Relaxed) {
+                panic!("a query that panics");
+            }
+            self.entered.send(()).unwrap();
+            let _ = self.release.lock().recv_timeout(Duration::from_secs(5));
+        }
     }
 
     impl MetricsSource for Gated {
@@ -788,17 +822,33 @@ mod query_slot_tests {
             step: f64,
             opts: &metriken_query::QueryOptions,
         ) -> Result<QueryResult, QueryError> {
+            self.wait();
             self.inner.query_range_opts(expr, start, end, step, opts)
         }
+        fn query_range_display_opts(
+            &self,
+            expr: &str,
+            start: f64,
+            end: f64,
+            step: f64,
+            opts: &metriken_query::DisplayOptions,
+            qopts: &metriken_query::QueryOptions,
+        ) -> Result<metriken_query::DisplayResult, QueryError> {
+            self.wait();
+            self.inner
+                .query_range_display_opts(expr, start, end, step, opts, qopts)
+        }
         fn query(&self, expr: &str, time: Option<f64>) -> Result<QueryResult, QueryError> {
-            self.entered.send(()).unwrap();
-            // Bounded, so a handler that blocks the async worker fails the
-            // test instead of hanging it.
-            let _ = self
-                .release
-                .lock()
-                .recv_timeout(std::time::Duration::from_secs(5));
+            self.wait();
             MetricsSource::query(&self.inner, expr, time)
+        }
+        fn sample_timestamps(&self) -> Vec<u64> {
+            self.wait();
+            MetricsSource::sample_timestamps(&self.inner)
+        }
+        fn counter_names(&self) -> Vec<String> {
+            self.wait();
+            MetricsSource::counter_names(&self.inner)
         }
         fn columns(&self, query: &str) -> Result<HashSet<String>, QueryError> {
             MetricsSource::columns(&self.inner, query)
@@ -824,9 +874,6 @@ mod query_slot_tests {
         fn file_metadata(&self) -> HashMap<String, String> {
             MetricsSource::file_metadata(&self.inner)
         }
-        fn counter_names(&self) -> Vec<String> {
-            MetricsSource::counter_names(&self.inner)
-        }
         fn gauge_names(&self) -> Vec<String> {
             MetricsSource::gauge_names(&self.inner)
         }
@@ -847,63 +894,131 @@ mod query_slot_tests {
         }
     }
 
-    fn params() -> Query<QueryParams> {
-        Query(QueryParams {
-            query: "up".to_string(),
-            time: None,
-            capture: None,
-        })
-    }
+    type Entered = Arc<parking_lot::Mutex<mpsc::Receiver<()>>>;
 
-    /// A query that is reading the recording holds one query slot, not the
-    /// server: on a single async worker, a request that does not read the
-    /// recording is answered meanwhile, and with one slot a second query
-    /// waits for the first.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn a_query_holds_a_slot_and_not_the_server() {
-        let (entered_tx, entered) = mpsc::sync_channel(2);
+    /// A one-slot state over a [`Gated`] recording, with the channels that
+    /// see a read enter and release it.
+    fn gated() -> (Arc<AppState>, Entered, mpsc::Sender<()>, Arc<Gated>) {
+        let (entered_tx, entered) = mpsc::sync_channel(4);
         let (release, release_rx) = mpsc::channel();
-        let gated = Gated {
+        let gated = Arc::new(Gated {
             inner: metriken_query::MemoryStore::builder().build(),
             entered: entered_tx,
             release: parking_lot::Mutex::new(release_rx),
-        };
-        let mut state = AppState::new(Arc::new(gated), ::dashboard::TemplateRegistry::empty());
+            panic_once: AtomicBool::new(false),
+        });
+        let mut state = AppState::new(
+            Arc::clone(&gated) as Arc<dyn MetricsSource>,
+            ::dashboard::TemplateRegistry::empty(),
+        );
         state.set_query_concurrency(1);
-        let state = Arc::new(state);
+        (
+            Arc::new(state),
+            Arc::new(parking_lot::Mutex::new(entered)),
+            release,
+            gated,
+        )
+    }
 
-        let first = tokio::spawn(instant_query(params(), State(Arc::clone(&state))));
-        let entered = Arc::new(parking_lot::Mutex::new(entered));
-        let wait_entered = |entered: Arc<parking_lot::Mutex<mpsc::Receiver<()>>>| {
-            tokio::task::spawn_blocking(move || {
-                entered
-                    .lock()
-                    .recv_timeout(std::time::Duration::from_secs(5))
+    async fn wait_entered(entered: &Entered) {
+        let entered = Arc::clone(entered);
+        tokio::task::spawn_blocking(move || entered.lock().recv_timeout(Duration::from_secs(5)))
+            .await
+            .unwrap()
+            .expect("a read enters the recording");
+    }
+
+    fn range(format: Option<&str>) -> Query<RangeQueryParams> {
+        Query(RangeQueryParams {
+            query: "up".to_string(),
+            start: 0.0,
+            end: 10.0,
+            step: 1.0,
+            capture: None,
+            format: format.map(str::to_string),
+            points: None,
+            band: None,
+            rate_mode: None,
+        })
+    }
+
+    /// Each handler that reads the recording, as a spawned request.
+    fn request(kind: usize, state: &Arc<AppState>) -> tokio::task::JoinHandle<Response> {
+        let state = State(Arc::clone(state));
+        let metrics = || {
+            Query(MetricsParam {
+                source: None,
+                capture: None,
             })
         };
-        wait_entered(Arc::clone(&entered)).await.unwrap().unwrap();
+        match kind {
+            0 => tokio::spawn(instant_query(
+                Query(QueryParams {
+                    query: "up".to_string(),
+                    time: None,
+                    capture: None,
+                }),
+                state,
+            )),
+            1 => tokio::spawn(range_query(range(None), state)),
+            2 => tokio::spawn(range_query(range(Some("display")), state)),
+            3 => tokio::spawn(metrics_handler(state, metrics())),
+            _ => tokio::spawn(timestamps_handler(state, metrics())),
+        }
+    }
 
-        // Spawned, so it needs the async worker as a request does.
-        let Json(mode) = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            tokio::spawn(mode(State(Arc::clone(&state)))),
-        )
-        .await
-        .expect("a request that does not read the recording is answered")
-        .unwrap();
-        assert!(mode.is_object());
+    /// A request that is reading the recording holds one query slot, not the
+    /// server: on a single async worker, a request that does not read the
+    /// recording is answered meanwhile, and with one slot a second request
+    /// that reads it waits for the first. For each handler that reads it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_query_holds_a_slot_and_not_the_server() {
+        for kind in 0..5 {
+            let (state, entered, release, _) = gated();
+            let first = request(kind, &state);
+            wait_entered(&entered).await;
 
-        let second = tokio::spawn(instant_query(params(), State(Arc::clone(&state))));
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            // Spawned, so it needs the async worker as a request does.
+            let Json(mode) = tokio::time::timeout(
+                Duration::from_secs(1),
+                tokio::spawn(mode(State(Arc::clone(&state)))),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("handler {kind}: mode is not answered"))
+            .unwrap();
+            assert!(mode.is_object());
+
+            let second = request(kind, &state);
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert!(
+                entered.lock().try_recv().is_err(),
+                "handler {kind}: the second request waits for the slot"
+            );
+
+            release.send(()).unwrap();
+            first.await.unwrap();
+            wait_entered(&entered).await;
+            release.send(()).unwrap();
+            second.await.unwrap();
+        }
+    }
+
+    /// A query that panics gives its slot back: with one slot, the next
+    /// query runs.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_query_that_panics_gives_its_slot_back() {
+        let (state, entered, release, gated) = gated();
+        gated.panic_once.store(true, Ordering::Relaxed);
         assert!(
-            entered.lock().try_recv().is_err(),
-            "the second query waits for the slot"
+            request(0, &state).await.is_err(),
+            "the panic reaches the handler"
         );
-
+        let next = request(0, &state);
+        wait_entered(&entered).await;
         release.send(()).unwrap();
-        let Json(_) = first.await.unwrap();
-        wait_entered(Arc::clone(&entered)).await.unwrap().unwrap();
-        release.send(()).unwrap();
-        let Json(_) = second.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), next)
+            .await
+            .expect("the next query runs")
+            .unwrap();
     }
 }

@@ -287,12 +287,11 @@ pub fn command() -> Command {
                 .long("query-concurrency")
                 .value_name("N")
                 .help(
-                    "Queries the dashboard runs at once; others wait for one to \
-                     finish. Each rate query reads on up to 8 threads and holds \
-                     its own memory, so a lower value bounds peak RSS. Overrides \
-                     REZOLUS_QUERY_CONCURRENCY. Default: half the CPUs, 2 to 8.",
+                    "How many queries read the recording at once; the rest wait \
+                     for a free slot. Overrides REZOLUS_QUERY_CONCURRENCY. \
+                     Default: half the CPUs, from 2 to 8.",
                 )
-                .value_parser(value_parser!(usize))
+                .value_parser(value_parser!(u64).range(1..))
                 .action(clap::ArgAction::Set),
         )
 }
@@ -402,8 +401,8 @@ impl TryFrom<ArgMatches> for Config {
 
         // Queries at once: CLI flag > env var > half the CPUs.
         let query_concurrency = args
-            .get_one::<usize>("QUERY_CONCURRENCY")
-            .copied()
+            .get_one::<u64>("QUERY_CONCURRENCY")
+            .map(|n| *n as usize)
             .or_else(|| {
                 std::env::var("REZOLUS_QUERY_CONCURRENCY")
                     .ok()
@@ -505,7 +504,9 @@ pub fn run(config: Config) {
 
     state.set_proxy(config.proxy_allow.clone());
     state.set_query_concurrency(config.query_concurrency);
-    info!("Queries at once: {}", config.query_concurrency);
+    if !config.tui {
+        info!("Queries at once: {}", config.query_concurrency);
+    }
     if state.proxy.enabled() {
         if state.proxy.allow.is_any() {
             warn!(
