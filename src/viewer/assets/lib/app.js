@@ -881,6 +881,15 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     selectedGpus,
     gpuSelectorActive: (m.route.get() || '').startsWith('/gpu'),
     onGpuChange: changeGpu,
+    // The window the charts are fetched for, which the time bar draws and
+    // sets: a drill-down to `win` ({ start, end } seconds), or back to the
+    // whole recording.
+    range: getRangeOverride(),
+    onRangeChange: (win) => { applyDisplayWindow(win).catch(() => {}); },
+    onRangeReset: () => {
+        chartsState.resetAll();
+        applyDisplayWindow(null).catch(() => {});
+    },
     extra: {
         // Default compare state so TopNav renders the badge in every
         // code path (Main.view, single-chart route, service route).

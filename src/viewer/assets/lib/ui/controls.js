@@ -51,13 +51,29 @@ const parseTimeInput = (text, referenceMs) => {
     return null;
 };
 
+// `range` ({ start, end } seconds) as percentages of the bar's span
+// (`start_time`/`end_time`, milliseconds), or null without one.
+const rangePercent = ({ range, start_time: t0, end_time: t1 }) => {
+    const total = t1 - t0;
+    if (!range || !(total > 0)) return null;
+    const pct = (s) => Math.max(0, Math.min(100, ((s * 1000 - t0) / total) * 100));
+    return { start: pct(range.start), end: pct(range.end) };
+};
+
 // Global time range bar — interactive minimap for zoom selection.
-// Displays full experiment duration with a draggable selection window.
+// Displays the whole recording with the window the charts show selected.
+// With `onRangeChange`, the selection is the charts' fetched window
+// (`range`): dragging or typing a time sets a new one when released, and
+// Reset (`onRangeReset`) returns to the whole recording. Without it, the
+// selection zooms the charts in place.
 const TimeRangeBar = {
     oninit(vnode) {
-        const zoom = vnode.attrs.chartsState?.globalZoom;
+        const zoom = vnode.attrs.onRangeChange
+            ? rangePercent(vnode.attrs)
+            : vnode.attrs.chartsState?.globalZoom;
         vnode.state.barStart = zoom ? zoom.start : 0;
         vnode.state.barEnd = zoom ? zoom.end : 100;
+        vnode.state.attrs = vnode.attrs;
         vnode.state.editing = null; // 'start' | 'end' | null
         vnode.state.editValue = '';
     },
@@ -82,11 +98,33 @@ const TimeRangeBar = {
             if (end - start < 0.5) return;
             vnode.state.barStart = start;
             vnode.state.barEnd = end;
-            // The single writer. setZoom writes zoomLevel/zoomSource/
-            // globalZoom atomically and notifies every chart's zoom
-            // subscriber; no need for a local forEach dispatch here.
-            chartsState.setZoom({ start, end }, { source: 'global' });
+            // With a range handler the bar only moves until the selection is
+            // committed; the charts hold the fetched window, so a percentage
+            // zoom of them would not match the bar's span.
+            if (!vnode.state.attrs.onRangeChange) {
+                // The single writer. setZoom writes zoomLevel/zoomSource/
+                // globalZoom atomically and notifies every chart's zoom
+                // subscriber; no need for a local forEach dispatch here.
+                chartsState.setZoom({ start, end }, { source: 'global' });
+            }
             m.redraw();
+        };
+
+        // Set the charts' window to the selection, or back to the whole
+        // recording when the selection covers it.
+        vnode.state.commit = () => {
+            const a = vnode.state.attrs;
+            if (!a.onRangeChange) return;
+            const { barStart: s, barEnd: e } = vnode.state;
+            if (s <= 0.1 && e >= 99.9) {
+                if (a.range) a.onRangeReset?.();
+                return;
+            }
+            const total = a.end_time - a.start_time;
+            a.onRangeChange({
+                start: (a.start_time + (s / 100) * total) / 1000,
+                end: (a.start_time + (e / 100) * total) / 1000,
+            });
         };
 
         const applyZoom = vnode.state.applyZoom;
@@ -141,9 +179,11 @@ const TimeRangeBar = {
         };
 
         const onMouseUp = () => {
+            const dragged = vnode.state.dragging != null;
             vnode.state.dragging = null;
             document.removeEventListener('mousemove', onMouseMove);
             document.removeEventListener('mouseup', onMouseUp);
+            if (dragged) vnode.state.commit();
         };
 
         bar.addEventListener('mousedown', onMouseDown);
@@ -161,12 +201,24 @@ const TimeRangeBar = {
     view(vnode) {
         const chartsState = vnode.attrs.chartsState;
 
-        // Sync bar position from globalZoom only (not from local chart zoom,
-        // which can carry undefined/NaN start/end when zooming by raw value).
-        const zoom = chartsState?.globalZoom;
-        if (zoom && (zoom.start !== vnode.state.barStart || zoom.end !== vnode.state.barEnd)) {
-            vnode.state.barStart = zoom.start;
-            vnode.state.barEnd = zoom.end;
+        vnode.state.attrs = vnode.attrs;
+        const ranged = !!vnode.attrs.onRangeChange;
+        if (ranged) {
+            // The selection is the charts' window, except mid-drag.
+            if (!vnode.state.dragging) {
+                const pct = rangePercent(vnode.attrs);
+                vnode.state.barStart = pct ? pct.start : 0;
+                vnode.state.barEnd = pct ? pct.end : 100;
+            }
+        } else {
+            // Sync bar position from globalZoom only (not from local chart
+            // zoom, which can carry undefined/NaN start/end when zooming by
+            // raw value).
+            const zoom = chartsState?.globalZoom;
+            if (zoom && (zoom.start !== vnode.state.barStart || zoom.end !== vnode.state.barEnd)) {
+                vnode.state.barStart = zoom.start;
+                vnode.state.barEnd = zoom.end;
+            }
         }
 
         const start = vnode.state.barStart;
@@ -198,6 +250,7 @@ const TimeRangeBar = {
             } else {
                 vnode.state.applyZoom(start, Math.max(pct, start + 0.5));
             }
+            vnode.state.commit();
         };
 
         const startEditing = (which, currentMs) => {
@@ -279,6 +332,7 @@ const TimeRangeBar = {
                     }
                     if (s !== undefined && !isNaN(s)) {
                         vnode.state.applyZoom(s, e2);
+                        vnode.state.commit();
                     }
                 },
                 title: 'Snap global time range to current chart zoom',
@@ -288,11 +342,18 @@ const TimeRangeBar = {
                     e.stopPropagation();
                     vnode.state.barStart = 0;
                     vnode.state.barEnd = 100;
-                    chartsState.resetAll();
+                    if (ranged && vnode.attrs.onRangeReset) {
+                        vnode.attrs.onRangeReset();
+                    } else {
+                        chartsState.resetAll();
+                    }
                     m.redraw();
                 },
                 title: 'Reset to full time range',
-                style: { visibility: (!hidden && (start > 0.1 || end < 99.9)) ? 'visible' : 'hidden' },
+                style: {
+                    visibility: (!hidden && (vnode.attrs.range || start > 0.1 || end < 99.9))
+                        ? 'visible' : 'hidden',
+                },
             }, 'Reset'),
         ]);
     },
