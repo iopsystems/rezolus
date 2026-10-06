@@ -14,7 +14,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use metriken_query::{BufferPool, MetricsSource, QueryError, QueryOptions, QueryResult};
+use metriken_query::{
+    BufferPool, DisplayOptions, DisplayResult, MetricsSource, QueryError, QueryOptions, QueryResult,
+};
 
 use crate::reader::RezReader;
 
@@ -256,6 +258,18 @@ impl MetricsSource for LiveReader {
     ) -> Result<QueryResult, QueryError> {
         self.current()
             .query_range_opts(expr, start, end, step, opts)
+    }
+    fn query_range_display_opts(
+        &self,
+        expr: &str,
+        start: f64,
+        end: f64,
+        step: f64,
+        opts: &DisplayOptions,
+        qopts: &QueryOptions,
+    ) -> Result<DisplayResult, QueryError> {
+        self.current()
+            .query_range_display_opts(expr, start, end, step, opts, qopts)
     }
     fn query(&self, expr: &str, time: Option<f64>) -> Result<QueryResult, QueryError> {
         self.current().query(expr, time)

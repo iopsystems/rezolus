@@ -15,7 +15,9 @@ use std::sync::Arc;
 
 pub use metriken_archive::ArchiveReader;
 use metriken_archive::{InMemorySource, IndexRelabel};
-use metriken_query::{BufferPool, MetricsSource, QueryError, QueryOptions, QueryResult};
+use metriken_query::{
+    BufferPool, DisplayOptions, DisplayResult, MetricsSource, QueryError, QueryOptions, QueryResult,
+};
 
 use crate::catalog::{Catalog, Container};
 use crate::rez::{self, RecordingBytes};
@@ -206,6 +208,18 @@ impl MetricsSource for RezReader {
         opts: &QueryOptions,
     ) -> Result<QueryResult, QueryError> {
         self.0.query_range_opts(expr, start_s, end_s, step_s, opts)
+    }
+    fn query_range_display_opts(
+        &self,
+        expr: &str,
+        start_s: f64,
+        end_s: f64,
+        step_s: f64,
+        opts: &DisplayOptions,
+        qopts: &QueryOptions,
+    ) -> Result<DisplayResult, QueryError> {
+        self.0
+            .query_range_display_opts(expr, start_s, end_s, step_s, opts, qopts)
     }
     fn query(&self, expr: &str, time: Option<f64>) -> Result<QueryResult, QueryError> {
         self.0.query(expr, time)
