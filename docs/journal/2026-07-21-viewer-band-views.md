@@ -121,16 +121,17 @@ raw gate meets the full-smoothing crossover and the policy is perfectly
 two-regime on max-width charts. **A is the recorded fallback** if the 5×
 gate step or phone-width cells (~14 columns) bite in practice.
 
-**Revisited 2026-10-06 (#1420).** The budget is now `clamp(px/4, 48, 300)`
-buckets (first `px/8`, then made finer on review of the result), so a whole
-9.6-hour recording on a half-width chart is drawn in 5-minute buckets rather
-than 1-minute ones, and a window holding no more
+**Revisited 2026-10-06 (#1420, #1421).** The budget is now
+`clamp(px, 300, 1200) / 4` buckets (75 to 300). #1420 used `px/8`; #1421
+halved it after a browser check showed 10-minute buckets for a whole 9.6-hour
+recording on a half-width chart. A whole recording there is now drawn in
+5-minute buckets rather than 1-minute ones, and a window holding no more
 samples than the budget is passed through raw. `MIN_SAMPLES_PER_BUCKET` is
-gone: between the budget and five times it, a bucket can hold 2 to 4
-samples, so the five-number summary there is interpolated rather than exact
-order statistics. Both changes were asked for: coarser buckets fully zoomed
+gone: between the budget and five times it, a bucket can hold fewer than 5
+samples (2 at a 1 s interval, up to twice the budget), so the five-number
+summary there is interpolated rather than exact order statistics. Both changes were asked for: coarser buckets fully zoomed
 out, and the native interval reached at a shallower zoom than 48 samples.
-Reopen if the 2-4-sample band is misread in practice; restoring
+Reopen if the under-5-sample band is misread in practice; restoring
 `buckets = min(budget, ceil(native/5))` above the raw gate brings the exact
 summaries back at the cost of a 5× resolution step at the gate.
 

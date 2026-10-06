@@ -289,12 +289,13 @@ export const getDisplayMode = () => _displayMode;
 
 // Column budget for histogram bucket heatmaps, about one per CSS pixel of a
 // chart cell; `displayBudget` divides it by `BUCKET_PX` for display series.
-// Charts render two per row, so measure an actual chart cell when one exists (exact on a zoom refetch — it handles full- vs half-width) and fall
-// back to half the viewport on first load. devicePixelRatio is intentionally NOT
+// Charts render two per row, so measure an actual chart cell when one exists
+// (exact on a zoom refetch — it handles full- vs half-width) and fall back to
+// half the viewport on first load. devicePixelRatio is intentionally NOT
 // applied: sub-CSS-pixel detail isn't distinguishable in the envelope, and
-// multiplying by it was over-fetching ~4× on half-width retina charts. The upper
-// clamp also caps the histogram bucket-heatmap columns (downsampled to 500 in
-// histogram_heatmap.js regardless).
+// multiplying by it was over-fetching ~4× on half-width retina charts. The
+// upper clamp also caps the histogram bucket-heatmap columns (downsampled to
+// 500 in histogram_heatmap.js regardless).
 const BUDGET_MIN = 300;
 const BUDGET_MAX = 1200;
 const pixelBudget = () => {
@@ -305,20 +306,15 @@ const pixelBudget = () => {
     return Math.max(BUDGET_MIN, Math.min(BUDGET_MAX, Math.round(w)));
 };
 
-// Buckets per chart for a display fetch: at most one per BUCKET_PX of the
-// chart's width, from DISPLAY_BUCKETS_MIN to DISPLAY_BUCKETS_MAX. The server
-// rounds the bucket width up to a round width (see `niceSecs`), so a whole
-// 9.6-hour recording on a half-width chart (a budget of about 200) is drawn
-// in 5-minute buckets, each a median with its band and envelope. A window
-// holding no more samples than the budget comes back at the query step, one
-// point per sample with no min/max envelope.
+// Buckets per chart for a display fetch: about one per BUCKET_PX of the
+// chart's width (measured width clamped to BUDGET_MIN..BUDGET_MAX px), so 75
+// to 300. The server rounds the bucket width up to a round width (see
+// `niceSecs`), so a whole 9.6-hour recording on a half-width chart (a budget
+// of about 200) is drawn in 5-minute buckets, each a median with its band and
+// envelope. A window holding no more samples than the budget comes back at
+// the query step, one point per sample with no min/max envelope.
 const BUCKET_PX = 4;
-const DISPLAY_BUCKETS_MIN = 48;
-const DISPLAY_BUCKETS_MAX = BUDGET_MAX / BUCKET_PX;
-const displayBudget = () => Math.max(
-    DISPLAY_BUCKETS_MIN,
-    Math.min(DISPLAY_BUCKETS_MAX, Math.round(pixelBudget() / BUCKET_PX)),
-);
+const displayBudget = () => Math.round(pixelBudget() / BUCKET_PX);
 
 // The round bucket widths, in seconds, the server's display reducer chooses
 // from (metriken-query's `nice_bucket_secs`): the smallest at least `raw`.
