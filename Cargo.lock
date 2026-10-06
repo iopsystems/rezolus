@@ -3068,11 +3068,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-<<<<<<< HEAD
 version = "6.0.0-alpha.37"
-=======
-version = "6.0.0-alpha.36"
->>>>>>> upstream/main
 dependencies = [
  "allan",
  "anyhow",
