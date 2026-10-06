@@ -4,7 +4,10 @@
 // rates, and the display response as a matrix.
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { niceSecs, heatmapStep, isRateQuery, displayAsMatrix } from '../src/viewer/assets/lib/data.js';
+import {
+    niceSecs, heatmapStep, isRateQuery, isEntityQuery, displayAsMatrix, restampRateColumns,
+    displayBucketWidth,
+} from '../src/viewer/assets/lib/data.js';
 
 test('niceSecs is the smallest round width at least the raw width', () => {
     for (const [raw, nice] of [
@@ -43,21 +46,41 @@ test('isRateQuery finds rate and irate, not gauges', () => {
     assert.ok(!isRateQuery('sum by (id) (separate(x))'));
 });
 
-test('displayAsMatrix gives each series its bucket medians', () => {
-    const decoded = {
-        series: [
-            { metric: { id: '0' }, t: new Float64Array([0, 600]), median: new Float64Array([1.5, 2.5]) },
-            { metric: { id: '1' }, t: new Float64Array([0]), median: new Float64Array([7]) },
-        ],
-    };
-    assert.deepStrictEqual(displayAsMatrix(decoded), {
+test('displayAsMatrix gives each series its bucket medians at bucket starts', () => {
+    const series = [
+        { metric: { id: '0' }, t: new Float64Array([0, 600]), median: new Float64Array([1.5, 2.5]) },
+        // A bucket holding one point is stamped at the point's own time.
+        { metric: { id: '1' }, t: new Float64Array([0, 1_203]), median: new Float64Array([7, 8]) },
+    ];
+    assert.deepStrictEqual(displayAsMatrix(series, 600), {
         status: 'success',
         data: {
             resultType: 'matrix',
             result: [
                 { metric: { id: '0' }, values: [[0, '1.5'], [600, '2.5']] },
-                { metric: { id: '1' }, values: [[0, '7']] },
+                { metric: { id: '1' }, values: [[0, '7'], [1_200, '8']] },
             ],
         },
     });
+});
+
+test('restampRateColumns moves each value to the start of its step', () => {
+    const res = { data: { result: [{ metric: {}, values: [[600, '1'], [1_200, '2']] }] } };
+    assert.deepStrictEqual(restampRateColumns(res, 600).data.result[0].values, [[0, '1'], [600, '2']]);
+});
+
+test('isEntityQuery is a by (id) query with no outer aggregation', () => {
+    assert.ok(isEntityQuery('sum by (id) (irate(cpu_usage[5m])) / 1000000000'));
+    assert.ok(isEntityQuery('max by (id, vendor) (gpu_temperature)'));
+    assert.ok(isEntityQuery('1 - sum by (id) (irate(cpu_l3_miss[5m])) / sum by (id) (irate(cpu_l3_access[5m]))'));
+    assert.ok(!isEntityQuery('avg(sum by (id) (irate(core_cstate_residency[5m])) / sum by (id) (irate(cpu_tsc[5m])))'));
+    assert.ok(!isEntityQuery('sum(irate(cpu_usage[5m]))'));
+});
+
+test('displayBucketWidth follows the server width rule', () => {
+    // Step 60 over 9.6 h at 100 buckets: 600 s.
+    assert.strictEqual(displayBucketWidth(0, 34_677, 60, 100), 600);
+    // A range that fits at its step keeps the step.
+    assert.strictEqual(displayBucketWidth(0, 90, 1, 100), 1);
+    assert.strictEqual(displayBucketWidth(0, 4, 0.1, 48), 0.1);
 });

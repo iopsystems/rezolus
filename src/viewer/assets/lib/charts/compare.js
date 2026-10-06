@@ -256,12 +256,16 @@ export const diffTimeShift = (aId, bId, anchors, aTime, bTime) => {
     const hasA = Array.isArray(aTime) && aTime.length > 0;
     const hasB = Array.isArray(bTime) && bTime.length > 0;
     if (!hasA || !hasB) return { k: 0, ok: true };
+    const stepOf = (t) => (t.length > 1 && t[1] - t[0] > 0 ? t[1] - t[0] : null);
+    // Cells pair by index, so the two must have the same step.
+    const stepA = stepOf(aTime);
+    const stepB = stepOf(bTime);
+    if (stepA && stepB && Math.abs(stepA - stepB) > 1e-9) return { k: 0, ok: false };
     const relA = aTime[0] - anchorSecondsFor(anchors, aId, aTime);
     const relB = bTime[0] - anchorSecondsFor(anchors, bId, bTime);
     const diff = relA - relB;
     if (Math.abs(diff) < 1e-9) return { k: 0, ok: true };
-    const stepOf = (t) => (t.length > 1 && t[1] - t[0] > 0 ? t[1] - t[0] : null);
-    const step = stepOf(aTime) ?? stepOf(bTime);
+    const step = stepA ?? stepB;
     if (!step) return { k: 0, ok: false };
     const exact = diff / step;
     const k = Math.round(exact);
@@ -274,8 +278,9 @@ const diffUnavailable = (pair) => (pair && pair.kind === 'vnode' ? {
     kind: 'vnode',
     vnode: m('div.compare-diff-unavailable', [
         m('div.compare-diff-note',
-            'Diff pairs cells by sample step; the two anchors differ by a fraction of a step, '
-            + 'so no cells line up and the captures are shown side by side.'),
+            'Diff pairs cells by sample step; the two captures have different steps, or '
+            + 'anchors a fraction of a step apart, so no cells line up and the captures '
+            + 'are shown side by side.'),
         pair.vnode,
     ]),
 } : pair);

@@ -12,6 +12,7 @@ import {
     getStepOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT,
     fetchQuantileSpectrumForPlot, nativeInterval, stepAtLeast,
     listCaptures, captureMetadata, mapLimit,
+    fetchEntityHeatmapForCapture, isEntityQuery,
 } from './data.js';
 import { canonicalQuantileLabel, composeScatterLabel } from './charts/util/compare_math.js';
 import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
@@ -263,9 +264,15 @@ const fetchExperimentResult = (vnode) => {
                 return;
             }
             const step = effectiveExperimentStep(vnode.attrs, range);
-            const res = await queryRangeForCapture(
-                CAPTURE_EXPERIMENT, query, range.start, range.end, step,
-            );
+            // A per-entity heatmap is fetched as the baseline's was, at the
+            // baseline's column spacing, so the two pair column for column.
+            const res = entityHeatmap(spec, query)
+                ? await fetchEntityHeatmapForCapture(
+                    CAPTURE_EXPERIMENT, query, range, range.start, range.end, columnStep(spec),
+                )
+                : await queryRangeForCapture(
+                    CAPTURE_EXPERIMENT, query, range.start, range.end, step,
+                );
             vnode.state.experimentResult = res;
             vnode.state._lastFetchedStep = step;
             // Line charts also fetch the experiment's decimated boxplot so
@@ -420,6 +427,16 @@ const rangeFromMeta = (meta) => {
 const EXTRA_CAPTURE_CONCURRENCY = 4;
 // Distinguishes a range query that threw (the capture is dropped, as the
 // sequential loop did) from one that resolved to nothing.
+// Whether `spec` is a per-entity heatmap of `query`, fetched as the
+// baseline's was (see `fetchEntityHeatmap` in data.js).
+const entityHeatmap = (spec, query) => resolvedStyle(spec) === 'heatmap' && isEntityQuery(query);
+
+// The spacing of the baseline heatmap's columns, or null without two.
+const columnStep = (spec) => {
+    const t = spec.time_data;
+    return Array.isArray(t) && t.length >= 2 && t[1] > t[0] ? t[1] - t[0] : null;
+};
+
 const FETCH_FAILED = Symbol('fetch failed');
 
 // Fetch every capture BEYOND baseline+experiment, for an N-way overlay.
@@ -481,7 +498,11 @@ const fetchExtraCaptures = (vnode) => {
                 if (!range) return null;
                 const step = effectiveExperimentStep(vnode.attrs, range);
                 const [result, boxplot] = await Promise.all([
-                    queryRangeForCapture(cap.id, query, range.start, range.end, step)
+                    (entityHeatmap(spec, query)
+                        ? fetchEntityHeatmapForCapture(
+                            cap.id, query, range, range.start, range.end, columnStep(spec),
+                        )
+                        : queryRangeForCapture(cap.id, query, range.start, range.end, step))
                         .catch(() => FETCH_FAILED),
                     wantBoxplot
                         ? queryRangeDisplayForCapture(

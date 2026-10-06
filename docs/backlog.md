@@ -199,9 +199,11 @@ Source: [display-mode decimation](journal/2026-07-13-viewer-display-decimation.m
   Source: [band views](journal/2026-07-21-viewer-band-views.md). Three decided
   pieces: (1) split spread ("what happened") from measurement ("what we can
   claim") into distinct chart views, never overlaid; (2) budget policy
-  `native ≤ px/5 → raw, else min(px, ⌈native/5⌉)` honest buckets — fixes the
-  48-floor-as-cap bug and the stale "<4 min → native" doc claim
-  (element-gating is the recorded fallback); (3) interval-hull worst-case
+  `native ≤ px/5 → raw, else min(px, ⌈native/5⌉)` honest buckets —
+  **superseded by #1420**: the budget is `clamp(px/8, 48, 150)` with raw
+  passthrough at or below it, and buckets between the budget and 5× it hold
+  2-4 samples. *Reopen* if that band is misread; restoring `⌈native/5⌉` above
+  the raw gate brings exact five-number summaries back; (3) interval-hull worst-case
   envelope `[min(lo_i), max(hi_i)]` in the measurement view (possibility, not
   observation — needs its own visual voice). Open: view-toggle scope
   (per-chart + sticky global default is the leaning). End-state: unsnapped
