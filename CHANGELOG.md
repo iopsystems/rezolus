@@ -34,18 +34,27 @@
   restart. A parquet recording still has no history.
 - metriken-query 0.34.7 and metriken-archive 0.3.5. The viewer's charts are
   reduced to their point budget while the query is computed, instead of
-  after the full-resolution result is built, and a grouped chart holds each
-  group's points only until they are final, so its memory does not grow
-  with the recording's length. On a 9.6-hour recording of a per-task group
-  stored long, an unaggregated `irate(...)` chart took 9.4 GB of memory and
-  6.0 s and takes 434-486 MB and 2.7 s, and a `sum by (comm)` chart took
-  1.3 GB and takes 387-399 MB. Stored wide, the `irate(...)` chart took
-  8.7 GB and takes about 1.5 GB. On the same recording, a query over a small
-  part of the range, whose time is mostly spent opening the table, takes
-  1.5-1.65 s instead of 2.7-3.0 s. A `sum` or `avg` chart's values can
-  differ in the last bits of a float when a task with fewer than nine
-  samples ends. Every series of a chart now shares one set of buckets, set
-  by the chart's time range and step:
+  after the full-resolution result is built. A `sum`, `avg`, `min`, `max`
+  or `count` chart of `rate`/`irate` over a .rez or .dendro recording also
+  holds each group's points only until they are final.
+  - On a 9.6-hour recording of a per-task group stored long, an
+    unaggregated `irate(...)` chart took 9.4 GB of memory and 6.0 s, and
+    takes 434-486 MB and 2.7 s. A `sum by (comm)` chart took 1.3 GB and
+    takes 387-399 MB. Stored wide, the `irate(...)` chart took 8.7 GB and
+    takes about 1.5 GB; there, decoding the table is most of the memory.
+  - On the same recording, a query over a small part of the range, whose
+    time is mostly spent opening the table, takes 1.5-1.65 s instead of
+    2.7-3.0 s.
+  - A series that stops for more than 10 × max(its sample spacing, the
+    step) and then resumes, as after an agent restart, makes a grouped
+    chart's query fall back to evaluating per series. That uses as much
+    memory as before, and up to about twice the time.
+  - A `sum` or `avg` chart's values can differ from 0.34.6 in the last bits
+    of a float when a series with fewer than nine samples stops more than
+    ten sample intervals before the end of the range.
+
+  Every series of a chart now shares one set of buckets, set by the chart's
+  time range and step:
   - a chart whose range fits its point budget at its step shows every
     point, at any interval;
   - otherwise the buckets are one of the round widths, from 1 s up, so a
