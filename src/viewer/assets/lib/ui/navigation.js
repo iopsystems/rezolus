@@ -21,6 +21,9 @@ const buildTopNavAttrs = ({
     selectedGpus = [],
     gpuSelectorActive = false,
     onGpuChange,
+    range = null,
+    onRangeChange,
+    onRangeReset,
     extra = {},
 }) => ({
     sectionRoute,
@@ -50,6 +53,9 @@ const buildTopNavAttrs = ({
     selectedGpus,
     gpuSelectorActive,
     onGpuChange,
+    range,
+    onRangeChange,
+    onRangeReset,
     ...extra,
 });
 

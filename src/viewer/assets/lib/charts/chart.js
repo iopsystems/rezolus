@@ -31,13 +31,14 @@ export class ChartsState {
     // Shape: { start?: 0-100, end?: 0-100, startValue?: ms, endValue?: ms }
     // Treated as a whole — consumers should read via the observable
     // subscribeZoom() callback when they need to react to changes.
-    // Direct reads (TimeRangeBar's `.globalZoom`, `isDefaultZoom`, etc.)
+    // Direct reads (`.globalZoom`, `isDefaultZoom`, etc.)
     // stay fine, but `zoomLevel` MUST ONLY be mutated via setZoom().
     zoomLevel = null;
     // 'global' (time bar) | 'local' (chart drag/scroll) | null
     zoomSource = null;
     // Global zoom — always percentage-based { start, end } (0-100).
-    // Tracks what the time bar shows. Only updated when source === 'global'.
+    // Only updated when source === 'global'. The time bar draws the range
+    // override, not this.
     globalZoom = null;
     // All `Chart` instances, mapped by id
     charts = new Map();
