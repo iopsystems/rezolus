@@ -32,18 +32,19 @@
   `--metadata` is kept. Before, the metadata described only the process the
   recording opened with, and a log warning was the only record of the
   restart. A parquet recording still has no history.
-- The viewer asks for at most one bucket per 8 pixels of chart width (48 to
-  150) instead of one per pixel, and the server rounds the width up. On a
+- The viewer asks for about one bucket per 4 pixels of chart width (75 to
+  300) instead of one per pixel, and the server rounds the width up. On a
   9.6-hour recording at 1 s in a 1,600-pixel window, a half-width chart of
-  the whole recording is drawn in 10-minute buckets instead of 1-minute
-  ones, and an hour in 1-minute buckets. A window holding no more samples
-  than the budget (about 100 s at 1 s there) is drawn at the query step, one
+  the whole recording is drawn in 5-minute buckets instead of 1-minute
+  ones, and an hour in 20-second buckets. A window holding no more samples
+  than the budget (about 200 s at 1 s there) is drawn at the query step, one
   point per sample with no min/max envelope; before, that took 48 samples or
-  fewer. Between the budget and about five times it, a bucket can hold 2 to
-  4 samples, where before it held at least 5.
+  fewer. Between the budget and about five times it, a bucket can hold
+  fewer than 5 samples (2 at a 1 s interval, up to twice the budget), where
+  before it held at least 5.
 - A zoom can narrow to five samples at the recording's interval, whatever
   the spacing of the points drawn. It was five of the points drawn, which
-  with 10-minute buckets would have stopped a zoom at 50 minutes.
+  with 5-minute buckets would have stopped a zoom at 25 minutes.
 - A per-entity heatmap (a `by (id)` panel such as per-CPU busy %) is
   fetched at the line charts' bucket width instead of at every sample, in
   compare mode too. A rate is fetched at that step in grid mode, each cell
@@ -51,7 +52,7 @@
   in full is left out. A ratio of rates such as IPC is the ratio of the
   column's totals. A gauge (the GPU panels) is fetched in display mode,
   each cell its column's median. On a 9.6-hour recording at 1 s, a per-CPU
-  panel's response is about 21 kB instead of about 17.5 MB.
+  panel's response is about 44 kB instead of about 17.5 MB.
 - A line that averages over `by (id)` (`avg(sum by (id) (...))`) is drawn in
   display mode with its band, like other line charts.
 - `rezolus view` runs dashboard queries on a pool of threads, several at
