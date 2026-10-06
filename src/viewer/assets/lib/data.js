@@ -308,21 +308,63 @@ const pixelBudget = () => {
     return Math.max(BUDGET_MIN, Math.min(BUDGET_MAX, Math.round(w)));
 };
 
-// Budget for a display-series fetch over [start,end]. Starts from the pixel
-// budget, but ALSO caps it so each bucket aggregates at least
-// MIN_SAMPLES_PER_BUCKET native samples once the window is wide enough — so the
-// median+band engages and SMOOTHS jittery per-second signals (e.g. CPU%) at
-// moderate windows instead of drawing every raw sample as a dense zigzag. The
-// MIN_DISPLAY_BUCKETS floor keeps tight windows detailed: when the window has few
-// native samples the cap sits above the native count, so the server returns
-// native resolution (no aggregation) and you still get raw detail on a deep zoom.
-const MIN_SAMPLES_PER_BUCKET = 5;
-const MIN_DISPLAY_BUCKETS = 48;
-const displayBudget = (meta, start, end) => {
-    const px = pixelBudget();
-    const native = Math.max(1, Math.round((end - start) / nativeInterval(meta)));
-    return Math.min(px, Math.max(MIN_DISPLAY_BUCKETS, Math.ceil(native / MIN_SAMPLES_PER_BUCKET)));
+// Buckets per chart for a display fetch: one per BUCKET_PX of the chart's
+// width, from DISPLAY_BUCKETS_MIN to DISPLAY_BUCKETS_MAX. The server rounds
+// the bucket width up to a round width (see `niceSecs`), so a whole 9.6-hour
+// recording on a half-width chart (~100 buckets) is drawn in 10-minute
+// buckets, each a median with its band and envelope. A window holding no more
+// samples than the budget comes back at the recording's own interval, one
+// unbanded point per sample.
+const BUCKET_PX = 8;
+const DISPLAY_BUCKETS_MIN = 48;
+const DISPLAY_BUCKETS_MAX = 150;
+const displayBudget = () => Math.max(
+    DISPLAY_BUCKETS_MIN,
+    Math.min(DISPLAY_BUCKETS_MAX, Math.round(pixelBudget() / BUCKET_PX)),
+);
+
+// The round bucket widths, in seconds, the server's display reducer chooses
+// from (metriken-query's `nice_bucket_secs`): the smallest at least `raw`.
+const NICE_SECS = [
+    1, 2, 5, 10, 15, 20, 30,
+    60, 120, 300, 600, 900, 1800,
+    3600, 7200, 10800, 21600, 43200,
+    86400,
+];
+export const niceSecs = (raw) => {
+    for (const n of NICE_SECS) if (n >= raw) return n;
+    return Math.ceil(raw / 86400) * 86400;
 };
+
+// The step of a per-entity heatmap over [start, end]: the display bucket
+// width, so a heatmap's columns match the line charts' buckets, never finer
+// than the recording's interval and a whole multiple of it. The Granularity
+// override wins.
+export const heatmapStep = (meta, start, end, budget = displayBudget()) => {
+    const native = nativeInterval(meta);
+    if (_stepOverride && _stepOverride > native) return _stepOverride;
+    const raw = Math.max(0, end - start) / budget;
+    return raw <= native ? native : stepAtLeast(native, niceSecs(raw));
+};
+
+// A rate's per-step value is the average over the step, so a heatmap of one
+// is fetched at the coarse step; a gauge is sampled at each step point, so a
+// heatmap of one is fetched in display mode and drawn from bucket medians.
+const RATE_FN = /\b(?:i?rate)\s*\(/;
+export const isRateQuery = (query) => RATE_FN.test(query);
+
+// A decoded display response as a matrix result: each series' bucket medians
+// at their bucket times, as `applyResultToPlot` takes a JSON range query.
+export const displayAsMatrix = (decoded) => ({
+    status: 'success',
+    data: {
+        resultType: 'matrix',
+        result: decoded.series.map((s) => ({
+            metric: s.metric,
+            values: Array.from(s.t, (t, i) => [t, String(s.median[i])]),
+        })),
+    },
+});
 
 // Which plots use display mode: line-ish charts (gauge / counter) and
 // histogram *percentile* scatterplots (histogram_quantiles returns a
@@ -330,10 +372,10 @@ const displayBudget = (meta, start, end) => {
 // heatmaps (buckets / quantile_heatmap) keep the JSON path — they have their
 // own server-side resolution handling.
 // A query that groups `by (id)` yields one series per entity (CPU/GPU/...),
-// which the native path renders as a per-entity HEATMAP (resolveStyle → 'heatmap'
-// when the result carries an `id` label). Display mode collapses each series to a
-// median + bands, which cannot represent a heatmap — so those stay on the native
-// render path. `\bid\b` avoids matching substrings like `grid`/`width`.
+// which renders as a per-entity HEATMAP (resolveStyle → 'heatmap' when the
+// result carries an `id` label); it is fetched by `fetchEntityHeatmap`, with
+// one value per entity and column. `\bid\b` avoids matching substrings like
+// `grid`/`width`.
 const GROUPS_BY_ID = /\bby\s*\(\s*[^)]*\bid\b[^)]*\)/;
 
 const plotUsesDisplay = (plot) => {
@@ -431,7 +473,7 @@ const tileStore = (query, start, end, decoded) => {
 
 const fetchDisplaySeries = async (query, meta, signal) => {
     const { start, end, step } = defaultRangeFor(meta);
-    const budget = displayBudget(meta, start, end);
+    const budget = displayBudget();
     const cached = tileLookup(query, start, end, budget);
     if (cached) return cached; // covered at sufficient resolution — no network
     const res = await ViewerApi.queryRangeDisplay(query, start, end, step, { points: budget, signal, rateMode: getRateMode() });
@@ -1039,6 +1081,20 @@ const createDataApi = ({
         return queryRange(query, start, end, step, 'baseline', signal);
     };
 
+    // A per-entity heatmap over the current range, as a matrix result with
+    // one value per entity and column. A rate is fetched at the heatmap step
+    // (`heatmapStep`), where each value is the exact average over its column.
+    // Anything else is fetched in display mode, where each column is a
+    // bucket's median.
+    const fetchEntityHeatmap = async (query, metadata, signal) => {
+        const meta = metadata || cachedMetadata || await fetchMetadata();
+        if (isRateQuery(query)) {
+            const { start, end } = defaultRangeFor(meta);
+            return queryRange(query, start, end, heatmapStep(meta, start, end), 'baseline', signal);
+        }
+        return displayAsMatrix(await fetchDisplaySeries(query, meta, signal));
+    };
+
     // Apply the same per-plot query transforms the baseline path applies.
     // Returns the query to actually execute, or `null` when the plot should
     // be skipped (e.g. cgroup pattern without a resolved selector).
@@ -1172,6 +1228,11 @@ const createDataApi = ({
                             if (superseded()) return;
                             applyResultToPlot(plot, res);
                         }
+                    } else if (_displayMode && GROUPS_BY_ID.test(plot.promql_query)
+                        && plot.opts?.type !== 'histogram') {
+                        const res = await fetchEntityHeatmap(query, metadata, signal);
+                        if (superseded()) return;
+                        applyResultToPlot(plot, res);
                     } else {
                         const res = await executePromQLRangeQuery(query, metadata, signal);
                         if (superseded()) return;

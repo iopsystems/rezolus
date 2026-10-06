@@ -32,6 +32,19 @@
   `--metadata` is kept. Before, the metadata described only the process the
   recording opened with, and a log warning was the only record of the
   restart. A parquet recording still has no history.
+- The viewer draws a chart in about one bucket per 8 pixels of its width,
+  from 48 to 150 buckets, instead of about one per pixel. A whole 9.6-hour
+  recording on a half-width chart is drawn in 10-minute buckets instead of
+  1-minute ones; an hour in 1-minute buckets. A window holding no more
+  samples than the chart's buckets (100 s at 1 s on a half-width chart) is
+  drawn at the recording's own interval, one unbanded point per sample;
+  before, that took a window of 48 samples or fewer.
+- A per-entity heatmap (a `by (id)` panel, such as per-CPU busy %) is
+  fetched at the same column width instead of at every sample. A rate is
+  fetched at that step, so each cell is the exact average over its column;
+  a gauge is fetched in display mode and each cell is its column's median.
+  On the 9.6-hour recording a per-CPU panel's response is about 21 kB
+  instead of about 17.5 MB.
 - `rezolus view` runs dashboard queries on a pool of threads, several at
   once, instead of one at a time on the server's single worker. A slow query
   now occupies one slot, and other requests are answered while it runs.
