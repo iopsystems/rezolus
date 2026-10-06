@@ -121,9 +121,10 @@ raw gate meets the full-smoothing crossover and the policy is perfectly
 two-regime on max-width charts. **A is the recorded fallback** if the 5×
 gate step or phone-width cells (~14 columns) bite in practice.
 
-**Revisited 2026-10-06 (#1420).** The budget is now `clamp(px/8, 48, 150)`
-buckets, so a whole 9.6-hour recording on a half-width chart is drawn in
-10-minute buckets rather than 1-minute ones, and a window holding no more
+**Revisited 2026-10-06 (#1420).** The budget is now `clamp(px/4, 48, 300)`
+buckets (first `px/8`, then made finer on review of the result), so a whole
+9.6-hour recording on a half-width chart is drawn in 5-minute buckets rather
+than 1-minute ones, and a window holding no more
 samples than the budget is passed through raw. `MIN_SAMPLES_PER_BUCKET` is
 gone: between the budget and five times it, a bucket can hold 2 to 4
 samples, so the five-number summary there is interpolated rather than exact
