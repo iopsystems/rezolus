@@ -1634,8 +1634,10 @@ const initDashboard = (config = {}) => {
     updateDocumentTitle(currentRoute);
 };
 
-// Double-click anywhere resets zoom and clears all pin selections
-document.addEventListener('dblclick', () => {
+// Double-click anywhere resets zoom and clears all pin selections, except on
+// the time bar, where a double-click on a time label edits it.
+document.addEventListener('dblclick', (e) => {
+    if (e.target.closest?.('.time-range-bar')) return;
     if (!chartsState.isDefaultZoom() || chartsState.charts.size > 0) {
         chartsState.resetAll();
         m.redraw();

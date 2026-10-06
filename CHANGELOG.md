@@ -602,8 +602,8 @@
 
 - The viewer's time bar shows the window the charts are drawn for after a
   zoom on a chart, and its Reset button returns to the whole recording.
-  Dragging the bar or typing a time sets that window when the mouse is
-  released, and refetches the charts for it. Before, the bar stayed at the
+  Dragging the bar sets that window when the mouse is released, and typing
+  a time sets it on Enter; either refetches the charts for it. Before, the bar stayed at the
   whole recording after a chart zoom, and a drag on it zoomed the
   already-zoomed charts by the bar's percentages.
 - **Hindsight exits on SIGTERM and SIGINT.** Hindsight treated SIGTERM and

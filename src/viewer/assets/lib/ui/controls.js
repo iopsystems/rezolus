@@ -61,16 +61,13 @@ const rangePercent = ({ range, start_time: t0, end_time: t1 }) => {
 };
 
 // Global time range bar — interactive minimap for zoom selection.
-// Displays the whole recording with the window the charts show selected.
-// With `onRangeChange`, the selection is the charts' fetched window
-// (`range`): dragging or typing a time sets a new one when released, and
-// Reset (`onRangeReset`) returns to the whole recording. Without it, the
-// selection zooms the charts in place.
+// Displays the whole recording (`start_time`..`end_time`, ms) with the window
+// the charts are fetched for (`range`) selected. A drag sets a new window
+// through `onRangeChange` on mouse release, a typed time on Enter, and Match
+// Selection on click; Reset (`onRangeReset`) returns to the whole recording.
 const TimeRangeBar = {
     oninit(vnode) {
-        const zoom = vnode.attrs.onRangeChange
-            ? rangePercent(vnode.attrs)
-            : vnode.attrs.chartsState?.globalZoom;
+        const zoom = rangePercent(vnode.attrs);
         vnode.state.barStart = zoom ? zoom.start : 0;
         vnode.state.barEnd = zoom ? zoom.end : 100;
         vnode.state.attrs = vnode.attrs;
@@ -84,7 +81,6 @@ const TimeRangeBar = {
         vnode.state.dragStartLeft = 0;
         vnode.state.dragStartRight = 0;
 
-        const chartsState = vnode.attrs.chartsState;
         const bar = vnode.dom;
         const track = bar.querySelector('.time-track');
         const getPercent = (clientX) => {
@@ -98,15 +94,7 @@ const TimeRangeBar = {
             if (end - start < 0.5) return;
             vnode.state.barStart = start;
             vnode.state.barEnd = end;
-            // With a range handler the bar only moves until the selection is
-            // committed; the charts hold the fetched window, so a percentage
-            // zoom of them would not match the bar's span.
-            if (!vnode.state.attrs.onRangeChange) {
-                // The single writer. setZoom writes zoomLevel/zoomSource/
-                // globalZoom atomically and notifies every chart's zoom
-                // subscriber; no need for a local forEach dispatch here.
-                chartsState.setZoom({ start, end }, { source: 'global' });
-            }
+            // Moves only the bar; commit() sets the charts' window.
             m.redraw();
         };
 
@@ -114,7 +102,6 @@ const TimeRangeBar = {
         // recording when the selection covers it.
         vnode.state.commit = () => {
             const a = vnode.state.attrs;
-            if (!a.onRangeChange) return;
             const { barStart: s, barEnd: e } = vnode.state;
             if (s <= 0.1 && e >= 99.9) {
                 if (a.range) a.onRangeReset?.();
@@ -135,6 +122,7 @@ const TimeRangeBar = {
             e.preventDefault();
             const pct = getPercent(e.clientX);
             const zoom = getBarZoom();
+            vnode.state.dragFrom = zoom;
             const handleWidth = 3; // percent tolerance for handle hit
 
             if (Math.abs(pct - zoom.start) < handleWidth) {
@@ -179,11 +167,14 @@ const TimeRangeBar = {
         };
 
         const onMouseUp = () => {
-            const dragged = vnode.state.dragging != null;
+            const from = vnode.state.dragging != null && vnode.state.dragFrom;
             vnode.state.dragging = null;
             document.removeEventListener('mousemove', onMouseMove);
             document.removeEventListener('mouseup', onMouseUp);
-            if (dragged) vnode.state.commit();
+            // A click that moved nothing leaves the window as it is.
+            if (from && (from.start !== vnode.state.barStart || from.end !== vnode.state.barEnd)) {
+                vnode.state.commit();
+            }
         };
 
         bar.addEventListener('mousedown', onMouseDown);
@@ -202,23 +193,11 @@ const TimeRangeBar = {
         const chartsState = vnode.attrs.chartsState;
 
         vnode.state.attrs = vnode.attrs;
-        const ranged = !!vnode.attrs.onRangeChange;
-        if (ranged) {
-            // The selection is the charts' window, except mid-drag.
-            if (!vnode.state.dragging) {
-                const pct = rangePercent(vnode.attrs);
-                vnode.state.barStart = pct ? pct.start : 0;
-                vnode.state.barEnd = pct ? pct.end : 100;
-            }
-        } else {
-            // Sync bar position from globalZoom only (not from local chart
-            // zoom, which can carry undefined/NaN start/end when zooming by
-            // raw value).
-            const zoom = chartsState?.globalZoom;
-            if (zoom && (zoom.start !== vnode.state.barStart || zoom.end !== vnode.state.barEnd)) {
-                vnode.state.barStart = zoom.start;
-                vnode.state.barEnd = zoom.end;
-            }
+        // The selection is the charts' window, except mid-drag.
+        if (!vnode.state.dragging) {
+            const pct = rangePercent(vnode.attrs);
+            vnode.state.barStart = pct ? pct.start : 0;
+            vnode.state.barEnd = pct ? pct.end : 100;
         }
 
         const start = vnode.state.barStart;
@@ -236,6 +215,9 @@ const TimeRangeBar = {
         const showDates = startDate.toDateString() !== endDate.toDateString();
 
         const commitEdit = (which) => {
+            // Enter commits and removes the input, whose blur would commit
+            // again; Escape clears `editing` so its blur commits nothing.
+            if (vnode.state.editing !== which) return;
             const text = vnode.state.editValue.trim();
             const refMs = which === 'start' ? selectedStartMs : selectedEndMs;
             const parsed = parseTimeInput(text, refMs);
@@ -322,13 +304,21 @@ const TimeRangeBar = {
                 onclick: (e) => {
                     e.stopPropagation();
                     const localZoom = chartsState.zoomLevel;
-                    let s = localZoom?.start;
-                    let e2 = localZoom?.end;
-                    // Local zoom via scroll gives raw ms values, not percentages
-                    if ((s === undefined || isNaN(s)) && localZoom?.startValue !== undefined) {
-                        const total = endTime - startTime;
-                        s = Math.max(0, Math.min(100, ((localZoom.startValue - startTime) / total) * 100));
-                        e2 = Math.max(0, Math.min(100, ((localZoom.endValue - startTime) / total) * 100));
+                    const toBar = (ms) => Math.max(0, Math.min(100, ((ms - startTime) / totalDuration) * 100));
+                    let s;
+                    let e2;
+                    if (Number.isFinite(localZoom?.start)) {
+                        // Percentages of the charts' x axis, which spans the
+                        // fetched window (`range`), not the whole recording.
+                        const range = vnode.attrs.range;
+                        const w0 = range ? range.start * 1000 : startTime;
+                        const w1 = range ? range.end * 1000 : endTime;
+                        s = toBar(w0 + (localZoom.start / 100) * (w1 - w0));
+                        e2 = toBar(w0 + (localZoom.end / 100) * (w1 - w0));
+                    } else if (localZoom?.startValue !== undefined) {
+                        // Local zoom via scroll gives raw ms values.
+                        s = toBar(localZoom.startValue);
+                        e2 = toBar(localZoom.endValue);
                     }
                     if (s !== undefined && !isNaN(s)) {
                         vnode.state.applyZoom(s, e2);
@@ -342,11 +332,7 @@ const TimeRangeBar = {
                     e.stopPropagation();
                     vnode.state.barStart = 0;
                     vnode.state.barEnd = 100;
-                    if (ranged && vnode.attrs.onRangeReset) {
-                        vnode.attrs.onRangeReset();
-                    } else {
-                        chartsState.resetAll();
-                    }
+                    vnode.attrs.onRangeReset?.();
                     m.redraw();
                 },
                 title: 'Reset to full time range',
