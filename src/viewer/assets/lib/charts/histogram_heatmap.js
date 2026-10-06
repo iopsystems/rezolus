@@ -269,7 +269,7 @@ export function configureHistogramHeatmap(chart) {
             bottom: '24',
             containLabel: true,
         },
-        dataZoom: getDataZoomConfig(calculateMinZoomSpan(timeData)),
+        dataZoom: getDataZoomConfig(calculateMinZoomSpan(timeData, chart.interval)),
         // Force hover effects onto a separate canvas (the zrender
         // "hoverLayer") so cell hover doesn't trigger a progressive
         // re-render of the main canvas. Without this, hovering each

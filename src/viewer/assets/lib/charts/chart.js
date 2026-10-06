@@ -610,10 +610,13 @@ export class Chart {
             timeData = this.spec.time_data;
         }
 
-        // Calculate sample interval and minimum zoom percentage
-        // Minimum zoom is 5x the sample interval
+        // The narrowest zoom: five samples at the recording's interval, or
+        // at the chart's own point spacing when the interval is unknown. A
+        // zoom refetches finer data, so the points drawn are not the limit.
         if (timeData && timeData.length >= 2) {
-            const sampleInterval = timeData[1] - timeData[0]; // in seconds
+            const sampleInterval = this.interval > 0
+                ? this.interval
+                : timeData[1] - timeData[0]; // in seconds
             const totalDuration = timeData[timeData.length - 1] - timeData[0];
             const minVisibleDuration = sampleInterval * 5;
             // Convert to percentage of total duration

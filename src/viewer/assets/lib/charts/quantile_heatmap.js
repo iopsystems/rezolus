@@ -384,7 +384,7 @@ export function configureQuantileHeatmap(chart) {
             bottom: '24',
             containLabel: false,
         },
-        dataZoom: getDataZoomConfig(calculateMinZoomSpan(timeData)),
+        dataZoom: getDataZoomConfig(calculateMinZoomSpan(timeData, chart.interval)),
         // Force hover effects onto the separate hoverLayer canvas so
         // cell hover doesn't trigger a progressive re-render of the
         // main canvas. Same fix as heatmap.js / histogram_heatmap.js.

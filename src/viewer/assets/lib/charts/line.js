@@ -255,7 +255,7 @@ export function configureLineChart(chart) {
     const option = {
         ...baseOption,
         ...(xAxisOverride ? { xAxis: xAxisOverride } : {}),
-        dataZoom: getDataZoomConfig(calculateMinZoomSpan(widestTimeData)),
+        dataZoom: getDataZoomConfig(calculateMinZoomSpan(widestTimeData, chart.interval)),
         yAxis: getBaseYAxisOption(logScale, unitSystem),
         tooltip: {
             ...baseOption.tooltip,

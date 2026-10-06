@@ -371,14 +371,16 @@ export function buildOverlayLegendOption(names, { tooltipFormatter, top = '42', 
 }
 
 /**
- * Calculate the minimum zoom span (as a percentage of total duration)
- * to prevent zooming tighter than 5x the sample interval.
+ * The narrowest zoom, as a percentage of the chart's time range: five
+ * samples at the recording's `interval` (seconds) when it is given, else five
+ * of the chart's own point spacings. A zoom refetches finer data, so the
+ * limit is the recording's interval, not the spacing of the points drawn.
  */
-export function calculateMinZoomSpan(timeData) {
+export function calculateMinZoomSpan(timeData, interval) {
     if (!timeData || timeData.length < 2) return 0.1;
-    const sampleInterval = timeData[1] - timeData[0];
+    const spacing = interval > 0 ? interval : timeData[1] - timeData[0];
     const totalDuration = timeData[timeData.length - 1] - timeData[0];
-    return Math.max(0.1, (sampleInterval * 5 / totalDuration) * 100);
+    return Math.max(0.1, (spacing * 5 / totalDuration) * 100);
 }
 
 /**

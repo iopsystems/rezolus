@@ -293,7 +293,7 @@ export function configureHeatmap(chart) {
         // attaches to when the user drags a selection on the canvas.
         // Without this, the drag does nothing on heatmaps — which was
         // the long-standing heatmap-drag-zoom bug.
-        dataZoom: getDataZoomConfig(calculateMinZoomSpan(timeData)),
+        dataZoom: getDataZoomConfig(calculateMinZoomSpan(timeData, chart.interval)),
         // Echarts has two render modes for hover effects. When number of chart elements is
         // below this threshold, it just draws the hover effect onto the same canvas.
         // When above this threshold, it draws them onto a separate canvas element (zrender's

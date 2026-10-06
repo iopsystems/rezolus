@@ -156,7 +156,7 @@ function renderPercentileBands(chart) {
     const baseOption = getBaseOption();
     const option = {
         ...baseOption,
-        dataZoom: getDataZoomConfig(calculateMinZoomSpan(widest)),
+        dataZoom: getDataZoomConfig(calculateMinZoomSpan(widest, chart.interval)),
         yAxis: oob
             ? oobYAxis(getBaseYAxisOption(logScale, unitSystem), oob.oobMax, range.max)
             : getBaseYAxisOption(logScale, unitSystem),
@@ -387,7 +387,7 @@ export function configureScatterChart(chart) {
     // Store labels so _rescaleYAxis can map data indices to pinned names
     chart._seriesLabels = percentileLabels;
 
-    const minZoomSpan = calculateMinZoomSpan(timeData);
+    const minZoomSpan = calculateMinZoomSpan(timeData, chart.interval);
 
     const uniqueNamesForLayout = [...new Set(series.map(s => s.name))];
 

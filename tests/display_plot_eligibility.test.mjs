@@ -1,9 +1,8 @@
-// Guards which plots are routed through display mode (median + bands). The
-// regression this pins: per-entity charts that group `by (id)` render as
-// heatmaps (one row per CPU/GPU/...), and display mode — which collapses each
-// series to a median + bands — cannot represent a heatmap. Those must stay on
-// the native render path. Percentile scatters and aggregate/multi line charts
-// do use display.
+// Guards which plots are routed through display mode (median + bands).
+// Per-entity charts that group `by (id)` render as heatmaps (one row per
+// CPU/GPU/...); they are fetched by `fetchEntityHeatmap`, not as display
+// series. Percentile scatters, aggregate/multi line charts, and a line that
+// averages over `by (id)` use display.
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { plotUsesDisplay } from '../src/viewer/assets/lib/data.js';
@@ -29,6 +28,8 @@ test('aggregate / multi line charts use display', () => {
         'avg by (state) (cpu_usage)',
         'rate(grid_metric[5m])',     // "grid" must not trip the id match
         'sum by (width) (x)',        // "width" must not trip the id match
+        // One series averaged over the entities: a line, not a heatmap.
+        'avg(sum by (id) (irate(core_cstate_residency[5m])) / sum by (id) (irate(cpu_tsc[5m])))',
     ]) {
         assert.equal(plotUsesDisplay(p(q, { type: 'delta_counter' })), true, q);
     }
