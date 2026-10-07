@@ -134,8 +134,12 @@ pub async fn load_url(
             .unwrap_or_else(|| "remote.parquet".to_string())
     });
     // Staging, opening and checksumming the file and building the
-    // dashboards read the whole recording: a query slot's work.
+    // dashboards read the whole file, so they run in a query slot.
     on_query_slot(&state, move |state| {
+        // Checked again here: a live connect can finish during the wait.
+        if state.live.load(Ordering::Relaxed) {
+            return ApiResponse::err("load_url is only available in file mode", "bad_request");
+        }
         let temp_path = baseline_temp_path();
         if let Err(e) = std::fs::write(&temp_path, &bytes) {
             return ApiResponse::err(format!("failed to stage upstream bytes: {e}"), "io_error");
@@ -160,17 +164,21 @@ pub async fn upload_parquet(
 
     let filename = filename_header(&headers).unwrap_or_else(|| "upload.parquet".to_string());
     // Storing, opening and checksumming the upload and building the
-    // dashboards read the whole recording: a query slot's work.
+    // dashboards read the whole file, so they run in a query slot.
     on_query_slot(&state, move |state| ingest_upload(state, &body, filename)).await
 }
 
-/// Store an upload and load it as the baseline, by its content: a `.rez`, a
-/// combined-A/B tarball, or a parquet.
+/// Store an upload and load it as the baseline, by its content: a `.rez` or
+/// `.dendro` archive, a combined-A/B tarball, or a parquet.
 fn ingest_upload(
     state: &AppState,
     body: &[u8],
     filename: String,
 ) -> Json<ApiResponse<serde_json::Value>> {
+    // Checked again here: a live connect can finish during the slot wait.
+    if state.live.load(Ordering::Relaxed) {
+        return ApiResponse::err("upload is only available in file mode", "bad_request");
+    }
     let temp_path = baseline_temp_path();
     if let Err(e) = std::fs::write(&temp_path, body) {
         return ApiResponse::err(format!("failed to store upload: {e}"), "io_error");
@@ -467,13 +475,23 @@ pub async fn attach_experiment(
     }
 
     let filename = filename_header(&headers).unwrap_or_else(|| "experiment.parquet".to_string());
-    // Storing and opening the upload and building the dashboards read the
-    // whole recording: a query slot's work.
+    // Writing the upload, opening it and rebuilding the dashboards (which run
+    // KPI validation queries) are blocking file reads, so they run in a query
+    // slot.
     on_query_slot(&state, move |state| attach_upload(state, &body, filename)).await
 }
 
 /// Store an uploaded experiment parquet and attach it.
 fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
+    // Checked again here: another attach can finish during the slot wait, and
+    // both would write the same temp file.
+    if state.captures.experiment_attached() {
+        return (
+            StatusCode::CONFLICT,
+            "experiment already attached; DELETE first",
+        )
+            .into_response();
+    }
     let temp_path =
         std::env::temp_dir().join(format!("rezolus-experiment-{}.parquet", std::process::id()));
     if let Err(e) = std::fs::write(&temp_path, body) {
@@ -520,18 +538,24 @@ fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
 }
 
 /// Detach the currently attached experiment (if any) and clean up its temp file.
+///
+/// All of it runs in a query slot, since rebuilding the dashboards runs KPI
+/// validation queries; a request dropped while waiting for the slot changes
+/// nothing.
 pub async fn detach_experiment(State(state): State<Arc<AppState>>) -> Response {
-    state.unfollow_capture(super::capture_registry::EXPERIMENT_ID);
-    state.captures.detach_experiment();
-    if let Some(path) = state.experiment_parquet_path.write().take() {
-        let _ = std::fs::remove_file(&path);
-    }
-    // Clear the CLI-supplied experiment path too so regen below doesn't
-    // rebuild against a detached capture. Only the path reference is
-    // dropped — the user's parquet on disk is left alone.
-    state.cli_experiment_path.write().take();
-    // Rebuilding the dashboards validates KPI queries against the recording.
-    on_query_slot(&state, regenerate_dashboards).await;
+    on_query_slot(&state, |state| {
+        state.unfollow_capture(super::capture_registry::EXPERIMENT_ID);
+        state.captures.detach_experiment();
+        if let Some(path) = state.experiment_parquet_path.write().take() {
+            let _ = std::fs::remove_file(&path);
+        }
+        // Clear the CLI-supplied experiment path too so regen below doesn't
+        // rebuild against a detached capture. Only the path reference is
+        // dropped — the user's parquet on disk is left alone.
+        state.cli_experiment_path.write().take();
+        regenerate_dashboards(state);
+    })
+    .await;
     StatusCode::OK.into_response()
 }
 

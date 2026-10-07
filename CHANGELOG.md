@@ -65,10 +65,11 @@
   2.4-2.6 s instead of 14-15 s. Peak memory over the load was 2.4 GB,
   against 2.8 GB before (one run each).
 - `rezolus view` loads an upload, a URL or an attached experiment, and
-  rebuilds the dashboards on a detach, in a query slot. These ran on one of
-  the server's two async workers and held it while the upload was written to
-  disk, opened, checksummed and checked against its KPIs (20 ms for a 22 MB
-  `.dendro`).
+  rebuilds the dashboards on a detach, on the blocking pool under
+  `--query-concurrency`; these requests now wait for a free slot as queries
+  do. They ran on one of the server's two async workers and held it while
+  the file was written to disk, opened, checksummed and checked against its
+  KPIs.
 - metriken-query 0.34.7 and metriken-archive 0.3.5. The viewer's charts are
   reduced to their point budget while the query is computed, instead of
   after the full-resolution result is built. A `sum`, `avg`, `min`, `max`

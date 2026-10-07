@@ -1063,6 +1063,49 @@ mod query_slot_tests {
         }
     }
 
+    /// A detach dropped while it waits for a slot changes nothing, and an
+    /// attach that waited behind another finds the experiment attached.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn waiting_detaches_and_attaches_check_the_state_they_change() {
+        use crate::viewer::actions;
+        let (state, entered, release, _) = gated();
+        let experiment =
+            || Arc::new(metriken_query::MemoryStore::builder().build()) as Arc<dyn MetricsSource>;
+        state
+            .captures
+            .attach_experiment(experiment(), None, None, None);
+
+        let first = request(1, &state);
+        wait_entered(&entered).await;
+        let detach = tokio::spawn(actions::detach_experiment(State(Arc::clone(&state))));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        detach.abort();
+        let _ = detach.await;
+        assert!(
+            state.captures.experiment_attached(),
+            "a detach dropped before its slot leaves the experiment"
+        );
+
+        // Detached while the attach waits: the attach passes its first check.
+        state.captures.detach_experiment();
+        let attach = tokio::spawn(actions::attach_experiment(
+            State(Arc::clone(&state)),
+            axum::http::HeaderMap::new(),
+            axum::body::Bytes::from_static(b"not a recording"),
+        ));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        state
+            .captures
+            .attach_experiment(experiment(), None, None, None);
+        release.send(()).unwrap();
+        first.await.unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(5), attach)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+    }
+
     /// A query that panics gives its slot back: with one slot, the next
     /// query runs.
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]

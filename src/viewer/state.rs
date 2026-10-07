@@ -169,8 +169,9 @@ pub struct AppState {
     /// The default is `DEFAULT_CACHE_SIZE_BYTES`; set `REZOLUS_CACHE_MB` or
     /// pass `--cache-size-mb` to override.
     pub pool: Arc<BufferPool>,
-    /// One permit per request that may read a recording at once: a query,
-    /// or loading an upload, a URL or an experiment, or detaching one. See
+    /// One permit per request that may read a recording at once: a query, a
+    /// dashboard section, or loading an upload, a URL or an experiment, or
+    /// detaching the experiment. See
     /// [`default_query_concurrency`] and `--query-concurrency`.
     pub queries: Arc<tokio::sync::Semaphore>,
 }
