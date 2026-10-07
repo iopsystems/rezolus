@@ -282,8 +282,10 @@ mod tests {
         // Longer than the lead, so the copy can start after the first row.
         recorded(&src, 700, true);
 
+        // Starts after the restatement at 600 s, so a thread is named only
+        // by a restatement before the range.
         let range = ::report_save::TimeRange {
-            start_ns: ANCHOR + 600 * SECOND,
+            start_ns: ANCHOR + 605 * SECOND,
             end_ns: ANCHOR + 650 * SECOND,
         };
         let bytes = build_rez_report(&src, None, Some(range), "{}", None).unwrap();
@@ -309,7 +311,10 @@ mod tests {
                 first + 4 * SECOND > lead_start,
                 "{stream} starts at {first}"
             );
-            assert!(first <= range.start_ns, "{stream} covers the start");
+            assert!(
+                first <= lead_start,
+                "{stream} starts at {first}, after the lead"
+            );
             assert!(
                 last >= range.end_ns && last < range.end_ns + 4 * SECOND,
                 "{stream} ends at {last}"
@@ -320,7 +325,8 @@ mod tests {
         assert!(rates.iter().all(|(comm, _)| !comm.is_empty()));
     }
 
-    /// A ranged `.rez` report keeps only the segments overlapping the range.
+    /// A ranged `.rez` report keeps the segments overlapping the range, and a
+    /// range after the data is an error, as it is for a parquet.
     #[test]
     fn a_ranged_rez_report_drops_segments_outside_the_range() {
         let dir = tempfile::tempdir().unwrap();
@@ -336,6 +342,8 @@ mod tests {
             start_ns: ANCHOR + 2_000_000_000,
             end_ns: ANCHOR + 3_000_000_000,
         };
+        let err = build_rez_report(&src, None, Some(after), "{}", None).unwrap_err();
+        assert!(err.contains("no rows"), "{err}");
         let rows = |range| {
             let bytes = build_rez_report(&src, None, Some(range), "{}", None).unwrap();
             let db = RezDb::open_bytes(bytes).unwrap();
@@ -346,7 +354,6 @@ mod tests {
                 .map(|s| s.meta.rows)
                 .sum::<u64>()
         };
-        assert_eq!(rows(after), 0, "nothing overlaps a range after the data");
         assert!(rows(inside) >= 2, "the rows inside the range are kept");
     }
 }

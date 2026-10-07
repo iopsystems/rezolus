@@ -602,8 +602,8 @@
 ### Fixed
 
 - Save as Report's "Trim to the time range shown" keeps only that range. The
-  option sent a range the server ignored, so the report held the whole
-  recording; and it was offered only for a chart zoom, not for a zoom that
+  option sent a range that neither the server nor the browser build read, so
+  the report held the whole recording; and it was offered only for a chart zoom, not for a zoom that
   refetched the charts, so a zoomed view usually did not offer it. A parquet
   report keeps the rows inside the range. A `.rez` or `.dendro` report keeps
   whole segments, so it reaches up to one segment's span past each end (5

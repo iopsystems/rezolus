@@ -150,14 +150,21 @@ Source: [Selection → Notebook → Report](journal/2026-05-10-selection-noteboo
   A parquet report keeps the rows inside the range; a `.rez` or dendro report
   keeps the segments overlapping it, whole. Live mode saves through the dendro
   path, so it is trimmed too (not exercised against a live agent).
-- **Row-exact archive trim** — Open. An archive report carries up to one
+- **Row-exact archive trim** — By design. An archive report carries up to one
   segment's span (5 minutes in a recorded archive) beyond each end of the
   range, plus a restatement period (5 minutes) before it when the source has
-  long tables. *Reopen* if a report's edges are misread; cutting the edge
-  segments needs a row filter in dendro's `copy_sources_into`.
-- **De-duplicate `report_save` trim logic** — Open (cleanup). `crates/viewer/src/report_save.rs`
-  is a parallel copy of `src/viewer/report_save.rs` over `Bytes`. Fold into a
-  shared workspace crate if the surface grows past ~150 lines.
+  long tables. Archives with identity-index caller rows (a 5.x
+  `record --stream` `.rez`, or a dendro converted from one) have two edges:
+  a dendro copy keeps caller rows only inside the range, so slots before the
+  next full entry lose their names; a `.rez` copy keeps them only up to the
+  range's end, so slots in the last segment after it keep the previous
+  occupant's labels. *Reopen* if a report's edges are misread or a converted
+  5.x archive is trimmed; cutting the edge segments needs a row filter in
+  dendro's `copy_sources_into` and `rez_v3_rewrite::copy_recordings_into`,
+  and the caller rows need copying from before the range.
+- **De-duplicate `report_save` trim logic** — Done (#924). The logic is in the
+  shared `crates/report-save`; `crates/viewer/src/report_save.rs` and
+  `src/viewer/report_save.rs` are thin wrappers over it.
 - **Report schema-drift guard** — Open. If a report's notes are re-applied against
   the wrong parquet, nothing warns. Add optional `baseline_checksum` /
   `experiment_checksum` to the v3 payload and show a banner on mismatch (warn,

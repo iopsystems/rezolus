@@ -45,7 +45,7 @@ pub const MAX_ROW_GROUP_SIZE: usize = 1800;
 
 /// Save-relevant subset of `/api/v1/save_with_selection`'s POST body.
 /// Other fields on the wire (tagline, anchors, chartToggles, …) are
-/// ignored — only entries' queries, the `trim_columns` flag and
+/// ignored — only entries' queries, events, the `trim_columns` flag and
 /// `trim_range_ms` shape the output.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReportPayload {
@@ -83,8 +83,9 @@ impl TimeRange {
 }
 
 impl ReportPayload {
-    /// `trim_range_ms` in nanoseconds, widened outward to whole nanoseconds.
-    /// An error when either end is not finite or the start is after the end.
+    /// `trim_range_ms` in nanoseconds, widened outward by
+    /// [`RANGE_SLACK_NS`] at each end. An error when either end is not finite
+    /// or the start is after the end.
     pub fn time_range(&self) -> Result<Option<TimeRange>, String> {
         let Some(r) = self.trim_range_ms else {
             return Ok(None);
@@ -94,11 +95,17 @@ impl ReportPayload {
         }
         // `as` saturates: a negative start becomes 0, a huge end u64::MAX.
         Ok(Some(TimeRange {
-            start_ns: (r.start * 1e6).floor() as u64,
-            end_ns: (r.end * 1e6).ceil() as u64,
+            start_ns: ((r.start * 1e6).floor() as u64).saturating_sub(RANGE_SLACK_NS),
+            end_ns: ((r.end * 1e6).ceil() as u64).saturating_add(RANGE_SLACK_NS),
         }))
     }
 }
+
+/// How far [`ReportPayload::time_range`] widens each end. A browser holds a
+/// row's time as f64 milliseconds or seconds, about 240 ns apart near the
+/// present, so a window that starts or ends on a row can land just inside
+/// it; 1 µs keeps that row.
+pub const RANGE_SLACK_NS: u64 = 1_000;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReportEntry {
@@ -523,6 +530,8 @@ fn embed_rez_report_markers(
 ///
 /// `range` keeps the segments overlapping it. A segment is copied whole, so
 /// the report holds rows up to a segment's span beyond each end of `range`.
+/// A dendro source with long tables is copied from [`OCCUPANT_RESTATE_NS`]
+/// before `range`. An error when `range` keeps no segment.
 pub fn build_rez_report_from_rez(
     source_bytes: &[u8],
     keep_metrics: Option<&BTreeSet<String>>,
@@ -559,6 +568,22 @@ pub fn build_rez_report_from_rez(
             .map(|_| ())
         })
     })?;
+    if range.is_some() {
+        let mut rows = 0u64;
+        for rec in dst.read_recordings()? {
+            for table in dst.all_samplers(rec.id)? {
+                rows += dst
+                    .segments_overlapping(rec.id, &table, 0, u64::MAX)?
+                    .iter()
+                    .map(|seg| seg.meta.rows)
+                    .sum::<u64>();
+                rows += dst.live_wal_span(rec.id, &table)?.rows;
+            }
+        }
+        if rows == 0 {
+            return Err("the time range holds no rows".to_string());
+        }
+    }
     embed_rez_report_markers(&dst, keep_metrics.is_some(), selection_json, events_json)?;
     dst.serialize()
 }
@@ -576,7 +601,8 @@ pub fn build_rez_report_from_rez(
 /// With `range`, the copy starts [`OCCUPANT_RESTATE_NS`] before it when the
 /// source has long tables, so an occupant first seen before the range keeps
 /// the restatement that names it. That is the bound hindsight's ranged dump
-/// uses.
+/// uses. The lead applies when the source has a long table, whether or not
+/// `keep_metrics` keeps one.
 fn build_dendro_report(
     source_bytes: &[u8],
     keep_metrics: Option<&BTreeSet<String>>,
@@ -619,6 +645,26 @@ fn build_dendro_report(
         .map_err(err)?;
 
     let sources = dst.read_sources().map_err(err)?;
+    if range.is_some() {
+        let mut rows = 0u64;
+        for source in &sources {
+            for stream in dst.all_streams(source.id).map_err(err)? {
+                if table_of(&stream).is_some() {
+                    continue;
+                }
+                rows += dst
+                    .segments_overlapping(source.id, &stream, i64::MIN, i64::MAX)
+                    .map_err(err)?
+                    .iter()
+                    .map(|seg| seg.meta.rows)
+                    .sum::<u64>();
+                rows += dst.live_wal_span(source.id, &stream).map_err(err)?.rows;
+            }
+        }
+        if rows == 0 {
+            return Err("the time range holds no rows".to_string());
+        }
+    }
     for source in &sources {
         let streams = dst.all_streams(source.id).map_err(err)?;
         let tables: BTreeSet<&str> = streams
@@ -654,8 +700,8 @@ fn build_dendro_report(
     dst.serialize().map_err(err)
 }
 
-/// Row time metriken-archive's writer lets pass between restatements of a
-/// long table's live occupants, in nanoseconds: `WriterConfig::default()`'s
+/// The row-time interval at which metriken-archive's writer restates a long
+/// table's live occupants, in nanoseconds: `WriterConfig::default()`'s
 /// `restate_every_ns`, which needs the writer and so is not reachable from
 /// here. The binary's tests pin the two together.
 pub const OCCUPANT_RESTATE_NS: u64 = 300_000_000_000;
@@ -1315,8 +1361,8 @@ mod tests {
         assert_eq!(
             p.time_range().unwrap(),
             Some(TimeRange {
-                start_ns: 1_500_000_000,
-                end_ns: 2_500_500_000,
+                start_ns: 1_500_000_000 - RANGE_SLACK_NS,
+                end_ns: 2_500_500_000 + RANGE_SLACK_NS,
             })
         );
         assert!(ranged_payload(3.0, 2.0, true).time_range().is_err());
@@ -1326,8 +1372,8 @@ mod tests {
         assert_eq!(
             body.time_range().unwrap(),
             Some(TimeRange {
-                start_ns: 1_000_000_000,
-                end_ns: 2_000_000_000,
+                start_ns: 1_000_000_000 - RANGE_SLACK_NS,
+                end_ns: 2_000_000_000 + RANGE_SLACK_NS,
             })
         );
     }
@@ -1401,5 +1447,18 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A window whose ends came through browser f64 seconds keeps the rows
+    /// it starts and ends on.
+    #[test]
+    fn a_window_on_row_times_keeps_its_edge_rows() {
+        let first: u64 = 1_790_144_092_001_835_800;
+        let last: u64 = first + 34_677_000_000_000;
+        // As the page computes them: seconds as f64, times 1000.
+        let ms = |ns: u64| (ns as f64 / 1e9) * 1000.0;
+        let p = ranged_payload(ms(first), ms(last), false);
+        let r = p.time_range().unwrap().unwrap();
+        assert!(r.contains(first) && r.contains(last), "{r:?}");
     }
 }

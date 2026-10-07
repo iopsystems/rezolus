@@ -773,7 +773,8 @@ const loadJsonIntoSelection = (json, filename) => {
 // The time range the charts show, { start, end } in ms since the epoch, or
 // null when they show the whole recording. The charts are fetched for the
 // range override (or the whole recording), and a chart zoom narrows that:
-// as percentages of the fetched window, or as ms values from a scroll zoom.
+// as percentages of the fetched window, or, when percentages could not be
+// derived, as ms values from a drag zoom.
 const shownWindowMs = (cs, attrs) => {
     const override = getRangeOverride();
     const zoom = cs && !cs.isDefaultZoom() ? cs.zoomLevel : null;
@@ -821,7 +822,13 @@ const saveToParquet = async (store, attrs) => {
     const payload = buildPayload(store, attrs);
     payload.trim_columns = result.trim_columns !== false;
 
-    if (trimToSelection && shown) payload.trim_range_ms = shown;
+    if (trimToSelection && shown) {
+        payload.trim_range_ms = shown;
+        // The report holds only this window: describe it, and drop a chart
+        // zoom, whose percentages would narrow the trimmed data again.
+        payload.time_range = { start_ms: shown.start, end_ms: shown.end };
+        payload.zoom = null;
+    }
 
     try {
         // Transport-agnostic: the server adapter POSTs to
