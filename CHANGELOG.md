@@ -601,6 +601,16 @@
 
 ### Fixed
 
+- Save as Report's "Trim to the time range shown" keeps only that range. The
+  option sent a range the server ignored, so the report held the whole
+  recording; and it was offered only for a chart zoom, not for a zoom that
+  refetched the charts, so a zoomed view usually did not offer it. A parquet
+  report keeps the rows inside the range. A `.rez` or `.dendro` report keeps
+  whole segments, so it reaches up to one segment's span past each end (5
+  minutes in a recorded archive), and a further 5 minutes before the start
+  when the archive has long tables, so their occupants stay named. A 1-hour
+  trim of a 9.6-hour recording was 154 MB, against 1.27 GB of segments in the
+  source. Compare mode does not offer it.
 - The viewer's time bar shows the window the charts are drawn for after a
   zoom on a chart, and its Reset button returns to the whole recording.
   Dragging the bar sets that window when the mouse is released, and typing

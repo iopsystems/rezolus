@@ -146,11 +146,15 @@ Source: [Selection → Notebook → Report](journal/2026-05-10-selection-noteboo
   additive approach as `tagline`) and set `document.title` to
   `Report/Notebook[: <title>]` on those routes. No schema change; belongs with the
   `titleOverride`/preamble machinery in `selection/selection.js`.
-- **Row / time trim on Save-as-Report** (`trim_range_ms`) — Open. The frontend
-  already sends the field; the server ignores it (PR4 non-goal). Separate PR when
-  file-size reduction by time range is needed.
-- **Live-mode trim** — Open. `save_with_selection` in live mode converts msgpack
-  snapshots to parquet at save time and skips the trim path.
+- **Row / time trim on Save-as-Report** (`trim_range_ms`) — Done (#PRNUM).
+  A parquet report keeps the rows inside the range; a `.rez` or dendro report
+  keeps the segments overlapping it, whole. Live mode saves through the dendro
+  path, so it is trimmed too (not exercised against a live agent).
+- **Row-exact archive trim** — Open. An archive report carries up to one
+  segment's span (5 minutes in a recorded archive) beyond each end of the
+  range, plus a restatement period (5 minutes) before it when the source has
+  long tables. *Reopen* if a report's edges are misread; cutting the edge
+  segments needs a row filter in dendro's `copy_sources_into`.
 - **De-duplicate `report_save` trim logic** — Open (cleanup). `crates/viewer/src/report_save.rs`
   is a parallel copy of `src/viewer/report_save.rs` over `Bytes`. Fold into a
   shared workspace crate if the surface grows past ~150 lines.
