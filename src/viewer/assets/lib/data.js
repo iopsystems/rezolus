@@ -1250,7 +1250,9 @@ const createDataApi = ({
     const processDashboardData = async (data, activeCgroupPattern, sectionRoute, { freshMetadata = false, isStale = null, signal = null } = {}) => {
         if (freshMetadata) { cachedMetadata = null; clearDisplayTiles(); }
         const metadata = cachedMetadata || await fetchMetadata();
-        cachedMetadata = metadata;
+        // A superseded fetch's metadata may describe a recording that has
+        // since been replaced, so it is not cached.
+        if (!((signal && signal.aborted) || (isStale && isStale()))) cachedMetadata = metadata;
 
         const queryPlots = [];
         for (const group of data.groups || []) {

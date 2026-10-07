@@ -8,18 +8,24 @@ const formatMB = (bytes) => (bytes / (1024 * 1024)).toFixed(1);
 
 const backendRequest = (opts) => {
     // `signal` (an AbortSignal) lets callers cancel an in-flight request — used
-    // by the zoom drill-down to abort a superseded window's queries. m.request
-    // has no native abort, so hook the XHR via its `config` callback.
+    // by the zoom drill-down and the live refresh to abort superseded queries.
+    // m.request has no native abort, so hook the XHR via its `config`
+    // callback. m.request's promise never settles once its XHR is aborted, so
+    // the returned promise rejects with an AbortError on abort instead.
     const { signal, ...rest } = opts;
     const req = { withCredentials: true, ...rest };
-    if (signal) {
-        req.config = (xhr) => {
-            if (signal.aborted) xhr.abort();
-            else signal.addEventListener('abort', () => xhr.abort(), { once: true });
-            return xhr;
-        };
-    }
-    return m.request(req);
+    if (!signal) return m.request(req);
+    req.config = (xhr) => {
+        if (signal.aborted) xhr.abort();
+        else signal.addEventListener('abort', () => xhr.abort(), { once: true });
+        return xhr;
+    };
+    return new Promise((resolve, reject) => {
+        const onAbort = () => reject(new DOMException('Aborted', 'AbortError'));
+        if (signal.aborted) { onAbort(); return; }
+        signal.addEventListener('abort', onAbort, { once: true });
+        m.request(req).then(resolve, reject);
+    });
 };
 
 const sectionUrl = (section) => `/data/${section}.json`;

@@ -92,6 +92,9 @@ const startRecording = async () => {
         // the cached metadata (the old recording's time range) goes too.
         liveGen++;
         if (liveRefreshController) liveRefreshController.abort();
+        // A superseded refresh may still be waiting on a request that takes
+        // no signal; the next refresh does not wait for it.
+        liveRefreshInProgress = false;
         clearViewerCaches();
         clearMetadataCache();
         setRecording(true);
@@ -269,7 +272,8 @@ const refreshCurrentSection = async () => {
     } catch (e) {
         // Keep existing data on error.
     } finally {
-        liveRefreshInProgress = false;
+        // A superseded refresh leaves the flag to the refreshes after the reset.
+        if (!isStale()) liveRefreshInProgress = false;
     }
 };
 
