@@ -424,7 +424,7 @@ struct RangeQueryParams {
 /// query holds one slot rather than the server. The slot is held until `f`
 /// returns, including after the client disconnects. A panic in `f` releases
 /// it and is raised again in the handler.
-async fn on_query_slot<T, F>(state: &Arc<AppState>, f: F) -> T
+pub(super) async fn on_query_slot<T, F>(state: &Arc<AppState>, f: F) -> T
 where
     T: Send + 'static,
     F: FnOnce(&AppState) -> T + Send + 'static,
@@ -1001,6 +1001,109 @@ mod query_slot_tests {
             release.send(()).unwrap();
             second.await.unwrap();
         }
+    }
+
+    /// Uploads, attaches and detaches read the recording they load, so each
+    /// waits for a query slot while a query holds the only one, and the
+    /// async worker still answers a request that does not read it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn uploads_attaches_and_detaches_wait_for_a_slot() {
+        use crate::viewer::actions;
+        for kind in 0..3 {
+            let (state, entered, release, _) = gated();
+            let first = request(1, &state);
+            wait_entered(&entered).await;
+
+            let st = State(Arc::clone(&state));
+            let bytes = axum::body::Bytes::from_static(b"not a recording");
+            let action = match kind {
+                0 => tokio::spawn(async move {
+                    actions::upload_parquet(st, axum::http::HeaderMap::new(), bytes)
+                        .await
+                        .into_response()
+                }),
+                1 => tokio::spawn(actions::attach_experiment(
+                    st,
+                    axum::http::HeaderMap::new(),
+                    bytes,
+                )),
+                _ => tokio::spawn(actions::detach_experiment(st)),
+            };
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert!(!action.is_finished(), "action {kind}: waits for the slot");
+            let Json(mode) = tokio::time::timeout(
+                Duration::from_secs(1),
+                tokio::spawn(mode(State(Arc::clone(&state)))),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("action {kind}: mode is not answered"))
+            .unwrap();
+            assert!(mode.is_object());
+
+            // Release the query, then every read the action makes.
+            release.send(()).unwrap();
+            first.await.unwrap();
+            let drain = {
+                let entered = Arc::clone(&entered);
+                std::thread::spawn(move || {
+                    while entered
+                        .lock()
+                        .recv_timeout(Duration::from_millis(500))
+                        .is_ok()
+                    {
+                        let _ = release.send(());
+                    }
+                })
+            };
+            tokio::time::timeout(Duration::from_secs(5), action)
+                .await
+                .unwrap_or_else(|_| panic!("action {kind}: finishes once the slot is free"))
+                .unwrap();
+            drain.join().unwrap();
+        }
+    }
+
+    /// A detach dropped while it waits for a slot changes nothing, and an
+    /// attach that waited behind another finds the experiment attached.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn waiting_detaches_and_attaches_check_the_state_they_change() {
+        use crate::viewer::actions;
+        let (state, entered, release, _) = gated();
+        let experiment =
+            || Arc::new(metriken_query::MemoryStore::builder().build()) as Arc<dyn MetricsSource>;
+        state
+            .captures
+            .attach_experiment(experiment(), None, None, None);
+
+        let first = request(1, &state);
+        wait_entered(&entered).await;
+        let detach = tokio::spawn(actions::detach_experiment(State(Arc::clone(&state))));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        detach.abort();
+        let _ = detach.await;
+        assert!(
+            state.captures.experiment_attached(),
+            "a detach dropped before its slot leaves the experiment"
+        );
+
+        // Detached while the attach waits: the attach passes its first check.
+        state.captures.detach_experiment();
+        let attach = tokio::spawn(actions::attach_experiment(
+            State(Arc::clone(&state)),
+            axum::http::HeaderMap::new(),
+            axum::body::Bytes::from_static(b"not a recording"),
+        ));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        state
+            .captures
+            .attach_experiment(experiment(), None, None, None);
+        release.send(()).unwrap();
+        first.await.unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(5), attach)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
     }
 
     /// A query that panics gives its slot back: with one slot, the next
