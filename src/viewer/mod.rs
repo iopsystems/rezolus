@@ -287,7 +287,8 @@ pub fn command() -> Command {
                 .long("query-concurrency")
                 .value_name("N")
                 .help(
-                    "How many queries read the recording at once; the rest wait \
+                    "How many requests read a recording at once (queries, and \
+                     loading an upload, a URL or an experiment); the rest wait \
                      for a free slot. Overrides REZOLUS_QUERY_CONCURRENCY. \
                      Default: half the CPUs, from 2 to 8.",
                 )

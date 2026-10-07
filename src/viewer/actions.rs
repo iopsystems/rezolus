@@ -22,6 +22,7 @@ use super::metadata::{
     extract_service_extension_metadata, regenerate_dashboards, validate_service_extensions,
 };
 use super::report_save;
+use super::routes::on_query_slot;
 use super::state::{ApiResponse, AppState, LazySectionStore};
 use ::dashboard;
 
@@ -125,11 +126,6 @@ pub async fn load_url(
         Err(e) => return ApiResponse::err(format!("upstream read failed: {e}"), "upstream_error"),
     };
 
-    let temp_path = baseline_temp_path();
-    if let Err(e) = std::fs::write(&temp_path, &bytes) {
-        return ApiResponse::err(format!("failed to stage upstream bytes: {e}"), "io_error");
-    }
-
     let filename = body.filename.unwrap_or_else(|| {
         target
             .path_segments()
@@ -137,7 +133,16 @@ pub async fn load_url(
             .map(ToString::to_string)
             .unwrap_or_else(|| "remote.parquet".to_string())
     });
-    ingest_baseline_from_path(&state, temp_path, filename)
+    // Staging, opening and checksumming the file and building the
+    // dashboards read the whole recording: a query slot's work.
+    on_query_slot(&state, move |state| {
+        let temp_path = baseline_temp_path();
+        if let Err(e) = std::fs::write(&temp_path, &bytes) {
+            return ApiResponse::err(format!("failed to stage upstream bytes: {e}"), "io_error");
+        }
+        ingest_baseline_from_path(state, temp_path, filename)
+    })
+    .await
 }
 
 /// Upload and load a parquet file into file-mode viewer state.
@@ -154,8 +159,20 @@ pub async fn upload_parquet(
     }
 
     let filename = filename_header(&headers).unwrap_or_else(|| "upload.parquet".to_string());
+    // Storing, opening and checksumming the upload and building the
+    // dashboards read the whole recording: a query slot's work.
+    on_query_slot(&state, move |state| ingest_upload(state, &body, filename)).await
+}
+
+/// Store an upload and load it as the baseline, by its content: a `.rez`, a
+/// combined-A/B tarball, or a parquet.
+fn ingest_upload(
+    state: &AppState,
+    body: &[u8],
+    filename: String,
+) -> Json<ApiResponse<serde_json::Value>> {
     let temp_path = baseline_temp_path();
-    if let Err(e) = std::fs::write(&temp_path, &body) {
+    if let Err(e) = std::fs::write(&temp_path, body) {
         return ApiResponse::err(format!("failed to store upload: {e}"), "io_error");
     }
     // `.rez` (v2 tar) is also a tar, so check it before the A/B-tarball
@@ -166,12 +183,12 @@ pub async fn upload_parquet(
         .unwrap_or(crate::recorder::rez::RezFormat::NotRez)
         != crate::recorder::rez::RezFormat::NotRez
     {
-        return ingest_rez_from_path(&state, temp_path, filename);
+        return ingest_rez_from_path(state, temp_path, filename);
     }
     if super::ab_extract::looks_like_ab_tarball(&temp_path) {
-        return ingest_combined_ab_from_path(&state, temp_path, filename);
+        return ingest_combined_ab_from_path(state, temp_path, filename);
     }
-    ingest_baseline_from_path(&state, temp_path, filename)
+    ingest_baseline_from_path(state, temp_path, filename)
 }
 
 /// Runtime-upload version of `init_file_mode_rez` (mod.rs): load a `.rez` as one
@@ -450,9 +467,16 @@ pub async fn attach_experiment(
     }
 
     let filename = filename_header(&headers).unwrap_or_else(|| "experiment.parquet".to_string());
+    // Storing and opening the upload and building the dashboards read the
+    // whole recording: a query slot's work.
+    on_query_slot(&state, move |state| attach_upload(state, &body, filename)).await
+}
+
+/// Store an uploaded experiment parquet and attach it.
+fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
     let temp_path =
         std::env::temp_dir().join(format!("rezolus-experiment-{}.parquet", std::process::id()));
-    if let Err(e) = std::fs::write(&temp_path, &body) {
+    if let Err(e) = std::fs::write(&temp_path, body) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to store upload: {e}"),
@@ -485,7 +509,7 @@ pub async fn attach_experiment(
     );
     *state.experiment_parquet_path.write() = Some(temp_path);
 
-    regenerate_dashboards(&state);
+    regenerate_dashboards(state);
 
     (
         StatusCode::OK,
@@ -506,7 +530,8 @@ pub async fn detach_experiment(State(state): State<Arc<AppState>>) -> Response {
     // rebuild against a detached capture. Only the path reference is
     // dropped — the user's parquet on disk is left alone.
     state.cli_experiment_path.write().take();
-    regenerate_dashboards(&state);
+    // Rebuilding the dashboards validates KPI queries against the recording.
+    on_query_slot(&state, regenerate_dashboards).await;
     StatusCode::OK.into_response()
 }
 
