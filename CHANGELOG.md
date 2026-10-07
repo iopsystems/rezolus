@@ -607,6 +607,11 @@
 
 ### Fixed
 
+- In live mode, Record (a reset to a new recording) drops a refresh still in
+  flight. A refresh begun before the reset could land after it and draw the
+  old recording's data until the next refresh, 5 s later. The reset also
+  clears the cached metadata, so a section opened before that refresh is
+  queried over the new recording's time range rather than the old one's.
 - Save as Report's "Trim to the time range shown" keeps only that range. The
   option sent a range that neither the server nor the browser build read, so
   the report held the whole recording; and it was offered only for a chart zoom, not for a zoom that

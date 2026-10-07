@@ -849,11 +849,13 @@ const toggleGlobalHeatmap = async (sectionRoute, groups) => {
     }
 };
 
-const fetchSectionHeatmapData = async (sectionRoute, groups) => {
+// `isStale`, when given, says the fetch was superseded; its result is then
+// dropped rather than cached.
+const fetchSectionHeatmapData = async (sectionRoute, groups, isStale = null) => {
     heatmapLoading = true;
     m.redraw();
     const heatmapData = await fetchHeatmapsForGroups(groups);
-    heatmapDataCache.set(sectionRoute, heatmapData);
+    if (!(isStale && isStale())) heatmapDataCache.set(sectionRoute, heatmapData);
     heatmapLoading = false;
     m.redraw();
 };
