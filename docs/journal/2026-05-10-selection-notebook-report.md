@@ -190,7 +190,7 @@ compare-mode arc; the series renumbered to "PR 4 of 4" at #919.
   needed; belongs with the existing `titleOverride`/preamble machinery in
   `selection/selection.js`.
 
-- **Row / time trim** (`trim_range_ms`). Done 2026-10-07 (#PRNUM). The
+- **Row / time trim** (`trim_range_ms`). Done 2026-10-07 (#1423). The
   payload carries the window the charts show (the range override, narrowed
   by a chart zoom). A parquet report keeps the rows inside it
   (`report_save::rewrite_parquet_bytes`); a `.rez` or dendro report keeps the
@@ -202,7 +202,7 @@ compare-mode arc; the series renumbered to "PR 4 of 4" at #919.
   experiment's rows are at its own times.
 
 - **Live-mode trim.** Superseded: live mode saves a dendro report through the
-  archive path, which applies the range (#PRNUM, not exercised against a live
+  archive path, which applies the range (#1423, not exercised against a live
   agent).
 
 - **`crates/viewer/src/report_save.rs` duplication.** The WASM crate's trim

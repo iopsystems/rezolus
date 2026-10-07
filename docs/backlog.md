@@ -146,7 +146,7 @@ Source: [Selection → Notebook → Report](journal/2026-05-10-selection-noteboo
   additive approach as `tagline`) and set `document.title` to
   `Report/Notebook[: <title>]` on those routes. No schema change; belongs with the
   `titleOverride`/preamble machinery in `selection/selection.js`.
-- **Row / time trim on Save-as-Report** (`trim_range_ms`) — Done (#PRNUM).
+- **Row / time trim on Save-as-Report** (`trim_range_ms`) — Done (#1423).
   A parquet report keeps the rows inside the range; a `.rez` or dendro report
   keeps the segments overlapping it, whole. Live mode saves through the dendro
   path, so it is trimmed too (not exercised against a live agent).
