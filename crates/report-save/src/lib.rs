@@ -45,8 +45,8 @@ pub const MAX_ROW_GROUP_SIZE: usize = 1800;
 
 /// Save-relevant subset of `/api/v1/save_with_selection`'s POST body.
 /// Other fields on the wire (tagline, anchors, chartToggles, …) are
-/// ignored — only entries' queries and the `trim_columns` flag shape
-/// the output.
+/// ignored — only entries' queries, events, the `trim_columns` flag and
+/// `trim_range_ms` shape the output.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReportPayload {
     #[serde(default)]
@@ -55,7 +55,57 @@ pub struct ReportPayload {
     pub trim_columns: bool,
     #[serde(default)]
     pub events: Vec<Event>,
+    /// The time range to keep, in milliseconds since the epoch. `None`
+    /// keeps every row. See [`ReportPayload::time_range`].
+    #[serde(default)]
+    pub trim_range_ms: Option<TrimRangeMs>,
 }
+
+/// `trim_range_ms` as it arrives: milliseconds since the epoch, possibly
+/// fractional.
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct TrimRangeMs {
+    pub start: f64,
+    pub end: f64,
+}
+
+/// A report's row-timestamp bound, inclusive, in nanoseconds since the epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeRange {
+    pub start_ns: u64,
+    pub end_ns: u64,
+}
+
+impl TimeRange {
+    fn contains(&self, ts: u64) -> bool {
+        self.start_ns <= ts && ts <= self.end_ns
+    }
+}
+
+impl ReportPayload {
+    /// `trim_range_ms` in nanoseconds, widened outward by
+    /// [`RANGE_SLACK_NS`] at each end. An error when either end is not finite
+    /// or the start is after the end.
+    pub fn time_range(&self) -> Result<Option<TimeRange>, String> {
+        let Some(r) = self.trim_range_ms else {
+            return Ok(None);
+        };
+        if !r.start.is_finite() || !r.end.is_finite() || r.start > r.end {
+            return Err(format!("invalid trim_range_ms: {} to {}", r.start, r.end));
+        }
+        // `as` saturates: a negative start becomes 0, a huge end u64::MAX.
+        Ok(Some(TimeRange {
+            start_ns: ((r.start * 1e6).floor() as u64).saturating_sub(RANGE_SLACK_NS),
+            end_ns: ((r.end * 1e6).ceil() as u64).saturating_add(RANGE_SLACK_NS),
+        }))
+    }
+}
+
+/// How far [`ReportPayload::time_range`] widens each end. A browser holds a
+/// row's time as f64 milliseconds or seconds, about 240 ns apart near the
+/// present, so a window that starts or ends on a row can land just inside
+/// it; 1 µs keeps that row.
+pub const RANGE_SLACK_NS: u64 = 1_000;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReportEntry {
@@ -127,8 +177,9 @@ pub fn resolve_kept_columns(
 
 /// Project the source parquet down to the saved selection's columns
 /// (when `trim_columns` is true), or just embed the selection JSON in
-/// the footer (when false). Returns the new parquet bytes ready to
-/// stream / download.
+/// the footer (when false), keeping only the rows inside the payload's
+/// [`time_range`](ReportPayload::time_range). Returns the new parquet bytes
+/// ready to stream / download.
 pub fn save_single_parquet(
     source_bytes: Bytes,
     payload: &ReportPayload,
@@ -137,11 +188,18 @@ pub fn save_single_parquet(
     trim_columns: bool,
 ) -> Result<Vec<u8>, String> {
     let events_json = events_payload_json(&payload.events);
+    let rows = payload.time_range()?;
     if trim_columns {
         let kept = resolve_kept_columns(payload, source, Side::Baseline);
-        trim_parquet_to_columns(source_bytes, &kept, selection_json, events_json.as_deref())
+        trim_parquet_to_columns(
+            source_bytes,
+            &kept,
+            selection_json,
+            events_json.as_deref(),
+            rows,
+        )
     } else {
-        embed_selection_in_parquet(source_bytes, selection_json, events_json.as_deref())
+        embed_selection_in_parquet(source_bytes, selection_json, events_json.as_deref(), rows)
     }
 }
 
@@ -162,6 +220,7 @@ pub fn save_combined_ab_tarball(
     trim_columns: bool,
 ) -> Result<Vec<u8>, String> {
     let events_json = events_payload_json(&payload.events);
+    let rows = payload.time_range()?;
     let (baseline_out, experiment_out) = if trim_columns {
         let baseline_kept = resolve_kept_columns(payload, baseline_source, Side::Baseline);
         let experiment_kept = resolve_kept_columns(payload, experiment_source, Side::Experiment);
@@ -171,18 +230,30 @@ pub fn save_combined_ab_tarball(
                 &baseline_kept,
                 selection_json,
                 events_json.as_deref(),
+                rows,
             )?,
             trim_parquet_to_columns(
                 experiment_bytes,
                 &experiment_kept,
                 selection_json,
                 events_json.as_deref(),
+                rows,
             )?,
         )
     } else {
         (
-            embed_selection_in_parquet(baseline_bytes, selection_json, events_json.as_deref())?,
-            embed_selection_in_parquet(experiment_bytes, selection_json, events_json.as_deref())?,
+            embed_selection_in_parquet(
+                baseline_bytes,
+                selection_json,
+                events_json.as_deref(),
+                rows,
+            )?,
+            embed_selection_in_parquet(
+                experiment_bytes,
+                selection_json,
+                events_json.as_deref(),
+                rows,
+            )?,
         )
     };
 
@@ -212,6 +283,7 @@ fn embed_selection_in_parquet(
     source_bytes: Bytes,
     selection_json: &str,
     events_json: Option<&str>,
+    rows: Option<TimeRange>,
 ) -> Result<Vec<u8>, String> {
     let mut kv_meta = read_file_metadata(source_bytes.clone())?;
     kv_meta.retain(|kv| kv.key != KEY_SELECTION && kv.key != KEY_EVENTS);
@@ -225,7 +297,7 @@ fn embed_selection_in_parquet(
             value: Some(events.to_string()),
         });
     }
-    rewrite_parquet_bytes(source_bytes, kv_meta, None)
+    rewrite_parquet_bytes(source_bytes, kv_meta, None, rows)
 }
 
 fn trim_parquet_to_columns(
@@ -233,6 +305,7 @@ fn trim_parquet_to_columns(
     kept: &HashSet<String>,
     selection_json: &str,
     events_json: Option<&str>,
+    rows: Option<TimeRange>,
 ) -> Result<Vec<u8>, String> {
     let builder = ParquetRecordBatchReaderBuilder::try_new(source_bytes.clone())
         .map_err(|e| e.to_string())?;
@@ -276,7 +349,7 @@ fn trim_parquet_to_columns(
         .collect();
     filter_descriptions(&mut kv_meta, &kept_names);
 
-    rewrite_parquet_bytes(source_bytes, kv_meta, Some(&indices))
+    rewrite_parquet_bytes(source_bytes, kv_meta, Some(&indices), rows)
 }
 
 /// Mirror of `parquet filter`'s field-keep predicate: exact name, base
@@ -309,14 +382,27 @@ fn filter_descriptions(kv_meta: &mut [KeyValue], kept_names: &BTreeSet<&str>) {
     }
 }
 
+/// Rewrite a parquet with `kv_meta` as its footer, keeping the columns in
+/// `projection` (all when `None`) and the rows whose `timestamp` is inside
+/// `rows` (all when `None`). An error when `rows` keeps no row.
 fn rewrite_parquet_bytes(
     source: Bytes,
     kv_meta: Vec<KeyValue>,
     projection: Option<&[usize]>,
+    rows: Option<TimeRange>,
 ) -> Result<Vec<u8>, String> {
     let builder = ParquetRecordBatchReaderBuilder::try_new(source).map_err(|e| e.to_string())?;
     let schema = builder.schema().clone();
     let reader = builder.build().map_err(|e| e.to_string())?;
+    let timestamp = match rows {
+        Some(_) => Some(
+            schema
+                .index_of("timestamp")
+                .map_err(|_| "a time range needs a timestamp column".to_string())?,
+        ),
+        None => None,
+    };
+    let mut kept_rows = 0usize;
 
     let output_schema = match projection {
         Some(indices) => std::sync::Arc::new(schema.project(indices).map_err(|e| e.to_string())?),
@@ -339,6 +425,11 @@ fn rewrite_parquet_bytes(
         .map_err(|e| e.to_string())?;
         for batch in reader {
             let batch = batch.map_err(|e| e.to_string())?;
+            let batch = match (rows, timestamp) {
+                (Some(range), Some(col)) => filter_rows(&batch, col, range)?,
+                _ => batch,
+            };
+            kept_rows += batch.num_rows();
             let batch = match projection {
                 Some(indices) => batch.project(indices).map_err(|e| e.to_string())?,
                 None => batch,
@@ -347,7 +438,36 @@ fn rewrite_parquet_bytes(
         }
         writer.close().map_err(|e| e.to_string())?;
     }
+    if rows.is_some() && kept_rows == 0 {
+        return Err("the time range holds no rows".to_string());
+    }
     Ok(buf)
+}
+
+/// The rows of `batch` whose `UInt64` column `col` (nanoseconds) is inside
+/// `range`.
+fn filter_rows(
+    batch: &arrow::record_batch::RecordBatch,
+    col: usize,
+    range: TimeRange,
+) -> Result<arrow::record_batch::RecordBatch, String> {
+    use arrow::array::{Array, BooleanArray, UInt64Array};
+    let ts = batch
+        .column(col)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| "the timestamp column is not UInt64".to_string())?;
+    let mask: BooleanArray = (0..ts.len())
+        .map(|i| Some(!ts.is_null(i) && range.contains(ts.value(i))))
+        .collect();
+    arrow::compute::filter_record_batch(batch, &mask).map_err(|e| e.to_string())
+}
+
+/// `bytes` with only the rows inside `range`, footer unchanged.
+fn parquet_rows_in(bytes: &[u8], range: TimeRange) -> Result<Vec<u8>, String> {
+    let bytes = Bytes::copy_from_slice(bytes);
+    let kv_meta = read_file_metadata(bytes.clone())?;
+    rewrite_parquet_bytes(bytes, kv_meta, None, Some(range))
 }
 
 fn append_tar_entry<W: std::io::Write>(
@@ -407,9 +527,15 @@ fn embed_rez_report_markers(
 /// Build a `.rez` report from a `.rez` source's bytes: copy every recording
 /// (trimming to `keep_metrics` when `Some`) and embed the selection. Returns
 /// the new archive's bytes.
+///
+/// `range` keeps the segments overlapping it. A segment is copied whole, so
+/// the report holds rows up to a segment's span beyond each end of `range`.
+/// A dendro source with long tables is copied from [`OCCUPANT_RESTATE_NS`]
+/// before `range`. An error when `range` keeps no segment.
 pub fn build_rez_report_from_rez(
     source_bytes: &[u8],
     keep_metrics: Option<&BTreeSet<String>>,
+    range: Option<TimeRange>,
     selection_json: &str,
     events_json: Option<&str>,
 ) -> Result<Vec<u8>, String> {
@@ -417,7 +543,13 @@ pub fn build_rez_report_from_rez(
     use rez::rez_v3_rewrite::{copy_recordings_into, CopySpec};
 
     if metriken_archive::DendroCatalog::is_archive_bytes(source_bytes) {
-        return build_dendro_report(source_bytes, keep_metrics, selection_json, events_json);
+        return build_dendro_report(
+            source_bytes,
+            keep_metrics,
+            range,
+            selection_json,
+            events_json,
+        );
     }
     let src = RezDb::open_bytes(source_bytes.to_vec())?;
     let mut dst = RezDb::create_in_memory()?;
@@ -428,12 +560,30 @@ pub fn build_rez_report_from_rez(
                 tx,
                 &CopySpec {
                     keep_metrics,
+                    start: range.map_or(0, |r| r.start_ns),
+                    end: range.map_or(u64::MAX, |r| r.end_ns),
                     ..CopySpec::everything()
                 },
             )
             .map(|_| ())
         })
     })?;
+    if range.is_some() {
+        let mut rows = 0u64;
+        for rec in dst.read_recordings()? {
+            for table in dst.all_samplers(rec.id)? {
+                rows += dst
+                    .segments_overlapping(rec.id, &table, 0, u64::MAX)?
+                    .iter()
+                    .map(|seg| seg.meta.rows)
+                    .sum::<u64>();
+                rows += dst.live_wal_span(rec.id, &table)?.rows;
+            }
+        }
+        if rows == 0 {
+            return Err("the time range holds no rows".to_string());
+        }
+    }
     embed_rez_report_markers(&dst, keep_metrics.is_some(), selection_json, events_json)?;
     dst.serialize()
 }
@@ -447,9 +597,16 @@ pub fn build_rez_report_from_rez(
 /// `Encoder`, and segments re-encoded with the writer's properties. An
 /// occupant stream whose table the trim dropped is removed, as `recording
 /// filter` removes it. The markers go on the first source.
+///
+/// With `range`, the copy starts [`OCCUPANT_RESTATE_NS`] before it when the
+/// source has long tables, so an occupant first seen before the range keeps
+/// the restatement that names it. That is the bound hindsight's ranged dump
+/// uses. The lead applies when the source has a long table, whether or not
+/// `keep_metrics` keeps one.
 fn build_dendro_report(
     source_bytes: &[u8],
     keep_metrics: Option<&BTreeSet<String>>,
+    range: Option<TimeRange>,
     selection_json: &str,
     events_json: Option<&str>,
 ) -> Result<Vec<u8>, String> {
@@ -465,7 +622,18 @@ fn build_dendro_report(
     }
     let encoder = metriken_archive::Encoder::for_streams(names.iter().map(String::as_str));
     let keep = keep_metrics.map(metriken_archive::KeepMetrics::new);
+    let (start, end) = match range {
+        Some(r) => {
+            let long = names.iter().any(|s| table_of(s).is_some());
+            let lead = if long { OCCUPANT_RESTATE_NS } else { 0 };
+            let ns = |t: u64| i64::try_from(t).unwrap_or(i64::MAX);
+            (ns(r.start_ns.saturating_sub(lead)), ns(r.end_ns))
+        }
+        None => (i64::MIN, i64::MAX),
+    };
     let spec = CopySpec {
+        start,
+        end,
         keep_columns: keep.as_ref().map(|k| k as &dyn ColumnFilter),
         writer_props: Some(metriken_archive::segment_props(
             metriken_archive::default_compression(),
@@ -477,6 +645,26 @@ fn build_dendro_report(
         .map_err(err)?;
 
     let sources = dst.read_sources().map_err(err)?;
+    if range.is_some() {
+        let mut rows = 0u64;
+        for source in &sources {
+            for stream in dst.all_streams(source.id).map_err(err)? {
+                if table_of(&stream).is_some() {
+                    continue;
+                }
+                rows += dst
+                    .segments_overlapping(source.id, &stream, i64::MIN, i64::MAX)
+                    .map_err(err)?
+                    .iter()
+                    .map(|seg| seg.meta.rows)
+                    .sum::<u64>();
+                rows += dst.live_wal_span(source.id, &stream).map_err(err)?.rows;
+            }
+        }
+        if rows == 0 {
+            return Err("the time range holds no rows".to_string());
+        }
+    }
     for source in &sources {
         let streams = dst.all_streams(source.id).map_err(err)?;
         let tables: BTreeSet<&str> = streams
@@ -512,6 +700,12 @@ fn build_dendro_report(
     dst.serialize().map_err(err)
 }
 
+/// The row-time interval at which metriken-archive's writer restates a long
+/// table's live occupants, in nanoseconds: `WriterConfig::default()`'s
+/// `restate_every_ns`, which needs the writer and so is not reachable from
+/// here. The binary's tests pin the two together.
+pub const OCCUPANT_RESTATE_NS: u64 = 300_000_000_000;
+
 /// One side of a parquet compare: its bytes and the columns to keep (`None`
 /// keeps all — an untrimmed save).
 pub struct ParquetReportSide<'a> {
@@ -522,19 +716,29 @@ pub struct ParquetReportSide<'a> {
 /// Build a `.rez` report by ingesting parquet sides, each as one windowless
 /// recording — the `.rez` replacement for a `.parquet.ab.tar`. `trimmed`
 /// stamps the report marker (true when the sides were column-projected).
+/// `range` keeps only the rows inside it, on every side.
 pub fn build_rez_report_from_parquets(
     sides: &[ParquetReportSide<'_>],
     trimmed: bool,
+    range: Option<TimeRange>,
     selection_json: &str,
     events_json: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     use rez::parquet_ingest::ingest_parquet_bytes;
     use rez::rez_sqlite::RezDb;
 
+    let ranged: Vec<Vec<u8>> = match range {
+        Some(r) => sides
+            .iter()
+            .map(|side| parquet_rows_in(side.bytes, r))
+            .collect::<Result<_, _>>()?,
+        None => Vec::new(),
+    };
     let mut dst = RezDb::create_in_memory()?;
     dst.transaction(|tx| {
-        for side in sides {
-            ingest_parquet_bytes(side.bytes, tx, side.keep_metrics)?;
+        for (i, side) in sides.iter().enumerate() {
+            let bytes = ranged.get(i).map_or(side.bytes, Vec::as_slice);
+            ingest_parquet_bytes(bytes, tx, side.keep_metrics)?;
         }
         Ok(())
     })?;
@@ -630,6 +834,7 @@ mod tests {
             }],
             trim_columns: true,
             events: vec![],
+            trim_range_ms: None,
         };
         let kept = resolve_kept_columns(&payload, &reader, Side::Baseline);
         assert!(kept.contains("timestamp"));
@@ -649,6 +854,7 @@ mod tests {
             }],
             trim_columns: true,
             events: vec![],
+            trim_range_ms: None,
         };
         let kept = resolve_kept_columns(&payload, &reader, Side::Experiment);
         assert!(kept.contains("m_a"));
@@ -666,6 +872,7 @@ mod tests {
             }],
             trim_columns: true,
             events: vec![],
+            trim_range_ms: None,
         };
         let kept_b = resolve_kept_columns(&payload, &reader, Side::Baseline);
         let kept_e = resolve_kept_columns(&payload, &reader, Side::Experiment);
@@ -723,6 +930,7 @@ mod tests {
             }],
             trim_columns: true,
             events: vec![],
+            trim_range_ms: None,
         };
         let body = r#"{"version":1,"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
         let out = save_single_parquet(bytes, &payload, body, &reader, true).unwrap();
@@ -752,6 +960,7 @@ mod tests {
             }],
             trim_columns: false,
             events: vec![],
+            trim_range_ms: None,
         };
         let selection = r#"{"version":1,"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
         let out = save_single_parquet(bytes, &payload, selection, &reader, false).unwrap();
@@ -806,6 +1015,7 @@ mod tests {
             }],
             trim_columns: true,
             events: vec![],
+            trim_range_ms: None,
         };
         let body = r#"{"version":1,"entries":[]}"#;
         // Manifest bytes are opaque to this crate; just hand it a valid
@@ -881,6 +1091,7 @@ mod tests {
                 id: None,
                 chart_id: Some("c1".into()),
             }],
+            trim_range_ms: None,
         };
         let body = r#"{"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
         let out = save_single_parquet(bytes, &payload, body, &reader, true).unwrap();
@@ -907,6 +1118,7 @@ mod tests {
             }],
             trim_columns: true,
             events: vec![],
+            trim_range_ms: None,
         };
         let body = r#"{"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
         let out = save_single_parquet(bytes, &payload, body, &reader, true).unwrap();
@@ -940,6 +1152,7 @@ mod tests {
                 id: None,
                 chart_id: None,
             }],
+            trim_range_ms: None,
         };
         let body = r#"{"entries":[]}"#;
         let manifest_bytes = br#"{"version":1,"baseline":{"alias":"a","sources":["svc"]},"experiment":{"alias":"b","sources":["svc"]}}"#;
@@ -1051,7 +1264,8 @@ mod tests {
                 keep_metrics: None,
             },
         ];
-        let out = build_rez_report_from_parquets(&sides, true, r#"{"entries":[]}"#, None).unwrap();
+        let out =
+            build_rez_report_from_parquets(&sides, true, None, r#"{"entries":[]}"#, None).unwrap();
 
         let db = RezDb::open_bytes(out).unwrap();
         let recs = db.read_recordings().unwrap();
@@ -1080,6 +1294,7 @@ mod tests {
                 keep_metrics: None,
             }],
             false,
+            None,
             "{}",
             None,
         )
@@ -1094,8 +1309,8 @@ mod tests {
         }
 
         let keep: BTreeSet<String> = ["cpu_cycles".to_string()].into_iter().collect();
-        let out =
-            build_rez_report_from_rez(&source, Some(&keep), r#"{"entries":[1]}"#, None).unwrap();
+        let out = build_rez_report_from_rez(&source, Some(&keep), None, r#"{"entries":[1]}"#, None)
+            .unwrap();
         let db = RezDb::open_bytes(out).unwrap();
         let md = &db.read_recordings().unwrap()[0].meta.metadata;
         assert_eq!(
@@ -1106,5 +1321,144 @@ mod tests {
             md.get(KEY_REPORT).map(String::as_str),
             Some(REPORT_VALUE_TRIMMED)
         );
+    }
+
+    /// The timestamps (ns) of a parquet's rows.
+    fn row_timestamps(bytes: &[u8]) -> Vec<u64> {
+        let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))
+            .unwrap()
+            .build()
+            .unwrap();
+        let mut out = Vec::new();
+        for batch in reader {
+            let batch = batch.unwrap();
+            let col = batch.schema().index_of("timestamp").unwrap();
+            let ts = batch
+                .column(col)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap();
+            out.extend(ts.values().iter().copied());
+        }
+        out
+    }
+
+    fn ranged_payload(start: f64, end: f64, trim_columns: bool) -> ReportPayload {
+        ReportPayload {
+            entries: vec![ReportEntry {
+                promql_query: "m_a".into(),
+                promql_query_experiment: None,
+            }],
+            trim_columns,
+            events: vec![],
+            trim_range_ms: Some(TrimRangeMs { start, end }),
+        }
+    }
+
+    #[test]
+    fn time_range_converts_ms_to_ns_and_rejects_bad_ranges() {
+        let p = ranged_payload(1500.0, 2500.5, true);
+        assert_eq!(
+            p.time_range().unwrap(),
+            Some(TimeRange {
+                start_ns: 1_500_000_000 - RANGE_SLACK_NS,
+                end_ns: 2_500_500_000 + RANGE_SLACK_NS,
+            })
+        );
+        assert!(ranged_payload(3.0, 2.0, true).time_range().is_err());
+        assert!(ranged_payload(f64::NAN, 2.0, true).time_range().is_err());
+        let body: ReportPayload =
+            serde_json::from_str(r#"{"trim_range_ms":{"start":1000,"end":2000}}"#).unwrap();
+        assert_eq!(
+            body.time_range().unwrap(),
+            Some(TimeRange {
+                start_ns: 1_000_000_000 - RANGE_SLACK_NS,
+                end_ns: 2_000_000_000 + RANGE_SLACK_NS,
+            })
+        );
+    }
+
+    /// A range keeps only the rows inside it, with or without a column trim.
+    #[test]
+    fn single_parquet_keeps_only_rows_in_the_range() {
+        let sec = 1_000_000_000u64;
+        for trim_columns in [true, false] {
+            let (bytes, reader) = build_test(true);
+            let payload = ranged_payload(1500.0, 3000.0, trim_columns);
+            let out = save_single_parquet(bytes, &payload, "{}", &reader, trim_columns).unwrap();
+            assert_eq!(
+                row_timestamps(&out),
+                vec![2 * sec, 3 * sec],
+                "trim_columns={trim_columns}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_range_holding_no_rows_is_an_error() {
+        let (bytes, reader) = build_test(true);
+        let payload = ranged_payload(10_000.0, 20_000.0, true);
+        let err = save_single_parquet(bytes, &payload, "{}", &reader, true).unwrap_err();
+        assert!(err.contains("no rows"), "{err}");
+    }
+
+    /// A parquet compare keeps only each side's rows inside the range.
+    #[test]
+    fn parquet_compare_keeps_only_rows_in_the_range() {
+        use rez::rez_sqlite::RezDb;
+        let a = rez_test_parquet("redis", "cpu_usage", "cpu_cycles");
+        let b = rez_test_parquet("valkey", "cpu_usage", "cpu_cycles");
+        let all = row_timestamps(&a);
+        assert!(all.len() >= 3, "fixture has rows to cut: {all:?}");
+        let (lo, hi) = (all[1], all[all.len() - 2]);
+        let sides = [
+            ParquetReportSide {
+                bytes: &a,
+                keep_metrics: None,
+            },
+            ParquetReportSide {
+                bytes: &b,
+                keep_metrics: None,
+            },
+        ];
+        let range = TimeRange {
+            start_ns: lo,
+            end_ns: hi,
+        };
+        let out = build_rez_report_from_parquets(&sides, false, Some(range), "{}", None).unwrap();
+        let db = RezDb::open_bytes(out).unwrap();
+        let recs = db.read_recordings().unwrap();
+        assert_eq!(recs.len(), 2);
+        for rec in &recs {
+            let tables = db.all_samplers(rec.id).unwrap();
+            assert!(!tables.is_empty());
+            for table in tables {
+                for seg in db
+                    .segments_overlapping(rec.id, &table, 0, u64::MAX)
+                    .unwrap()
+                {
+                    let m = &seg.meta;
+                    assert!(
+                        m.first_ts >= lo && m.last_ts <= hi,
+                        "{table}: {}..{} outside {lo}..{hi}",
+                        m.first_ts,
+                        m.last_ts
+                    );
+                }
+            }
+        }
+    }
+
+    /// A window whose ends came through browser f64 seconds keeps the rows
+    /// it starts and ends on.
+    #[test]
+    fn a_window_on_row_times_keeps_its_edge_rows() {
+        let first: u64 = 1_790_144_092_001_835_800;
+        let last: u64 = first + 34_677_000_000_000;
+        // As the page computes them: seconds as f64, times 1000.
+        let ms = |ns: u64| (ns as f64 / 1e9) * 1000.0;
+        let p = ranged_payload(ms(first), ms(last), false);
+        let r = p.time_range().unwrap().unwrap();
+        assert!(r.contains(first) && r.contains(last), "{r:?}");
     }
 }

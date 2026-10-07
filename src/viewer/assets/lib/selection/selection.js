@@ -5,7 +5,7 @@
 import { ChartsState, Chart } from '../charts/chart.js';
 import { CompareChartWrapper } from '../viewer_core.js';
 import { compareToggle } from '../ui/chart_controls.js';
-import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
+import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, getRangeOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
 import { notify, showSaveModal } from '../ui/overlays.js';
 import { isHistogramPlot } from '../charts/metric_types.js';
 import { migrateSelection, normalizeAnchor, normalizeFamily, SELECTION_SCHEMA_VERSION } from './selection_migration.js';
@@ -770,6 +770,30 @@ const loadJsonIntoSelection = (json, filename) => {
     }
 };
 
+// The time range the charts show, { start, end } in ms since the epoch, or
+// null when they show the whole recording. The charts are fetched for the
+// range override (or the whole recording), and a chart zoom narrows that:
+// as percentages of the fetched window, or, when percentages could not be
+// derived, as ms values from a drag zoom.
+const shownWindowMs = (cs, attrs) => {
+    const override = getRangeOverride();
+    const zoom = cs && !cs.isDefaultZoom() ? cs.zoomLevel : null;
+    if (!override && !zoom) return null;
+    const w0 = override ? override.start * 1000 : attrs.start_time;
+    const w1 = override ? override.end * 1000 : attrs.end_time;
+    if (!Number.isFinite(w0) || !Number.isFinite(w1)) return null;
+    if (zoom && Number.isFinite(zoom.start) && Number.isFinite(zoom.end)) {
+        return {
+            start: w0 + (zoom.start / 100) * (w1 - w0),
+            end: w0 + (zoom.end / 100) * (w1 - w0),
+        };
+    }
+    if (zoom && Number.isFinite(zoom.startValue) && Number.isFinite(zoom.endValue)) {
+        return { start: zoom.startValue, end: zoom.endValue };
+    }
+    return { start: w0, end: w1 };
+};
+
 const saveToParquet = async (store, attrs) => {
     const isCompare = !!attrs.compareMode;
     // Compare mode produces an A/B tarball — modal default uses both
@@ -782,13 +806,14 @@ const saveToParquet = async (store, attrs) => {
         )
         : (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-report';
     const defaultExt = isCompare ? '.parquet.ab.tar' : '.parquet';
-    const cs = attrs.chartsState;
-    const hasZoom = cs && !cs.isDefaultZoom();
+    // Compare mode is not offered a time trim: the experiment's rows are at
+    // its own times, which the baseline's window does not describe.
+    const shown = isCompare ? null : shownWindowMs(attrs.chartsState, attrs);
     const checkboxes = [
         { key: 'trim_columns', label: 'Trim columns to charts in this report', checked: true },
     ];
-    if (hasZoom) {
-        checkboxes.push({ key: 'trim', label: 'Trim to selected time range', checked: false });
+    if (shown) {
+        checkboxes.push({ key: 'trim', label: 'Trim to the time range shown', checked: false });
     }
     const result = await showSaveModal(defaultPrefix, defaultExt, checkboxes);
     if (!result) return;
@@ -797,16 +822,12 @@ const saveToParquet = async (store, attrs) => {
     const payload = buildPayload(store, attrs);
     payload.trim_columns = result.trim_columns !== false;
 
-    // When trimming, compute the absolute time range (ms) from the zoom percentage
-    if (trimToSelection) {
-        const zoom = cs?.globalZoom || cs?.zoomLevel;
-        if (zoom && attrs.start_time != null && attrs.end_time != null) {
-            const total = attrs.end_time - attrs.start_time;
-            payload.trim_range_ms = {
-                start: attrs.start_time + (zoom.start / 100) * total,
-                end: attrs.start_time + (zoom.end / 100) * total,
-            };
-        }
+    if (trimToSelection && shown) {
+        payload.trim_range_ms = shown;
+        // The report holds only this window: describe it, and drop a chart
+        // zoom, whose percentages would narrow the trimmed data again.
+        payload.time_range = { start_ms: shown.start, end_ms: shown.end };
+        payload.zoom = null;
     }
 
     try {

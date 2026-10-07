@@ -1018,6 +1018,7 @@ impl WasmCaptureRegistry {
         use std::collections::BTreeSet;
         let payload: report_save::ReportPayload = serde_json::from_str(payload_json)
             .map_err(|e| JsValue::from_str(&format!("invalid selection payload: {e}")))?;
+        let range = payload.time_range().map_err(|e| JsValue::from_str(&e))?;
 
         let baseline = self
             .baseline
@@ -1053,6 +1054,7 @@ impl WasmCaptureRegistry {
             return ::report_save::build_rez_report_from_rez(
                 rez_bytes,
                 keep.as_ref(),
+                range,
                 payload_json,
                 events_json.as_deref(),
             )
@@ -1085,6 +1087,7 @@ impl WasmCaptureRegistry {
                 ::report_save::build_rez_report_from_parquets(
                     &sides,
                     payload.trim_columns,
+                    range,
                     payload_json,
                     events_json.as_deref(),
                 )

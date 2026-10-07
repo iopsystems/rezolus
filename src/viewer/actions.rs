@@ -718,6 +718,10 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                 .into_response();
             }
         };
+        let range = match payload.time_range() {
+            Ok(r) => r,
+            Err(e) => return ApiResponse::<()>::err(e, "bad_data").into_response(),
+        };
         let baseline_data = state.baseline_data();
         let trim_columns = payload.trim_columns;
         let experiment_path = state.resolve_experiment_parquet_path();
@@ -770,6 +774,7 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                     super::report_save_rez::build_rez_report(
                         &source,
                         keep.as_ref(),
+                        range,
                         &body,
                         events_json.as_deref(),
                     )
@@ -832,6 +837,7 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                     ::report_save::build_rez_report_from_parquets(
                         &sides,
                         trim_columns,
+                        range,
                         &body,
                         events_json.as_deref(),
                     )

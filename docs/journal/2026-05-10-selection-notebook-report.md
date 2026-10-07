@@ -190,17 +190,26 @@ compare-mode arc; the series renumbered to "PR 4 of 4" at #919.
   needed; belongs with the existing `titleOverride`/preamble machinery in
   `selection/selection.js`.
 
-- **Row / time trim** (`trim_range_ms`). The frontend already sends the field in
-  the save payload; the server ignores it (spec non-goal for PR4). Separate PR
-  when someone needs file size reduction by time range.
+- **Row / time trim** (`trim_range_ms`). Done 2026-10-06 (#1423). The
+  payload carries the window the charts show (the range override, narrowed
+  by a chart zoom). A parquet report keeps the rows inside it
+  (`report_save::rewrite_parquet_bytes`); a `.rez` or dendro report keeps the
+  segments overlapping it through the copy's `start`/`end`, starting
+  `OCCUPANT_RESTATE_NS` early when the source has long tables, as hindsight's
+  ranged dump does. A 1-hour trim of a 9.6-hour dendro recording held
+  09:55:01 to 11:04:56 UTC for 10:00 to 11:00 UTC and was 154 MB, against 1.27 GB of
+  segments in the source. Compare mode is not offered the trim: the
+  experiment's rows are at its own times.
 
-- **Live-mode trim.** `save_with_selection` in live mode converts msgpack
-  snapshots to parquet at save time; the trim path is skipped. Separate concern.
+- **Live-mode trim.** Superseded: live mode saves a dendro report through the
+  archive path, which applies the range (#1423, not exercised against a live
+  agent).
 
 - **`crates/viewer/src/report_save.rs` duplication.** The WASM crate's trim
   implementation is a parallel copy of `src/viewer/report_save.rs` operating on
   `Bytes`. Refactor into a shared workspace crate if the surface grows beyond
-  the current ~150 lines.
+  the current ~150 lines. Done in #924: both are thin wrappers over
+  `crates/report-save`.
 
 - **Schema version drift guard.** If reports get shared widely and notes
   authored against one parquet get re-applied against a wrong one, add an

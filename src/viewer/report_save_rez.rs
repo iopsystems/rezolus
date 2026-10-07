@@ -15,16 +15,24 @@ use std::path::Path;
 
 /// Build a `.rez` report from `source_path` — see
 /// `report_save::build_rez_report_from_rez` for the semantics (trim when
-/// `keep_metrics` is `Some`, embed selection/events, stamp the report marker).
+/// `keep_metrics` is `Some`, keep the segments overlapping `range`, embed
+/// selection/events, stamp the report marker).
 pub fn build_rez_report(
     source_path: &Path,
     keep_metrics: Option<&BTreeSet<String>>,
+    range: Option<::report_save::TimeRange>,
     selection_json: &str,
     events_json: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     let bytes = std::fs::read(source_path)
         .map_err(|e| format!("failed to read {}: {e}", source_path.display()))?;
-    ::report_save::build_rez_report_from_rez(&bytes, keep_metrics, selection_json, events_json)
+    ::report_save::build_rez_report_from_rez(
+        &bytes,
+        keep_metrics,
+        range,
+        selection_json,
+        events_json,
+    )
 }
 
 #[cfg(test)]
@@ -45,7 +53,7 @@ mod tests {
         populated_v3_rez(&src, "baseline", &["cpu_usage", "scheduler"], 6);
 
         let keep: BTreeSet<String> = ["0".to_string()].into_iter().collect();
-        let bytes = build_rez_report(&src, Some(&keep), r#"{"entries":[]}"#, None).unwrap();
+        let bytes = build_rez_report(&src, Some(&keep), None, r#"{"entries":[]}"#, None).unwrap();
 
         let out = dir.path().join("report.rez");
         std::fs::write(&out, &bytes).unwrap();
@@ -77,7 +85,7 @@ mod tests {
         let src = dir.path().join("src.rez");
         populated_v3_rez(&src, "baseline", &["cpu_usage", "scheduler"], 6);
 
-        let bytes = build_rez_report(&src, None, r#"{"entries":[]}"#, None).unwrap();
+        let bytes = build_rez_report(&src, None, None, r#"{"entries":[]}"#, None).unwrap();
         let out = dir.path().join("report.rez");
         std::fs::write(&out, &bytes).unwrap();
         let db = RezDb::open(&out).unwrap();
@@ -113,7 +121,7 @@ mod tests {
             db.update_recording_metadata(recs[0].id, &md).unwrap();
         }
 
-        let bytes = build_rez_report(&src, None, "{}", None).unwrap();
+        let bytes = build_rez_report(&src, None, None, "{}", None).unwrap();
         let out = dir.path().join("report.rez");
         std::fs::write(&out, &bytes).unwrap();
         let db = RezDb::open(&out).unwrap();
@@ -176,8 +184,14 @@ mod tests {
         let src = dir.path().join("src.dendro");
         crate::dendro_copy::fixtures::recorded(&src, 10, false);
 
-        let bytes =
-            build_rez_report(&src, Some(&set(&["task_ops"])), r#"{"entries":[]}"#, None).unwrap();
+        let bytes = build_rez_report(
+            &src,
+            Some(&set(&["task_ops"])),
+            None,
+            r#"{"entries":[]}"#,
+            None,
+        )
+        .unwrap();
         assert!(metriken_archive::DendroCatalog::is_archive_bytes(&bytes));
         let (streams, md) = dendro_report(&bytes);
         assert_eq!(
@@ -219,7 +233,7 @@ mod tests {
         let src = dir.path().join("src.dendro");
         crate::dendro_copy::fixtures::recorded(&src, 10, true);
 
-        let bytes = build_rez_report(&src, Some(&set(&["mem_free"])), "{}", None).unwrap();
+        let bytes = build_rez_report(&src, Some(&set(&["mem_free"])), None, "{}", None).unwrap();
         let (streams, _) = dendro_report(&bytes);
         assert_eq!(streams, vec!["memory/meminfo".to_string()]);
     }
@@ -232,7 +246,7 @@ mod tests {
         let src = dir.path().join("src.dendro");
         crate::dendro_copy::fixtures::recorded(&src, 10, true);
 
-        let bytes = build_rez_report(&src, None, "{}", Some(r#"{"events":[]}"#)).unwrap();
+        let bytes = build_rez_report(&src, None, None, "{}", Some(r#"{"events":[]}"#)).unwrap();
         let (streams, md) = dendro_report(&bytes);
         assert_eq!(
             streams,
@@ -247,5 +261,99 @@ mod tests {
             md.get(KEY_EVENTS).map(String::as_str),
             Some(r#"{"events":[]}"#)
         );
+    }
+
+    /// report-save's restatement lead is the writer's restatement period.
+    #[test]
+    fn the_occupant_lead_is_the_writers_restatement_period() {
+        assert_eq!(
+            ::report_save::OCCUPANT_RESTATE_NS,
+            metriken_archive::WriterConfig::default().restate_every_ns
+        );
+    }
+
+    /// A ranged dendro report drops segments wholly before the range less
+    /// the restatement lead, and the threads it keeps are still named.
+    #[test]
+    fn a_ranged_dendro_report_keeps_the_range_and_its_occupant_names() {
+        use crate::dendro_copy::fixtures::{recorded, ANCHOR, SECOND};
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src.dendro");
+        // Longer than the lead, so the copy can start after the first row.
+        recorded(&src, 700, true);
+
+        // Starts after the restatement at 600 s, so a thread is named only
+        // by a restatement before the range.
+        let range = ::report_save::TimeRange {
+            start_ns: ANCHOR + 605 * SECOND,
+            end_ns: ANCHOR + 650 * SECOND,
+        };
+        let bytes = build_rez_report(&src, None, Some(range), "{}", None).unwrap();
+        let out = dir.path().join("report.dendro");
+        std::fs::write(&out, &bytes).unwrap();
+
+        let db = dendro::archive::Archive::open(&out).unwrap();
+        let id = db.read_sources().unwrap()[0].id;
+        let lead_start = range.start_ns - ::report_save::OCCUPANT_RESTATE_NS;
+        for stream in db.all_streams(id).unwrap() {
+            // Occupant streams hold changes and restatements, not a row a tick.
+            if ::rez::occupants::table_of(&stream).is_some() {
+                continue;
+            }
+            let segs = db
+                .segments_overlapping(id, &stream, i64::MIN, i64::MAX)
+                .unwrap();
+            assert!(!segs.is_empty(), "{stream} kept");
+            let first = segs.iter().map(|s| s.meta.first_ts).min().unwrap() as u64;
+            let last = segs.iter().map(|s| s.meta.last_ts).max().unwrap() as u64;
+            // Whole segments of 4 rows: up to 3 rows beyond each bound.
+            assert!(
+                first + 4 * SECOND > lead_start,
+                "{stream} starts at {first}"
+            );
+            assert!(
+                first <= lead_start,
+                "{stream} starts at {first}, after the lead"
+            );
+            assert!(
+                last >= range.end_ns && last < range.end_ns + 4 * SECOND,
+                "{stream} ends at {last}"
+            );
+        }
+        let rates = task_rates(&out);
+        assert_eq!(rates.len(), 2, "both threads named: {rates:?}");
+        assert!(rates.iter().all(|(comm, _)| !comm.is_empty()));
+    }
+
+    /// A ranged `.rez` report keeps the segments overlapping the range, and a
+    /// range after the data is an error, as it is for a parquet.
+    #[test]
+    fn a_ranged_rez_report_drops_segments_outside_the_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src.rez");
+        populated_v3_rez(&src, "baseline", &["cpu_usage"], 6);
+        const ANCHOR: u64 = 1_700_000_000_000_000_000;
+
+        let after = ::report_save::TimeRange {
+            start_ns: ANCHOR + 100_000_000_000,
+            end_ns: ANCHOR + 200_000_000_000,
+        };
+        let inside = ::report_save::TimeRange {
+            start_ns: ANCHOR + 2_000_000_000,
+            end_ns: ANCHOR + 3_000_000_000,
+        };
+        let err = build_rez_report(&src, None, Some(after), "{}", None).unwrap_err();
+        assert!(err.contains("no rows"), "{err}");
+        let rows = |range| {
+            let bytes = build_rez_report(&src, None, Some(range), "{}", None).unwrap();
+            let db = RezDb::open_bytes(bytes).unwrap();
+            let id = db.read_recordings().unwrap()[0].id;
+            db.segments_overlapping(id, "cpu_usage", 0, u64::MAX)
+                .unwrap()
+                .iter()
+                .map(|s| s.meta.rows)
+                .sum::<u64>()
+        };
+        assert!(rows(inside) >= 2, "the rows inside the range are kept");
     }
 }
