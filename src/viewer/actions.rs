@@ -737,24 +737,28 @@ pub async fn save_capture(State(state): State<Arc<AppState>>) -> Response {
     finalize_attachment(result, "rezolus-capture.dendro", parquet_attachment)
 }
 
-/// File mode: column-trim the loaded parquet (or repack a combined-A/B
-/// tarball with per-side trims) using the saved selection, embed the
+/// File mode: column-trim the loaded parquet (or build a 2-recording `.rez`
+/// from a parquet compare) using the saved selection, embed the
 /// selection JSON in the output footer, and stream it back. Live mode takes
 /// the archive branch: `parquet_path` is the live archive, and the report is
 /// a trimmed `.dendro`.
 ///
-/// The report is built in a query slot: resolving the kept columns opens
-/// the recording's tables, and building the report reads all of it.
+/// The report is built in a query slot: resolving the kept columns builds a
+/// reader for each table a saved query touches, and the build reads the
+/// recording. What the report is built from is read before the slot wait,
+/// together with `parquet_path`, so a load during the wait does not pair one
+/// recording's path with another's data.
 pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: String) -> Response {
     // In live mode `parquet_path` is the live archive: hold its directory
     // until the report is built, so a reset meanwhile does not delete it.
     // Both are read under the session lock, which `install_live` holds while
     // it changes them.
-    let (parquet_path, live_hold) = {
+    let (parquet_path, live_hold, sources) = {
         let session = state.live_session.lock();
         (
             state.parquet_path.read().clone(),
             session.as_ref().map(|s| s.archive().1),
+            ReportSources::read(&state),
         )
     };
     // Live mode sets `parquet_path` to its archive; with no file and no live
@@ -777,26 +781,45 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
         Ok(r) => r,
         Err(e) => return ApiResponse::<()>::err(e, "bad_data").into_response(),
     };
-    on_query_slot(&state, move |state| {
+    on_query_slot(&state, move |_| {
         let _hold = live_hold;
-        // A panic is reported as a failed save, as a failed build is.
-        let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            build_report(state, &path, &payload, &selection_json, range)
-        }));
-        let (result, filename) = match built {
-            Ok((result, filename)) => (Ok(result), filename),
-            Err(_) => (Err("the report build panicked"), "rezolus-report"),
-        };
-        finalize_attachment(result, filename, parquet_attachment)
+        let (result, filename) = build_report(&sources, &path, &payload, &selection_json, range);
+        finalize_build(result, filename, parquet_attachment)
     })
     .await
 }
 
+/// The data a report is built from, read from the state at one time.
+struct ReportSources {
+    /// Every attached capture, anchor first.
+    captures: Vec<Arc<dyn MetricsSource>>,
+    baseline: Arc<dyn MetricsSource>,
+    /// The experiment parquet's path and data, when one is attached.
+    experiment: Option<(PathBuf, Arc<dyn MetricsSource>)>,
+}
+
+impl ReportSources {
+    fn read(state: &AppState) -> Self {
+        ReportSources {
+            captures: state
+                .captures
+                .capture_ids()
+                .iter()
+                .filter_map(|id| state.captures.get_by_id(id))
+                .collect(),
+            baseline: state.baseline_data(),
+            experiment: state
+                .resolve_experiment_parquet_path()
+                .zip(state.captures.get(CaptureId::Experiment)),
+        }
+    }
+}
+
 /// Build the report for the recording at `path` and name its download: a
-/// `.rez` or `.dendro` for an archive source or a parquet compare, a
-/// `.parquet` for a single parquet.
+/// `.dendro` for a dendro source, a `.rez` for a `.rez` source or a parquet
+/// compare, a `.parquet` for a single parquet.
 fn build_report(
-    state: &AppState,
+    sources: &ReportSources,
     path: &std::path::Path,
     payload: &report_save::ReportPayload,
     selection_json: &str,
@@ -809,11 +832,10 @@ fn build_report(
         serde_json::to_string(&serde_json::json!({ "events": &payload.events })).ok()
     };
 
-    // `.rez` source: save a trimmed `.rez` report (single recording or a
-    // 2-recording A/B stay one archive), NOT a parquet or a
-    // `.parquet.ab.tar`. This must come before the compare/single branches
-    // below, which assume a parquet source and would fail trying to reparse
-    // the SQLite container as parquet.
+    // Archive source (`.rez` or dendro): save a trimmed archive in the same
+    // container, one archive for a single recording or a 2-recording A/B.
+    // This branch comes first because the compare and single branches read
+    // the source as parquet.
     if crate::recorder::rez::detect_rez_format(path)
         .map(|f| f != crate::recorder::rez::RezFormat::NotRez)
         .unwrap_or(false)
@@ -824,19 +846,17 @@ fn build_report(
         // per-recording trim, but never lossy.
         let keep: Option<std::collections::BTreeSet<String>> = trim_columns.then(|| {
             let mut set = std::collections::BTreeSet::new();
-            for (i, id) in state.captures.capture_ids().into_iter().enumerate() {
-                if let Some(source) = state.captures.get_by_id(&id) {
-                    let side = if i == 0 {
-                        ::report_save::Side::Baseline
-                    } else {
-                        ::report_save::Side::Experiment
-                    };
-                    set.extend(::report_save::resolve_kept_columns(
-                        payload,
-                        source.as_ref(),
-                        side,
-                    ));
-                }
+            for (i, source) in sources.captures.iter().enumerate() {
+                let side = if i == 0 {
+                    ::report_save::Side::Baseline
+                } else {
+                    ::report_save::Side::Experiment
+                };
+                set.extend(::report_save::resolve_kept_columns(
+                    payload,
+                    source.as_ref(),
+                    side,
+                ));
             }
             set
         });
@@ -861,10 +881,8 @@ fn build_report(
     // `.rez` source never reaches here — it returned above. Labels come from
     // each parquet's own source metadata, so there is no manifest to
     // synthesize.
-    let baseline_data = state.baseline_data();
-    let experiment_path = state.resolve_experiment_parquet_path();
-    let experiment_data = state.captures.get(CaptureId::Experiment);
-    if let (Some(experiment_path), Some(experiment_data)) = (experiment_path, experiment_data) {
+    let baseline_data = &sources.baseline;
+    if let Some((experiment_path, experiment_data)) = &sources.experiment {
         let keep = |data: &dyn MetricsSource, side| -> Option<std::collections::BTreeSet<String>> {
             trim_columns.then(|| {
                 ::report_save::resolve_kept_columns(payload, data, side)
@@ -877,7 +895,7 @@ fn build_report(
         let result = (|| -> Result<Vec<u8>, String> {
             let baseline_bytes =
                 std::fs::read(path).map_err(|e| format!("failed to read baseline: {e}"))?;
-            let experiment_bytes = std::fs::read(&experiment_path)
+            let experiment_bytes = std::fs::read(experiment_path)
                 .map_err(|e| format!("failed to read experiment: {e}"))?;
             let sides = [
                 ::report_save::ParquetReportSide {
@@ -912,25 +930,36 @@ fn build_report(
     (result, "rezolus-report.parquet")
 }
 
-/// Convert a blocking build's outcome into a download Response, logging
-/// success and the two failure modes (build error vs. panic).
-fn finalize_attachment<E: std::fmt::Display>(
-    result: Result<Result<Vec<u8>, String>, E>,
+/// Convert a `spawn_blocking` outcome into a download Response, logging
+/// success and the two failure modes (build error vs. task panic).
+fn finalize_attachment(
+    result: Result<Result<Vec<u8>, String>, tokio::task::JoinError>,
     filename: &'static str,
     attach: fn(&str, Vec<u8>) -> Response,
 ) -> Response {
     match result {
-        Ok(Ok(output)) => {
-            info!("saved report {filename} ({} bytes)", output.len());
-            attach(filename, output)
-        }
-        Ok(Err(e)) => {
-            error!("report build failed: {e}");
-            server_error(format!("report build failed: {e}"))
-        }
+        Ok(built) => finalize_build(built, filename, attach),
         Err(e) => {
             error!("report task panicked: {e}");
             server_error("internal error")
+        }
+    }
+}
+
+/// Convert a build's result into a download Response, logging it.
+fn finalize_build(
+    result: Result<Vec<u8>, String>,
+    filename: &'static str,
+    attach: fn(&str, Vec<u8>) -> Response,
+) -> Response {
+    match result {
+        Ok(output) => {
+            info!("saved report {filename} ({} bytes)", output.len());
+            attach(filename, output)
+        }
+        Err(e) => {
+            error!("report build failed: {e}");
+            server_error(format!("report build failed: {e}"))
         }
     }
 }

@@ -68,6 +68,7 @@
   `--query-concurrency`. Working out which columns to keep, which on an
   archive opens the tables each saved query touches, ran on an async worker
   before the build, and the build ran on the blocking pool outside any slot.
+  A save now waits for a free slot, as a query does.
 - `rezolus view` loads an upload, a URL or an attached experiment, and
   rebuilds the dashboards on a detach, on the blocking pool under
   `--query-concurrency`; these requests now wait for a free slot as queries
