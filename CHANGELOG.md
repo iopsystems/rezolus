@@ -607,6 +607,17 @@
 
 ### Fixed
 
+- In live mode, Record (a reset to a new recording) drops a refresh still in
+  flight. A refresh begun before the reset could land after it and draw the
+  old recording's data until the next refresh (within 5 s). The reset also
+  clears the cached metadata, so a section opened before the next refresh
+  queries the new recording's time range.
+- The time bar renders, hidden, when the recording has no time span yet. It
+  rendered nothing, and its setup then threw, which stopped the page from
+  drawing its charts; a live Record whose first redraw saw a single sample
+  left the section without charts until the user navigated.
+- An aborted query request rejects. It stayed pending, so a refresh or zoom
+  whose requests were aborted never finished.
 - Save as Report's "Trim to the time range shown" keeps only that range. The
   option sent a range that neither the server nor the browser build read, so
   the report held the whole recording; and it was offered only for a chart zoom, not for a zoom that

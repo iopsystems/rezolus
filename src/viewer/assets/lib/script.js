@@ -87,7 +87,16 @@ const startRecording = async () => {
             notify('error', `Could not reconnect: ${res?.error ?? 'unknown error'}`);
             return;
         }
+        // The server now holds a new recording. A refresh still in flight
+        // reads the old one, so it is aborted and its results dropped, and
+        // the cached metadata (the old recording's time range) goes too.
+        liveGen++;
+        if (liveRefreshController) liveRefreshController.abort();
+        // A superseded refresh may still be waiting on a request that takes
+        // no signal; the next refresh does not wait for it.
+        liveRefreshInProgress = false;
         clearViewerCaches();
+        clearMetadataCache();
         setRecording(true);
         m.redraw();
     } catch (e) {
@@ -186,6 +195,10 @@ const uploadParquet = async (file) => {
 };
 
 let liveRefreshInProgress = false;
+// Bumped when a reset starts a new live recording; a refresh begun under an
+// older value is superseded. The controller aborts that refresh's requests.
+let liveGen = 0;
+let liveRefreshController = null;
 // The baseline extent the last poll of a followed file saw.
 let lastFollowExtent = null;
 
@@ -193,12 +206,19 @@ const refreshCurrentSection = async () => {
     if (liveRefreshInProgress || !getRecording()) return;
 
     liveRefreshInProgress = true;
+    // Superseded when a reset starts a new recording before this lands.
+    const gen = liveGen;
+    const isStale = () => gen !== liveGen;
+    const controller = new AbortController();
+    liveRefreshController = controller;
+    const signal = controller.signal;
     try {
         // A live recording that stopped (the agent refused a reconnect, or a
         // write failed) no longer advances. Say so until dismissed, and stop
         // presenting the view as recording. Checked before the zoom and route
         // checks, so it is seen from a zoomed chart or the query page too.
         const meta = await ViewerApi.getMetadata();
+        if (isStale()) return;
         const liveError = meta?.data?.liveError;
         if (liveError) {
             stopRecording();
@@ -234,23 +254,26 @@ const refreshCurrentSection = async () => {
         if (!section || section === 'query') return;
 
         const data = await ViewerApi.getSection(section, true);
+        if (isStale()) return;
 
         // freshMetadata: TSDB grows continuously in live mode; without
         // this the query window stays frozen at first-fetch maxTime and
         // charts visibly stop updating even though /api/v1/query_range
         // would serve fresh data if asked.
-        const promises = [processDashboardData(data, getActiveCgroupPattern(), currentRoute, { freshMetadata: true })];
+        const promises = [processDashboardData(data, getActiveCgroupPattern(), currentRoute, { freshMetadata: true, isStale, signal })];
         if (getHeatmapEnabled()) {
-            promises.push(fetchSectionHeatmapData(currentRoute, data.groups));
+            promises.push(fetchSectionHeatmapData(currentRoute, data.groups, isStale));
         }
         const [processed] = await Promise.all(promises);
+        if (isStale()) return;
 
         cacheSectionResponse(section, processed);
         m.redraw();
     } catch (e) {
         // Keep existing data on error.
     } finally {
-        liveRefreshInProgress = false;
+        // A superseded refresh leaves the flag to the refreshes after the reset.
+        if (!isStale()) liveRefreshInProgress = false;
     }
 };
 

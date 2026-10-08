@@ -202,11 +202,14 @@ const TimeRangeBar = {
 
         const start = vnode.state.barStart;
         const end = vnode.state.barEnd;
-        const startTime = vnode.attrs.start_time;
-        const endTime = vnode.attrs.end_time;
-
+        // With no span (a new live recording's first sample, or no recording)
+        // the bar is still rendered, hidden: oncreate attaches its handlers
+        // to this DOM, and it runs once.
+        const span = vnode.attrs.end_time - vnode.attrs.start_time;
+        const empty = !span || !Number.isFinite(span);
+        const startTime = empty ? 0 : vnode.attrs.start_time;
+        const endTime = empty ? 1 : vnode.attrs.end_time;
         const totalDuration = endTime - startTime;
-        if (!totalDuration || !isFinite(totalDuration)) return null;
         const selectedStartMs = startTime + (start / 100) * totalDuration;
         const selectedEndMs = startTime + (end / 100) * totalDuration;
 
@@ -274,7 +277,7 @@ const TimeRangeBar = {
             ]);
         };
 
-        const hidden = vnode.attrs.hidden;
+        const hidden = vnode.attrs.hidden || empty;
         const hasLocalZoom = !hidden && chartsState?.zoomSource === 'local';
 
         return m('div.time-range-bar', {
