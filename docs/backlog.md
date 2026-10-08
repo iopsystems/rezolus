@@ -692,9 +692,9 @@ Source: [Rezolus 6.0.0: release readiness](journal/2026-10-08-6-0-release-readin
 
 - **Compatibility fixtures from released versions** — Open. Check in archives
   written by released versions (a tar `.rez` from a 5.17.1 prerelease, a v3
-  `.rez` from 5.18.0, a 5.2x `--stream` `.rez`, a v5.25 `.dendro`, an older
-  parquet, a 6.0 recording) with golden query results; open, query and upgrade
-  each in a test.
+  `.rez` from 5.18.0, a v5.25 `.dendro`, an older parquet, a 6.0 recording)
+  with golden query results; open, query and upgrade each in a test. 5.x's
+  preview `--stream` `.rez` is not included.
 - **Cross-version CI job** — Open. v5.25.1 binary against the current agent,
   the current recorder against a v5.25.1 agent, the v5.25.1 reader on 6.0
   output, the v5.22.1 reader on a 6.0 `.rez` (systemslab's current pin).

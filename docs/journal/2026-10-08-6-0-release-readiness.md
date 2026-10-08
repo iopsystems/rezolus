@@ -20,10 +20,10 @@ Related entries in other repositories, opened the same day:
 
 Every mode that writes an archive defaults to `.dendro`: `record`, the
 `hindsight` buffer and its dumps, the live viewer's temporary archive, and
-Save as Report from a dendro source. `view` (server and WASM), `mcp` and
-every `recording` subcommand that reads an archive reads `.dendro` and `.rez` through `RezReader`,
-which wraps metriken-archive's `ArchiveReader`. Parquet is read through
-`metriken_query::ParquetReader`.
+Save as Report from a dendro source. `view` (server and WASM), `mcp` and every
+`recording` subcommand that reads an archive read `.dendro` and `.rez` through
+`RezReader`, which wraps metriken-archive's `ArchiveReader`. Parquet is read
+through `metriken_query::ParquetReader`.
 
 Measured on 2026-10-08:
 
@@ -73,13 +73,16 @@ recorded.
    replication stream, `rezolus record` records any of them, and one viewer
    implementation reads the result (metriken entry). `cachecannon view` stays
    as a command and moves onto the shared viewer. The pieces become metriken
-   crates: `metriken-storage` (today's `metriken-archive`), the stream's
-   producer side (a `stream` feature of `metriken-exposition` is recommended,
-   a `metriken-streaming` crate is the alternative), `metriken-recorder` (from
+   crates (metriken entry, "Structure"): `metriken-types` (the acquisition
+   window and the `__uid__` label key, below `metriken-core`),
+   `metriken-model` (the data model, with no `metriken` dependency),
+   `metriken-storage` (today's `metriken-archive` with `metriken-segment`'s
+   tables, this repository's `crates/rez` and the parquet reader and writer),
+   the stream route in `metriken-exposition`, `metriken-recorder` (from
    `src/recorder`, with `rezolus record` as its CLI), `metriken-dashboard` and
    `metriken-viewer` (from `crates/dashboard` and the viewer crates, after
-   6.0.0). Applications own their dashboard
-   templates, and the viewer loads them from the archive.
+   6.0.0). Applications own their dashboard templates, and the viewer loads
+   them from the archive.
 
 ## Plan
 
@@ -94,12 +97,14 @@ on request (`record -o x.dendro`, a hindsight `output` ending in `.dendro`,
 - Check in small archives written by released versions under
   `tests/fixtures/`: a tar `.rez` from a 5.17.1 prerelease
   (`v5.17.1-alpha.*`; no stable release wrote tar, since 5.18.0, the first
-  release with `.rez`, writes v3 only), a v3 `.rez` from 5.18.0, a 5.2x
-  `record --stream -o x.rez` (with `caller_rows`), a v5.25 `.dendro`, a
-  parquet from a 5.x release before 5.18, and the 6.0 recording described
-  above. Store golden query results for each; a test
-  opens each, queries it, runs `recording upgrade --to dendro` where it
-  applies, and compares.
+  release with `.rez`, writes v3 only), a v3 `.rez` from 5.18.0, a v5.25
+  `.dendro`, a parquet from a 5.x release before 5.18, and the 6.0 recording
+  described above. Store golden query results for each; a test opens each,
+  queries it, runs `recording upgrade --to dendro` where it applies, and
+  compares. A 5.x `record --stream -o x.rez` (with `caller_rows`) is not
+  included: 5.x's stream support is a preview with no compatibility promise
+  (decided 2026-10-08), and the identity index it wrote is not carried into
+  `metriken-storage`.
 - A CI job that runs the v5.25.1 binary against the current agent, the
   current recorder against a v5.25.1 agent, the v5.25.1 reader on 6.0 output,
   and the v5.22.1 reader on a 6.0 `.rez` (systemslab's current pin).
@@ -189,8 +194,10 @@ reader.
 
 ## Out of scope for 6.0.0
 
-- Moving the recorder and the viewer into metriken crates (metriken entry).
-  6.0.0 ships them from this repository.
+- Moving the viewer into metriken crates (metriken entry, path step 7). The
+  recorder and `crates/rez` move to `metriken-recorder` and `metriken-storage`
+  independently of 6.0.0 (path steps 2 and 4); 6.0.0 ships from whichever
+  side holds them when it is tagged.
 - Segment compaction (dendro `CompactSpec`), and the "20 segments to 1"
   acceptance of #1224's phase 4 that depends on it.
 - #1224's optional phase 5, an in-agent archive, which overlaps #1144.
