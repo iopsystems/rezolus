@@ -170,8 +170,8 @@ pub struct AppState {
     /// pass `--cache-size-mb` to override.
     pub pool: Arc<BufferPool>,
     /// One permit per request that may read a recording at once: a query, a
-    /// dashboard section, or loading an upload, a URL or an experiment, or
-    /// detaching the experiment. See
+    /// dashboard section, saving a report, or loading an upload, a URL or an
+    /// experiment, or detaching the experiment. See
     /// [`default_query_concurrency`] and `--query-concurrency`.
     pub queries: Arc<tokio::sync::Semaphore>,
 }

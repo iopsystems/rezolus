@@ -1063,6 +1063,47 @@ mod query_slot_tests {
         }
     }
 
+    /// Save as Report builds in a query slot: it waits while a query holds
+    /// the only one, and the async worker answers other requests meanwhile.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_report_save_waits_for_a_slot() {
+        use crate::viewer::actions;
+        let (state, entered, release, _) = gated();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("not-a-recording");
+        std::fs::write(&path, b"not a recording").unwrap();
+        *state.parquet_path.write() = Some(path);
+
+        let first = request(1, &state);
+        wait_entered(&entered).await;
+        let save = tokio::spawn(actions::save_with_selection(
+            State(Arc::clone(&state)),
+            r#"{"entries":[],"trim_columns":false}"#.to_string(),
+        ));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!save.is_finished(), "the save waits for the slot");
+        let Json(mode) = tokio::time::timeout(
+            Duration::from_secs(1),
+            tokio::spawn(mode(State(Arc::clone(&state)))),
+        )
+        .await
+        .expect("mode is answered")
+        .unwrap();
+        assert!(mode.is_object());
+
+        release.send(()).unwrap();
+        first.await.unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(5), save)
+            .await
+            .expect("the save finishes once the slot is free")
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "a file that is not a recording fails to build"
+        );
+    }
+
     /// A detach dropped while it waits for a slot changes nothing, and an
     /// attach that waited behind another finds the experiment attached.
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]

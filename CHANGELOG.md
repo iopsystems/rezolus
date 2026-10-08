@@ -64,6 +64,11 @@
   request waited 267-287 ms instead of 1.2 s, and the 90th percentile
   2.4-2.6 s instead of 14-15 s. Peak memory over the load was 2.4 GB,
   against 2.8 GB before (one run each).
+- `rezolus view` builds a Save as Report download in a query slot, under
+  `--query-concurrency`. Working out which columns to keep, which on an
+  archive opens the tables each saved query touches, ran on an async worker
+  before the build, and the build ran on the blocking pool outside any slot.
+  A save now waits for a free slot, as a query does.
 - `rezolus view` loads an upload, a URL or an attached experiment, and
   rebuilds the dashboards on a detach, on the blocking pool under
   `--query-concurrency`; these requests now wait for a free slot as queries
