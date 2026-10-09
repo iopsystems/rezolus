@@ -352,6 +352,23 @@
 
 ### Added
 
+- **macOS agents record block IO and NVMe drive health.** The `blockio`
+  sampler reads each `IOBlockStorageDriver`'s statistics from the I/O
+  registry (the counters `iostat` reads), unprivileged, and publishes the
+  system-wide `blockio_operations` and `blockio_bytes` counters for reads and
+  writes, summed over every driver, disk images included. Three counters exist
+  only on macOS: `blockio_retries`, `blockio_service_time` (the driver's
+  "Total Time") and `blockio_driver_errors` (the driver's unclassified error
+  count, kept apart from `blockio_errors`, which counts terminal failures by
+  class). Nothing writes the size and latency histograms there. The `requests`
+  option turns the macOS sampler off. The `drivehealth` sampler reads each NVMe
+  drive's SMART / Health log page through IOKit's NVMe SMART user client,
+  unprivileged, every 60 seconds, and publishes `drive_temperature` and the
+  thermal-throttle counters with the Linux labels (`device` is the BSD name,
+  e.g. `disk0`). A drive accepts one SMART client at a time, so a sweep that
+  finds it held by another process (`smartctl`) skips that drive until the
+  next sweep. Before, both samplers were Linux-only, and a macOS recording had
+  no disk or drive data.
 - **The viewer follows an archive file that is still being written.**
   `rezolus view` on a `.dendro` or `.rez` (v3) that is not finalized, such as
   a running hindsight buffer or a `rezolus record` in progress, reopens it

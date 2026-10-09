@@ -7,23 +7,27 @@ use linkme::distributed_slice;
 // The `blockio` sampler replaced `blockio_requests` and `blockio_latency`;
 // the acquisition groups keep the names they had under those samplers.
 //
-// Registered here (not in mod.rs) because this file is also `include!`d
-// directly on non-Linux platforms (see `blockio/mod.rs`'s
-// `#[cfg(not(target_os = "linux"))] mod stats` fallback) to keep metric
-// identity stable across platforms, while `mod.rs`'s BPF sampler code is
-// Linux-only. One group per `.counters()` map.
-pub static COUNTERS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("blockio"),
-    "blockio_requests_counters",
-);
-pub static ERRORS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("blockio"),
-    "blockio_requests_errors",
-);
-pub static REQUEUES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("blockio"),
-    "blockio_requests_requeues",
-);
+// Registered here (not in mod.rs) because this file is compiled three ways:
+// as the Linux BPF sampler's `stats` module, inside the macOS sampler
+// (`blockio/macos/mod.rs`), and on every other platform under
+// `blockio/mod.rs`'s fallback `mod stats`, which keeps metric identity stable
+// across platforms. One group per `.counters()` map.
+
+/// The sampler these groups belong to. Where a `blockio` sampler exists
+/// (Linux, macOS) the metrics below attribute to it, so the groups must name
+/// it; elsewhere the metrics attribute to `unattributed`, and so do the
+/// groups (see `crate::agent::samplers::bpf_sampler_name`).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const GROUP_SAMPLER: &str = "blockio";
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const GROUP_SAMPLER: &str = crate::agent::samplers::bpf_sampler_name("blockio");
+
+pub static COUNTERS_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(GROUP_SAMPLER, "blockio_requests_counters");
+pub static ERRORS_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(GROUP_SAMPLER, "blockio_requests_errors");
+pub static REQUEUES_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(GROUP_SAMPLER, "blockio_requests_requeues");
 
 // ONE group for all 4 op-class size histograms: LIKE ENTITIES (one
 // "blockio size" family, distinguished by the `op` label) read as a single
@@ -33,10 +37,8 @@ pub static REQUEUES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
 // different metric family each). `BpfBuilder::histogram` batches every
 // call naming this group into one `HistogramBatch`, stamped once per
 // refresh — see `bpf/histogram.rs`.
-pub static SIZES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("blockio"),
-    "blockio_requests_sizes",
-);
+pub static SIZES_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(GROUP_SAMPLER, "blockio_requests_sizes");
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static COUNTERS_ACQ_REG: &'static AcquisitionGroup = &COUNTERS_ACQ;
@@ -413,26 +415,20 @@ pub static BLOCKIO_DISCARD_REQUEUE: LazyCounter = LazyCounter::new(Counter::defa
 // they are read back-to-back in one refresh.
 // `BpfBuilder::histogram` batches every call naming a group into one
 // `HistogramBatch`, stamped once per refresh — see `bpf/histogram.rs`.
-pub static DEVICE_LATENCIES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("blockio"),
-    "blockio_latency_device_latencies",
-);
+pub static DEVICE_LATENCIES_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(GROUP_SAMPLER, "blockio_latency_device_latencies");
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static DEVICE_LATENCIES_ACQ_REG: &'static AcquisitionGroup = &DEVICE_LATENCIES_ACQ;
 
-pub static QUEUE_LATENCIES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("blockio"),
-    "blockio_latency_queue_latencies",
-);
+pub static QUEUE_LATENCIES_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(GROUP_SAMPLER, "blockio_latency_queue_latencies");
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static QUEUE_LATENCIES_ACQ_REG: &'static AcquisitionGroup = &QUEUE_LATENCIES_ACQ;
 
-pub static TOTAL_LATENCIES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("blockio"),
-    "blockio_latency_total_latencies",
-);
+pub static TOTAL_LATENCIES_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(GROUP_SAMPLER, "blockio_latency_total_latencies");
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static TOTAL_LATENCIES_ACQ_REG: &'static AcquisitionGroup = &TOTAL_LATENCIES_ACQ;

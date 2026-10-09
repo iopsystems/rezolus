@@ -7,13 +7,21 @@ use linkme::distributed_slice;
 /// discovered beyond this cap are dropped by `GaugeGroup` (logged once).
 pub const MAX_DRIVES: usize = 64;
 
-// Registered here (not in `linux/mod.rs`) because this file is also
-// `include!`d directly on non-Linux platforms (see `drivehealth/mod.rs`'s
-// `#[cfg(not(target_os = "linux"))] mod stats` fallback) to keep metric
-// identity stable across platforms. Same cross-platform-name mechanism as
-// the BPF samplers (e.g. `cpu_tlb_flush`'s groups) — see
-// `crate::agent::samplers::bpf_sampler_name`'s doc comment.
-//
+// Registered here (not in `linux/mod.rs`) because this file is compiled three
+// ways: as the Linux sampler's `stats` module, inside the macOS sampler
+// (`drivehealth/macos/mod.rs`), and on every other platform under
+// `drivehealth/mod.rs`'s fallback `mod stats`, which keeps metric identity
+// stable across platforms.
+
+/// The sampler these groups belong to: `drivehealth` where that sampler exists
+/// (Linux, macOS), and elsewhere the `unattributed` bucket, to which the
+/// metrics below are attributed there (see
+/// `crate::agent::samplers::bpf_sampler_name`).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const GROUP_SAMPLER: &str = "drivehealth";
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const GROUP_SAMPLER: &str = crate::agent::samplers::bpf_sampler_name("drivehealth");
+
 /// ONE group for the entire drivehealth sweep: `read_all(&drives)` plus the
 /// per-drive `set()` loop that follows it, bracketed inside the
 /// `spawn_blocking` task in `linux/mod.rs` — that task is this group's
@@ -32,10 +40,8 @@ pub const MAX_DRIVES: usize = 64;
 /// `group_builder`), not just one — at this sampler's 60s read cadence that
 /// shows up as an occasional ~60s-wide `rate()` uncertainty band on these
 /// counters, which is expected and honest, not a bug.
-pub static DRIVEHEALTH_SWEEP_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("drivehealth"),
-    "drivehealth_sweep",
-);
+pub static DRIVEHEALTH_SWEEP_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(GROUP_SAMPLER, "drivehealth_sweep");
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static DRIVEHEALTH_SWEEP_ACQ_REG: &'static AcquisitionGroup = &DRIVEHEALTH_SWEEP_ACQ;
@@ -50,10 +56,8 @@ static DRIVEHEALTH_SWEEP_ACQ_REG: &'static AcquisitionGroup = &DRIVEHEALTH_SWEEP
 /// `a_groups_metrics_agree_on_slot_order_and_on_what_each_slot_means` pins for
 /// every other group. Splitting them says what was already true: these
 /// describe NVMe drives, and the gauge describes all of them.
-pub static DRIVEHEALTH_NVME_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("drivehealth"),
-    "drivehealth_nvme",
-);
+pub static DRIVEHEALTH_NVME_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(GROUP_SAMPLER, "drivehealth_nvme");
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static DRIVEHEALTH_NVME_ACQ_REG: &'static AcquisitionGroup = &DRIVEHEALTH_NVME_ACQ;

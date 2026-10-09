@@ -174,7 +174,9 @@ enabled = true
 # waited in the queue (`blockio_queue_latency`), how long the device then took
 # (`blockio_device_latency`), and the two together (`blockio_total_latency`).
 # Replaces `blockio_requests` and `blockio_latency`; a config that still names
-# them is read as this section, with a warning.
+# them is read as this section, with a warning. On macOS it reads the storage
+# drivers' counters from IOKit instead: operations, bytes, retries, driver
+# errors and driver time, no histograms; `requests = false` turns it off there.
 [samplers.blockio]
 # requests = false   # drop the operation, byte, size, error and requeue counts
 # latency = false    # drop the latency histograms
@@ -232,7 +234,8 @@ enabled = true
 # discovered once at startup. Because each read is a device command and
 # temperature moves slowly, reads are throttled to `interval` (default 60s) and
 # run off the scrape/TTL cycle. Needs CAP_SYS_RAWIO (already held for eBPF);
-# unprivileged or with no supported drive it emits no series.
+# unprivileged or with no supported drive it emits no series. On macOS it reads
+# NVMe drives' SMART log through IOKit, unprivileged, the same way.
 [samplers.drivehealth]
 # interval = "60s"
 
