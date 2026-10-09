@@ -38,7 +38,11 @@ fn init(config: Arc<Config>) -> SamplerResult {
     }
 
     let keys = Keys::new().ok_or_else(|| anyhow::anyhow!("{NAME}: could not build IOKit keys"))?;
-    if read_drivers(&keys).iter().all(|(_, s)| s.is_none()) {
+    if read_drivers(&keys)
+        .unwrap_or_default()
+        .iter()
+        .all(|(_, s)| s.is_none())
+    {
         return Err(crate::agent::sampler_status::Unsupported(
             "no IOBlockStorageDriver reports statistics".to_string(),
         )
@@ -170,9 +174,11 @@ impl Keys {
 }
 
 /// Every block storage driver, keyed by registry entry ID, with its counters
-/// or `None` if this read of them failed.
-fn read_drivers(keys: &Keys) -> Vec<(u64, Option<DriverStats>)> {
-    Service::matching("IOBlockStorageDriver")
+/// or `None` if this read of them failed. `None` if the drivers could not be
+/// listed.
+fn read_drivers(keys: &Keys) -> Option<Vec<(u64, Option<DriverStats>)>> {
+    let drivers = Service::matching("IOBlockStorageDriver")?;
+    let read = drivers
         .iter()
         .filter_map(|s| {
             let id = s.id()?;
@@ -181,7 +187,8 @@ fn read_drivers(keys: &Keys) -> Vec<(u64, Option<DriverStats>)> {
                 s.dictionary(&keys.statistics).and_then(|d| keys.read(&d)),
             ))
         })
-        .collect()
+        .collect();
+    Some(read)
 }
 
 /// Fold one refresh's readings into `last` and return the increase since the
@@ -189,10 +196,17 @@ fn read_drivers(keys: &Keys) -> Vec<(u64, Option<DriverStats>)> {
 /// count. A driver whose read failed keeps its previous reading, so the next
 /// successful read counts only what is new. A driver no longer enumerated is
 /// dropped, and what it counted stays in the totals.
+///
+/// Returns `None` and leaves `last` unchanged when no driver was read, which
+/// is what a failed enumeration looks like: dropping every driver then would
+/// count each one's whole total again on the next read.
 fn account(
     last: &mut HashMap<u64, DriverStats>,
     now: Vec<(u64, Option<DriverStats>)>,
-) -> DriverStats {
+) -> Option<DriverStats> {
+    if now.iter().all(|(_, s)| s.is_none()) {
+        return None;
+    }
     let mut add = DriverStats::default();
     let mut next = HashMap::with_capacity(now.len());
     for (id, stats) in now {
@@ -209,7 +223,7 @@ fn account(
         }
     }
     *last = next;
-    add
+    Some(add)
 }
 
 struct Inner {
@@ -223,7 +237,14 @@ impl Inner {
         let counters = COUNTERS_ACQ.acquire();
         let errors = ERRORS_ACQ.acquire();
 
-        let add = account(&mut self.last, read_drivers(&self.keys));
+        // A refresh that reads no driver publishes nothing and keeps the
+        // groups' previous windows.
+        let Some(add) = read_drivers(&self.keys).and_then(|now| account(&mut self.last, now))
+        else {
+            counters.discard();
+            errors.discard();
+            return;
+        };
 
         BLOCKIO_READ_OPS.add(add.operations[READ]);
         BLOCKIO_WRITE_OPS.add(add.operations[WRITE]);
@@ -269,7 +290,7 @@ mod tests {
     #[test]
     fn the_first_refresh_counts_everything_since_boot() {
         let mut last = HashMap::new();
-        let add = account(&mut last, vec![(1, Some(stats(10))), (2, Some(stats(5)))]);
+        let add = account(&mut last, vec![(1, Some(stats(10))), (2, Some(stats(5)))]).unwrap();
         assert_eq!(add.operations, [15, 30]);
     }
 
@@ -277,8 +298,17 @@ mod tests {
     fn a_failed_read_does_not_count_a_driver_twice() {
         let mut last = HashMap::new();
         account(&mut last, vec![(1, Some(stats(10)))]);
-        assert_eq!(account(&mut last, vec![(1, None)]), DriverStats::default());
-        let add = account(&mut last, vec![(1, Some(stats(12)))]);
+        assert_eq!(account(&mut last, vec![(1, None)]), None);
+        let add = account(&mut last, vec![(1, Some(stats(12)))]).unwrap();
+        assert_eq!(add.operations, [2, 4]);
+    }
+
+    #[test]
+    fn a_failed_enumeration_does_not_count_every_driver_again() {
+        let mut last = HashMap::new();
+        account(&mut last, vec![(1, Some(stats(10)))]);
+        assert_eq!(account(&mut last, vec![]), None);
+        let add = account(&mut last, vec![(1, Some(stats(12)))]).unwrap();
         assert_eq!(add.operations, [2, 4]);
     }
 
@@ -286,7 +316,7 @@ mod tests {
     fn a_driver_that_goes_away_keeps_its_count_and_a_new_one_adds_its_own() {
         let mut last = HashMap::new();
         account(&mut last, vec![(1, Some(stats(10))), (2, Some(stats(5)))]);
-        let add = account(&mut last, vec![(1, Some(stats(11))), (3, Some(stats(2)))]);
+        let add = account(&mut last, vec![(1, Some(stats(11))), (3, Some(stats(2)))]).unwrap();
         assert_eq!(add.operations, [1 + 2, 2 + 4]);
         assert!(!last.contains_key(&2));
     }
@@ -297,7 +327,7 @@ mod tests {
     #[test]
     fn reads_the_boot_disk_driver() {
         let keys = Keys::new().unwrap();
-        let drivers = read_drivers(&keys);
+        let drivers = read_drivers(&keys).unwrap_or_default();
         if drivers.is_empty() {
             eprintln!("no IOBlockStorageDriver on this host; skipping");
             return;

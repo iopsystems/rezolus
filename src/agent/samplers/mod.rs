@@ -165,8 +165,8 @@ fn is_module_prefix(prefix: &str, module: &str) -> bool {
 /// `blockio` and `drivehealth` also have macOS samplers, which compile the
 /// shared `stats.rs` inside their own module, so on macOS their metrics
 /// attribute to the real sampler. Their `stats.rs` names the groups' sampler
-/// with a `GROUP_SAMPLER` constant covering both platforms instead of this
-/// function.
+/// with a `GROUP_SAMPLER` constant: the sampler's name on Linux and macOS,
+/// and this function's result elsewhere.
 ///
 /// An [`crate::agent::timing::AcquisitionGroup`] declared for such a
 /// sampler's metrics must register under whichever of the two this platform
@@ -448,10 +448,11 @@ mod unbacked_group_tests {
     /// binary. Being unbacked is the CORRECT state for that bucket; bounding it
     /// is the entire point of this mechanism.
     ///
-    /// Linux and macOS only. On macOS it covers the `blockio` and
-    /// `drivehealth` groups, whose `GROUP_SAMPLER` must match their macOS
-    /// sampler's name; elsewhere no BPF sampler has a `SamplerEntry`, so the
-    /// check would say nothing.
+    /// Linux and macOS only. On macOS it catches a `blockio` or `drivehealth`
+    /// `GROUP_SAMPLER` naming a sampler that does not exist; one left as
+    /// `unattributed` passes here and is caught by the router's routing
+    /// `debug_assert` in the snapshot tests. Elsewhere no BPF sampler has a
+    /// `SamplerEntry`, so the check would say nothing.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn every_registered_group_names_a_real_sampler() {

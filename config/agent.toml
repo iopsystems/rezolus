@@ -235,7 +235,8 @@ enabled = true
 # temperature moves slowly, reads are throttled to `interval` (default 60s) and
 # run off the scrape/TTL cycle. Needs CAP_SYS_RAWIO (already held for eBPF);
 # unprivileged or with no supported drive it emits no series. On macOS it reads
-# NVMe drives' SMART log through IOKit, unprivileged, the same way.
+# only NVMe drives, through IOKit's NVMe SMART user client, and needs no
+# privileges.
 [samplers.drivehealth]
 # interval = "60s"
 

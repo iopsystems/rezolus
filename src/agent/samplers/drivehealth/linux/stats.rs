@@ -22,18 +22,13 @@ const GROUP_SAMPLER: &str = "drivehealth";
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 const GROUP_SAMPLER: &str = crate::agent::samplers::bpf_sampler_name("drivehealth");
 
-/// ONE group for the entire drivehealth sweep: `read_all(&drives)` plus the
-/// per-drive `set()` loop that follows it, bracketed inside the
-/// `spawn_blocking` task in `linux/mod.rs` — that task is this group's
-/// single writer (`refresh()` itself never stamps; see the doc comment
-/// there). All seven metrics below — drive temperature and the six
-/// NVMe-only throttle counters — share this one group rather than one per
-/// metric family: each drive's reading comes from a SINGLE read-only
-/// pass-through ioctl (`device::read_one`, one command per drive) that
-/// decodes every one of these fields from that one response, so unlike
-/// `cpu_usage`'s three separate BPF map reads, there is exactly one source
-/// per drive here — unambiguously one read section for the whole sweep. See
-/// `docs/principles.md` principle 18's "device sweep" read-section shape.
+/// The drivehealth sweep's group, holding `drive_temperature` for every
+/// drive. One sweep reads every drive once and sets the gauge, and it is the
+/// group's single writer: the `spawn_blocking` task in `linux/mod.rs` (one
+/// read-only pass-through command per drive, `device::read_one`) or `sweep`
+/// in `macos/mod.rs` (one NVMe SMART log page per drive). `refresh()` itself
+/// never stamps. See `docs/principles.md` principle 18's "device sweep"
+/// read-section shape.
 /// A sweep that finishes while the V3 builder's walk is between this
 /// group's first touch and its own emit point yields the honest union of
 /// both windows (`resolve_walk_window` in metriken-exposition's

@@ -5,14 +5,14 @@ use metriken::*;
 
 #[metric(
     name = "blockio_retries",
-    description = "Block IO requests the storage driver retried (IOBlockStorageDriver \"Retries\")",
+    description = "Retries the storage driver performed for block IO (IOBlockStorageDriver \"Retries\")",
     metadata = { op = "read", unit = "operations", acq_group = "blockio_requests_counters" }
 )]
 pub static BLOCKIO_READ_RETRIES: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_retries",
-    description = "Block IO requests the storage driver retried (IOBlockStorageDriver \"Retries\")",
+    description = "Retries the storage driver performed for block IO (IOBlockStorageDriver \"Retries\")",
     metadata = { op = "write", unit = "operations", acq_group = "blockio_requests_counters" }
 )]
 pub static BLOCKIO_WRITE_RETRIES: LazyCounter = LazyCounter::new(Counter::default);

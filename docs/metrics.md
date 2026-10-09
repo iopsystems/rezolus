@@ -169,16 +169,16 @@ On macOS there is no request trace. The sampler reads each
 `IOBlockStorageDriver`'s cumulative statistics from the I/O registry (the
 counters `iostat` reads), unprivileged, and sums them over every driver,
 disk images included. It publishes `blockio_operations` and `blockio_bytes`
-for reads and writes, and these macOS-only counters, all `op={read,write}`.
-Nothing writes the latency histograms, `blockio_size`, `blockio_errors` or
-`blockio_requeues` there; the histograms appear with no value. The `requests` option turns the
-macOS sampler off; `latency` has no effect.
+for reads and writes, and the macOS-only counters below. Nothing writes the
+latency histograms, `blockio_size`, `blockio_errors` or `blockio_requeues`
+there; the histograms appear with no value. Setting `requests = false` turns
+the macOS sampler off; `latency` has no effect.
 
-| Metric | Description |
-|--------|-------------|
-| `blockio_retries` | Requests the storage driver retried |
-| `blockio_service_time` | Nanoseconds the driver reports spending on IO ("Total Time") |
-| `blockio_driver_errors` | Errors the driver reports, unclassified; the header does not say whether a request that succeeded on retry is counted |
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `blockio_retries` | Retries the storage driver performed | `op={read,write}` |
+| `blockio_service_time` | Nanoseconds the driver reports spending on IO ("Total Time") | `op={read,write}` |
+| `blockio_driver_errors` | Errors the driver reports, unclassified; `IOBlockStorageDriver.h` does not say whether a request that succeeded on retry is counted | `op={read,write}` |
 
 ## CPU
 

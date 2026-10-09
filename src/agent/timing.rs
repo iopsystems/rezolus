@@ -70,11 +70,6 @@ impl GroupWindowSlot {
     /// example a drivehealth-style sampler with a blocking probe task
     /// alongside `refresh()`) must stamp the group from that one task only,
     /// never from both.
-    // Reachable from the sampler refresh paths on Linux and macOS (via
-    // AcquisitionGuard::finish); other builds compile this file (stats.rs
-    // constructs AcquisitionGroup statics for cross-platform metric identity)
-    // but never drive a refresh, so store() is genuinely unused there.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
     pub(crate) fn store(&self, w: Window) {
         let s = self.seq.load(Ordering::Relaxed);
         debug_assert_eq!(
@@ -217,7 +212,6 @@ impl AcquisitionGroup {
     /// stamp-last ordering alone does not make a changing population coherent.
     /// Principle 18 allows revising the bound each read for a changing
     /// population and accepts that one-snapshot incoherence.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
     pub(crate) fn set_member_bound(&self, n: usize) {
         self.member_bound.store(n, Ordering::Relaxed);
     }
@@ -280,8 +274,7 @@ impl AcquisitionGroup {
     /// is idempotent and harmless. Prefer declaring the group with
     /// `new_reader_stamped` in the first place — see its doc comment for
     /// why relying on this call alone leaves a gap.
-    // Only called from `PackedCounters::new`, Linux-only; see the note on
-    // `GroupWindowSlot::store`.
+    // Only called from `PackedCounters::new`, which is Linux-only.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn set_reader_stamped(&self) {
         self.reader_stamped.store(true, Ordering::Relaxed);
@@ -317,9 +310,6 @@ impl AcquisitionGroup {
     /// blocking probe running alongside `refresh()`) must have that one
     /// task own the group and call `acquire()`/`finish()`, not `refresh()`
     /// as well.
-    // Reachable from the sampler refresh paths on Linux and macOS; see the
-    // note on `GroupWindowSlot::store`.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
     pub(crate) fn acquire(&self) -> AcquisitionGuard<'_> {
         AcquisitionGuard::begin(&self.slot)
     }
@@ -351,9 +341,6 @@ impl AcquisitionGroup {
 /// group's window exactly where it was; readers see "no new data this
 /// tick", which is the honest signal. A group whose reads keep failing
 /// simply stops advancing, visibly, in the data — missing beats wrong.
-// Constructed from the sampler refresh paths on Linux and macOS (via
-// AcquisitionGroup::acquire); see the note on `GroupWindowSlot::store`.
-#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
 pub(crate) struct AcquisitionGuard<'a> {
     slot: &'a GroupWindowSlot,
     begin_ns: u64,
@@ -364,7 +351,6 @@ pub(crate) struct AcquisitionGuard<'a> {
     marked_end_ns: Option<u64>,
 }
 
-#[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
 impl<'a> AcquisitionGuard<'a> {
     pub(crate) fn begin(slot: &'a GroupWindowSlot) -> Self {
         let begin_mono = Instant::now();

@@ -113,6 +113,7 @@ fn enumerate() -> Vec<Drive> {
         return Vec::new();
     };
     Service::matching("IOBlockStorageDevice")
+        .unwrap_or_default()
         .into_iter()
         .filter(|s| s.boolean(&capable) == Some(true))
         .map(|service| {
@@ -183,7 +184,8 @@ impl Sampler for DriveHealth {
 
 /// Read every drive and publish what it returned. The groups' window is
 /// stamped only if at least one drive returned a page; otherwise it keeps its
-/// previous window, as on Linux. Returns the number of drives read.
+/// previous window, as the Linux sampler does for the sweep group. Returns
+/// the number of drives read.
 fn sweep(drives: &[Drive]) -> usize {
     let sweep = DRIVEHEALTH_SWEEP_ACQ.acquire();
     let nvme = DRIVEHEALTH_NVME_ACQ.acquire();
@@ -252,6 +254,11 @@ mod tests {
             drives.iter().all(|d| d.labels.contains_key("device")),
             "a drive has no BSD name"
         );
+        // A device accepts one SMART client at a time across processes.
+        if drives.iter().any(|d| NvmeSmart::open(&d.service).is_none()) {
+            eprintln!("an NVMe SMART device is held by another process; skipping");
+            return;
+        }
         assert_eq!(sweep(&drives), drives.len(), "a drive returned no page");
     }
 }

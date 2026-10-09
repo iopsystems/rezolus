@@ -203,12 +203,10 @@ impl Drop for Service {
 }
 
 impl Service {
-    /// Every registered service of IOKit class `class` (or a subclass).
-    /// Returns an empty list if the lookup fails.
-    pub(crate) fn matching(class: &str) -> Vec<Service> {
-        let Ok(c) = CString::new(class) else {
-            return Vec::new();
-        };
+    /// Every registered service of IOKit class `class` (or a subclass), or
+    /// `None` if the lookup fails.
+    pub(crate) fn matching(class: &str) -> Option<Vec<Service>> {
+        let c = CString::new(class).ok()?;
         let mut iter: IoObject = 0;
         // SAFETY: `IOServiceMatching` returns a +1 dictionary (or null) that
         // `IOServiceGetMatchingServices` consumes, null included.
@@ -217,7 +215,7 @@ impl Service {
             IOServiceGetMatchingServices(MAIN_PORT_DEFAULT, matching, &mut iter)
         };
         if kr != KERN_SUCCESS || iter == 0 {
-            return Vec::new();
+            return None;
         }
         let iter = Service(iter);
         let mut out = Vec::new();
@@ -230,7 +228,7 @@ impl Service {
             }
             out.push(Service(s));
         }
-        out
+        Some(out)
     }
 
     /// The registry entry ID, which is unique for the life of the entry and
@@ -468,11 +466,20 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let capable = CfString::new("NVMe SMART Capable").unwrap();
         let devices: Vec<Service> = Service::matching("IOBlockStorageDevice")
+            .unwrap_or_default()
             .into_iter()
             .filter(|s| s.boolean(&capable) == Some(true))
             .collect();
         if devices.is_empty() {
             eprintln!("no NVMe SMART capable device on this host; skipping");
+            return;
+        }
+        // A device accepts one client at a time across processes. If another
+        // process (smartctl, a running agent, another test run) holds it, the
+        // first open fails and there is nothing to test. After a first open
+        // succeeds, a failed reopen means this process leaked the client.
+        if devices.iter().any(|s| NvmeSmart::open(s).is_none()) {
+            eprintln!("an NVMe SMART device is held by another process; skipping");
             return;
         }
         for round in 0..3 {
