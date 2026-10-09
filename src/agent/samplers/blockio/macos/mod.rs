@@ -197,8 +197,8 @@ fn read_drivers(keys: &Keys) -> Option<Vec<(u64, Option<DriverStats>)>> {
 /// successful read counts only what is new. A driver no longer enumerated is
 /// dropped, and what it counted stays in the totals.
 ///
-/// Returns `None` and leaves `last` unchanged when no driver was read, which
-/// is what a failed enumeration looks like: dropping every driver then would
+/// Returns `None` and leaves `last` unchanged when no driver was read (an
+/// empty listing, or every read failed): dropping every driver then would
 /// count each one's whole total again on the next read.
 fn account(
     last: &mut HashMap<u64, DriverStats>,

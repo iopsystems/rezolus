@@ -477,9 +477,14 @@ mod tests {
         // A device accepts one client at a time across processes. If another
         // process (smartctl, a running agent, another test run) holds it, the
         // first open fails and there is nothing to test. After a first open
-        // succeeds, a failed reopen means this process leaked the client.
+        // succeeds, a failed reopen means this process leaked the client. The
+        // return code is the same in both cases, so if another test in this
+        // process leaked first, this test skips and that test fails instead.
         if devices.iter().any(|s| NvmeSmart::open(s).is_none()) {
-            eprintln!("an NVMe SMART device is held by another process; skipping");
+            eprintln!(
+                "an NVMe SMART device is held (by another process, or by a client this \
+                 process leaked); skipping"
+            );
             return;
         }
         for round in 0..3 {

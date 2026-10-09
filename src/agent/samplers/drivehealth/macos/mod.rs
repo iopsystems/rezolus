@@ -256,7 +256,10 @@ mod tests {
         );
         // A device accepts one SMART client at a time across processes.
         if drives.iter().any(|d| NvmeSmart::open(&d.service).is_none()) {
-            eprintln!("an NVMe SMART device is held by another process; skipping");
+            eprintln!(
+                "an NVMe SMART device is held (by another process, or by a client this \
+                 process leaked); skipping"
+            );
             return;
         }
         assert_eq!(sweep(&drives), drives.len(), "a drive returned no page");
