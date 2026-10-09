@@ -657,10 +657,13 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   fingerprint and the reader probes one footer per distinct fingerprint,
   plus the live tail's schema-carrying rows; a segment without a
   fingerprint (a `.rez`, a conversion) keeps the old assumption.
-- **The reshaping converter** — Roadmap, after the reader. Replaces #1301's byte
-  copy. Oracle: on 5.x `.rez --stream` recordings the occupants derived from
-  the columns must equal those the recorded index gives, and every series must read back
-  the same as through the `.rez` reader.
+- **The reshaping converter** — Roadmap, after the reader, until metriken's
+  path step 2 ([6.0.0 release readiness](journal/2026-10-08-6-0-release-readiness.md)).
+  Replaces #1301's byte copy. Oracle: on 5.x `.rez --stream` recordings the
+  occupants derived from the columns must equal those the recorded index
+  gives, and every series must read back the same as through the `.rez`
+  reader. Path step 2 drops the index (`caller_rows`) from the `.rez` reader,
+  since 5.x's stream support is a preview; this item is dropped with it.
 - **5.18–5.20 mid-segment occupant changes** — By design. The file does not
   record the new occupant's labels (#1232), so a conversion keeps what the file
   records. Reopen only if a recording from that range needs per-task
@@ -685,6 +688,40 @@ agent's stream, and slot groups travel in the long layout
   without bound. Hindsight's retention is the likely answer. Do before 6.0
   if hindsight's retention fits; otherwise when a long-running live session
   is reported.
+
+## 6.0.0 release readiness
+
+Source: [Rezolus 6.0.0: release readiness](journal/2026-10-08-6-0-release-readiness.md).
+
+- **Compatibility fixtures from released versions** — Open. Check in archives
+  written by released versions (a tar `.rez` from a 5.17.1 prerelease, a v3
+  `.rez` from 5.18.0, a v5.25 `.dendro`, an older parquet, a 6.0 recording)
+  with golden query results; open, query and upgrade each in a test. 5.x's
+  preview `--stream` `.rez` is not included.
+- **Cross-version CI job** — Open. v5.25.1 binary against the current agent,
+  the current recorder against a v5.25.1 agent, the v5.25.1 reader on 6.0
+  output, the v5.22.1 reader on a 6.0 `.rez` (systemslab's current pin).
+- **Smaller test gaps** — Open. V3 raw `recording convert`; a WASM `.dendro`
+  test; `tests/viewer_smoke.sh` in CI; read `site/viewer/data/mr2-report.parquet`
+  in a test; upgrade a v1 tar archive.
+- **Record a non-streaming agent to `.rez` with a warning** — Open. When the
+  output was not named; an explicit `-o x.dendro` still refuses.
+- **Endpoint detection** — Open. For `.dendro` output, stream any source whose
+  `/metrics/stream` handshake opens; a Rezolus agent that cannot stream falls
+  under the `.rez` fallback; scrape `/metrics` from any other source
+  (cachecannon is refused today). `.rez` and parquet output keep scraping
+  `/metrics/binary`.
+- **Measurement harness and the two missing measurements** — Open. Harness in
+  the repository; `.dendro` / `.rez` / parquet sizes for one agent; a 24-hour
+  `hindsight` and `record` run on Linux.
+- **Upgrade page and stale docs** — Open. `site/docs/usage.html`,
+  `architecture.html`, the viewer bundle README in `release.yml`, the
+  `recording` about text, `src/mcp/skill/SKILL.md`, the hindsight `output`
+  path change.
+- **Homebrew tap at 5.19.0** — Open. Sixteen bump PRs open in
+  `iopsystems/homebrew-iop` (#134–#151).
+- **Release candidate soak** — Open. A day on a Linux host and a fleet host,
+  read with both readers.
 
 ## Agent — histogram groups with slots (after 6.0)
 
