@@ -174,7 +174,9 @@ enabled = true
 
 # BPF sampler that instruments block_io request queue. Produces per-op
 # completion counts, byte counters, size histograms, terminal-failure
-# counters bucketed by error class, and requeue counters.
+# counters bucketed by error class, and requeue counters. On macOS it reads
+# the storage drivers' counters from IOKit instead: operations, bytes,
+# retries, driver errors and driver time, no histograms.
 [samplers.blockio_requests]
 
 # BPF sampler that collects CPU CFS bandwidth control and throttling stats
@@ -234,7 +236,9 @@ enabled = true
 # discovered once at startup. Because each read is a device command and
 # temperature moves slowly, reads are throttled to `interval` (default 60s) and
 # run off the scrape/TTL cycle. Needs CAP_SYS_RAWIO (already held for eBPF);
-# unprivileged or with no supported drive it emits no series.
+# unprivileged or with no supported drive it emits no series. On macOS it reads
+# only NVMe drives, through IOKit's NVMe SMART user client, and needs no
+# privileges.
 [samplers.drivehealth]
 # interval = "60s"
 

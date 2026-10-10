@@ -12,6 +12,8 @@ mod ext4;
 pub(crate) mod filesystem;
 mod gpu;
 mod hw_sensors;
+#[cfg(target_os = "macos")]
+pub(crate) mod iokit;
 mod memory;
 mod network;
 mod rezolus;
@@ -71,9 +73,9 @@ pub static SAMPLERS: [SamplerEntry] = [..];
 /// `cpu_usage_cpu_usage`).
 ///
 /// This is stricter than "unique within the sampler" because every BPF
-/// sampler's `stats.rs` is ALSO compiled directly on non-Linux platforms
-/// (see `bpf_sampler_name`'s doc comment), where every one of them
-/// attributes to the single shared `"unattributed"` sampler bucket — so two
+/// sampler's `stats.rs` is ALSO compiled on platforms where that sampler does
+/// not exist (see `bpf_sampler_name`'s doc comment), where all of them
+/// attribute to the single shared `"unattributed"` sampler bucket — so two
 /// different samplers both naming a group `"counters"` would collide there
 /// even though they never collide on Linux. Always prefixing with the real
 /// sampler name keeps the group name globally unique across every sampler
@@ -96,9 +98,10 @@ pub static ACQUISITION_GROUPS: [&'static crate::agent::timing::AcquisitionGroup]
 ///
 /// Measured before this: a macOS agent with 3 healthy samplers served a 3.47 MB
 /// snapshot in which 43,456 of 43,469 scalar members were `None` — 99% phantom.
-/// Every BPF sampler's `stats.rs` is compiled on non-Linux too (to keep metric
-/// identity stable across platforms), where it attributes to `"unattributed"`
-/// and no `SamplerEntry` exists, so *all* of those groups are unbacked at once.
+/// Every BPF sampler's `stats.rs` is compiled where the sampler does not exist
+/// too (to keep metric identity stable across platforms), where it attributes
+/// to `"unattributed"` and no `SamplerEntry` exists, so *all* of those groups
+/// are unbacked at once.
 ///
 /// The same shape reaches Linux whenever a sampler fails to load — an
 /// unsupported kernel, a missing probe, a hardware counter that will not open.
@@ -158,6 +161,12 @@ fn is_module_prefix(prefix: &str, module: &str) -> bool {
 /// platforms) with no matching `SamplerEntry` anywhere — so
 /// `attribute_sampler` resolves it to `"unattributed"` instead, regardless
 /// of `linux_name`.
+///
+/// `blockio_requests` and `drivehealth` also have macOS samplers, which
+/// compile the shared `stats.rs` inside their own module, so on macOS their
+/// metrics attribute to the real sampler. Their `stats.rs` names the groups'
+/// sampler with a `GROUP_SAMPLER` constant: the sampler's name on Linux and
+/// macOS, and this function's result elsewhere.
 ///
 /// An [`crate::agent::timing::AcquisitionGroup`] declared for such a
 /// sampler's metrics must register under whichever of the two this platform
@@ -439,9 +448,12 @@ mod unbacked_group_tests {
     /// binary. Being unbacked is the CORRECT state for that bucket; bounding it
     /// is the entire point of this mechanism.
     ///
-    /// Linux only, because off Linux every BPF sampler's `stats.rs` compiles
-    /// with no matching `SamplerEntry`, so the check would say nothing.
-    #[cfg(target_os = "linux")]
+    /// Linux and macOS only. On macOS it catches a `blockio_requests` or
+    /// `drivehealth` `GROUP_SAMPLER` naming a sampler that does not exist; one
+    /// left as `unattributed` passes here and is caught by the snapshot
+    /// builder's routing `debug_assert` in the snapshot tests. Elsewhere no BPF
+    /// sampler has a `SamplerEntry`, so the check would say nothing.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn every_registered_group_names_a_real_sampler() {
         let known: HashSet<&'static str> = SAMPLERS.iter().map(|e| e.name).collect();

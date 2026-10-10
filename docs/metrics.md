@@ -166,6 +166,21 @@ optimization, and capacity planning.
 | `blockio_operations` | The number of completed operations for block devices | `op={read,write,flush,discard}` |
 | `blockio_bytes` | The number of bytes transferred for block devices | `op={read,write,flush,discard}` |
 
+On macOS there is no request trace. The sampler reads each
+`IOBlockStorageDriver`'s cumulative statistics from the I/O registry (the
+counters `iostat` reads), unprivileged, and sums them over every driver,
+disk images included. It publishes `blockio_operations` and `blockio_bytes`
+for reads and writes, and the macOS-only counters below. Nothing writes
+`blockio_size`, `blockio_errors` or `blockio_requeues` there; the size
+histograms appear with no value. There is no macOS `blockio_latency`
+sampler.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `blockio_retries` | Retries the storage driver performed | `op={read,write}` |
+| `blockio_service_time` | Nanoseconds the driver reports spending on IO ("Total Time") | `op={read,write}` |
+| `blockio_driver_errors` | Errors the driver reports, unclassified; `IOBlockStorageDriver.h` does not say whether a request that succeeded on retry is counted | `op={read,write}` |
+
 ## CPU
 
 Metrics related to CPU performance and usage. These metrics provide insight for
@@ -387,13 +402,20 @@ this is the deliberate device-read exception in `docs/principles.md`). SATA uses
 Get Log Page 0x02 (Composite Temperature). Drives are enumerated once at startup
 from `/sys/block` and `/sys/class/nvme`.
 
+On macOS the sampler reads NVMe drives only, through IOKit's NVMe SMART user
+client (Get Log Page 0x02, unprivileged), from the block storage devices whose
+`NVMe SMART Capable` property is set. `device` is the whole disk's BSD name
+(`disk0`). A drive accepts one SMART client at a time, so a sweep that finds
+it held by another process (`smartctl`) skips that drive until the next sweep.
+
 Because each read is a device command (measured ~7.6 ms/drive) and temperature
 moves on the order of seconds, reads are throttled and offloaded from the
 scrape/TTL sample cycle: at most once per `interval` the sampler dispatches the
 reads (all drives in parallel) to a blocking thread pool and returns
 immediately, so the sample cycle stays ~microseconds; the gauge retains its last
 value between reads. The cadence defaults to 60s and is configurable via
-`interval` in `[samplers.drivehealth]`.
+`interval` in `[samplers.drivehealth]`. On macOS the drives are read one after
+another in one blocking task.
 
 Pass-through ioctls require `CAP_SYS_RAWIO` (the agent already runs privileged
 for eBPF); unprivileged, reads fail closed — zero series, no error. Hosts with

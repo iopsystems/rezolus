@@ -345,7 +345,7 @@ When working on code under `src/agent/samplers/` or `src/agent/bpf/`, read `docs
 ## Platform Support
 
 - **Linux**: Full support including eBPF (kernel 5.8+)
-- **macOS**: Limited (CPU usage only, no eBPF)
+- **macOS**: Limited (CPU usage, GPU, block IO counters and NVMe drive health; no eBPF)
 - **Architectures**: x86_64 and ARM64
 
 ## Git Conventions
