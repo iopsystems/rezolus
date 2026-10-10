@@ -1,24 +1,15 @@
 ## [Unreleased]
 
+## [5.26.0] - 2026-10-09
+
 ### Added
 
-- **macOS agents record block IO and NVMe drive health.** The
-  `blockio_requests` sampler reads each `IOBlockStorageDriver`'s statistics
-  from the I/O registry (the counters `iostat` reads), unprivileged, and
-  publishes the system-wide `blockio_operations` and `blockio_bytes` counters
-  for reads and writes, summed over every driver, disk images included. Three
-  counters exist only on macOS: `blockio_retries`, `blockio_service_time` (the
-  driver's "Total Time") and `blockio_driver_errors` (the driver's
-  unclassified error count, kept apart from `blockio_errors`, which counts
-  terminal failures by class). Nothing writes the size histograms there, and
-  there is no macOS `blockio_latency` sampler. The `drivehealth` sampler reads
-  each NVMe drive's SMART / Health log page through IOKit's NVMe SMART user
-  client, unprivileged, every 60 seconds, and publishes `drive_temperature`
-  and the thermal-throttle counters with the Linux labels (`device` is the BSD
-  name, e.g. `disk0`). A drive accepts one SMART client at a time, so a sweep
-  that finds it held by another process (`smartctl`) skips that drive until
-  the next sweep. Before, both samplers were Linux-only, and a macOS recording
-  had no disk or drive data.
+- **Block IO and NVMe drive health on macOS.** `blockio_requests` publishes
+  `blockio_operations` and `blockio_bytes` from the storage drivers' IOKit
+  statistics, plus the macOS-only `blockio_retries`, `blockio_service_time`
+  and `blockio_driver_errors`. `drivehealth` publishes `drive_temperature`,
+  the warning and critical temperature-time counters and the thermal-throttle
+  counters from each NVMe drive's SMART log. Neither needs root.
 
 ## [5.25.1] - 2026-10-04
 
@@ -1920,7 +1911,8 @@ focal.
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.25.1...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.26.0...HEAD
+[5.26.0]: https://github.com/iopsystems/rezolus/compare/v5.25.1...v5.26.0
 [5.25.1]: https://github.com/iopsystems/rezolus/compare/v5.25.0...v5.25.1
 [5.25.0]: https://github.com/iopsystems/rezolus/compare/v5.24.0...v5.25.0
 [5.24.0]: https://github.com/iopsystems/rezolus/compare/v5.23.1...v5.24.0
