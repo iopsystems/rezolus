@@ -132,6 +132,12 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
 /// not registered on whatever platform compiled the test).
 pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("blockio_bytes", "blockio_requests"),
+    // macOS only, these three: the IOKit driver counters the macOS
+    // `blockio_requests` sampler publishes beside `blockio_operations` and
+    // `blockio_bytes`.
+    ("blockio_driver_errors", "blockio_requests"),
+    ("blockio_retries", "blockio_requests"),
+    ("blockio_service_time", "blockio_requests"),
     ("blockio_errors", "blockio_requests"),
     ("blockio_operations", "blockio_requests"),
     ("blockio_queue_latency", "blockio_latency"),

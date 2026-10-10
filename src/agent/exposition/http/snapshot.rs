@@ -1871,10 +1871,10 @@ fn group_registry() -> &'static HashMap<(&'static str, &'static str), &'static A
             debug_assert!(
                 prev.is_none(),
                 "duplicate acquisition-group registry key `{}/{}` — every registered group's \
-                 (sampler, name) pair must stay globally unique, including on non-Linux builds, \
-                 where `samplers::bpf_sampler_name` collapses every BPF sampler's \
-                 `attribute_sampler` resolution to the shared \"unattributed\" bucket (stats.rs \
-                 is `include!`d there for metric-identity continuity, with no matching \
+                 (sampler, name) pair must stay globally unique, including on builds where a BPF \
+                 sampler does not exist and `attribute_sampler` resolves its `stats.rs` to the \
+                 shared \"unattributed\" bucket (`bpf_sampler_name` names it; stats.rs is \
+                 `include!`d there for metric-identity continuity, with no matching \
                  SamplerEntry). Qualify the group's `name` with its sampler, e.g. \
                  `<sampler>_<shortname>` — see the naming rule documented on \
                  `samplers::ACQUISITION_GROUPS`.",
