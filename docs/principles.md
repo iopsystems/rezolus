@@ -34,9 +34,9 @@ instrumented and the per-probe entry cost. Workloads that drive any one hot
 path at extreme rates — millions of packets per second, millions of context
 switches per second, millions of syscalls per second, or millions of block
 I/Os per second — can see measurable impact, both from the cumulative
-entry/exit tax across all enabled probes and from the residual hashmap
-lookups some samplers still need (notably the TCP packet samplers, where
-the natural key is `struct sock*` — see principle 5). Less common patterns
+entry/exit tax across all enabled probes and, at extreme connection rates,
+from the hashmap in `tcp_connect_latency` (an insert, a lookup and a
+delete per connect, and a delete per destroyed socket). Less common patterns
 can trip the same threshold for individual samplers (heavy mmap churn for
 `cpu/tlb_flush`, throttle storms for `cpu/bandwidth`, PMU contention with
 other consumers for `cpu/perf`) — the shape is always the same: one hot
@@ -142,9 +142,12 @@ body, selected at runtime via `kernel_has_btf` and
 
 `BPF_MAP_TYPE_ARRAY` for any key that fits a bounded integer space (PID,
 CPU, cgroup id, syscall nr). Accept the bounded memory cost — even when only
-a fraction of the keyspace is live. Fall back to `BPF_MAP_TYPE_HASH` only
-when the natural key is a kernel pointer (`struct request*`,
-`struct sock*`) and there is no array-indexable equivalent.
+a fraction of the keyspace is live. When the natural key is a kernel pointer
+(`struct request*`, `struct sock*`) and the probe is on a per-packet or
+per-event hot path, use a fixed array indexed by a hash of the pointer, each
+slot one 64-bit word carrying a fingerprint of the key, and accept that a key
+whose slot is taken is not measured (`tcp_packet_latency`). Fall back to
+`BPF_MAP_TYPE_HASH` only for pointer keys off the hot path.
 
 *Why:* BPF hashmap update cost — spinlock contention on `task_switch`-class
 hot paths — is the dealbreaker, not just cycles. The bounded memory cost
@@ -154,8 +157,10 @@ acceptable; hashmap latency in a hot probe is not.
 **How to apply.**
 - New per-PID, per-CPU, per-cgroup-id, or per-syscall maps use
   `BPF_MAP_TYPE_ARRAY` with `BPF_F_MMAPABLE`.
+- Pointer keys on a hot path use a hashed array of one-word slots, with
+  the miss rate stated next to it.
 - A new `BPF_MAP_TYPE_HASH` requires a comment justifying why the key
-  cannot be a bounded integer.
+  cannot be a bounded integer or a hashed slot.
 
 **What we refuse.**
 - Hashmaps on hot paths whose keys could be expressed as bounded integers
@@ -688,8 +693,10 @@ change. Each item is a yes/no question, or "justify in a comment."
   Default ordering: `tp_btf` ≥ `raw_tp` > `tracepoint` > `fentry`/`fexit`
   > `kprobe`/`kretprobe`. (Principle 4.)
 - **Map structure.** Bounded-integer key → `BPF_MAP_TYPE_ARRAY` with
-  `BPF_F_MMAPABLE`. Pointer key → `BPF_MAP_TYPE_HASH`, justified in a
-  comment. Anything else needs explicit reasoning. (Principle 5.)
+  `BPF_F_MMAPABLE`. Pointer key on a per-packet or per-event hot path → a
+  fixed array indexed by a hash of the pointer, as `tcp_packet_latency`
+  does; elsewhere `BPF_MAP_TYPE_HASH`, justified in a comment. Anything else
+  needs explicit reasoning. (Principle 5.)
 - **Counter layout.** Choose `Counters` / `CpuCounters` / `PackedCounters`
   based on the writer concurrency pattern (principle 7). Prefer
   `CpuCounters` over `Counters` for new samplers (principle 9). Group

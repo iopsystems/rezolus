@@ -151,6 +151,42 @@ pub fn kernel_btf_has_tracepoints(names: &[&str]) -> bool {
     all
 }
 
+/// Whether the running kernel defines the BPF helper `name` (for example
+/// `bpf_skc_to_tcp_sock`), from its BTF.
+///
+/// The kernel defines each helper with a `BPF_CALL_<n>` macro, which emits the
+/// typedef `btf_<name>`; it is in vmlinux BTF exactly when the helper is,
+/// including on distro kernels that backported it. Whether a given program
+/// type may call it is a separate question: callers name a helper whose
+/// availability to their program type arrived with the helper itself.
+///
+/// libbpf's helper probe cannot answer this for tracing programs: it cannot
+/// load a standalone `BPF_PROG_TYPE_TRACING` probe, and the `kprobe` probe
+/// that `probe_task_storage_helper` uses instead only sees helpers in the
+/// table `kprobe` programs share with tracing programs. Helpers offered only
+/// in `tracing_prog_func_proto`, such as `bpf_skc_to_tcp_sock`, read as
+/// absent through it. A kernel whose BTF lacks the typedef reads as
+/// unsupported, which selects the caller's fallback, never a load failure.
+/// Returns false when there is no kernel BTF to consult.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn kernel_btf_has_helper(name: &str) -> bool {
+    if !kernel_has_btf() {
+        return false;
+    }
+
+    let Some(vmlinux) = RawBtf::parse(Path::new("/sys/kernel/btf/vmlinux"), None) else {
+        return false;
+    };
+
+    let found = vmlinux.has_typedef(&format!("btf_{name}"));
+
+    if !found {
+        debug!("kernel BTF has no BPF helper `{name}`");
+    }
+
+    found
+}
+
 /// The module BTF files under `dir` (`/sys/kernel/btf/<module>`, one per
 /// loaded module with BTF), `vmlinux` excluded. A directory that does not
 /// exist yields nothing rather than an error: no module BTF is the normal

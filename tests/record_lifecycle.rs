@@ -117,7 +117,7 @@ enum Names {
     /// as a current agent serves.
     Metriken,
     /// `application/vnd.rezolus.replication.v1+dendro` and `x-rezolus-*`, as
-    /// agents from 5.21.0 through 6.0.0-alpha.43 serve.
+    /// agents from 5.21.0 through 6.0.0-alpha.44 serve.
     Legacy,
 }
 
@@ -820,7 +820,7 @@ fn a_dendro_streams_an_agent_and_scrapes_a_prometheus_exporter_into_one_archive(
 
 /// One `.dendro` run records an agent serving the legacy stream names
 /// (`application/vnd.rezolus.replication.v1+dendro`, as 5.21.0 through
-/// 6.0.0-alpha.43 agents do) and one serving metriken's names, a recording each.
+/// 6.0.0-alpha.44 agents do) and one serving metriken's names, a recording each.
 /// GO check 5 of metriken's `docs/journal/2026-10-11-stream-route.md`.
 #[test]
 fn a_dendro_records_agents_serving_legacy_and_metriken_stream_names() {

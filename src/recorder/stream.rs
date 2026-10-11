@@ -32,7 +32,7 @@ use dendro::replicate::Frame;
 use metriken_exposition::stream::{WireNames, WIRE_NAMES};
 use std::time::Duration;
 
-/// The names agents from 5.21.0 through 6.0.0-alpha.43 serve their stream
+/// The names agents from 5.21.0 through 6.0.0-alpha.44 serve their stream
 /// under. A later agent serves metriken's [`WIRE_NAMES`].
 pub(crate) const REZOLUS_LEGACY_WIRE_NAMES: WireNames = WireNames {
     content_type: "application/vnd.rezolus.replication.v1+dendro",
@@ -43,7 +43,7 @@ pub(crate) const REZOLUS_LEGACY_WIRE_NAMES: WireNames = WireNames {
 
 /// The names this recorder accepts a stream under: metriken's, which current
 /// agents serve, and the legacy names, so agents from 5.21.0 through
-/// 6.0.0-alpha.43 are still recorded.
+/// 6.0.0-alpha.44 are still recorded.
 pub(crate) const ACCEPTED_WIRE_NAMES: &[WireNames] = &[WIRE_NAMES, REZOLUS_LEGACY_WIRE_NAMES];
 
 /// What one interval's frames amounted to.
