@@ -1,13 +1,6 @@
-//! `RezReader`: a `.rez` or dendro archive read as one
+//! `RezReader`: an archive opened by `metriken_storage::rez::open` (a
+//! `.rez` or dendro archive, recognized by content), read as one
 //! `metriken_query::MetricsSource` per recording.
-//!
-//! The reader itself is metriken-archive's [`ArchiveReader`] (moved from
-//! here, phase 3 of metriken's
-//! `docs/journal/2026-09-28-high-cardinality-stack.md`). What stays in
-//! rezolus is the `.rez` side: recognizing and opening the container
-//! (v2 tar, v3 SQLite, or dendro; see [`crate::catalog`]), and reading a
-//! `.rez` recording's identity index (caller rows written by
-//! `record --stream`) into a relabelling, [`IdentityIndex`].
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -20,8 +13,8 @@ use metriken_query::{
 
 /// A `.rez` or dendro archive read as a `MetricsSource`: metriken-archive's
 /// [`ArchiveReader`], opened from a path or bytes by content. Derefs to it,
-/// so its methods (`composition_sources`, `eval_timestamps_for`,
-/// `metric_metadata`, `complete`, ...) are this type's.
+/// so its methods (`composition_sources`, `metric_metadata`, `complete`, ...)
+/// are this type's.
 pub struct RezReader(pub ArchiveReader);
 
 impl std::ops::Deref for RezReader {
@@ -3045,6 +3038,195 @@ mod tests {
             vec!["cpu_usage".to_string()],
             "the query opened the table it named and no other"
         );
+    }
+
+    /// A table carrying the identity index a 5.x `record --stream` wrote
+    /// reads exactly as the same table without it: the index is no longer
+    /// read, and the labels come from each segment's columns.
+    mod caller_rows_ignored {
+        use super::*;
+        use crate::rez_sqlite::TickBatch;
+        use crate::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
+        use crate::seal_policy::SealPolicy;
+        use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, SnapshotV3};
+        use std::time::Duration;
+
+        const STREAM: &str = "fake/ops";
+        const TICKS: u64 = 6;
+        /// One result series: its labels and its `(timestamp, value)` points.
+        type Series = (BTreeMap<String, String>, Vec<(f64, f64)>);
+        /// The tick at which slot 0 changes hands: redis leaves, valkey lands.
+        const HANDOVER: u64 = 3;
+
+        fn ts(tick: u64) -> u64 {
+            1_000_000_000 * (tick + 1)
+        }
+
+        fn labels(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        }
+
+        /// Which occupant slot 0 has at `tick`.
+        fn slot0_comm(tick: u64) -> &'static str {
+            if tick < HANDOVER {
+                "redis"
+            } else {
+                "valkey"
+            }
+        }
+
+        /// The group's schema at `tick`. `labelled` is the shape agents write
+        /// today, where a slot's labels are copied into its member's metadata;
+        /// unlabelled is the shape after #1224 step 7, where a member carries
+        /// only its metric and slot and the index is the one place the labels
+        /// live.
+        fn schema(tick: u64, labelled: bool) -> GroupSchema {
+            let member = |slot: u32, comm: &str| {
+                let mut m = labels(&[("metric", "fake_ops"), ("id", &slot.to_string())]);
+                if labelled {
+                    m.insert("comm".to_string(), comm.to_string());
+                }
+                MetricDesc {
+                    name: format!("7x{slot}"),
+                    metadata: m,
+                }
+            };
+            GroupSchema {
+                counters: vec![member(0, slot0_comm(tick)), member(1, "nginx")],
+                gauges: Vec::new(),
+                histograms: Vec::new(),
+            }
+        }
+
+        /// Write `TICKS` ticks of one two-slot group, slot 0 changing hands at
+        /// `HANDOVER`, sealed every two rows so the table is several segments
+        /// plus a WAL tail. With `with_index` the table also has `caller_rows`,
+        /// as `record --stream -o out.rez` wrote them before 6.0; they are
+        /// inserted after the rows, since nothing in 6.0 writes them.
+        fn write(path: &Path, labelled: bool, with_index: bool) {
+            let seed = ManifestSeed {
+                labels: labels(&[("source", "rezolus")]),
+                metadata: labels(&[("sampling_interval_ms", "1000")]),
+                clock_anchor_wall_ns: ts(0),
+            };
+            let (mut archive, writer) = RezArchive::single(path, seed).unwrap();
+            let rid = writer.recording_id();
+            let mut rec = StreamRecorderV3::with_policy(
+                writer,
+                SealPolicy {
+                    max_bytes: usize::MAX,
+                    max_rows: 2,
+                    max_age: Duration::from_secs(3600),
+                },
+            );
+            for tick in 0..TICKS {
+                let sch = schema(tick, labelled);
+                let g = GroupSnapshot {
+                    name: STREAM.to_string(),
+                    schema_hash: sch.hash(),
+                    schema: Some(Arc::new(sch)),
+                    window: Some(metriken::Window::new(ts(tick) - 5_000_000, ts(tick))),
+                    // Slot 0 restarts from zero at the handover with a
+                    // different slope: a read that merged the two occupants
+                    // would show a counter reset there, and a rate that
+                    // crossed it would not be 10 or 7.
+                    counters: vec![
+                        Some(if tick < HANDOVER {
+                            tick * 10
+                        } else {
+                            (tick - HANDOVER) * 7
+                        }),
+                        Some(tick * 3),
+                    ],
+                    gauges: Vec::new(),
+                    histograms: Vec::new(),
+                };
+                let snap = Snapshot::V3(SnapshotV3 {
+                    systemtime: SystemTime::UNIX_EPOCH + Duration::from_nanos(ts(tick)),
+                    duration: Duration::ZERO,
+                    metadata: HashMap::new(),
+                    groups: vec![g],
+                });
+                let rows = rec.stage(&snap, ts(tick), 0).unwrap();
+                archive
+                    .wal_tick(vec![TickBatch {
+                        recording_id: rid,
+                        rows,
+                    }])
+                    .unwrap();
+                rec.maybe_seal().unwrap();
+            }
+            rec.sync().unwrap();
+            drop(rec);
+            drop(archive);
+            if with_index {
+                // The bytes are not decoded any more; any blob stands for the
+                // index a 5.x `record --stream` wrote.
+                let entries: Vec<(u64, Vec<u8>)> =
+                    vec![(ts(0), b"full".to_vec()), (ts(HANDOVER), b"delta".to_vec())];
+                let mut db = RezDb::open(path).unwrap();
+                db.transaction(|tx| tx.insert_caller_rows(rid, STREAM, &entries))
+                    .unwrap();
+            }
+        }
+
+        fn open(path: &Path) -> RezReader {
+            let mut readers =
+                RezReader::open_recordings(path, BufferPool::new(16 * 1024 * 1024)).unwrap();
+            assert_eq!(readers.len(), 1);
+            readers.pop().unwrap().1
+        }
+
+        /// Every series of `rate(fake_ops[2s])` as `(labels, values)`, in a
+        /// fixed order. A rate rather than the bare counter because that is
+        /// what the engine evaluates over a range for a counter, and because
+        /// a rate is what a merged handover would corrupt.
+        fn series(reader: &RezReader) -> Vec<Series> {
+            let (start, end) = reader.time_range().unwrap();
+            let r = reader
+                .query_range("rate(fake_ops[2s])", start, end, 1.0)
+                .expect("the query must resolve");
+            let QueryResult::Matrix { result } = r else {
+                panic!("a range query over a counter is a matrix");
+            };
+            let mut out: Vec<_> = result
+                .into_iter()
+                .map(|s| (s.metric.into_iter().collect::<BTreeMap<_, _>>(), s.values))
+                .collect();
+            out.sort_by(|a, b| a.0.cmp(&b.0));
+            out
+        }
+
+        #[test]
+        fn an_archive_with_an_identity_index_reads_as_one_without() {
+            let dir = tempfile::tempdir().unwrap();
+            let plain = dir.path().join("plain.rez");
+            let indexed = dir.path().join("indexed.rez");
+            write(&plain, true, false);
+            write(&indexed, true, true);
+
+            let plain = open(&plain);
+            let indexed = open(&indexed);
+
+            let expected = series(&plain);
+            assert_eq!(
+                expected.len(),
+                3,
+                "the segment labels split the handover into two series: {expected:?}"
+            );
+            assert_eq!(series(&indexed), expected);
+
+            let mut a = plain.counter_labels("fake_ops");
+            let mut b = indexed.counter_labels("fake_ops");
+            a.sort();
+            b.sort();
+            assert_eq!(a, b);
+            assert_eq!(indexed.sample_timestamps(), plain.sample_timestamps());
+            assert_eq!(indexed.time_range_ns(), plain.time_range_ns());
+        }
     }
 
     /// A long table and its occupant stream (the 6.0 layout) read as the

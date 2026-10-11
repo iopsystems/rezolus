@@ -2339,15 +2339,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "metriken-segment"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f3a74ef95d35220b74cc8aae5f8ccd91df0ce543382557a8966fb9a8af8c739"
-dependencies = [
- "metriken-storage",
-]
-
-[[package]]
 name = "metriken-storage"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3090,10 +3081,8 @@ dependencies = [
  "metriken-archive",
  "metriken-exposition",
  "metriken-query",
- "metriken-segment",
  "metriken-storage",
  "parquet",
- "rmp-serde",
  "rusqlite",
  "serde",
  "serde_json",

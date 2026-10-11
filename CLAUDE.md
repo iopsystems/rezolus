@@ -130,10 +130,10 @@ target/release/rezolus recording filter file.parquet -o slim.parquet   # drop co
 target/release/rezolus recording upgrade old.rez                       # v1/v2 tar .rez -> v3 SQLite (in place)
 target/release/rezolus recording upgrade old.rez -o new.rez            # ...or to a new file
 target/release/rezolus recording upgrade --to dendro in.rez -o out.dendro  # any .rez -> dendro archive (new file only;
-#   `view` and `mcp` read it through crates/rez/src/catalog.rs, long tables and their `<table>/occupants`
-#   streams included (format: metriken-segment; relabel: metriken_query::long); `recording` metadata, annotate,
+#   `view` and `mcp` read it through metriken-storage's src/rez/catalog.rs, long tables and their `<table>/occupants`
+#   streams included (format and relabel: metriken-storage); `recording` metadata, annotate,
 #   check, snapshot, filter and combine (into a .dendro) read it too; RezDb::open refuses one by name). Segment/WAL/caller-row bytes are
-#   copied verbatim, only live WAL rows, u64 timestamps checked into i64. crates/rez/src/to_dendro.rs.
+#   copied verbatim, only live WAL rows, u64 timestamps checked into i64. metriken-storage's src/rez/to_dendro.rs.
 target/release/rezolus recording snapshot live.rez -o incident.rez     # complete copy of an archive still being written
 # .rez archives: metadata describes the manifest (recordings, labels, tables + cadence; V3 group
 #   tables appear as <sampler>/<group>);
@@ -244,10 +244,10 @@ File-level metadata keys are defined in `src/parquet_metadata.rs`:
 
 ### `.rez` Archive Format
 
-The `.rez` format (`crates/rez/`: `src/rez.rs`, `src/reader.rs`) is a container holding many parquet tables plus a `manifest.json`, rather than a single parquet file. Two container shapes exist and both are readable:
+The `.rez` format (metriken-storage's `src/rez/`: `rez.rs`, `rez_sqlite.rs`, `open.rs`; rezolus's `crates/rez/src/reader.rs`) is a container holding many parquet tables plus a `manifest.json`, rather than a single parquet file. Two container shapes exist and both are readable:
 
 - **v2 (tar)** — a tar archive with `manifest.json` and one table per sampler (`<recording>/<sampler>.parquet`).
-- **v3 (SQLite)** — a SQLite container (`crates/rez/src/rez_sqlite.rs`, `crates/rez/src/rez_v3_writer.rs`) with a real WAL: rows land in the WAL and are periodically sealed into parquet segments. This is what `hindsight` maintains as its rolling buffer, and it is readable live while a writer is still appending.
+- **v3 (SQLite)** — a SQLite container (metriken-storage's `src/rez/rez_sqlite.rs` and `src/rez/rez_v3_writer.rs`) with a real WAL: rows land in the WAL and are periodically sealed into parquet segments. This is what `hindsight` maintains as its rolling buffer, and it is readable live while a writer is still appending.
 
 Each sampler records at its own cadence. Table granularity depends on the snapshot format the agent produced:
 
@@ -258,7 +258,7 @@ Either way the query engine consumes the window columns to compute `rate()`/`ira
 
 A segment carries no declared sampling interval and needs none: the rows carry timestamps, and metriken-query reads them. (Until 0.24.0 it rounded every timestamp to a grid derived from the file's `sampling_interval_ms`, defaulting to 1000ms when absent — which a `.rez` segment always is. A sub-second archive therefore read back wrong, ten rows of a second collapsing onto one instant, until the reader stopped rounding.) `RezReader::interval()` is a measured figure — a table's catalog span over its gaps, rounded to whole ms — and it is only a hint: the staleness bound and the step the viewer opens at. Nothing is rounded to it, so it does not have to be exactly right.
 
-Because each sampler records at its own cadence, a query spanning *two samplers of materially different cadence* (measured row spacing differing by at least 2x, with the slower coarser than the step) is evaluated at the **slow sampler's own row timestamps** rather than on the uniform `start + k·step` grid — otherwise nearly every point lands where the slow sampler never read and its value is merely held forward. `RezReader::cross_cadence_eval_timestamps` picks those timestamps and passes them as `QueryOptions::eval_timestamps`; cadence is measured from the rows (never `interval()`, which reports one nominal value for the whole archive) and per *sampler*, since a group that skips ticks is sparse within its sampler's cadence rather than a second cadence. Single-sampler queries and `RateMode::Raw` are untouched.
+Because each sampler records at its own cadence, a query spanning *two samplers of materially different cadence* (measured row spacing differing by at least 2x, with the slower coarser than the step) is evaluated at the **slow sampler's own row timestamps** rather than on the uniform `start + k·step` grid — otherwise nearly every point lands where the slow sampler never read and its value is merely held forward. metriken-query's `archive::cross_cadence_eval_timestamps` picks those timestamps and passes them as `QueryOptions::eval_timestamps`; cadence is measured from the rows (never `interval()`, which reports one nominal value for the whole archive) and per *sampler*, since a group that skips ticks is sparse within its sampler's cadence rather than a second cadence. Single-sampler queries and `RateMode::Raw` are untouched.
 
 A `.rez` takes any number of endpoints, rezolus or Prometheus. A Prometheus target is converted on the way in: one scrape is one request and one response, so it becomes a single V3 acquisition group named `prometheus/scrape`, windowed by the real HTTP round trip (`src/recorder/prometheus.rs`). That is why it is a group rather than a flat V2 snapshot — a V2 table carries `<name>:window_begin`/`<name>:window_width` per value column, which would triple the schema width of every Prometheus table. The manifest carries per-recording label sets (`source`/`host` auto-populated, plus any `record --label k=v`, which applies to every recording in the run); a multi-recording `.rez` — built live by `record --endpoint a --endpoint b -o out.rez`, or offline by `parquet combine` — drives the viewer's A/B comparison, aliasing baseline/experiment from each recording's `arm`/`host` labels. The seal stagger keys on sampler + the recording's canonical label set (`seal_policy::recording_stagger_key`), so two recordings of the same agent do not seal in lockstep; identical label sets warn at startup.
 
@@ -278,8 +278,8 @@ a 5.x `record --stream -o out.rez` wrote is not read; such a table logs a
 warning and keeps the labels its segments carry.
 It is a workspace crate rather than a module of the binary because `rezolus` is
 **binary-only** (no `lib` target), so nothing can depend on it: a reader living
-there was reachable by the server viewer and by nothing else, which is why the
-static-site WASM viewer has never opened a `.rez`.
+there was reachable by the server viewer and by nothing else; the static-site
+WASM viewer reads `.rez` through `crates/rez`.
 
 The binary re-exports the modules under the paths call sites already use
 (`crate::recorder::rez`, `crate::rez_reader`, …), so `.rez` code reads the same
@@ -318,7 +318,7 @@ The WASM crate lives at `crates/viewer/`. It targets `wasm32-unknown-unknown` an
 
 **It opens both parquet files and `.rez` archives.** A `.rez` is recognized by content, not by filename, exactly as the CLI recognizes it, and a 2-recording archive fills the A/B slots — the same mapping `rezolus view` makes. Above two, the first two are shown and the rest are named in `WasmCaptureRegistry::notices()`, which the frontend logs; the server viewer's equivalent warning goes to a terminal nobody is watching in a browser.
 
-Save-as-Report writes the source's container: a dendro source saves a `.dendro` report (`report_save::build_dendro_report`, which seals the source's live tail with metriken-storage's `Encoder`, available without `write` since 0.2.7), a `.rez` source or a parquet compare a `.rez`, a single parquet a `.parquet`.
+Save-as-Report writes the source's container: a dendro source saves a `.dendro` report (`report_save::build_dendro_report`, which seals the source's live tail with metriken-storage's `Encoder`, available without `write`), a `.rez` source or a parquet compare a `.rez`, a single parquet a `.parquet`.
 
 One thing the browser cannot have: SQLite's `-wal` **sidecar**. A `.rez` carries its own unsealed rows in a `wal` TABLE inside the file, and those travel with an upload — but SQLite also commits into a sidecar file not yet checkpointed into the archive, and an upload is one file. `rezolus view archive.rez` opens by path with the sidecar beside it and sees further. This only differs for a copy taken from under a running recorder, and the gap used to be large: measured at **123 ticks (~2 minutes at a 1s interval)** on a 2000-tick recording, with a sidecar larger than the archive. Two things bound it now — the writer folds the sidecar into the archive every `rez_v3_writer::CHECKPOINT_INTERVAL` (10s), so a plain copy is at most that stale rather than unbounded; and `rezolus recording snapshot <archive> -o out.rez` reads through the sidecar for an exact copy, without pausing the writer.
 

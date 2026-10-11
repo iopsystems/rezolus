@@ -40,8 +40,8 @@ be one.
 
 | key | written by | read by | treatment |
 |---|---|---|---|
-| `metric` | agent (`src/agent/exposition/http/snapshot.rs:416`), Prometheus converter (`src/recorder/prometheus.rs:64`), parquet ingest backfill (`crates/rez/src/parquet_ingest.rs:175`) | every loader | becomes `__name__`; column name minus `:buckets` is the fallback |
-| `metric_type` | `crates/rez/src/rez.rs:1586`, combine (`src/parquet_tools/combine.rs:1387`), metriken-exposition's writer | loaders skip it; `recording metadata` prints it | selects counter/gauge/histogram handling |
+| `metric` | agent (`src/agent/exposition/http/snapshot.rs:416`), Prometheus converter (`src/recorder/prometheus.rs:64`), parquet ingest backfill (metriken-storage `src/rez/parquet_ingest.rs`) | every loader | becomes `__name__`; column name minus `:buckets` is the fallback |
+| `metric_type` | metriken-storage `src/rez/rez.rs`, combine (`src/parquet_tools/combine.rs:1387`), metriken-exposition's writer | loaders skip it; `recording metadata` prints it | selects counter/gauge/histogram handling |
 | `unit` | a metric's own static metadata only (`unit = "..."` in a sampler's `stats.rs`); the exposition crate never writes it except on `timestamp` | loaders skip it; MCP strips it from key lists | display hint |
 | `grouping_power`, `max_value_power` | agent (`snapshot.rs:948`, `:2651`), Prometheus converter (`prometheus.rs:364`) | the parquet loader removes them (`parquet.rs:1708`); **the live-agent loader does not** (`memory.rs:139`) | histogram bucket configuration |
 | `acq_group` | declared statically on ~290 metrics | **removed before emission** (`snapshot.rs:735`, `:2342`) | never reaches a column |
@@ -129,10 +129,10 @@ consumers; metriken-query pins the engine.
 - **`{__name__="x"}` routes but cannot evaluate**: the selector parser accepts
   it (`promql/mod.rs:381`), the dispatcher requires a bare name
   (`streaming/dispatch.rs:605`).
-- **`caller_rows` is read by the archive reader.** A `.rez` recorded by a
-  5.x `record --stream -o out.rez` holds identity transitions there
-  (`rez_sqlite.rs`), and `crates/rez/src/indexed.rs` replays them to split a
-  group table's slot columns by occupant (#1280). 6.0 writes none: a
-  `.dendro` streams agents and takes identity from each group's schema, and
-  a `.rez` is scraped.
+- **`caller_rows` is not read.** A `.rez` recorded by a 5.x
+  `record --stream -o out.rez` holds identity transitions there; 6.0 reads
+  such a table with the labels each segment carries and logs a warning
+  (metriken-storage's `reader.rs`, `relabel`). 6.0 writes none: a `.dendro`
+  streams agents and takes identity from each group's schema, and a `.rez`
+  is scraped.
   See `docs/journal/2026-09-22-internal-labels.md`.
