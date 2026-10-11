@@ -110,6 +110,24 @@ pub struct StreamRows {
     pub rows: Vec<metriken_exposition::stream::EncodedStreamGroup>,
 }
 
+/// A long-layout pass as a stream subscription reads it
+/// (`StreamSubscription::frame_at`).
+impl metriken_exposition::stream::Pass for StreamRows {
+    type Row = metriken_exposition::stream::EncodedStreamGroup;
+
+    fn stamp(&self) -> metriken_exposition::stream::PassStamp {
+        metriken_exposition::stream::PassStamp {
+            wall_ns: self.wall_ns,
+            ts: self.ts,
+            wall_offset: self.wall_offset,
+        }
+    }
+
+    fn rows(&self) -> &[Self::Row] {
+        &self.rows
+    }
+}
+
 /// The pass's wide snapshot, built on first use.
 fn wide<'a>(
     cached: &'a CachedSnapshot,

@@ -43,7 +43,7 @@ enum Format {
     Parquet,
     Raw,
     Rez,
-    /// A dendro archive, written through metriken-archive. The default since
+    /// A dendro archive, written through metriken-storage. The default since
     /// 6.0.
     Dendro,
 }

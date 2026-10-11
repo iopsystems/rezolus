@@ -4,7 +4,7 @@
 //! dendro's `copy_sources_into` copies sealed segments as they are, the
 //! clock offsets and caller rows, and encodes each stream's live WAL tail
 //! into a final segment, all in one read snapshot of the source. The tail is
-//! encoded with metriken-archive's `Encoder`, built from the source's stream
+//! encoded with metriken-storage's `Encoder`, built from the source's stream
 //! list, since a copy runs outside the writer that knows which streams are
 //! long. The copy is therefore fully sealed.
 
@@ -41,7 +41,7 @@ pub(crate) fn copy(src: &Archive, dest: &Path, spec: &CopySpec<'_>) -> Result<us
     Ok(copied)
 }
 
-/// Test fixtures: dendro archives recorded through metriken-archive's writer,
+/// Test fixtures: dendro archives recorded through metriken-storage's writer,
 /// so they carry what a real recording does (a long table and its occupant
 /// stream beside a V2 sampler table).
 #[cfg(test)]

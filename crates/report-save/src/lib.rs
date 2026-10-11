@@ -591,9 +591,9 @@ pub fn build_rez_report_from_rez(
 /// [`build_rez_report_from_rez`] for a dendro archive: a dendro report.
 ///
 /// The same assembly, in memory: every source copied through dendro's
-/// `copy_sources_into` (trimmed with metriken-archive's `KeepMetrics` when
+/// `copy_sources_into` (trimmed with metriken-storage's `KeepMetrics` when
 /// `keep_metrics` is `Some`, which keeps a long table long and its occupant
-/// stream whole), each stream's live tail sealed with metriken-archive's
+/// stream whole), each stream's live tail sealed with metriken-storage's
 /// `Encoder`, and segments re-encoded with the writer's properties. An
 /// occupant stream whose table the trim dropped is removed, as `recording
 /// filter` removes it. The markers go on the first source.
@@ -700,7 +700,7 @@ fn build_dendro_report(
     dst.serialize().map_err(err)
 }
 
-/// The row-time interval at which metriken-archive's writer restates a long
+/// The row-time interval at which metriken-storage's writer restates a long
 /// table's live occupants, in nanoseconds: `WriterConfig::default()`'s
 /// `restate_every_ns`, which needs the writer and so is not reachable from
 /// here. The binary's tests pin the two together.

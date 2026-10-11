@@ -118,7 +118,13 @@ impl LiveSession {
         let timeout = crate::recorder::tick_timeout(LIVE_INTERVAL);
         let subscription = match tokio::time::timeout(
             timeout,
-            Subscription::connect(client, url, LIVE_INTERVAL, Layout::Long),
+            Subscription::connect(
+                client,
+                url,
+                LIVE_INTERVAL,
+                Layout::Long,
+                crate::recorder::stream::ACCEPTED_WIRE_NAMES,
+            ),
         )
         .await
         {

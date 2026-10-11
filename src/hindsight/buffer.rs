@@ -1,7 +1,7 @@
 //! The hindsight rolling buffer: **an archive recording with retention**, and
 //! nothing else. See docs/journal/2026-08-12-rez-sqlite-container.md
 //! § "Hindsight". Since 6.0 the buffer is a dendro archive written through
-//! metriken-archive (`create_dendro`, `dump_dendro`) unless the output names a
+//! metriken-storage (`create_dendro`, `dump_dendro`) unless the output names a
 //! `.rez`; the notes below were written for the `.rez` buffer, and the dendro
 //! one keeps the same properties (docs/journal/2026-09-28-dendro-writer-adoption.md,
 //! "B: built").
@@ -77,7 +77,7 @@ enum Writer {
         #[allow(dead_code)]
         archive: RezArchive,
     },
-    /// A dendro archive through metriken-archive's writer.
+    /// A dendro archive through metriken-storage's writer.
     Dendro {
         rec: metriken_storage::SourceRecorder,
         writer: metriken_storage::ArchiveWriter,
@@ -96,7 +96,7 @@ fn archive_err(e: Box<dyn std::error::Error + Send + Sync>) -> String {
 
 impl HindsightBuffer {
     /// Create a dendro buffer at `path`, which must not exist. As
-    /// [`create`](Self::create), through metriken-archive's writer: groups
+    /// [`create`](Self::create), through metriken-storage's writer: groups
     /// with slots are written long.
     pub fn create_dendro(
         path: &Path,
@@ -555,7 +555,7 @@ pub fn dump(buffer: &Path, dest: &Path, range: &TimeRange) -> Result<Summary, St
 /// Both the whole buffer and a range go through dendro's
 /// `copy_sources_into`: whole segments overlapping the range, copied as they
 /// are, the live WAL tail encoded into a final segment through
-/// metriken-archive's encoder, and the clock offsets, all in one read
+/// metriken-storage's encoder, and the clock offsets, all in one read
 /// snapshot of the buffer. The dump is therefore fully sealed: a reader
 /// opening it has no WAL tail to rebuild, which a `VACUUM INTO` copy would
 /// carry over unsealed.

@@ -15,7 +15,7 @@ listen = "0.0.0.0:4241"
 #    a /metrics/stream frame can carry anything new. A subscriber asking for
 #    less than the TTL is legal — it gets the frames it asked for, most of them
 #    empty — but it cannot make the agent work harder than this. Subscribers
-#    are told the floor in the `x-rezolus-update-floor` response header.
+#    are told the floor in the `x-metriken-update-floor` response header.
 #
 # The consequence of one knob doing both: raising the TTL to protect the agent
 # from a demanding subscriber also coarsens every scrape-based consumer. The

@@ -172,7 +172,7 @@ fn serve_stream(
         .and_then(|v| humantime::parse_duration(&v).ok())
         .unwrap_or(INTERVAL);
     let head = "HTTP/1.1 200 OK\r\n\
-                Content-Type: application/vnd.rezolus.replication.v1+dendro\r\n\
+                Content-Type: application/vnd.metriken.replication.v1+dendro\r\n\
                 Connection: close\r\n\r\n";
     let mut bytes = head.as_bytes().to_vec();
     wire::write_preamble(&mut bytes).unwrap();

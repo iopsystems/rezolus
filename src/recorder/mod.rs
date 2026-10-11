@@ -743,7 +743,13 @@ async fn open_stream(
     ep.agent = fetch_agent_metadata(client, &ep.config.url).await;
     let sub = match tokio::time::timeout(
         timeout,
-        stream::Subscription::connect(client, &ep.config.url, interval, stream::Layout::Long),
+        stream::Subscription::connect(
+            client,
+            &ep.config.url,
+            interval,
+            stream::Layout::Long,
+            stream::ACCEPTED_WIRE_NAMES,
+        ),
     )
     .await
     {
@@ -1601,7 +1607,7 @@ enum Sink {
         staged: Vec<rez_sqlite::TickBatch>,
         archive: rez_v3_writer::RezArchive,
     },
-    /// A dendro archive through metriken-archive's writer: groups with slots
+    /// A dendro archive through metriken-storage's writer: groups with slots
     /// are written long, with their occupants in a stream beside each.
     Dendro {
         recs: BTreeMap<usize, metriken_storage::SourceRecorder>,
@@ -1616,7 +1622,7 @@ enum Sink {
     },
 }
 
-/// A metriken-archive error as the recorder reports errors.
+/// A metriken-storage error as the recorder reports errors.
 fn archive_err(e: Box<dyn std::error::Error + Send + Sync>) -> String {
     e.to_string()
 }
@@ -4797,7 +4803,7 @@ mod tests {
 
     #[test]
     fn a_dendro_recording_round_trips_through_rezreader() {
-        // `-o out.dendro` writes through metriken-archive's writer, and the
+        // `-o out.dendro` writes through metriken-storage's writer, and the
         // recording must come back out through the reader every consumer
         // uses, with each endpoint its own recording: one opened at startup,
         // one that activated mid-run.

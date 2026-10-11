@@ -219,7 +219,7 @@ fn filter_rez_any(
 ///
 /// - `keep_samplers` keeps a stream when its sampler is named; an occupant
 ///   stream (`<table>/occupants`) counts as its table's, so it goes with it.
-/// - `keep_metrics` trims columns with metriken-archive's `KeepMetrics`,
+/// - `keep_metrics` trims columns with metriken-storage's `KeepMetrics`,
 ///   which keeps a long table long (its `occupant` column and layout
 ///   markers) and copies occupant streams whole, re-encoding with the
 ///   writer's properties. A table left with no kept metric is dropped by the

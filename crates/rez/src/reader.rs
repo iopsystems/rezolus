@@ -13,7 +13,7 @@ pub use metriken_storage::ArchiveReader;
 use metriken_storage::BufferPool;
 
 /// A `.rez` or dendro archive read as a `MetricsSource`: metriken-storage's
-/// [`ArchiveReader`] (re-exported by metriken-archive), opened from a path or bytes by content. Derefs to it,
+/// [`ArchiveReader`], opened from a path or bytes by content. Derefs to it,
 /// so its methods (`composition_sources`, `metric_metadata`, `complete`, ...)
 /// are this type's.
 pub struct RezReader(pub ArchiveReader);

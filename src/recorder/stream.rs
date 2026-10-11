@@ -7,10 +7,10 @@
 //! # Why not dendro's `Subscriber`
 //!
 //! dendro ships one. It owns a dendro `Writer`, while `record -o out.dendro` writes
-//! through metriken-archive's `ArchiveWriter`, which maps the producer's
+//! through metriken-storage's `ArchiveWriter`, which maps the producer's
 //! occupant keys to its own occupant numbers (`SourceRecorder::stage_streamed`).
 //! So the frames are read and checked here; the callers decode their rows
-//! with `StreamDecoder`, and metriken-archive writes the archive.
+//! with `StreamDecoder`, and metriken-storage writes the archive.
 //!
 //! # Layout
 //!
@@ -29,7 +29,22 @@
 
 use dendro::archive::WalRow;
 use dendro::replicate::Frame;
+use metriken_exposition::stream::{WireNames, WIRE_NAMES};
 use std::time::Duration;
+
+/// The names agents from 5.21.0 through 6.0.0-alpha serve their stream
+/// under. A later agent serves metriken's [`WIRE_NAMES`].
+pub(crate) const REZOLUS_LEGACY_WIRE_NAMES: WireNames = WireNames {
+    content_type: "application/vnd.rezolus.replication.v1+dendro",
+    frame_interval: "x-rezolus-frame-interval",
+    update_floor: "x-rezolus-update-floor",
+    layout: "x-rezolus-layout",
+};
+
+/// The names this recorder accepts a stream under: metriken's, which current
+/// agents serve, and the legacy names, so agents from 5.21.0 through
+/// 6.0.0-alpha are still recorded.
+pub(crate) const ACCEPTED_WIRE_NAMES: &[WireNames] = &[WIRE_NAMES, REZOLUS_LEGACY_WIRE_NAMES];
 
 /// What one interval's frames amounted to.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -43,25 +58,12 @@ pub(crate) struct Applied {
     pub gap: bool,
 }
 
-/// How a stream carries groups whose metrics are all counter or gauge
-/// groups: as a `WalGroupRow` whose schema lists every member (wide), or as
-/// a `WalLongRow` keyed by occupant with each occupant's labels sent on
-/// `<group>/occupants` (long). See the module docs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Layout {
-    Wide,
-    Long,
-}
-
-impl Layout {
-    /// The value of the `layout` query parameter and `x-rezolus-layout`.
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Layout::Wide => "wide",
-            Layout::Long => "long",
-        }
-    }
-}
+/// How a stream carries groups of slots: as a `WalGroupRow` whose schema
+/// lists every member (wide), or as a `WalLongRow` keyed by occupant with
+/// each occupant's labels sent on `<group>/occupants` (long). The producer's
+/// type, so the agent and this subscriber name the same values. See the
+/// module docs.
+pub(crate) use metriken_exposition::stream::Layout;
 
 /// One pass off the stream: the producer's stamp and its rows, in the order
 /// they arrived.
@@ -384,11 +386,11 @@ pub(crate) struct Subscription {
     subscriber: StreamSubscriber,
     /// Frames decoded but not yet part of a complete interval.
     pending: Vec<Frame>,
-    /// The agent's `x-rezolus-update-floor`: how often a frame can carry
+    /// The agent's update-floor header: how often a frame can carry
     /// anything new, which is its snapshot TTL. `None` when the agent did
     /// not say.
     update_floor: Option<Duration>,
-    /// The layout the agent serves, from `x-rezolus-layout`; wide when it
+    /// The layout the agent serves, from its layout header; wide when it
     /// does not say, as an agent before the long layout does not.
     layout: Layout,
 }
@@ -398,8 +400,12 @@ impl Subscription {
     ///
     /// The interval is a request, not a guarantee: the agent's TTL is the
     /// floor on how often anything can be new, and it reports that floor in
-    /// `x-rezolus-update-floor`. Asking for less is legal and gets the frames
+    /// its update-floor header. Asking for less is legal and gets the frames
     /// asked for, most of them empty.
+    ///
+    /// `names` lists the wire names accepted, in order. The response's
+    /// `Content-Type` picks the entry, and that entry's header names are the
+    /// ones read; a `Content-Type` no entry has is refused.
     ///
     /// Returns only once the handshake has been applied, so
     /// [`source`](Self::source) is `Some` on every open subscription. The
@@ -411,6 +417,7 @@ impl Subscription {
         base: &reqwest::Url,
         interval: Duration,
         layout: Layout,
+        names: &[WireNames],
     ) -> Result<Self, ConnectError> {
         let mut url = base.clone();
         url.set_path("/metrics/stream");
@@ -460,23 +467,27 @@ impl Subscription {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
-        if content_type != crate::agent::REPLICATION_CONTENT_TYPE {
+        let Some(served_names) = names.iter().find(|n| n.content_type == content_type) else {
+            let accepted: Vec<String> = names
+                .iter()
+                .map(|n| format!("`{}`", n.content_type))
+                .collect();
             return Err(ConnectError::Unsupported(format!(
-                "{url} serves `{content_type}`, not `{}`; this recorder reads only `{}`",
-                crate::agent::REPLICATION_CONTENT_TYPE,
-                crate::agent::REPLICATION_CONTENT_TYPE
+                "{url} serves `{content_type}`, not a replication stream this recorder \
+                 reads ({})",
+                accepted.join(" or ")
             )));
-        }
+        };
 
         let update_floor = response
             .headers()
-            .get("x-rezolus-update-floor")
+            .get(served_names.update_floor)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| humantime::parse_duration(v).ok());
 
         let served = match response
             .headers()
-            .get("x-rezolus-layout")
+            .get(served_names.layout)
             .and_then(|v| v.to_str().ok())
         {
             Some("long") => Layout::Long,
@@ -675,7 +686,7 @@ pub(crate) async fn pump(
             tokio::time::sleep(retry).await;
             let connected = tokio::time::timeout(
                 timeout,
-                Subscription::connect(&client, &base, interval, layout),
+                Subscription::connect(&client, &base, interval, layout, ACCEPTED_WIRE_NAMES),
             )
             .await;
             match connected {
