@@ -255,12 +255,15 @@ fn subscription_body(
     wall_now: impl Fn() -> std::time::SystemTime + Send + 'static,
 ) -> std::pin::Pin<Box<dyn futures::Stream<Item = std::io::Result<bytes::Bytes>> + Send>> {
     // One `into_stream` per layout, since the two layouts' passes are
-    // different types.
+    // different types. The instant is read on waking, before the lock: a
+    // subscriber queued behind another's pass then asks for the time it woke
+    // at, and the pass built for that boundary is fresh for it.
     match subscription.request().layout {
         Layout::Wide => Box::pin(subscription.into_stream(
             move |_| {
                 let builder = Arc::clone(&builder);
-                async move { builder.lock().await.rows_at(Instant::now()).await }
+                let now = Instant::now();
+                async move { builder.lock().await.rows_at(now).await }
             },
             keep_alive,
             wall_now,
@@ -268,7 +271,8 @@ fn subscription_body(
         Layout::Long => Box::pin(subscription.into_stream(
             move |_| {
                 let builder = Arc::clone(&builder);
-                async move { builder.lock().await.stream_long_at(Instant::now()).await }
+                let now = Instant::now();
+                async move { builder.lock().await.stream_long_at(now).await }
             },
             keep_alive,
             wall_now,
@@ -740,15 +744,14 @@ mod stream_tests {
     ///
     /// Real clock, since the claim is about timers firing on the same
     /// boundaries and meeting the TTL cache, which a paused clock would
-    /// decide by construction. Each subscription is sent `TICKS` frames, and
-    /// the bound is the number of distinct intervals those frames name
-    /// (`seq`). That is `TICKS` when every subscription fires at every
-    /// boundary. It is more when a subscription misses boundaries, which
-    /// happens when a frame takes longer than an interval to build: a
-    /// subscription's first frame carries every schema, and with the rest of
-    /// this binary's tests running beside it, 20 frames each named 30 or 31
-    /// intervals and took 25 to 27 passes. A TTL below the interval (`1ms`)
-    /// fails the bound with 60 passes, one per subscription per frame.
+    /// decide by construction. Every frame for one interval (`seq`), across
+    /// the three subscriptions, carries rows from one pass: one row
+    /// timestamp per `seq`. A subscriber that reads the instant after
+    /// waiting for the lock behind a slow pass finds that pass stale and
+    /// samples again, which gives one `seq` several timestamps. Each
+    /// subscription is sent `TICKS` frames, and the sampling passes are also
+    /// at most the distinct intervals those frames name. A TTL below the
+    /// interval (`1ms`) fails both.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn three_subscriptions_at_one_interval_share_one_pass_per_interval() {
         const TICKS: usize = 20;
@@ -806,22 +809,31 @@ mod stream_tests {
             })
             .collect();
 
-        let mut seqs = std::collections::BTreeSet::new();
+        let mut stamps: std::collections::BTreeMap<u64, std::collections::BTreeSet<i64>> =
+            Default::default();
         for task in tasks {
             let body = task.await.unwrap();
             let mut reader = dendro::replicate::wire::FrameReader::new(std::io::Cursor::new(body))
                 .expect("the preamble reads");
             let mut frames = 0;
             while let Some(frame) = reader.next_frame().expect("decodable") {
-                if let dendro::replicate::Frame::Rows { seq, .. } = frame {
-                    seqs.insert(seq);
+                if let dendro::replicate::Frame::Rows { seq, rows, .. } = frame {
+                    let at = stamps.entry(seq).or_default();
+                    at.extend(rows.iter().map(|row| row.ts));
                     frames += 1;
                 }
             }
             assert_eq!(frames, TICKS, "one rows frame per interval");
         }
+        for (seq, at) in &stamps {
+            assert!(
+                at.len() <= 1,
+                "seq {seq} carries rows from {} passes: {at:?}",
+                at.len()
+            );
+        }
         let passes = builder.lock().await.samples() - before;
-        let intervals = seqs.len() as u64;
+        let intervals = stamps.len() as u64;
         assert!(
             passes <= intervals,
             "{passes} sampling passes for {intervals} distinct intervals of three subscriptions"

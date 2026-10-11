@@ -94,8 +94,8 @@ target/release/rezolus record --url http://localhost:4241 -o out.dendro         
 # application/vnd.metriken.replication.v1+dendro with x-metriken-frame-interval,
 # x-metriken-update-floor and x-metriken-layout (WIRE_NAMES). Recorder, hindsight and the
 # live viewer also accept the vnd.rezolus / x-rezolus-* names that agents 5.21.0 through
-# 6.0.0-alpha serve (src/recorder/stream.rs ACCEPTED_WIRE_NAMES); a 5.x or 6.0-alpha
-# recorder refuses a current agent's stream by its content type. --stream was
+# 6.0.0-alpha.43 serve (src/recorder/stream.rs ACCEPTED_WIRE_NAMES); 5.x `record --stream`
+# and 6.0-alpha consumers through alpha.43 refuse a current agent's stream by its content type. --stream was
 # removed before 6.0.0 (clap's unknown-argument error): the output format picks the transport.
 
 # Viewer - web dashboard for parquet files, live agents, or upload mode

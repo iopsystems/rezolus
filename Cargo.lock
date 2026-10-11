@@ -2239,6 +2239,7 @@ dependencies = [
 [[package]]
 name = "metriken"
 version = "0.11.3"
+source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fstream-route#080621b011f7246d1de0eb3925a0ad36778e25d9"
 dependencies = [
  "getrandom 0.3.4",
  "histogram",
@@ -2252,6 +2253,7 @@ dependencies = [
 [[package]]
 name = "metriken-core"
 version = "0.3.3"
+source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fstream-route#080621b011f7246d1de0eb3925a0ad36778e25d9"
 dependencies = [
  "histogram",
  "linkme",
@@ -2263,6 +2265,7 @@ dependencies = [
 [[package]]
 name = "metriken-derive"
 version = "0.6.0"
+source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fstream-route#080621b011f7246d1de0eb3925a0ad36778e25d9"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2273,6 +2276,7 @@ dependencies = [
 [[package]]
 name = "metriken-exposition"
 version = "0.22.0"
+source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fstream-route#080621b011f7246d1de0eb3925a0ad36778e25d9"
 dependencies = [
  "bytes",
  "chrono",
@@ -2294,6 +2298,7 @@ dependencies = [
 [[package]]
 name = "metriken-model"
 version = "0.1.1"
+source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fstream-route#080621b011f7246d1de0eb3925a0ad36778e25d9"
 dependencies = [
  "histogram",
  "metriken-types",
@@ -2305,6 +2310,7 @@ dependencies = [
 [[package]]
 name = "metriken-query"
 version = "0.36.0"
+source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fstream-route#080621b011f7246d1de0eb3925a0ad36778e25d9"
 dependencies = [
  "arrow",
  "bytes",
@@ -2325,6 +2331,7 @@ dependencies = [
 [[package]]
 name = "metriken-storage"
 version = "0.2.0"
+source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fstream-route#080621b011f7246d1de0eb3925a0ad36778e25d9"
 dependencies = [
  "arrow",
  "bytes",
@@ -2350,6 +2357,7 @@ dependencies = [
 [[package]]
 name = "metriken-types"
 version = "0.1.0"
+source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fstream-route#080621b011f7246d1de0eb3925a0ad36778e25d9"
 dependencies = [
  "serde",
 ]

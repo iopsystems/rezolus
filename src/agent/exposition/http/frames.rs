@@ -1,4 +1,4 @@
-//! The agent's rows as dendro replication frames, tested.
+//! Tests of the agent's rows through metriken-exposition's `FrameProducer`.
 //!
 //! The frames are built by metriken-exposition's [`FrameProducer`], which
 //! reads the agent's [`AgentRow`](crate::recorder::wire::AgentRow)s (wide

@@ -32,11 +32,17 @@
   stops being read waits with no lock held, and on resuming skips to the
   current pass and logs a `seq` gap.
   - `record`, `hindsight` and the live viewer accept both sets of names, so
-    agents from 5.21.0 through 6.0.0-alpha are still streamed.
-  - **A 5.x or 6.0.0-alpha recorder, hindsight or live viewer refuses a
-    stream from this agent**, naming the content type it got. Upgrade it, or
-    record to `.rez` or parquet: the scrape path (`/metrics/binary`) is
+    agents from 5.21.0 through 6.0.0-alpha.43 are still streamed.
+  - **Older consumers of the stream refuse this agent's stream**, naming the
+    content type they got: `record --stream` from 5.21.0 through 5.26.x, and
+    `record` to `.dendro`, `hindsight` and the live viewer from 6.0.0-alpha
+    builds through alpha.43. Drop `--stream` (5.x), upgrade, or record to
+    `.rez` or parquet, which scrape `/metrics/binary`; that path is
     unchanged.
+  - A subscriber reads the time it woke before waiting for the pass lock,
+    so subscribers at one boundary share one sampling pass. Before, one
+    queued behind a pass longer than the TTL found it stale and sampled
+    again.
 
 - **The `.rez` format and the archive reader and writer are
   `metriken-storage`'s** (0.2.0, feature `rez`), and queries over an archive

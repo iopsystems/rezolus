@@ -54,19 +54,19 @@ wasm-bindgen = "0.2.120"
 
 # TEMPORARY: metriken-exposition 0.22.0, metriken-storage 0.2.0 and
 # metriken-query 0.36.0 (metriken branch `feat/stream-route`) and dendro
-# 0.4.0 are not released yet. This block builds against a local metriken
-# worktree and dendro's merged commit, and is removed when those releases are
+# 0.4.0 are not released yet. This block builds against that metriken
+# branch and dendro's merged commit, and is removed when those releases are
 # on crates.io. The metriken crates whose versions did not change are patched
 # too, so the graph holds one `metriken-core` (it declares `links`).
 [patch.crates-io]
-metriken = { path = "/private/tmp/claude-501/-Users-brian-workspace-brayniac-rezolus/4d3c40a1-17c6-4a50-9d19-89e623de330a/scratchpad/m-route/metriken" }
-metriken-core = { path = "/private/tmp/claude-501/-Users-brian-workspace-brayniac-rezolus/4d3c40a1-17c6-4a50-9d19-89e623de330a/scratchpad/m-route/metriken-core" }
-metriken-derive = { path = "/private/tmp/claude-501/-Users-brian-workspace-brayniac-rezolus/4d3c40a1-17c6-4a50-9d19-89e623de330a/scratchpad/m-route/metriken-derive" }
-metriken-types = { path = "/private/tmp/claude-501/-Users-brian-workspace-brayniac-rezolus/4d3c40a1-17c6-4a50-9d19-89e623de330a/scratchpad/m-route/metriken-types" }
-metriken-model = { path = "/private/tmp/claude-501/-Users-brian-workspace-brayniac-rezolus/4d3c40a1-17c6-4a50-9d19-89e623de330a/scratchpad/m-route/metriken-model" }
-metriken-exposition = { path = "/private/tmp/claude-501/-Users-brian-workspace-brayniac-rezolus/4d3c40a1-17c6-4a50-9d19-89e623de330a/scratchpad/m-route/metriken-exposition" }
-metriken-storage = { path = "/private/tmp/claude-501/-Users-brian-workspace-brayniac-rezolus/4d3c40a1-17c6-4a50-9d19-89e623de330a/scratchpad/m-route/metriken-storage" }
-metriken-query = { path = "/private/tmp/claude-501/-Users-brian-workspace-brayniac-rezolus/4d3c40a1-17c6-4a50-9d19-89e623de330a/scratchpad/m-route/metriken-query" }
+metriken = { git = "https://github.com/iopsystems/metriken", branch = "feat/stream-route" }
+metriken-core = { git = "https://github.com/iopsystems/metriken", branch = "feat/stream-route" }
+metriken-derive = { git = "https://github.com/iopsystems/metriken", branch = "feat/stream-route" }
+metriken-types = { git = "https://github.com/iopsystems/metriken", branch = "feat/stream-route" }
+metriken-model = { git = "https://github.com/iopsystems/metriken", branch = "feat/stream-route" }
+metriken-exposition = { git = "https://github.com/iopsystems/metriken", branch = "feat/stream-route" }
+metriken-storage = { git = "https://github.com/iopsystems/metriken", branch = "feat/stream-route" }
+metriken-query = { git = "https://github.com/iopsystems/metriken", branch = "feat/stream-route" }
 dendro = { git = "https://github.com/iopsystems/dendro", rev = "8cc03eeb2f5a64d5ef35ced638c67ef2aecf2694" }
 
 [package]
