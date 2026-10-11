@@ -750,23 +750,39 @@ mod stream_tests {
     /// waiting for the lock behind a slow pass finds that pass stale and
     /// samples again, which gives one `seq` several timestamps. Each
     /// subscription is sent `TICKS` frames, and the sampling passes are also
-    /// at most the distinct intervals those frames name. A TTL below the
-    /// interval (`1ms`) fails both.
+    /// at most the distinct intervals those frames name.
     ///
-    /// The TTL is half the interval, as the agent's is far below its own
+    /// A sampler whose refresh sleeps 250 ms makes every pass 150 ms longer
+    /// than the TTL on any build, so a subscriber queued behind it would find
+    /// it stale if it read the time after the lock, unless it woke more than
+    /// 150 ms after the one building.
+    ///
+    /// The TTL is a quarter of the interval, as the agent's is far below its own
     /// (10 ms under 1 s). With a TTL equal to the interval, a subscriber that
     /// woke earlier than the one that built the last pass can find that pass
-    /// still fresh at the next boundary and send it again beside the new one.
+    /// still fresh at the next boundary, send an empty frame, and send that
+    /// pass one interval late, at the same `seq` as the new one.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn three_subscriptions_at_one_interval_share_one_pass_per_interval() {
-        const TICKS: usize = 20;
-        let interval = Duration::from_millis(200);
+        const TICKS: usize = 12;
+        let interval = Duration::from_millis(400);
         let config: Config =
             toml::from_str("[general]\nttl = \"100ms\"\nsnapshot_format = \"v3\"\n")
                 .expect("valid config");
+        struct Slow;
+        #[async_trait::async_trait]
+        impl Sampler for Slow {
+            fn name(&self) -> &'static str {
+                "slow"
+            }
+            async fn refresh(&self) {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+        let samplers: Vec<Box<dyn Sampler>> = vec![Box::new(Slow)];
         let builder = Arc::new(Mutex::new(SnapshotBuilder::new(
             Arc::new(config),
-            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            Arc::new(samplers.into_boxed_slice()),
             None,
         )));
         // The first pass builds every group's schema from the global
