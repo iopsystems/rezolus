@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use metriken_query::{BufferPool, MetricsSource, ParquetReader, QueryOptions};
+use metriken_query::{MetricsSource, ParquetReader, QueryOptions};
+use metriken_storage::BufferPool;
 
 /// Buffer pool budget for the WASM viewer: 64 MB.
 ///
@@ -1114,7 +1115,7 @@ impl WasmCaptureRegistry {
         if self
             .rez_source
             .as_ref()
-            .is_some_and(|b| metriken_archive::DendroCatalog::is_archive_bytes(b))
+            .is_some_and(|b| metriken_storage::DendroCatalog::is_archive_bytes(b))
         {
             ".dendro".to_string()
         } else if self.rez_source.is_some() || !self.others.is_empty() {

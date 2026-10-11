@@ -752,7 +752,7 @@ mod follow_tests {
             &config,
             path,
             &::dashboard::TemplateRegistry::empty(),
-            metriken_query::BufferPool::new(64 << 20),
+            metriken_storage::BufferPool::new(64 << 20),
         ))
     }
 

@@ -8,7 +8,7 @@
 //!
 //! See `docs/parquet-convert-design.md`.
 
-use metriken_exposition::{MsgpackToParquet, ParquetOptions};
+use metriken_storage::convert::{MsgpackToParquet, ParquetOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;

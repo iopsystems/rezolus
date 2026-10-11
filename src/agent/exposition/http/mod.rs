@@ -533,12 +533,12 @@ impl Reading {
     }
 }
 
-fn group_stream(g: &metriken_archive::stream::EncodedStreamGroup) -> &str {
-    metriken_archive::stream::StreamRow::stream(g)
+fn group_stream(g: &metriken_exposition::stream::EncodedStreamGroup) -> &str {
+    metriken_exposition::stream::StreamRow::stream(g)
 }
 
-fn group_window(g: &metriken_archive::stream::EncodedStreamGroup) -> Option<(u64, u64)> {
-    use metriken_archive::stream::EncodedStreamGroup;
+fn group_window(g: &metriken_exposition::stream::EncodedStreamGroup) -> Option<(u64, u64)> {
+    use metriken_exposition::stream::EncodedStreamGroup;
     match g {
         EncodedStreamGroup::Wide(g) => g.window,
         EncodedStreamGroup::Long(g) => g.window,
@@ -695,7 +695,7 @@ mod stream_tests {
     #[tokio::test]
     async fn a_long_layout_subscription_sends_each_occupant_once() {
         use crate::recorder::stream::{Layout, Subscription};
-        use metriken_archive::StreamedGroup;
+        use metriken_storage::StreamedGroup;
 
         let config: Config = toml::from_str("[general]\nttl = \"1s\"\nsnapshot_format = \"v3\"\n")
             .expect("valid config");
@@ -734,7 +734,7 @@ mod stream_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("long.dendro");
         let mut writer =
-            metriken_archive::ArchiveWriter::create(&path, Default::default()).unwrap();
+            metriken_storage::ArchiveWriter::create(&path, Default::default()).unwrap();
         let source = sub.source().cloned().unwrap();
         let mut recording = writer
             .add_source(
@@ -747,7 +747,7 @@ mod stream_tests {
         // Per interval: occupants described, long rows, occupants present.
         let mut intervals: Vec<(usize, usize, usize)> = Vec::new();
         let mut last = (0u64, 0i64);
-        let mut decoder = metriken_archive::StreamDecoder::new();
+        let mut decoder = metriken_storage::StreamDecoder::new();
         while intervals.len() < 2 {
             let applied = tokio::time::timeout(Duration::from_secs(10), sub.next_interval())
                 .await
@@ -793,8 +793,8 @@ mod stream_tests {
 
         recording.finalize(last).unwrap();
         writer.join().unwrap();
-        let catalog = metriken_archive::DendroCatalog::open(&path).unwrap();
-        use metriken_archive::Catalog;
+        let catalog = metriken_storage::DendroCatalog::open(&path).unwrap();
+        use metriken_storage::Catalog;
         let id = catalog.sources().unwrap()[0].id;
         let tables = catalog.tables(id).unwrap();
         assert!(
@@ -803,7 +803,7 @@ mod stream_tests {
         );
         let reader = crate::rez_reader::RezReader::open_with_pool(
             &path,
-            metriken_query::BufferPool::new(16 << 20),
+            metriken_storage::BufferPool::new(16 << 20),
         )
         .expect("the recording opens");
         assert!(!metriken_query::MetricsSource::counter_names(&reader).is_empty());
@@ -1464,8 +1464,8 @@ mod stream_frame_fixture {
     use super::*;
     use crate::recorder::schema::{GroupSchema, MetricDesc};
     use crate::recorder::wire::{AgentRow, AgentRows};
-    use metriken_archive::stream::{EncodedGroup, EncodedLongGroup, EncodedStreamGroup};
-    use metriken_archive::wal::{encode_wal_long_row, LongOccupant, WalLongRow};
+    use metriken_exposition::stream::{EncodedGroup, EncodedLongGroup, EncodedStreamGroup};
+    use metriken_storage::wal::{encode_wal_long_row, LongOccupant, WalLongRow};
     use std::collections::BTreeMap;
 
     const UUID: &str = "0f1e2d3c-4b5a-4968-8776-655443322110";

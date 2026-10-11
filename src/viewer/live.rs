@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use metriken_query::BufferPool;
+use metriken_storage::BufferPool;
 use reqwest::{Client, Url};
 use rez::live::LiveReader;
 use tracing::{error, info, warn};
@@ -304,7 +304,7 @@ impl Recording {
     /// session was dropped), a write fails, or the agent refuses a reconnect.
     fn run(mut self, mut rx: tokio::sync::mpsc::Receiver<(usize, StreamEvent)>) {
         let label = self.label.clone();
-        let mut decoder = metriken_archive::StreamDecoder::new();
+        let mut decoder = metriken_storage::StreamDecoder::new();
         while let Some((_, event)) = rx.blocking_recv() {
             match event {
                 StreamEvent::Interval(applied) => {
@@ -651,7 +651,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("grow.dendro");
         let mut writer =
-            metriken_archive::ArchiveWriter::create(&path, Default::default()).unwrap();
+            metriken_storage::ArchiveWriter::create(&path, Default::default()).unwrap();
         let first = [("source".to_string(), "rezolus".to_string())].into();
         let mut a = writer
             .add_source(first, Default::default(), ANCHOR)
@@ -686,7 +686,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("two.dendro");
         let mut writer =
-            metriken_archive::ArchiveWriter::create(&path, Default::default()).unwrap();
+            metriken_storage::ArchiveWriter::create(&path, Default::default()).unwrap();
         for host in ["a", "b"] {
             let labels = [
                 ("source".to_string(), "rezolus".to_string()),

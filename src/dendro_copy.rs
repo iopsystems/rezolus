@@ -32,7 +32,7 @@ pub(crate) fn streams(src: &Archive) -> Result<Vec<String>, String> {
 /// sidecars.
 pub(crate) fn copy(src: &Archive, dest: &Path, spec: &CopySpec<'_>) -> Result<usize, String> {
     let names = streams(src)?;
-    let encoder = metriken_archive::writer::Encoder::for_streams(names.iter().map(String::as_str));
+    let encoder = metriken_storage::writer::Encoder::for_streams(names.iter().map(String::as_str));
     let mut dst = ArchiveMut::create(dest).map_err(err)?;
     let copied = dst
         .transaction(|tx| copy_sources_into(src, tx, spec, &encoder))
@@ -122,7 +122,7 @@ pub(crate) mod fixtures {
     /// without finalizing, leaving the source incomplete with its last rows
     /// in the WAL, as a live or killed recording has them.
     pub(crate) fn recorded(path: &Path, ticks: u64, finalize: bool) {
-        use metriken_archive::{ArchiveWriter, WriterConfig};
+        use metriken_storage::{ArchiveWriter, WriterConfig};
         let config = WriterConfig {
             seal: dendro::seal::SealPolicy {
                 max_rows: 4,

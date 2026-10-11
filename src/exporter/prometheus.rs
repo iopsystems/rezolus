@@ -154,7 +154,7 @@ impl PrometheusFormat for Histogram {
 fn format_metadata(metadata: &HashMap<String, String>) -> String {
     let mut metadata: Vec<String> = metadata
         .iter()
-        .filter(|(key, _)| !metriken_query::is_internal_label(key))
+        .filter(|(key, _)| !metriken_storage::is_internal_label(key))
         .map(|(key, value)| format!("{key}=\"{value}\""))
         .collect();
     metadata.sort();

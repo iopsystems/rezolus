@@ -1,4 +1,5 @@
-use metriken_query::{is_internal_label, is_storage_key, MatrixSample, MetricsSource, QueryResult};
+use metriken_query::{MatrixSample, MetricsSource, QueryResult};
+use metriken_storage::{is_internal_label, is_storage_key};
 use rayon::prelude::*;
 use std::collections::HashMap;
 

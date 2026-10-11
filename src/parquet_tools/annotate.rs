@@ -440,7 +440,7 @@ enum MetadataStore {
 
 impl MetadataStore {
     fn open(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        if metriken_archive::DendroCatalog::is_archive(path).unwrap_or(false) {
+        if metriken_storage::DendroCatalog::is_archive(path).unwrap_or(false) {
             Ok(Self::Dendro(dendro::archive::ArchiveMut::open(path)?))
         } else {
             Ok(Self::Rez(crate::recorder::rez_sqlite::RezDb::open(path)?))
@@ -503,7 +503,7 @@ fn annotate_rez_v3_at(
     use crate::parquet_metadata::KEY_EVENTS;
     use crate::viewer::Events;
 
-    let pool = metriken_query::BufferPool::new(256 * 1024 * 1024);
+    let pool = metriken_storage::BufferPool::new(256 * 1024 * 1024);
     let readers = crate::rez_reader::RezReader::open_recordings(path, pool)?;
 
     let mut db = MetadataStore::open(path)?;
@@ -1444,7 +1444,7 @@ mod tests {
         // The reader surfaces it under `events` in `file_metadata()` — the same
         // map `init_file_mode_rez` (server) and `Viewer` (WASM) serialize for
         // the frontend's `seedEventsFromMetadata`.
-        let pool = metriken_query::BufferPool::new(64 * 1024 * 1024);
+        let pool = metriken_storage::BufferPool::new(64 * 1024 * 1024);
         let readers = crate::rez_reader::RezReader::open_recordings(&path, pool).unwrap();
         let (_labels, reader) = &readers[0];
         let surfaced = reader

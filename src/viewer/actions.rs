@@ -867,7 +867,7 @@ fn build_report(
             selection_json,
             events_json.as_deref(),
         );
-        let dendro = metriken_archive::DendroCatalog::is_archive(path).unwrap_or(false);
+        let dendro = metriken_storage::DendroCatalog::is_archive(path).unwrap_or(false);
         let name = if dendro {
             "rezolus-report.dendro"
         } else {

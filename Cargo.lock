@@ -1033,6 +1033,7 @@ dependencies = [
  "include_dir",
  "metriken-exposition",
  "metriken-query",
+ "metriken-storage",
  "serde",
  "serde_json",
  "tempfile",
@@ -1040,9 +1041,8 @@ dependencies = [
 
 [[package]]
 name = "dendro"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b3596f1d9de8119d20c966be3041c228db7314e0a658466e2ded8c842203de6"
+version = "0.4.0-alpha.0"
+source = "git+https://github.com/iopsystems/dendro?rev=8cc03eeb2f5a64d5ef35ced638c67ef2aecf2694#8cc03eeb2f5a64d5ef35ced638c67ef2aecf2694"
 dependencies = [
  "arrow",
  "bytes",
@@ -2239,8 +2239,6 @@ dependencies = [
 [[package]]
 name = "metriken"
 version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b775d1c8fa624fbf8e3a553a09cd2b48311e076301a48f2c968b6a52d7a52e1"
 dependencies = [
  "getrandom 0.3.4",
  "histogram",
@@ -2252,19 +2250,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "metriken-archive"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4460bd57b27d9ad62026dd2bf61e2434707177f10495912bec0c977a26736dd4"
-dependencies = [
- "metriken-storage",
-]
-
-[[package]]
 name = "metriken-core"
 version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "475f9a727147e3b088eadebda0572fb49f81aae39993d9dd1e6bac4556a18da0"
 dependencies = [
  "histogram",
  "linkme",
@@ -2276,8 +2263,6 @@ dependencies = [
 [[package]]
 name = "metriken-derive"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba9466276652f7134a720d6d7e004bb5277dfa85a349e63030bb80b9aacf3db5"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2287,27 +2272,28 @@ dependencies = [
 
 [[package]]
 name = "metriken-exposition"
-version = "0.21.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fafd4c877d8b928e80e5e07da7b26b0d8ca7ba4db301924b4fc6bd6b4457caad"
+version = "0.22.0"
 dependencies = [
- "arrow",
+ "bytes",
  "chrono",
+ "dendro",
  "foldhash 0.2.0",
+ "futures-core",
+ "futures-util",
  "histogram",
+ "humantime",
  "metriken",
  "metriken-model",
  "metriken-types",
- "parquet",
  "rmp-serde",
  "serde",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
 name = "metriken-model"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76482d52c12b2d4096f225a7dfcc4091c162e570e6696c3252e313251014d971"
 dependencies = [
  "histogram",
  "metriken-types",
@@ -2318,9 +2304,7 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0222b69b42312abc4dc8b62c4810879dcd642ca86bf02f83afbf6480150e3f3c"
+version = "0.36.0"
 dependencies = [
  "arrow",
  "bytes",
@@ -2340,9 +2324,7 @@ dependencies = [
 
 [[package]]
 name = "metriken-storage"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc61fd48ad711e2a2d124b12322d3696390374bc12f412ae577535eeb761429c"
+version = "0.2.0"
 dependencies = [
  "arrow",
  "bytes",
@@ -2350,7 +2332,6 @@ dependencies = [
  "foldhash 0.2.0",
  "histogram",
  "lru",
- "metriken",
  "metriken-exposition",
  "metriken-model",
  "metriken-types",
@@ -2369,8 +2350,6 @@ dependencies = [
 [[package]]
 name = "metriken-types"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bd7377cbafbe5e1852bff7714e7056598f419cfc42130c35955bb2c13a26c76"
 dependencies = [
  "serde",
 ]
@@ -3023,8 +3002,8 @@ dependencies = [
  "bytes",
  "dashboard",
  "dendro",
- "metriken-archive",
  "metriken-query",
+ "metriken-storage",
  "parquet",
  "rez",
  "serde",
@@ -3078,7 +3057,6 @@ dependencies = [
  "dendro",
  "histogram",
  "metriken",
- "metriken-archive",
  "metriken-exposition",
  "metriken-query",
  "metriken-storage",
@@ -3127,9 +3105,9 @@ dependencies = [
  "linkme",
  "memmap2",
  "metriken",
- "metriken-archive",
  "metriken-exposition",
  "metriken-query",
+ "metriken-storage",
  "nix",
  "notify",
  "nvml-wrapper",
@@ -4308,8 +4286,8 @@ dependencies = [
  "bytes",
  "console_error_panic_hook",
  "dashboard",
- "metriken-archive",
  "metriken-query",
+ "metriken-storage",
  "report-save",
  "rez",
  "serde",

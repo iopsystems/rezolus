@@ -1724,7 +1724,7 @@ fn a_refused_reconnect_captures_the_buffer_then_exits() {
 /// `producer_epoch` names it.
 #[test]
 fn an_agent_restart_is_written_into_a_dendro_buffers_metadata() {
-    use metriken_archive::Catalog;
+    use metriken_storage::Catalog;
 
     let agent = spawn_fake_agent_that_restarts(1, 10);
     let h = Hindsight::try_start_as(agent, 2, "dendro")
@@ -1734,7 +1734,7 @@ fn an_agent_restart_is_written_into_a_dendro_buffers_metadata() {
     let dest = dir.path().join("dump.dendro");
     h.dump_to(&dest);
 
-    let catalog = metriken_archive::DendroCatalog::open(&dest).expect("the dump opens");
+    let catalog = metriken_storage::DendroCatalog::open(&dest).expect("the dump opens");
     let sources = catalog.sources().unwrap();
     let metadata = &sources[0].metadata;
     assert_eq!(
@@ -1797,7 +1797,7 @@ fn an_agent_restart_is_written_into_a_rez_buffers_metadata() {
 /// queryable, while the buffer runs on.
 #[test]
 fn a_dendro_buffer_dumps_a_dendro_archive() {
-    use metriken_archive::Catalog;
+    use metriken_storage::Catalog;
 
     let agent = spawn_fake_agent(1);
     let h = Hindsight::try_start_as(agent, 2, "dendro")
@@ -1816,7 +1816,7 @@ fn a_dendro_buffer_dumps_a_dendro_archive() {
     h.dump_to(&dest);
 
     let catalog =
-        metriken_archive::DendroCatalog::open(&dest).expect("the dump is a dendro archive");
+        metriken_storage::DendroCatalog::open(&dest).expect("the dump is a dendro archive");
     let sources = catalog.sources().unwrap();
     assert_eq!(sources.len(), 1);
     assert!(sources[0].complete, "a dump is a finished artifact");

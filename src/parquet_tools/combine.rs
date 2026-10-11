@@ -203,7 +203,7 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         let dendro_out = output.extension().and_then(|e| e.to_str()) == Some("dendro");
         let dendro_in: Vec<bool> = files
             .iter()
-            .map(|f| metriken_archive::DendroCatalog::is_archive(f).unwrap_or(false))
+            .map(|f| metriken_storage::DendroCatalog::is_archive(f).unwrap_or(false))
             .collect();
         if dendro_out {
             if formats.contains(&RezFormat::NotRez) {
@@ -476,7 +476,7 @@ fn combine_dendro(
         for src in &archives {
             let names = crate::dendro_copy::streams(src).map_err(dendro::Error::Message)?;
             let encoder =
-                metriken_archive::writer::Encoder::for_streams(names.iter().map(String::as_str));
+                metriken_storage::writer::Encoder::for_streams(names.iter().map(String::as_str));
             sources += copy_sources_into(src, tx, &CopySpec::everything(), &encoder)?;
         }
         Ok(())
@@ -2990,7 +2990,7 @@ mod tests {
 
         let reader = crate::rez_reader::RezReader::open_with_pool(
             &out,
-            metriken_query::BufferPool::new(64 * 1024 * 1024),
+            metriken_storage::BufferPool::new(64 * 1024 * 1024),
         )
         .unwrap();
         assert!(!reader.counter_names().is_empty());
@@ -3075,7 +3075,7 @@ mod tests {
 
         // The point of the whole exercise: the assembled archive answers
         // queries, per recording.
-        let pool = metriken_query::BufferPool::new(64 * 1024 * 1024);
+        let pool = metriken_storage::BufferPool::new(64 * 1024 * 1024);
         let readers = crate::rez_reader::RezReader::open_recordings(&out, pool).unwrap();
         assert_eq!(readers.len(), 2, "both recordings must be readable");
     }
@@ -3231,7 +3231,7 @@ mod tests {
         drop(db);
         let readers = crate::rez_reader::RezReader::open_recordings(
             &out,
-            metriken_query::BufferPool::new(64 * 1024 * 1024),
+            metriken_storage::BufferPool::new(64 * 1024 * 1024),
         )
         .unwrap();
         assert_eq!(readers.len(), 2);

@@ -51,7 +51,7 @@
 //! # What is metriken's and what is the agent's
 //!
 //! Building the frames is metriken-archive's
-//! [`FrameProducer`](metriken_archive::stream::FrameProducer), which reads
+//! [`FrameProducer`](metriken_exposition::stream::FrameProducer), which reads
 //! the agent's [`AgentRow`](crate::recorder::wire::AgentRow)s (wide layout)
 //! or `EncodedStreamGroup`s (long layout). The agent keeps the transport: the HTTP route,
 //! the content type, each subscription's timer and interval index, and the
@@ -59,7 +59,7 @@
 
 use std::collections::BTreeMap;
 
-pub(crate) use metriken_archive::stream::FrameProducer;
+pub(crate) use metriken_exposition::stream::FrameProducer;
 
 /// A producer for one subscription to this agent.
 ///

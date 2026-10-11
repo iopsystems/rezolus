@@ -542,7 +542,7 @@ pub fn build_rez_report_from_rez(
     use rez::rez_sqlite::RezDb;
     use rez::rez_v3_rewrite::{copy_recordings_into, CopySpec};
 
-    if metriken_archive::DendroCatalog::is_archive_bytes(source_bytes) {
+    if metriken_storage::DendroCatalog::is_archive_bytes(source_bytes) {
         return build_dendro_report(
             source_bytes,
             keep_metrics,
@@ -620,8 +620,8 @@ fn build_dendro_report(
     for s in src.read_sources().map_err(err)? {
         names.extend(src.all_streams(s.id).map_err(err)?);
     }
-    let encoder = metriken_archive::Encoder::for_streams(names.iter().map(String::as_str));
-    let keep = keep_metrics.map(metriken_archive::KeepMetrics::new);
+    let encoder = metriken_storage::Encoder::for_streams(names.iter().map(String::as_str));
+    let keep = keep_metrics.map(metriken_storage::KeepMetrics::new);
     let (start, end) = match range {
         Some(r) => {
             let long = names.iter().any(|s| table_of(s).is_some());
@@ -635,8 +635,8 @@ fn build_dendro_report(
         start,
         end,
         keep_columns: keep.as_ref().map(|k| k as &dyn ColumnFilter),
-        writer_props: Some(metriken_archive::segment_props(
-            metriken_archive::default_compression(),
+        writer_props: Some(metriken_storage::segment_props(
+            metriken_storage::default_compression(),
         )),
         ..CopySpec::everything()
     };

@@ -1,4 +1,5 @@
-use metriken_query::{MetricsSource, is_internal_label, is_storage_key};
+use metriken_query::MetricsSource;
+use metriken_storage::{is_internal_label, is_storage_key};
 use serde::Serialize;
 use std::collections::BTreeSet;
 

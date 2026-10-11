@@ -459,7 +459,7 @@ fn a_prometheus_endpoint_records_into_a_dendro() {
         out.status.code()
     );
     assert_eq!(
-        metriken_archive::DendroCatalog::is_archive(&output),
+        metriken_storage::DendroCatalog::is_archive(&output),
         Ok(true),
         "a .dendro output is a dendro archive"
     );
@@ -711,7 +711,7 @@ fn a_rezolus_agent_and_a_prometheus_exporter_share_one_archive() {
 /// opened a second archive handle, would show.
 #[test]
 fn a_dendro_streams_an_agent_and_scrapes_a_prometheus_exporter_into_one_archive() {
-    use metriken_archive::Catalog;
+    use metriken_storage::Catalog;
 
     let agent = spawn_fake_agent();
     let exporter = spawn_fake_exporter_named("http_requests_total");
@@ -743,7 +743,7 @@ fn a_dendro_streams_an_agent_and_scrapes_a_prometheus_exporter_into_one_archive(
         "the agent is streamed, not scraped:\n{stderr}"
     );
 
-    let catalog = metriken_archive::DendroCatalog::open(&output).expect("the archive opens");
+    let catalog = metriken_storage::DendroCatalog::open(&output).expect("the archive opens");
     let sources = catalog.sources().expect("the catalog reads");
     assert_eq!(sources.len(), 2, "one recording per endpoint: {sources:?}");
     let rows = |id: i64, table: &str| {
@@ -773,7 +773,7 @@ fn a_dendro_streams_an_agent_and_scrapes_a_prometheus_exporter_into_one_archive(
 /// version.
 #[test]
 fn an_agent_restart_is_written_into_the_recording_metadata() {
-    use metriken_archive::Catalog;
+    use metriken_storage::Catalog;
 
     let agent = spawn_agent(Streams::Restarts(5), Some(BEFORE_RESTART.1));
     let dir = tempfile::tempdir().expect("failed to create a temp dir");
@@ -802,7 +802,7 @@ fn an_agent_restart_is_written_into_the_recording_metadata() {
         "the restart is written into the metadata:\n{stderr}"
     );
 
-    let catalog = metriken_archive::DendroCatalog::open(&output).expect("the archive opens");
+    let catalog = metriken_storage::DendroCatalog::open(&output).expect("the archive opens");
     let sources = catalog.sources().expect("the catalog reads");
     assert_eq!(sources.len(), 1, "{sources:?}");
     let metadata = &sources[0].metadata;
@@ -1314,7 +1314,7 @@ fn a_wrapped_rez_run_writes_run_start_and_run_end_events() {
 /// metadata through the dendro writer (`SourceRecorder::update_metadata`).
 #[test]
 fn a_wrapped_dendro_run_writes_run_start_and_run_end_events() {
-    use metriken_archive::Catalog;
+    use metriken_storage::Catalog;
 
     let dir = tempfile::tempdir().expect("failed to create a temp dir");
     let output = dir.path().join("out.dendro");
@@ -1325,7 +1325,7 @@ fn a_wrapped_dendro_run_writes_run_start_and_run_end_events() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let catalog = metriken_archive::DendroCatalog::open(&output).expect("the archive opens");
+    let catalog = metriken_storage::DendroCatalog::open(&output).expect("the archive opens");
     let sources = catalog.sources().expect("the catalog reads");
     assert_eq!(sources.len(), 1, "one endpoint, one source");
     let raw = sources[0]
@@ -1518,8 +1518,8 @@ fn the_interval_the_command_exited_in_is_sampled() {
 /// Rows in `table` of the one source in a `.dendro`, and the newest row's
 /// timestamp, sealed and live together.
 fn dendro_rows(output: &std::path::Path, table: &str) -> (u64, Option<u64>, Vec<String>) {
-    use metriken_archive::Catalog;
-    let catalog = metriken_archive::DendroCatalog::open(output).expect("the archive opens");
+    use metriken_storage::Catalog;
+    let catalog = metriken_storage::DendroCatalog::open(output).expect("the archive opens");
     let sources = catalog.sources().expect("the catalog reads");
     assert_eq!(sources.len(), 1, "one endpoint, one source");
     let id = sources[0].id;
@@ -1584,8 +1584,8 @@ fn the_interval_the_dendro_command_exited_in_is_recorded() {
     assert!(rows >= 2, "{rows} rows");
     let last_ts = last_ts.expect("a last row");
 
-    use metriken_archive::Catalog;
-    let catalog = metriken_archive::DendroCatalog::open(&output).unwrap();
+    use metriken_storage::Catalog;
+    let catalog = metriken_storage::DendroCatalog::open(&output).unwrap();
     let raw = catalog.sources().unwrap()[0]
         .metadata
         .get("events")
@@ -1618,7 +1618,7 @@ fn the_interval_the_dendro_command_exited_in_is_recorded() {
 /// unfinalized.
 #[test]
 fn a_late_agent_without_a_stream_is_left_out_and_the_rest_finalize() {
-    use metriken_archive::Catalog;
+    use metriken_storage::Catalog;
 
     let (exporter, hits) = spawn_fake_exporter_counted("http_requests_total");
     // Up once the exporter has been scraped twice: the startup probe, then
@@ -1663,7 +1663,7 @@ fn a_late_agent_without_a_stream_is_left_out_and_the_rest_finalize() {
         "no format switch advised:\n{stderr}"
     );
 
-    let catalog = metriken_archive::DendroCatalog::open(&output).expect("the archive opens");
+    let catalog = metriken_storage::DendroCatalog::open(&output).expect("the archive opens");
     let sources = catalog.sources().expect("the catalog reads");
     assert_eq!(
         sources.len(),
@@ -1703,7 +1703,7 @@ fn a_late_agent_without_a_stream_is_left_out_and_the_rest_finalize() {
 /// Regression: a refusal on a reconnect ended the whole run.
 #[test]
 fn an_agent_refused_on_reconnect_keeps_its_rows_and_the_rest_finalize() {
-    use metriken_archive::Catalog;
+    use metriken_storage::Catalog;
 
     let exporter = spawn_fake_exporter();
     let agent = spawn_fake_agent_that_stops_streaming(3);
@@ -1741,7 +1741,7 @@ fn an_agent_refused_on_reconnect_keeps_its_rows_and_the_rest_finalize() {
     }
     assert!(!stderr.contains("predates"), "a 6.0 agent:\n{stderr}");
 
-    let catalog = metriken_archive::DendroCatalog::open(&output).expect("the archive opens");
+    let catalog = metriken_storage::DendroCatalog::open(&output).expect("the archive opens");
     let sources = catalog.sources().expect("the catalog reads");
     assert_eq!(sources.len(), 2, "{sources:?}");
     let rows = |id: i64, table: &str| {
@@ -1780,7 +1780,7 @@ fn an_agent_refused_on_reconnect_keeps_its_rows_and_the_rest_finalize() {
 /// reconnect was refused, and the run exits 1.
 #[test]
 fn a_run_whose_every_endpoint_is_refused_ends_on_its_own() {
-    use metriken_archive::Catalog;
+    use metriken_storage::Catalog;
 
     let agent = spawn_fake_agent_that_stops_streaming(3);
     let dir = tempfile::tempdir().expect("failed to create a temp dir");
@@ -1826,7 +1826,7 @@ fn a_run_whose_every_endpoint_is_refused_ends_on_its_own() {
         "{stderr}"
     );
 
-    let catalog = metriken_archive::DendroCatalog::open(&output).expect("the archive opens");
+    let catalog = metriken_storage::DendroCatalog::open(&output).expect("the archive opens");
     let sources = catalog.sources().expect("the catalog reads");
     assert_eq!(sources.len(), 1, "{sources:?}");
     assert!(sources[0].complete, "the archive is finalized");

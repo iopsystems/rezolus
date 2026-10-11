@@ -707,12 +707,12 @@ pub(crate) async fn pump(
 /// Only a wide-layout subscription's groups make one: a long row has no
 /// member list to rebuild a group's schema from, and is refused.
 pub(crate) fn wide_snapshot(
-    groups: Vec<metriken_archive::StreamedGroup>,
+    groups: Vec<metriken_storage::StreamedGroup>,
     ts: i64,
     wall_offset: i64,
 ) -> Result<metriken_exposition::Snapshot, String> {
-    use metriken_archive::StreamedGroup;
     use metriken_exposition::{Snapshot, SnapshotV3};
+    use metriken_storage::StreamedGroup;
     let groups = groups
         .into_iter()
         .map(|g| match g {
@@ -995,7 +995,7 @@ mod tests {
 
     /// The groups of one row, as a connection's decoder reads it.
     fn decode(
-        decoder: &mut metriken_archive::StreamDecoder,
+        decoder: &mut metriken_storage::StreamDecoder,
         row: Vec<u8>,
     ) -> Vec<metriken_exposition::GroupSnapshot> {
         decoder
@@ -1003,7 +1003,7 @@ mod tests {
             .unwrap()
             .into_iter()
             .map(|g| match g {
-                metriken_archive::StreamedGroup::Wide(g) => g,
+                metriken_storage::StreamedGroup::Wide(g) => g,
                 _ => panic!("a wide group"),
             })
             .collect()
@@ -1013,7 +1013,7 @@ mod tests {
     /// validates it once per change; rows after it resolve by hash.
     #[test]
     fn a_streamed_schema_is_attached_where_it_arrived() {
-        let mut decoder = metriken_archive::StreamDecoder::new();
+        let mut decoder = metriken_storage::StreamDecoder::new();
         let first = decode(&mut decoder, payload(2, true, 2_000)).remove(0);
         assert_eq!(first.schema.as_ref().map(|s| s.counters.len()), Some(2));
         assert_eq!(first.counters, vec![Some(0), Some(1)]);
@@ -1027,7 +1027,7 @@ mod tests {
     /// counted, not decoded against the wrong members.
     #[test]
     fn a_streamed_row_with_an_unsent_schema_is_skipped() {
-        let mut decoder = metriken_archive::StreamDecoder::new();
+        let mut decoder = metriken_storage::StreamDecoder::new();
         decode(&mut decoder, payload(2, true, 2_000));
         assert!(decode(&mut decoder, payload(3, false, 3_000)).is_empty());
         assert_eq!(decoder.unresolved, 1);
@@ -1037,7 +1037,7 @@ mod tests {
     /// at the pass's wall clock, and a long row is refused by name.
     #[test]
     fn only_a_wide_pass_rebuilds_a_snapshot() {
-        let mut decoder = metriken_archive::StreamDecoder::new();
+        let mut decoder = metriken_storage::StreamDecoder::new();
         let groups = decoder
             .decode([wal_row(STREAM, 5_000, 7, payload(2, true, 5_000))])
             .unwrap();
@@ -1049,7 +1049,7 @@ mod tests {
             v3.systemtime,
             std::time::UNIX_EPOCH + Duration::from_nanos(5_007)
         );
-        let long = vec![metriken_archive::StreamedGroup::Occupants {
+        let long = vec![metriken_storage::StreamedGroup::Occupants {
             table: STREAM.to_string(),
             occupants: Vec::new(),
         }];
@@ -1152,7 +1152,7 @@ mod tests {
             ..Applied::default()
         };
         let pass = applied.for_writer().unwrap().remove(0);
-        let err = metriken_archive::StreamDecoder::new()
+        let err = metriken_storage::StreamDecoder::new()
             .decode(pass.rows)
             .err()
             .expect("must refuse");

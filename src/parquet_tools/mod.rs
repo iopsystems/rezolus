@@ -805,7 +805,7 @@ pub(crate) fn snapshot_rez(
     if output.exists() {
         return Err(format!("{} already exists", output.display()).into());
     }
-    if metriken_archive::DendroCatalog::is_archive(path).unwrap_or(false) {
+    if metriken_storage::DendroCatalog::is_archive(path).unwrap_or(false) {
         // A sealed copy: the live tail is encoded into the copy's last
         // segments, so the snapshot has no WAL rows for a reader to rebuild.
         // Staged beside the output so a failed copy leaves nothing there.
@@ -851,7 +851,7 @@ fn upgrade_rez(
     match detect_rez_format(path).unwrap_or(RezFormat::NotRez) {
         RezFormat::V2Tar => {}
         RezFormat::V3Sqlite
-            if metriken_archive::DendroCatalog::is_archive(path).unwrap_or(false) =>
+            if metriken_storage::DendroCatalog::is_archive(path).unwrap_or(false) =>
         {
             return Err(format!(
                 "{} is a dendro archive; there is nothing to upgrade",
@@ -907,7 +907,7 @@ fn upgrade_to_dendro(
         )
         .into());
     }
-    if metriken_archive::DendroCatalog::is_archive(path).unwrap_or(false) {
+    if metriken_storage::DendroCatalog::is_archive(path).unwrap_or(false) {
         return Err(format!("{} is already a dendro archive", path.display()).into());
     }
     let dir = output.parent().filter(|p| !p.as_os_str().is_empty());

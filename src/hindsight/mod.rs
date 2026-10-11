@@ -380,7 +380,7 @@ pub fn run(config: Config) {
             timeout,
             stream_tx,
         ));
-        let mut decoder = metriken_archive::StreamDecoder::new();
+        let mut decoder = metriken_storage::StreamDecoder::new();
         let mut epoch = source.uuid.clone();
         // Agent restarts not yet written into the buffer's metadata.
         let mut restarts: Vec<crate::recorder::restart::Restart> = Vec::new();
@@ -875,7 +875,7 @@ async fn record_restarts(
 /// skipped and logged.
 pub(crate) fn ingest_interval(
     buffer: &mut HindsightBuffer,
-    decoder: &mut metriken_archive::StreamDecoder,
+    decoder: &mut metriken_storage::StreamDecoder,
     applied: crate::recorder::stream::Applied,
 ) -> Result<usize, String> {
     if applied.gap {

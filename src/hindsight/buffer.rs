@@ -79,15 +79,15 @@ enum Writer {
     },
     /// A dendro archive through metriken-archive's writer.
     Dendro {
-        rec: metriken_archive::SourceRecorder,
-        writer: metriken_archive::ArchiveWriter,
+        rec: metriken_storage::SourceRecorder,
+        writer: metriken_storage::ArchiveWriter,
     },
 }
 
 /// Row time the dendro writer lets pass between restatements of a long
 /// table's live occupants: the writer's default, which the buffer uses.
 fn restate_every_ns() -> u64 {
-    metriken_archive::WriterConfig::default().restate_every_ns
+    metriken_storage::WriterConfig::default().restate_every_ns
 }
 
 fn archive_err(e: Box<dyn std::error::Error + Send + Sync>) -> String {
@@ -104,16 +104,16 @@ impl HindsightBuffer {
         lookback: Duration,
         policy: SealPolicy,
     ) -> Result<Self, String> {
-        let config = metriken_archive::WriterConfig {
+        let config = metriken_storage::WriterConfig {
             seal: dendro::seal::SealPolicy {
                 max_bytes: policy.max_bytes,
                 max_rows: policy.max_rows,
                 max_age: policy.max_age,
                 align: None,
             },
-            ..metriken_archive::WriterConfig::default()
+            ..metriken_storage::WriterConfig::default()
         };
-        let mut writer = metriken_archive::ArchiveWriter::create(path, config)
+        let mut writer = metriken_storage::ArchiveWriter::create(path, config)
             .map_err(|e| format!("failed to create {}: {e}", path.display()))?;
         let metadata = seed.metadata.clone();
         let rec = writer
@@ -206,7 +206,7 @@ impl HindsightBuffer {
     /// needs every group wide.
     pub fn ingest_streamed(
         &mut self,
-        groups: Vec<metriken_archive::StreamedGroup>,
+        groups: Vec<metriken_storage::StreamedGroup>,
         anchored_ts: u64,
         wall_offset_ns: i64,
     ) -> Result<(), String> {
@@ -373,7 +373,7 @@ pub fn summarize(path: &Path) -> Result<Summary, String> {
 
 /// Whether `path` is a dendro archive, by its header, as the readers decide.
 fn is_dendro(path: &Path) -> bool {
-    metriken_archive::DendroCatalog::is_archive(path).unwrap_or(false)
+    metriken_storage::DendroCatalog::is_archive(path).unwrap_or(false)
 }
 
 /// [`summarize_db`] for a dendro archive: the same figures from dendro's
@@ -1127,7 +1127,7 @@ mod tests {
         // And the viewer/MCP front door, with real values out the other side.
         let reader = crate::rez_reader::RezReader::open_with_pool(
             &path,
-            metriken_query::BufferPool::new(8 * 1024 * 1024),
+            metriken_storage::BufferPool::new(8 * 1024 * 1024),
         )
         .unwrap();
         assert_eq!(reader.counter_names(), vec!["cpu_usage_ops".to_string()]);
@@ -1240,7 +1240,7 @@ mod tests {
 
         let reader = crate::rez_reader::RezReader::open_with_pool(
             &dest,
-            metriken_query::BufferPool::new(8 * 1024 * 1024),
+            metriken_storage::BufferPool::new(8 * 1024 * 1024),
         )
         .unwrap();
         assert_eq!(reader.counter_names(), vec!["drivehealth_ops".to_string()]);
@@ -1382,7 +1382,7 @@ mod tests {
     /// on what retention guarantees rather than on exact segment edges.
     #[test]
     fn a_dendro_buffer_evicts_whole_segments_and_quiet_wal_rows() {
-        use metriken_archive::Catalog;
+        use metriken_storage::Catalog;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("buffer.dendro");
         let mut buf =
@@ -1401,7 +1401,7 @@ mod tests {
         buf.sync().unwrap();
         let cutoff = ANCHOR + 6 * SECOND;
 
-        let db = metriken_archive::DendroCatalog::open(&path).unwrap();
+        let db = metriken_storage::DendroCatalog::open(&path).unwrap();
         let id = db.sources().unwrap()[0].id;
         let segments = db.segment_meta(id, "cpu_usage").unwrap();
         assert!(!segments.is_empty(), "cpu_usage sealed");
@@ -1461,7 +1461,7 @@ mod tests {
         }
         let reader = crate::rez_reader::RezReader::open_recordings(
             &dest,
-            metriken_query::BufferPool::new(64 * 1024 * 1024),
+            metriken_storage::BufferPool::new(64 * 1024 * 1024),
         )
         .unwrap()
         .remove(0)
@@ -1554,7 +1554,7 @@ mod tests {
         dump(&path, &dest, &range).unwrap();
         let reader = crate::rez_reader::RezReader::open_recordings(
             &dest,
-            metriken_query::BufferPool::new(64 * 1024 * 1024),
+            metriken_storage::BufferPool::new(64 * 1024 * 1024),
         )
         .unwrap()
         .remove(0)

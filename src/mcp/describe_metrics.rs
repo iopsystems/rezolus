@@ -1,4 +1,5 @@
-use metriken_query::{is_internal_label, is_storage_key, MetricsSource};
+use metriken_query::MetricsSource;
+use metriken_storage::{is_internal_label, is_storage_key};
 
 /// Format metrics description for display
 pub fn format_metrics_description(data: &dyn MetricsSource) -> String {
