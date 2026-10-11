@@ -3,6 +3,26 @@
 Files here are **generated**, checked in, and asserted against by more than one
 language. Do not hand-edit them.
 
+## `stream-frames/wide.bin`, `stream-frames/long.bin`
+
+Pin the bytes the agent's `/metrics/stream` sends for one fixed sequence of
+passes, in the wide and long layouts (`src/agent/exposition/http/mod.rs`,
+`StreamState`, tests in `stream_frame_fixture`). metriken-exposition's
+`StreamSubscription` must reproduce them when it replaces `StreamState`.
+
+Each file is one record per chunk the stream yields, the opening chunk
+(preamble and handshake) first, then one per interval: a little-endian `u32`
+byte length followed by the chunk's bytes. The producer has a fixed uuid,
+clock anchor and labels.
+
+The sequence: a first pass with two windowed groups and one windowless group;
+the same pass again (an empty frame); a pass where one group's window did not
+advance; no pass; a pass two intervals later, with one group gaining a member;
+a wall clock step backwards (an empty frame with a clamped `seq`).
+
+Regenerate with `REZOLUS_BLESS=1 cargo test stream_frame_fixture`, only when
+the frames are meant to change.
+
 ## `display_wire_mixed.json`
 
 Pins the display-mode binary layout (`crates/dashboard/src/display_wire.rs`,

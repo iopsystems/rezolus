@@ -21,6 +21,12 @@
 
 ### Changed
 
+- **The agent's `/metrics/stream` frame rules are a synchronous
+  `StreamState`** (`src/agent/exposition/http/mod.rs`). Frames are unchanged,
+  pinned by `tests/fixtures/stream-frames/`. The handler's backpressure comment
+  now says what happens to a reader that stops reading: the stream waits with
+  no lock held, and on resuming skips to the current pass and logs a `seq` gap.
+
 - **The `.rez` format and the archive reader and writer are
   `metriken-storage`'s** (0.1.0, feature `rez`), and queries over an archive
   are `metriken-query` 0.35.0's. `crates/rez` keeps `RezReader` and
