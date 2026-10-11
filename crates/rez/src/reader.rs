@@ -14,15 +14,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub use metriken_archive::ArchiveReader;
-use metriken_archive::{InMemorySource, IndexRelabel};
 use metriken_query::{
     BufferPool, DisplayOptions, DisplayResult, MetricsSource, QueryError, QueryOptions, QueryResult,
 };
-
-use crate::catalog::{Catalog, Container};
-use crate::rez::{self, RecordingBytes};
-use crate::rez_sqlite::RezDb;
-use crate::wal::materialize_wal_tail;
 
 /// A `.rez` or dendro archive read as a `MetricsSource`: metriken-archive's
 /// [`ArchiveReader`], opened from a path or bytes by content. Derefs to it,
@@ -60,18 +54,8 @@ impl RezReader {
         path: &Path,
         pool: Arc<BufferPool>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let filename = path.file_name().map(|s| s.to_string_lossy().into_owned());
-        if let Some(opened) = from_catalog_path(path, Arc::clone(&pool))? {
-            return Ok(RezReader(ArchiveReader::flatten(
-                opened.into_iter().map(|(_, r)| r).collect(),
-                filename,
-            )));
-        }
-        let recordings = read_recordings(path)?;
-        Ok(RezReader(ArchiveReader::from_in_memory(
-            recordings.into_iter().map(in_memory).collect(),
-            filename,
-            pool,
+        Ok(RezReader(metriken_storage::rez::open::open_with_pool(
+            path, pool,
         )?))
     }
 
@@ -82,26 +66,9 @@ impl RezReader {
         bytes: Vec<u8>,
         pool: Arc<BufferPool>,
     ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
-        for container in [Container::Dendro, Container::Rez] {
-            if container.recognizes_bytes(&bytes) {
-                return Ok(wrap(ArchiveReader::from_catalog(
-                    container.open_bytes(bytes)?,
-                    None,
-                    pool,
-                    Some(Arc::new(IdentityIndex)),
-                )?));
-            }
-        }
-        let recordings = rez::read_archive_reader(std::io::Cursor::new(bytes))?.1;
-        let mut out = Vec::with_capacity(recordings.len());
-        for rec in recordings {
-            let labels = rec.labels.clone();
-            let filename = Some(rec.dir.clone());
-            let reader =
-                ArchiveReader::from_in_memory(vec![in_memory(rec)], filename, Arc::clone(&pool))?;
-            out.push((labels, RezReader(reader)));
-        }
-        Ok(out)
+        Ok(wrap(
+            metriken_storage::rez::open::open_recordings_from_bytes(bytes, pool)?,
+        ))
     }
 
     /// Open an archive as one `RezReader` **per recording**, paired with that
@@ -111,90 +78,9 @@ impl RezReader {
         path: &Path,
         pool: Arc<BufferPool>,
     ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
-        if let Some(opened) = from_catalog_path(path, Arc::clone(&pool))? {
-            return Ok(wrap(opened));
-        }
-        let recordings = read_recordings(path)?;
-        let mut out = Vec::with_capacity(recordings.len());
-        for rec in recordings {
-            let labels = rec.labels.clone();
-            let filename = Some(rec.dir.clone());
-            let reader =
-                ArchiveReader::from_in_memory(vec![in_memory(rec)], filename, Arc::clone(&pool))?;
-            out.push((labels, RezReader(reader)));
-        }
-        Ok(out)
-    }
-}
-
-/// Open `path` as one reader per recording when it is one of the catalog
-/// containers (a dendro archive or a `.rez` v3), decided by content; `None`
-/// for a v1/v2 tar `.rez`, which the callers read eagerly.
-fn from_catalog_path(
-    path: &Path,
-    pool: Arc<BufferPool>,
-) -> Result<Option<metriken_archive::LabeledRecordings>, Box<dyn std::error::Error>> {
-    let Some(container) = Container::of_path(path)? else {
-        return Ok(None);
-    };
-    // The reopen notes the file first, so a file swapped in before the
-    // catalog open below is refused on a table's first read.
-    let reopen = container.reopen(path);
-    Ok(Some(ArchiveReader::from_catalog(
-        container.open(path)?,
-        Some(reopen),
-        pool,
-        Some(Arc::new(IdentityIndex)),
-    )?))
-}
-
-fn in_memory(rec: RecordingBytes) -> InMemorySource {
-    InMemorySource {
-        name: rec.dir,
-        labels: rec.labels,
-        metadata: rec.metadata,
-        complete: rec.complete,
-        tables: rec.tables,
-    }
-}
-
-/// A `.rez` recording's identity index, the caller rows `record --stream`
-/// writes under a table's name, replayed into occupancy spans: the
-/// relabelling that files a reused slot's rows under each of its
-/// occupants.
-///
-/// Reads from the last `Full` at or before the table's first row: a slot's
-/// occupant at any row can depend on an entry from long before it, and a
-/// `Full` is where that dependence stops. A stream with no `Full` before its
-/// first row is read from its beginning. An index that cannot be read or
-/// replayed fails the table's open, never a silent fall-through to the plain
-/// path, which would file every reused slot's rows under its first occupant.
-pub struct IdentityIndex;
-
-impl IndexRelabel for IdentityIndex {
-    fn relabel(
-        &self,
-        catalog: &dyn Catalog,
-        source_id: i64,
-        table: &str,
-        first_row_ts: u64,
-    ) -> Result<Arc<dyn metriken_query::ColumnRelabel>, String> {
-        let from = catalog
-            .last_caller_row_at_or_before(source_id, table, first_row_ts, &mut |blob| {
-                crate::index::IndexEntry::decode(blob)
-                    .is_ok_and(|e| e.kind == crate::index::EntryKind::Full)
-            })?
-            .unwrap_or(0);
-        let entries = catalog.caller_rows(source_id, table, from, u64::MAX)?;
-        let occupants = crate::indexed::Occupants::replay(&entries)
-            .map_err(|e| format!("replaying the identity index for {table}: {e}"))?;
-        if occupants.skipped_before_full > 0 {
-            tracing::warn!(
-                "table {table}: {} index entries preceded the first full index and were skipped",
-                occupants.skipped_before_full
-            );
-        }
-        Ok(Arc::new(crate::indexed::OccupantRelabel::new(occupants)))
+        Ok(wrap(metriken_storage::rez::open::open_recordings(
+            path, pool,
+        )?))
     }
 }
 
@@ -274,93 +160,15 @@ impl MetricsSource for RezReader {
     }
 }
 
-/// Read either container into the one shape the reader consumes: per
-/// recording, `(sampler, segments-newest-last)`.
-///
-/// Dispatch is by CONTENT (`detect_rez_format`), not by extension, and the
-/// non-v3 arm deliberately falls through to `read_archive_bytes` unchanged —
-/// including for `NotRez`, so a caller handed something that is not a `.rez`
-/// at all keeps getting the tar reader's own error rather than a new one.
-fn read_recordings(path: &Path) -> Result<Vec<RecordingBytes>, Box<dyn std::error::Error>> {
-    match rez::detect_rez_format(path)? {
-        rez::RezFormat::V3Sqlite => read_v3_recordings(path),
-        rez::RezFormat::V2Tar | rez::RezFormat::NotRez => Ok(rez::read_archive_bytes(path)?.1),
-    }
-}
-
-/// Resolve a v3 (SQLite) `.rez` into the same `RecordingBytes` the tar reader
-/// produces, so everything downstream is container-agnostic.
-///
-/// Two things differ from a mechanical transcription of the catalog:
-///
-/// * Tables are enumerated with `all_samplers`, NOT `samplers`. The latter
-///   sees only `segments`, so a table still inside its first seal period —
-///   16 of 26 in the fleet measurement that motivated this container — would
-///   be invisible, which is precisely the data v3 exists to keep.
-/// * Each table's live WAL tail is materialized into an in-memory parquet
-///   segment and appended as the NEWEST segment. `live_wal`'s watermark
-///   (`ts > MAX(last_ts)` of that sampler's own segments) is what guarantees
-///   the seam has no duplicate row, so nothing here has to de-duplicate.
-fn read_v3_recordings(path: &Path) -> Result<Vec<RecordingBytes>, Box<dyn std::error::Error>> {
-    let db = RezDb::open(path)?;
-    let mut out = Vec::new();
-    for rec in db.read_recordings()? {
-        let mut tables = Vec::new();
-        for sampler in db.all_samplers(rec.id)? {
-            let segments = table_segments(&db, rec.id, &sampler)?;
-            // Only reachable if a sampler's every WAL row was pruned without
-            // its segment landing — which the seal ordering rules out. A table
-            // with no bytes has nothing to open, so skip rather than hand the
-            // reader an empty segment list.
-            if segments.is_empty() {
-                continue;
-            }
-            tables.push((sampler, segments));
-        }
-        out.push(RecordingBytes {
-            // v3 has no tar directory. `dir` survives only as a display name,
-            // and this is the function that produced it in the first place.
-            dir: rez::recording_dir_slug(&rec.meta.labels),
-            labels: rec.meta.labels,
-            metadata: rec.meta.metadata,
-            complete: rec.complete,
-            tables,
-        });
-    }
-    Ok(out)
-}
-
-/// One sampler's parquet segments, oldest first: its sealed segments in `seq`
-/// order, then its live WAL tail materialized as the newest segment.
-///
-/// `live_wal`, NOT `read_wal`: the watermark (`ts > MAX(last_ts)` over that
-/// sampler's own segments) is the only thing keeping the seam free of
-/// duplicates. The prune runs outside the seal transaction, so `wal` routinely
-/// still holds rows a sealed segment already covers; replaying the raw table
-/// would splice those rows in a second time.
-fn table_segments(
-    db: &RezDb,
-    recording_id: i64,
-    sampler: &str,
-) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
-    let mut segments: Vec<Vec<u8>> = db
-        .read_segments(recording_id, sampler)?
-        .into_iter()
-        .map(|s| s.bytes)
-        .collect();
-    if let Some(tail) = materialize_wal_tail(sampler, &db.live_wal(recording_id, sampler)?)? {
-        segments.push(tail.bytes);
-    }
-    Ok(segments)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rez::RezRecorder;
+    use crate::rez::{self, RezRecorder};
+    use crate::rez_sqlite::RezDb;
     use crate::window::Window;
     use metriken_exposition::{Counter, Gauge, Snapshot, SnapshotV2};
-    use metriken_query::{RateMode, SegmentedParquetReader};
+    use metriken_query::RateMode;
+    use metriken_storage::rez::open::table_segments;
     use std::time::SystemTime;
 
     fn counter(name: &str, sampler: &str, v: u64, w: Option<Window>) -> Counter {
@@ -374,7 +182,7 @@ mod tests {
             .into_iter()
             .collect(),
         )
-        .with_window(w.map(Into::into))
+        .with_window(w)
     }
 
     /// Two readers of one recording answer alike: names, labels, span,
@@ -446,7 +254,7 @@ mod tests {
             .into_iter()
             .collect(),
         )
-        .with_window(w.map(Into::into))
+        .with_window(w)
     }
 
     fn snap(ts: u64, counters: Vec<Counter>, gauges: Vec<Gauge>) -> Snapshot {
@@ -672,7 +480,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             )
-            .with_window(Some(Window::new(ts - 50_000_000, ts).into()));
+            .with_window(Some(Window::new(ts - 50_000_000, ts)));
             let snapshot = Snapshot::V2(SnapshotV2 {
                 systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
                 duration: std::time::Duration::ZERO,
@@ -1915,7 +1723,7 @@ mod tests {
                         .into_iter()
                         .collect(),
                     )
-                    .with_window(w.map(Into::into));
+                    .with_window(w);
                     let s = Snapshot::V2(SnapshotV2 {
                         systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
                         duration: std::time::Duration::ZERO,
@@ -2170,7 +1978,7 @@ mod tests {
                         name: "cpu_usage/percpu".to_string(),
                         schema_hash: schema.hash(),
                         schema: Some(std::sync::Arc::clone(&schema)),
-                        window: w.map(Into::into),
+                        window: w,
                         counters: vec![Some(i)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
@@ -2294,7 +2102,7 @@ mod tests {
                         name: "cpu_usage/percpu".to_string(),
                         schema_hash: percpu_schema.hash(),
                         schema: Some(std::sync::Arc::clone(&percpu_schema)),
-                        window: w.map(Into::into),
+                        window: w,
                         counters: vec![Some(i * 1_000)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
@@ -2303,7 +2111,7 @@ mod tests {
                         name: "cpu_usage/softirq".to_string(),
                         schema_hash: softirq_schema.hash(),
                         schema: Some(std::sync::Arc::clone(&softirq_schema)),
-                        window: w.map(Into::into),
+                        window: w,
                         counters: vec![Some(i * 10)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
@@ -2458,7 +2266,7 @@ mod tests {
                     name: "cpu_usage/percpu".to_string(),
                     schema_hash: percpu_schema.hash(),
                     schema: Some(std::sync::Arc::clone(&percpu_schema)),
-                    window: w.map(Into::into),
+                    window: w,
                     counters: vec![Some(i * 1_000)],
                     gauges: Vec::new(),
                     histograms: Vec::new(),
@@ -2467,7 +2275,7 @@ mod tests {
                     name: "cpu_usage/freq".to_string(),
                     schema_hash: freq_schema.hash(),
                     schema: Some(std::sync::Arc::clone(&freq_schema)),
-                    window: w.map(Into::into),
+                    window: w,
                     counters: Vec::new(),
                     gauges: vec![Some(2_000 + i as i64)],
                     histograms: Vec::new(),
@@ -2476,7 +2284,7 @@ mod tests {
                     name: "cpu_usage/sched".to_string(),
                     schema_hash: sched_schema.hash(),
                     schema: Some(std::sync::Arc::clone(&sched_schema)),
-                    window: w.map(Into::into),
+                    window: w,
                     counters: Vec::new(),
                     gauges: Vec::new(),
                     histograms: vec![Some(h)],
@@ -2580,7 +2388,7 @@ mod tests {
                         name: "cpu_usage/percpu".to_string(),
                         schema_hash: percpu_schema.hash(),
                         schema: Some(std::sync::Arc::clone(&percpu_schema)),
-                        window: w_fast.map(Into::into),
+                        window: w_fast,
                         counters: vec![Some(i * 1_000)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
@@ -2589,7 +2397,7 @@ mod tests {
                         name: "cpu_usage/softirq".to_string(),
                         schema_hash: softirq_schema.hash(),
                         schema: Some(std::sync::Arc::clone(&softirq_schema)),
-                        window: w_slow.map(Into::into),
+                        window: w_slow,
                         counters: vec![Some(i * 10)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
@@ -2702,7 +2510,7 @@ mod tests {
                         name: "cpu_usage/percpu".to_string(),
                         schema_hash: percpu_schema.hash(),
                         schema: Some(std::sync::Arc::clone(&percpu_schema)),
-                        window: w.map(Into::into),
+                        window: w,
                         counters: vec![Some(i * 1_000)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
@@ -2711,7 +2519,7 @@ mod tests {
                         name: "cpu_usage/softirq".to_string(),
                         schema_hash: softirq_schema.hash(),
                         schema: Some(std::sync::Arc::clone(&softirq_schema)),
-                        window: slow_w.map(Into::into),
+                        window: slow_w,
                         counters: vec![Some(i / 3)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
@@ -2819,7 +2627,7 @@ mod tests {
                         name: "cpu_usage/percpu".to_string(),
                         schema_hash: cpu_schema.hash(),
                         schema: Some(std::sync::Arc::clone(&cpu_schema)),
-                        window: w.map(Into::into),
+                        window: w,
                         counters: vec![Some(i * 1_000)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
@@ -2828,7 +2636,7 @@ mod tests {
                         name: "cpu_usage/softirq".to_string(),
                         schema_hash: softirq_schema.hash(),
                         schema: Some(std::sync::Arc::clone(&softirq_schema)),
-                        window: w.map(Into::into),
+                        window: w,
                         counters: vec![Some(i)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
@@ -2998,8 +2806,7 @@ mod tests {
         // Composed, with the recording's own evaluation points: identical to
         // querying the archive directly.
         let opts = QueryOptions::default();
-        let points = reader
-            .eval_timestamps_for(QUERY, 1.0, opts.rate_mode)
+        let points = metriken_query::eval_timestamps_for(&reader, QUERY, 1.0, opts.rate_mode)
             .expect("a two-cadence query must yield evaluation points");
         let aligned = times(
             composed
@@ -3020,9 +2827,13 @@ mod tests {
 
         // A single-cadence query needs no adjustment, so composing it is
         // already faithful and this returns None.
-        assert!(reader
-            .eval_timestamps_for("rate(cpu_cycles[2s])", 1.0, RateMode::default())
-            .is_none());
+        assert!(metriken_query::eval_timestamps_for(
+            &reader,
+            "rate(cpu_cycles[2s])",
+            1.0,
+            RateMode::default()
+        )
+        .is_none());
     }
 
     #[test]
@@ -3085,19 +2896,23 @@ mod tests {
         let reader = RezReader::open_with_pool(&path, pool).unwrap();
 
         assert!(
-            reader
-                .eval_timestamps_for(
-                    "rate(cpu_cycles[2s]) + rate(reads[4s])",
-                    1.0,
-                    RateMode::Grid,
-                )
-                .is_some(),
+            metriken_query::eval_timestamps_for(
+                &reader,
+                "rate(cpu_cycles[2s]) + rate(reads[4s])",
+                1.0,
+                RateMode::Grid,
+            )
+            .is_some(),
             "the fixture must be one the policy fires on, or this proves nothing"
         );
         assert!(
-            reader
-                .eval_timestamps_for("rate(cpu_cycles[2s]) + rate(reads[4s])", 1.0, RateMode::Raw,)
-                .is_none(),
+            metriken_query::eval_timestamps_for(
+                &reader,
+                "rate(cpu_cycles[2s]) + rate(reads[4s])",
+                1.0,
+                RateMode::Raw,
+            )
+            .is_none(),
             "Raw must be left alone"
         );
     }
@@ -3230,426 +3045,6 @@ mod tests {
             vec!["cpu_usage".to_string()],
             "the query opened the table it named and no other"
         );
-    }
-
-    /// Fixtures and checks for a group table read through the identity index.
-    mod indexed {
-        use super::*;
-        use crate::index::{EntryKind, IndexEntry, IndexState, SlotEntry};
-        use crate::rez_sqlite::TickBatch;
-        use crate::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
-        use crate::seal_policy::SealPolicy;
-        use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, SnapshotV3};
-        use std::time::Duration;
-
-        const STREAM: &str = "fake/ops";
-        const TICKS: u64 = 6;
-        /// One result series: its labels and its `(timestamp, value)` points.
-        type Series = (BTreeMap<String, String>, Vec<(f64, f64)>);
-        /// The tick at which slot 0 changes hands: redis leaves, valkey lands.
-        const HANDOVER: u64 = 3;
-
-        fn ts(tick: u64) -> u64 {
-            1_000_000_000 * (tick + 1)
-        }
-
-        fn labels(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-            pairs
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect()
-        }
-
-        /// Which occupant slot 0 has at `tick`.
-        fn slot0_comm(tick: u64) -> &'static str {
-            if tick < HANDOVER {
-                "redis"
-            } else {
-                "valkey"
-            }
-        }
-
-        /// The group's schema at `tick`. `labelled` is the shape agents write
-        /// today, where a slot's labels are copied into its member's metadata;
-        /// unlabelled is the shape after #1224 step 7, where a member carries
-        /// only its metric and slot and the index is the one place the labels
-        /// live.
-        fn schema(tick: u64, labelled: bool) -> GroupSchema {
-            let member = |slot: u32, comm: &str| {
-                let mut m = labels(&[("metric", "fake_ops"), ("id", &slot.to_string())]);
-                if labelled {
-                    m.insert("comm".to_string(), comm.to_string());
-                }
-                MetricDesc {
-                    name: format!("7x{slot}"),
-                    metadata: m,
-                }
-            };
-            GroupSchema {
-                counters: vec![member(0, slot0_comm(tick)), member(1, "nginx")],
-                gauges: Vec::new(),
-                histograms: Vec::new(),
-            }
-        }
-
-        /// The tick at which the 5.x recorder restated the whole set, as it
-        /// did every seal age: a `Full` that changes nothing.
-        const RESTATED: u64 = 4;
-
-        fn entry(tick: u64) -> Option<(u64, Vec<u8>)> {
-            let e = match tick {
-                0 => IndexEntry {
-                    kind: EntryKind::Full,
-                    slots: vec![
-                        SlotEntry {
-                            slot: 0,
-                            labels: labels(&[("comm", "redis")]),
-                        },
-                        SlotEntry {
-                            slot: 1,
-                            labels: labels(&[("comm", "nginx")]),
-                        },
-                    ],
-                    removed: Vec::new(),
-                    state: IndexState::default(),
-                },
-                HANDOVER => IndexEntry {
-                    kind: EntryKind::Delta,
-                    slots: vec![SlotEntry {
-                        slot: 0,
-                        labels: labels(&[("comm", "valkey")]),
-                    }],
-                    removed: Vec::new(),
-                    state: IndexState::default(),
-                },
-                RESTATED => IndexEntry {
-                    kind: EntryKind::Full,
-                    slots: vec![
-                        SlotEntry {
-                            slot: 0,
-                            labels: labels(&[("comm", "valkey")]),
-                        },
-                        SlotEntry {
-                            slot: 1,
-                            labels: labels(&[("comm", "nginx")]),
-                        },
-                    ],
-                    removed: Vec::new(),
-                    state: IndexState::default(),
-                },
-                _ => return None,
-            };
-            Some((ts(tick), e.encode()))
-        }
-
-        /// Write `TICKS` ticks of one two-slot group, slot 0 changing hands at
-        /// `HANDOVER`, sealed every two rows so the table is several segments
-        /// plus a WAL tail. With `with_index` the handover is in `caller_rows`,
-        /// as `record --stream -o out.rez` wrote it before 6.0; the entries are
-        /// inserted after the rows, since nothing in 6.0 writes them.
-        fn write(path: &Path, labelled: bool, with_index: bool) {
-            let seed = ManifestSeed {
-                labels: labels(&[("source", "rezolus")]),
-                metadata: labels(&[("sampling_interval_ms", "1000")]),
-                clock_anchor_wall_ns: ts(0),
-            };
-            let (mut archive, writer) = RezArchive::single(path, seed).unwrap();
-            let rid = writer.recording_id();
-            let mut rec = StreamRecorderV3::with_policy(
-                writer,
-                SealPolicy {
-                    max_bytes: usize::MAX,
-                    max_rows: 2,
-                    max_age: Duration::from_secs(3600),
-                },
-            );
-            for tick in 0..TICKS {
-                let sch = schema(tick, labelled);
-                let g = GroupSnapshot {
-                    name: STREAM.to_string(),
-                    schema_hash: sch.hash(),
-                    schema: Some(Arc::new(sch)),
-                    window: Some(metriken::Window::new(ts(tick) - 5_000_000, ts(tick))),
-                    // Slot 0 restarts from zero at the handover with a
-                    // different slope: a read that merged the two occupants
-                    // would show a counter reset there, and a rate that
-                    // crossed it would not be 10 or 7.
-                    counters: vec![
-                        Some(if tick < HANDOVER {
-                            tick * 10
-                        } else {
-                            (tick - HANDOVER) * 7
-                        }),
-                        Some(tick * 3),
-                    ],
-                    gauges: Vec::new(),
-                    histograms: Vec::new(),
-                };
-                let snap = Snapshot::V3(SnapshotV3 {
-                    systemtime: SystemTime::UNIX_EPOCH + Duration::from_nanos(ts(tick)),
-                    duration: Duration::ZERO,
-                    metadata: HashMap::new(),
-                    groups: vec![g],
-                });
-                let rows = rec.stage(&snap, ts(tick), 0).unwrap();
-                archive
-                    .wal_tick(vec![TickBatch {
-                        recording_id: rid,
-                        rows,
-                    }])
-                    .unwrap();
-                rec.maybe_seal().unwrap();
-            }
-            rec.sync().unwrap();
-            drop(rec);
-            drop(archive);
-            if with_index {
-                let entries: Vec<(u64, Vec<u8>)> = (0..TICKS).filter_map(entry).collect();
-                let mut db = RezDb::open(path).unwrap();
-                db.transaction(|tx| tx.insert_caller_rows(rid, STREAM, &entries))
-                    .unwrap();
-            }
-        }
-
-        fn open(path: &Path) -> RezReader {
-            let mut readers =
-                RezReader::open_recordings(path, BufferPool::new(16 * 1024 * 1024)).unwrap();
-            assert_eq!(readers.len(), 1);
-            readers.pop().unwrap().1
-        }
-
-        /// Every series of `rate(fake_ops[2s])` as `(labels, values)`, in a
-        /// fixed order. A rate rather than the bare counter because that is
-        /// what the engine evaluates over a range for a counter, and because
-        /// a rate is what a merged handover would corrupt.
-        fn series(reader: &RezReader) -> Vec<Series> {
-            let (start, end) = reader.time_range().unwrap();
-            let r = reader
-                .query_range("rate(fake_ops[2s])", start, end, 1.0)
-                .expect("the query must resolve");
-            let QueryResult::Matrix { result } = r else {
-                panic!("a range query over a counter is a matrix");
-            };
-            let mut out: Vec<_> = result
-                .into_iter()
-                .map(|s| (s.metric.into_iter().collect::<BTreeMap<_, _>>(), s.values))
-                .collect();
-            out.sort_by(|a, b| a.0.cmp(&b.0));
-            out
-        }
-
-        /// THE oracle. On an archive written the way agents write today —
-        /// a slot's labels in its column's metadata as well as in the index —
-        /// reading through the index yields exactly what reading the parquet
-        /// does: the same series, the same labels, the same values on the
-        /// same timestamps. The index path is a second implementation of the
-        /// same attribution, and this is what keeps it honest until the
-        /// column metadata goes away and it becomes the only one.
-        #[test]
-        fn the_index_path_agrees_with_the_parquet_path_on_a_dual_carrying_archive() {
-            let dir = tempfile::tempdir().unwrap();
-            let plain = dir.path().join("plain.rez");
-            let indexed = dir.path().join("indexed.rez");
-            write(&plain, true, false);
-            write(&indexed, true, true);
-
-            let plain = open(&plain);
-            let indexed = open(&indexed);
-
-            let expected = series(&plain);
-            assert_eq!(
-                expected.len(),
-                3,
-                "the parquet path itself sees the handover as two series: {expected:?}"
-            );
-            assert_eq!(series(&indexed), expected);
-
-            let mut a = plain.counter_labels("fake_ops");
-            let mut b = indexed.counter_labels("fake_ops");
-            a.sort();
-            b.sort();
-            assert_eq!(a, b);
-            assert_eq!(indexed.sample_timestamps(), plain.sample_timestamps());
-            assert_eq!(indexed.time_range_ns(), plain.time_range_ns());
-        }
-
-        /// The shape the cutover produces: a column that says which metric
-        /// and which slot and nothing else. Read as parquet, every row of
-        /// slot 0 is one series with no `comm` at all; read through the
-        /// index, the rows before the handover are redis's and the rows from
-        /// it on are valkey's, and neither has a value on the other's ticks.
-        #[test]
-        fn an_index_only_archive_is_split_by_occupant() {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("cutover.rez");
-            write(&path, false, true);
-            let reader = open(&path);
-
-            let got = series(&reader);
-            let labels_of: Vec<&BTreeMap<String, String>> = got.iter().map(|(l, _)| l).collect();
-            let want = |comm: &str, id: &str| {
-                labels(&[("__name__", "fake_ops"), ("comm", comm), ("id", id)])
-            };
-            assert_eq!(
-                labels_of,
-                vec![
-                    &want("nginx", "1"),
-                    &want("redis", "0"),
-                    &want("valkey", "0")
-                ],
-                "{got:?}"
-            );
-            let points = |comm: &str| -> Vec<(f64, f64)> {
-                got.iter()
-                    .find(|(l, _)| l["comm"] == comm)
-                    .map(|(_, v)| v.clone())
-                    .unwrap()
-            };
-            // Ticks are at 1s..6s; a 2s rate needs two samples, so each
-            // occupant's first tick has no point. Redis holds ticks 1-3,
-            // valkey 4-6, and neither rate crosses the handover.
-            assert_eq!(points("redis"), vec![(2.0, 10.0), (3.0, 10.0)]);
-            assert_eq!(points("valkey"), vec![(5.0, 7.0), (6.0, 7.0)]);
-            assert_eq!(
-                points("nginx"),
-                vec![(2.0, 3.0), (3.0, 3.0), (4.0, 3.0), (5.0, 3.0), (6.0, 3.0)]
-            );
-
-            // And the parquet path, on the same file, cannot tell them apart —
-            // which is the whole reason the index path exists.
-            let db = RezDb::open(&path).unwrap();
-            let segments = super::super::table_segments(&db, 1, STREAM).unwrap();
-            let plain = SegmentedParquetReader::open_bytes_with_pool(
-                segments,
-                BufferPool::new(16 * 1024 * 1024),
-            )
-            .unwrap();
-            assert_eq!(
-                plain.counter_labels("fake_ops").len(),
-                2,
-                "one series per slot, the handover invisible"
-            );
-        }
-
-        /// After retention has cut the head of the recording and its index
-        /// history back to the restatement, the surviving rows are still
-        /// attributed: the reader starts its replay at the last `Full` at
-        /// or before the table's first surviving row, which is exactly the
-        /// entry retention kept.
-        #[test]
-        fn a_retained_tail_is_attributed_from_the_restatement() {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("cutover.rez");
-            write(&path, false, true);
-            {
-                let mut db = RezDb::open(&path).unwrap();
-                db.evict_before(1, ts(RESTATED)).unwrap();
-                db.evict_caller_rows_before(1, STREAM, ts(RESTATED))
-                    .unwrap();
-                assert_eq!(
-                    db.read_caller_rows(1, STREAM, 0, u64::MAX).unwrap().len(),
-                    1,
-                    "fixture: only the restatement remains"
-                );
-            }
-            let reader = open(&path);
-            let got = series(&reader);
-            let labels_of: Vec<&BTreeMap<String, String>> = got.iter().map(|(l, _)| l).collect();
-            let want = |comm: &str, id: &str| {
-                labels(&[("__name__", "fake_ops"), ("comm", comm), ("id", id)])
-            };
-            assert_eq!(
-                labels_of,
-                vec![&want("nginx", "1"), &want("valkey", "0")],
-                "redis's rows are gone with the head; the rest are still named: {got:?}"
-            );
-        }
-
-        /// Converted to dendro, an archive whose occupants come from the
-        /// identity index reads as the `.rez` did: with labels in the
-        /// columns and the index, with the index alone, and with the index
-        /// cut back to its restatement, where replay has to start at the
-        /// `Full` found by `last_caller_row_at_or_before`.
-        #[test]
-        fn a_dendro_conversion_attributes_occupants_as_the_rez_did() {
-            let queries = ["rate(fake_ops[2s])", "sum by (comm) (rate(fake_ops[2s]))"];
-            for (case, labelled, retained) in [
-                ("dual", true, false),
-                ("index only", false, false),
-                ("retained tail", false, true),
-            ] {
-                let dir = tempfile::tempdir().unwrap();
-                let rez = dir.path().join("in.rez");
-                let dendro = dir.path().join("out.dendro");
-                write(&rez, labelled, true);
-                if retained {
-                    let mut db = RezDb::open(&rez).unwrap();
-                    db.evict_before(1, ts(RESTATED)).unwrap();
-                    db.evict_caller_rows_before(1, STREAM, ts(RESTATED))
-                        .unwrap();
-                }
-                crate::to_dendro::convert_v3_to_dendro(&rez, &dendro).unwrap();
-                let (a, b) = (open(&rez), open(&dendro));
-                assert_eq!(series(&a), series(&b), "{case}");
-                assert_same_answers(&a, &b, &queries);
-            }
-        }
-
-        /// The browser opens an archive from bytes and reads it through the
-        /// same split — the shared-connection arm of `SegmentSource`.
-        #[test]
-        fn the_split_also_applies_when_opened_from_bytes() {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("cutover.rez");
-            write(&path, false, true);
-            let mut readers = RezReader::open_recordings_from_bytes(
-                std::fs::read(&path).unwrap(),
-                BufferPool::new(16 * 1024 * 1024),
-            )
-            .unwrap();
-            let reader = readers.pop().unwrap().1;
-            assert_eq!(series(&reader).len(), 3);
-        }
-
-        /// Windows survive the split: `rate()` over the indexed table carries
-        /// the same uncertainty band the parquet path computes from the
-        /// table-level window columns.
-        #[test]
-        fn rate_bands_survive_the_split() {
-            let dir = tempfile::tempdir().unwrap();
-            let plain = dir.path().join("plain.rez");
-            let indexed = dir.path().join("indexed.rez");
-            write(&plain, true, false);
-            write(&indexed, true, true);
-            let bands = |path: &Path| {
-                let reader = open(path);
-                let (start, end) = reader.time_range().unwrap();
-                let QueryResult::Matrix { result } = reader
-                    .query_range("rate(fake_ops[2s])", start, end, 1.0)
-                    .unwrap()
-                else {
-                    panic!("matrix");
-                };
-                let mut out: Vec<_> = result
-                    .into_iter()
-                    .map(|s| {
-                        (
-                            s.metric.into_iter().collect::<BTreeMap<_, _>>(),
-                            s.values,
-                            s.intervals,
-                        )
-                    })
-                    .collect();
-                out.sort_by(|a, b| a.0.cmp(&b.0));
-                out
-            };
-            let expected = bands(&plain);
-            assert!(
-                expected.iter().any(|(_, _, i)| i.is_some()),
-                "the fixture's windows must produce a band on the parquet path: {expected:?}"
-            );
-            assert_eq!(bands(&indexed), expected);
-        }
     }
 
     /// A long table and its occupant stream (the 6.0 layout) read as the

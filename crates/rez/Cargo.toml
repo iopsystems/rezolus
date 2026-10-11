@@ -19,6 +19,7 @@ metriken-exposition = { workspace = true, optional = true }
 metriken-query.workspace = true
 metriken-segment.workspace = true
 metriken-archive.workspace = true
+metriken-storage = { workspace = true, features = ["rez"] }
 parquet = { version = "58.2.0", default-features = false, features = [
     "arrow",
     "simdutf8",
@@ -56,11 +57,13 @@ write = [
     # `StreamRow` for `wire::AgentRow`, so the agent's frame producer reads
     # the rows it already built for `/metrics/rows` without converting them.
     "metriken-archive/stream",
+    "metriken-storage/write",
+    "metriken-storage/stream",
 ]
 # Fixture builders used by the binary crate's tests. Not `#[cfg(test)]`,
 # because a `#[cfg(test)]` module in THIS crate is invisible to the crate
 # under test next door.
-test-support = ["write"]
+test-support = ["write", "metriken-storage/test-support"]
 
 # Builds only with `test-support`, which is what supplies the fixture builders
 # it calls. Declared rather than left implicit because `--all-targets` compiles
@@ -72,4 +75,5 @@ name = "write_rez_fixture"
 required-features = ["test-support"]
 
 [dev-dependencies]
+metriken-storage = { workspace = true, features = ["rez", "test-support"] }
 tempfile = "3"

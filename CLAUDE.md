@@ -264,16 +264,18 @@ A `.rez` takes any number of endpoints, rezolus or Prometheus. A Prometheus targ
 
 ### `.rez` lives in its own crate
 
-`crates/rez` holds the `.rez` format — container (v2 tar, v3 SQLite), writers,
-and `RezReader`, which opens a `.rez` or dendro archive by content and presents
-it as a `metriken_query::MetricsSource`. The reader underneath is metriken's
-(`metriken-archive`'s `ArchiveReader`, which `RezReader` derefs to; the segment
-format, WAL rows and table builders are `metriken-segment`'s), per metriken's
-`docs/journal/2026-09-28-high-cardinality-stack.md`. What stays here is the
-`.rez` container (`RezDb`'s `metriken_archive::Catalog` impl, the tar path) and
-the identity-index relabel (`reader::IdentityIndex`, an
-`metriken_archive::IndexRelabel`), which reads the `caller_rows` a 5.x
-`record --stream -o out.rez` wrote; nothing in 6.0 writes them.
+The `.rez` format is `metriken-storage`'s (feature `rez`, with `write` for the
+v3 writer and the `.rez`-to-dendro conversion, `test-support` for the tar
+fixture writer): container (v2 tar, v3 SQLite `RezDb`), writers, and opening an
+archive by content (`metriken_storage::rez::open`). The archive reader is
+storage's `ArchiveReader`; queries over it are `metriken-query`'s, which
+implements `MetricsSource` for it. See metriken's
+`docs/journal/2026-10-09-storage-scan.md`. `crates/rez` keeps `RezReader` and
+`LiveReader`, which implement `MetricsSource` and so cannot live in storage,
+and re-exports storage's `rez` modules at the paths call sites use
+(`rez::rez_sqlite`, `rez::rez_v3_writer`, ...). The `caller_rows` identity index
+a 5.x `record --stream -o out.rez` wrote is not read; such a table logs a
+warning and keeps the labels its segments carry.
 It is a workspace crate rather than a module of the binary because `rezolus` is
 **binary-only** (no `lib` target), so nothing can depend on it: a reader living
 there was reachable by the server viewer and by nothing else, which is why the
@@ -284,43 +286,24 @@ The binary re-exports the modules under the paths call sites already use
 from inside `rezolus`.
 
 Fixture builders (`rez::rez::recorder_tests_support`, and the tar writer
-`rez_stream`) sit behind the crate's `test-support` feature rather than
-`#[cfg(test)]` — a `#[cfg(test)]` module in `rez` is invisible to the binary
-crate's tests, which build most `.rez` fixtures in this repo. The binary enables
-that feature as a dev-dependency.
+`rez_stream`) sit behind `test-support` (storage's, which `rez`'s turns on)
+rather than `#[cfg(test)]`: a `#[cfg(test)]` module in another crate is
+invisible to the binary crate's tests, which build most `.rez` fixtures in this
+repo. The binary enables that feature as a dev-dependency.
 
 **The `write` feature (default on) is what separates the two halves.** With it
 off, `crates/rez` is a *reader*: container, catalog, WAL-tail materialization,
 `RezReader`. That configuration is the one that compiles for
-`wasm32-unknown-unknown`, and the reason it has to exist is narrow — `metriken`'s
+`wasm32-unknown-unknown`, and the reason it has to exist is narrow: `metriken`'s
 registry (`metriken-core`) declares a `linkme` distributed slice, and `linkme`
-gates on a fixed `target_os` list that `unknown` is not in. So the read path
-must not name a `metriken`/`metriken-exposition` type at all. These types
-belong to the segment format, `metriken-segment` (wasm-safe; the wide table,
-its builders and parquet codec moved there too, per metriken's
-`docs/journal/2026-09-28-high-cardinality-stack.md`), and `crates/rez`
-re-exports them under the paths call sites use:
-
-- `rez::window::Window` — the acquisition window a segment stores. Converted
-  from `metriken::Window` once, at ingest (metriken-segment's `metriken`
-  feature, which `rez`'s `write` feature turns on).
-- `rez::schema::{GroupSchema, MetricDesc}` — a group's membership as carried in
-  a WAL row. Its serde field order is the on-disk msgpack, so it is pinned
-  byte-for-byte against the producer's type by tests in metriken-exposition,
-  which also holds the conversion (its `segment` feature).
-- `rez::rez::{Cell, CellValue}` — the builder's input. Rows reach a table from
-  an agent snapshot *and* from this archive's own WAL, and only the first has
-  snapshot values to borrow. `push_entries`, the snapshot form, is the
-  `rez::rez::PushEntries` extension trait, since the builder is no longer
-  rezolus's type.
-- `rez::wal::{WalGroupRow, WalCell, WalValue, materialize_wal_tail}` — the WAL
-  row format and turning a live tail into a segment (metriken-segment's `wal`;
-  `rez_sqlite::WalRow` implements its `WalRowSource`). Building a row from a
-  `GroupSnapshot` (`wal_group_row`, `group_approx_bytes`) is
-  metriken-exposition's, behind `write`.
+gates on a fixed `target_os` list that `unknown` is not in. Storage's read path
+names only `metriken-model` and `metriken-types` types (`Window`,
+`GroupSchema`, the WAL rows), and its writers read `metriken-model` snapshots,
+so no `.rez` code needs the registry; `rez`'s `write` feature still turns on
+`metriken-storage/stream`, which does.
 
 `cargo check -p rez --no-default-features --target wasm32-unknown-unknown` is a
-CI step for exactly this reason; nothing else catches a metriken type creeping
+CI step for exactly this reason; nothing else catches a registry type creeping
 back onto the read path.
 
 ### Service Extensions
@@ -335,7 +318,7 @@ The WASM crate lives at `crates/viewer/`. It targets `wasm32-unknown-unknown` an
 
 **It opens both parquet files and `.rez` archives.** A `.rez` is recognized by content, not by filename, exactly as the CLI recognizes it, and a 2-recording archive fills the A/B slots — the same mapping `rezolus view` makes. Above two, the first two are shown and the rest are named in `WasmCaptureRegistry::notices()`, which the frontend logs; the server viewer's equivalent warning goes to a terminal nobody is watching in a browser.
 
-Save-as-Report writes the source's container: a dendro source saves a `.dendro` report (`report_save::build_dendro_report`, which seals the source's live tail with metriken-archive's `Encoder`, available without `write` since 0.2.7), a `.rez` source or a parquet compare a `.rez`, a single parquet a `.parquet`.
+Save-as-Report writes the source's container: a dendro source saves a `.dendro` report (`report_save::build_dendro_report`, which seals the source's live tail with metriken-storage's `Encoder`, available without `write` since 0.2.7), a `.rez` source or a parquet compare a `.rez`, a single parquet a `.parquet`.
 
 One thing the browser cannot have: SQLite's `-wal` **sidecar**. A `.rez` carries its own unsealed rows in a `wal` TABLE inside the file, and those travel with an upload — but SQLite also commits into a sidecar file not yet checkpointed into the archive, and an upload is one file. `rezolus view archive.rez` opens by path with the sidecar beside it and sees further. This only differs for a copy taken from under a running recorder, and the gap used to be large: measured at **123 ticks (~2 minutes at a 1s interval)** on a 2000-tick recording, with a sidecar larger than the archive. Two things bound it now — the writer folds the sidecar into the archive every `rez_v3_writer::CHECKPOINT_INTERVAL` (10s), so a plain copy is at most that stale rather than unbounded; and `rezolus recording snapshot <archive> -o out.rez` reads through the sidecar for an exact copy, without pausing the writer.
 
