@@ -556,7 +556,7 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   *Reopen:* if restart-heavy recordings make split columns a real annoyance.
 - **Seal thresholds as compile-time constants** — Open. Byte-first seal
   thresholds (est. bytes primary, row cap, ~5 min age bound for the kill-loss
-  window) ship as constants in `crates/rez/src/rez.rs`. *Reopen:* if real
+  window) ship as constants in metriken-storage's `src/rez/rez.rs`. *Reopen:* if real
   workloads need tuning — promote to a `--flag` or config knob.
 - **Fast finalize for the classic parquet path** — By design. The single-file
   parquet's wide schema is only knowable once recording ends, so its finalize
@@ -657,13 +657,6 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   fingerprint and the reader probes one footer per distinct fingerprint,
   plus the live tail's schema-carrying rows; a segment without a
   fingerprint (a `.rez`, a conversion) keeps the old assumption.
-- **The reshaping converter** — Roadmap, after the reader, until metriken's
-  path step 2 ([6.0.0 release readiness](journal/2026-10-08-6-0-release-readiness.md)).
-  Replaces #1301's byte copy. Oracle: on 5.x `.rez --stream` recordings the
-  occupants derived from the columns must equal those the recorded index
-  gives, and every series must read back the same as through the `.rez`
-  reader. Path step 2 drops the index (`caller_rows`) from the `.rez` reader,
-  since 5.x's stream support is a preview; this item is dropped with it.
 - **5.18–5.20 mid-segment occupant changes** — By design. The file does not
   record the new occupant's labels (#1232), so a conversion keeps what the file
   records. Reopen only if a recording from that range needs per-task

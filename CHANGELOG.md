@@ -21,6 +21,11 @@
 
 ### Changed
 
+- **The `.rez` format and the archive reader and writer are
+  `metriken-storage`'s** (0.1.0, feature `rez`), and queries over an archive
+  are `metriken-query` 0.35.0's. `crates/rez` keeps `RezReader` and
+  `LiveReader` and re-exports the rest at its old paths. The files `record`,
+  `hindsight` and `recording` write and read are unchanged.
 - **An agent restart is written into the recording's metadata.** When the
   agent restarts mid-recording, an archive written by `record` or `hindsight`
   (`.dendro` or `.rez`) is amended once the first row from the new process is
@@ -311,8 +316,10 @@
   names dendro's `NO_INDEX_STATE`), no longer keeps the slot-change broadcast
   or index history, and `/status` drops `index_resyncs`. Slot identity
   reaches a `.dendro` through each group's schema, `__uid__` included.
-  `.rez` archives written by a 5.x `record --stream` still read with their
-  occupants split by the recorded index. 5.x keeps `.rez --stream` on
+  `.rez` archives written by a 5.x `record --stream` are read without that
+  index: each slot column keeps the labels its segment was built with, which
+  splits reused slots where a member carries its labels (what released agents
+  wrote), and each indexed table logs a warning. 5.x keeps `.rez --stream` on
   `release/5.x`; a 5.x `record --stream -o out.rez` against a 6.0 agent
   receives no index frames, so it no longer records an identity index. A 6.0
   recorder ignores a 5.x agent's index frames.

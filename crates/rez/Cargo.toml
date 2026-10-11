@@ -17,8 +17,8 @@ histogram.workspace = true
 metriken = { workspace = true, optional = true }
 metriken-exposition = { workspace = true, optional = true }
 metriken-query.workspace = true
-metriken-segment.workspace = true
 metriken-archive.workspace = true
+metriken-storage = { workspace = true, features = ["rez"] }
 parquet = { version = "58.2.0", default-features = false, features = [
     "arrow",
     "simdutf8",
@@ -28,7 +28,6 @@ parquet = { version = "58.2.0", default-features = false, features = [
     "lz4",
 ] }
 rusqlite = { version = "0.40", features = ["bundled", "blob", "serialize"] }
-rmp-serde = "1.3.1"
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 tar = { version = "0.4.45", default-features = false }
@@ -51,16 +50,16 @@ write = [
     # own as of dendro 0.2.0 — it is always compiled in, and the parts of it
     # that need a writer are gated on `write` inside dendro.
     "dendro/write",
-    # `From` between `metriken::Window` and the segment format's `Window`.
-    "metriken-segment/metriken",
     # `StreamRow` for `wire::AgentRow`, so the agent's frame producer reads
     # the rows it already built for `/metrics/rows` without converting them.
     "metriken-archive/stream",
+    "metriken-storage/write",
+    "metriken-storage/stream",
 ]
 # Fixture builders used by the binary crate's tests. Not `#[cfg(test)]`,
 # because a `#[cfg(test)]` module in THIS crate is invisible to the crate
 # under test next door.
-test-support = ["write"]
+test-support = ["write", "metriken-storage/test-support"]
 
 # Builds only with `test-support`, which is what supplies the fixture builders
 # it calls. Declared rather than left implicit because `--all-targets` compiles
@@ -72,4 +71,5 @@ name = "write_rez_fixture"
 required-features = ["test-support"]
 
 [dev-dependencies]
+metriken-storage = { workspace = true, features = ["rez", "test-support"] }
 tempfile = "3"

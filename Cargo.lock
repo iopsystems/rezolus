@@ -2238,47 +2238,39 @@ dependencies = [
 
 [[package]]
 name = "metriken"
-version = "0.11.2"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49659db0fae8c610294543743e0f5eeb3ec2247b2df8bc5d32cec9d9a898bf0d"
+checksum = "6b775d1c8fa624fbf8e3a553a09cd2b48311e076301a48f2c968b6a52d7a52e1"
 dependencies = [
  "getrandom 0.3.4",
  "histogram",
  "metriken-core",
  "metriken-derive",
+ "metriken-types",
  "once_cell",
  "parking_lot",
 ]
 
 [[package]]
 name = "metriken-archive"
-version = "0.3.5"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad4fbe4816303cb135cf12374c45ea1388f24d878c19e6bb29118c35af4b435d"
+checksum = "4460bd57b27d9ad62026dd2bf61e2434707177f10495912bec0c977a26736dd4"
 dependencies = [
- "arrow",
- "bytes",
- "dendro",
- "histogram",
- "metriken",
- "metriken-exposition",
- "metriken-query",
- "metriken-segment",
- "parquet",
- "tracing",
+ "metriken-storage",
 ]
 
 [[package]]
 name = "metriken-core"
-version = "0.3.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c1f24356a64325a1d2ba5a94377a179752b8b3e67f826819b0166c137870f4c"
+checksum = "475f9a727147e3b088eadebda0572fb49f81aae39993d9dd1e6bac4556a18da0"
 dependencies = [
  "histogram",
  "linkme",
+ "metriken-types",
  "parking_lot",
  "phf",
- "serde",
 ]
 
 [[package]]
@@ -2295,34 +2287,48 @@ dependencies = [
 
 [[package]]
 name = "metriken-exposition"
-version = "0.21.4"
+version = "0.21.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0733b4d7a38f49b22289b8d6eb127729522c6f343acd4d51594ec4813a2a07a"
+checksum = "fafd4c877d8b928e80e5e07da7b26b0d8ca7ba4db301924b4fc6bd6b4457caad"
 dependencies = [
  "arrow",
  "chrono",
  "foldhash 0.2.0",
  "histogram",
  "metriken",
- "metriken-segment",
+ "metriken-model",
+ "metriken-types",
  "parquet",
  "rmp-serde",
  "serde",
 ]
 
 [[package]]
-name = "metriken-query"
-version = "0.34.7"
+name = "metriken-model"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d6c01a30e92a7ccf25035d5be4a820601e38d55b010fd731db52cef0dc6e4de"
+checksum = "76482d52c12b2d4096f225a7dfcc4091c162e570e6696c3252e313251014d971"
+dependencies = [
+ "histogram",
+ "metriken-types",
+ "rmp",
+ "rmp-serde",
+ "serde",
+]
+
+[[package]]
+name = "metriken-query"
+version = "0.35.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0222b69b42312abc4dc8b62c4810879dcd642ca86bf02f83afbf6480150e3f3c"
 dependencies = [
  "arrow",
  "bytes",
  "foldhash 0.2.0",
  "histogram",
  "lru",
- "metriken-exposition",
- "metriken-segment",
+ "metriken-model",
+ "metriken-storage",
  "parquet",
  "promql-parser",
  "serde",
@@ -2333,20 +2339,40 @@ dependencies = [
 ]
 
 [[package]]
-name = "metriken-segment"
-version = "0.1.6"
+name = "metriken-storage"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78fbec620b731d13ed44d18a136a5b0417bb1b790a4ad937b9ba3666f63538e4"
+checksum = "dc61fd48ad711e2a2d124b12322d3696390374bc12f412ae577535eeb761429c"
 dependencies = [
  "arrow",
  "bytes",
+ "dendro",
+ "foldhash 0.2.0",
  "histogram",
+ "lru",
  "metriken",
+ "metriken-exposition",
+ "metriken-model",
+ "metriken-types",
  "parquet",
  "rmp",
  "rmp-serde",
+ "rusqlite",
  "serde",
+ "serde_json",
+ "tar",
+ "tempfile",
  "tracing",
+ "twox-hash",
+]
+
+[[package]]
+name = "metriken-types"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9bd7377cbafbe5e1852bff7714e7056598f419cfc42130c35955bb2c13a26c76"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -3055,9 +3081,8 @@ dependencies = [
  "metriken-archive",
  "metriken-exposition",
  "metriken-query",
- "metriken-segment",
+ "metriken-storage",
  "parquet",
- "rmp-serde",
  "rusqlite",
  "serde",
  "serde_json",
@@ -3068,7 +3093,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "6.0.0-alpha.41"
+version = "6.0.0-alpha.42"
 dependencies = [
  "allan",
  "anyhow",
