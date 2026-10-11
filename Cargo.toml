@@ -71,7 +71,7 @@ dendro = { git = "https://github.com/iopsystems/dendro", rev = "8cc03eeb2f5a64d5
 
 [package]
 name = "rezolus"
-version = "6.0.0-alpha.43"
+version = "6.0.0-alpha.44"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true
