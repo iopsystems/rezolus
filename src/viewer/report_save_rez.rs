@@ -154,7 +154,7 @@ mod tests {
         use metriken_query::MetricsSource;
         let r = crate::rez_reader::RezReader::open_recordings(
             path,
-            metriken_query::BufferPool::new(64 * 1024 * 1024),
+            metriken_storage::BufferPool::new(64 * 1024 * 1024),
         )
         .unwrap()
         .remove(0)
@@ -192,7 +192,7 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!(metriken_archive::DendroCatalog::is_archive_bytes(&bytes));
+        assert!(metriken_storage::DendroCatalog::is_archive_bytes(&bytes));
         let (streams, md) = dendro_report(&bytes);
         assert_eq!(
             streams,
@@ -213,7 +213,7 @@ mod tests {
         // The browser viewer opens an upload from its bytes.
         let from_bytes = crate::rez_reader::RezReader::open_recordings_from_bytes(
             bytes.clone(),
-            metriken_query::BufferPool::new(64 * 1024 * 1024),
+            metriken_storage::BufferPool::new(64 * 1024 * 1024),
         )
         .unwrap();
         assert_eq!(from_bytes.len(), 1);
@@ -268,7 +268,7 @@ mod tests {
     fn the_occupant_lead_is_the_writers_restatement_period() {
         assert_eq!(
             ::report_save::OCCUPANT_RESTATE_NS,
-            metriken_archive::WriterConfig::default().restate_every_ns
+            metriken_storage::WriterConfig::default().restate_every_ns
         );
     }
 

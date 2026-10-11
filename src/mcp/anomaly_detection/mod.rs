@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
-use metriken_query::{is_internal_label, is_storage_key, MetricsSource, QueryResult};
+use metriken_query::{MetricsSource, QueryResult};
+use metriken_storage::{is_internal_label, is_storage_key};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 

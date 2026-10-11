@@ -38,11 +38,11 @@ pub struct SnapshotBuilder {
     /// not by generations: one entry per group name, overwritten on change.
     emitted_schemas: HashMap<String, (u64, u64)>,
     /// Each group's schema converted to the row format, once per schema hash.
-    schemas: metriken_archive::stream::SchemaCache,
+    schemas: metriken_exposition::stream::SchemaCache,
     /// The same for the long layout's columns. Separate from `schemas`: the
     /// cache keeps one entry per group name, and a group's wide schema and
     /// long columns would replace each other on every pass that builds both.
-    long_schemas: metriken_archive::stream::SchemaCache,
+    long_schemas: metriken_exposition::stream::SchemaCache,
     /// Whether a failure to encode the long layout has been logged.
     long_encode_warned: bool,
     /// Completed sampling passes — see [`samples`](Self::samples).
@@ -107,7 +107,25 @@ pub struct StreamRows {
     pub wall_ns: u64,
     pub ts: i64,
     pub wall_offset: i64,
-    pub rows: Vec<metriken_archive::stream::EncodedStreamGroup>,
+    pub rows: Vec<metriken_exposition::stream::EncodedStreamGroup>,
+}
+
+/// A long-layout pass as a stream subscription reads it
+/// (`StreamSubscription::frame_at`).
+impl metriken_exposition::stream::Pass for StreamRows {
+    type Row = metriken_exposition::stream::EncodedStreamGroup;
+
+    fn stamp(&self) -> metriken_exposition::stream::PassStamp {
+        metriken_exposition::stream::PassStamp {
+            wall_ns: self.wall_ns,
+            ts: self.ts,
+            wall_offset: self.wall_offset,
+        }
+    }
+
+    fn rows(&self) -> &[Self::Row] {
+        &self.rows
+    }
 }
 
 /// The pass's wide snapshot, built on first use.
@@ -146,8 +164,8 @@ impl SnapshotBuilder {
             format: config.general().snapshot_format(),
             v3: v3_builder(),
             emitted_schemas: HashMap::new(),
-            schemas: metriken_archive::stream::SchemaCache::new(),
-            long_schemas: metriken_archive::stream::SchemaCache::new(),
+            schemas: metriken_exposition::stream::SchemaCache::new(),
+            long_schemas: metriken_exposition::stream::SchemaCache::new(),
             long_encode_warned: false,
             samples: 0,
         }
@@ -324,7 +342,7 @@ impl SnapshotBuilder {
                 let rows = v3
                     .build_stream(extra)
                     .iter()
-                    .map(|g| metriken_archive::stream::EncodedStreamGroup::encode(g, schemas))
+                    .map(|g| metriken_exposition::stream::EncodedStreamGroup::encode(g, schemas))
                     .collect::<Result<Vec<_>, _>>();
                 let rows = match rows {
                     Ok(rows) => rows,

@@ -4,7 +4,7 @@
 //! dendro's `copy_sources_into` copies sealed segments as they are, the
 //! clock offsets and caller rows, and encodes each stream's live WAL tail
 //! into a final segment, all in one read snapshot of the source. The tail is
-//! encoded with metriken-archive's `Encoder`, built from the source's stream
+//! encoded with metriken-storage's `Encoder`, built from the source's stream
 //! list, since a copy runs outside the writer that knows which streams are
 //! long. The copy is therefore fully sealed.
 
@@ -32,7 +32,7 @@ pub(crate) fn streams(src: &Archive) -> Result<Vec<String>, String> {
 /// sidecars.
 pub(crate) fn copy(src: &Archive, dest: &Path, spec: &CopySpec<'_>) -> Result<usize, String> {
     let names = streams(src)?;
-    let encoder = metriken_archive::writer::Encoder::for_streams(names.iter().map(String::as_str));
+    let encoder = metriken_storage::writer::Encoder::for_streams(names.iter().map(String::as_str));
     let mut dst = ArchiveMut::create(dest).map_err(err)?;
     let copied = dst
         .transaction(|tx| copy_sources_into(src, tx, spec, &encoder))
@@ -41,7 +41,7 @@ pub(crate) fn copy(src: &Archive, dest: &Path, spec: &CopySpec<'_>) -> Result<us
     Ok(copied)
 }
 
-/// Test fixtures: dendro archives recorded through metriken-archive's writer,
+/// Test fixtures: dendro archives recorded through metriken-storage's writer,
 /// so they carry what a real recording does (a long table and its occupant
 /// stream beside a V2 sampler table).
 #[cfg(test)]
@@ -122,7 +122,7 @@ pub(crate) mod fixtures {
     /// without finalizing, leaving the source incomplete with its last rows
     /// in the WAL, as a live or killed recording has them.
     pub(crate) fn recorded(path: &Path, ticks: u64, finalize: bool) {
-        use metriken_archive::{ArchiveWriter, WriterConfig};
+        use metriken_storage::{ArchiveWriter, WriterConfig};
         let config = WriterConfig {
             seal: dendro::seal::SealPolicy {
                 max_rows: 4,

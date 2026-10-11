@@ -278,6 +278,17 @@ rezolus record --url http://old-host:4241 -o run.rez
 rezolus recording upgrade --to dendro run.rez -o run.dendro
 ```
 
+An agent serves its stream as `application/vnd.metriken.replication.v1+dendro`,
+with the `x-metriken-frame-interval`, `x-metriken-update-floor` and
+`x-metriken-layout` headers. Agents from 5.21.0 through 6.0.0-alpha.44 served
+the same frames as `application/vnd.rezolus.replication.v1+dendro` with
+`x-rezolus-*` headers, and `record`, `hindsight` and the live viewer accept
+both. `record --stream` from 5.21.0 through 5.26.x, and `record` to `.dendro`,
+`hindsight` and the live viewer from 6.0.0-alpha builds through alpha.44,
+refuse a current agent's stream and name the content type they got. Drop
+`--stream` (5.x), upgrade, or record that agent to a `.rez` or parquet, which
+scrape `/metrics/binary`.
+
 An agent that is merely unreachable is retried each tick, as is one that
 answers but whose stream fails to open with an error that can change (a 5xx
 from a proxy, a handshake that times out). A stream that drops mid-run, or that

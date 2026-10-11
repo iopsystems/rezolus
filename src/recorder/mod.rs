@@ -743,7 +743,13 @@ async fn open_stream(
     ep.agent = fetch_agent_metadata(client, &ep.config.url).await;
     let sub = match tokio::time::timeout(
         timeout,
-        stream::Subscription::connect(client, &ep.config.url, interval, stream::Layout::Long),
+        stream::Subscription::connect(
+            client,
+            &ep.config.url,
+            interval,
+            stream::Layout::Long,
+            stream::ACCEPTED_WIRE_NAMES,
+        ),
     )
     .await
     {
@@ -1601,22 +1607,22 @@ enum Sink {
         staged: Vec<rez_sqlite::TickBatch>,
         archive: rez_v3_writer::RezArchive,
     },
-    /// A dendro archive through metriken-archive's writer: groups with slots
+    /// A dendro archive through metriken-storage's writer: groups with slots
     /// are written long, with their occupants in a stream beside each.
     Dendro {
-        recs: BTreeMap<usize, metriken_archive::SourceRecorder>,
+        recs: BTreeMap<usize, metriken_storage::SourceRecorder>,
         /// This tick's rows, as for `Rez`.
-        staged: Vec<metriken_archive::writer::Staged>,
-        writer: metriken_archive::ArchiveWriter,
+        staged: Vec<metriken_storage::writer::Staged>,
+        writer: metriken_storage::ArchiveWriter,
         /// The archive's path; the writer does not report it.
         path: std::path::PathBuf,
         /// Streamed endpoints only: per endpoint, the decoder that turns its
         /// rows back into the groups the writer stages.
-        decoders: BTreeMap<usize, metriken_archive::StreamDecoder>,
+        decoders: BTreeMap<usize, metriken_storage::StreamDecoder>,
     },
 }
 
-/// A metriken-archive error as the recorder reports errors.
+/// A metriken-storage error as the recorder reports errors.
 fn archive_err(e: Box<dyn std::error::Error + Send + Sync>) -> String {
     e.to_string()
 }
@@ -1685,7 +1691,7 @@ impl RezStream {
     ///
     /// [`stage`](Self::stage) for the stream path, which writes `.dendro`
     /// only: each pass's rows are decoded by the endpoint's
-    /// `metriken_archive::StreamDecoder` and staged with `stage_streamed`.
+    /// `metriken_storage::StreamDecoder` and staged with `stage_streamed`.
     ///
     /// The stamp is the producer's: an interval carries when the agent
     /// sampled, and there is no recorder-side reading to prefer over it.
@@ -2061,9 +2067,9 @@ fn start_rez_recorder(
         Sink::Dendro {
             recs: BTreeMap::new(),
             staged: Vec::new(),
-            writer: metriken_archive::ArchiveWriter::create(
+            writer: metriken_storage::ArchiveWriter::create(
                 &config.output,
-                metriken_archive::WriterConfig::default(),
+                metriken_storage::WriterConfig::default(),
             )
             .map_err(|e| format!("failed to create {}: {e}", config.output.display()))?,
             path: config.output.clone(),
@@ -4469,7 +4475,7 @@ mod tests {
         // count-only assertion while still having dropped the scrapes.
         let readers = crate::rez_reader::RezReader::open_recordings(
             &path,
-            metriken_query::BufferPool::new(64 * 1024 * 1024),
+            metriken_storage::BufferPool::new(64 * 1024 * 1024),
         )
         .expect("the archive opens");
         assert_eq!(
@@ -4542,7 +4548,7 @@ mod tests {
         use metriken_query::MetricsSource;
         let reader = crate::rez_reader::RezReader::open_with_pool(
             &path,
-            metriken_query::BufferPool::new(64 * 1024 * 1024),
+            metriken_storage::BufferPool::new(64 * 1024 * 1024),
         )
         .unwrap();
         assert_eq!(reader.counter_names(), vec!["fake_ops".to_string()]);
@@ -4678,8 +4684,8 @@ mod tests {
         rec.finalize((anchor + (ticks - 1) * TEST_SECOND, 3))
             .unwrap();
 
-        use metriken_archive::Catalog;
-        let catalog = metriken_archive::DendroCatalog::open(&path).unwrap();
+        use metriken_storage::Catalog;
+        let catalog = metriken_storage::DendroCatalog::open(&path).unwrap();
         let id = catalog.sources().unwrap()[0].id;
         let streams = catalog.tables(id).unwrap();
         assert!(
@@ -4695,7 +4701,7 @@ mod tests {
         use metriken_query::MetricsSource;
         let reader = crate::rez_reader::RezReader::open_recordings(
             &path,
-            metriken_query::BufferPool::new(64 * 1024 * 1024),
+            metriken_storage::BufferPool::new(64 * 1024 * 1024),
         )
         .unwrap()
         .remove(0)
@@ -4797,7 +4803,7 @@ mod tests {
 
     #[test]
     fn a_dendro_recording_round_trips_through_rezreader() {
-        // `-o out.dendro` writes through metriken-archive's writer, and the
+        // `-o out.dendro` writes through metriken-storage's writer, and the
         // recording must come back out through the reader every consumer
         // uses, with each endpoint its own recording: one opened at startup,
         // one that activated mid-run.
@@ -4818,12 +4824,12 @@ mod tests {
         rec.finalize((TEST_ANCHOR + 5 * TEST_SECOND, 0)).unwrap();
 
         assert!(
-            metriken_archive::DendroCatalog::is_archive(&path).unwrap(),
+            metriken_storage::DendroCatalog::is_archive(&path).unwrap(),
             "a .dendro output is a dendro archive"
         );
         let readers = crate::rez_reader::RezReader::open_recordings(
             &path,
-            metriken_query::BufferPool::new(64 * 1024 * 1024),
+            metriken_storage::BufferPool::new(64 * 1024 * 1024),
         )
         .unwrap();
         let mut sources: Vec<&str> = readers

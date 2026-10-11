@@ -555,7 +555,7 @@ pub(crate) fn open_targets(
     if !path.exists() {
         return Err(format!("Recording file not found: {}", path.display()));
     }
-    let pool = metriken_query::BufferPool::new(256 * 1024 * 1024);
+    let pool = metriken_storage::BufferPool::new(256 * 1024 * 1024);
     let format = crate::recorder::rez::detect_rez_format(path).unwrap_or(RezFormat::NotRez);
     if format == RezFormat::NotRez {
         if !selector.is_empty() {

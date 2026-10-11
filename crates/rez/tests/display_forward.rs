@@ -10,7 +10,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use metriken_exposition::{Counter, Snapshot, SnapshotV2};
-use metriken_query::{BufferPool, DisplayOptions, MetricsSource, QueryOptions, QueryResult};
+use metriken_query::{DisplayOptions, MetricsSource, QueryOptions, QueryResult};
+use metriken_storage::BufferPool;
 use rez::reader::RezReader;
 use rez::rez::RezRecorder;
 

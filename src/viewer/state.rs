@@ -14,7 +14,9 @@ use parking_lot::{Mutex, RwLock};
 use reqwest::Client;
 use tracing::error;
 
-use metriken_query::{BufferPool, MetricsSource};
+use metriken_query::MetricsSource;
+
+use metriken_storage::BufferPool;
 
 use super::capture_registry::{CaptureId, CaptureRegistry};
 use super::proxy_allow;

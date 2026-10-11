@@ -36,7 +36,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dendro::archive::{HeartbeatWatch, WriterState};
-use metriken_query::{BufferPool, MetricsSource};
+use metriken_query::MetricsSource;
+use metriken_storage::BufferPool;
 use parking_lot::Mutex;
 use rez::live::LiveReader;
 use tracing::{info, warn};
@@ -151,7 +152,7 @@ impl Follow {
             .map(|(_, r)| r.path().to_path_buf())
             .unwrap_or_default();
         let newest = newest_row(&readers);
-        let dendro = metriken_archive::DendroCatalog::is_archive(&path).unwrap_or(false);
+        let dendro = metriken_storage::DendroCatalog::is_archive(&path).unwrap_or(false);
         let started = Instant::now();
         let inner = Arc::new(Followed {
             path,
@@ -498,7 +499,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use metriken_archive::{ArchiveWriter, SourceRecorder, WriterConfig};
+    use metriken_storage::{ArchiveWriter, SourceRecorder, WriterConfig};
 
     use metriken_query::MetricsSource;
     use rez::live::LiveReader;
@@ -544,7 +545,7 @@ mod tests {
                 &config,
                 path,
                 &::dashboard::TemplateRegistry::empty(),
-                metriken_query::BufferPool::new(64 << 20),
+                metriken_storage::BufferPool::new(64 << 20),
             )
         })
     }
@@ -610,7 +611,7 @@ mod tests {
     /// A follow of the only recording at `path`, started as file mode starts
     /// one but waiting `interval`, with its thread running.
     fn follow_running(path: &Path, interval: Duration) -> (super::Follow, Arc<LiveReader>) {
-        let pool = metriken_query::BufferPool::new(64 << 20);
+        let pool = metriken_storage::BufferPool::new(64 << 20);
         let (labels, reader) = RezReader::open_recordings(path, Arc::clone(&pool))
             .unwrap()
             .remove(0);

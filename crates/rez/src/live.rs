@@ -15,8 +15,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use metriken_query::{
-    BufferPool, DisplayOptions, DisplayResult, MetricsSource, QueryError, QueryOptions, QueryResult,
+    DisplayOptions, DisplayResult, MetricsSource, QueryError, QueryOptions, QueryResult,
 };
+
+use metriken_storage::BufferPool;
 
 use crate::reader::RezReader;
 

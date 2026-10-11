@@ -12,12 +12,13 @@ arrow = "58.2.0"
 bytes = "1"
 # Reader-only by default (see the workspace entry); `write` below turns
 # dendro's append side on alongside rez's own.
-dendro.workspace = true
+dendro = { workspace = true, features = ["archive"] }
 histogram.workspace = true
 metriken = { workspace = true, optional = true }
 metriken-exposition = { workspace = true, optional = true }
-metriken-query.workspace = true
-metriken-archive.workspace = true
+# `archive`: `MetricsSource` for `ArchiveReader` and `eval_timestamps_for`,
+# which the read path needs in every configuration, the wasm viewer's included.
+metriken-query = { workspace = true, features = ["archive"] }
 metriken-storage = { workspace = true, features = ["rez"] }
 parquet = { version = "58.2.0", default-features = false, features = [
     "arrow",
@@ -50,9 +51,9 @@ write = [
     # own as of dendro 0.2.0 — it is always compiled in, and the parts of it
     # that need a writer are gated on `write` inside dendro.
     "dendro/write",
-    # `StreamRow` for `wire::AgentRow`, so the agent's frame producer reads
-    # the rows it already built for `/metrics/rows` without converting them.
-    "metriken-archive/stream",
+    # `StreamRow` for `wire::AgentRow` and `Pass` for `wire::AgentRows`, so
+    # the agent's stream subscriptions read the rows it already built for
+    # `/metrics/rows` without converting them.
     "metriken-storage/write",
     "metriken-storage/stream",
 ]

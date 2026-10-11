@@ -6,13 +6,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
-pub use metriken_archive::ArchiveReader;
 use metriken_query::{
-    BufferPool, DisplayOptions, DisplayResult, MetricsSource, QueryError, QueryOptions, QueryResult,
+    DisplayOptions, DisplayResult, MetricsSource, QueryError, QueryOptions, QueryResult,
 };
+pub use metriken_storage::ArchiveReader;
+use metriken_storage::BufferPool;
 
 /// A `.rez` or dendro archive read as a `MetricsSource`: metriken-storage's
-/// [`ArchiveReader`] (re-exported by metriken-archive), opened from a path or bytes by content. Derefs to it,
+/// [`ArchiveReader`], opened from a path or bytes by content. Derefs to it,
 /// so its methods (`composition_sources`, `metric_metadata`, `complete`, ...)
 /// are this type's.
 pub struct RezReader(pub ArchiveReader);
@@ -27,7 +28,7 @@ impl std::ops::Deref for RezReader {
 /// One `RezReader` per recording, paired with that recording's label set.
 pub type LabeledRecordings = Vec<(BTreeMap<String, String>, RezReader)>;
 
-fn wrap(readers: metriken_archive::LabeledRecordings) -> LabeledRecordings {
+fn wrap(readers: metriken_storage::LabeledRecordings) -> LabeledRecordings {
     readers
         .into_iter()
         .map(|(l, r)| (l, RezReader(r)))
@@ -3363,7 +3364,8 @@ mod tests {
                     }
                 }
             }
-            let occupants = metriken_query::long::encode_occupant_ranges(rows.iter().map(|r| r.1));
+            let occupants =
+                metriken_storage::long::encode_occupant_ranges(rows.iter().map(|r| r.1));
             parquet(
                 vec![
                     Field::new("timestamp", DataType::UInt64, false),
@@ -3387,10 +3389,10 @@ mod tests {
                 ],
                 vec![
                     (
-                        metriken_query::long::LAYOUT_KEY.into(),
-                        metriken_query::long::LAYOUT_LONG.into(),
+                        metriken_storage::long::LAYOUT_KEY.into(),
+                        metriken_storage::long::LAYOUT_LONG.into(),
                     ),
-                    (metriken_query::long::OCCUPANTS_KEY.into(), occupants),
+                    (metriken_storage::long::OCCUPANTS_KEY.into(), occupants),
                 ],
             )
         }

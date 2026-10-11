@@ -472,7 +472,7 @@ pub fn run(config: Config) {
     let registry = load_template_registry(config.templates_dir.as_deref());
 
     // One shared pool for all ParquetReaders in this process.
-    let pool = metriken_query::BufferPool::new(config.cache_size_bytes);
+    let pool = metriken_storage::BufferPool::new(config.cache_size_bytes);
     info!(
         "Buffer pool: {} MB",
         config.cache_size_bytes / (1024 * 1024)
@@ -592,7 +592,7 @@ fn init_file_mode(
     config: &Config,
     path: &Path,
     registry: &TemplateRegistry,
-    pool: Arc<metriken_query::BufferPool>,
+    pool: Arc<metriken_storage::BufferPool>,
 ) -> AppState {
     info!("Loading data from parquet file...");
 
@@ -806,7 +806,7 @@ fn init_file_mode_rez(
     config: &Config,
     path: &Path,
     registry: &TemplateRegistry,
-    pool: Arc<metriken_query::BufferPool>,
+    pool: Arc<metriken_storage::BufferPool>,
 ) -> AppState {
     use metriken_query::MetricsSource;
     use std::collections::BTreeMap;
@@ -1020,7 +1020,7 @@ fn init_file_mode_combined_ab(
     config: &Config,
     path: &Path,
     registry: &TemplateRegistry,
-    pool: Arc<metriken_query::BufferPool>,
+    pool: Arc<metriken_storage::BufferPool>,
 ) -> AppState {
     info!("Combined-A/B tarball detected — extracting per-side parquets");
 
@@ -1168,7 +1168,7 @@ fn validate_category_at_startup(
     cat_name: &str,
     baseline_exts: &[(String, ServiceExtension)],
     config: &Config,
-    pool: Arc<metriken_query::BufferPool>,
+    pool: Arc<metriken_storage::BufferPool>,
 ) {
     let category = registry.get_category(cat_name).unwrap_or_else(|| {
         eprintln!("no category template named {cat_name:?} found in the registry");
@@ -1219,7 +1219,7 @@ fn attach_cli_experiment(
     exp_path: &Path,
     registry: &TemplateRegistry,
     alias: Option<String>,
-    pool: Arc<metriken_query::BufferPool>,
+    pool: Arc<metriken_storage::BufferPool>,
 ) {
     info!("Loading experiment from parquet file...");
     let (exp_sysinfo, _exp_selection, exp_file_meta) = metadata::extract_parquet_metadata(exp_path);
@@ -1271,7 +1271,7 @@ fn init_live_mode(
     rt: &tokio::runtime::Runtime,
     url: &Url,
     registry: &TemplateRegistry,
-    pool: Arc<metriken_query::BufferPool>,
+    pool: Arc<metriken_storage::BufferPool>,
 ) -> AppState {
     info!("Connecting to live agent at {url}...");
     let (info, session) = rt.block_on(async {
@@ -1371,7 +1371,7 @@ mod tests {
         let matches = super::command().get_matches_from(["view", rez_path.to_str().unwrap()]);
         let config = super::Config::try_from(matches).unwrap();
         let registry = ::dashboard::TemplateRegistry::empty();
-        let pool = metriken_query::BufferPool::new(8 * 1024 * 1024);
+        let pool = metriken_storage::BufferPool::new(8 * 1024 * 1024);
 
         let state = super::init_file_mode(&config, &rez_path, &registry, pool);
         assert_eq!(*state.parquet_path.read(), Some(rez_path));
@@ -1430,7 +1430,7 @@ mod tests {
         let matches = super::command().get_matches_from(["view", rez_path.to_str().unwrap()]);
         let config = super::Config::try_from(matches).unwrap();
         let registry = ::dashboard::TemplateRegistry::empty();
-        let pool = metriken_query::BufferPool::new(8 * 1024 * 1024);
+        let pool = metriken_storage::BufferPool::new(8 * 1024 * 1024);
         let state = super::init_file_mode(&config, &rez_path, &registry, pool);
 
         // Selection reached the global slot the `/api/v1/selection` route serves.
@@ -1733,7 +1733,7 @@ mod tests {
         ]);
         let config = super::Config::try_from(matches).unwrap();
         let registry = ::dashboard::TemplateRegistry::empty();
-        let pool = metriken_query::BufferPool::new(8 * 1024 * 1024);
+        let pool = metriken_storage::BufferPool::new(8 * 1024 * 1024);
         let state = super::init_file_mode(&config, &rez_path, &registry, pool);
 
         assert!(state.captures.experiment_attached());
@@ -1784,7 +1784,7 @@ mod tests {
         ]);
         let config = super::Config::try_from(matches).unwrap();
         let registry = ::dashboard::TemplateRegistry::empty();
-        let pool = metriken_query::BufferPool::new(8 * 1024 * 1024);
+        let pool = metriken_storage::BufferPool::new(8 * 1024 * 1024);
         let state = super::init_file_mode(&config, &rez_path, &registry, pool);
 
         assert!(!state.captures.experiment_attached());
@@ -1824,7 +1824,7 @@ mod tests {
         let matches = super::command().get_matches_from(["view", rez_path.to_str().unwrap()]);
         let config = super::Config::try_from(matches).unwrap();
         let registry = ::dashboard::TemplateRegistry::empty();
-        let pool = metriken_query::BufferPool::new(8 * 1024 * 1024);
+        let pool = metriken_storage::BufferPool::new(8 * 1024 * 1024);
         let state = super::init_file_mode(&config, &rez_path, &registry, pool);
 
         assert!(state.captures.experiment_attached());
@@ -1893,7 +1893,7 @@ mod tests {
         ]);
         let config = super::Config::try_from(matches).unwrap();
         let registry = ::dashboard::TemplateRegistry::empty();
-        let pool = metriken_query::BufferPool::new(8 * 1024 * 1024);
+        let pool = metriken_storage::BufferPool::new(8 * 1024 * 1024);
         let state = super::init_file_mode(&config, &rez_path, &registry, pool);
 
         assert_eq!(

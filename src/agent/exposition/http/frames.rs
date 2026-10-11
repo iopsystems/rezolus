@@ -1,88 +1,21 @@
-//! A sampling pass as dendro replication frames.
+//! Tests of the agent's rows through metriken-exposition's `FrameProducer`.
 //!
-//! The agent is one dendro *source*: one clock domain, one identity, one
-//! sequence of observations. This turns a tick into the frames that say so —
-//! a [`Frame::Handshake`](dendro::replicate::Frame::Handshake) once and one
-//! [`Frame::Rows`](dendro::replicate::Frame::Rows) per interval.
+//! The frames are built by metriken-exposition's [`FrameProducer`], which
+//! reads the agent's [`AgentRow`](crate::recorder::wire::AgentRow)s (wide
+//! layout) or `EncodedStreamGroup`s (long layout); `/metrics/stream` serves
+//! them through `StreamSubscription`. These tests drive the producer with the
+//! agent's own row type and read the frames back with dendro's reader and the
+//! recorder's subscriber, so a disagreement between the agent's rows, the
+//! producer and the consumer fails here.
 //!
-//! # No identity index
-//!
-//! The agent sends no [`Frame::Index`](dendro::replicate::Frame::Index). For
-//! a group sent wide, what a slot means travels in the group's schema (each
-//! member's labels, including its `__uid__`), which the payload carries
-//! whenever it changes. For a group sent long (`?layout=long`), each
-//! occupant's labels travel on `<group>/occupants`. Every rows frame names
-//! dendro's [`NO_INDEX_STATE`](dendro::replicate::NO_INDEX_STATE), which a
-//! subscriber always treats as resolvable.
-//!
-//! # Time is the producer's
-//!
-//! Both transports stamp on the PRODUCER, because the producer is the only
-//! party that knows when the values were read. A pass is cached for the
-//! agent's TTL, so a request arriving inside that window is answered from the
-//! cache and a consumer sees one HTTP response either way; on a stream there is
-//! no consumer tick at all, only the send, which is producer time plus
-//! transport delay.
-//!
-//! dendro's FORMAT.md §5 says "one source is one clock domain: rows from two
-//! producers with two clocks belong in two sources", and the anchor that pins
-//! the timeline (`clock_anchor_wall_ns`) is a handshake field — the producer's.
-//! If a subscriber stamped, two recorders watching one agent would build two
-//! timelines for the same source and could not be merged.
-//!
-//! So `ts` is anchored: `anchor_wall_ns + monotonic elapsed`, which has
-//! wall-clock magnitude but advances monotonically, so rows stay strictly
-//! increasing through an NTP step. `wall_offset` is wall minus `ts` at the
-//! moment of the read, so `ts + wall_offset` recovers the real wall clock and
-//! the divergence is visible rather than absorbed.
-//!
-//! The anchor comes from [`crate::agent::epoch`], where it is minted with the
-//! `producer_epoch` and is therefore one per PROCESS, so every subscription
-//! is told the same timeline.
-//!
-//! # The schema travels inside the payload
-//!
-//! `/metrics/rows` carries a group's schema in the row ENVELOPE
-//! ([`AgentRow::schema`](crate::recorder::wire::AgentRow::schema)). A
-//! [`WalRow`](dendro::archive::WalRow) has no envelope, so on a stream the
-//! schema goes inside the payload, on a group's first row and whenever its
-//! hash changes.
-//!
-//! # What is metriken's and what is the agent's
-//!
-//! Building the frames is metriken-archive's
-//! [`FrameProducer`](metriken_archive::stream::FrameProducer), which reads
-//! the agent's [`AgentRow`](crate::recorder::wire::AgentRow)s (wide layout)
-//! or `EncodedStreamGroup`s (long layout). The agent keeps the transport: the HTTP route,
-//! the content type, each subscription's timer and interval index, and the
-//! rules for which rows a subscriber is sent.
+//! The source uuid is the agent's `producer_epoch`, and the handshake's
+//! anchor is [`crate::agent::epoch`]'s, one per process, so every
+//! subscription is told the same timeline.
 
 use std::collections::BTreeMap;
 
-pub(crate) use metriken_archive::stream::FrameProducer;
+use metriken_exposition::stream::FrameProducer;
 
-/// A producer for one subscription to this agent.
-///
-/// `FrameProducer::new` takes the source uuid and the anchor from
-/// `metriken::epoch`, which is what [`crate::agent::epoch`] re-exports: the
-/// uuid is the agent's `producer_epoch` (the two mean the same thing, this
-/// producer until its counters restart), and the handshake metadata carries
-/// it again under dendro's `PRODUCER_EPOCH` key. The anchor is the timeline
-/// every row's `ts` and every acquisition window is on.
-pub(crate) fn agent_producer() -> FrameProducer {
-    FrameProducer::new(
-        [("source".to_string(), env!("CARGO_BIN_NAME").to_string())]
-            .into_iter()
-            .collect(),
-        BTreeMap::new(),
-    )
-}
-
-/// The `Content-Type` of a replication stream: dendro's own framing, a
-/// preamble and then length-prefixed frames.
-pub(crate) const CONTENT_TYPE: &str = crate::agent::REPLICATION_CONTENT_TYPE;
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::recorder::wire::{AgentRow, AgentRows};
@@ -485,7 +418,6 @@ mod tests {
 ///
 /// The archive path pays a write and a read per tick that the direct path does
 /// not. This says what that costs.
-#[cfg(test)]
 mod archive_as_a_source {
     use super::tests::*;
     use super::*;

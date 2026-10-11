@@ -16,10 +16,9 @@ libc = "0.2.186"
 libloading = "0.8"
 log = "0.4.29"
 metriken = "0.11.3"
-metriken-exposition = "0.21.6"
-metriken-query = { version = "0.35.0", default-features = false }
-metriken-archive = { version = "0.4.0", default-features = false }
-metriken-storage = { version = "0.1.0", default-features = false }
+metriken-exposition = "0.22.0"
+metriken-query = { version = "0.36.0", default-features = false }
+metriken-storage = { version = "0.2.0", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
@@ -46,7 +45,7 @@ dashboard = { path = "crates/dashboard" }
 # `FrameReader` skip frame kinds it does not know. 0.3.1 adds
 # `last_caller_row_at_or_before`, which the reader for dendro archives uses
 # to find the identity index's `Full` to replay from.
-dendro = { version = "0.3.4", default-features = false }
+dendro = { version = "0.4.0", default-features = false }
 rez = { path = "crates/rez" }
 report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
@@ -55,7 +54,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "6.0.0-alpha.44"
+version = "6.0.0-alpha.45"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true
@@ -85,7 +84,7 @@ core_affinity = "0.8.3"
 # configuration here too: `crates/rez`'s `write` feature is what turns the
 # append side on, and turning it on twice would say the binary needs a writer
 # of its own, which it does not.
-dendro.workspace = true
+dendro = { workspace = true, features = ["archive"] }
 ctrlc = { version = "3.5.2", features = ["termination"] }
 foldhash = "0.2.0"
 futures = "0.3.32"
@@ -102,11 +101,14 @@ libc.workspace = true
 linkme = "0.3.36"
 memmap2 = "0.9.10"
 metriken.workspace = true
-metriken-exposition.workspace = true
+# `stream-tokio`: the `/metrics/stream` route (`StreamSubscription`) and its
+# body stream on tokio.
+metriken-exposition = { workspace = true, features = ["stream-tokio"] }
 metriken-query = { workspace = true, features = ["ingest"] }
-# The archive writer `record -o out.dendro` writes through, and (`stream`) the
-# frame producer behind the agent's `/metrics/stream`.
-metriken-archive = { workspace = true, features = ["write", "stream"] }
+# The archive writer `record -o out.dendro` writes through (`write`), and the
+# msgpack-to-parquet conversion behind `recording convert` and the recorder's
+# parquet output (`convert`).
+metriken-storage = { workspace = true, features = ["write", "convert"] }
 notify = "8.2.0"
 open = "5.3.4"
 ouroboros = "0.18.5"

@@ -191,7 +191,7 @@ fn filter_rez_any(
     keep_metrics: Option<&std::collections::BTreeSet<String>>,
     output: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if metriken_archive::DendroCatalog::is_archive(path).unwrap_or(false) {
+    if metriken_storage::DendroCatalog::is_archive(path).unwrap_or(false) {
         return filter_dendro(path, keep_samplers, keep_metrics, output);
     }
     if format != RezFormat::V2Tar {
@@ -219,7 +219,7 @@ fn filter_rez_any(
 ///
 /// - `keep_samplers` keeps a stream when its sampler is named; an occupant
 ///   stream (`<table>/occupants`) counts as its table's, so it goes with it.
-/// - `keep_metrics` trims columns with metriken-archive's `KeepMetrics`,
+/// - `keep_metrics` trims columns with metriken-storage's `KeepMetrics`,
 ///   which keeps a long table long (its `occupant` column and layout
 ///   markers) and copies occupant streams whole, re-encoding with the
 ///   writer's properties. A table left with no kept metric is dropped by the
@@ -237,7 +237,7 @@ fn filter_dendro(
     use ::rez::occupants::table_of;
     use dendro::archive::{Archive, ArchiveMut};
     use dendro::rewrite::CopySpec;
-    use metriken_archive::table_sampler;
+    use metriken_storage::table_sampler;
 
     let src = Archive::open(path)?;
     let tables: Vec<String> = crate::dendro_copy::streams(&src)?
@@ -281,14 +281,14 @@ fn filter_dendro(
         keep_samplers
             .is_none_or(|keep| keep.contains(table_sampler(table_of(stream).unwrap_or(stream))))
     };
-    let keep_columns = keep_metrics.map(metriken_archive::KeepMetrics::new);
+    let keep_columns = keep_metrics.map(metriken_storage::KeepMetrics::new);
     let spec = CopySpec {
         keep_streams: Some(&keep_stream),
         keep_columns: keep_columns
             .as_ref()
             .map(|k| k as &dyn dendro::rewrite::ColumnFilter),
-        writer_props: Some(metriken_archive::segment_props(
-            metriken_archive::default_compression(),
+        writer_props: Some(metriken_storage::segment_props(
+            metriken_storage::default_compression(),
         )),
         ..CopySpec::everything()
     };
@@ -936,7 +936,7 @@ mod tests {
         let metrics: std::collections::BTreeSet<String> = ["0".to_string()].into_iter().collect();
         filter_rez_v3(&path, None, Some(&metrics), Some(&out)).unwrap();
 
-        let pool = metriken_query::BufferPool::new(8 * 1024 * 1024);
+        let pool = metriken_storage::BufferPool::new(8 * 1024 * 1024);
         let readers = crate::rez_reader::RezReader::open_recordings(&out, pool).unwrap();
         assert_eq!(readers.len(), 1);
         let (_labels, reader) = &readers[0];
@@ -1181,7 +1181,7 @@ mod tests {
         let open = |p: &Path| {
             crate::rez_reader::RezReader::open_recordings(
                 p,
-                metriken_query::BufferPool::new(64 * 1024 * 1024),
+                metriken_storage::BufferPool::new(64 * 1024 * 1024),
             )
             .unwrap()
             .remove(0)

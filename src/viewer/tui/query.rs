@@ -1,7 +1,9 @@
 //! Bridges `PlotDef`s to `MetricsSource::query_range` and shapes results
 //! into chart-ready series.
 
-use metriken_query::{is_internal_label, MetricsSource, QueryResult};
+use metriken_query::{MetricsSource, QueryResult};
+
+use metriken_storage::is_internal_label;
 
 use super::model::{PlotDef, PlotKind};
 use super::window::TimeWindow;

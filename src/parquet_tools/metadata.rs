@@ -442,7 +442,7 @@ fn read_v3_summary(path: &Path) -> Result<Vec<V3Recording>, String> {
 /// Whether `path` is a dendro archive, by its header. A dendro archive is a
 /// SQLite file too, so the `.rez` sniff alone calls it v3.
 fn is_dendro(path: &Path) -> bool {
-    metriken_archive::DendroCatalog::is_archive(path).unwrap_or(false)
+    metriken_storage::DendroCatalog::is_archive(path).unwrap_or(false)
 }
 
 /// [`read_v3_summary`] for a dendro archive: the same facts from dendro's

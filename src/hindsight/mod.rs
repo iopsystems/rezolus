@@ -72,7 +72,7 @@ pub fn command() -> Command {
 /// not only cover the duration of an anomalous event but give time for an
 /// engineer or automated process to respond and trigger a snapshot.
 ///
-/// The buffer is the same archive writer the recorder uses (metriken-archive's
+/// The buffer is the same archive writer the recorder uses (metriken-storage's
 /// for a dendro buffer, the `.rez` v3 writer for a `.rez` one), with retention
 /// configured — see [`buffer`]. That is what replaced the fixed-size
 /// ring of 4 KB slots: a ring nothing but hindsight could read, whose dump
@@ -237,7 +237,13 @@ pub fn run(config: Config) {
     let connected = rt.block_on(async {
         tokio::time::timeout(
             timeout,
-            Subscription::connect(&async_client, &url, interval_dur, layout),
+            Subscription::connect(
+                &async_client,
+                &url,
+                interval_dur,
+                layout,
+                crate::recorder::stream::ACCEPTED_WIRE_NAMES,
+            ),
         )
         .await
     });
@@ -380,7 +386,7 @@ pub fn run(config: Config) {
             timeout,
             stream_tx,
         ));
-        let mut decoder = metriken_archive::StreamDecoder::new();
+        let mut decoder = metriken_storage::StreamDecoder::new();
         let mut epoch = source.uuid.clone();
         // Agent restarts not yet written into the buffer's metadata.
         let mut restarts: Vec<crate::recorder::restart::Restart> = Vec::new();
@@ -875,7 +881,7 @@ async fn record_restarts(
 /// skipped and logged.
 pub(crate) fn ingest_interval(
     buffer: &mut HindsightBuffer,
-    decoder: &mut metriken_archive::StreamDecoder,
+    decoder: &mut metriken_storage::StreamDecoder,
     applied: crate::recorder::stream::Applied,
 ) -> Result<usize, String> {
     if applied.gap {

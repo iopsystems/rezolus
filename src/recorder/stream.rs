@@ -7,10 +7,10 @@
 //! # Why not dendro's `Subscriber`
 //!
 //! dendro ships one. It owns a dendro `Writer`, while `record -o out.dendro` writes
-//! through metriken-archive's `ArchiveWriter`, which maps the producer's
+//! through metriken-storage's `ArchiveWriter`, which maps the producer's
 //! occupant keys to its own occupant numbers (`SourceRecorder::stage_streamed`).
 //! So the frames are read and checked here; the callers decode their rows
-//! with `StreamDecoder`, and metriken-archive writes the archive.
+//! with `StreamDecoder`, and metriken-storage writes the archive.
 //!
 //! # Layout
 //!
@@ -29,7 +29,22 @@
 
 use dendro::archive::WalRow;
 use dendro::replicate::Frame;
+use metriken_exposition::stream::{WireNames, WIRE_NAMES};
 use std::time::Duration;
+
+/// The names agents from 5.21.0 through 6.0.0-alpha.44 serve their stream
+/// under. A later agent serves metriken's [`WIRE_NAMES`].
+pub(crate) const REZOLUS_LEGACY_WIRE_NAMES: WireNames = WireNames {
+    content_type: "application/vnd.rezolus.replication.v1+dendro",
+    frame_interval: "x-rezolus-frame-interval",
+    update_floor: "x-rezolus-update-floor",
+    layout: "x-rezolus-layout",
+};
+
+/// The names this recorder accepts a stream under: metriken's, which current
+/// agents serve, and the legacy names, so agents from 5.21.0 through
+/// 6.0.0-alpha.44 are still recorded.
+pub(crate) const ACCEPTED_WIRE_NAMES: &[WireNames] = &[WIRE_NAMES, REZOLUS_LEGACY_WIRE_NAMES];
 
 /// What one interval's frames amounted to.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -43,25 +58,12 @@ pub(crate) struct Applied {
     pub gap: bool,
 }
 
-/// How a stream carries groups whose metrics are all counter or gauge
-/// groups: as a `WalGroupRow` whose schema lists every member (wide), or as
-/// a `WalLongRow` keyed by occupant with each occupant's labels sent on
-/// `<group>/occupants` (long). See the module docs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Layout {
-    Wide,
-    Long,
-}
-
-impl Layout {
-    /// The value of the `layout` query parameter and `x-rezolus-layout`.
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Layout::Wide => "wide",
-            Layout::Long => "long",
-        }
-    }
-}
+/// How a stream carries groups of slots: as a `WalGroupRow` whose schema
+/// lists every member (wide), or as a `WalLongRow` keyed by occupant with
+/// each occupant's labels sent on `<group>/occupants` (long). The producer's
+/// type, so the agent and this subscriber name the same values. See the
+/// module docs.
+pub(crate) use metriken_exposition::stream::Layout;
 
 /// One pass off the stream: the producer's stamp and its rows, in the order
 /// they arrived.
@@ -384,11 +386,11 @@ pub(crate) struct Subscription {
     subscriber: StreamSubscriber,
     /// Frames decoded but not yet part of a complete interval.
     pending: Vec<Frame>,
-    /// The agent's `x-rezolus-update-floor`: how often a frame can carry
+    /// The agent's update-floor header: how often a frame can carry
     /// anything new, which is its snapshot TTL. `None` when the agent did
     /// not say.
     update_floor: Option<Duration>,
-    /// The layout the agent serves, from `x-rezolus-layout`; wide when it
+    /// The layout the agent serves, from its layout header; wide when it
     /// does not say, as an agent before the long layout does not.
     layout: Layout,
 }
@@ -398,8 +400,12 @@ impl Subscription {
     ///
     /// The interval is a request, not a guarantee: the agent's TTL is the
     /// floor on how often anything can be new, and it reports that floor in
-    /// `x-rezolus-update-floor`. Asking for less is legal and gets the frames
+    /// its update-floor header. Asking for less is legal and gets the frames
     /// asked for, most of them empty.
+    ///
+    /// `names` lists the wire names accepted, in order. The response's
+    /// `Content-Type` picks the entry, and that entry's header names are the
+    /// ones read; a `Content-Type` no entry has is refused.
     ///
     /// Returns only once the handshake has been applied, so
     /// [`source`](Self::source) is `Some` on every open subscription. The
@@ -411,6 +417,7 @@ impl Subscription {
         base: &reqwest::Url,
         interval: Duration,
         layout: Layout,
+        names: &[WireNames],
     ) -> Result<Self, ConnectError> {
         let mut url = base.clone();
         url.set_path("/metrics/stream");
@@ -460,23 +467,27 @@ impl Subscription {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
-        if content_type != crate::agent::REPLICATION_CONTENT_TYPE {
+        let Some(served_names) = names.iter().find(|n| n.content_type == content_type) else {
+            let accepted: Vec<String> = names
+                .iter()
+                .map(|n| format!("`{}`", n.content_type))
+                .collect();
             return Err(ConnectError::Unsupported(format!(
-                "{url} serves `{content_type}`, not `{}`; this recorder reads only `{}`",
-                crate::agent::REPLICATION_CONTENT_TYPE,
-                crate::agent::REPLICATION_CONTENT_TYPE
+                "{url} serves `{content_type}`, not a replication stream this recorder \
+                 reads ({})",
+                accepted.join(" or ")
             )));
-        }
+        };
 
         let update_floor = response
             .headers()
-            .get("x-rezolus-update-floor")
+            .get(served_names.update_floor)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| humantime::parse_duration(v).ok());
 
         let served = match response
             .headers()
-            .get("x-rezolus-layout")
+            .get(served_names.layout)
             .and_then(|v| v.to_str().ok())
         {
             Some("long") => Layout::Long,
@@ -675,7 +686,7 @@ pub(crate) async fn pump(
             tokio::time::sleep(retry).await;
             let connected = tokio::time::timeout(
                 timeout,
-                Subscription::connect(&client, &base, interval, layout),
+                Subscription::connect(&client, &base, interval, layout, ACCEPTED_WIRE_NAMES),
             )
             .await;
             match connected {
@@ -707,12 +718,12 @@ pub(crate) async fn pump(
 /// Only a wide-layout subscription's groups make one: a long row has no
 /// member list to rebuild a group's schema from, and is refused.
 pub(crate) fn wide_snapshot(
-    groups: Vec<metriken_archive::StreamedGroup>,
+    groups: Vec<metriken_storage::StreamedGroup>,
     ts: i64,
     wall_offset: i64,
 ) -> Result<metriken_exposition::Snapshot, String> {
-    use metriken_archive::StreamedGroup;
     use metriken_exposition::{Snapshot, SnapshotV3};
+    use metriken_storage::StreamedGroup;
     let groups = groups
         .into_iter()
         .map(|g| match g {
@@ -995,7 +1006,7 @@ mod tests {
 
     /// The groups of one row, as a connection's decoder reads it.
     fn decode(
-        decoder: &mut metriken_archive::StreamDecoder,
+        decoder: &mut metriken_storage::StreamDecoder,
         row: Vec<u8>,
     ) -> Vec<metriken_exposition::GroupSnapshot> {
         decoder
@@ -1003,7 +1014,7 @@ mod tests {
             .unwrap()
             .into_iter()
             .map(|g| match g {
-                metriken_archive::StreamedGroup::Wide(g) => g,
+                metriken_storage::StreamedGroup::Wide(g) => g,
                 _ => panic!("a wide group"),
             })
             .collect()
@@ -1013,7 +1024,7 @@ mod tests {
     /// validates it once per change; rows after it resolve by hash.
     #[test]
     fn a_streamed_schema_is_attached_where_it_arrived() {
-        let mut decoder = metriken_archive::StreamDecoder::new();
+        let mut decoder = metriken_storage::StreamDecoder::new();
         let first = decode(&mut decoder, payload(2, true, 2_000)).remove(0);
         assert_eq!(first.schema.as_ref().map(|s| s.counters.len()), Some(2));
         assert_eq!(first.counters, vec![Some(0), Some(1)]);
@@ -1027,7 +1038,7 @@ mod tests {
     /// counted, not decoded against the wrong members.
     #[test]
     fn a_streamed_row_with_an_unsent_schema_is_skipped() {
-        let mut decoder = metriken_archive::StreamDecoder::new();
+        let mut decoder = metriken_storage::StreamDecoder::new();
         decode(&mut decoder, payload(2, true, 2_000));
         assert!(decode(&mut decoder, payload(3, false, 3_000)).is_empty());
         assert_eq!(decoder.unresolved, 1);
@@ -1037,7 +1048,7 @@ mod tests {
     /// at the pass's wall clock, and a long row is refused by name.
     #[test]
     fn only_a_wide_pass_rebuilds_a_snapshot() {
-        let mut decoder = metriken_archive::StreamDecoder::new();
+        let mut decoder = metriken_storage::StreamDecoder::new();
         let groups = decoder
             .decode([wal_row(STREAM, 5_000, 7, payload(2, true, 5_000))])
             .unwrap();
@@ -1049,7 +1060,7 @@ mod tests {
             v3.systemtime,
             std::time::UNIX_EPOCH + Duration::from_nanos(5_007)
         );
-        let long = vec![metriken_archive::StreamedGroup::Occupants {
+        let long = vec![metriken_storage::StreamedGroup::Occupants {
             table: STREAM.to_string(),
             occupants: Vec::new(),
         }];
@@ -1152,7 +1163,7 @@ mod tests {
             ..Applied::default()
         };
         let pass = applied.for_writer().unwrap().remove(0);
-        let err = metriken_archive::StreamDecoder::new()
+        let err = metriken_storage::StreamDecoder::new()
             .decode(pass.rows)
             .err()
             .expect("must refuse");

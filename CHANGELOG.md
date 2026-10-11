@@ -21,6 +21,28 @@
 
 ### Changed
 
+- **The agent serves `/metrics/stream` under metriken's names:**
+  `Content-Type: application/vnd.metriken.replication.v1+dendro` and the
+  `x-metriken-frame-interval`, `x-metriken-update-floor` and
+  `x-metriken-layout` headers, in place of `vnd.rezolus.replication` and
+  `x-rezolus-*`. The route is metriken-exposition 0.22.0's
+  `StreamSubscription`; the agent keeps the pass it hands it (the sampler
+  refresh behind the TTL, and the pass cache `/metrics/rows` shares). Frames
+  are unchanged, pinned by `tests/fixtures/stream-frames/`. A stream that
+  stops being read waits with no lock held, and on resuming skips to the
+  current pass and logs a `seq` gap.
+  - `record`, `hindsight` and the live viewer accept both sets of names, so
+    agents from 5.21.0 through 6.0.0-alpha.44 are still streamed.
+  - **Older consumers of the stream refuse this agent's stream**, naming the
+    content type they got: `record --stream` from 5.21.0 through 5.26.x, and
+    `record` to `.dendro`, `hindsight` and the live viewer from 6.0.0-alpha
+    builds through alpha.44. Drop `--stream` (5.x), upgrade, or record to
+    `.rez` or parquet, which scrape `/metrics/binary`; that path is
+    unchanged.
+  - A subscriber reads the time it woke before waiting for the pass lock,
+    so subscribers at one boundary share one sampling pass. Before, one
+    queued behind a pass longer than the TTL found it stale and sampled
+    again.
 - **`tcp_packet_latency` no longer creates and deletes a map entry per
   segment.** Each data segment inserted the socket into a hash map and each
   read deleted it, taking a bucket lock both times. On a production host
@@ -53,17 +75,15 @@
     runs at 2000-5000 clients.
   - The old map dropped samples past 10240 sockets holding a start time at
     once.
-- **The agent's `/metrics/stream` frame rules are a synchronous
-  `StreamState`** (`src/agent/exposition/http/mod.rs`). Frames are unchanged,
-  pinned by `tests/fixtures/stream-frames/`. The handler's backpressure comment
-  now says what happens to a reader that stops reading: the stream waits with
-  no lock held, and on resuming skips to the current pass and logs a `seq` gap.
 
 - **The `.rez` format and the archive reader and writer are
-  `metriken-storage`'s** (0.1.0, feature `rez`), and queries over an archive
-  are `metriken-query` 0.35.0's. `crates/rez` keeps `RezReader` and
-  `LiveReader` and re-exports the rest at its old paths. The files `record`,
-  `hindsight` and `recording` write and read are unchanged.
+  `metriken-storage`'s** (0.2.0, feature `rez`), and queries over an archive
+  are `metriken-query` 0.36.0's. metriken-archive and metriken-segment are no
+  longer dependencies; msgpack-to-parquet conversion (`recording convert`,
+  the recorder's parquet output) is metriken-storage's `convert`.
+  `crates/rez` keeps `RezReader` and `LiveReader` and re-exports the rest at
+  its old paths. The files `record`, `hindsight` and `recording` write and
+  read are unchanged.
 - **An agent restart is written into the recording's metadata.** When the
   agent restarts mid-recording, an archive written by `record` or `hindsight`
   (`.dendro` or `.rez`) is amended once the first row from the new process is

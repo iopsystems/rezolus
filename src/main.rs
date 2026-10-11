@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use backtrace::Backtrace;
 use clap::{value_parser, Command, ValueEnum};
 use linkme::distributed_slice;
-use metriken_exposition::{MsgpackToParquet, ParquetOptions};
+use metriken_storage::convert::{MsgpackToParquet, ParquetOptions};
 use reqwest::{Client, Url};
 use serde::Deserialize;
 use tempfile::tempfile_in;
@@ -43,7 +43,7 @@ enum Format {
     Parquet,
     Raw,
     Rez,
-    /// A dendro archive, written through metriken-archive. The default since
+    /// A dendro archive, written through metriken-storage. The default since
     /// 6.0.
     Dendro,
 }

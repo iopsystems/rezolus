@@ -117,7 +117,7 @@ impl std::error::Error for OpenError {}
 /// an MCP client, and a message that offers the wrong one cannot be acted on.
 pub(crate) fn open_source_with_pool(
     file: &std::path::Path,
-    pool: std::sync::Arc<metriken_query::BufferPool>,
+    pool: std::sync::Arc<metriken_storage::BufferPool>,
     selector: &RecordingSelector,
     syntax: SelectorSyntax,
 ) -> Result<std::sync::Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
@@ -137,7 +137,7 @@ pub(crate) fn open_source_with_pool(
 /// rather than a second, guessing, resolution at the call site.
 pub(crate) fn open_source_with_pool_labeled(
     file: &std::path::Path,
-    pool: std::sync::Arc<metriken_query::BufferPool>,
+    pool: std::sync::Arc<metriken_storage::BufferPool>,
     selector: &RecordingSelector,
     syntax: SelectorSyntax,
 ) -> Result<Opened, OpenError> {
@@ -386,7 +386,7 @@ pub(crate) fn open_source_selected(
 ) -> Result<std::sync::Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
     open_source_with_pool(
         file,
-        metriken_query::BufferPool::new(256 * 1024 * 1024),
+        metriken_storage::BufferPool::new(256 * 1024 * 1024),
         selector,
         SelectorSyntax::Flag("--recording"),
     )
@@ -401,7 +401,7 @@ pub(crate) fn open_selected_labeled(
 ) -> Result<Opened, OpenError> {
     open_source_with_pool_labeled(
         file,
-        metriken_query::BufferPool::new(256 * 1024 * 1024),
+        metriken_storage::BufferPool::new(256 * 1024 * 1024),
         selector,
         syntax,
     )
