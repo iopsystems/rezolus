@@ -195,12 +195,16 @@ use crate::recorder::stream::Layout;
 /// # Backpressure
 ///
 /// The agent is always-on production and must never be held up by a consumer
-/// that has stopped reading — a recorder with a full disk must degrade to a
-/// dropped subscription, never to a stalled agent. The sampling clock is
-/// therefore never awaited by this handler: it watches a generation counter
-/// and, if it finds itself more than one generation behind while writing, it
-/// ends the stream rather than trying to catch up. A truncated stream is a
-/// visible, recoverable event; a stalled agent is not.
+/// that has stopped reading. Each subscription has its own timer, and the
+/// body is a generator that hyper polls only when the connection can take
+/// more bytes. A reader that stops reading leaves the generator suspended at
+/// its `yield`, holding no lock: the `SnapshotBuilder` mutex is released once
+/// the pass is fetched, before the frame is built, so other subscribers and
+/// scrapes proceed. When the reader resumes, the generator sleeps to the next
+/// boundary, takes `seq` from the wall clock, and so sends the current pass
+/// rather than the ones it missed; [`StreamState::frame`] logs the skipped
+/// intervals as a `seq` gap, which the subscriber also sees. The stream is
+/// not ended for falling behind.
 async fn stream(
     State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<StreamQuery>,
@@ -299,10 +303,13 @@ async fn stream(
 /// [`Subscription`]: crate::agent::clock::Subscription
 ///
 /// `wall_now` is injected rather than read directly so a test can drive the
-/// clock backwards and exercise the monotonicity clamp below on the REAL code
-/// path. `tokio::time::pause` cannot do that job: it controls `Instant` and
-/// `sleep`, while the interval index is derived from `SystemTime`, which tokio
-/// does not touch.
+/// clock backwards and exercise the monotonicity clamp in
+/// [`StreamState::frame`] on the REAL code path. `tokio::time::pause` cannot
+/// do that job: it controls `Instant` and `sleep`, while the interval index is
+/// derived from `SystemTime`, which tokio does not touch.
+///
+/// This function owns the timer and the fetch; every rule about what a frame
+/// contains is in [`StreamState`], which is synchronous.
 fn rows_frames(
     builder: Arc<Mutex<SnapshotBuilder>>,
     subscription: crate::agent::clock::Subscription,
@@ -311,24 +318,12 @@ fn rows_frames(
 ) -> impl futures::Stream<Item = Result<bytes::Bytes, std::io::Error>> {
     async_stream::try_stream! {
         let interval = subscription.interval();
-        // Per group, the end of the acquisition window this connection has
-        // already been told about. A snapshot carries every group the agent
-        // knows, including ones whose sampler did not read this tick — a 60s
-        // `drivehealth` sweep sits unchanged across hundreds of ticks, keeping
-        // the window of its last real read. Sending it again would assert an
-        // observation that did not happen.
-        let mut last_window: std::collections::HashMap<String, u64> =
-            std::collections::HashMap::new();
-        let mut last_sent_wall: Option<u64> = None;
-        let mut last_index: Option<u64> = None;
-
-        let mut producer = frames::agent_producer();
+        let mut state = StreamState::new(frames::agent_producer(), interval);
 
         // dendro's own framing: a preamble, then length-prefixed frames. Sent
         // before anything else so a consumer can reject a stream it cannot
         // read rather than decoding its first frame as garbage.
-        let opening = producer.opening().map_err(std::io::Error::other)?;
-        yield bytes::Bytes::from(opening);
+        yield state.opening()?;
 
         loop {
             // This subscription's own timer, on ITS boundaries. Nothing is
@@ -337,24 +332,9 @@ fn rows_frames(
             // served exactly rather than quantized.
             tokio::time::sleep(clock::until_next_aligned(interval)).await;
 
-            // Which of this subscription's intervals just elapsed. Taken from
-            // the boundary we woke for, not from the snapshot's own timestamp:
-            // a snapshot served from cache can predate the boundary slightly,
-            // and this index has to advance once per interval regardless.
-            //
-            // Clamped forward, because it is derived from the WALL clock and
-            // the wall clock can step. An NTP correction backwards would
-            // otherwise emit a `seq` lower than one already sent, which a
-            // consumer checking for +1 has no rule for — it would read as
-            // corruption.
-            let measured = clock::interval_index(wall_now(), interval);
-            let index = clock::monotonic_interval_index(wall_now(), interval, last_index);
-            if index != measured {
-                warn!(
-                    "wall clock moved backwards under a stream subscriber at {interval:?}; \
-                     holding the interval index monotonic ({measured} -> {index})"
-                );
-            }
+            // Read on waking, before the fetch: `seq` names the boundary this
+            // subscription woke for, not the time the pass came back.
+            let wall_ns = wall_now();
 
             let reading = match layout {
                 Layout::Wide => builder
@@ -371,93 +351,168 @@ fn rows_frames(
                     .map(Reading::Long),
             };
 
-            if let Some(previous) = last_index {
-                if index > previous + 1 {
-                    // Every interval gets a frame, so this is a lost reading
-                    // rather than a quiet one — the distinction empty frames
-                    // exist to preserve.
-                    warn!(
-                        "stream subscriber at {interval:?} missed {} interval(s); \
-                         the subscription was starved past its boundary",
-                        index - previous - 1
-                    );
-                }
+            yield state.frame(reading.as_ref(), wall_ns)?;
+        }
+    }
+}
+
+/// One subscription's frame state: what this connection has been sent, and
+/// the rules for what each interval's frame carries.
+///
+/// Synchronous and free of I/O, so a test can drive it with synthetic passes
+/// and a chosen wall clock. [`rows_frames`] wraps it with the timer and the
+/// fetch.
+struct StreamState {
+    interval: Duration,
+    producer: frames::FrameProducer,
+    /// Per group, the end of the acquisition window this connection has
+    /// already been told about. A snapshot carries every group the agent
+    /// knows, including ones whose sampler did not read this tick: a 60s
+    /// `drivehealth` sweep sits unchanged across hundreds of ticks, keeping
+    /// the window of its last real read. Sending it again would assert an
+    /// observation that did not happen.
+    last_window: std::collections::HashMap<String, u64>,
+    /// The `wall_ns` stamp of the last pass a frame was built from.
+    last_sent_wall: Option<u64>,
+    /// The `seq` of the last frame.
+    last_index: Option<u64>,
+}
+
+impl StreamState {
+    fn new(producer: frames::FrameProducer, interval: Duration) -> Self {
+        Self {
+            interval,
+            producer,
+            last_window: std::collections::HashMap::new(),
+            last_sent_wall: None,
+            last_index: None,
+        }
+    }
+
+    /// The preamble and the handshake frame.
+    fn opening(&mut self) -> Result<bytes::Bytes, std::io::Error> {
+        let opening = self.producer.opening().map_err(std::io::Error::other)?;
+        Ok(bytes::Bytes::from(opening))
+    }
+
+    /// The encoded frame for one interval.
+    ///
+    /// `wall_ns` is the wall clock read when the subscription woke, before
+    /// `reading` was fetched; `seq` is derived from it. `reading` is `None`
+    /// when there was no pass to send, and the interval gets an empty frame.
+    fn frame(
+        &mut self,
+        reading: Option<&Reading>,
+        wall_ns: u64,
+    ) -> Result<bytes::Bytes, std::io::Error> {
+        let interval = self.interval;
+
+        // Which of this subscription's intervals just elapsed. Taken from the
+        // boundary we woke for, not from the snapshot's own timestamp: a
+        // snapshot served from cache can predate the boundary slightly, and
+        // this index has to advance once per interval regardless.
+        //
+        // Clamped forward, because it is derived from the WALL clock and the
+        // wall clock can step. An NTP correction backwards would otherwise
+        // emit a `seq` lower than one already sent, which a consumer checking
+        // for +1 has no rule for: it would read as corruption.
+        let measured = clock::interval_index(wall_ns, interval);
+        let index = clock::monotonic_interval_index(wall_ns, interval, self.last_index);
+        if index != measured {
+            warn!(
+                "wall clock moved backwards under a stream subscriber at {interval:?}; \
+                 holding the interval index monotonic ({measured} -> {index})"
+            );
+        }
+
+        if let Some(previous) = self.last_index {
+            if index > previous + 1 {
+                // Every interval gets a frame, so this is a lost reading
+                // rather than a quiet one, the distinction empty frames exist
+                // to preserve.
+                warn!(
+                    "stream subscriber at {interval:?} missed {} interval(s); \
+                     the subscription was starved past its boundary",
+                    index - previous - 1
+                );
             }
-            last_index = Some(index);
+        }
+        self.last_index = Some(index);
 
-            let frame = match reading {
-                Some(reading) => {
-                    let (wall_ns, ts, wall_offset) = reading.stamp();
-                    // The same reading as last time — reached when the interval asked
-                    // for is shorter than the TTL, which is the case the TTL exists to
-                    // bound. Nothing in this snapshot can have advanced, so every row
-                    // is dropped below and the frame goes out empty, saying "your
-                    // interval elapsed and there is nothing new".
-                    let advanced = last_sent_wall != Some(wall_ns);
-                    last_sent_wall = Some(wall_ns);
+        let frame = match reading {
+            Some(reading) => {
+                let (wall_ns, ts, wall_offset) = reading.stamp();
+                // The same reading as last time, reached when the interval
+                // asked for is shorter than the TTL, which is the case the TTL
+                // exists to bound. Nothing in this snapshot can have advanced,
+                // so every row is dropped below and the frame goes out empty,
+                // saying "your interval elapsed and there is nothing new".
+                let advanced = self.last_sent_wall != Some(wall_ns);
+                self.last_sent_wall = Some(wall_ns);
 
-                    // Filtered BEFORE the producer sees the rows: it records a
-                    // schema as sent when it builds a row carrying it, so a
-                    // row dropped afterwards would leave its group referencing
-                    // a schema this subscriber never received.
-                    let mut keep = |stream: &str, window: Option<(u64, u64)>| {
-                        // The whole snapshot is one this connection already has, so
-                        // nothing in it is new — including a windowless group,
-                        // which carries no evidence either way and would otherwise
-                        // be sent again on the strength of not being able to prove
-                        // itself stale.
-                        if !advanced {
+                // Filtered BEFORE the producer sees the rows: it records a
+                // schema as sent when it builds a row carrying it, so a row
+                // dropped afterwards would leave its group referencing a
+                // schema this subscriber never received.
+                let last_window = &mut self.last_window;
+                let mut keep = |stream: &str, window: Option<(u64, u64)>| {
+                    // The whole snapshot is one this connection already has,
+                    // so nothing in it is new, including a windowless group,
+                    // which carries no evidence either way and would otherwise
+                    // be sent again on the strength of not being able to prove
+                    // itself stale.
+                    if !advanced {
+                        return false;
+                    }
+                    // Has this group actually been read again since this
+                    // connection last heard about it? A windowless group
+                    // carries no answer, so it is always sent, the same
+                    // disposition `stage_rows` gives it.
+                    if let Some(end) = window.map(|(_, end)| end) {
+                        if last_window.get(stream) == Some(&end) {
                             return false;
                         }
-                        // Has this group actually been read again since this
-                        // connection last heard about it? A windowless group
-                        // carries no answer, so it is always sent — the same
-                        // disposition `stage_rows` gives it.
-                        if let Some(end) = window.map(|(_, end)| end) {
-                            if last_window.get(stream) == Some(&end) {
-                                return false;
-                            }
-                            last_window.insert(stream.to_string(), end);
-                        }
-                        true
-                    };
-                    // The pass's own stamp, carried through: a frame sent now
-                    // can describe a pass that ran up to a TTL ago.
-                    match &reading {
-                        Reading::Wide(rows) => producer.interval(
-                            rows.rows.iter().filter(|r| keep(&r.stream, r.window)),
-                            ts,
-                            wall_offset,
-                            index,
-                        ),
-                        Reading::Long(rows) => producer.interval(
-                            rows.rows.iter().filter(|r| keep(group_stream(r), group_window(r))),
-                            ts,
-                            wall_offset,
-                            index,
-                        ),
+                        last_window.insert(stream.to_string(), end);
                     }
+                    true
+                };
+                // The pass's own stamp, carried through: a frame sent now can
+                // describe a pass that ran up to a TTL ago.
+                match reading {
+                    Reading::Wide(rows) => self.producer.interval(
+                        rows.rows.iter().filter(|r| keep(&r.stream, r.window)),
+                        ts,
+                        wall_offset,
+                        index,
+                    ),
+                    Reading::Long(rows) => self.producer.interval(
+                        rows.rows
+                            .iter()
+                            .filter(|r| keep(group_stream(r), group_window(r))),
+                        ts,
+                        wall_offset,
+                        index,
+                    ),
                 }
-                // No reading to send: before the first sampling pass, or when
-                // the snapshot failed to encode. The interval still elapsed,
-                // so it still gets a frame, the empty one. Skipping it would
-                // leave a gap in `seq`, which a subscriber reads as intervals
-                // it did not receive, and a subscriber waiting on its first
-                // interval would wait for the next one instead.
-                None => {
-                    warn!(
-                        "stream subscriber at {interval:?}: no snapshot to send for \
-                         interval {index}; sending an empty frame"
-                    );
-                    producer.empty_interval(index)
-                }
-            };
+            }
+            // No reading to send: before the first sampling pass, or when the
+            // snapshot failed to encode. The interval still elapsed, so it
+            // still gets a frame, the empty one. Skipping it would leave a gap
+            // in `seq`, which a subscriber reads as intervals it did not
+            // receive, and a subscriber waiting on its first interval would
+            // wait for the next one instead.
+            None => {
+                warn!(
+                    "stream subscriber at {interval:?}: no snapshot to send for \
+                     interval {index}; sending an empty frame"
+                );
+                self.producer.empty_interval(index)
+            }
+        };
 
-            let mut body = Vec::new();
-            dendro::replicate::wire::encode_frame(&frame, &mut body)
-                .map_err(std::io::Error::other)?;
-            yield bytes::Bytes::from(body);
-        }
+        let mut body = Vec::new();
+        dendro::replicate::wire::encode_frame(&frame, &mut body).map_err(std::io::Error::other)?;
+        Ok(bytes::Bytes::from(body))
     }
 }
 
@@ -1385,5 +1440,344 @@ mod stream_tests {
             _ => None,
         })
         .await;
+    }
+}
+
+/// GO check 1 of metriken's `docs/journal/2026-10-11-stream-route.md`.
+///
+/// [`StreamState`] is driven through one fixed sequence of synthetic passes,
+/// in each layout, and its output is compared byte for byte with a committed
+/// fixture under `tests/fixtures/stream-frames/`. The fixture is what
+/// metriken-exposition's `StreamSubscription` must reproduce when it replaces
+/// `rows_frames`: the same sequence through it, built with the same uuid and
+/// anchor, has to give the same bytes.
+///
+/// File format: one record per chunk the stream yields, the opening chunk
+/// (preamble and handshake) first, then one per interval. Each record is a
+/// little-endian `u32` byte length followed by the chunk's bytes.
+///
+/// Regenerate with `REZOLUS_BLESS=1 cargo test stream_frame_fixture`, and only
+/// when the frames are meant to change.
+#[cfg(test)]
+mod stream_frame_fixture {
+    use super::*;
+    use crate::recorder::schema::{GroupSchema, MetricDesc};
+    use crate::recorder::wire::{AgentRow, AgentRows};
+    use metriken_archive::stream::{EncodedGroup, EncodedLongGroup, EncodedStreamGroup};
+    use metriken_archive::wal::{encode_wal_long_row, LongOccupant, WalLongRow};
+    use std::collections::BTreeMap;
+
+    const UUID: &str = "0f1e2d3c-4b5a-4968-8776-655443322110";
+    const ANCHOR: i64 = 1_700_000_000_000_000_000;
+    const SECOND: u64 = 1_000_000_000;
+    /// Subscription wake times are offsets from this, half an interval past
+    /// a boundary so `seq` does not sit on an edge.
+    const BASE: u64 = 1_700_000_000_000_000_000 + SECOND / 2;
+
+    fn state() -> StreamState {
+        let producer = frames::FrameProducer::for_source(
+            UUID.to_string(),
+            ANCHOR,
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            [(dendro::keys::PRODUCER_EPOCH.to_string(), UUID.to_string())]
+                .into_iter()
+                .collect(),
+        );
+        StreamState::new(producer, Duration::from_secs(1))
+    }
+
+    fn schema(n: usize) -> GroupSchema {
+        GroupSchema {
+            counters: (0..n)
+                .map(|i| MetricDesc {
+                    name: format!("0x{i}"),
+                    metadata: [("metric".to_string(), format!("counter_{i}"))]
+                        .into_iter()
+                        .collect(),
+                })
+                .collect(),
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        }
+    }
+
+    /// One group of a pass: its stream, window, counter count, and the value
+    /// its counters start from.
+    struct G {
+        stream: &'static str,
+        window: Option<(u64, u64)>,
+        n: usize,
+        base: u64,
+    }
+
+    /// A pass's stamp: `wall_ns`, `ts`, `wall_offset`.
+    type Stamp = (u64, i64, i64);
+
+    fn wide_row(g: &G) -> AgentRow {
+        let schema = schema(g.n);
+        let row = crate::recorder::wal::encode_wal_group_row(&crate::recorder::wal::WalGroupRow {
+            schema_hash: schema.hash(),
+            schema: None,
+            window: g.window,
+            counters: (0..g.n).map(|i| Some(g.base + i as u64)).collect(),
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        })
+        .unwrap();
+        AgentRow {
+            stream: g.stream.to_string(),
+            window: g.window,
+            schema_hash: schema.hash(),
+            schema: Some(Arc::new(schema)),
+            arity: (g.n as u32, 0, 0),
+            approx_bytes: row.len() as u32,
+            row,
+        }
+    }
+
+    fn wide_pass(stamp: Stamp, groups: &[G]) -> Reading {
+        Reading::Wide(Arc::new(AgentRows {
+            wall_ns: stamp.0,
+            ts: stamp.1,
+            wall_offset: stamp.2,
+            duration_ns: 1_000,
+            rows: groups.iter().map(wide_row).collect(),
+        }))
+    }
+
+    /// A windowed group in the long form, with `g.n` occupants of one counter
+    /// each. A windowless group is built wide, so the long sequence mixes
+    /// both forms.
+    fn long_group(g: &G) -> EncodedStreamGroup {
+        if g.window.is_none() {
+            let row = wide_row(g);
+            return EncodedStreamGroup::Wide(EncodedGroup {
+                stream: row.stream,
+                window: row.window,
+                schema_hash: row.schema_hash,
+                schema: row.schema,
+                row: row.row,
+            });
+        }
+        let columns = schema(1);
+        let keys: Vec<u64> = (0..g.n as u64).map(|i| 0x100 + i).collect();
+        let row = encode_wal_long_row(&WalLongRow {
+            schema_hash: columns.hash(),
+            schema: None,
+            window: g.window,
+            occupants: keys
+                .iter()
+                .map(|&key| LongOccupant {
+                    occupant: key,
+                    counters: vec![Some(g.base + key)],
+                    gauges: Vec::new(),
+                    histograms: Vec::new(),
+                })
+                .collect(),
+        })
+        .unwrap();
+        EncodedStreamGroup::Long(EncodedLongGroup {
+            stream: g.stream.to_string(),
+            window: g.window,
+            columns_hash: columns.hash(),
+            columns: Arc::new(columns),
+            occupants: keys
+                .iter()
+                .map(|&key| {
+                    let labels: BTreeMap<String, String> =
+                        [("id".to_string(), key.to_string())].into_iter().collect();
+                    (key, Arc::new(labels))
+                })
+                .collect(),
+            row,
+        })
+    }
+
+    fn long_pass(stamp: Stamp, groups: &[G]) -> Reading {
+        Reading::Long(Arc::new(snapshot::StreamRows {
+            wall_ns: stamp.0,
+            ts: stamp.1,
+            wall_offset: stamp.2,
+            rows: groups.iter().map(long_group).collect(),
+        }))
+    }
+
+    fn g(stream: &'static str, window: Option<(u64, u64)>, n: usize, base: u64) -> G {
+        G {
+            stream,
+            window,
+            n,
+            base,
+        }
+    }
+
+    /// The sequence, as `(wake time, pass)`. `pass` builds the layout's
+    /// reading from a stamp and groups.
+    ///
+    /// 1. First pass: `cpu/a` and `cpu/b` windowed, `external/main`
+    ///    windowless. All sent.
+    /// 2. The same pass again (same stamp): an empty frame.
+    /// 3. A new pass where `cpu/a`'s window did not advance and `cpu/b`'s did:
+    ///    `cpu/b` and `external/main` sent.
+    /// 4. No pass: an empty frame.
+    /// 5. Two seconds later, so `seq` skips one: both windows advanced, and
+    ///    `cpu/b` has one more counter (wide: a new schema; long: a new
+    ///    occupant).
+    /// 6. The wall clock steps back half a second, same pass: an empty frame
+    ///    whose `seq` is held at the previous one plus one.
+    fn sequence(pass: fn(Stamp, &[G]) -> Reading) -> Vec<(u64, Option<Reading>)> {
+        let s1: Stamp = (BASE + SECOND - 10_000, ANCHOR + 1_000_000, 7);
+        let s2: Stamp = (BASE + 3 * SECOND - 10_000, ANCHOR + 2_000_000, 7);
+        let s3: Stamp = (BASE + 6 * SECOND - 10_000, ANCHOR + 3_000_000, -3);
+        let p1 = || {
+            pass(
+                s1,
+                &[
+                    g("cpu/a", Some((100, 200)), 2, 10),
+                    g("cpu/b", Some((100, 210)), 2, 20),
+                    g("external/main", None, 1, 30),
+                ],
+            )
+        };
+        let p2 = pass(
+            s2,
+            &[
+                g("cpu/a", Some((100, 200)), 2, 10),
+                g("cpu/b", Some((210, 320)), 2, 21),
+                g("external/main", None, 1, 31),
+            ],
+        );
+        let p3 = || {
+            pass(
+                s3,
+                &[
+                    g("cpu/a", Some((200, 400)), 2, 12),
+                    g("cpu/b", Some((320, 430)), 3, 22),
+                    g("external/main", None, 1, 32),
+                ],
+            )
+        };
+        vec![
+            (BASE + SECOND, Some(p1())),
+            (BASE + 2 * SECOND, Some(p1())),
+            (BASE + 3 * SECOND, Some(p2)),
+            (BASE + 4 * SECOND, None),
+            (BASE + 6 * SECOND, Some(p3())),
+            (BASE + 6 * SECOND - SECOND / 2 - 1, Some(p3())),
+        ]
+    }
+
+    /// Every chunk the state yields for `sequence`, opening first.
+    fn chunks(pass: fn(Stamp, &[G]) -> Reading) -> Vec<bytes::Bytes> {
+        let mut state = state();
+        let mut out = vec![state.opening().unwrap()];
+        for (wall_ns, reading) in sequence(pass) {
+            out.push(state.frame(reading.as_ref(), wall_ns).unwrap());
+        }
+        out
+    }
+
+    fn serialize(chunks: &[bytes::Bytes]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for chunk in chunks {
+            out.extend_from_slice(&(chunk.len() as u32).to_le_bytes());
+            out.extend_from_slice(chunk);
+        }
+        out
+    }
+
+    /// `(seq, streams)` of each rows frame, decoded from the concatenated
+    /// chunks with dendro's reader. Checked as well as the bytes, so a fixture
+    /// blessed from a broken rule does not pass on the strength of matching
+    /// itself.
+    fn decoded(chunks: &[bytes::Bytes]) -> Vec<(u64, Vec<String>)> {
+        let body: Vec<u8> = chunks.iter().flat_map(|c| c.iter().copied()).collect();
+        let mut reader = dendro::replicate::wire::FrameReader::new(std::io::Cursor::new(body))
+            .expect("the preamble reads");
+        let mut out = Vec::new();
+        while let Some(frame) = reader.next_frame().expect("decodable") {
+            if let dendro::replicate::Frame::Rows { seq, rows, .. } = frame {
+                out.push((seq, rows.into_iter().map(|r| r.stream).collect()));
+            }
+        }
+        out
+    }
+
+    fn check(name: &str, pass: fn(Stamp, &[G]) -> Reading, expected: &[(u64, &[&str])]) {
+        let chunks = chunks(pass);
+
+        let first = clock::interval_index(BASE + SECOND, Duration::from_secs(1));
+        let expected: Vec<(u64, Vec<String>)> = expected
+            .iter()
+            .map(|(seq, streams)| (first + seq, streams.iter().map(|s| s.to_string()).collect()))
+            .collect();
+        assert_eq!(
+            decoded(&chunks),
+            expected,
+            "{name}: frames by seq and stream"
+        );
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/stream-frames")
+            .join(format!("{name}.bin"));
+        let bytes = serialize(&chunks);
+        if std::env::var_os("REZOLUS_BLESS").is_some() {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, &bytes).unwrap();
+            return;
+        }
+        let fixture = std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("{}: {e}; regenerate with REZOLUS_BLESS=1", path.display()));
+        assert!(
+            fixture == bytes,
+            "{name}: frames differ from {} ({} bytes produced, {} in the fixture)",
+            path.display(),
+            bytes.len(),
+            fixture.len()
+        );
+    }
+
+    #[test]
+    fn wide_frames_match_the_fixture() {
+        check(
+            "wide",
+            wide_pass,
+            &[
+                (0, &["cpu/a", "cpu/b", "external/main"]),
+                (1, &[]),
+                (2, &["cpu/b", "external/main"]),
+                (3, &[]),
+                (5, &["cpu/a", "cpu/b", "external/main"]),
+                (6, &[]),
+            ],
+        );
+    }
+
+    #[test]
+    fn long_frames_match_the_fixture() {
+        // A long group's new occupants go out first, on `<group>/occupants`.
+        check(
+            "long",
+            long_pass,
+            &[
+                (
+                    0,
+                    &[
+                        "cpu/a/occupants",
+                        "cpu/a",
+                        "cpu/b/occupants",
+                        "cpu/b",
+                        "external/main",
+                    ],
+                ),
+                (1, &[]),
+                (2, &["cpu/b", "external/main"]),
+                (3, &[]),
+                (5, &["cpu/a", "cpu/b/occupants", "cpu/b", "external/main"]),
+                (6, &[]),
+            ],
+        );
     }
 }
