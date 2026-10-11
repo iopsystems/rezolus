@@ -11,8 +11,8 @@ use metriken_query::{
     BufferPool, DisplayOptions, DisplayResult, MetricsSource, QueryError, QueryOptions, QueryResult,
 };
 
-/// A `.rez` or dendro archive read as a `MetricsSource`: metriken-archive's
-/// [`ArchiveReader`], opened from a path or bytes by content. Derefs to it,
+/// A `.rez` or dendro archive read as a `MetricsSource`: metriken-storage's
+/// [`ArchiveReader`] (re-exported by metriken-archive), opened from a path or bytes by content. Derefs to it,
 /// so its methods (`composition_sources`, `metric_metadata`, `complete`, ...)
 /// are this type's.
 pub struct RezReader(pub ArchiveReader);
@@ -3208,8 +3208,21 @@ mod tests {
             write(&plain, true, false);
             write(&indexed, true, true);
 
+            // The fixture really carries the index, and on the table queried.
+            let db = RezDb::open(&indexed).unwrap();
+            let rid = db.read_recordings().unwrap()[0].id;
+            assert_eq!(
+                db.caller_row_streams(rid).unwrap(),
+                vec![STREAM.to_string()]
+            );
+            drop(db);
+
             let plain = open(&plain);
             let indexed = open(&indexed);
+            assert_eq!(
+                indexed.owners_of(&["fake_ops".to_string()])[0].sampler(),
+                STREAM
+            );
 
             let expected = series(&plain);
             assert_eq!(
@@ -3226,6 +3239,22 @@ mod tests {
             assert_eq!(a, b);
             assert_eq!(indexed.sample_timestamps(), plain.sample_timestamps());
             assert_eq!(indexed.time_range_ns(), plain.time_range_ns());
+        }
+
+        /// What the dropped index loses: members that carry no labels, the
+        /// index being the one place a slot's occupant was named. Slot 0 reads
+        /// as one series across the handover, with no `comm`.
+        #[test]
+        fn an_index_only_archive_reads_unsplit() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("index-only.rez");
+            write(&path, false, true);
+            let got = series(&open(&path));
+            assert_eq!(got.len(), 2, "one series per slot: {got:?}");
+            assert!(
+                got.iter().all(|(l, _)| !l.contains_key("comm")),
+                "no occupant labels without the index: {got:?}"
+            );
         }
     }
 

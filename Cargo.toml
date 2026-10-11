@@ -18,7 +18,6 @@ log = "0.4.29"
 metriken = "0.11.3"
 metriken-exposition = "0.21.6"
 metriken-query = { version = "0.35.0", default-features = false }
-metriken-segment = { version = "0.2.0", default-features = false }
 metriken-archive = { version = "0.4.0", default-features = false }
 metriken-storage = { version = "0.1.0", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
