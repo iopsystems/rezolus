@@ -752,12 +752,17 @@ mod stream_tests {
     /// subscription is sent `TICKS` frames, and the sampling passes are also
     /// at most the distinct intervals those frames name. A TTL below the
     /// interval (`1ms`) fails both.
+    ///
+    /// The TTL is half the interval, as the agent's is far below its own
+    /// (10 ms under 1 s). With a TTL equal to the interval, a subscriber that
+    /// woke earlier than the one that built the last pass can find that pass
+    /// still fresh at the next boundary and send it again beside the new one.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn three_subscriptions_at_one_interval_share_one_pass_per_interval() {
         const TICKS: usize = 20;
-        let interval = Duration::from_millis(50);
+        let interval = Duration::from_millis(200);
         let config: Config =
-            toml::from_str("[general]\nttl = \"50ms\"\nsnapshot_format = \"v3\"\n")
+            toml::from_str("[general]\nttl = \"100ms\"\nsnapshot_format = \"v3\"\n")
                 .expect("valid config");
         let builder = Arc::new(Mutex::new(SnapshotBuilder::new(
             Arc::new(config),
