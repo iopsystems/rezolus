@@ -334,7 +334,7 @@ fn rows_frames(
 
             // Read on waking, before the fetch: `seq` names the boundary this
             // subscription woke for, not the time the pass came back.
-            let wall_ns = wall_now();
+            let woke_ns = wall_now();
 
             let reading = match layout {
                 Layout::Wide => builder
@@ -351,7 +351,7 @@ fn rows_frames(
                     .map(Reading::Long),
             };
 
-            yield state.frame(reading.as_ref(), wall_ns)?;
+            yield state.frame(reading.as_ref(), woke_ns)?;
         }
     }
 }
@@ -372,7 +372,8 @@ struct StreamState {
     /// the window of its last real read. Sending it again would assert an
     /// observation that did not happen.
     last_window: std::collections::HashMap<String, u64>,
-    /// The `wall_ns` stamp of the last pass a frame was built from.
+    /// The pass's own `wall_ns` stamp (not the wake time) of the last pass a
+    /// frame was built from.
     last_sent_wall: Option<u64>,
     /// The `seq` of the last frame.
     last_index: Option<u64>,
@@ -397,13 +398,13 @@ impl StreamState {
 
     /// The encoded frame for one interval.
     ///
-    /// `wall_ns` is the wall clock read when the subscription woke, before
+    /// `woke_ns` is the wall clock read when the subscription woke, before
     /// `reading` was fetched; `seq` is derived from it. `reading` is `None`
     /// when there was no pass to send, and the interval gets an empty frame.
     fn frame(
         &mut self,
         reading: Option<&Reading>,
-        wall_ns: u64,
+        woke_ns: u64,
     ) -> Result<bytes::Bytes, std::io::Error> {
         let interval = self.interval;
 
@@ -416,8 +417,8 @@ impl StreamState {
         // wall clock can step. An NTP correction backwards would otherwise
         // emit a `seq` lower than one already sent, which a consumer checking
         // for +1 has no rule for: it would read as corruption.
-        let measured = clock::interval_index(wall_ns, interval);
-        let index = clock::monotonic_interval_index(wall_ns, interval, self.last_index);
+        let measured = clock::interval_index(woke_ns, interval);
+        let index = clock::monotonic_interval_index(woke_ns, interval, self.last_index);
         if index != measured {
             warn!(
                 "wall clock moved backwards under a stream subscriber at {interval:?}; \
@@ -441,14 +442,14 @@ impl StreamState {
 
         let frame = match reading {
             Some(reading) => {
-                let (wall_ns, ts, wall_offset) = reading.stamp();
+                let (pass_wall_ns, ts, wall_offset) = reading.stamp();
                 // The same reading as last time, reached when the interval
                 // asked for is shorter than the TTL, which is the case the TTL
                 // exists to bound. Nothing in this snapshot can have advanced,
                 // so every row is dropped below and the frame goes out empty,
                 // saying "your interval elapsed and there is nothing new".
-                let advanced = self.last_sent_wall != Some(wall_ns);
-                self.last_sent_wall = Some(wall_ns);
+                let advanced = self.last_sent_wall != Some(pass_wall_ns);
+                self.last_sent_wall = Some(pass_wall_ns);
 
                 // Filtered BEFORE the producer sees the rows: it records a
                 // schema as sent when it builds a row carrying it, so a row
@@ -1723,7 +1724,7 @@ mod stream_frame_fixture {
             .join("tests/fixtures/stream-frames")
             .join(format!("{name}.bin"));
         let bytes = serialize(&chunks);
-        if std::env::var_os("REZOLUS_BLESS").is_some() {
+        if std::env::var("REZOLUS_BLESS").as_deref() == Ok("1") {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, &bytes).unwrap();
             return;
