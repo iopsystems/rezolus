@@ -45,29 +45,12 @@ dashboard = { path = "crates/dashboard" }
 # `FrameReader` skip frame kinds it does not know. 0.3.1 adds
 # `last_caller_row_at_or_before`, which the reader for dendro archives uses
 # to find the identity index's `Full` to replay from.
-dendro = { version = "0.4.0-alpha.0", default-features = false }
+dendro = { version = "0.4.0", default-features = false }
 rez = { path = "crates/rez" }
 report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
 walkdir = "2.5.0"
 wasm-bindgen = "0.2.120"
-
-# TEMPORARY: metriken-exposition 0.22.0, metriken-storage 0.2.0 and
-# metriken-query 0.36.0 (metriken branch `feat/stream-route`) and dendro
-# 0.4.0 are not released yet. This block builds against that metriken
-# branch and dendro's merged commit, and is removed when those releases are
-# on crates.io. The metriken crates whose versions did not change are patched
-# too, so the graph holds one `metriken-core` (it declares `links`).
-[patch.crates-io]
-metriken = { git = "https://github.com/iopsystems/metriken", branch = "feat/stream-route" }
-metriken-core = { git = "https://github.com/iopsystems/metriken", branch = "feat/stream-route" }
-metriken-derive = { git = "https://github.com/iopsystems/metriken", branch = "feat/stream-route" }
-metriken-types = { git = "https://github.com/iopsystems/metriken", branch = "feat/stream-route" }
-metriken-model = { git = "https://github.com/iopsystems/metriken", branch = "feat/stream-route" }
-metriken-exposition = { git = "https://github.com/iopsystems/metriken", branch = "feat/stream-route" }
-metriken-storage = { git = "https://github.com/iopsystems/metriken", branch = "feat/stream-route" }
-metriken-query = { git = "https://github.com/iopsystems/metriken", branch = "feat/stream-route" }
-dendro = { git = "https://github.com/iopsystems/dendro", rev = "8cc03eeb2f5a64d5ef35ced638c67ef2aecf2694" }
 
 [package]
 name = "rezolus"

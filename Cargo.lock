@@ -1041,8 +1041,9 @@ dependencies = [
 
 [[package]]
 name = "dendro"
-version = "0.4.0-alpha.0"
-source = "git+https://github.com/iopsystems/dendro?rev=8cc03eeb2f5a64d5ef35ced638c67ef2aecf2694#8cc03eeb2f5a64d5ef35ced638c67ef2aecf2694"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c7ee00a1be36806c9d2198457f6da4023710209f3d79cd246fcbd3ea4eb0e86"
 dependencies = [
  "arrow",
  "bytes",
@@ -2239,7 +2240,8 @@ dependencies = [
 [[package]]
 name = "metriken"
 version = "0.11.3"
-source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fstream-route#080621b011f7246d1de0eb3925a0ad36778e25d9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b775d1c8fa624fbf8e3a553a09cd2b48311e076301a48f2c968b6a52d7a52e1"
 dependencies = [
  "getrandom 0.3.4",
  "histogram",
@@ -2253,7 +2255,8 @@ dependencies = [
 [[package]]
 name = "metriken-core"
 version = "0.3.3"
-source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fstream-route#080621b011f7246d1de0eb3925a0ad36778e25d9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "475f9a727147e3b088eadebda0572fb49f81aae39993d9dd1e6bac4556a18da0"
 dependencies = [
  "histogram",
  "linkme",
@@ -2265,7 +2268,8 @@ dependencies = [
 [[package]]
 name = "metriken-derive"
 version = "0.6.0"
-source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fstream-route#080621b011f7246d1de0eb3925a0ad36778e25d9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba9466276652f7134a720d6d7e004bb5277dfa85a349e63030bb80b9aacf3db5"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2276,7 +2280,8 @@ dependencies = [
 [[package]]
 name = "metriken-exposition"
 version = "0.22.0"
-source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fstream-route#080621b011f7246d1de0eb3925a0ad36778e25d9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4490aadf5922e994e5ffeb6ae31b9b9f72d46cf761ec64da60fa0e327365e801"
 dependencies = [
  "bytes",
  "chrono",
@@ -2298,7 +2303,8 @@ dependencies = [
 [[package]]
 name = "metriken-model"
 version = "0.1.1"
-source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fstream-route#080621b011f7246d1de0eb3925a0ad36778e25d9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76482d52c12b2d4096f225a7dfcc4091c162e570e6696c3252e313251014d971"
 dependencies = [
  "histogram",
  "metriken-types",
@@ -2310,7 +2316,8 @@ dependencies = [
 [[package]]
 name = "metriken-query"
 version = "0.36.0"
-source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fstream-route#080621b011f7246d1de0eb3925a0ad36778e25d9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e543a028fbc58be0aa48c5fd8ac20ca9858bc6dc9a6f3b6d7beae2416f41c17e"
 dependencies = [
  "arrow",
  "bytes",
@@ -2331,7 +2338,8 @@ dependencies = [
 [[package]]
 name = "metriken-storage"
 version = "0.2.0"
-source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fstream-route#080621b011f7246d1de0eb3925a0ad36778e25d9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9098faa6546d34d27aad587f307110f61fc773d610d2a73663a75311fde2b2f"
 dependencies = [
  "arrow",
  "bytes",
@@ -2357,7 +2365,8 @@ dependencies = [
 [[package]]
 name = "metriken-types"
 version = "0.1.0"
-source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fstream-route#080621b011f7246d1de0eb3925a0ad36778e25d9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9bd7377cbafbe5e1852bff7714e7056598f419cfc42130c35955bb2c13a26c76"
 dependencies = [
  "serde",
 ]
