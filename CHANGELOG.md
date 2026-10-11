@@ -1,5 +1,40 @@
 ## [Unreleased]
 
+### Changed
+
+- **`tcp_packet_latency` no longer creates and deletes a map entry per
+  segment.** Each data segment inserted the socket into a hash map and each
+  read deleted it, taking a bucket lock both times. On a production host
+  where both programs ran about 4.4M times per second, `bpf_stats` measured
+  521 ns per run for `tcp_probe` and 386 ns for `tcp_rcv_space_adjust`. The
+  start times are now kept in a fixed 4 MiB array of 2^19 slots indexed by a
+  hash of the socket's address, with no allocation or lock; each slot is one
+  64-bit word, so a slot is never read half written. The sampler attaches
+  `tp_btf` programs where the kernel has `bpf_skc_to_tcp_sock` (5.9+) and
+  `raw_tp` programs otherwise. In a 6.12 KVM guest over loopback (MTU 1500,
+  valkey-benchmark 4 KiB SET/GET, 48 clients, one run per arm), ns per run
+  for `tcp_probe` / `tcp_rcv_space_adjust` went from 326 / 523 to 226 / 325
+  with `tp_btf` and to 264 / 283 with `raw_tp`.
+  - Only an in-order data segment (sequence number `rcv_nxt`) starts a
+    sample. Duplicate, out-of-order and beyond-window segments did before,
+    and one that was dropped could leave a start time that a much later read
+    recorded. An in-order segment that the kernel then drops (checksum or
+    PAWS failure, zero receive window, receive memory exhausted) still
+    starts one, as before.
+  - A segment is not timed when its socket's slot holds another socket's
+    start time, either for unread data or for a socket no read clears, such
+    as an MPTCP subflow. The miss rate grows with the number of sockets
+    holding a start time at the same moment, K, and is about K / 2^19 when
+    socket addresses spread evenly over the slots. If a later in-order
+    segment arrives before the read, the sample starts there and is shorter
+    than the data's wait. The new data in a partial duplicate is not timed.
+  - Against an exact per-socket reference on the same segments, the slot
+    array missed 0.20-0.22% of samples at 2000 clients; p90, p99 and p99.9
+    fell in the same buckets, and p50 read one bucket high in three of four
+    runs at 2000-5000 clients.
+  - The old map dropped samples past 10240 sockets holding a start time at
+    once.
+
 ## [5.26.0] - 2026-10-09
 
 ### Added
