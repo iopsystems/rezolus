@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 mod blockio;
 mod cpu;
+#[cfg(target_os = "linux")]
+pub(crate) mod deferred;
 mod drivehealth;
 mod ext4;
 pub(crate) mod filesystem;

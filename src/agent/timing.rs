@@ -216,6 +216,19 @@ impl AcquisitionGroup {
         self.member_bound.store(n, Ordering::Relaxed);
     }
 
+    /// Unbound the group if its bound is still zero; leave any other bound.
+    /// For a sampler that initialises after start (`samplers::deferred`):
+    /// its groups are bounded to zero while it waits, and after init the
+    /// ones init did not bound itself go back to unbounded. A group init
+    /// bounded to exactly zero is lifted too; none of the deferred samplers
+    /// does that.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn lift_zero_bound(&self) {
+        let _ =
+            self.member_bound
+                .compare_exchange(0, usize::MAX, Ordering::Relaxed, Ordering::Relaxed);
+    }
+
     /// Declare the group's members explicitly, for a population that is not a
     /// dense prefix.
     ///

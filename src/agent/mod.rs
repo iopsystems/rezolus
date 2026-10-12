@@ -346,6 +346,13 @@ fn log_sampler_health_summary() {
                     .collect();
                 warn!("sampler {}: degraded — {}", s.name, probes.join(", "));
             }
+            // Before the health arm below: `set_unsupported` records health
+            // `Unsupported` too, and that arm prints only probe verdicts, which
+            // a sampler refused at init has none of.
+            (SamplerState::Unsupported { reason }, _) => {
+                unsupported += 1;
+                info!("sampler {}: unsupported — {reason}", s.name);
+            }
             (_, Some(SamplerHealth::Unsupported)) => {
                 unsupported += 1;
                 let probes: Vec<String> = s
@@ -360,10 +367,6 @@ fn log_sampler_health_summary() {
                     })
                     .collect();
                 info!("sampler {}: unsupported — {}", s.name, probes.join(", "));
-            }
-            (SamplerState::Unsupported { reason }, _) => {
-                unsupported += 1;
-                info!("sampler {}: unsupported — {reason}", s.name);
             }
             (_, Some(SamplerHealth::Healthy)) => healthy += 1,
             (SamplerState::Disabled, None) => {}

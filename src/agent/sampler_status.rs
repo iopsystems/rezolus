@@ -155,6 +155,30 @@ fn registry() -> &'static Mutex<BTreeMap<&'static str, SamplerStatus>> {
     REGISTRY.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
+/// Mark a sampler active if its record still says unsupported. For a
+/// sampler that initialises after start (`samplers::deferred`): its
+/// "waiting" record is replaced once init succeeds, unless init already
+/// wrote a richer one (a BPF sampler's builder does).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn set_active_if_unsupported(name: &'static str) {
+    let mut registry = registry().lock().unwrap();
+    let waiting = matches!(
+        registry.get(name).map(|s| &s.state),
+        None | Some(SamplerState::Unsupported { .. })
+    );
+    if waiting {
+        registry.insert(
+            name,
+            SamplerStatus {
+                name: name.to_string(),
+                state: SamplerState::Active,
+                health: None,
+                programs: Vec::new(),
+            },
+        );
+    }
+}
+
 /// Record a sampler as config-disabled.
 pub fn set_disabled(name: &'static str) {
     registry().lock().unwrap().insert(
