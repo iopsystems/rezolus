@@ -17,6 +17,7 @@ VIEWER_LISTEN="0.0.0.0:8080"
 NO_VIEWER=false
 RECORDER_PID=""
 STAGING=""
+INTERRUPTED=false
 
 help() {
     cat <<EOF
@@ -159,12 +160,18 @@ if [ ${#ENDPOINTS[@]} -ne ${#SOURCES[@]} ]; then
 fi
 
 # Validate source names: each names one recording in the archive, so they
-# must be unique, and `rezolus` is the agent's. A nested loop rather than an
-# associative array, which the bash 3.2 macOS ships does not have.
+# must be unique, and `rezolus` is the agent's. A `,` or `=` would split the
+# `--endpoint url,source=NAME` value into other options. A nested loop rather
+# than an associative array, which the bash 3.2 macOS ships does not have.
 for i in "${!SOURCES[@]}"; do
     if [ "${SOURCES[$i]}" = "rezolus" ]; then
         error "source name 'rezolus' is reserved for the agent's recording"
     fi
+    case "${SOURCES[$i]}" in
+        *,*|*=*)
+            error "source name must not contain ',' or '=': ${SOURCES[$i]}"
+            ;;
+    esac
     for j in "${!SOURCES[@]}"; do
         if [ "$j" -lt "$i" ] && [ "${SOURCES[$j]}" = "${SOURCES[$i]}" ]; then
             error "duplicate source name: ${SOURCES[$i]}"
@@ -199,8 +206,10 @@ STAGING="$(mktemp -d "${OUTPUT_DIR%/}/.capture-XXXXXX")"
 STAGED_FILE="$STAGING/capture.dendro"
 
 cleanup() {
-    # Stop the recorder if it is still running (--pid mode, or an interrupt).
-    # SIGTERM is a clean stop: it finalizes the archive.
+    # Stop the recorder if it is still running: the script is exiting on an
+    # error or a signal other than the SIGINT the --pid loop handles. The
+    # recorder treats a second SIGINT or SIGTERM as "terminate immediately",
+    # and the staging directory is removed below, so this capture is lost.
     if [ -n "$RECORDER_PID" ]; then
         kill "$RECORDER_PID" 2>/dev/null || true
         wait "$RECORDER_PID" 2>/dev/null || true
@@ -245,25 +254,36 @@ elif [ ${#COMMAND[@]} -gt 0 ]; then
 
 else
     echo "Capturing while process $MONITOR_PID is running (interval: $INTERVAL)..."
+    # Ctrl-C at a terminal sends SIGINT to the whole process group, so the
+    # recorder already has it and is finalizing the archive. Without this
+    # trap the script would exit and the EXIT trap would send the recorder a
+    # second signal, which aborts the archive, and then remove it.
+    trap 'INTERRUPTED=true' INT
     "${RECORD[@]}" &
     RECORDER_PID=$!
-    while kill -0 "$MONITOR_PID" 2>/dev/null; do
+    while ! $INTERRUPTED && kill -0 "$MONITOR_PID" 2>/dev/null; do
         if ! kill -0 "$RECORDER_PID" 2>/dev/null; then
             wait "$RECORDER_PID" || true
             RECORDER_PID=""
             echo "Error: the recorder exited before process $MONITOR_PID did" >&2
             exit 1
         fi
-        sleep 1
+        # The same SIGINT kills `sleep`, which `set -e` would make fatal.
+        sleep 1 || true
     done
-    echo "Process $MONITOR_PID exited, stopping capture..."
-    kill "$RECORDER_PID" 2>/dev/null || true
+    if $INTERRUPTED; then
+        echo "Interrupted, waiting for the recorder to finalize the capture..."
+    else
+        echo "Process $MONITOR_PID exited, stopping capture..."
+        kill "$RECORDER_PID" 2>/dev/null || true
+    fi
     if ! wait "$RECORDER_PID"; then
         RECORDER_PID=""
         echo "Error: the recording failed" >&2
         exit 1
     fi
     RECORDER_PID=""
+    trap - INT
 fi
 
 if [ ! -s "$STAGED_FILE" ]; then
@@ -272,8 +292,9 @@ if [ ! -s "$STAGED_FILE" ]; then
 fi
 
 # Replace an earlier capture, including any SQLite sidecars a reader left.
-rm -f "$OUTPUT_FILE" "$OUTPUT_FILE-wal" "$OUTPUT_FILE-shm"
-mv "$STAGED_FILE" "$OUTPUT_FILE"
+# `mv -f` renames over the old file, so a reader never sees no capture.
+rm -f "$OUTPUT_FILE-wal" "$OUTPUT_FILE-shm"
+mv -f "$STAGED_FILE" "$OUTPUT_FILE"
 # Removed here rather than by the EXIT trap, which `exec` below skips.
 rm -rf "$STAGING"
 STAGING=""
