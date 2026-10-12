@@ -54,49 +54,50 @@ sudo target/release/rezolus config/agent.toml
 # Exporter - Prometheus-compatible metrics endpoint
 sudo target/release/rezolus exporter config/exporter.toml
 
-# Recorder - capture metrics to disk (.dendro by default)
+# Recorder - capture metrics to a .dendro archive (the only format 6.x writes)
 target/release/rezolus record                                                           # localhost:4241 -> rezolus.dendro
-target/release/rezolus record --url http://localhost:4241 -o out.dendro --label arm=redis  # per-sampler archive (.rez: the pre-6.0 format)
+target/release/rezolus record --url http://localhost:4241 -o out.dendro --label arm=redis  # per-sampler archive
 target/release/rezolus record --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.dendro  # one recording per endpoint
-target/release/rezolus record --url http://host:9090/metrics -o out.parquet --metadata source=llm-perf
+target/release/rezolus record --url http://host:9090/metrics -o out.dendro --metadata source=llm-perf
 target/release/rezolus record --endpoint http://agent:4241 --endpoint http://svc:9090/metrics,source=svc -o run.dendro  # agent streamed, Prometheus scraped, one archive
-target/release/rezolus record -o bench.rez -- ./bench.sh   # record for the command's lifetime; writes run_start/run_end events
-#   (program name only; --record-command-line adds the full argument list; .rez, .dendro and parquet carry them, raw cannot)
-target/release/rezolus record --url http://localhost:4241 -o out.dendro         # dendro archive via metriken-storage; the agent is streamed
-# Auto-detects Rezolus agent vs Prometheus endpoints. The -o extension picks the format
-# (.dendro, the default | .rez | .parquet | .raw); --format {dendro|rez|parquet|raw} is rarely
-# needed and conflicting with the extension is an error. With no -o, the output is
-# rezolus.<ext> for the format in play (rezolus.dendro by default).
-# .rez takes any number of endpoints, rezolus or Prometheus, each as its own recording
-# in one multi-recording archive. A Prometheus scrape becomes one acquisition group per
-# target (`prometheus/scrape`), windowed by the real HTTP round trip. Only --separate
-# demotes the format, since one archive cannot be one file per endpoint.
-# Also: --metadata key=value (repeatable), --label key=value (repeatable; tags a .rez
-# recording, source/host auto-populated), --interval, --duration.
-# A .dendro records every rezolus agent from /metrics/stream and scrapes every Prometheus
-# endpoint (src/recorder/mod.rs `activate_endpoint`); both feed one ArchiveWriter, one commit
-# per tick. There is no scrape path for an agent into a .dendro: one that cannot serve the
-# stream (older than 5.21.0, V2 agent, handshake that does not decode) is refused with its
-# version. At startup that is before the archive exists, pointing at .rez/parquet (which
-# scrape); an agent that comes up later, or is refused on a reconnect, is marked Refused
-# and left out from then on (a reconnect keeps the rows it had), the rest finalize, and the
-# run exits 1 (`refuse_mid_run`). An unreachable one (or a 5xx / handshake timeout) is retried each
-# tick, and a stream that drops (or goes silent for the scrape timeout) is reconnected
-# after one interval, at least a second. A wrapped command that exits on its own waits for
-# each agent's frame stamped at or after the exit (bounded by interval + scrape timeout).
-# When every endpoint has been refused the run ends; each refused endpoint gets a line.
+target/release/rezolus record -o bench.dendro -- ./bench.sh   # record for the command's lifetime; writes run_start/run_end events
+#   (program name only; --record-command-line adds the full argument list)
+# Auto-detects Rezolus agent vs Prometheus endpoints. The output must end in .dendro (default
+# rezolus.dendro); -o ending in .rez/.parquet/.raw or anything else, --format other than dendro
+# (a hidden flag kept so `--format dendro` still parses) and --separate (hidden) are refused in
+# src/recorder/config.rs (`check_output`, `check_format`, `refuse_separate`) with exit 2,
+# naming a 5.x recorder (`LATEST_5X_RELEASE`, src/recorder/mod.rs). The same for a --config
+# file's output/format/separate. Any number of endpoints, rezolus or Prometheus, each its own
+# recording in one archive. A Prometheus scrape becomes one acquisition group per target
+# (`prometheus/scrape`), windowed by the real HTTP round trip.
+# Also: --metadata key=value (repeatable, every recording), --label key=value (repeatable;
+# source/host auto-populated), --interval, --duration; an endpoint's role= is its recording's
+# `role` metadata key.
+# Every rezolus agent is recorded from /metrics/stream and every Prometheus endpoint scraped
+# (src/recorder/mod.rs `activate_endpoint`); both feed one ArchiveWriter (`Archive`), one commit
+# per tick. There is no scrape path for an agent: one that cannot serve the stream (older than
+# 5.21.0, V2 agent, 404/409/foreign content type, handshake that does not decode) is refused
+# with its version, pointing at a 5.x recorder (`unstreamable_agent`). At startup that is
+# before the archive exists (exit 1); an agent that comes up later, or is refused on a
+# reconnect, is marked Refused and left out from then on (a reconnect keeps the rows it had),
+# the rest finalize, and the run exits 1 (`refuse_mid_run`). An unreachable one (or a 5xx /
+# handshake timeout) is retried each tick, and a stream that drops (or goes silent for the
+# scrape timeout) is reconnected after one interval, at least a second. A wrapped command that
+# exits on its own waits for each agent's frame stamped at or after the exit (bounded by
+# interval + scrape timeout). When every endpoint has been refused the run ends; each refused
+# endpoint gets a line.
 # Groups of slots arrive in the long layout (/metrics/stream?layout=long: values keyed by
 # occupant, each occupant's labels once on <group>/occupants; metriken_storage::StreamDecoder
 # and SourceRecorder::stage_streamed); other groups carry their schema when it changes. An
-# agent that serves only the wide layout is recorded through the same decoder. A .rez
-# hindsight buffer asks for the wide layout. The agent sends no index frames.
+# agent that serves only the wide layout is recorded through the same decoder. The agent sends
+# no index frames.
 # The agent serves the stream through metriken-exposition's StreamSubscription, as
 # application/vnd.metriken.replication.v1+dendro with x-metriken-frame-interval,
 # x-metriken-update-floor and x-metriken-layout (WIRE_NAMES). Recorder, hindsight and the
 # live viewer also accept the vnd.rezolus / x-rezolus-* names that agents 5.21.0 through
 # 6.0.0-alpha.44 serve (src/recorder/stream.rs ACCEPTED_WIRE_NAMES); 5.x `record --stream`
 # and 6.0-alpha consumers through alpha.44 refuse a current agent's stream by its content type. --stream was
-# removed before 6.0.0 (clap's unknown-argument error): the output format picks the transport.
+# removed before 6.0.0 (clap's unknown-argument error).
 
 # Viewer - web dashboard for parquet files, live agents, or upload mode
 target/release/rezolus view output.parquet [experiment.parquet] [--listen ADDR]
@@ -107,7 +108,7 @@ target/release/rezolus view [--listen ADDR]                         # upload-onl
 target/release/rezolus view --tui output.parquet                    # terminal UI (parquet or live agent; not upload-only)
 target/release/rezolus view --tui http://localhost:4241             # terminal UI, live agent
 
-# Hindsight - rolling archive buffer (.dendro; .rez when the output names one) for incident analysis
+# Hindsight - rolling .dendro buffer for incident analysis (an output ending in .rez or .parquet is refused)
 target/release/rezolus hindsight config/hindsight.toml
 
 # Parquet tools - file operations on parquet recordings
@@ -207,11 +208,11 @@ The binary operates in seven modes via subcommands:
 
 1. **Agent** (`src/agent/`) - Default. Collects system metrics via samplers.
 2. **Exporter** (`src/exporter/`) - Pulls from agent's msgpack endpoint, exposes Prometheus metrics.
-3. **Recorder** (`src/recorder/`) - Writes metrics to disk. Auto-detects Rezolus vs Prometheus sources. The output extension picks the format (`.dendro` default since 6.0, `.rez`, `.parquet`, `.raw`); `.dendro` writes through metriken-storage's `ArchiveWriter` (`RezStream`'s `Sink::Dendro`), streams Rezolus agents and scrapes Prometheus endpoints, see `docs/journal/2026-09-28-dendro-writer-adoption.md`; `--format` is the explicit form and contradicting the extension is an error. Defaults to `rezolus.dendro` when no `-o` is given, falling back to `rezolus.parquet` only for `--separate` with several endpoints when nothing pinned the format. Several endpoints in one run write one multi-recording archive, a recording each. Supports `--metadata key=value`; `--label key=value` tags every archive recording in the run, so `--endpoint url,source=name` is what distinguishes two endpoints (see "`.rez` archive format" below).
-4. **Hindsight** (`src/hindsight/`) - Maintains a rolling archive buffer on disk (the archive writer with retention: everything older than `duration` is evicted each tick) for post-incident snapshots. It is a stream consumer, like `record` to `.dendro`: it subscribes to the agent's `/metrics/stream` through the recorder's `stream::pump` and writes each interval at the agent's own stamp. An agent that cannot stream is refused at startup. The buffer is readable live by the viewer/MCP/`recording metadata`. It is a dendro archive through metriken-storage's writer (`buffer.rs`'s `Writer::Dendro`) unless `output` ends in `.rez`, which keeps the `.rez` v3 buffer (a snapshot of that is a `VACUUM INTO` copy taken without pausing the recording). A dendro buffer's snapshots go through dendro's `copy_sources_into` on the read handle, which seals the live tail into the copy (a fully sealed artifact, no WAL rows), and a ranged one starts one occupant restatement period early so long tables keep their labels.
+3. **Recorder** (`src/recorder/`) - Writes metrics to a `.dendro` archive, the only format 6.x writes, through metriken-storage's `ArchiveWriter` (the recorder's `Archive`); see `docs/journal/2026-09-28-dendro-writer-adoption.md`. Auto-detects Rezolus vs Prometheus sources; Rezolus agents are streamed and Prometheus endpoints scraped, and an agent that cannot stream is refused, pointing at a 5.x recorder. Defaults to `rezolus.dendro` when no `-o` is given; any output not ending in `.dendro`, `--format` other than `dendro`, and `--separate` are refused (exit 2). Several endpoints in one run write one multi-recording archive, a recording each. Supports `--metadata key=value`; `--label key=value` tags every archive recording in the run, so `--endpoint url,source=name` is what distinguishes two endpoints (see "`.rez` archive format" below).
+4. **Hindsight** (`src/hindsight/`) - Maintains a rolling archive buffer on disk (the archive writer with retention: everything older than `duration` is evicted each tick) for post-incident snapshots. It is a stream consumer, like `record` to `.dendro`: it subscribes to the agent's `/metrics/stream` through the recorder's `stream::pump` and writes each interval at the agent's own stamp. An agent that cannot stream is refused at startup. The buffer is readable live by the viewer/MCP/`recording metadata`. It is a dendro archive through metriken-storage's writer (`buffer.rs`'s `HindsightBuffer`); an `output` ending in `.rez` or `.parquet` is refused at config load (`config/general.rs` `check_output`). Its snapshots go through dendro's `copy_sources_into` on the read handle, which seals the live tail into the copy (a fully sealed artifact, no WAL rows), and a ranged one starts one occupant restatement period early so long tables keep their labels.
 5. **Viewer** (`src/viewer/`) - Web dashboard with PromQL query engine and TSDB (from `metriken-query` crate). Supports parquet files, `.rez` archives (a 2-recording `.rez` renders as an A/B baseline/experiment comparison; >2 shows the first two unless `--baseline k=v` / `--experiment k=v` name which recordings fill the slots — repeatable, ANDed, subset match, the same selector semantics as the MCP `--recording` flag, and each must name exactly one recording or the run is refused with a listing), live agent connections (a stream consumer: `src/viewer/live.rs` records `/metrics/stream` into a temporary dendro archive through hindsight's buffer writer and reads it through `rez::live::LiveReader`, which reopens after each interval because an open `ArchiveReader`'s view is fixed; saving copies the archive), and upload-only mode. A `.dendro` or `.rez` v3 file opened while unfinalized (a running hindsight buffer, a `record` in progress) is followed: `src/viewer/follow.rs` wraps every recording shown (baseline, experiment and any further capture) in a `LiveReader`, and a thread reopens the archive and hands each reader its recording (`LiveReader::replace`, matched by full label set). Each reopen of a dendro archive first reads the catalog's `sources` once (before `open_recordings`, so a source the catalog reads as finalized is finalized in the open that follows) and judges each followed recording's writer with a `dendro::archive::HeartbeatWatch` (matched by exact label set): any `Live` → reopen every 2 s with no backoff, however slowly rows arrive; otherwise (`Stopped`: killed, paused, or a `cp`/`recording snapshot` copy; or `Unknown`: a `.rez`, or a dendro source with no heartbeat) → 2 s while the newest row advances, and after a reopen that finds no new row the wait doubles, capped at 60 s (`follow::MAX_WAIT`); a `Stopped` writer that beats again is `Live` again. The follow ends only when every recording is finalized, when the file is removed (hindsight removes its buffer on SIGTERM/SIGINT without finalizing it), or when the baseline is replaced. Do not end a follow on time since the last row or on `Stopped`: a writer may sample once a minute, `interval()` reads 1 s for an archive with too few rows, and a paused writer reads `Stopped` until it beats again. Detaching the experiment drops its reader from the follow; replacing the baseline ends it; an archive whose shown recordings share a label set with another recording is not followed. `/api/v1/mode` reports `following` (distinct from `live`), and the page polls as in live mode but keeps the file-mode label, `from`/`to` handling and compare; in compare mode `noteRecordingExtent` replaces `experimentQueryRange` when the experiment's range changes, and `CompareChartWrapper` fetches again when that range changes. A finalized file is never reopened. Generates service KPI dashboards from `ServiceExtension` metadata.
 6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation, PromQL queries, feature extraction). Runs as stdio server or one-shot CLI commands. `query` prints acquisition-window uncertainty bands `[lo, hi]` beside `rate()`/`irate()` values (scalar ops scale the band; series-op-series combines both operands' bands by interval arithmetic, and operands from *different* acquisition tables have their bands widened to the union of both spans first — identical edges mean the same read, so the common case widens by nothing; non-rate/non-histogram queries have no band). See `docs/journal/2026-08-21-cross-table-uncertainty.md`. `extract-features` emits a deterministic, versioned overview record (JSON) summarizing a recording's Rezolus-native features.
-7. **Parquet** (`src/parquet_tools/`) - File operations: `metadata` (inspect; on a `.rez`, describes the manifest), `annotate` (add service extension KPIs or timeline events; on a `.rez`, `--queries` embeds KPIs and the event flags embed events into each recording's manifest), `combine` (merge multi-source files, assemble a multi-recording `.rez` from `.rez` OR `.parquet` inputs — the preferred A/B form; parquet inputs become windowless recordings — or build a legacy A/B tarball), `filter` (drop columns not needed by KPIs; on a `.rez`, `--samplers` drops every table whose sampler is not listed and `--metrics` trims metric columns, re-encoding segments), `convert` (raw msgpack recording, plain or zstd, into parquet — the offline complement to `record -o out.raw`), `snapshot` (a complete standalone copy of a `.rez` that is still being written — `cp` leaves SQLite's `-wal` sidecar behind and silently ends early). Those four accept `.rez` inputs; `convert` takes raw input only and emits parquet only.
+7. **Parquet** (`src/parquet_tools/`) - File operations: `metadata` (inspect; on a `.rez`, describes the manifest), `annotate` (add service extension KPIs or timeline events; on a `.rez`, `--queries` embeds KPIs and the event flags embed events into each recording's manifest), `combine` (merge multi-source files, assemble a multi-recording `.rez` from `.rez` OR `.parquet` inputs — the preferred A/B form; parquet inputs become windowless recordings — or build a legacy A/B tarball), `filter` (drop columns not needed by KPIs; on a `.rez`, `--samplers` drops every table whose sampler is not listed and `--metrics` trims metric columns, re-encoding segments), `convert` (raw msgpack recording, plain or zstd, into parquet — the offline complement to a 5.x `record -o out.raw`), `snapshot` (a complete standalone copy of a `.rez` that is still being written — `cp` leaves SQLite's `-wal` sidecar behind and silently ends early). Those four accept `.rez` inputs; `convert` takes raw input only and emits parquet only.
 
 ### Sampler Architecture
 
@@ -233,7 +234,7 @@ BPF-enabled samplers: `blockio/blockio`, `cpu/{bandwidth,perf,tlb_flush,usage}`,
 
 ### Parquet File Format
 
-Parquet files produced by the recorder/hindsight use a columnar layout from `metriken-exposition`:
+Parquet files produced by 5.x recorders use a columnar layout from `metriken-exposition`:
 - **`timestamp`** (UInt64) - Nanoseconds since Unix epoch. Present in every file.
 - **`duration`** (UInt64, nullable) - Snapshot collection duration in nanoseconds.
 - **Metric columns** - One per metric: counters (UInt64), gauges (Int64), histograms (List&lt;UInt64&gt;).
@@ -253,7 +254,7 @@ File-level metadata keys are defined in `src/parquet_metadata.rs`:
 The `.rez` format (metriken-storage's `src/rez/`: `rez.rs`, `rez_sqlite.rs`, `open.rs`; rezolus's `crates/rez/src/reader.rs`) is a container holding many parquet tables plus a `manifest.json`, rather than a single parquet file. Two container shapes exist and both are readable:
 
 - **v2 (tar)** — a tar archive with `manifest.json` and one table per sampler (`<recording>/<sampler>.parquet`).
-- **v3 (SQLite)** — a SQLite container (metriken-storage's `src/rez/rez_sqlite.rs` and `src/rez/rez_v3_writer.rs`) with a real WAL: rows land in the WAL and are periodically sealed into parquet segments. This is what `hindsight` maintains as its rolling buffer, and it is readable live while a writer is still appending.
+- **v3 (SQLite)** — a SQLite container (metriken-storage's `src/rez/rez_sqlite.rs` and `src/rez/rez_v3_writer.rs`) with a real WAL: rows land in the WAL and are periodically sealed into parquet segments. This is what a 5.x `hindsight` maintains as its rolling buffer (6.x keeps a `.dendro`), and it is readable live while a writer is still appending.
 
 Each sampler records at its own cadence. Table granularity depends on the snapshot format the agent produced:
 
@@ -266,7 +267,7 @@ A segment carries no declared sampling interval and needs none: the rows carry t
 
 Because each sampler records at its own cadence, a query spanning *two samplers of materially different cadence* (measured row spacing differing by at least 2x, with the slower coarser than the step) is evaluated at the **slow sampler's own row timestamps** rather than on the uniform `start + k·step` grid — otherwise nearly every point lands where the slow sampler never read and its value is merely held forward. metriken-query (`src/archive.rs`, the private `cross_cadence_eval_timestamps`, reached through `eval_timestamps_for` and the query methods) picks those timestamps and passes them as `QueryOptions::eval_timestamps`; cadence is measured from the rows (never `interval()`, which reports one nominal value for the whole archive) and per *sampler*, since a group that skips ticks is sparse within its sampler's cadence rather than a second cadence. Single-sampler queries and `RateMode::Raw` are untouched.
 
-A `.rez` takes any number of endpoints, rezolus or Prometheus. A Prometheus target is converted on the way in: one scrape is one request and one response, so it becomes a single V3 acquisition group named `prometheus/scrape`, windowed by the real HTTP round trip (`src/recorder/prometheus.rs`). That is why it is a group rather than a flat V2 snapshot — a V2 table carries `<name>:window_begin`/`<name>:window_width` per value column, which would triple the schema width of every Prometheus table. The manifest carries per-recording label sets (`source`/`host` auto-populated, plus any `record --label k=v`, which applies to every recording in the run); a multi-recording `.rez` — built live by `record --endpoint a --endpoint b -o out.rez`, or offline by `parquet combine` — drives the viewer's A/B comparison, aliasing baseline/experiment from each recording's `arm`/`host` labels. The seal stagger keys on sampler + the recording's canonical label set (`seal_policy::recording_stagger_key`), so two recordings of the same agent do not seal in lockstep; identical label sets warn at startup.
+A `.rez` (and a `.dendro`) takes any number of endpoints, rezolus or Prometheus. A Prometheus target is converted on the way in: one scrape is one request and one response, so it becomes a single V3 acquisition group named `prometheus/scrape`, windowed by the real HTTP round trip (`src/recorder/prometheus.rs`). That is why it is a group rather than a flat V2 snapshot — a V2 table carries `<name>:window_begin`/`<name>:window_width` per value column, which would triple the schema width of every Prometheus table. The manifest carries per-recording label sets (`source`/`host` auto-populated, plus any `record --label k=v`, which applies to every recording in the run); a multi-recording `.rez` — built live by a 5.x `record --endpoint a --endpoint b -o out.rez`, or offline by `parquet combine` — drives the viewer's A/B comparison, aliasing baseline/experiment from each recording's `arm`/`host` labels. The seal stagger keys on sampler + the recording's canonical label set (`seal_policy::recording_stagger_key`), so two recordings of the same agent do not seal in lockstep; identical label sets warn at startup.
 
 ### `.rez` lives in its own crate
 

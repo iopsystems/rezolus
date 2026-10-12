@@ -2,6 +2,28 @@
 
 ### Removed
 
+- **`record` writes `.dendro` only.** The output must end in `.dendro`
+  (`rezolus.dendro` without `-o`). `-o` ending in `.rez`, `.parquet`, `.raw`
+  or anything else, `--format` other than `dendro`, and `--separate` are
+  refused as usage errors (exit 2) before any endpoint is contacted, as are
+  the same `output`, `format` and `separate = true` in a `--config` file.
+  The refusal names a 5.x recorder (5.27.0 is the latest 5.x release), which
+  still writes those formats; `rezolus recording upgrade --to dendro`
+  converts a `.rez`. Reading `.rez` and parquet is unchanged.
+- **`record` refuses every Rezolus agent that cannot stream.** An agent older
+  than 5.21.0, a v2 agent, or a stream route that answers 404, 409 or a
+  foreign content type is refused at startup (exit 1, nothing written) or,
+  if it comes up later or fails on a reconnect, left out of the recording
+  while the rest is recorded (exit 1). The refusal points at a 5.x recorder,
+  which scrapes such an agent. A 5xx or a handshake timeout is still retried
+  each tick. Before, this applied to `.dendro` output only, and `.rez` and
+  parquet output scraped the agent.
+- **Hindsight writes `.dendro` only.** An `output` ending in `.rez` or
+  `.parquet` is refused when the config is loaded (exit 1). Before, `.rez`
+  kept a `.rez` buffer and `.parquet` wrote a `.dendro` with a warning.
+- **`record` no longer fetches an agent's `/samplers`.** The sampler status
+  was written into parquet output only.
+
 - **The live viewer no longer reads `/metrics/binary`.** `rezolus view
   http://agent:4241` needs `/metrics/stream`: an agent from 5.21.0 with
   `snapshot_format = "v3"` (the default). An older agent, a v2 agent, a
@@ -20,6 +42,10 @@
   last focal release; `install.sh` still installs it there, with a warning.
 
 ### Changed
+
+- **`record --endpoint url,role=...` is kept in the recording.** The role is
+  the `role` key of that endpoint's recording metadata; `--metadata role=...`
+  overrides it. Before, only parquet output carried it.
 
 - **Exact label listings for sparse long tables** (metriken-storage 0.2.1).
   A long table whose columns have values for only some of its occupants, as
