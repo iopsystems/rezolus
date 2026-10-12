@@ -885,11 +885,15 @@ cargo build --release
 sudo scripts/rezolus-capture --rezolus ./target/release/rezolus --duration 60s
 ```
 
-The helper starts an agent if necessary, records to parquet, and launches the
-viewer. Its default agent config is `config/agent.toml`; use `--agent-config`
-if you run it elsewhere. For service metrics, pass paired `--endpoint` and
-`--source` flags. This helper's parquet workflow is separate from the recorder's
-`.dendro` default. Run `scripts/rezolus-capture --help` for its full options.
+The helper starts an agent if necessary, records it with one `rezolus record`
+into `capture.dendro` in the output directory (`--output-dir`, default `.`),
+and launches the viewer on it. Its default agent config is
+`config/agent.toml`; use `--agent-config` if you run it elsewhere. For service
+metrics, pass paired `--endpoint` and `--source` flags: each endpoint becomes
+its own recording in the archive, labelled `source=<NAME>`, beside the agent's
+`source=rezolus`. `--command` records for the lifetime of the command
+(`rezolus record -- <command>`), and `--pid` until that process exits. Run
+`scripts/rezolus-capture --help` for its full options.
 
 ## Docker
 
