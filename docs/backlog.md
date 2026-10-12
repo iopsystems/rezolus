@@ -271,10 +271,10 @@ Source: [simple-capture viewer](journal/2026-07-03-simple-capture-viewer.md).
 
 Source: [per-source descriptions](journal/2026-07-04-per-source-descriptions.md).
 
-- **Backfill descriptions on a parquet lacking `# HELP`** — Dropped 2026-10-12
-  (6.0 readiness, decision 5 and per-subcommand behaviour): 6.x refuses
-  `annotate` on a parquet and has no `convert` to parquet ([6.0
-  readiness](journal/2026-10-08-6-0-release-readiness.md)). Recorded as it was:
+- **Backfill descriptions on a parquet lacking `# HELP`** — Open, retargeted:
+  `annotate --descriptions` on a `.dendro`. The parquet form is gone (6.x
+  refuses `annotate` on a parquet), but a Prometheus scrape into `.dendro`
+  without `# HELP` has the same blank descriptions. Recorded as it was:
   A Prometheus capture whose exporter emits no `# HELP` has blank descriptions
   (nothing to harvest at record time). A `parquet annotate --descriptions
   name=text` path could backfill the footer `descriptions` key after the fact.
@@ -303,13 +303,14 @@ recording length, 55 ms under backpressure).
 Source: [window sidecar cost](journal/2026-08-17-window-sidecar-cost.md)
 (design, pre-build; every figure measured on a 32-core host).
 
-- **Emit sidecars only for metrics that have a window** — Dropped 2026-10-12:
-  the per-metric sidecar columns are the SnapshotV2 table layout. 6.x records
-  only through `/metrics/stream`, whose acquisition groups carry one table-level
-  window pair, and refuses an agent that cannot stream ([6.0
-  readiness](journal/2026-10-08-6-0-release-readiness.md), decision 6), so
-  nothing 6.x writes has these columns. Recorded as it was: Open, recorder-side,
-  lossless, **lands on its own**. `rez.rs:262` pushes both sidecar fields
+- **Emit sidecars only for metrics that have a window** — Open, applies to
+  dendro for V2-sourced tables: metriken-storage's `table_to_batch`
+  (`table.rs:217-233`) writes both sidecars for every column of a table
+  without a table-level window, which 6.x produces from `convert` of a V2 raw
+  recording and `upgrade --to dendro` of a V2 `.rez`. Streamed groups and
+  Prometheus scrapes carry one table-level pair and are unaffected. The cited
+  `rez.rs:262` is now metriken-storage `src/table.rs`. Recorded as it was:
+  Open, recorder-side, lossless, **lands on its own**. `rez.rs:262` pushes both sidecar fields
   unconditionally, but only 413 of `cpu_usage`'s ~2,068 metrics have a window,
   so **3,310 of its 6,206 columns are all-null**; six tables (`cpu_perf`,
   `cpu_bandwidth`, `cpu_frequency`, `cpu_l3`, `cpu_dtlb`, `cpu_branch`) are
@@ -398,8 +399,8 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   permanently (measured 16.0× when the working set shrank 16×).
   `auto_vacuum=INCREMENTAL` at creation is adopted to defend this; it is free in
   steady state and **cannot be enabled later** without a full `VACUUM`.
-- **Hindsight migration to segments** — Dropped 2026-10-12: done. The slot
-  ring is gone (`src/hindsight/state.rs` keeps only shared state, and its doc
+- **Hindsight migration to segments** — **DONE** (closed 2026-10-12): the
+  slot ring is gone (`src/hindsight/state.rs` keeps only shared state, and its doc
   comment says the ring's geometry has no analogue), the buffer is a dendro
   archive with retention (`src/hindsight/buffer.rs`, `Writer::Dendro`), and a
   dump goes through dendro's `copy_sources_into`. Recorded as it was:
@@ -415,9 +416,10 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
 - **Per-table kill-loss for low-volume tables** — Dropped 2026-10-12: the
   dendro writer commits each tick's rows to the archive's WAL table in one
   transaction (dendro `Writer::wal_tick`), and readers materialize the WAL
-  tail, so an unclean kill loses the tick in flight rather than a quiet
-  table's unsealed segment. That is the WAL the item asked for. Not measured
-  on a killed dendro recording; *reopen* if a kill test recovers less than
+  tail, so an unclean kill loses at most the ticks not yet committed (one
+  queued, one committing) rather than a quiet table's unsealed segment.
+  That is the WAL the item asked for. Not measured on a killed dendro
+  recording; *reopen* if a kill test recovers less than
   every committed tick. Recorded as it was: Open. At fleet scale a quiet
   table seals every 180–300 s, so an unclean kill can lose its whole
   recording while busy tables lose seconds (measured: 16 of 26 tables
@@ -591,10 +593,11 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   too: `record` passes `WriterConfig::default()`, so dendro's
   `SealPolicy::default()` (8 MiB, 900 rows, 300 s, the same values) is a
   constant there; hindsight already takes `segment_rows` from its config.
-  Byte-first seal thresholds (est. bytes primary, row cap, ~5 min age bound
-  for the kill-loss window) ship as constants in metriken-storage's
-  `src/rez/rez.rs`. *Reopen:* if real workloads need tuning — promote to a
-  `--flag` or config knob.
+  Byte-first seal thresholds (est. bytes primary, row cap, a 300 s age bound
+  that now bounds an unsealed segment's age, not kill loss: the WAL holds the
+  rows) ship as constants in metriken-storage's `src/rez/seal_policy.rs`
+  (`SealPolicy::default()`). *Reopen:* if real workloads need tuning —
+  promote to a `--flag` or config knob.
 - **Fast finalize for the classic parquet path** — Dropped 2026-10-12: 6.x
   writes no parquet (6.0 readiness, decision 5). Recorded as it was, By design:
   The single-file parquet's wide schema is only knowable once recording ends, so
@@ -624,7 +627,7 @@ Source: [`.rez` v3 versus parquet on the read path](journal/2026-08-27-rez-vs-pa
   `schema_hash` already asserts — one pass per table would serve all of them.
 - **Seal larger segments** — Open, applies to dendro too: its writer seals at
   the same `max_rows: 900` default. The size comparison in the 6.0 readiness
-  entry ("Measurement") is the measurement that would reopen it for dendro; the
+  entry ("Measurement") is the measurement that decides it for dendro; the
   figures below are from `.rez`. Recorded as it was: the ONLY lever on the
   remaining axis: `.rez` is still 2.25× parquet's size at 50 ms. Segments
   average 218 KB against the 1.4 MiB the container was priced at, so compression

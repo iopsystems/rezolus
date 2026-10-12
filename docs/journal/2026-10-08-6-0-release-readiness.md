@@ -205,7 +205,7 @@ in `.rez` or `.parquet` at startup.
 | `build_parquet_converter`, the `Format::Parquet` arms | `src/recorder/mod.rs:1238`, `:3503`, `:3541` | parquet through `MsgpackToParquet` |
 | the `Format::Raw` arm | `src/recorder/mod.rs:3476` | raw msgpack |
 | `--separate`, `separate_output_path`, `demote_from_rez` | `src/recorder/mod.rs:247`, `:1220`, `:2301` | one parquet or raw file per endpoint |
-| hindsight `Writer::Rez`, `HindsightBuffer::create` and the `Writer::Rez` match arms. `Writer::Dendro` and `create_dendro` stay. | `src/hindsight/buffer.rs:73-85` (enum), `:137-156` (`create`), arms from `:175` to `:297` | `.rez` v3 buffer |
+| hindsight `Writer::Rez`, `HindsightBuffer::create` and the `Writer::Rez` match arms. `Writer::Dendro` and `create_dendro` stay. | `src/hindsight/buffer.rs:75-79` (variant), `:137-156` (`create`), arms from `:175` to `:297` | `.rez` v3 buffer |
 | hindsight `.rez` dump | `src/hindsight/buffer.rs:485-515` (`vacuum_into`, `copy_range`) | `.rez` dump of a `.rez` buffer |
 | hindsight `output` ending `.parquet` | `src/hindsight/mod.rs:180` | warns and writes `.dendro`; becomes a refusal |
 
@@ -217,7 +217,7 @@ Save as Report, server (`src/viewer/actions.rs`, `save_with_selection` from
 |---|---|---|---|
 | `.dendro` | `build_dendro_report` (:606) | `.dendro` (stays) | via `build_rez_report_from_rez` |
 | `.rez` | `build_rez_report_from_rez` (:535) | `.rez` via `rez_v3_rewrite::copy_recordings_into` | `src/viewer/report_save_rez.rs:20`, `actions.rs:863`, `crates/viewer/src/lib.rs:1055` |
-| two parquets (compare) | `build_rez_report_from_parquets` (:720) | `.rez` via `parquet_ingest` | `actions.rs:910`, `crates/viewer/src/lib.rs:1088` |
+| two parquets (compare) | `build_rez_report_from_parquets` (:720) | `.rez` via `parquet_ingest`; row trim via `parquet_rows_in`/`rewrite_parquet_bytes` (`crates/report-save/src/lib.rs:467`, `:388`), which goes with it | `actions.rs:910`, `crates/viewer/src/lib.rs:1088` |
 | one parquet | `save_single_parquet` (:183) | parquet | `src/viewer/report_save.rs:21`, `crates/viewer/src/report_save.rs`, `actions.rs:922`, `crates/viewer/src/lib.rs:1099` |
 | two parquets (A/B tarball) | `save_combined_ab_tarball` (:212) | `.parquet.ab.tar` | none outside its own tests; goes with `combine --ab` |
 
@@ -347,7 +347,7 @@ repository. Before 6.0.0:
   file size, free-list size and `-wal` size. The run fails if, at hour 24,
   hindsight's RSS or file size (its retention full by then) or `record`'s
   RSS is more than 5% above its value at hour 12. `record`'s file grows by
-  design and is logged, not judged.
+  design; its size is logged with no threshold.
 
 ### Documentation
 
