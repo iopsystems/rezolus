@@ -93,7 +93,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } read_size SEC(".maps");
 
 struct {
@@ -101,7 +101,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } write_size SEC(".maps");
 
 struct {
@@ -109,7 +109,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } flush_size SEC(".maps");
 
 struct {
@@ -117,7 +117,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } discard_size SEC(".maps");
 
 // errors[cpu * ERR_BANK_WIDTH + op * ERR_BUCKETS + cls]
@@ -154,7 +154,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } read_device_latency SEC(".maps");
 
 struct {
@@ -162,7 +162,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } write_device_latency SEC(".maps");
 
 struct {
@@ -170,7 +170,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } flush_device_latency SEC(".maps");
 
 struct {
@@ -178,7 +178,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } discard_device_latency SEC(".maps");
 
 struct {
@@ -186,7 +186,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } read_queue_latency SEC(".maps");
 
 struct {
@@ -194,7 +194,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } write_queue_latency SEC(".maps");
 
 struct {
@@ -202,7 +202,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } flush_queue_latency SEC(".maps");
 
 struct {
@@ -210,7 +210,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } discard_queue_latency SEC(".maps");
 
 struct {
@@ -218,7 +218,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } read_total_latency SEC(".maps");
 
 struct {
@@ -226,7 +226,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } write_total_latency SEC(".maps");
 
 struct {
@@ -234,7 +234,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } flush_total_latency SEC(".maps");
 
 struct {
@@ -242,7 +242,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } discard_total_latency SEC(".maps");
 
 // A phase we are willing to report: the stamp was actually set, it does not
@@ -252,7 +252,7 @@ static bool __always_inline plausible_span(u64 begin, u64 end) {
 }
 
 static void __always_inline record_device_latency(u32 op, u64 delta) {
-    u32 idx = value_to_index(delta, HISTOGRAM_POWER);
+    u32 idx = histogram_index(delta, HISTOGRAM_POWER);
 
     switch (op) {
     case REQ_OP_READ:
@@ -271,7 +271,7 @@ static void __always_inline record_device_latency(u32 op, u64 delta) {
 }
 
 static void __always_inline record_queue_latency(u32 op, u64 delta) {
-    u32 idx = value_to_index(delta, HISTOGRAM_POWER);
+    u32 idx = histogram_index(delta, HISTOGRAM_POWER);
 
     switch (op) {
     case REQ_OP_READ:
@@ -290,7 +290,7 @@ static void __always_inline record_queue_latency(u32 op, u64 delta) {
 }
 
 static void __always_inline record_total_latency(u32 op, u64 delta) {
-    u32 idx = value_to_index(delta, HISTOGRAM_POWER);
+    u32 idx = histogram_index(delta, HISTOGRAM_POWER);
 
     switch (op) {
     case REQ_OP_READ:
@@ -345,7 +345,7 @@ static void __always_inline count_request(u32 op, int error, unsigned int nr_byt
         // flush completions transfer no data (nr_bytes is always 0), so a
         // size observation would just pile zeros into the first bucket
         if (nr_bytes > 0) {
-            idx = value_to_index(nr_bytes, HISTOGRAM_POWER);
+            idx = histogram_index(nr_bytes, HISTOGRAM_POWER);
 
             switch (op) {
             case REQ_OP_READ:

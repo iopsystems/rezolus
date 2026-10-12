@@ -21,6 +21,9 @@
 
 ### Changed
 
+- Reduced overhead by giving each CPU its own slice of every BPF histogram,
+  at about 4 KiB of memory per possible CPU per histogram. (#1445)
+
 - Reduced overhead when threads with neighbouring thread IDs (TIDs) run on
   different CPUs, by indexing per-thread BPF arrays through a permutation of
   the TID. The `id` label and `x<n>` series-name suffix of `task_cpu_usage`
