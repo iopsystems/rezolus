@@ -246,17 +246,16 @@ Three pieces of work the removal needs and that do not exist today:
   metriken-storage's writer stages V1 to V3 snapshots (metriken-recorder
   entry, "Left alone"), so this is a new caller, not new format code.
 
-**Proposals, for the owner to decide.** None of these is decided; decision 5
-says which files are written, not how each subcommand behaves on an input it
-can no longer write back.
+**Per-subcommand behaviour (decided 2026-10-12).** Decision 5 says which
+files are written; these say how each subcommand behaves on an input it can
+no longer write back. They were proposed here and accepted as a set, with
+`export_query` removed rather than kept.
 
 - **`annotate` on a `.rez` or a parquet** (and `--event`, `check --annotate`,
   MCP `add_event`, `remove_events`, `run_checks` with `annotate`, which share
   its writer): refused, with a pointer to `recording upgrade --to dendro` for
-  a `.rez` and to the parquet-to-`.dendro` path for a parquet. The
-  alternative is to keep the in-place rewrite, since it adds metadata to an
-  existing file rather than writing a new one; that keeps two writers
-  (`annotate_rez_v3`, `rewrite_parquet`) in 6.x.
+  a `.rez` and to the parquet-to-`.dendro` path for a parquet. 6.x keeps no
+  `.rez` or parquet rewriter (`annotate_rez_v3`, `rewrite_parquet` go).
 - **`filter` on a `.rez` or a parquet:** writes a `.dendro` at `-o`, which
   becomes required for those inputs (no in-place filter, since the container
   changes).
@@ -276,9 +275,8 @@ can no longer write back.
   parquet sources, single and compare, go through the parquet-to-`.dendro`
   path. If the WASM viewer cannot convert, its `.rez` and parquet sources
   offer no report save, with a message pointing at `rezolus view`.
-- **MCP `export_query`:** keep its parquet. It writes one query's result
-  rows (series, timestamp, value, lo, hi), not a recording, so decision 2
-  does not cover it and decision 5's "recording" wording does not either.
+- **MCP `export_query`:** removed, with its `--export-dir` flag. It wrote
+  one query's result rows as CSV or parquet.
 
 ### Callers that ask `record` for parquet or `.rez` (block 6.0.0)
 
@@ -380,8 +378,8 @@ reader.
 - The endpoint detection fix and the refusal of agents older than 5.21.0
   (decision 6) are merged, with tests.
 - No 6.x mode writes `.rez`, parquet or raw: every writer in the inventory
-  above is removed or writes `.dendro`, and the owner has decided each
-  proposal.
+  above is removed or writes `.dendro`, as the per-subcommand decisions
+  say.
 - Every caller listed under "Callers that ask `record` for parquet or `.rez`"
   records `.dendro`.
 - metriken path steps 4 to 7 are released, rezolus is on them, and each

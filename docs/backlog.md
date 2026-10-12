@@ -721,12 +721,11 @@ Source: [Rezolus 6.0.0: release readiness](journal/2026-10-08-6-0-release-readin
   each writer with its path. Needs a parquet-to-`.dendro` path, `.rez` to
   `.dendro` in the WASM viewer (or no report save there for those sources),
   and raw to `.dendro` in `convert`.
-- **Owner decisions on in-place and per-subcommand behaviour** — Open. The
-  entry's proposals: `annotate` on `.rez`/parquet refused with a pointer to
-  `recording upgrade --to dendro`, or kept as an in-place rewrite; `filter`
-  to a required `-o x.dendro`; `combine` `.dendro` only, `--ab` removed;
-  `snapshot` of a `.rez` to `.dendro`; `upgrade --to dendro` the default;
-  MCP `export_query` keeps parquet. Decide before the writer removal lands.
+- **Owner decisions on in-place and per-subcommand behaviour** — DONE
+  (2026-10-12): `annotate` on `.rez`/parquet refused with a pointer to
+  `recording upgrade --to dendro`; `filter` to a required `-o x.dendro`;
+  `combine` `.dendro` only, `--ab` removed; `snapshot` of a `.rez` to
+  `.dendro`; `upgrade --to dendro` the default; MCP `export_query` removed.
 - **Move callers off parquet and `.rez` output** — Open. `docker/rezolus-capture`,
   `scripts/rezolus-capture`, `labels/specs/*.toml`,
   `data/test_fixtures/compare-demo.sh`, the CI smoke steps in
