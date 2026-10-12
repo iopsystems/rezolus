@@ -55,6 +55,24 @@
 
 ### Changed
 
+- **A Prometheus endpoint's HELP text is its recording's `descriptions`.**
+  The scrape's `# HELP` lines (first seen wins) are written into the
+  recording's `descriptions` metadata, the key an agent recording fills from
+  `/metrics/descriptions`, and updated when a later scrape brings a new
+  metric name. 5.x wrote them into parquet output only, and the `.dendro`
+  path dropped them.
+- **`rezolus-capture` records one `.dendro`.** `scripts/rezolus-capture` and
+  the Docker image's `rezolus-capture` ran `rezolus record` to parquet, which
+  6.x refuses, so every capture failed. A capture is now one `rezolus record`
+  with an `--endpoint` per source, written to `capture.dendro` in
+  `--output-dir`: a recording per endpoint, `source=rezolus` for the agent
+  and `source=<NAME>` for each service. The command-line options are
+  unchanged; `--source rezolus` is refused, since it names the agent's
+  recording. `capture.parquet` and the per-endpoint `agent-<port>.parquet` /
+  `<source>-<port>.parquet` copies are no longer written, and the viewer
+  shows the recordings side by side rather than merged into one.
+- **`record --endpoint url,protocol=rezolus`** names a Rezolus agent;
+  `protocol=msgpack`, the 5.x spelling, is still accepted.
 - **`record --endpoint url,role=...` is kept in the recording.** The role is
   the `role` key of that endpoint's recording metadata; `--metadata role=...`
   overrides it. Before, only parquet output carried it.
