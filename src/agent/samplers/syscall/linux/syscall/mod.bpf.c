@@ -87,11 +87,13 @@ struct {
 } syscall_lut SEC(".maps");
 
 /*
- * latency: the start stamp per thread and one histogram per syscall family
+ * latency: the start stamp per thread, at pid_slot(tid), and one histogram
+ * per syscall family
  */
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
     __uint(max_entries, MAX_PID);
     __type(key, u32);
     __type(value, u64);
@@ -503,9 +505,9 @@ static __always_inline int account_sys_enter(long id, bool btf) {
     }
 
     if (latency) {
-        u32 tid = bpf_get_current_pid_tgid();
+        u32 slot = pid_slot(bpf_get_current_pid_tgid());
         u64 ts = bpf_ktime_get_ns();
-        bpf_map_update_elem(&start, &tid, &ts, 0);
+        bpf_map_update_elem(&start, &slot, &ts, 0);
     }
 
     return 0;
@@ -533,7 +535,7 @@ static __always_inline int account_sys_exit(struct pt_regs* regs, bool btf) {
 
     u64 id = bpf_get_current_pid_tgid();
     u64 *start_ts, lat = 0;
-    u32 tid = id, group = 0;
+    u32 slot = pid_slot(id), group = 0;
 
     long nr = exit_syscall_nr(regs, btf);
     if (nr < 0) {
@@ -542,7 +544,7 @@ static __always_inline int account_sys_exit(struct pt_regs* regs, bool btf) {
 
     u32 syscall_id = nr;
 
-    start_ts = bpf_map_lookup_elem(&start, &tid);
+    start_ts = bpf_map_lookup_elem(&start, &slot);
 
     // possible we missed the start
     if (!start_ts || *start_ts == 0) {

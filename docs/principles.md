@@ -157,6 +157,12 @@ acceptable; hashmap latency in a hot probe is not.
 **How to apply.**
 - New per-PID, per-CPU, per-cgroup-id, or per-syscall maps use
   `BPF_MAP_TYPE_ARRAY` with `BPF_F_MMAPABLE`.
+- Per-PID arrays are indexed through `pid_slot()` (`bpf/helpers.h`), not by
+  the pid. Indexed by pid, eight entries share a cache line, so CPUs running
+  threads with neighbouring pids write the same line. `pid_slot()` permutes
+  each page so 48 consecutive pids use 48 different lines; `helpers.h` gives
+  the line counts at other strides. Userspace that reads or labels a per-PID
+  array by index uses the Rust `pid_slot`.
 - Pointer keys on a hot path use a hashed array of one-word slots, with
   the miss rate stated next to it.
 - A new `BPF_MAP_TYPE_HASH` requires a comment justifying why the key

@@ -21,6 +21,11 @@
 
 ### Changed
 
+- Reduced overhead when threads with neighbouring thread IDs (TIDs) run on
+  different CPUs, by indexing per-thread BPF arrays through a permutation of
+  the TID. The `id` label and `x<n>` series-name suffix of `task_cpu_usage`
+  are now that index, not the TID; select a thread by its `pid` label. (#1444)
+
 - **Exact label listings for sparse long tables** (metriken-storage 0.2.1).
   A long table whose columns have values for only some of its occupants, as
   a metriken producer's single group of plain metrics and labelled counter
