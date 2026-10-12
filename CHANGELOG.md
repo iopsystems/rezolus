@@ -692,6 +692,12 @@
 
 ### Fixed
 
+- **`xfs_log` starts when xfs loads.** On a host whose root filesystem is
+  not XFS, xfs is a module that loads at the first XFS mount, often after
+  the agent has started; `xfs_log` reported unsupported ("the kernel's BTF
+  does not describe the XFS log grant tracepoints") and was never retried.
+  It now waits for the module as the ext4 samplers do. `xfs_stats` reads
+  sysfs on every sweep and already picked up a later mount.
 - **ext4 samplers start when ext4 loads.** ext4 and jbd2 are modules on most
   distribution kernels and load at the first ext4 mount, which on a host
   whose root filesystem is not ext4 (Amazon Linux 2023, RHEL) often comes

@@ -129,14 +129,20 @@ fn select_programs(
     (disabled, required)
 }
 
+/// Kernel modules this sampler needs loaded; see `samplers::deferred`. xfs
+/// is a module on distributions whose root filesystem is not XFS, and loads
+/// at the first XFS mount, which can come after the agent has started.
+const MODULES: &[&str] = &["xfs"];
+
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
     }
 
-    // This machine cannot, rather than this sampler failed: both checks report
+    // This machine cannot, rather than this sampler failed: reported as
     // unsupported, so `rezolus status` does not exit non-zero for a kernel
-    // that predates what the sampler needs, or a host without XFS at all.
+    // that predates what the sampler needs. Checked before waiting for xfs,
+    // so such a kernel says so instead of "waiting for kernel module xfs".
     if !kernel_tracing_has_task_storage() {
         return Err(crate::agent::sampler_status::Unsupported(
             "tracing programs cannot use task local storage on this kernel (needs 5.12+)"
@@ -145,6 +151,12 @@ fn init(config: Arc<Config>) -> SamplerResult {
         .into());
     }
 
+    crate::agent::samplers::deferred::until_loaded(NAME, MODULES, config, init_now)
+}
+
+fn init_now(config: Arc<Config>) -> SamplerResult {
+    // Reached once xfs is loaded or built in; a kernel whose BTF still lacks
+    // the tracepoints (xfs a module, no module BTF) cannot run this.
     if !kernel_btf_has_tracepoints(TRACEPOINTS) {
         return Err(crate::agent::sampler_status::Unsupported(
             "the kernel's BTF does not describe the XFS log grant tracepoints; needs XFS \
