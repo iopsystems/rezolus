@@ -141,13 +141,33 @@ mod tests {
     /// dragged a multi-gigabyte buffer wherever the snapshot was pointed.
     #[test]
     fn the_buffer_directory_is_not_derived_from_the_output_path() {
-        let cfg: Config = toml::from_str("[general]\noutput = \"/srv/captures/incident.rez\"\n")
+        let cfg: Config = toml::from_str("[general]\noutput = \"/srv/captures/incident.dendro\"\n")
             .expect("config parses");
         assert_eq!(
             cfg.general().buffer_dir(),
             PathBuf::from(buffer_dir()),
             "moving `output` must not move the buffer"
         );
+    }
+
+    /// An `output` naming a `.rez` or a `.parquet` is refused, naming
+    /// `.dendro`, and for a `.rez` pointing at a 5.x hindsight. Any other
+    /// path is written as a `.dendro`, as before 6.0.
+    #[test]
+    fn an_output_in_a_removed_format_is_refused() {
+        for (out, five) in [
+            ("/var/lib/rezolus/rezolus.rez", true),
+            ("/srv/incident.parquet", false),
+        ] {
+            let err = general::check_output(Path::new(out)).unwrap_err();
+            assert!(err.contains(out), "{err}");
+            assert!(err.contains("ending in .dendro"), "{err}");
+            assert_eq!(err.contains("5.x hindsight"), five, "{err}");
+        }
+        for out in ["rezolus.dendro", "buffer", "incident.db"] {
+            assert!(general::check_output(Path::new(out)).is_ok(), "{out}");
+        }
+        assert!(general::check_output(Path::new(&output())).is_ok());
     }
 
     /// systemd names the state directory it created, and it must win over the

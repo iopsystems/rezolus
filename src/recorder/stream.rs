@@ -84,9 +84,8 @@ impl Applied {
     /// at one `ts` would write one row's worth of key however their wall
     /// offsets differ. The first row's `wall_offset` stands for the pass.
     ///
-    /// A negative stamp is refused for the reason `snapshot_producer_stamp`
-    /// refuses one: the archive's `ts` is unsigned, and a producer that sent
-    /// one is not one to guess for.
+    /// A negative stamp is refused: the archive's `ts` is unsigned, and a
+    /// producer that sent one is not one to guess for.
     pub(crate) fn for_writer(self) -> Result<Vec<Pass>, String> {
         let mut by_stamp: std::collections::BTreeMap<i64, (i64, Vec<WalRow>)> =
             std::collections::BTreeMap::new();
@@ -341,7 +340,7 @@ impl FrameDecoder {
 /// An agent that answered and cannot serve the stream — no route (404), no
 /// acquisition groups to stream (the 409 a V2 agent gives), a body of the
 /// wrong type — is a configuration the run was not written for, and it fails
-/// loudly rather than falling back to scraping: a `.dendro` records agents by
+/// loudly rather than falling back to scraping: 6.x records agents by
 /// stream only, and a run that silently scraped one would put two endpoints of
 /// one A/B on different transports.
 #[derive(Debug)]
@@ -713,38 +712,6 @@ pub(crate) async fn pump(
     }
 }
 
-/// A pass's decoded groups as the V3 snapshot a `.rez` writer ingests.
-///
-/// Only a wide-layout subscription's groups make one: a long row has no
-/// member list to rebuild a group's schema from, and is refused.
-pub(crate) fn wide_snapshot(
-    groups: Vec<metriken_storage::StreamedGroup>,
-    ts: i64,
-    wall_offset: i64,
-) -> Result<metriken_exposition::Snapshot, String> {
-    use metriken_exposition::{Snapshot, SnapshotV3};
-    use metriken_storage::StreamedGroup;
-    let groups = groups
-        .into_iter()
-        .map(|g| match g {
-            StreamedGroup::Wide(g) => Ok(g),
-            StreamedGroup::Long { name, .. } | StreamedGroup::Occupants { table: name, .. } => {
-                Err(format!(
-                    "stream {name} arrived in the long layout, which a .rez archive cannot record"
-                ))
-            }
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let wall = u64::try_from(ts.saturating_add(wall_offset)).unwrap_or(0);
-    Ok(Snapshot::V3(SnapshotV3 {
-        systemtime: std::time::UNIX_EPOCH + Duration::from_nanos(wall),
-        // The stream carries no pass duration.
-        duration: Duration::ZERO,
-        metadata: Default::default(),
-        groups,
-    }))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1042,30 +1009,6 @@ mod tests {
         decode(&mut decoder, payload(2, true, 2_000));
         assert!(decode(&mut decoder, payload(3, false, 3_000)).is_empty());
         assert_eq!(decoder.unresolved, 1);
-    }
-
-    /// A `.rez` archive records snapshots: a pass of wide groups becomes one
-    /// at the pass's wall clock, and a long row is refused by name.
-    #[test]
-    fn only_a_wide_pass_rebuilds_a_snapshot() {
-        let mut decoder = metriken_storage::StreamDecoder::new();
-        let groups = decoder
-            .decode([wal_row(STREAM, 5_000, 7, payload(2, true, 5_000))])
-            .unwrap();
-        let metriken_exposition::Snapshot::V3(v3) = wide_snapshot(groups, 5_000, 7).unwrap() else {
-            panic!("a V3 snapshot");
-        };
-        assert_eq!(v3.groups.len(), 1);
-        assert_eq!(
-            v3.systemtime,
-            std::time::UNIX_EPOCH + Duration::from_nanos(5_007)
-        );
-        let long = vec![metriken_storage::StreamedGroup::Occupants {
-            table: STREAM.to_string(),
-            occupants: Vec::new(),
-        }];
-        let err = wide_snapshot(long, 5_000, 0).expect_err("a long pass");
-        assert!(err.contains(STREAM) && err.contains("long layout"), "{err}");
     }
 
     fn wal_row(stream: &str, ts: i64, wall_offset: i64, row: Vec<u8>) -> WalRow {

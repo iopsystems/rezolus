@@ -30,6 +30,27 @@ pub struct General {
     segment_rows: Option<usize>,
 }
 
+/// Refuse an `output` naming a format hindsight wrote before 6.0: a `.rez`
+/// (the buffer and its snapshots were `.rez` then) or a `.parquet`. Any other
+/// path is written as a `.dendro` archive, as it was before 6.0.
+pub(super) fn check_output(output: &Path) -> Result<(), String> {
+    let ext = output.extension().and_then(|e| e.to_str());
+    let advice = match ext {
+        Some("rez") => format!(
+            ", or a rezolus 5.x hindsight ({} is the latest 5.x release) for a .rez buffer",
+            crate::recorder::LATEST_5X_RELEASE
+        ),
+        Some("parquet") => String::new(),
+        _ => return Ok(()),
+    };
+    Err(format!(
+        "output = {:?}: hindsight writes .dendro archives only, and .{} output was \
+         removed in 6.0. Use an output ending in .dendro{advice}",
+        output.display().to_string(),
+        ext.unwrap_or_default()
+    ))
+}
+
 impl Default for General {
     fn default() -> Self {
         Self {
@@ -48,6 +69,10 @@ impl General {
     pub fn check(&self) {
         if let Err(e) = self.interval.parse::<humantime::Duration>() {
             eprintln!("prometheus sample interval couldn't be parsed: {e}");
+            std::process::exit(1);
+        }
+        if let Err(e) = check_output(Path::new(&self.output)) {
+            eprintln!("{e}");
             std::process::exit(1);
         }
     }

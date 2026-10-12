@@ -30,9 +30,9 @@ pub fn command() -> Command {
              Configuration is a TOML file (the only argument). It sets the sampling interval\n\
              ([general] interval, e.g. 1s), how far back the buffer reaches ([general] duration,\n\
              e.g. 15m), the agent to read from ([general] source), and the snapshot output path\n\
-             ([general] output). An output ending in .rez keeps the buffer and its snapshots\n\
-             in the archive format before 6.0; any other output is a .dendro archive. See\n\
-             config/hindsight.toml for a documented starting point.\n\n\
+             ([general] output). The buffer and its snapshots are .dendro archives; an output\n\
+             ending in .rez or .parquet is refused at startup (a rezolus 5.x hindsight still\n\
+             writes .rez). See config/hindsight.toml for a documented starting point.\n\n\
              TRIGGERING A SNAPSHOT: send SIGHUP to write the buffer to a timestamped file beside\n\
              the output path (rezolus-20260915T204500Z.dendro for output rezolus.dendro) without\n\
              stopping the daemon. A SIGHUP during a capture is ignored. Optionally set\n\
@@ -73,8 +73,7 @@ pub fn command() -> Command {
 /// engineer or automated process to respond and trigger a snapshot.
 ///
 /// The buffer is the same archive writer the recorder uses (metriken-storage's
-/// for a dendro buffer, the `.rez` v3 writer for a `.rez` one), with retention
-/// configured — see [`buffer`]. That is what replaced the fixed-size
+/// `ArchiveWriter`), with retention configured — see [`buffer`]. That is what replaced the fixed-size
 /// ring of 4 KB slots: a ring nothing but hindsight could read, whose dump
 /// copied a buffer that was being overwritten in place and could therefore
 /// tear.
@@ -176,14 +175,6 @@ pub fn run(config: Config) {
         error!("failed to open destination file: {e}");
         std::process::exit(1);
     }
-    let dendro = writes_dendro(&output);
-    if output.extension().is_some_and(|e| e == "parquet") {
-        warn!(
-            "{} will be written as a .dendro archive, not parquet — hindsight snapshots \
-             are archives",
-            output.display()
-        );
-    }
 
     let buffer_dir = config.general().buffer_dir();
 
@@ -213,11 +204,7 @@ pub fn run(config: Config) {
         }
     };
     signals::set_buffer_dir(staging.path());
-    let buffer_path = staging.path().join(if dendro {
-        "hindsight.dendro"
-    } else {
-        "hindsight.rez"
-    });
+    let buffer_path = staging.path().join("hindsight.dendro");
 
     let interval_dur: Duration = config.general().interval().into();
     let lookback: Duration = config.general().duration().into();
@@ -226,14 +213,8 @@ pub fn run(config: Config) {
     // Subscribe before the buffer exists. The handshake's anchor is the
     // buffer's timeline (rows carry the agent's own stamps, as a recording of
     // the stream does), and an agent that cannot stream is refused before
-    // anything is written.
-    // A dendro buffer takes groups of slots long; a `.rez` buffer records
-    // snapshots, which only the wide layout can rebuild.
-    let layout = if writes_dendro(&output) {
-        Layout::Long
-    } else {
-        Layout::Wide
-    };
+    // anything is written. Groups of slots arrive long.
+    let layout = Layout::Long;
     let connected = rt.block_on(async {
         tokio::time::timeout(
             timeout,
@@ -248,23 +229,15 @@ pub fn run(config: Config) {
         .await
     });
     let subscription = match connected {
-        // A `.rez` buffer records snapshots, which a long row cannot be
-        // rebuilt into. An agent serves the layout asked for, so this is an
-        // agent that ignored the request.
-        Ok(Ok(sub)) if layout == Layout::Wide && sub.layout() == Layout::Long => {
-            error!(
-                "the agent at {url} serves the long stream layout where the wide one was \
-                 asked for; a .rez buffer cannot record it. Use a .dendro output"
-            );
-            std::process::exit(1);
-        }
         Ok(Ok(sub)) => sub,
         Ok(Err(ConnectError::Unsupported(e))) => {
             let version = agent_version.as_deref().unwrap_or("of unknown version");
             error!("the agent at {url} ({version}) cannot serve its replication stream: {e}");
             error!(
                 "hindsight records an agent over /metrics/stream, which agents from 5.21.0 \
-                 serve; check that the path is reachable if a proxy sits in between"
+                 serve; check that the path is reachable if a proxy sits in between, or \
+                 run a rezolus 5.x hindsight ({} is the latest 5.x release) for an older agent",
+                crate::recorder::LATEST_5X_RELEASE
             );
             std::process::exit(1);
         }
@@ -321,12 +294,7 @@ pub fn run(config: Config) {
         policy.max_rows = rows.max(1);
     }
 
-    let created = if dendro {
-        HindsightBuffer::create_dendro(&buffer_path, seed, lookback, policy)
-    } else {
-        HindsightBuffer::create(&buffer_path, seed, lookback, policy)
-    };
-    let mut buffer = match created {
+    let mut buffer = match HindsightBuffer::create_dendro(&buffer_path, seed, lookback, policy) {
         Ok(b) => b,
         Err(e) => {
             error!("failed to create the hindsight buffer: {e}");
@@ -426,7 +394,7 @@ pub fn run(config: Config) {
                     let gate = dump_gate.clone();
                     dumps.spawn(async move {
                         let _serialized = gate.lock().await;
-                        // On a blocking thread: a large `VACUUM INTO` must not
+                        // On a blocking thread: a large copy must not
                         // park the HTTP server along with the tick.
                         let response = tokio::task::spawn_blocking(move || {
                             dump_to_file(&buffer_path, &output, &range)
@@ -766,8 +734,8 @@ fn listen_for_signals(rt: &tokio::runtime::Runtime, wake: tokio::sync::mpsc::Sen
 ///
 /// This is the whole of what the ring's `perform_dump_to_file` did by walking
 /// slots and running a msgpack→parquet conversion over them. It touches
-/// neither the buffer nor the writer: `VACUUM INTO` copies a point-in-time
-/// snapshot from its own connection while the recording continues.
+/// neither the buffer nor the writer: the copy reads a point-in-time snapshot
+/// from its own connection while the recording continues.
 fn dump_to_file(buffer_path: &Path, output: &Path, range: &TimeRange) -> DumpToFileResponse {
     match buffer::dump(buffer_path, output, range) {
         Ok(summary) => DumpToFileResponse::success(output.to_path_buf(), summary),
@@ -961,37 +929,21 @@ pub(crate) fn buffer_metadata(
     m
 }
 
-/// Whether the buffer for `output` is a dendro archive: every output except
-/// one ending in `.rez`, which keeps the format before 6.0.
-fn writes_dendro(output: &Path) -> bool {
-    !output.extension().is_some_and(|e| e == "rez")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A `.rez` output keeps a `.rez` buffer; everything else is dendro,
-    /// including an output with no extension or a parquet name.
-    #[test]
-    fn only_a_rez_output_keeps_a_rez_buffer() {
-        assert!(!writes_dendro(Path::new("/var/lib/rezolus/rezolus.rez")));
-        for out in ["rezolus.dendro", "rezolus.parquet", "buffer", "incident.db"] {
-            assert!(writes_dendro(Path::new(out)), "{out}");
-        }
-    }
 
     /// A signal-triggered capture must never land on `output`: that is where
     /// an operator's deliberate `POST /dump/file` captures go, and a service
     /// restart would otherwise overwrite an incident somebody saved.
     #[test]
     fn a_shutdown_capture_does_not_land_on_the_output_path() {
-        let out = Path::new("/var/lib/rezolus/rezolus.rez");
+        let out = Path::new("/var/lib/rezolus/rezolus.dendro");
         let got = shutdown_capture_path(out, 1_789_425_944_000_000_000);
         assert_ne!(got, out.to_path_buf(), "must not clobber the output path");
         assert_eq!(
             got,
-            Path::new("/var/lib/rezolus/rezolus-20260914T224544Z.rez"),
+            Path::new("/var/lib/rezolus/rezolus-20260914T224544Z.dendro"),
             "same directory and extension, stem stamped with the capture time"
         );
     }
@@ -1000,7 +952,7 @@ mod tests {
     /// interesting than the other, so neither may overwrite the other.
     #[test]
     fn two_shutdown_captures_do_not_collide() {
-        let out = Path::new("/var/lib/rezolus/rezolus.rez");
+        let out = Path::new("/var/lib/rezolus/rezolus.dendro");
         let a = shutdown_capture_path(out, 1_789_425_944_000_000_000);
         let b = shutdown_capture_path(out, 1_789_425_999_000_000_000);
         assert_ne!(a, b);

@@ -1,10 +1,9 @@
 //! The hindsight rolling buffer: **an archive recording with retention**, and
 //! nothing else. See docs/journal/2026-08-12-rez-sqlite-container.md
-//! § "Hindsight". Since 6.0 the buffer is a dendro archive written through
-//! metriken-storage (`create_dendro`, `dump_dendro`) unless the output names a
-//! `.rez`; the notes below were written for the `.rez` buffer, and the dendro
-//! one keeps the same properties (docs/journal/2026-09-28-dendro-writer-adoption.md,
-//! "B: built").
+//! § "Hindsight" and docs/journal/2026-09-28-dendro-writer-adoption.md,
+//! "B: built". The buffer is a dendro archive written through
+//! metriken-storage (`create_dendro`, `dump`); a `.rez` buffer was removed in
+//! 6.0.
 //!
 //! What this replaces is a fixed-size ring of 4 KB-aligned slots
 //! (`snapshot_len` × `snapshot_count`) written round-robin and overwritten in
@@ -12,35 +11,37 @@
 //! things were wrong with that, and the second is the one that mattered:
 //!
 //! 1. **Nothing could read it.** The ring was a private on-disk format with one
-//!    consumer — its own dump routine. A v3 buffer is an ordinary `.rez`: the
-//!    viewer, the MCP tools and `parquet metadata` open it with no special
+//!    consumer — its own dump routine. The buffer is an ordinary archive: the
+//!    viewer, the MCP tools and `recording metadata` open it with no special
 //!    casing, live, while it is being written.
 //! 2. **A dump could tear**, because it copied a buffer that was being written
 //!    in place. Here the buffer is immutable sealed segments plus a WAL, so a
-//!    dump is `VACUUM INTO` — a point-in-time copy taken inside a read
-//!    transaction, consistent by construction. Measured: 0 torn reads, 0
-//!    `SQLITE_BUSY` over 92 s, +0.7 ms writer impact.
+//!    dump is a copy taken inside one read snapshot, consistent by
+//!    construction.
 //!
-//! Retention is [`RezDb::evict_before`], made an indexed lookup by the
-//! `segments_by_time` index. The file stays bounded because freed pages are
-//! reused (measured 1.004–1.011× live), and stays bounded *after a spike*
-//! because `auto_vacuum=INCREMENTAL` lets the writer trickle pages back.
+//! Retention is `SourceRecorder::evict_before` each tick. The file stays
+//! bounded because freed pages are reused.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use metriken_exposition::Snapshot;
-
 use super::state::TimeRange;
-use crate::recorder::rez_sqlite::RezDb;
-use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
+use crate::recorder::rez_v3_writer::ManifestSeed;
 use crate::recorder::seal_policy::SealPolicy;
 
 /// The rolling buffer. One recording, fed a row per tick, trimmed to the
 /// configured lookback every tick.
+///
+/// The recorder is **declared before the writer deliberately.** Fields drop
+/// in declaration order, and dropping the writer joins its thread. Dropping
+/// it first would not hang — `join` sends a shutdown before releasing its own
+/// sender, so the writer stops whoever still holds a clone — but it would stop
+/// the writer while the recorder could still queue a final seal, and that work
+/// would be dropped.
 pub struct HindsightBuffer {
-    writer: Writer,
+    rec: metriken_storage::SourceRecorder,
+    writer: metriken_storage::ArchiveWriter,
     /// How far back the buffer reaches — `[general] duration`.
     lookback: Duration,
     /// The newest row stamp ingested so far. Retention is measured from THIS,
@@ -54,34 +55,9 @@ pub struct HindsightBuffer {
     /// [`at_retention_bound`](Self::at_retention_bound) can be answered
     /// exactly. It is not affected by eviction, which is the point.
     first_ts: Option<u64>,
-    /// The recording's metadata as last written: a `.rez` writer replaces
-    /// the whole map, so an update sends this back with the change merged in.
+    /// The recording's metadata as last written, for the restart patch to be
+    /// computed against.
     metadata: BTreeMap<String, String>,
-}
-
-/// The container the buffer is written in.
-///
-/// In both, the recorder is **declared before the archive deliberately.**
-/// Fields drop in declaration order, and dropping the archive joins the
-/// writer thread. Dropping it first would not hang — `join` sends a shutdown
-/// before releasing its own sender, so the writer stops whoever still holds
-/// a clone — but it would stop the writer while the recorder could still
-/// queue a final seal, and that work would be dropped.
-///
-/// Hindsight opens exactly one recording; an archive can hold several, and
-/// does for a multi-endpoint `record` run.
-enum Writer {
-    /// A `.rez` v3 archive.
-    Rez {
-        rec: StreamRecorderV3,
-        #[allow(dead_code)]
-        archive: RezArchive,
-    },
-    /// A dendro archive through metriken-storage's writer.
-    Dendro {
-        rec: metriken_storage::SourceRecorder,
-        writer: metriken_storage::ArchiveWriter,
-    },
 }
 
 /// Row time the dendro writer lets pass between restatements of a long
@@ -95,9 +71,13 @@ fn archive_err(e: Box<dyn std::error::Error + Send + Sync>) -> String {
 }
 
 impl HindsightBuffer {
-    /// Create a dendro buffer at `path`, which must not exist. As
-    /// [`create`](Self::create), through metriken-storage's writer: groups
-    /// with slots are written long.
+    /// Create the buffer at `path`, which must not exist, through
+    /// metriken-storage's writer: groups with slots are written long.
+    ///
+    /// The seal policy is a parameter rather than a constant because segment
+    /// size has to track the interval: `[general] segment_rows` sets it
+    /// and defaults to the writer's 900, which is a segment per ~15 minutes at
+    /// the default 1 s interval and per ~90 seconds at 10 Hz.
     pub fn create_dendro(
         path: &Path,
         seed: ManifestSeed,
@@ -120,34 +100,8 @@ impl HindsightBuffer {
             .add_source(seed.labels, seed.metadata, seed.clock_anchor_wall_ns)
             .map_err(archive_err)?;
         Ok(Self {
-            writer: Writer::Dendro { rec, writer },
-            lookback,
-            newest_ts: None,
-            first_ts: None,
-            metadata,
-        })
-    }
-
-    /// Create the buffer at `path`, which must not exist.
-    ///
-    /// The seal policy is a parameter rather than a constant because segment
-    /// size has to track the interval: `[general] segment_rows` sets it
-    /// and defaults to the writer's 900, which is a segment per ~15 minutes at
-    /// the default 1 s interval and per ~90 seconds at 10 Hz.
-    pub fn create(
-        path: &Path,
-        seed: ManifestSeed,
-        lookback: Duration,
-        policy: SealPolicy,
-    ) -> Result<Self, String> {
-        let mut archive = RezArchive::create(path)?;
-        let metadata = seed.metadata.clone();
-        let writer = archive.add_recording(seed)?;
-        Ok(Self {
-            writer: Writer::Rez {
-                rec: StreamRecorderV3::with_policy(writer, policy),
-                archive,
-            },
+            rec,
+            writer,
             lookback,
             newest_ts: None,
             first_ts: None,
@@ -171,64 +125,49 @@ impl HindsightBuffer {
         );
         let mut merged = self.metadata.clone();
         merged.extend(patch.clone());
-        match &mut self.writer {
-            Writer::Rez { rec, .. } => rec.update_metadata(merged.clone())?,
-            Writer::Dendro { rec, .. } => rec.update_metadata(patch).map_err(archive_err)?,
-        }
+        self.rec.update_metadata(patch).map_err(archive_err)?;
         self.metadata = merged;
         Ok(())
     }
 
-    /// Append one snapshot. Every tick is committed as it arrives, so
-    /// an unclean kill of the daemon costs one tick, not a whole open segment.
+    /// Append one snapshot, committed at once. The tests' way of filling a
+    /// buffer without a stream.
+    #[cfg(test)]
     pub fn ingest(
         &mut self,
-        snapshot: &Snapshot,
+        snapshot: &metriken_exposition::Snapshot,
         anchored_ts: u64,
         wall_offset_ns: i64,
     ) -> Result<(), String> {
-        match &mut self.writer {
-            Writer::Rez { rec, .. } => rec.ingest(snapshot, anchored_ts, wall_offset_ns)?,
-            Writer::Dendro { rec, writer } => {
-                let staged = rec
-                    .stage(snapshot, anchored_ts, wall_offset_ns)
-                    .map_err(archive_err)?;
-                writer.commit(vec![staged]).map_err(archive_err)?;
-            }
-        }
-        self.newest_ts = Some(self.newest_ts.map_or(anchored_ts, |t| t.max(anchored_ts)));
-        self.first_ts.get_or_insert(anchored_ts);
+        let staged = self
+            .rec
+            .stage(snapshot, anchored_ts, wall_offset_ns)
+            .map_err(archive_err)?;
+        self.writer.commit(vec![staged]).map_err(archive_err)?;
+        self.note_ts(anchored_ts);
         Ok(())
     }
 
-    /// Append one pass taken off the stream. A dendro buffer stages the
-    /// groups as they arrived; a `.rez` buffer rebuilds the snapshot, which
-    /// needs every group wide.
+    /// Append one pass taken off the stream, staging the groups as they
+    /// arrived.
     pub fn ingest_streamed(
         &mut self,
         groups: Vec<metriken_storage::StreamedGroup>,
         anchored_ts: u64,
         wall_offset_ns: i64,
     ) -> Result<(), String> {
-        match &mut self.writer {
-            Writer::Rez { .. } => {
-                let snapshot = crate::recorder::stream::wide_snapshot(
-                    groups,
-                    anchored_ts as i64,
-                    wall_offset_ns,
-                )?;
-                return self.ingest(&snapshot, anchored_ts, wall_offset_ns);
-            }
-            Writer::Dendro { rec, writer } => {
-                let staged = rec
-                    .stage_streamed(groups, anchored_ts, wall_offset_ns)
-                    .map_err(archive_err)?;
-                writer.commit(vec![staged]).map_err(archive_err)?;
-            }
-        }
-        self.newest_ts = Some(self.newest_ts.map_or(anchored_ts, |t| t.max(anchored_ts)));
-        self.first_ts.get_or_insert(anchored_ts);
+        let staged = self
+            .rec
+            .stage_streamed(groups, anchored_ts, wall_offset_ns)
+            .map_err(archive_err)?;
+        self.writer.commit(vec![staged]).map_err(archive_err)?;
+        self.note_ts(anchored_ts);
         Ok(())
+    }
+
+    fn note_ts(&mut self, ts: u64) {
+        self.newest_ts = Some(self.newest_ts.map_or(ts, |t| t.max(ts)));
+        self.first_ts.get_or_insert(ts);
     }
 
     /// Whether any row has been written into the buffer.
@@ -243,9 +182,9 @@ impl HindsightBuffer {
     /// first row, which eviction never moves — not from the span it currently
     /// retains. The retained span is the wrong instrument: it converges to just
     /// *under* the lookback (the oldest surviving row sits one tick inside the
-    /// cutoff, and a `.rez` row is stamped in nanoseconds), so `retained >=
-    /// lookback` reads false forever at steady state. Ask the question the
-    /// buffer can answer exactly instead of the one that needs a fudge factor.
+    /// cutoff, and a row is stamped in nanoseconds), so `retained >= lookback`
+    /// reads false forever at steady state. Ask the question the buffer can
+    /// answer exactly instead of the one that needs a fudge factor.
     pub fn at_retention_bound(&self) -> bool {
         match (self.first_ts, self.newest_ts) {
             (Some(first), Some(newest)) => {
@@ -260,27 +199,15 @@ impl HindsightBuffer {
     /// here.
     ///
     /// `maybe_seal` runs first, so a segment closed on this tick is in the
-    /// catalog before the cutoff is applied to it. Retention
-    /// only ever sees committed data — rows still sitting in an open builder
-    /// are evicted when their segment seals and later ages out.
+    /// catalog before the cutoff is applied to it. Occupant streams are
+    /// evicted one restatement period behind their data
+    /// (`SourceRecorder::evict_before`), so the oldest rows kept can still
+    /// find their occupants' labels.
     pub fn maintain(&mut self) -> Result<(), String> {
         let cutoff = self.cutoff();
-        match &mut self.writer {
-            Writer::Rez { rec, .. } => {
-                rec.maybe_seal()?;
-                if let Some(cutoff) = cutoff {
-                    rec.evict_before(cutoff)?;
-                }
-            }
-            // Occupant streams are evicted one restatement period behind
-            // their data (`SourceRecorder::evict_before`), so the oldest rows
-            // kept can still find their occupants' labels.
-            Writer::Dendro { rec, .. } => {
-                rec.maybe_seal().map_err(archive_err)?;
-                if let Some(cutoff) = cutoff {
-                    rec.evict_before(cutoff).map_err(archive_err)?;
-                }
-            }
+        self.rec.maybe_seal().map_err(archive_err)?;
+        if let Some(cutoff) = cutoff {
+            self.rec.evict_before(cutoff).map_err(archive_err)?;
         }
         Ok(())
     }
@@ -293,10 +220,7 @@ impl HindsightBuffer {
     /// to see its own last tick, rather than the state from before it.
     #[cfg(test)]
     pub fn sync(&mut self) -> Result<(), String> {
-        match &mut self.writer {
-            Writer::Rez { rec, .. } => rec.sync(),
-            Writer::Dendro { rec, .. } => rec.sync().map_err(archive_err),
-        }
+        self.rec.sync().map_err(archive_err)
     }
 
     /// The retention cutoff: everything wholly older than this goes. `None`
@@ -310,10 +234,11 @@ impl HindsightBuffer {
 /// What a buffer or a dump holds, from catalog columns alone — no segment or
 /// WAL payload is read, so this costs the same on a 4 MB buffer and a 4 GB one.
 ///
-/// This is what `/status` reports, and it is deliberately stated in v3's own
-/// terms. The ring's geometry (slot size, slot count, write index, "has it
-/// wrapped") described a fixed-size array that no longer exists; reporting a
-/// fabricated equivalent would be worse than not reporting it.
+/// This is what `/status` reports, and it is deliberately stated in the
+/// archive's own terms. The ring's geometry (slot size, slot count, write
+/// index, "has it wrapped") described a fixed-size array that no longer
+/// exists; reporting a fabricated equivalent would be worse than not
+/// reporting it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Summary {
     /// Every table in the buffer, including one that has not sealed a segment
@@ -359,26 +284,19 @@ impl Summary {
     }
 }
 
-/// Summarize a `.rez` at `path` without disturbing whoever is writing it. In
-/// WAL mode this reader never blocks the writer and is never blocked by it.
+/// Summarize the dendro archive at `path` without disturbing whoever is
+/// writing it. In WAL mode this reader never blocks the writer and is never
+/// blocked by it.
 pub fn summarize(path: &Path) -> Result<Summary, String> {
-    let mut out = if is_dendro(path) {
-        summarize_dendro(&dendro::archive::Archive::open(path).map_err(|e| e.to_string())?)?
-    } else {
-        summarize_db(&RezDb::open(path)?)?
-    };
+    let mut out =
+        summarize_dendro(&dendro::archive::Archive::open(path).map_err(|e| e.to_string())?)?;
     out.bytes = bytes_on_disk(path);
     Ok(out)
 }
 
-/// Whether `path` is a dendro archive, by its header, as the readers decide.
-fn is_dendro(path: &Path) -> bool {
-    metriken_storage::DendroCatalog::is_archive(path).unwrap_or(false)
-}
-
-/// [`summarize_db`] for a dendro archive: the same figures from dendro's
-/// catalog. A long table's occupant stream (`<table>/occupants`) is listed
-/// as a table of its own, as it is stored.
+/// The figures of [`Summary`] from dendro's catalog. A long table's occupant
+/// stream (`<table>/occupants`) is listed as a table of its own, as it is
+/// stored.
 fn summarize_dendro(db: &dendro::archive::Archive) -> Result<Summary, String> {
     let err = |e: dendro::Error| e.to_string();
     let pages = db.page_stats().map_err(err)?;
@@ -419,40 +337,9 @@ fn summarize_dendro(db: &dendro::archive::Archive) -> Result<Summary, String> {
     Ok(out)
 }
 
-fn summarize_db(db: &RezDb) -> Result<Summary, String> {
-    let mut out = Summary {
-        free_pages: db.pragma_u32("freelist_count")?,
-        pages: db.pragma_u32("page_count")?,
-        ..Summary::default()
-    };
-    for rec in db.read_recordings()? {
-        let (first, last) = db.recording_time_span(rec.id)?;
-        out.first_ts = match (out.first_ts, first) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
-        out.last_ts = match (out.last_ts, last) {
-            (Some(a), Some(b)) => Some(a.max(b)),
-            (a, b) => a.or(b),
-        };
-        for sampler in db.all_samplers(rec.id)? {
-            let (segments, span) = db.segment_span(rec.id, &sampler)?;
-            let live_wal_rows = db.live_wal_span(rec.id, &sampler)?.rows;
-            out.rows += span.rows + live_wal_rows;
-            out.tables.push(TableSummary {
-                sampler,
-                rows: span.rows + live_wal_rows,
-                segments,
-                live_wal_rows,
-            });
-        }
-    }
-    Ok(out)
-}
-
 /// The database plus its `-wal`/`-shm` sidecars. The sidecar is real disk
-/// usage and is capped (4 MiB) rather than unbounded, but reporting only the
-/// main file would under-count a buffer that is actively being written.
+/// usage and is capped rather than unbounded, but reporting only the main
+/// file would under-count a buffer that is actively being written.
 fn bytes_on_disk(path: &Path) -> u64 {
     let mut total = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     for suffix in ["-wal", "-shm"] {
@@ -465,110 +352,43 @@ fn bytes_on_disk(path: &Path) -> u64 {
     total
 }
 
-/// Write the buffer out to `dest` as a standalone archive in the buffer's
-/// container, replacing whatever was there.
+/// Write the buffer out to `dest` as a standalone, finished dendro archive,
+/// replacing whatever was there.
 ///
 /// This is the whole of what `perform_dump_to_file` used to do by walking ring
-/// slots and running a msgpack→parquet conversion over them. `VACUUM INTO`
-/// takes a point-in-time copy inside a read transaction: the writer keeps
-/// committing throughout, the copy cannot tear, and the copy is compacted on
-/// the way out (a rolling buffer's free list does not travel with it).
+/// slots and running a msgpack→parquet conversion over them.
+///
+/// Both the whole buffer and a range go through dendro's
+/// `copy_sources_into`: whole segments overlapping the range, copied as they
+/// are, the live WAL tail encoded into a final segment through
+/// metriken-storage's encoder, and the clock offsets, all in one read
+/// snapshot of the buffer. The writer keeps committing throughout and the
+/// copy cannot tear. The dump is fully sealed: a reader opening it has no WAL
+/// tail to rebuild.
 ///
 /// `range` trims the copy — never the buffer — at SEGMENT granularity, so a
 /// dump reaches at least as far as asked and possibly further. The returned
 /// span says exactly how far, which is why the caller reports it back rather
-/// than echoing the request.
+/// than echoing the request. A range starts one restatement period early when
+/// the buffer has long tables: an occupant's labels are written when it is
+/// first seen and restated every period, so one first seen before `start` is
+/// named only by a restatement at most a period before it.
 ///
 /// The copy is staged beside `dest` and renamed into place, so a failed dump
 /// leaves the previous one intact and no consumer ever sees a half-written
 /// file at `dest`.
 pub fn dump(buffer: &Path, dest: &Path, range: &TimeRange) -> Result<Summary, String> {
+    use dendro::archive::{Archive, ArchiveMut};
+    use dendro::rewrite::CopySpec;
+    let err = |e: dendro::Error| e.to_string();
+
     let parent = dest.parent().filter(|p| !p.as_os_str().is_empty());
     let staging = match parent {
         Some(dir) => tempfile::tempdir_in(dir),
         None => tempfile::tempdir(),
     }
     .map_err(|e| format!("failed to stage the dump beside {}: {e}", dest.display()))?;
-    if is_dendro(buffer) {
-        let staged = staging.path().join("dump.dendro");
-        // Summarized before the rename, through the write handle `dump_dendro`
-        // closes; reopening the output read-only would leave `-wal`/`-shm`
-        // sidecars beside it, which only a write handle's close removes.
-        let mut summary = dump_dendro(buffer, &staged, range)?;
-        std::fs::rename(&staged, dest).map_err(|e| {
-            format!(
-                "failed to move the dump into place at {}: {e}",
-                dest.display()
-            )
-        })?;
-        summary.bytes = bytes_on_disk(dest);
-        return Ok(summary);
-    }
-    let staged = staging.path().join("dump.rez");
-
-    // A second connection, deliberately: the writer thread owns its own and
-    // keeps using it. WAL mode is what makes that safe.
-    let src = RezDb::open(buffer)?;
-    match (range.start_ns(), range.end_ns()) {
-        (None, None) => src.vacuum_into(&staged)?,
-        (start, end) => copy_range(
-            &src,
-            &staged,
-            start.unwrap_or(0),
-            end.unwrap_or(u64::MAX),
-            &|| {},
-        )?,
-    }
-    drop(src);
-
-    let mut db = RezDb::open(&staged)?;
-    for id in db
-        .read_recordings()?
-        .iter()
-        .map(|r| r.id)
-        .collect::<Vec<_>>()
-    {
-        // The buffer's recording is still running and so is never `complete`;
-        // this copy of it is finished by definition. Without this every
-        // hindsight dump would open with a "not cleanly finalized, data may be
-        // missing" warning that says nothing true about the artifact.
-        db.mark_complete(id)?;
-    }
-    let mut summary = summarize_db(&db)?;
-    // Close before the rename: dropping the connection is what checkpoints and
-    // removes the staged file's `-wal`, so what gets renamed is the whole
-    // database and not just its older half.
-    drop(db);
-
-    std::fs::rename(&staged, dest).map_err(|e| {
-        format!(
-            "failed to move the dump into place at {}: {e}",
-            dest.display()
-        )
-    })?;
-    summary.bytes = bytes_on_disk(dest);
-    Ok(summary)
-}
-
-/// [`dump`] of a dendro buffer into `staged`, which is then complete.
-///
-/// Both the whole buffer and a range go through dendro's
-/// `copy_sources_into`: whole segments overlapping the range, copied as they
-/// are, the live WAL tail encoded into a final segment through
-/// metriken-storage's encoder, and the clock offsets, all in one read
-/// snapshot of the buffer. The dump is therefore fully sealed: a reader
-/// opening it has no WAL tail to rebuild, which a `VACUUM INTO` copy would
-/// carry over unsealed.
-///
-/// A range starts one restatement period early when the buffer has long
-/// tables. An occupant's labels are written when it is first seen and
-/// restated every period; one first seen before `start` is named only by a
-/// restatement at most a period before it. The dump reaches further than
-/// asked at each edge anyway (whole segments), and reports what it holds.
-fn dump_dendro(buffer: &Path, staged: &Path, range: &TimeRange) -> Result<Summary, String> {
-    use dendro::archive::{Archive, ArchiveMut};
-    use dendro::rewrite::CopySpec;
-    let err = |e: dendro::Error| e.to_string();
+    let staged = staging.path().join("dump.dendro");
 
     // A second connection, deliberately: the writer thread owns its own.
     let src = Archive::open(buffer).map_err(err)?;
@@ -588,12 +408,14 @@ fn dump_dendro(buffer: &Path, staged: &Path, range: &TimeRange) -> Result<Summar
             }
         }
     };
-    crate::dendro_copy::copy(&src, staged, &spec)?;
+    crate::dendro_copy::copy(&src, &staged, &spec)?;
     drop(src);
 
     // The buffer's source is still running and so is never complete; this
-    // copy of it is finished by definition (see `dump`).
-    let mut db = ArchiveMut::open(staged).map_err(err)?;
+    // copy of it is finished by definition. Without this every dump would
+    // open with a "not cleanly finalized, data may be missing" warning that
+    // says nothing true about the artifact.
+    let mut db = ArchiveMut::open(&staged).map_err(err)?;
     let ids: Vec<i64> = db
         .read_sources()
         .map_err(err)?
@@ -603,87 +425,30 @@ fn dump_dendro(buffer: &Path, staged: &Path, range: &TimeRange) -> Result<Summar
     for id in ids {
         db.mark_complete(id).map_err(err)?;
     }
-    let summary = summarize_dendro(&db)?;
+    // Summarized before the rename, through the write handle; reopening the
+    // output read-only would leave `-wal`/`-shm` sidecars beside it, which
+    // only a write handle's close removes.
+    let mut summary = summarize_dendro(&db)?;
     // Dropping the write handle folds its sidecar into the file and removes
     // it, so what gets renamed is the whole archive and nothing beside it.
     drop(db);
-    Ok(summary)
-}
 
-/// Build a fresh `.rez` at `staged` holding only the segments that overlap
-/// `[start, end]`.
-///
-/// **Segments only — no WAL rows are copied, and that is the point.** A
-/// metric's metadata rides on the *first* WAL row that mentions it within a
-/// segment's span, re-anchored at every seal. Copying a slice of raw WAL rows
-/// would therefore leave a metric whose anchor row fell before `start` with no
-/// identity at all: values with no labels. Sealed segments have no such
-/// problem — `TableBuilder::push_row` latches a column's metadata when it
-/// creates the column, so every segment describes itself.
-///
-/// So the live tail is *materialized into a segment* first, through the very
-/// function the reader uses ([`crate::recorder::rez_v3_writer::materialize_wal_tail`]), and
-/// selection then happens purely over segments. Reusing that function rather
-/// than assembling columns here is not stylistic either: it injects
-/// `metric_type` via `push_row` exactly as the writer does, and a hand-rolled
-/// equivalent produces a segment whose gauges read back as counters.
-///
-/// Whole segments, always: a segment is an immutable parquet BLOB, so the dump
-/// carries a little more than was asked for at each edge. The caller reports
-/// the span it actually got.
-///
-/// Every read happens in ONE snapshot, so retention cannot evict a segment
-/// between selecting it and copying its bytes.
-///
-/// `listed` is that claim's test seam and is `&|| {}` in production — a
-/// callback rather than a `#[cfg(test)]` hook or a list/copy split, chosen so
-/// that the statements this function runs, and the order it runs them in, are
-/// **the same ones the tests run**. A `cfg(test)` hook would compile a
-/// different function than the one that ships; splitting the phases would
-/// change the shipped structure to suit a test. A no-op closure changes
-/// neither: there is no branch here that only a test takes, only a call whose
-/// body is empty everywhere except in
-/// `a_dump_keeps_a_segment_evicted_after_its_snapshot_opened`.
-///
-/// It fires once the snapshot is PINNED (`read_recordings` is the first read,
-/// and `BEGIN DEFERRED` takes its read mark there) and before a single segment
-/// BLOB has been copied — i.e. exactly the window in which retention running
-/// on the writer's connection would, without the snapshot, delete a segment
-/// out from under the copy.
-fn copy_range(
-    src: &RezDb,
-    staged: &Path,
-    start: u64,
-    end: u64,
-    listed: &dyn Fn(),
-) -> Result<(), String> {
-    use crate::recorder::rez_v3_rewrite::{copy_recordings_into, CopySpec};
-    let mut dst = RezDb::create(staged)?;
-    src.read_snapshot(|src| {
-        // Pins the snapshot before a single segment BLOB is copied:
-        // `read_recordings` is the first read, so `BEGIN DEFERRED` takes its
-        // read mark here.
-        let _pinned = src.read_recordings()?;
-        listed();
-        dst.transaction(|tx| {
-            let spec = CopySpec {
-                start,
-                end,
-                ..CopySpec::everything()
-            };
-            copy_recordings_into(src, tx, &spec)?;
-            Ok(())
-        })
-    })
+    std::fs::rename(&staged, dest).map_err(|e| {
+        format!(
+            "failed to move the dump into place at {}: {e}",
+            dest.display()
+        )
+    })?;
+    summary.bytes = bytes_on_disk(dest);
+    Ok(summary)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::recorder::rez::recorder_tests_support::{counter, snap};
-    use crate::recorder::rez::{detect_rez_format, read_table_parquet, RezFormat};
-    use crate::recorder::rez_sqlite::{Evicted, RecordingMeta, SegmentMeta};
-    use std::collections::BTreeMap;
+    use metriken_exposition::Snapshot;
+    use metriken_storage::Catalog;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
 
@@ -702,9 +467,8 @@ mod tests {
         }
     }
 
-    /// A policy that seals every `rows` rows. The first-seal stagger reduces
-    /// the target by `(rows / 128) * bucket`, which is 0 for any `rows < 128` —
-    /// so small policies seal at exactly `rows` for every sampler.
+    /// A policy that seals every `rows` rows (dendro staggers each stream's
+    /// first segment, so the first seal may come sooner).
     fn seal_every(rows: usize) -> SealPolicy {
         SealPolicy {
             max_bytes: usize::MAX,
@@ -732,78 +496,6 @@ mod tests {
     }
 
     #[test]
-    fn retention_evicts_segments_older_than_the_lookback() {
-        // The mechanism that makes a bounded rolling buffer possible at all,
-        // and it has two halves that must move together: whole segments past
-        // the lookback, AND the WAL rows of a sampler that has not sealed one.
-        // `drivehealth` reports only every fifth tick, so it never fills a
-        // segment and lives entirely in the WAL — exactly the quiet-table case
-        // a segments-only eviction would leave to grow forever.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("buffer.rez");
-        let mut buf =
-            HindsightBuffer::create(&path, seed(), Duration::from_secs(5), seal_every(4)).unwrap();
-
-        for i in 0..12u64 {
-            let samplers: &[&str] = if i % 5 == 0 {
-                &["cpu_usage", "drivehealth"]
-            } else {
-                &["cpu_usage"]
-            };
-            let (s, ts) = tick(samplers, i);
-            buf.ingest(&s, ts, 0).unwrap();
-            buf.maintain().unwrap();
-        }
-        // Newest row is ANCHOR+11s and the lookback is 5s, so the cutoff is
-        // ANCHOR+6s.
-        let cutoff = ANCHOR + 6 * SECOND;
-        drop(buf);
-
-        let db = RezDb::open(&path).unwrap();
-        let rid = db.read_recordings().unwrap()[0].id;
-
-        // cpu_usage sealed at rows 0-3, 4-7, 8-11. The first is wholly older
-        // than the cutoff and goes; the second straddles it and is kept whole.
-        let segments = db.read_segments(rid, "cpu_usage").unwrap();
-        assert_eq!(
-            segments
-                .iter()
-                .map(|s| (s.meta.first_ts, s.meta.last_ts))
-                .collect::<Vec<_>>(),
-            vec![
-                (ANCHOR + 4 * SECOND, ANCHOR + 7 * SECOND),
-                (ANCHOR + 8 * SECOND, ANCHOR + 11 * SECOND),
-            ],
-            "the segment wholly before the cutoff is gone; the straddling one \
-             is kept whole, because trimming inside a sealed segment would \
-             mean rewriting an immutable parquet BLOB"
-        );
-        // The kept segments are untouched, not merely present.
-        for s in &segments {
-            let table = read_table_parquet("cpu_usage".to_string(), s.bytes.clone()).unwrap();
-            assert_eq!(table.timestamps.len(), s.meta.rows as usize);
-        }
-
-        // drivehealth ticked at 0, 5 and 10 and never sealed: its whole history
-        // is WAL rows, and the two before the cutoff must go with the segments.
-        assert!(
-            db.read_segments(rid, "drivehealth").unwrap().is_empty(),
-            "drivehealth never filled a segment"
-        );
-        assert_eq!(
-            db.read_wal(rid, "drivehealth")
-                .unwrap()
-                .iter()
-                .map(|r| r.ts)
-                .collect::<Vec<_>>(),
-            vec![ANCHOR + 10 * SECOND],
-            "WAL rows older than the cutoff are evicted too; the one inside \
-             the lookback is untouched"
-        );
-        assert!(cutoff > ANCHOR + 5 * SECOND && cutoff < ANCHOR + 10 * SECOND);
-    }
-
-    #[test]
     fn retention_is_measured_from_the_newest_row_not_from_now() {
         // The cutoff follows the DATA, and that choice matters at exactly the
         // moment hindsight is for. If the agent dies — which may well be the
@@ -815,9 +507,10 @@ mod tests {
         // These rows are stamped in 2023 and the lookback is 5s, so a cutoff
         // taken from the wall clock would evict every one of them.
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("buffer.rez");
+        let path = dir.path().join("buffer.dendro");
         let mut buf =
-            HindsightBuffer::create(&path, seed(), Duration::from_secs(5), seal_every(2)).unwrap();
+            HindsightBuffer::create_dendro(&path, seed(), Duration::from_secs(5), seal_every(2))
+                .unwrap();
         for i in 0..4u64 {
             let (s, ts) = tick(&["cpu_usage"], i);
             buf.ingest(&s, ts, 0).unwrap();
@@ -827,7 +520,7 @@ mod tests {
         for _ in 0..5 {
             buf.maintain().unwrap();
         }
-        drop(buf);
+        buf.sync().unwrap();
 
         let summary = summarize(&path).unwrap();
         assert_eq!(
@@ -845,16 +538,17 @@ mod tests {
         // `retained >= lookback` reads false forever at steady state. This is
         // the span the recording has COVERED, which crosses the lookback
         // exactly once and stays crossed.
+        //
         // A 4.5 s lookback against 1 s ticks, so the cutoff lands BETWEEN two
-        // rows. That is the ordinary case, not a contrived one: in the real
-        // loop the same misalignment comes from tick jitter, since rows are
-        // stamped `anchor + monotonic elapsed` in nanoseconds and never land
+        // rows: in the real loop the same misalignment comes from tick
+        // jitter, since rows are stamped in nanoseconds and never land
         // exactly a lookback apart.
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("buffer.rez");
+        let path = dir.path().join("buffer.dendro");
         let lookback = Duration::from_millis(4_500);
         let mut buf =
-            HindsightBuffer::create(&path, seed(), lookback, seal_every(usize::MAX)).unwrap();
+            HindsightBuffer::create_dendro(&path, seed(), lookback, seal_every(usize::MAX))
+                .unwrap();
         assert!(!buf.at_retention_bound(), "nothing ingested yet");
 
         for i in 0..5u64 {
@@ -870,20 +564,10 @@ mod tests {
         buf.maintain().unwrap();
         assert!(buf.at_retention_bound(), "5s covered: eviction has started");
 
-        // And the retained span is now permanently just UNDER the lookback:
-        // these rows are unsealed, so retention drops them one at a time and
-        // the oldest survivor sits strictly inside the cutoff.
-        //
-        // A span-based rule cannot be rescued by flipping the comparison
-        // either, because SEALED rows go the other way: a segment is dropped
-        // only when its newest row is out of the window, so a segmented table
-        // retains *more* than the lookback. The retained span straddles the
-        // lookback from both sides depending on what has sealed; the covered
-        // span crosses it once.
-        // `summarize` opens its own connection, so it sees the file rather than
-        // this buffer's queued work. Without the barrier the eviction above may
-        // still be in flight and the file still spans all six ticks — which is
-        // how this read, and only this read, went flaky.
+        // And the retained span is now just UNDER the lookback: these rows
+        // are unsealed, so retention drops them one at a time and the oldest
+        // survivor sits strictly inside the cutoff. `summarize` opens its own
+        // connection, so the barrier makes it see the eviction above.
         buf.sync().unwrap();
         let retained = summarize(&path).unwrap().retained().unwrap();
         assert!(
@@ -893,93 +577,34 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_file_plateaus_across_many_evict_cycles() {
-        // THE property that makes a bounded hindsight buffer possible: freed
-        // pages are reused, so a file that evicts as fast as it fills stops
-        // growing instead of growing forever. Measured at 1.004-1.011x live
-        // (journal § "Eviction without VACUUM"); asserted here as "the page
-        // count at cycle 60 is the page count at cycle 240", which is the
-        // statement that goes red the moment eviction stops reclaiming.
-        //
-        // Driven at the container level rather than through `HindsightBuffer`
-        // on purpose: this is a property of insert-and-evict, and 240 cycles
-        // of parquet encoding would buy nothing but runtime.
-        const BLOB: usize = 256 * 1024;
-        const RETAIN: u64 = 24;
-        const CYCLES: u64 = 240;
-        const WARM: u64 = 60;
+    /// A table's sealed segments as `(first_ts, last_ts)`, and its live WAL
+    /// stamps.
+    type Timeline = (Vec<(u64, u64)>, Vec<u64>);
 
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("buffer.rez");
-        let mut db = RezDb::create(&path).unwrap();
-        let rid = db
-            .insert_recording(&RecordingMeta {
-                labels: BTreeMap::new(),
-                metadata: BTreeMap::new(),
-                clock_anchor_wall_ns: ANCHOR,
+    /// The tables of the one source in the dendro archive at `path`.
+    fn timelines(path: &Path) -> BTreeMap<String, Timeline> {
+        let catalog = metriken_storage::DendroCatalog::open(path).unwrap();
+        let id = catalog.sources().unwrap()[0].id;
+        catalog
+            .tables(id)
+            .unwrap()
+            .into_iter()
+            .map(|table| {
+                let segments = catalog
+                    .segment_meta(id, &table)
+                    .unwrap()
+                    .into_iter()
+                    .map(|(_, m)| (m.first_ts, m.last_ts))
+                    .collect();
+                let wal = catalog
+                    .live_wal(id, &table)
+                    .unwrap()
+                    .iter()
+                    .map(|r| r.ts)
+                    .collect();
+                (table, (segments, wal))
             })
-            .unwrap();
-
-        let bytes = vec![0xa5u8; BLOB];
-        let mut warm_pages = 0u32;
-        for cycle in 0..CYCLES {
-            db.insert_segment(
-                rid,
-                "cpu_usage",
-                cycle,
-                &SegmentMeta {
-                    rows: 1,
-                    first_ts: cycle,
-                    last_ts: cycle,
-                },
-                &bytes,
-            )
-            .unwrap();
-            db.evict_before(rid, cycle.saturating_sub(RETAIN - 1))
-                .unwrap();
-            if cycle == WARM {
-                warm_pages = db.pragma_u32("page_count").unwrap();
-            }
-        }
-
-        // The claim first, the fixture check after: this is the assertion the
-        // test is named for, and it should be the one that speaks when it goes
-        // red.
-        let end_pages = db.pragma_u32("page_count").unwrap();
-        assert!(
-            end_pages <= warm_pages,
-            "the file must plateau: {warm_pages} pages at cycle {WARM}, \
-             {end_pages} after {CYCLES} — {} cycles of turnover wrote \
-             {} MiB through a {} MiB working set",
-            CYCLES - WARM,
-            (CYCLES as usize * BLOB) >> 20,
-            (RETAIN as usize * BLOB) >> 20,
-        );
-
-        // And the plateau is near the live size, not merely flat at some
-        // arbitrary high-water mark.
-        //
-        // 1.1x, not the journal's 1.004-1.011x, and the gap is scale rather
-        // than a discrepancy: that range was measured at 226-839 MB live,
-        // where the schema, the pointer maps and a few dozen free pages are
-        // noise. At the 6 MiB this test can afford they are not — the measured
-        // value here is 1.052x, of which 65 free pages (266 KiB) is the bulk.
-        // What the assertion is for is a REGRESSION into unbounded growth, and
-        // for that the plateau check above is the sharp instrument.
-        let live = RETAIN * BLOB as u64;
-        let file = (end_pages as u64) * db.pragma_u32("page_size").unwrap() as u64;
-        assert!(
-            file < live * 11 / 10,
-            "{file} bytes on disk for {live} bytes live is more than 1.1x ({} free pages)",
-            db.pragma_u32("freelist_count").unwrap()
-        );
-
-        assert_eq!(
-            db.read_segments(rid, "cpu_usage").unwrap().len(),
-            RETAIN as usize,
-            "fixture: the working set is constant across the run"
-        );
+            .collect()
     }
 
     #[test]
@@ -995,10 +620,10 @@ mod tests {
         // database — while silently missing every commit since the last
         // checkpoint.
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("buffer.rez");
-        let dest = dir.path().join("dump.rez");
+        let path = dir.path().join("buffer.dendro");
+        let dest = dir.path().join("dump.dendro");
         let mut buf =
-            HindsightBuffer::create(&path, seed(), Duration::from_secs(3600), seal_every(8))
+            HindsightBuffer::create_dendro(&path, seed(), Duration::from_secs(3600), seal_every(8))
                 .unwrap();
 
         let stop = Arc::new(AtomicBool::new(false));
@@ -1031,10 +656,9 @@ mod tests {
         stop.store(true, Ordering::Relaxed);
         drop(writer.join().unwrap());
 
-        assert_eq!(
-            detect_rez_format(&dest).unwrap(),
-            RezFormat::V3Sqlite,
-            "the dump is an ordinary .rez"
+        assert!(
+            metriken_storage::DendroCatalog::is_archive(&dest).unwrap(),
+            "the dump is a dendro archive"
         );
         assert!(
             dumped.last_ts >= witness.last_ts && dumped.last_ts.is_some(),
@@ -1050,49 +674,36 @@ mod tests {
             witness.rows
         );
 
-        // Self-consistent: every sampler's rows form one strictly increasing
-        // timeline across the segment/WAL splice, with nothing duplicated at
-        // the seam and no half-written segment.
-        let db = RezDb::open(&dest).unwrap();
-        let rid = db.read_recordings().unwrap()[0].id;
+        // Self-consistent: the dump is fully sealed, and each sampler's
+        // segments form one increasing timeline that starts where the
+        // recording did, with no segment overlapping the one before it.
+        let catalog = metriken_storage::DendroCatalog::open(&dest).unwrap();
         assert!(
-            db.read_recordings().unwrap()[0].complete,
+            catalog.sources().unwrap()[0].complete,
             "a dump is a finished artifact even though the buffer runs on"
         );
-        let samplers = db.all_samplers(rid).unwrap();
-        assert_eq!(samplers, vec!["cpu_usage", "scheduler"]);
-        for sampler in samplers {
-            let mut stamps = Vec::new();
-            for segment in db.read_segments(rid, &sampler).unwrap() {
-                let table = read_table_parquet(sampler.clone(), segment.bytes).unwrap();
-                assert_eq!(
-                    table.timestamps.len(),
-                    segment.meta.rows as usize,
-                    "{sampler}: a segment's parquet must hold the rows the \
-                     catalog claims"
-                );
-                stamps.extend(table.timestamps);
-            }
-            stamps.extend(db.live_wal(rid, &sampler).unwrap().iter().map(|r| r.ts));
+        drop(catalog);
+        let tables = timelines(&dest);
+        assert_eq!(
+            tables.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["cpu_usage", "scheduler"]
+        );
+        for (table, (segments, wal)) in tables {
+            assert!(wal.is_empty(), "{table}: a dump has no WAL rows");
+            assert_eq!(segments.first().map(|s| s.0), Some(ANCHOR), "{table}");
             assert!(
-                stamps.windows(2).all(|w| w[0] < w[1]),
-                "{sampler}: rows must form one strictly increasing timeline, \
-                 with no duplicate at the segment/WAL seam: {stamps:?}"
-            );
-            assert_eq!(
-                stamps.first().copied(),
-                Some(ANCHOR),
-                "{sampler}: the dump starts where the recording did"
+                segments.windows(2).all(|w| w[0].1 < w[1].0),
+                "{table}: segments must form one increasing timeline: {segments:?}"
             );
         }
     }
 
     #[test]
-    fn a_hindsight_buffer_opens_as_an_ordinary_rez() {
+    fn a_hindsight_buffer_opens_in_the_ordinary_readers() {
         // The unification. Nothing could read the slot ring — not the viewer,
-        // not the MCP tools, not `parquet metadata`; its only consumer was its
-        // own dump routine. A v3 buffer is read by the generic reader, live,
-        // mid-recording, with no hindsight-specific casing anywhere.
+        // not the MCP tools, not `recording metadata`; its only consumer was
+        // its own dump routine. The buffer is read by the generic reader,
+        // live, mid-recording, with no hindsight-specific casing anywhere.
         //
         // Nothing has sealed here (the policy is far out of reach), so every
         // row the reader returns comes from the live WAL — the state a running
@@ -1100,8 +711,8 @@ mod tests {
         use metriken_query::MetricsSource;
 
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("buffer.rez");
-        let mut buf = HindsightBuffer::create(
+        let path = dir.path().join("buffer.dendro");
+        let mut buf = HindsightBuffer::create_dendro(
             &path,
             seed(),
             Duration::from_secs(900),
@@ -1113,10 +724,9 @@ mod tests {
             buf.ingest(&s, ts, 0).unwrap();
             buf.maintain().unwrap();
         }
+        buf.sync().unwrap();
 
-        assert_eq!(detect_rez_format(&path).unwrap(), RezFormat::V3Sqlite);
-
-        // `parquet metadata` — dispatched by content, not by extension, and
+        // `recording metadata` — dispatched by content, not by extension, and
         // handed a file that is still being written.
         let described = crate::parquet_tools::metadata::describe_rez_string_at(&path).unwrap();
         assert!(
@@ -1125,11 +735,13 @@ mod tests {
         );
 
         // And the viewer/MCP front door, with real values out the other side.
-        let reader = crate::rez_reader::RezReader::open_with_pool(
+        let reader = crate::rez_reader::RezReader::open_recordings(
             &path,
             metriken_storage::BufferPool::new(8 * 1024 * 1024),
         )
-        .unwrap();
+        .unwrap()
+        .remove(0)
+        .1;
         assert_eq!(reader.counter_names(), vec!["cpu_usage_ops".to_string()]);
         let (start, end) = reader.time_range().unwrap();
         let metriken_query::QueryResult::Matrix { result } = reader
@@ -1147,44 +759,23 @@ mod tests {
             points.iter().all(|v| (*v - 1.0).abs() < 1e-6),
             "a counter rising 1/s must read back as 1/s: {points:?}"
         );
-
-        // Still true after the buffer is dumped: the dump is the same shape.
-        //
-        // `sync()` here fixes a real, observed intermittent flake: `dump`
-        // opens a SECOND connection (`RezDb::open`), so without this, the
-        // read can race the async writer thread and see the file before the
-        // last `ingest`/`maintain` tick actually committed — exactly what
-        // `RecordingWriter::sync`'s doc warns a second-connection reader must
-        // guard against. Reproduced under heavy parallel-test contention on
-        // a multi-core Linux container (never locally, on a quiet machine),
-        // as `rows >= 6` failing with fewer rows than were ingested.
-        buf.sync().unwrap();
-        let dest = dir.path().join("dump.rez");
-        assert!(dump(&path, &dest, &TimeRange::default()).unwrap().rows >= 6);
-        assert_eq!(detect_rez_format(&dest).unwrap(), RezFormat::V3Sqlite);
     }
 
     #[test]
     fn a_ranged_dump_keeps_metric_identity_for_a_wal_only_table() {
-        // The trap a ranged dump has to avoid, and one this project has
-        // already been caught by once (B4/d420414e): a metric's metadata rides
-        // on the FIRST WAL row that mentions it within a segment's span. Copy
-        // a *slice* of raw WAL rows and any metric whose anchor row fell
-        // before `start` arrives with no identity — values with no labels.
-        //
-        // The dump sidesteps it structurally rather than carefully: the live
-        // tail is materialized into a SEGMENT first — segments latch their
-        // column metadata at creation and are self-describing — and selection
-        // then happens purely over segments. Which is also why the tail always
-        // travels whole: it is one segment, and segments are never split.
+        // A metric's metadata rides on the row that carries its schema. A
+        // ranged dump that copied a *slice* of raw WAL rows would leave any
+        // metric whose schema row fell before `start` with no identity:
+        // values with no labels. The dump encodes the live tail into a
+        // segment instead, and segments describe themselves.
         //
         // Nothing seals here, so this table's entire history is WAL rows and
-        // its anchor row is tick 0, well before the requested start.
+        // its schema row is tick 0, well before the requested start.
         use metriken_query::MetricsSource;
 
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("buffer.rez");
-        let mut buf = HindsightBuffer::create(
+        let path = dir.path().join("buffer.dendro");
+        let mut buf = HindsightBuffer::create_dendro(
             &path,
             seed(),
             Duration::from_secs(3600),
@@ -1196,9 +787,9 @@ mod tests {
             buf.ingest(&s, ts, 0).unwrap();
             buf.maintain().unwrap();
         }
-        drop(buf);
+        buf.sync().unwrap();
 
-        let dest = dir.path().join("dump.rez");
+        let dest = dir.path().join("dump.dendro");
         let range = TimeRange::new(
             Some(std::time::UNIX_EPOCH + Duration::from_nanos(ANCHOR + 5 * SECOND)),
             None,
@@ -1206,183 +797,61 @@ mod tests {
         dump(&path, &dest, &range).unwrap();
 
         // The dump is segments and nothing else — no WAL rows were copied.
-        let db = RezDb::open(&dest).unwrap();
-        let rid = db.read_recordings().unwrap()[0].id;
-        assert!(db.read_wal(rid, "drivehealth").unwrap().is_empty());
-        let segments = db.read_segments(rid, "drivehealth").unwrap();
+        let (segments, wal) = timelines(&dest).remove("drivehealth").unwrap();
+        assert!(wal.is_empty(), "{wal:?}");
         assert_eq!(segments.len(), 1, "the tail was sealed into one segment");
 
-        // And the metric kept its identity, labels and all.
-        let table = read_table_parquet("drivehealth".to_string(), segments[0].bytes.clone())
-            .expect("the materialized tail must be readable parquet");
-        let column = table
-            .columns
-            .iter()
-            .find(|c| c.name == "drivehealth_ops")
-            .expect("the metric's column must be present");
-        assert_eq!(
-            column.metadata.get("metric").map(String::as_str),
-            Some("drivehealth_ops"),
-            "a value with no labels is the failure this test exists for: {:?}",
-            column.metadata
-        );
-        assert_eq!(
-            column.metadata.get("sampler").map(String::as_str),
-            Some("drivehealth")
-        );
-        // `metric_type` is injected by `push_row`, not carried on the WAL cell:
-        // a tail assembled by hand instead of replayed would read every gauge
-        // back as a counter.
-        assert_eq!(
-            column.metadata.get("metric_type").map(String::as_str),
-            Some("counter")
-        );
-
-        let reader = crate::rez_reader::RezReader::open_with_pool(
+        // And the metric kept its identity.
+        let reader = crate::rez_reader::RezReader::open_recordings(
             &dest,
             metriken_storage::BufferPool::new(8 * 1024 * 1024),
         )
-        .unwrap();
+        .unwrap()
+        .remove(0)
+        .1;
         assert_eq!(reader.counter_names(), vec!["drivehealth_ops".to_string()]);
     }
 
     #[test]
-    fn a_dump_keeps_a_segment_evicted_after_its_snapshot_opened() {
-        // **Why hindsight needs no eviction pause.** Retention and a dump run
-        // on different connections with nothing between them — no lock, no
-        // quiesce, no "hold off evicting while a dump is in flight". The only
-        // thing standing between them is the read transaction `copy_range`
-        // opens, and the claim is that it is enough: a segment deleted after
-        // the snapshot opened is still in the dump, because the dump is
-        // reading the database as it stood when it started.
-        //
-        // Deterministic, not a race. The eviction runs in the `listed` seam,
-        // which fires after `read_recordings` has pinned the snapshot and
-        // before the first segment BLOB is read — so "the delete landed inside
-        // the window" is a fact of the call order rather than something the
-        // scheduler has to be persuaded to do. No sleeps, no retries, no
-        // "eventually".
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("buffer.rez");
-        let staged = dir.path().join("dump.rez");
-        // A lookback far past the data, so the ONLY eviction in this test is
-        // the one the seam performs.
-        let mut buf =
-            HindsightBuffer::create(&path, seed(), Duration::from_secs(3600), seal_every(2))
-                .unwrap();
-        for i in 0..12u64 {
-            let (s, ts) = tick(&["cpu_usage"], i);
-            buf.ingest(&s, ts, 0).unwrap();
-            buf.maintain().unwrap();
-        }
-        drop(buf);
-
-        // Everything before ANCHOR+6s: segments [0,1], [2,3] and [4,5].
-        let cutoff = ANCHOR + 6 * SECOND;
-        let evicted = std::cell::Cell::new(Evicted::default());
-
-        let src = RezDb::open(&path).unwrap();
-        copy_range(&src, &staged, 0, u64::MAX, &|| {
-            // A SECOND connection, which is what retention actually is here:
-            // the writer thread owns its own and evicts from it while a dump
-            // reads. Opened inside the seam so it cannot be blamed for pinning
-            // anything itself.
-            let mut writer = RezDb::open(&path).unwrap();
-            let rid = writer.read_recordings().unwrap()[0].id;
-            evicted.set(writer.evict_before(rid, cutoff).unwrap());
-        })
-        .unwrap();
-        drop(src);
-
-        // Fixture, and it has to come first: if the eviction did not actually
-        // delete anything then the assertion below passes for no reason at all,
-        // which is precisely the failure mode this test exists to avoid.
-        assert_eq!(
-            evicted.get().segments,
-            3,
-            "fixture: the seam must really have deleted segments mid-dump"
-        );
-        let after = RezDb::open(&path).unwrap();
-        let rid = after.read_recordings().unwrap()[0].id;
-        assert_eq!(
-            after
-                .read_segments(rid, "cpu_usage")
-                .unwrap()
-                .iter()
-                .map(|s| s.meta.first_ts)
-                .collect::<Vec<_>>(),
-            vec![
-                ANCHOR + 6 * SECOND,
-                ANCHOR + 8 * SECOND,
-                ANCHOR + 10 * SECOND
-            ],
-            "fixture: the SOURCE really did lose those three segments"
-        );
-
-        // The claim. The dump holds all six, including the three the source no
-        // longer has, and their bytes are intact rather than merely catalogued
-        // — a snapshot that covered the catalog but not the BLOBs would leave a
-        // segment row pointing at bytes that were deleted.
-        let dumped = RezDb::open(&staged).unwrap();
-        let rid = dumped.read_recordings().unwrap()[0].id;
-        let segments = dumped.read_segments(rid, "cpu_usage").unwrap();
-        assert_eq!(
-            segments
-                .iter()
-                .map(|s| (s.meta.first_ts, s.meta.last_ts))
-                .collect::<Vec<_>>(),
-            (0..6)
-                .map(|i| (ANCHOR + 2 * i * SECOND, ANCHOR + (2 * i + 1) * SECOND))
-                .collect::<Vec<_>>(),
-            "a dump reads the database as it stood when its snapshot opened; \
-             eviction afterwards cannot reach into it"
-        );
-        for s in &segments {
-            let table = read_table_parquet("cpu_usage".to_string(), s.bytes.clone())
-                .expect("a dumped segment's bytes must still be readable parquet");
-            assert_eq!(table.timestamps.len(), s.meta.rows as usize);
-        }
-    }
-
-    #[test]
     fn a_dump_can_be_trimmed_to_a_time_range() {
-        // `/dump?start=&end=` survives the migration, but at segment
-        // granularity — so the caller is told the span it actually got rather
-        // than the one it asked for.
+        // `/dump?start=&end=` works at segment granularity, so the caller is
+        // told the span it actually got rather than the one it asked for.
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("buffer.rez");
+        let path = dir.path().join("buffer.dendro");
         let mut buf =
-            HindsightBuffer::create(&path, seed(), Duration::from_secs(3600), seal_every(4))
+            HindsightBuffer::create_dendro(&path, seed(), Duration::from_secs(3600), seal_every(4))
                 .unwrap();
         for i in 0..12u64 {
             let (s, ts) = tick(&["cpu_usage"], i);
             buf.ingest(&s, ts, 0).unwrap();
             buf.maintain().unwrap();
         }
-        drop(buf);
+        buf.sync().unwrap();
 
-        // Segments cover 0-3, 4-7, 8-11. Ask for [5s, 6s]: the straddling
-        // segment is kept whole, its neighbours go.
+        // Ask for [5s, 6s]: the segments overlapping it are kept whole, the
+        // rest go.
         let range = TimeRange::new(
             Some(std::time::UNIX_EPOCH + Duration::from_nanos(ANCHOR + 5 * SECOND)),
             Some(std::time::UNIX_EPOCH + Duration::from_nanos(ANCHOR + 6 * SECOND)),
         );
-        let dest = dir.path().join("dump.rez");
+        let dest = dir.path().join("dump.dendro");
         let summary = dump(&path, &dest, &range).unwrap();
 
-        assert_eq!(summary.rows, 4, "one segment survives the trim");
-        assert_eq!(summary.first_ts, Some(ANCHOR + 4 * SECOND));
-        assert_eq!(summary.last_ts, Some(ANCHOR + 7 * SECOND));
+        assert!(summary.rows < 12, "the trim dropped rows: {summary:?}");
+        assert!(
+            summary.first_ts <= Some(ANCHOR + 5 * SECOND)
+                && summary.last_ts >= Some(ANCHOR + 6 * SECOND),
+            "the dump covers the range asked for: {summary:?}"
+        );
         // The untrimmed buffer is not what got trimmed.
         assert_eq!(summarize(&path).unwrap().rows, 12);
     }
 
-    /// A `.dendro` buffer, the same ticks as the `.rez` tests. dendro's first
+    /// A `.dendro` buffer with a quiet table. dendro's first
     /// segment is staggered by a hash of the stream, so the assertions are
     /// on what retention guarantees rather than on exact segment edges.
     #[test]
     fn a_dendro_buffer_evicts_whole_segments_and_quiet_wal_rows() {
-        use metriken_storage::Catalog;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("buffer.dendro");
         let mut buf =
