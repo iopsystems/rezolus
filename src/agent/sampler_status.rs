@@ -155,6 +155,15 @@ fn registry() -> &'static Mutex<BTreeMap<&'static str, SamplerStatus>> {
     REGISTRY.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
+/// Forget a sampler's record, so the next `set_*` call, including
+/// `set_active_if_absent`, starts from nothing. For a sampler that initialises
+/// after agent start (`samplers::deferred`), whose waiting record must not
+/// outlive the wait.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn clear(name: &'static str) {
+    registry().lock().unwrap().remove(name);
+}
+
 /// Record a sampler as config-disabled.
 pub fn set_disabled(name: &'static str) {
     registry().lock().unwrap().insert(

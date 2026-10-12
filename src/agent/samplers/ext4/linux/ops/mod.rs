@@ -140,7 +140,18 @@ fn select_programs(
     (disabled, required)
 }
 
+/// Kernel modules this sampler needs loaded; see `samplers::deferred`.
+const MODULES: &[&str] = &["ext4"];
+
 fn init(config: Arc<Config>) -> SamplerResult {
+    if !config.enabled(NAME) {
+        return Ok(None);
+    }
+
+    crate::agent::samplers::deferred::until_loaded(NAME, MODULES, config, init_now)
+}
+
+fn init_now(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
     }

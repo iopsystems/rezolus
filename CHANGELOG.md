@@ -692,6 +692,15 @@
 
 ### Fixed
 
+- **ext4 samplers start when ext4 loads.** ext4 and jbd2 are modules on most
+  distribution kernels and load at the first ext4 mount, which on a host
+  whose root filesystem is not ext4 (Amazon Linux 2023, RHEL) often comes
+  after the agent has started at boot. `ext4_alloc` and `ext4_journal` then
+  failed to load with "Invalid argument (os error 22)", and `ext4_ops`
+  reported unsupported, and none was retried: the host recorded no ext4
+  metrics until the agent was restarted. A sampler whose module is neither
+  loaded nor built in now reports unsupported with "waiting for kernel module
+  ext4 to load", checks every 5 s, and initialises once it loads.
 - In live mode, Record (a reset to a new recording) drops a refresh still in
   flight. A refresh begun before the reset could land after it and draw the
   old recording's data until the next refresh (within 5 s). The reset also
