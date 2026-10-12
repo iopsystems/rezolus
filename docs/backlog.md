@@ -271,7 +271,7 @@ Source: [simple-capture viewer](journal/2026-07-03-simple-capture-viewer.md).
 
 Source: [per-source descriptions](journal/2026-07-04-per-source-descriptions.md).
 
-- **Backfill descriptions on a parquet lacking `# HELP`** — Open, retargeted:
+- **Backfill descriptions on a recording lacking `# HELP`** — Open, retargeted:
   `annotate --descriptions` on a `.dendro`. The parquet form is gone (6.x
   refuses `annotate` on a parquet), but a Prometheus scrape into `.dendro`
   without `# HELP` has the same blank descriptions. Recorded as it was:
@@ -306,8 +306,10 @@ Source: [window sidecar cost](journal/2026-08-17-window-sidecar-cost.md)
 - **Emit sidecars only for metrics that have a window** — Open, applies to
   dendro for V2-sourced tables: metriken-storage's `table_to_batch`
   (`table.rs:217-233`) writes both sidecars for every column of a table
-  without a table-level window, which 6.x produces from `convert` of a V2 raw
-  recording and `upgrade --to dendro` of a V2 `.rez`. Streamed groups and
+  without a table-level window, which 6.x will produce from `convert` of a V1
+  or V2 raw recording once `convert` writes `.dendro`. `upgrade --to dendro`
+  of a V2 `.rez` copies the 5.x segments byte for byte, sidecars included, so
+  this change does not reach them. Streamed groups and
   Prometheus scrapes carry one table-level pair and are unaffected. The cited
   `rez.rs:262` is now metriken-storage `src/table.rs`. Recorded as it was:
   Open, recorder-side, lossless, **lands on its own**. `rez.rs:262` pushes both sidecar fields
@@ -417,7 +419,8 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   dendro writer commits each tick's rows to the archive's WAL table in one
   transaction (dendro `Writer::wal_tick`), and readers materialize the WAL
   tail, so an unclean kill loses at most the ticks not yet committed (one
-  queued, one committing) rather than a quiet table's unsealed segment.
+  committing, one in dendro's bound-1 hand-off at `writer.rs:352`, and one
+  blocked in `wal_tick`'s send) rather than a quiet table's unsealed segment.
   That is the WAL the item asked for. Not measured on a killed dendro
   recording; *reopen* if a kill test recovers less than
   every committed tick. Recorded as it was: Open. At fleet scale a quiet
@@ -627,8 +630,9 @@ Source: [`.rez` v3 versus parquet on the read path](journal/2026-08-27-rez-vs-pa
   `schema_hash` already asserts — one pass per table would serve all of them.
 - **Seal larger segments** — Open, applies to dendro too: its writer seals at
   the same `max_rows: 900` default. The size comparison in the 6.0 readiness
-  entry ("Measurement") is the measurement that decides it for dendro; the
-  figures below are from `.rez`. Recorded as it was: the ONLY lever on the
+  entry ("Measurement") is the size side of the trade for dendro; finalize
+  time at a larger `max_rows` is not in that measurement. The figures below
+  are from `.rez`. Recorded as it was: the ONLY lever on the
   remaining axis: `.rez` is still 2.25× parquet's size at 50 ms. Segments
   average 218 KB against the 1.4 MiB the container was priced at, so compression
   cannot work across boundaries. **It is a trade, not a win** — `max_rows: 900`

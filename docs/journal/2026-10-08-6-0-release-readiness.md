@@ -217,7 +217,7 @@ Save as Report, server (`src/viewer/actions.rs`, `save_with_selection` from
 |---|---|---|---|
 | `.dendro` | `build_dendro_report` (:606) | `.dendro` (stays) | via `build_rez_report_from_rez` |
 | `.rez` | `build_rez_report_from_rez` (:535) | `.rez` via `rez_v3_rewrite::copy_recordings_into` | `src/viewer/report_save_rez.rs:20`, `actions.rs:863`, `crates/viewer/src/lib.rs:1055` |
-| two parquets (compare) | `build_rez_report_from_parquets` (:720) | `.rez` via `parquet_ingest`; row trim via `parquet_rows_in`/`rewrite_parquet_bytes` (`crates/report-save/src/lib.rs:467`, `:388`), which goes with it | `actions.rs:910`, `crates/viewer/src/lib.rs:1088` |
+| two parquets (compare) | `build_rez_report_from_parquets` (:720) | `.rez` via `parquet_ingest`; row trim via `parquet_rows_in` (`crates/report-save/src/lib.rs:467`), which goes with it; `rewrite_parquet_bytes` (`:388`) also serves the one-parquet row and goes when both rows have gone | `actions.rs:910`, `crates/viewer/src/lib.rs:1088` |
 | one parquet | `save_single_parquet` (:183) | parquet | `src/viewer/report_save.rs:21`, `crates/viewer/src/report_save.rs`, `actions.rs:922`, `crates/viewer/src/lib.rs:1099` |
 | two parquets (A/B tarball) | `save_combined_ab_tarball` (:212) | `.parquet.ab.tar` | none outside its own tests; goes with `combine --ab` |
 
