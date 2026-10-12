@@ -473,6 +473,51 @@ fn a_prometheus_endpoint_records_into_a_dendro() {
     }
 }
 
+/// A Prometheus endpoint's `# HELP` lines land in its recording's
+/// `descriptions` metadata, the key an agent recording fills from
+/// `/metrics/descriptions`. A metric without a HELP line has no entry.
+#[test]
+fn a_prometheus_endpoints_help_text_is_the_recordings_descriptions() {
+    use metriken_storage::Catalog;
+
+    let port = spawn_fake_exporter_named("widgets_total");
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("help.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{port}/metrics,source=svc"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+
+    let catalog = metriken_storage::DendroCatalog::open(&output).expect("the archive opens");
+    let sources = catalog.sources().expect("the catalog reads");
+    assert_eq!(sources.len(), 1, "{sources:?}");
+    let json = sources[0]
+        .metadata
+        .get("descriptions")
+        .unwrap_or_else(|| panic!("no descriptions: {:?}", sources[0].metadata));
+    let descriptions: std::collections::BTreeMap<String, String> =
+        serde_json::from_str(json).expect("descriptions is a JSON object of strings");
+    assert_eq!(
+        descriptions,
+        std::collections::BTreeMap::from([(
+            "widgets_total".to_string(),
+            "Total requests.".to_string()
+        )]),
+        "queue_depth has no HELP line and so no entry"
+    );
+}
+
 /// A scrape's acquisition window is on the same clock as the row that holds
 /// it.
 ///

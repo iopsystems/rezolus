@@ -2342,6 +2342,24 @@ pub fn run(config: RecordingConfig) {
                                     ingest_failed.get_or_insert(e);
                                 }
                             }
+                            // The scrape's HELP lines, when it brought a name
+                            // not yet stored. A failed write is retried after
+                            // the next scrape rather than ending the run: the
+                            // rows are what the recording is for.
+                            if let Some(json) = conv.pending_descriptions() {
+                                let patch = BTreeMap::from([(
+                                    parquet_metadata::KEY_DESCRIPTIONS.to_string(),
+                                    json,
+                                )]);
+                                match rec.patch_metadata(idx, patch) {
+                                    Ok(()) => conv.descriptions_stored(),
+                                    Err(e) => warn!(
+                                        "not storing the HELP text of {} ({}) yet: {e}",
+                                        endpoints[idx].config.source_label(),
+                                        endpoints[idx].config.url
+                                    ),
+                                }
+                            }
                         }
                     }
                     Err(e) => {
