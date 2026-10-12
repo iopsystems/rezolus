@@ -1044,4 +1044,87 @@ mod tests {
             "and has values inside the range"
         );
     }
+
+    /// The property that keeps a hindsight buffer bounded: eviction frees
+    /// pages and later commits reuse them, so a buffer that evicts as fast as
+    /// it fills stops growing. Asserted as "the highest page count over ticks
+    /// 100 to 400 is no higher than over ticks 0 to 100", which goes red the
+    /// moment eviction stops reclaiming (a deleted segment or WAL row whose
+    /// pages are never reused) or stops running.
+    ///
+    /// High-water marks, not single readings: the page count swings within
+    /// each seal cycle (measured 349 to 451 pages on every 5-tick cycle, the
+    /// peak first reached at tick 29 and never exceeded over 2,000 ticks), so
+    /// comparing one tick against another compares a trough with a peak.
+    ///
+    /// Driven through `HindsightBuffer`, not the container: the dendro buffer
+    /// both seals segments and evicts WAL rows, and either could leak. The
+    /// numbers: a 20 s lookback at one tick a second, a segment every 5 rows,
+    /// so the live working set is about 20 rows plus one segment of overhang.
+    /// 300 noisy counters a tick give each row real size, so a leaked segment
+    /// per lookback shows in the page count. Ticks 0 to 100 are five
+    /// lookbacks, past the first full turnover and its high-water mark; ticks
+    /// 100 to 400 are fifteen more turnovers. A quiet table (a row every 7
+    /// ticks) stays in the WAL, so WAL eviction is in the cycle too.
+    #[test]
+    fn a_dendro_buffer_plateaus_across_many_evict_cycles() {
+        const COUNTERS: usize = 300;
+        const LOOKBACK: u64 = 20;
+        const SEAL_ROWS: usize = 5;
+        const WARM: u64 = 100;
+        const TICKS: u64 = 400;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("buffer.dendro");
+        let mut buf = HindsightBuffer::create_dendro(
+            &path,
+            seed(),
+            Duration::from_secs(LOOKBACK),
+            seal_every(SEAL_ROWS),
+        )
+        .unwrap();
+
+        // xorshift: values that do not compress away, so the segments have
+        // real size.
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        // High-water page counts over ticks [0, WARM] and (WARM, TICKS).
+        let (mut warm_pages, mut late_pages, mut late_free) = (0u32, 0u32, 0u32);
+        for i in 0..TICKS {
+            let ts = ANCHOR + i * SECOND;
+            let window = Some(::rez::window::Window::new(ts - SECOND / 2, ts));
+            let mut counters: Vec<_> = (0..COUNTERS)
+                .map(|c| counter(&format!("bulk_{c}"), "bulk", next(), window))
+                .collect();
+            if i % 7 == 0 {
+                counters.push(counter("quiet_ops", "quiet", i, window));
+            }
+            buf.ingest(&snap(ts, counters), ts, 0).unwrap();
+            buf.maintain().unwrap();
+            buf.sync().unwrap();
+            let now = summarize(&path).unwrap();
+            if i <= WARM {
+                warm_pages = warm_pages.max(now.pages);
+            } else if now.pages > late_pages {
+                (late_pages, late_free) = (now.pages, now.free_pages);
+            }
+        }
+
+        assert!(
+            late_pages <= warm_pages,
+            "the buffer must plateau: at most {warm_pages} pages over ticks 0-{WARM}, \
+             {late_pages} ({late_free} free) over ticks {WARM}-{TICKS}",
+        );
+        // And retention ran: the buffer holds about a lookback, not the run.
+        let retained = summarize(&path).unwrap().retained().unwrap();
+        assert!(
+            retained < Duration::from_secs(LOOKBACK + 2 * SEAL_ROWS as u64),
+            "retained {retained:?}"
+        );
+    }
 }
