@@ -757,9 +757,11 @@ Source: [Rezolus 6.0.0: release readiness](journal/2026-10-08-6-0-release-readin
   handshake opens; refuse a Rezolus agent that cannot stream; scrape
   `/metrics` from any other source (cachecannon is refused today). Done in
   rezolus's own recorder first (metriken-recorder entry, step 2).
+- **Remove the `.rez`, parquet and raw writers from `record` and hindsight**
+  — DONE (this PR): both write `.dendro` only and refuse any other output,
+  pointing at a 5.x recorder or hindsight (metriken-recorder entry, step 2).
 - **Remove the `.rez`, parquet and raw writers** — Open. Decision 5: 6.x
-  writes `.dendro` only. `record` and hindsight (metriken-recorder entry,
-  step 2), Save as Report in both viewers, and the `recording` subcommands
+  writes `.dendro` only. Save as Report in both viewers, and the `recording` subcommands
   `combine`, `convert`, `filter`, `snapshot`, `upgrade` and `annotate` (with
   the event and check writers that share it). The entry's inventory lists
   each writer with its path. Needs a parquet-to-`.dendro` path, `.rez` to
@@ -776,11 +778,11 @@ Source: [Rezolus 6.0.0: release readiness](journal/2026-10-08-6-0-release-readin
   `recording upgrade --to dendro`; `filter` to a required `-o x.dendro`;
   `combine` `.dendro` only, `--ab` removed; `snapshot` of a `.rez` to
   `.dendro`; `upgrade --to dendro` the default; MCP `export_query` removed.
-- **Move callers off parquet and `.rez` output** — Open. `docker/rezolus-capture`,
-  `scripts/rezolus-capture`, `data/test_fixtures/compare-demo.sh`, the CI
-  smoke steps in `.github/workflows/cargo.yml` (:330-351, :361-382),
-  llm-perf's non-`.dendro` server metrics, systemslab's runner (`-o
-  metrics.rez`). `labels/specs/*.toml` pin a 5.17.1-alpha.8 recorder and do
+- **Move callers off parquet and `.rez` output** — Open. Done (this PR):
+  `docker/rezolus-capture` and `scripts/rezolus-capture` (one `record` per
+  capture into `capture.dendro`), `data/test_fixtures/compare-demo.sh`, and
+  the CI smoke steps in `.github/workflows/cargo.yml`. Open: llm-perf's
+  non-`.dendro` server metrics, systemslab's runner (`-o metrics.rez`). `labels/specs/*.toml` pin a 5.17.1-alpha.8 recorder and do
   not block 6.0.0; moving that pin to 6.x needs `-o .dendro`.
 - **metriken path steps 4 to 7 and their follow-ups** — Open. Decision 7:
   6.0.0 ships after `metriken-recorder`, templates in the archive,
