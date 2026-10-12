@@ -34,9 +34,27 @@ static __always_inline void array_incr(void* array, u32 idx) {
     array_add(array, idx, 1);
 }
 
+// A histogram map holds one slice of buckets per CPU, so CPUs recording into
+// the same bucket do not write the same cache line; userspace sums the slices.
+// The map is declared with HISTOGRAM_BUCKETS * HISTOGRAM_SLICES entries (the
+// agent's MAX_CPUS) and the builder sets it to the possible CPUs before load.
+// A slice is (65 - grouping_power) << grouping_power buckets: 496 at power 3,
+// 62 cache lines, so each slice starts on a line. That holds at any
+// grouping power of 3 or more (the width is a multiple of 8 buckets) and
+// not below 3.
+#define HISTOGRAM_SLICES 1024
+#define HISTOGRAM_SLICE_BUCKETS(grouping_power) ((65 - (grouping_power)) << (grouping_power))
+_Static_assert(HISTOGRAM_SLICE_BUCKETS(3) == HISTOGRAM_BUCKETS_POW_3,
+               "a slice must be as wide as the bucket count the builder checks");
+
+// The index of `value`'s bucket in this CPU's slice.
+static __always_inline u32 histogram_index(u64 value, u8 grouping_power) {
+    return bpf_get_smp_processor_id() * HISTOGRAM_SLICE_BUCKETS(grouping_power) +
+           value_to_index(value, grouping_power);
+}
+
 static __always_inline void histogram_incr(void* array, u8 grouping_power, u64 value) {
-    u32 idx = value_to_index(value, grouping_power);
-    array_add(array, idx, 1);
+    array_add(array, histogram_index(value, grouping_power), 1);
 }
 
 static __always_inline void array_set_if_larger(void* array, u32 idx, u64 value) {

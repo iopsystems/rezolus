@@ -612,7 +612,7 @@ fn whole_pages<T>(count: usize) -> usize {
 }
 
 use counters::{Counters, CpuCounters, FilesystemCounters, PackedCounters};
-use histogram::{Histogram, HistogramBatch};
+use histogram::{Histogram, HistogramBatch, HISTOGRAM_SLICES};
 pub use sync_primitive::SyncPrimitive;
 
 /// The CPU ids this host actually has, for declaring a per-CPU group's
@@ -739,9 +739,10 @@ pub(crate) fn possible_cpus() -> usize {
         let contents = match std::fs::read_to_string("/sys/devices/system/cpu/possible") {
             Ok(contents) => contents,
             Err(e) => {
-                debug!(
+                warn!(
                     "failed to read /sys/devices/system/cpu/possible ({e}); \
-                     falling back to MAX_CPUS={}",
+                     falling back to MAX_CPUS={}, which sizes every BPF histogram \
+                     for that many CPUs (about 3.9 MiB each)",
                     crate::agent::MAX_CPUS
                 );
                 return crate::agent::MAX_CPUS;
