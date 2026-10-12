@@ -73,6 +73,22 @@ impl ModuleTree {
         Some(list.lines().any(|line| line.trim_end().ends_with(&file)))
     }
 
+    /// The running kernel can load the module: `modules.dep` lists every
+    /// loadable module by path, compressed or not (`kernel/fs/xfs/xfs.ko`,
+    /// `xfs.ko.xz`, `.zst`, `.gz`). `None` when `modules.dep` is unreadable.
+    fn available(&self, name: &str) -> Option<bool> {
+        let dep = std::fs::read_to_string(self.modules.join("modules.dep")).ok()?;
+        let file = format!("/{name}.ko");
+
+        Some(dep.lines().any(|line| {
+            let path = line.split(':').next().unwrap_or("");
+            path.ends_with(&file)
+                || [".xz", ".zst", ".gz"]
+                    .iter()
+                    .any(|z| path.strip_suffix(z).is_some_and(|p| p.ends_with(&file)))
+        }))
+    }
+
     /// Modules from `names` that are not loaded, for the waiting thread.
     /// Unlike [`waiting_for`](Self::waiting_for), an unreadable
     /// `modules.builtin` counts as not built in: the thread only runs once a
@@ -147,6 +163,22 @@ fn until_loaded_in(
 
     if waiting.is_empty() {
         return init(config);
+    }
+
+    // Neither built in nor shipped for this kernel: nothing will ever load
+    // it, so say so rather than wait for the life of the agent. An
+    // unreadable `modules.dep` waits, as before.
+    let absent: Vec<&str> = waiting
+        .iter()
+        .copied()
+        .filter(|m| tree.available(m) == Some(false))
+        .collect();
+    if !absent.is_empty() {
+        return Err(crate::agent::sampler_status::Unsupported(format!(
+            "this kernel has no {} module (not built in, not in modules.dep)",
+            absent.join(", ")
+        ))
+        .into());
     }
 
     info!(
@@ -317,6 +349,67 @@ mod tests {
     fn builtin_matches_the_whole_file_name() {
         let (_d, t) = tree(&[], Some(&["xjbd2"]));
         assert_eq!(t.waiting_for(&["jbd2"]), vec!["jbd2"]);
+    }
+
+    fn write_dep(t: &ModuleTree, paths: &[&str]) {
+        let list: String = paths
+            .iter()
+            .map(|p| format!("{p}: kernel/lib/libcrc32c.ko\n"))
+            .collect();
+        std::fs::write(t.modules.join("modules.dep"), list).unwrap();
+    }
+
+    #[test]
+    fn available_matches_compressed_and_plain_module_files() {
+        let (_d, t) = tree(&[], Some(&[]));
+        write_dep(
+            &t,
+            &[
+                "kernel/fs/xfs/xfs.ko.xz",
+                "kernel/fs/ext4/ext4.ko",
+                "kernel/fs/jbd2/jbd2.ko.zst",
+            ],
+        );
+        assert_eq!(t.available("xfs"), Some(true));
+        assert_eq!(t.available("ext4"), Some(true));
+        assert_eq!(t.available("jbd2"), Some(true));
+        assert_eq!(t.available("btrfs"), Some(false));
+        // Whole file name: `fs` is not found by `xfs.ko`.
+        assert_eq!(t.available("fs"), Some(false));
+    }
+
+    #[test]
+    fn available_is_unknown_without_modules_dep() {
+        let (_d, t) = tree(&[], Some(&[]));
+        assert_eq!(t.available("xfs"), None);
+    }
+
+    fn never_init(_: Arc<Config>) -> SamplerResult {
+        panic!("init must not run for a module this kernel does not have");
+    }
+
+    /// A module neither built in nor in modules.dep is reported unsupported
+    /// at once, not waited for.
+    #[test]
+    fn a_module_this_kernel_does_not_have_is_unsupported() {
+        let (_d, t) = tree(&[], Some(&[]));
+        write_dep(&t, &["kernel/fs/ext4/ext4.ko.xz"]);
+        let err = match until_loaded_in(
+            t,
+            Duration::from_millis(10),
+            "deferred_test_absent",
+            &["xfs"],
+            vec![],
+            Arc::new(toml::from_str("").unwrap()),
+            never_init,
+        ) {
+            Err(e) => e,
+            Ok(_) => panic!("expected unsupported"),
+        };
+        let u = err
+            .downcast_ref::<crate::agent::sampler_status::Unsupported>()
+            .expect("unsupported, not failed");
+        assert!(u.0.contains("no xfs module"), "{}", u.0);
     }
 
     // Lifecycle tests. The status registry is process-global, so each test
