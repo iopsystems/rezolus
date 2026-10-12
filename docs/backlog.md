@@ -104,9 +104,10 @@ Source: [retire the `.parquet.ab.tar` container](journal/2026-08-27-retire-ab-ta
 - **Windowless `.rez` tables (non-rezolus sides)** — Open. Ingest is close (the
   recorder already converts Prometheus scrapes to Snapshots; `demote_from_rez`
   documents the refusal as policy, `src/recorder/mod.rs:744-760`). The reader must
-  report *no* band for such a table rather than a fabricated one. Open sub-question:
-  whether these should be recordable by `record` at all, or only constructible by
-  `combine`.
+  report *no* band for such a table rather than a fabricated one. The
+  sub-question, whether `record` should write these at all, was answered
+  2026-10-12: 6.x writes no `.rez` ([6.0 readiness](journal/2026-10-08-6-0-release-readiness.md),
+  decision 5), so only the reader half remains.
 
 ## Viewer — charts & heatmap UX
 
@@ -542,14 +543,18 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   15k-segment archive. *Reopen:* if segment counts get pathological in practice
   (the compactor below is the real answer).
 
-- **Offline `.rez` compactor** — Roadmap. Merge a segmented archive's per-table
+- **Offline `.rez` compactor** — Dropped 2026-10-12: 6.x writes no `.rez`
+  ([6.0 readiness](journal/2026-10-08-6-0-release-readiness.md), decision 5);
+  compaction is dendro's `CompactSpec`. Recorded as it was: Merge a segmented archive's per-table
   segments into single files offline (likely under `rezolus parquet`): recovers
   the compression ratio and per-segment footer overhead that streaming trades
   for durability, and its output is fully v1-readable (`file` + `files`,
   `version: 1`), making it the forward-compatibility downgrade path. With the
   segment-aware read path in scope, this is an optimization, not a read-speed
   requirement. Not needed for the streaming writer to ship.
-- **Full metric-identity column keys in `.rez` tables** — Open. Column names
+- **Full metric-identity column keys in `.rez` tables** — Dropped 2026-10-12:
+  a `.rez` write-format change, and 6.x writes no `.rez` (6.0 readiness,
+  decision 5). Recorded as it was: Column names
   are per-agent-process numeric ids, so an agent restart mid-recording remaps
   them; the merge policy splits conflicting columns. Keying on metric name +
   labels at write time would make restarts seamless (write-format change).
@@ -558,7 +563,8 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   thresholds (est. bytes primary, row cap, ~5 min age bound for the kill-loss
   window) ship as constants in metriken-storage's `src/rez/rez.rs`. *Reopen:* if real
   workloads need tuning — promote to a `--flag` or config knob.
-- **Fast finalize for the classic parquet path** — By design. The single-file
+- **Fast finalize for the classic parquet path** — Dropped 2026-10-12: 6.x
+  writes no parquet (6.0 readiness, decision 5). Recorded as it was, By design: The single-file
   parquet's wide schema is only knowable once recording ends, so its finalize
   replays the whole msgpack spool. *Reopen:* if a client needs `.parquet` output
   with fast stop — likely shape: record to `.rez`, convert offline.
@@ -693,24 +699,54 @@ Source: [Rezolus 6.0.0: release readiness](journal/2026-10-08-6-0-release-readin
   preview `--stream` `.rez` is not included.
 - **Cross-version CI job** — Open. v5.25.1 binary against the current agent,
   the current recorder against a v5.25.1 agent, the v5.25.1 reader on 6.0
-  output, the v5.22.1 reader on a 6.0 `.rez` (systemslab's current pin).
+  output. (The v5.22.1 reader on a 6.0 `.rez` was dropped 2026-10-12: 6.0
+  writes no `.rez`.)
 - **Smaller test gaps** — Open. V3 raw `recording convert`; a WASM `.dendro`
   test; `tests/viewer_smoke.sh` in CI; read `site/viewer/data/mr2-report.parquet`
   in a test; upgrade a v1 tar archive.
-- **Record a non-streaming agent to `.rez` with a warning** — Open. When the
-  output was not named; an explicit `-o x.dendro` still refuses.
-- **Endpoint detection** — Open. For `.dendro` output, stream any source whose
-  `/metrics/stream` handshake opens; a Rezolus agent that cannot stream falls
-  under the `.rez` fallback; scrape `/metrics` from any other source
-  (cachecannon is refused today). `.rez` and parquet output keep scraping
-  `/metrics/binary`.
+- **Refuse an agent older than 5.21.0** — Open. At startup (exit 1, nothing
+  written) and mid-run (that endpoint refused, the rest recorded), with a
+  pointer to a 5.x recorder, and a test of each. Replaces the withdrawn
+  "record a non-streaming agent to `.rez`" (decision 1, withdrawn
+  2026-10-12).
+- **Endpoint detection** — Open. Stream any source whose `/metrics/stream`
+  handshake opens; refuse a Rezolus agent that cannot stream; scrape
+  `/metrics` from any other source (cachecannon is refused today). Done in
+  rezolus's own recorder first (metriken-recorder entry, step 2).
+- **Remove the `.rez`, parquet and raw writers** — Open. Decision 5: 6.x
+  writes `.dendro` only. `record` and hindsight (metriken-recorder entry,
+  step 2), Save as Report in both viewers, and the `recording` subcommands
+  `combine`, `convert`, `filter`, `snapshot`, `upgrade` and `annotate` (with
+  the event and check writers that share it). The entry's inventory lists
+  each writer with its path. Needs a parquet-to-`.dendro` path, `.rez` to
+  `.dendro` in the WASM viewer (or no report save there for those sources),
+  and raw to `.dendro` in `convert`.
+- **Owner decisions on in-place and per-subcommand behaviour** — Open. The
+  entry's proposals: `annotate` on `.rez`/parquet refused with a pointer to
+  `recording upgrade --to dendro`, or kept as an in-place rewrite; `filter`
+  to a required `-o x.dendro`; `combine` `.dendro` only, `--ab` removed;
+  `snapshot` of a `.rez` to `.dendro`; `upgrade --to dendro` the default;
+  MCP `export_query` keeps parquet. Decide before the writer removal lands.
+- **Move callers off parquet and `.rez` output** — Open. `docker/rezolus-capture`,
+  `scripts/rezolus-capture`, `labels/specs/*.toml`,
+  `data/test_fixtures/compare-demo.sh`, the CI smoke steps in
+  `.github/workflows/cargo.yml` (:330-351, :361-382), llm-perf's
+  non-`.dendro` server metrics, systemslab's runner (`-o metrics.rez`).
+- **metriken path steps 4 to 7 and their follow-ups** — Open. Decision 7:
+  6.0.0 ships after `metriken-recorder`, templates in the archive,
+  `metriken-py`, and `metriken-dashboard`/`metriken-viewer`, with rezolus on
+  them, and after the follow-ups in the metriken plan's step 7 are landed or
+  measured and dropped.
 - **Measurement harness and the two missing measurements** — Open. Harness in
-  the repository; `.dendro` / `.rez` / parquet sizes for one agent; a 24-hour
-  `hindsight` and `record` run on Linux.
+  the repository; `.dendro` sizes from 6.0 against `.rez` and parquet from a
+  5.x recorder, for one agent; a 24-hour `hindsight` and `record` run on
+  Linux.
 - **Upgrade page and stale docs** — Open. `site/docs/usage.html`,
   `architecture.html`, the viewer bundle README in `release.yml`, the
   `recording` about text, `src/mcp/skill/SKILL.md`, the hindsight `output`
-  path change.
+  path change, and `CLAUDE.md`, `docs/usage.md` and `record`'s help once the
+  writers go. The upgrade page covers `.dendro`-only writing and the refusal
+  of agents older than 5.21.0.
 - **Homebrew tap at 5.19.0** — Open. Sixteen bump PRs open in
   `iopsystems/homebrew-iop` (#134–#151).
 - **Release candidate soak** — Open. A day on a Linux host and a fleet host,
