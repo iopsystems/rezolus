@@ -73,6 +73,20 @@ impl ModuleTree {
         Some(list.lines().any(|line| line.trim_end().ends_with(&file)))
     }
 
+    /// Modules from `names` that are not loaded, for the waiting thread.
+    /// Unlike [`waiting_for`](Self::waiting_for), an unreadable
+    /// `modules.builtin` counts as not built in: the thread only runs once a
+    /// module was found missing, and a read that fails later (a package
+    /// operation replacing `/lib/modules/<release>`) must not start init
+    /// with the module still absent.
+    fn still_waiting_for(&self, names: &[&'static str]) -> Vec<&'static str> {
+        names
+            .iter()
+            .copied()
+            .filter(|name| !self.loaded(name) && self.builtin(name) != Some(true))
+            .collect()
+    }
+
     /// Modules from `names` that are neither loaded nor built in. Empty when
     /// all are present, or when built-in status cannot be read, in which case
     /// the caller initialises at once as it did before.
@@ -183,7 +197,7 @@ fn watch(tree: ModuleTree, interval: Duration, p: Pending, slot: &OnceLock<Box<d
 
     loop {
         std::thread::sleep(interval);
-        let waiting = tree.waiting_for(p.modules);
+        let waiting = tree.still_waiting_for(p.modules);
         if waiting.is_empty() {
             break;
         }
@@ -200,8 +214,10 @@ fn watch(tree: ModuleTree, interval: Duration, p: Pending, slot: &OnceLock<Box<d
             for group in &p.groups {
                 group.lift_zero_bound();
             }
-            crate::agent::sampler_status::set_active_if_unsupported(name);
+            // Stored before the status says active, so a reader that sees
+            // active also sees refreshes forwarded.
             let _ = slot.set(sampler);
+            crate::agent::sampler_status::set_active_if_unsupported(name);
             info!("{name}: started after its kernel module loaded");
         }
         // Groups stay bounded to zero: nothing will fill them.
@@ -544,6 +560,43 @@ mod tests {
                 Some(SamplerState::Unsupported { ref reason }) if reason.contains("module ext4 to")
             ))
             .await,
+            "{:?}",
+            state(NAME)
+        );
+    }
+
+    static GONE_INITS: AtomicUsize = AtomicUsize::new(0);
+
+    fn gone_init(_: Arc<Config>) -> SamplerResult {
+        GONE_INITS.fetch_add(1, Ordering::SeqCst);
+        Err(anyhow::anyhow!(
+            "must not run: ext4 never loads in this test"
+        ))
+    }
+
+    /// `modules.builtin` becoming unreadable while waiting does not end the
+    /// wait: ext4 is still not loaded.
+    #[tokio::test]
+    async fn losing_modules_builtin_while_waiting_keeps_waiting() {
+        const NAME: &str = "deferred_test_builtin_gone";
+        let (_d, t) = tree(&[], Some(&[]));
+        let _sampler = until_loaded_in(
+            t.clone(),
+            TICK,
+            NAME,
+            &["ext4"],
+            vec![],
+            test_config(),
+            gone_init,
+        )
+        .unwrap()
+        .unwrap();
+
+        std::fs::remove_file(t.modules.join("modules.builtin")).unwrap();
+        tokio::time::sleep(20 * TICK).await;
+        assert_eq!(GONE_INITS.load(Ordering::SeqCst), 0);
+        assert!(
+            matches!(state(NAME), Some(SamplerState::Unsupported { .. })),
             "{:?}",
             state(NAME)
         );
