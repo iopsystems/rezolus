@@ -9,7 +9,8 @@ its source (entry or origin) first, and close it out there.
 
 Status key: **Open** (actionable now), **Roadmap** (planned next phase),
 **By design** (documented limitation, reopen only if the assumption changes),
-**Idea** (net-new capability, not yet scoped).
+**Idea** (net-new capability, not yet scoped), **Dropped** (no longer
+applies; the item says why and when, and keeps its original text).
 
 ## Viewer — compare mode (A/B)
 
@@ -270,18 +271,21 @@ Source: [simple-capture viewer](journal/2026-07-03-simple-capture-viewer.md).
 
 Source: [per-source descriptions](journal/2026-07-04-per-source-descriptions.md).
 
-- **Backfill descriptions on a parquet lacking `# HELP`** — Open. A
-  Prometheus capture whose exporter emits no `# HELP` has blank descriptions
-  (nothing to harvest at record time). A `parquet annotate --descriptions name=text`
-  path could backfill the footer `descriptions` key after the fact. *Reopen:* if
-  blank-description foreign captures become a recurring annoyance.
+- **Backfill descriptions on a parquet lacking `# HELP`** — Dropped 2026-10-12
+  (6.0 readiness, decision 5 and per-subcommand behaviour): 6.x refuses
+  `annotate` on a parquet and has no `convert` to parquet ([6.0
+  readiness](journal/2026-10-08-6-0-release-readiness.md)). Recorded as it was:
+  A Prometheus capture whose exporter emits no `# HELP` has blank descriptions
+  (nothing to harvest at record time). A `parquet annotate --descriptions
+  name=text` path could backfill the footer `descriptions` key after the fact.
+  *Reopen:* if blank-description foreign captures become a recurring annoyance.
   **Second motivation (2026-08-13):** `parquet convert` gave raw recordings the
   same gap, and harder — `annotate` already takes `--systeminfo`, so a converted
-  file can get its hardware summary back, but descriptions have no annotate route
-  at all. The only recovery is a full `--force` reconvert of the original raw
-  input, which is a poor trade for one footer key. Making `annotate` accept
-  `--descriptions` (file or `name=text`) closes both cases at once; scoped as its
-  own PR, deliberately kept out of the `convert` change.
+  file can get its hardware summary back, but descriptions have no annotate
+  route at all. The only recovery is a full `--force` reconvert of the original
+  raw input, which is a poor trade for one footer key. Making `annotate` accept
+  `--descriptions` (file or `name=text`) closes both cases at once; scoped as
+  its own PR, deliberately kept out of the `convert` change.
 - Per-source-not-per-node descriptions, and "descriptions only exist if the origin
   supplied them," are **by design** — not backlog.
 
@@ -299,7 +303,12 @@ recording length, 55 ms under backpressure).
 Source: [window sidecar cost](journal/2026-08-17-window-sidecar-cost.md)
 (design, pre-build; every figure measured on a 32-core host).
 
-- **Emit sidecars only for metrics that have a window** — Open, recorder-side,
+- **Emit sidecars only for metrics that have a window** — Dropped 2026-10-12:
+  the per-metric sidecar columns are the SnapshotV2 table layout. 6.x records
+  only through `/metrics/stream`, whose acquisition groups carry one table-level
+  window pair, and refuses an agent that cannot stream ([6.0
+  readiness](journal/2026-10-08-6-0-release-readiness.md), decision 6), so
+  nothing 6.x writes has these columns. Recorded as it was: Open, recorder-side,
   lossless, **lands on its own**. `rez.rs:262` pushes both sidecar fields
   unconditionally, but only 413 of `cpu_usage`'s ~2,068 metrics have a window,
   so **3,310 of its 6,206 columns are all-null**; six tables (`cpu_perf`,
@@ -364,14 +373,18 @@ Source: [Recorder resource footprint — seal cost and peak RSS](journal/2026-08
 Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-sqlite-container.md)
 (design landed 2026-08-12, `f0d58a74`; both gating measurements passed).
 
-- **Adopt a target-encoded-size cap** — Open, **lower urgency after the 2026-08-13
-  footprint work**: segment count drives read cost (the compactor's problem) and
-  does not affect peak RSS, which is set by column count. A single global
-  *in-memory* `max_bytes` is mismatched at both ends: it makes `syscall_latency` emit 190
-  segments of 0.63 MB (7.6× past the ~25/table guidance) while letting
-  `cpu_usage` emit 6.23 MiB ones, because the compression ratio spans 1.32:1 to
-  62:1. Now that the per-table ratio is measured and stable within ±5%, a cap of
-  *target encoded size × an EWMA of the observed ratio* fixes both ends.
+- **Adopt a target-encoded-size cap** — Open, applies to dendro too: dendro's
+  `SealPolicy` (dendro 0.4.0 `src/seal.rs`), which metriken-storage's
+  `ArchiveWriter` uses through `WriterConfig::default()`, has the same in-memory
+  `max_bytes` (8 MiB) and `max_rows` (900) defaults. The figures below are from
+  `.rez`. **Lower urgency after the 2026-08-13 footprint work**: segment count
+  drives read cost (the compactor's problem) and does not affect peak RSS, which
+  is set by column count. A single global *in-memory* `max_bytes` is mismatched
+  at both ends: it makes `syscall_latency` emit 190 segments of 0.63 MB (7.6×
+  past the ~25/table guidance) while letting `cpu_usage` emit 6.23 MiB ones,
+  because the compression ratio spans 1.32:1 to 62:1. Now that the per-table
+  ratio is measured and stable within ±5%, a cap of *target encoded size × an
+  EWMA of the observed ratio* fixes both ends.
 - **`page_size` untested** — Open. Left at the 4096 default through the gating
   measurements; larger pages would shorten overflow chains for multi-MB BLOBs.
   Un-optimized, not chosen.
@@ -385,17 +398,31 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   permanently (measured 16.0× when the working set shrank 16×).
   `auto_vacuum=INCREMENTAL` at creation is adopted to defend this; it is free in
   steady state and **cannot be enabled later** without a full `VACUUM`.
-- **Hindsight migration to segments** — Roadmap. Retires the 4 KB slot ring
-  (`src/hindsight/state.rs`) and the separate dump-to-parquet path
-  (`src/hindsight/mod.rs:316`); dump becomes a consistent read or `VACUUM INTO`.
-- **v2 tar → v3 conversion tool** — Open (on demand). Reading v2 stays
-  supported; a converter is only needed to bring old recordings forward.
+- **Hindsight migration to segments** — Dropped 2026-10-12: done. The slot
+  ring is gone (`src/hindsight/state.rs` keeps only shared state, and its doc
+  comment says the ring's geometry has no analogue), the buffer is a dendro
+  archive with retention (`src/hindsight/buffer.rs`, `Writer::Dendro`), and a
+  dump goes through dendro's `copy_sources_into`. Recorded as it was:
+  Roadmap. Retires the 4 KB slot ring (`src/hindsight/state.rs`) and the
+  separate dump-to-parquet path (`src/hindsight/mod.rs:316`); dump becomes a
+  consistent read or `VACUUM INTO`.
+- **v2 tar → v3 conversion tool** — Dropped 2026-10-12 (6.0 readiness, decision
+  5 and per-subcommand behaviour): `recording upgrade --to v3` is removed and a
+  tar `.rez` converts straight to `.dendro`. Recorded as it was: Open (on
+  demand). Reading v2 stays supported; a converter is only needed to bring old
+  recordings forward.
 
-- **Per-table kill-loss for low-volume tables** — Open. At fleet scale a quiet
-  table seals every 180–300 s, so an unclean kill can lose its whole recording
-  while busy tables lose seconds (measured: 16 of 26 tables recovered nothing
-  from a 120 s run). Correct by policy; a WAL covering the unsealed tail would
-  close it.
+- **Per-table kill-loss for low-volume tables** — Dropped 2026-10-12: the
+  dendro writer commits each tick's rows to the archive's WAL table in one
+  transaction (dendro `Writer::wal_tick`), and readers materialize the WAL
+  tail, so an unclean kill loses the tick in flight rather than a quiet
+  table's unsealed segment. That is the WAL the item asked for. Not measured
+  on a killed dendro recording; *reopen* if a kill test recovers less than
+  every committed tick. Recorded as it was: Open. At fleet scale a quiet
+  table seals every 180–300 s, so an unclean kill can lose its whole
+  recording while busy tables lose seconds (measured: 16 of 26 tables
+  recovered nothing from a 120 s run). Correct by policy; a WAL covering the
+  unsealed tail would close it.
 - **`record` cannot write a multi-recording `.rez`** — **DONE** (this PR).
   Source: [multi-endpoint `.rez`](journal/2026-08-28-multi-endpoint-rez-record.md).
   Everything else in the stack is multi-recording — the manifest is a
@@ -545,8 +572,9 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
 
 - **Offline `.rez` compactor** — Dropped 2026-10-12: 6.x writes no `.rez`
   ([6.0 readiness](journal/2026-10-08-6-0-release-readiness.md), decision 5);
-  compaction is dendro's `CompactSpec`. Recorded as it was: Merge a segmented archive's per-table
-  segments into single files offline (likely under `rezolus parquet`): recovers
+  compaction is dendro's `CompactSpec`. Recorded as it was: Merge a segmented
+  archive's per-table segments into single files offline (likely under
+  `rezolus parquet`): recovers
   the compression ratio and per-segment footer overhead that streaming trades
   for durability, and its output is fully v1-readable (`file` + `files`,
   `version: 1`), making it the forward-compatibility downgrade path. With the
@@ -559,15 +587,20 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   them; the merge policy splits conflicting columns. Keying on metric name +
   labels at write time would make restarts seamless (write-format change).
   *Reopen:* if restart-heavy recordings make split columns a real annoyance.
-- **Seal thresholds as compile-time constants** — Open. Byte-first seal
-  thresholds (est. bytes primary, row cap, ~5 min age bound for the kill-loss
-  window) ship as constants in metriken-storage's `src/rez/rez.rs`. *Reopen:* if real
-  workloads need tuning — promote to a `--flag` or config knob.
+- **Seal thresholds as compile-time constants** — Open, applies to dendro
+  too: `record` passes `WriterConfig::default()`, so dendro's
+  `SealPolicy::default()` (8 MiB, 900 rows, 300 s, the same values) is a
+  constant there; hindsight already takes `segment_rows` from its config.
+  Byte-first seal thresholds (est. bytes primary, row cap, ~5 min age bound
+  for the kill-loss window) ship as constants in metriken-storage's
+  `src/rez/rez.rs`. *Reopen:* if real workloads need tuning — promote to a
+  `--flag` or config knob.
 - **Fast finalize for the classic parquet path** — Dropped 2026-10-12: 6.x
-  writes no parquet (6.0 readiness, decision 5). Recorded as it was, By design: The single-file
-  parquet's wide schema is only knowable once recording ends, so its finalize
-  replays the whole msgpack spool. *Reopen:* if a client needs `.parquet` output
-  with fast stop — likely shape: record to `.rez`, convert offline.
+  writes no parquet (6.0 readiness, decision 5). Recorded as it was, By design:
+  The single-file parquet's wide schema is only knowable once recording ends, so
+  its finalize replays the whole msgpack spool. *Reopen:* if a client needs
+  `.parquet` output with fast stop — likely shape: record to `.rez`, convert
+  offline.
 
 ## `.rez` v3 — read path
 
@@ -589,13 +622,16 @@ Source: [`.rez` v3 versus parquet on the read path](journal/2026-08-27-rez-vs-pa
   four identity indexes per segment per metric kind (~418 footer parses, ~1,670
   schema passes for one archive). A table's segments have identical schemas, which
   `schema_hash` already asserts — one pass per table would serve all of them.
-- **Seal larger segments** — Open, and now the ONLY lever on the remaining axis:
-  `.rez` is still 2.25× parquet's size at 50 ms. Segments average 218 KB against
-  the 1.4 MiB the container was priced at, so compression cannot work across
-  boundaries. **It is a trade, not a win** — `max_rows: 900` was chosen to cut
-  finalize 1147.6 → 549.8 ms, and with query latency now ahead of parquet the
-  trade is harder to justify than it looked. *Reopen:* if archive size becomes
-  the binding constraint.
+- **Seal larger segments** — Open, applies to dendro too: its writer seals at
+  the same `max_rows: 900` default. The size comparison in the 6.0 readiness
+  entry ("Measurement") is the measurement that would reopen it for dendro; the
+  figures below are from `.rez`. Recorded as it was: the ONLY lever on the
+  remaining axis: `.rez` is still 2.25× parquet's size at 50 ms. Segments
+  average 218 KB against the 1.4 MiB the container was priced at, so compression
+  cannot work across boundaries. **It is a trade, not a win** — `max_rows: 900`
+  was chosen to cut finalize 1147.6 → 549.8 ms, and with query latency now ahead
+  of parquet the trade is harder to justify than it looked. *Reopen:* if archive
+  size becomes the binding constraint.
 - **Read cost on a live/unsealed archive is unmeasured** — Open. Both benchmark
   arms were finalized; hindsight reads a buffer with a live WAL tail, which
   materializes differently. *Reopen:* measure alongside the first fix.
@@ -697,10 +733,11 @@ Source: [Rezolus 6.0.0: release readiness](journal/2026-10-08-6-0-release-readin
   `.rez` from 5.18.0, a v5.25 `.dendro`, an older parquet, a 6.0 recording)
   with golden query results; open, query and upgrade each in a test. 5.x's
   preview `--stream` `.rez` is not included.
-- **Cross-version CI job** — Open. v5.25.1 binary against the current agent,
-  the current recorder against a v5.25.1 agent, the v5.25.1 reader on 6.0
-  output. (The v5.22.1 reader on a 6.0 `.rez` was dropped 2026-10-12: 6.0
-  writes no `.rez`.)
+- **Cross-version CI job** — Open. v5.25.1 and v5.27.0 binaries against the
+  current agent, the current recorder against v5.25.1 and v5.27.0 agents, the
+  v5.25.1 and v5.27.0 readers on 6.0 output (5.25.1 measured and systemslab's
+  next pin; 5.27.0 the latest 5.x). (The v5.22.1 reader on a 6.0 `.rez` was
+  dropped 2026-10-12: 6.0 writes no `.rez`.)
 - **Smaller test gaps** — Open. V3 raw `recording convert`; a WASM `.dendro`
   test; `tests/viewer_smoke.sh` in CI; read `site/viewer/data/mr2-report.parquet`
   in a test; upgrade a v1 tar archive.
@@ -720,17 +757,24 @@ Source: [Rezolus 6.0.0: release readiness](journal/2026-10-08-6-0-release-readin
   the event and check writers that share it). The entry's inventory lists
   each writer with its path. Needs a parquet-to-`.dendro` path, `.rez` to
   `.dendro` in the WASM viewer (or no report save there for those sources),
-  and raw to `.dendro` in `convert`.
+  and raw to `.dendro` in `convert`. Also removes MCP `export_query` with
+  `--export-dir`.
+- **`snapshot` of a live 5.x `.rez`** — Open. Check whether
+  `convert_v3_to_dendro` reads a consistent snapshot of a `.rez` that a 5.x
+  writer is still appending to (a 5.x hindsight buffer). If it does not,
+  `recording snapshot` refuses a `.rez` input (6.0 readiness, per-subcommand
+  behaviour).
 - **Owner decisions on in-place and per-subcommand behaviour** — DONE
   (2026-10-12): `annotate` on `.rez`/parquet refused with a pointer to
   `recording upgrade --to dendro`; `filter` to a required `-o x.dendro`;
   `combine` `.dendro` only, `--ab` removed; `snapshot` of a `.rez` to
   `.dendro`; `upgrade --to dendro` the default; MCP `export_query` removed.
 - **Move callers off parquet and `.rez` output** — Open. `docker/rezolus-capture`,
-  `scripts/rezolus-capture`, `labels/specs/*.toml`,
-  `data/test_fixtures/compare-demo.sh`, the CI smoke steps in
-  `.github/workflows/cargo.yml` (:330-351, :361-382), llm-perf's
-  non-`.dendro` server metrics, systemslab's runner (`-o metrics.rez`).
+  `scripts/rezolus-capture`, `data/test_fixtures/compare-demo.sh`, the CI
+  smoke steps in `.github/workflows/cargo.yml` (:330-351, :361-382),
+  llm-perf's non-`.dendro` server metrics, systemslab's runner (`-o
+  metrics.rez`). `labels/specs/*.toml` pin a 5.17.1-alpha.8 recorder and do
+  not block 6.0.0; moving that pin to 6.x needs `-o .dendro`.
 - **metriken path steps 4 to 7 and their follow-ups** — Open. Decision 7:
   6.0.0 ships after `metriken-recorder`, templates in the archive,
   `metriken-py`, and `metriken-dashboard`/`metriken-viewer`, with rezolus on
