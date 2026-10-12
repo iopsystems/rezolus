@@ -107,8 +107,8 @@ struct RowsQuery {
 ///
 /// This is deliberately NOT a second spelling of `/metrics/binary`. Its body
 /// omits schemas that have not changed, which a snapshot body can never do:
-/// snapshots are contractually self-contained, because `record --format raw`
-/// writes them verbatim for `recording convert` to decode offline.
+/// snapshots are contractually self-contained, because a 5.x `record --format
+/// raw` wrote them verbatim for `recording convert` to decode offline.
 async fn rows(
     State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<RowsQuery>,

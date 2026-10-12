@@ -198,8 +198,8 @@ pub(crate) fn open_source_with_pool_labeled(
     // silently answering from one arm is the worse failure. But the analysis
     // tools fold a per-metric query error into `NoData`, so that refusal
     // surfaces as "analyzed 41 metrics, found anomalies in 0": a clean-looking
-    // wrong answer, on the shape `record --endpoint a --endpoint b -o out.rez`
-    // now produces by default. So the choice is made here, where both the
+    // wrong answer, on the shape `record --endpoint a --endpoint b -o out.dendro`
+    // produces. So the choice is made here, where both the
     // selection and any failure to select reach the caller.
     //
     // Selecting via a second open cost a measured 2x on every invocation —
@@ -1926,8 +1926,7 @@ mod tests {
     /// A multi-recording archive must be refused HERE, with a message, rather
     /// than opening into a reader that answers nothing.
     ///
-    /// `record --endpoint a --endpoint b -o out.rez` now produces this shape
-    /// by default. Flattening the recordings gives every sampler two owners,
+    /// `record --endpoint a --endpoint b -o out.dendro` produces this shape. Flattening the recordings gives every sampler two owners,
     /// so the reader refuses each query as cross-recording — which is the
     /// right call, but `extract-features` and `detect-anomalies` fold a
     /// per-metric query error into `NoData`, so the run would report

@@ -11,7 +11,7 @@ Every tool that reads a recording takes `parquet_file`, the path to a
 detected by content). A `.rez` is Rezolus's archive, which can hold several
 recordings; a `.dendro` is the newer archive container and reads the same
 way. `viewer_link` reads no recording and takes no path. Ask the person for
-the file if you were not given one; `rezolus record -o out.rez` writes one.
+the file if you were not given one; `rezolus record -o out.dendro` writes one.
 
 ## Workflow
 

@@ -330,8 +330,10 @@ JSON map of metric name → help text, used by `mcp describe-metrics` and the
 viewer tooltip layer. In combined files this is union-merged across all
 inputs (first writer wins on conflicts).
 
-**Set at record time** by the recorder (fetched from
-`/metrics/descriptions`). Not user-editable.
+**Set at record time** by the recorder: for a Rezolus agent, fetched from
+`/metrics/descriptions`; for a Prometheus endpoint, the scrape's `# HELP`
+lines, first seen wins, written once a scrape brings a metric name not seen
+before. Not user-editable.
 
 ### `selection`
 
@@ -386,14 +388,18 @@ The `parquet combine` step requires every rezolus input to have a unique node
 label. If the metadata key is missing, the filename stem is used as a
 fallback for rezolus files.
 
-**Set at record time:**
+**Set at record time.** A parquet recording comes from a 5.x recorder; 6.x
+writes `.dendro`, where the same `--metadata node=web01` sets the key in each
+recording's metadata:
 
 ```bash
+# with a 5.x binary
 target/release/rezolus record --url http://localhost:4241 -o web01.parquet --metadata node=web01
+# with this one
+target/release/rezolus record --url http://localhost:4241 -o web01.dendro --metadata node=web01
 
 # (`record --node` was removed: it was never wired to anything. `--metadata
 # node=NAME` writes the same `node` key, which is what combine reads.)
-target/release/rezolus record --metadata node=web01 http://localhost:4241 web01.parquet
 ```
 
 **Update an existing file with `parquet annotate --node`:**
@@ -419,9 +425,11 @@ When `parquet combine` sees multiple files for the same source: either every
 file carries an `instance` label (must be unique within the source), or none
 do (combine auto-assigns `"0"`, `"1"`, ... in input order). Mixed is rejected.
 
-**Set at record time:**
+**Set at record time** (a 5.x recorder for parquet; 6.x sets the same key in a
+`.dendro` recording's metadata):
 
 ```bash
+# with a 5.x binary
 target/release/rezolus record --url http://vllm-host:8000/metrics -o primary.parquet --metadata instance=primary
 ```
 
@@ -584,7 +592,7 @@ vllm service instance — and combine them.
 
 ### Inputs
 
-**`web01.parquet`** — produced by
+**`web01.parquet`** — produced by a 5.x
 `rezolus record --url http://web01:4241 -o web01.parquet --metadata node=web01`:
 
 ```json
@@ -602,7 +610,7 @@ vllm service instance — and combine them.
 **`web02.parquet`** — same shape, with `node: "web02"` and its own
 `systeminfo`/`per_source_metadata`.
 
-**`vllm.parquet`** — produced by
+**`vllm.parquet`** — produced by a 5.x
 `rezolus record --url http://vllm:8000/metrics -o vllm.parquet --metadata instance=primary --metadata role=service`,
 then annotated with `rezolus recording annotate vllm.parquet`:
 

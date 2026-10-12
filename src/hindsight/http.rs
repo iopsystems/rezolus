@@ -63,8 +63,8 @@ fn parse_timestamp(s: &str) -> Result<SystemTime, String> {
 impl DumpParams {
     /// Resolve the time range from query parameters.
     ///
-    /// The range still selects, but it selects whole segments: a `.rez` segment
-    /// is an immutable parquet BLOB, so a dump keeps any segment that overlaps
+    /// The range still selects, but it selects whole segments: a sealed segment
+    /// is immutable, so a dump keeps any segment that overlaps
     /// the range rather than rewriting one. The response reports the span
     /// actually written, which is how a caller learns it got more than it asked
     /// for — the alternative, silently honoring the request in the reply while
@@ -104,7 +104,7 @@ impl DumpParams {
 ///
 /// v3 shape. The ring fields it replaces (`snapshot_count`, and the
 /// `buffer_utilization` computed from it) described a fixed array of slots and
-/// have no analogue here — a `.rez` buffer is bounded by TIME, not by slots, so
+/// have no analogue here — the `.dendro` buffer is bounded by TIME, not by slots, so
 /// what it is doing is described by the span it retains and the size it has
 /// reached.
 #[derive(Serialize)]
@@ -222,7 +222,7 @@ async fn root() -> String {
          For information, see: https://rezolus.com\n\n\
          Endpoints:\n\
          - GET /status - Buffer status\n\
-         - GET /dump - Download the buffer as an archive (.dendro, or .rez for a .rez buffer)\n\
+         - GET /dump - Download the buffer as an archive (.dendro)\n\
          - POST /dump/file - Write the buffer to the configured output file\n"
     )
 }

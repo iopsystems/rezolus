@@ -24,16 +24,17 @@ pub fn command() -> Command {
     // commands is a recording.
     Command::new("recording")
         .alias("parquet")
-        .about("Inspect and transform Rezolus recordings (.parquet files and .rez archives)")
+        .about("Inspect and transform Rezolus recordings (.dendro and .rez archives, .parquet files)")
         .long_about(
-            "Offline operations on recordings produced by `rezolus record` or\n\
-             `rezolus hindsight` — both plain `.parquet` files and `.rez` archives.\n\n\
+            "Offline operations on recordings: the .dendro archives `rezolus record` and\n\
+             `rezolus hindsight` write, and the .rez archives and .parquet files that 5.x\n\
+             releases wrote.\n\n\
              SUBCOMMANDS:\n    \
              metadata   Inspect a file's file-level/column metadata, schema, and geometry\n    \
              annotate   Embed service-extension KPIs, events, or source/node tags into a file\n    \
              check      Evaluate the KPI checks a recording carries and report pass/fail verdicts\n    \
              combine    Merge multiple files (multi-node / multi-instance), assemble an A/B .rez, or build a legacy A/B tarball\n    \
-             convert    Turn a raw msgpack recording (from `record -o out.raw`) into parquet\n    \
+             convert    Turn a raw msgpack recording (from a 5.x `record -o out.raw`) into parquet\n    \
              filter     Drop columns not needed by a file's service-extension KPIs (shrink it)\n    \
              upgrade    Convert a v1/v2 (tar) `.rez` archive to the v3 (SQLite) container\n\n\
              Run `rezolus recording <subcommand> --help` for per-subcommand examples.\n\n\
@@ -492,14 +493,10 @@ pub fn command() -> Command {
             Command::new("convert")
                 .about("Convert a raw msgpack recording into parquet")
                 .long_about(
-                    "Convert a recording made with `rezolus record -o out.raw` (concatenated msgpack\n\
-                     snapshots, one per sampling tick) into a parquet file that the viewer, the\n\
-                     MCP tools and the rest of `rezolus recording` can read.\n\n\
-                     Raw is the cheapest capture mode: the recorder appends snapshots as they\n\
-                     arrive and finalizing is a byte copy rather than a conversion that grows\n\
-                     with run length, so long unattended captures record raw and convert\n\
-                     afterwards. Recording straight to parquet (`record -o out.parquet`) is simpler\n\
-                     for a short supervised run.\n\n\
+                    "Convert a recording made with a 5.x `rezolus record -o out.raw` (concatenated\n\
+                     msgpack snapshots, one per sampling tick) into a parquet file that the\n\
+                     viewer, the MCP tools and the rest of `rezolus recording` can read. 6.x\n\
+                     records .dendro only, so this is for raw recordings made before 6.0.\n\n\
                      The input may be plain or zstd-compressed; which one it is is detected from\n\
                      the file's contents, not its name. The output path defaults to the input\n\
                      with a trailing .zst and then a trailing .raw stripped, and .parquet\n\
@@ -526,7 +523,7 @@ pub fn command() -> Command {
                      A .rez archive cannot be produced from a raw recording: it needs per-sampler\n\
                      cadence and acquisition windows that a raw snapshot stream never carried.\n\n\
                      EXAMPLES:\n    \
-                     # The producing side, for reference\n    \
+                     # The producing side, with a 5.x binary, for reference\n    \
                      rezolus record --url http://localhost:4241 -o rezolus.raw\n\n    \
                      # Convert a compressed recording (writes rezolus.parquet)\n    \
                      rezolus recording convert rezolus.raw.zst\n\n    \

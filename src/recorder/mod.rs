@@ -202,7 +202,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("ENDPOINT")
                 .long("endpoint")
-                .help("Add an endpoint as url[,source=name][,role=label][,protocol=msgpack|prometheus]; role is a free-form tag (conventionally service or loadgen); repeat for several (e.g. http://host:9090/metrics,source=svc,role=service,protocol=prometheus)")
+                .help("Add an endpoint as url[,source=name][,role=label][,protocol=rezolus|prometheus]; role is a free-form tag (conventionally service or loadgen); protocol skips auto-detection: rezolus is a Rezolus agent, recorded from its replication stream (msgpack is accepted for it too), prometheus a text exposition endpoint, scraped; repeat for several (e.g. http://host:9090/metrics,source=svc,role=service,protocol=prometheus)")
                 .action(clap::ArgAction::Append)
                 .conflicts_with_all(["URL", "CONFIG_FILE"]),
         )

@@ -4,6 +4,11 @@ use serde::Deserialize;
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Protocol {
+    /// A Rezolus agent: detected by its msgpack snapshot on
+    /// `/metrics/binary`, recorded from its replication stream. Spelled
+    /// `rezolus` in an endpoint's options; `msgpack`, the 5.x spelling, is
+    /// still accepted.
+    #[serde(alias = "rezolus")]
     Msgpack,
     Prometheus,
 }
@@ -175,9 +180,9 @@ fn distinguishing_path(url: &Url) -> Option<String> {
     if path.is_empty() || path == "metrics" {
         return None;
     }
-    // Slashes and anything else awkward become `-`: this ends up as a label
-    // value, a `.rez` recording's directory slug and a `--separate` filename,
-    // so it has to be a plain word in all three.
+    // Slashes and anything else awkward become `-`: this ends up as the
+    // recording's `source` label value, which `--recording source=...`
+    // selectors match, so it has to be a plain word.
     let slug: String = path
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
@@ -232,9 +237,9 @@ mod tests {
         }
     }
 
-    /// The inferred name becomes a label value, a `.rez` recording's directory
-    /// slug and a `--separate` filename, so it has to be a plain word in all
-    /// three — no slashes, no runs of separators, no leading or trailing dash.
+    /// The inferred name becomes the recording's `source` label value, so it
+    /// has to be a plain word — no slashes, no runs of separators, no leading
+    /// or trailing dash.
     #[test]
     fn a_nested_path_becomes_one_plain_word() {
         let url: Url = "http://svc:9090/metrics//v2/tenant_a/".parse().unwrap();

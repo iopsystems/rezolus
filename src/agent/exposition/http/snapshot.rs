@@ -404,8 +404,8 @@ impl SnapshotBuilder {
     /// `docs/journal/2026-09-16-row-endpoint-schema-resend.md`.
     ///
     /// `/metrics/binary` cannot do this and must keep resending. Its body is
-    /// contractually self-contained: `record --format raw` writes those bodies
-    /// verbatim to a file that `recording convert` decodes offline, much
+    /// contractually self-contained: a 5.x `record --format raw` wrote those
+    /// bodies verbatim to a file that `recording convert` decodes offline, much
     /// later, with no access to whatever earlier scrape carried the schema.
     /// Only a consumer that keeps state across scrapes can be told "the same
     /// schema as last time", and a recorder is the one consumer that does.
