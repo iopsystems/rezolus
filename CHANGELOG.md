@@ -21,6 +21,15 @@
 
 ### Changed
 
+- **Exact label listings for sparse long tables** (metriken-storage 0.2.1).
+  A long table whose columns have values for only some of its occupants, as
+  a metriken producer's single group of plain metrics and labelled counter
+  families does, listed every column once per occupant, with the occupant's
+  labels: `describe-metrics`, the viewer's metric catalog and anomaly
+  detection's label hints showed series that do not exist. Recordings made
+  with this version list only the series that have values. Archives recorded
+  before keep the inflated listing; queries were always right.
+
 - **The agent serves `/metrics/stream` under metriken's names:**
   `Content-Type: application/vnd.metriken.replication.v1+dendro` and the
   `x-metriken-frame-interval`, `x-metriken-update-floor` and
