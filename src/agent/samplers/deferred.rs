@@ -11,10 +11,16 @@
 //! nothing for them until the agent is restarted.
 //!
 //! [`until_loaded`] runs a sampler's init at once when its modules are built
-//! in or loaded. Otherwise it reports the sampler unsupported, naming the
-//! module it waits for, starts a thread that checks every [`CHECK_INTERVAL`]
-//! and runs the init once they load, and returns a [`Deferred`] sampler
-//! whose refreshes do nothing until then and forward afterwards.
+//! in or loaded. A module that is neither, and is not in `modules.dep`
+//! either, will never load: the sampler is reported unsupported at once.
+//! Otherwise it reports the sampler unsupported, naming the module it waits
+//! for, starts a thread that checks every [`CHECK_INTERVAL`] and runs the
+//! init once they load, and returns a [`Deferred`] sampler whose refreshes
+//! do nothing until then and forward afterwards. Without a readable
+//! `modules.builtin` (a container without the host's `/lib/modules`, NixOS)
+//! init runs at once, as it did before samplers waited; with
+//! `modules.builtin` but no readable `modules.dep`, a module that is not
+//! built in is waited for.
 //!
 //! While it waits and while init runs, the sampler's acquisition groups are
 //! bounded to zero members, as for a sampler that did not start; after init
