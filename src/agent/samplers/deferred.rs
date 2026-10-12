@@ -12,18 +12,25 @@
 //!
 //! [`until_loaded`] runs a sampler's init at once when its modules are built
 //! in or loaded. Otherwise it reports the sampler unsupported, naming the
-//! module it waits for, and returns a [`Deferred`] sampler that checks every
-//! [`CHECK_INTERVAL`] and runs the init on its own thread once they load.
+//! module it waits for, starts a thread that checks every [`CHECK_INTERVAL`]
+//! and runs the init once they load, and returns a [`Deferred`] sampler
+//! whose refreshes do nothing until then and forward afterwards.
+//!
+//! While it waits and while init runs, the sampler's acquisition groups are
+//! bounded to zero members, as for a sampler that did not start; after init
+//! succeeds, the ones init did not bound itself are unbounded again. A panic
+//! in a deferred init ends the agent, as it does at start (the panic hook in
+//! `main` exits the process).
 
 use super::{Sampler, SamplerResult, ACQUISITION_GROUPS};
+use crate::agent::timing::AcquisitionGroup;
 use crate::agent::Config;
 use crate::*;
 
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 /// How often a waiting sampler looks for its modules: a few `stat` calls.
 const CHECK_INTERVAL: Duration = Duration::from_secs(5);
@@ -79,22 +86,38 @@ impl ModuleTree {
 }
 
 /// Initialise `name` with `init` now if `modules` are present, or return a
-/// sampler that initialises it once they are. `init` must do its own
-/// `config.enabled()` check; it runs exactly once either way.
+/// sampler that initialises it once they are. `init` runs exactly once
+/// either way.
 pub(crate) fn until_loaded(
     name: &'static str,
     modules: &'static [&'static str],
     config: Arc<Config>,
     init: fn(Arc<Config>) -> SamplerResult,
 ) -> SamplerResult {
+    let groups = ACQUISITION_GROUPS
+        .iter()
+        .copied()
+        .filter(|g| g.sampler == name)
+        .collect();
+
     until_loaded_in(
         ModuleTree::running_kernel(),
         CHECK_INTERVAL,
         name,
         modules,
+        groups,
         config,
         init,
     )
+}
+
+/// A sampler's identity and init, carried to the watcher thread.
+struct Pending {
+    name: &'static str,
+    modules: &'static [&'static str],
+    groups: Vec<&'static AcquisitionGroup>,
+    config: Arc<Config>,
+    init: fn(Arc<Config>) -> SamplerResult,
 }
 
 fn until_loaded_in(
@@ -102,6 +125,7 @@ fn until_loaded_in(
     interval: Duration,
     name: &'static str,
     modules: &'static [&'static str],
+    groups: Vec<&'static AcquisitionGroup>,
     config: Arc<Config>,
     init: fn(Arc<Config>) -> SamplerResult,
 ) -> SamplerResult {
@@ -118,22 +142,31 @@ fn until_loaded_in(
 
     crate::agent::sampler_status::set_unsupported(name, waiting_reason(&waiting));
 
-    // Until init runs, these groups have no members, as for a sampler that
-    // did not start (`bound_groups_without_a_live_sampler`).
-    for group in ACQUISITION_GROUPS.iter().filter(|g| g.sampler == name) {
+    for group in &groups {
         group.set_member_bound(0);
     }
 
-    Ok(Some(Box::new(Deferred {
+    let inner: Arc<OnceLock<Box<dyn Sampler>>> = Arc::new(OnceLock::new());
+    let pending = Pending {
         name,
         modules,
-        tree,
+        groups,
         config,
         init,
-        shared: Arc::new(Shared::default()),
-        interval,
-        next_check: Mutex::new(Instant::now() + interval),
-    })))
+    };
+    let slot = inner.clone();
+
+    // A thread rather than a check on refresh: refreshes happen only when
+    // something scrapes or subscribes, and a host with nothing attached
+    // would otherwise never notice the module load.
+    std::thread::Builder::new()
+        .name(format!("{name}-wait"))
+        .spawn(move || watch(tree, interval, pending, &slot))
+        .map_err(|e| {
+            anyhow::anyhow!("could not start the thread that waits for the module: {e}")
+        })?;
+
+    Ok(Some(Box::new(Deferred { name, inner })))
 }
 
 fn waiting_reason(waiting: &[&str]) -> String {
@@ -143,108 +176,48 @@ fn waiting_reason(waiting: &[&str]) -> String {
     )
 }
 
-#[derive(Default)]
-struct Shared {
-    /// The real sampler, once init succeeded.
-    inner: OnceLock<Box<dyn Sampler>>,
-    /// Init has been started (successfully or not); never started twice.
-    started: AtomicBool,
-}
+/// Wait for the modules, then run init once and record the outcome as the
+/// agent's init loop does.
+fn watch(tree: ModuleTree, interval: Duration, p: Pending, slot: &OnceLock<Box<dyn Sampler>>) {
+    let name = p.name;
 
-/// A sampler waiting for its kernel modules. Refreshes are no-ops until the
-/// modules load and init succeeds, then forward to the real sampler.
-pub(crate) struct Deferred {
-    name: &'static str,
-    modules: &'static [&'static str],
-    tree: ModuleTree,
-    config: Arc<Config>,
-    init: fn(Arc<Config>) -> SamplerResult,
-    shared: Arc<Shared>,
-    interval: Duration,
-    next_check: Mutex<Instant>,
-}
-
-impl Deferred {
-    /// Start init on its own thread if the modules have loaded. Loading the
-    /// BPF programs takes hundreds of milliseconds, which a snapshot should
-    /// not wait for.
-    fn check(&self) {
-        if self.shared.started.load(Ordering::Acquire) {
-            return;
+    loop {
+        std::thread::sleep(interval);
+        let waiting = tree.waiting_for(p.modules);
+        if waiting.is_empty() {
+            break;
         }
-
-        {
-            let mut next = self.next_check.lock().unwrap();
-            let now = Instant::now();
-            if now < *next {
-                return;
-            }
-            *next = now + self.interval;
-        }
-
-        let waiting = self.tree.waiting_for(self.modules);
-        if !waiting.is_empty() {
-            crate::agent::sampler_status::set_unsupported(self.name, waiting_reason(&waiting));
-            return;
-        }
-
-        if self.shared.started.swap(true, Ordering::AcqRel) {
-            return;
-        }
-
-        info!("{}: kernel modules loaded; initialising", self.name);
-
-        let (name, init, config, shared) = (
-            self.name,
-            self.init,
-            self.config.clone(),
-            self.shared.clone(),
-        );
-
-        let spawned = std::thread::Builder::new()
-            .name(format!("{name}-init"))
-            .spawn(move || start(name, init, config, &shared));
-
-        if let Err(e) = spawned {
-            crate::agent::sampler_status::set_failed(
-                name,
-                format!("could not start the init thread: {e}"),
-            );
-        }
+        // The list can shrink (ext4 loaded, jbd2 not yet).
+        crate::agent::sampler_status::set_unsupported(name, waiting_reason(&waiting));
     }
-}
 
-/// Run `init` and record the outcome as the agent's init loop does.
-fn start(
-    name: &'static str,
-    init: fn(Arc<Config>) -> SamplerResult,
-    config: Arc<Config>,
-    shared: &Shared,
-) {
-    // Lift the bound set while waiting before init runs, so a bound init
-    // sets itself is the one that stands.
-    for group in ACQUISITION_GROUPS.iter().filter(|g| g.sampler == name) {
-        group.set_member_bound(usize::MAX);
-    }
-    crate::agent::sampler_status::clear(name);
+    info!("{name}: kernel modules loaded; initialising");
 
-    match init(config) {
+    match (p.init)(p.config) {
         Ok(Some(sampler)) => {
-            crate::agent::sampler_status::set_active_if_absent(name);
-            let _ = shared.inner.set(sampler);
+            // Groups init bounded itself keep that bound; the rest, still at
+            // the zero set while waiting, are unbounded as at a normal start.
+            for group in &p.groups {
+                group.lift_zero_bound();
+            }
+            crate::agent::sampler_status::set_active_if_unsupported(name);
+            let _ = slot.set(sampler);
             info!("{name}: started after its kernel module loaded");
         }
+        // Groups stay bounded to zero: nothing will fill them.
         Ok(None) => crate::agent::sampler_status::set_disabled(name),
-        Err(e) => {
-            for group in ACQUISITION_GROUPS.iter().filter(|g| g.sampler == name) {
-                group.set_member_bound(0);
-            }
-            match e.downcast_ref::<crate::agent::sampler_status::Unsupported>() {
-                Some(u) => crate::agent::sampler_status::set_unsupported(name, u.0.clone()),
-                None => crate::agent::sampler_status::set_failed(name, e.to_string()),
-            }
-        }
+        Err(e) => match e.downcast_ref::<crate::agent::sampler_status::Unsupported>() {
+            Some(u) => crate::agent::sampler_status::set_unsupported(name, u.0.clone()),
+            None => crate::agent::sampler_status::set_failed(name, e.to_string()),
+        },
     }
+}
+
+/// A sampler waiting for its kernel modules. Refreshes do nothing until the
+/// watcher thread has initialised the real sampler, then forward to it.
+pub(crate) struct Deferred {
+    name: &'static str,
+    inner: Arc<OnceLock<Box<dyn Sampler>>>,
 }
 
 #[async_trait]
@@ -254,9 +227,8 @@ impl Sampler for Deferred {
     }
 
     async fn refresh(&self) {
-        match self.shared.inner.get() {
-            Some(inner) => inner.refresh().await,
-            None => self.check(),
+        if let Some(inner) = self.inner.get() {
+            inner.refresh().await;
         }
     }
 }
@@ -332,10 +304,12 @@ mod tests {
     }
 
     // Lifecycle tests. The status registry is process-global, so each test
-    // uses its own sampler name and its own counters.
+    // uses its own sampler name, group and counters.
 
     use crate::agent::sampler_status::{snapshot, SamplerState};
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TICK: Duration = Duration::from_millis(10);
 
     fn state(name: &str) -> Option<SamplerState> {
         snapshot()
@@ -346,6 +320,12 @@ mod tests {
 
     fn test_config() -> Arc<Config> {
         Arc::new(toml::from_str("").expect("empty config parses"))
+    }
+
+    fn load(t: &ModuleTree, name: &str) {
+        let m = t.sys.join("module").join(name);
+        std::fs::create_dir_all(&m).unwrap();
+        std::fs::write(m.join("initstate"), "live\n").unwrap();
     }
 
     struct Fake(&'static AtomicUsize);
@@ -361,22 +341,32 @@ mod tests {
         }
     }
 
-    /// Poll until `f` holds or two seconds pass; init runs on its own thread.
+    /// Poll until `f` holds or five seconds pass; init runs on its own thread.
     async fn eventually(f: impl Fn() -> bool) -> bool {
-        for _ in 0..200 {
+        for _ in 0..500 {
             if f() {
                 return true;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::time::sleep(TICK).await;
         }
         f()
     }
 
     static WAIT_INITS: AtomicUsize = AtomicUsize::new(0);
     static WAIT_REFRESHES: AtomicUsize = AtomicUsize::new(0);
+    static WAIT_GROUP: AcquisitionGroup = AcquisitionGroup::new("deferred_test_waits", "plain");
+    static WAIT_SELF_BOUND: AcquisitionGroup =
+        AcquisitionGroup::new("deferred_test_waits", "bounded_by_init");
+    /// The bound the waiting group read while init ran.
+    static WAIT_BOUND_DURING_INIT: AtomicUsize = AtomicUsize::new(7);
 
     fn wait_init(_: Arc<Config>) -> SamplerResult {
         WAIT_INITS.fetch_add(1, Ordering::SeqCst);
+        WAIT_BOUND_DURING_INIT.store(
+            WAIT_GROUP.member_bound().unwrap_or(usize::MAX),
+            Ordering::SeqCst,
+        );
+        WAIT_SELF_BOUND.set_member_bound(1);
         Ok(Some(Box::new(Fake(&WAIT_REFRESHES))))
     }
 
@@ -386,9 +376,10 @@ mod tests {
         let (_d, t) = tree(&[], Some(&[]));
         let sampler = until_loaded_in(
             t.clone(),
-            Duration::ZERO,
+            TICK,
             NAME,
             &["ext4"],
+            vec![&WAIT_GROUP, &WAIT_SELF_BOUND],
             test_config(),
             wait_init,
         )
@@ -401,51 +392,64 @@ mod tests {
             }
             other => panic!("expected unsupported while waiting, got {other:?}"),
         }
+        assert_eq!(
+            WAIT_GROUP.member_bound(),
+            Some(0),
+            "no members while waiting"
+        );
 
-        sampler.refresh().await;
+        // No refresh drives the wait: the thread notices the load on its own.
+        tokio::time::sleep(5 * TICK).await;
         sampler.refresh().await;
         assert_eq!(
             WAIT_INITS.load(Ordering::SeqCst),
             0,
             "no init before the module loads"
         );
+        assert_eq!(WAIT_REFRESHES.load(Ordering::SeqCst), 0);
 
-        let m = t.sys.join("module/ext4");
-        std::fs::create_dir_all(&m).unwrap();
-        std::fs::write(m.join("initstate"), "live\n").unwrap();
-
-        sampler.refresh().await;
+        load(&t, "ext4");
         assert!(
             eventually(|| WAIT_INITS.load(Ordering::SeqCst) == 1).await,
             "init ran"
         );
-
-        // Forwarding starts once the init thread has stored the sampler.
         assert!(
-            eventually(|| {
-                futures::executor::block_on(sampler.refresh());
-                WAIT_REFRESHES.load(Ordering::SeqCst) > 0
-            })
-            .await,
-            "refreshes reach the real sampler"
+            eventually(|| matches!(state(NAME), Some(SamplerState::Active))).await,
+            "{:?}",
+            state(NAME)
         );
+
+        assert_eq!(
+            WAIT_BOUND_DURING_INIT.load(Ordering::SeqCst),
+            0,
+            "still no members while init runs"
+        );
+        assert_eq!(WAIT_GROUP.member_bound(), None, "unbounded after init");
+        assert_eq!(
+            WAIT_SELF_BOUND.member_bound(),
+            Some(1),
+            "init's own bound stands"
+        );
+
         for _ in 0..5 {
             sampler.refresh().await;
         }
+        assert_eq!(
+            WAIT_REFRESHES.load(Ordering::SeqCst),
+            5,
+            "refreshes reach the real sampler"
+        );
+        tokio::time::sleep(5 * TICK).await;
         assert_eq!(
             WAIT_INITS.load(Ordering::SeqCst),
             1,
             "init runs exactly once"
         );
-        assert!(
-            matches!(state(NAME), Some(SamplerState::Active)),
-            "{:?}",
-            state(NAME)
-        );
     }
 
     static NOW_INITS: AtomicUsize = AtomicUsize::new(0);
     static NOW_REFRESHES: AtomicUsize = AtomicUsize::new(0);
+    static NOW_GROUP: AcquisitionGroup = AcquisitionGroup::new("deferred_test_now", "plain");
 
     fn now_init(_: Arc<Config>) -> SamplerResult {
         NOW_INITS.fetch_add(1, Ordering::SeqCst);
@@ -457,15 +461,17 @@ mod tests {
         let (_d, t) = tree(&["ext4"], Some(&[]));
         let sampler = until_loaded_in(
             t,
-            Duration::ZERO,
+            TICK,
             "deferred_test_now",
             &["ext4"],
+            vec![&NOW_GROUP],
             test_config(),
             now_init,
         )
         .unwrap()
         .unwrap();
         assert_eq!(NOW_INITS.load(Ordering::SeqCst), 1);
+        assert_eq!(NOW_GROUP.member_bound(), None, "groups untouched");
         sampler.refresh().await;
         assert_eq!(
             NOW_REFRESHES.load(Ordering::SeqCst),
@@ -475,34 +481,32 @@ mod tests {
     }
 
     static FAIL_INITS: AtomicUsize = AtomicUsize::new(0);
+    static FAIL_GROUP: AcquisitionGroup = AcquisitionGroup::new("deferred_test_fails", "plain");
 
     fn failing_init(_: Arc<Config>) -> SamplerResult {
         FAIL_INITS.fetch_add(1, Ordering::SeqCst);
         Err(anyhow::anyhow!("Invalid argument (os error 22)"))
     }
 
-    /// An init that fails after the module loads is recorded as failed and
-    /// not retried every interval.
+    /// An init that fails after the module loads is recorded as failed, not
+    /// retried, and leaves its groups with no members.
     #[tokio::test]
     async fn a_failed_init_after_loading_is_recorded_and_not_retried() {
         const NAME: &str = "deferred_test_fails";
         let (_d, t) = tree(&[], Some(&[]));
         let sampler = until_loaded_in(
             t.clone(),
-            Duration::ZERO,
+            TICK,
             NAME,
             &["ext4"],
+            vec![&FAIL_GROUP],
             test_config(),
             failing_init,
         )
         .unwrap()
         .unwrap();
 
-        let m = t.sys.join("module/ext4");
-        std::fs::create_dir_all(&m).unwrap();
-        std::fs::write(m.join("initstate"), "live\n").unwrap();
-
-        sampler.refresh().await;
+        load(&t, "ext4");
         assert!(
             eventually(|| matches!(state(NAME), Some(SamplerState::Failed { .. }))).await,
             "{:?}",
@@ -511,7 +515,43 @@ mod tests {
         for _ in 0..5 {
             sampler.refresh().await;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::sleep(5 * TICK).await;
         assert_eq!(FAIL_INITS.load(Ordering::SeqCst), 1);
+        assert_eq!(FAIL_GROUP.member_bound(), Some(0));
+    }
+
+    /// The reason follows the modules still missing.
+    #[tokio::test]
+    async fn the_waiting_reason_names_the_modules_still_missing() {
+        const NAME: &str = "deferred_test_partial";
+        let (_d, t) = tree(&[], Some(&[]));
+        let _sampler = until_loaded_in(
+            t.clone(),
+            TICK,
+            NAME,
+            &["ext4", "jbd2"],
+            vec![],
+            test_config(),
+            now_init_unused,
+        )
+        .unwrap()
+        .unwrap();
+
+        load(&t, "jbd2");
+        assert!(
+            eventually(|| matches!(
+                state(NAME),
+                Some(SamplerState::Unsupported { ref reason }) if reason.contains("module ext4 to")
+            ))
+            .await,
+            "{:?}",
+            state(NAME)
+        );
+    }
+
+    fn now_init_unused(_: Arc<Config>) -> SamplerResult {
+        Err(anyhow::anyhow!(
+            "must not run: ext4 never loads in this test"
+        ))
     }
 }

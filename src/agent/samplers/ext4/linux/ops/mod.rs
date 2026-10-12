@@ -148,6 +148,16 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
+    // Checked before waiting for ext4, so a kernel that could never run
+    // this sampler says so instead of "waiting for kernel module ext4".
+    if !kernel_tracing_has_task_storage() {
+        return Err(crate::agent::sampler_status::Unsupported(
+            "tracing programs cannot use task local storage on this kernel (needs 5.12+)"
+                .to_string(),
+        )
+        .into());
+    }
+
     crate::agent::samplers::deferred::until_loaded(NAME, MODULES, config, init_now)
 }
 

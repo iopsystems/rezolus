@@ -155,13 +155,28 @@ fn registry() -> &'static Mutex<BTreeMap<&'static str, SamplerStatus>> {
     REGISTRY.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
-/// Forget a sampler's record, so the next `set_*` call, including
-/// `set_active_if_absent`, starts from nothing. For a sampler that initialises
-/// after agent start (`samplers::deferred`), whose waiting record must not
-/// outlive the wait.
+/// Mark a sampler active if its record still says unsupported. For a
+/// sampler that initialises after start (`samplers::deferred`): its
+/// "waiting" record is replaced once init succeeds, unless init already
+/// wrote a richer one (a BPF sampler's builder does).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub fn clear(name: &'static str) {
-    registry().lock().unwrap().remove(name);
+pub fn set_active_if_unsupported(name: &'static str) {
+    let mut registry = registry().lock().unwrap();
+    let waiting = matches!(
+        registry.get(name).map(|s| &s.state),
+        None | Some(SamplerState::Unsupported { .. })
+    );
+    if waiting {
+        registry.insert(
+            name,
+            SamplerStatus {
+                name: name.to_string(),
+                state: SamplerState::Active,
+                health: None,
+                programs: Vec::new(),
+            },
+        );
+    }
 }
 
 /// Record a sampler as config-disabled.
