@@ -7,15 +7,14 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tracing::warn;
 
-/// Converts Prometheus text format responses into SnapshotV2 objects that can be
-/// serialized as msgpack and processed by the existing parquet conversion pipeline.
+/// Converts Prometheus text format responses into snapshots the archive
+/// writer stages.
 ///
 /// Maintains a stable mapping from (metric_name, labels) to numeric IDs across
-/// scrapes within a recording session, ensuring consistent parquet column identity.
+/// scrapes within a recording session, ensuring consistent column identity.
 pub struct PrometheusConverter {
     metric_ids: HashMap<MetricKey, usize>,
     next_id: usize,
-    descriptions: HashMap<String, String>,
 }
 
 #[derive(Clone, Hash, Eq, PartialEq)]
@@ -36,13 +35,7 @@ impl PrometheusConverter {
         Self {
             metric_ids: HashMap::new(),
             next_id: 0,
-            descriptions: HashMap::new(),
         }
-    }
-
-    /// Returns the accumulated metric descriptions from all scrapes.
-    pub fn descriptions(&self) -> &HashMap<String, String> {
-        &self.descriptions
     }
 
     fn get_or_assign_id(&mut self, name: &str, labels: &[(String, String)]) -> String {
@@ -97,13 +90,6 @@ impl PrometheusConverter {
                 return empty_snapshot();
             }
         };
-
-        // Accumulate HELP descriptions across scrapes
-        for (name, doc) in &scrape.docs {
-            self.descriptions
-                .entry(name.clone())
-                .or_insert_with(|| doc.clone());
-        }
 
         let mut counters = Vec::new();
         let mut gauges = Vec::new();
@@ -583,16 +569,13 @@ b 2
         }
     }
 
-    /// The parquet path must not notice the version change.
+    /// The flat view of a converted scrape keeps each value's name, metadata
+    /// and window.
     ///
     /// `metriken-exposition` contracts that a V3 snapshot and the V2 describing
-    /// the same readings produce the same `HashedSnapshot`, which is what
-    /// `MsgpackToParquet` consumes — but that is THEIR invariant about THEIR
-    /// types, and it says nothing about whether this converter still puts the
-    /// same names, values, metadata and windows into it. Pinned here, on our
-    /// side of the boundary: parquet is the shipping output for a Prometheus
-    /// source, and a silent change to it would be a regression nobody asked
-    /// for.
+    /// the same readings produce the same `HashedSnapshot`, but that says
+    /// nothing about whether this converter puts the same names, values,
+    /// metadata and windows into it. Pinned here, on our side of the boundary.
     #[test]
     fn the_flat_view_of_a_scrape_is_unchanged_by_the_group_shape() {
         let mut conv = PrometheusConverter::new();

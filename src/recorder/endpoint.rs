@@ -41,8 +41,8 @@ impl EndpointConfig {
 pub enum EndpointStatus {
     Active,
     Pending,
-    /// Answered and cannot be recorded into this run's output (an agent
-    /// without a replication stream in a `.dendro` run). Never retried.
+    /// Answered and cannot be recorded (an agent without a replication
+    /// stream). Never retried.
     Refused,
 }
 
@@ -55,7 +55,6 @@ pub enum EndpointStatus {
 pub struct AgentMetadata {
     pub systeminfo: Option<String>,
     pub descriptions: Option<String>,
-    pub sampler_status: Option<String>,
     /// The agent's own crate version, recorded so a capture can be attributed
     /// to a build after the fact. See `recorder::fetch_agent_version`.
     pub version: Option<String>,
@@ -85,8 +84,8 @@ pub struct EndpointState {
     pub agent: AgentMetadata,
     pub first_success_ns: Option<u64>,
     pub last_success_ns: Option<u64>,
-    /// True for a Rezolus agent whose rows arrive off its replication stream
-    /// (a `.dendro` run) rather than from a scrape each tick.
+    /// True for a Rezolus agent, whose rows arrive off its replication stream
+    /// rather than from a scrape each tick.
     pub streaming: bool,
     /// Stream intervals received so far (streamed endpoints only).
     pub frames: u64,
