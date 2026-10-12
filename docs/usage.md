@@ -60,8 +60,11 @@ the writer, and its start moves forward as retention evicts old rows (see
 under `buffer_dir`, removed when hindsight exits on SIGTERM or SIGINT; a killed
 hindsight leaves it, unfinalized.
 
-Snapshots are `.dendro` archives. An `output` ending in `.rez` or `.parquet` is
-refused at startup; a 5.x hindsight still keeps a `.rez` buffer.
+Snapshots are `.dendro` archives. An `output` not ending in `.dendro` is
+refused at startup (exit 1). A 5.x hindsight (5.27.0 or later) wrote any such
+path as a `.rez` archive, and the 5.x packaged config names
+`/var/lib/rezolus/rezolus.rez`, so a config kept from 5.x needs its `output`
+changed.
 
 Hindsight reads the agent named by `source` over its replication stream
 (`/metrics/stream`), which agents from 5.21.0 serve when `snapshot_format` is
@@ -138,10 +141,10 @@ With no `-o` the recording goes to `rezolus.dendro`. The output path must end in
 `.dendro`. rezolus 6.x writes no other format: an output ending in `.rez`,
 `.parquet` or `.raw` (or in anything else), a `--format` other than `dendro`,
 and `--separate` are refused as usage errors (exit 2), as are the same
-settings in a `--config` file. A rezolus 5.x recorder (5.27.0 is the latest
-5.x release) still writes `.rez`, parquet and raw, and `rezolus recording
-upgrade --to dendro in.rez -o out.dendro` converts a `.rez`. Every tool still
-reads `.rez` and parquet.
+settings in a `--config` file. A rezolus 5.x recorder (5.27.0 or later) still
+writes `.rez`, parquet and raw, and `rezolus recording upgrade --to dendro
+in.rez -o out.dendro` converts a `.rez`. Every tool still reads `.rez` and
+parquet.
 
 The output path must not already exist — the recorder refuses rather than
 truncate, since the archive is committed as it goes and has no staging file.

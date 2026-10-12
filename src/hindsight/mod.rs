@@ -236,8 +236,8 @@ pub fn run(config: Config) {
             error!(
                 "hindsight records an agent over /metrics/stream, which agents from 5.21.0 \
                  serve; check that the path is reachable if a proxy sits in between, or \
-                 run a rezolus 5.x hindsight ({} is the latest 5.x release) for an older agent",
-                crate::recorder::LATEST_5X_RELEASE
+                 run a rezolus 5.x hindsight ({} or later) for an older agent",
+                crate::recorder::RELEASE_5X
             );
             std::process::exit(1);
         }

@@ -14,7 +14,10 @@ source = "127.0.0.1:4241"
 
 # Specify the path for the snapshot output file. Snapshots are dendro archives,
 # readable by `rezolus view`, `rezolus mcp` and the `rezolus recording`
-# subcommands. A path ending in `.rez` or `.parquet` is refused at startup.
+# subcommands. The path must end in `.dendro`; any other is refused at startup
+# (exit 1). Rezolus 5.x wrote any other path as a `.rez` archive and shipped
+# this file with `output = "/var/lib/rezolus/rezolus.rez"`, so a config kept
+# from 5.x has to be changed to a `.dendro` path.
 output = "/var/lib/rezolus/rezolus.dendro"
 
 # Specify the directory the rolling buffer is kept in. It needs room for the

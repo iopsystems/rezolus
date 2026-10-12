@@ -918,7 +918,7 @@ fn an_agent_without_a_stream_is_refused_at_startup_pointing_at_a_5x_recorder() {
             "5.21.0",
             "Nothing was recorded",
             "5.x recorder",
-            "5.27.0",
+            "5.27.0 or later",
             "recording upgrade --to dendro",
             &format!("127.0.0.1:{agent}"),
         ] {
@@ -957,7 +957,7 @@ fn an_output_in_a_removed_format_is_refused() {
             .expect("failed to run rezolus record");
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(2), "{args:?}:\n{stderr}");
-        for needle in [args[0].as_str(), "5.x recorder", "5.27.0"] {
+        for needle in [args[0].as_str(), "5.x recorder", "5.27.0 or later"] {
             assert!(
                 stderr.contains(needle),
                 "{args:?}: {needle:?} in:\n{stderr}"

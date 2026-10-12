@@ -7,8 +7,9 @@
   or anything else, `--format` other than `dendro`, and `--separate` are
   refused as usage errors (exit 2) before any endpoint is contacted, as are
   the same `output`, `format` and `separate = true` in a `--config` file.
-  The refusal names a 5.x recorder (5.27.0 is the latest 5.x release), which
-  still writes those formats; `rezolus recording upgrade --to dendro`
+  The refusal quotes the path as it was given (`-o`, the positional OUTPUT,
+  or the config file's `output`) and names a 5.x recorder (5.27.0 or later),
+  which still writes those formats; `rezolus recording upgrade --to dendro`
   converts a `.rez`. Reading `.rez` and parquet is unchanged.
 - **`record` refuses every Rezolus agent that cannot stream.** An agent older
   than 5.21.0, a v2 agent, or a stream route that answers 404, 409 or a
@@ -18,9 +19,20 @@
   which scrapes such an agent. A 5xx or a handshake timeout is still retried
   each tick. Before, this applied to `.dendro` output only, and `.rez` and
   parquet output scraped the agent.
-- **Hindsight writes `.dendro` only.** An `output` ending in `.rez` or
-  `.parquet` is refused when the config is loaded (exit 1). Before, `.rez`
-  kept a `.rez` buffer and `.parquet` wrote a `.dendro` with a warning.
+- **Hindsight writes `.dendro` only.** An `output` not ending in `.dendro` is
+  refused when the config is loaded (exit 1), as `record` refuses one. 5.27.0
+  wrote every such path as a `.rez` archive (`.parquet` with a warning); the
+  6.0 alphas kept a `.rez` buffer for `.rez` and wrote a `.dendro` for any
+  other path.
+
+  Upgrade note: 5.27.0 shipped `/etc/rezolus/hindsight.toml` with
+  `output = "/var/lib/rezolus/rezolus.rez"`. A package upgrade replaces that
+  file only if it was never edited (dpkg conffile, rpm `%config(noreplace)`);
+  for an edited one dpkg asks which to keep (and keeps it under
+  `--force-confold`), and rpm keeps it and writes the new one beside it as
+  `hindsight.toml.rpmnew`. If the kept file still names a `.rez`
+  (or any path not ending in `.dendro`), `rezolus-hindsight` exits 1 at start
+  until `output` is changed to a `.dendro` path.
 - **`record` no longer fetches an agent's `/samplers`.** The sampler status
   was written into parquet output only.
 

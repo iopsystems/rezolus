@@ -1769,15 +1769,15 @@ fn a_second_stop_exits_at_once_and_removes_the_buffer() {
     );
 }
 
-/// An `output` ending in `.rez` or `.parquet` is refused when the config is
-/// loaded, before the agent is contacted or a buffer is created: exit 1, with
-/// a message naming the path and `.dendro`, and for a `.rez` pointing at a
-/// 5.x hindsight.
+/// An `output` not ending in `.dendro` is refused when the config is loaded,
+/// before the agent is contacted or a buffer is created: exit 1, with a
+/// message naming the path, `.dendro`, and the 5.x hindsight that wrote such
+/// a path as a `.rez`.
 #[test]
-fn an_output_in_a_removed_format_is_refused_at_startup() {
-    for (ext, five) in [("rez", true), ("parquet", false)] {
+fn an_output_not_ending_in_dendro_is_refused_at_startup() {
+    for name in ["snapshot.rez", "snapshot.parquet", "snapshot"] {
         let dir = tempfile::tempdir().expect("failed to create a temp dir");
-        let output = dir.path().join(format!("snapshot.{ext}"));
+        let output = dir.path().join(name);
         // Nothing listens on port 1: a daemon that got as far as the agent
         // would fail differently.
         let config = write_config(dir.path(), 1, 2, &output);
@@ -1787,15 +1787,14 @@ fn an_output_in_a_removed_format_is_refused_at_startup() {
             .output()
             .expect("failed to run rezolus hindsight");
         let stderr = String::from_utf8_lossy(&out.stderr);
-        assert_eq!(out.status.code(), Some(1), "{ext}:\n{stderr}");
+        assert_eq!(out.status.code(), Some(1), "{name}:\n{stderr}");
         for needle in [
             output.display().to_string(),
-            format!(".{ext} output was removed in 6.0"),
             "ending in .dendro".to_string(),
+            "5.x hindsight (5.27.0 or later)".to_string(),
         ] {
             assert!(stderr.contains(&needle), "{needle:?} in:\n{stderr}");
         }
-        assert_eq!(stderr.contains("5.x hindsight"), five, "{stderr}");
         let left: Vec<String> = std::fs::read_dir(dir.path())
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())

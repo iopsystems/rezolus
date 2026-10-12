@@ -150,23 +150,24 @@ mod tests {
         );
     }
 
-    /// An `output` naming a `.rez` or a `.parquet` is refused, naming
-    /// `.dendro`, and for a `.rez` pointing at a 5.x hindsight. Any other
-    /// path is written as a `.dendro`, as before 6.0.
+    /// Any `output` not ending in `.dendro` is refused, naming the path,
+    /// `.dendro`, and the 5.x hindsight that wrote such a path as a `.rez`.
     #[test]
-    fn an_output_in_a_removed_format_is_refused() {
-        for (out, five) in [
-            ("/var/lib/rezolus/rezolus.rez", true),
-            ("/srv/incident.parquet", false),
+    fn an_output_not_ending_in_dendro_is_refused() {
+        for out in [
+            "/var/lib/rezolus/rezolus.rez",
+            "/srv/incident.parquet",
+            "buffer",
+            "incident.db",
+            "out.dendro.tmp",
         ] {
             let err = general::check_output(Path::new(out)).unwrap_err();
             assert!(err.contains(out), "{err}");
             assert!(err.contains("ending in .dendro"), "{err}");
-            assert_eq!(err.contains("5.x hindsight"), five, "{err}");
+            assert!(err.contains("5.x hindsight (5.27.0 or later)"), "{err}");
+            assert!(!err.contains("removed in 6.0"), "{err}");
         }
-        for out in ["rezolus.dendro", "buffer", "incident.db"] {
-            assert!(general::check_output(Path::new(out)).is_ok(), "{out}");
-        }
+        assert!(general::check_output(Path::new("rezolus.dendro")).is_ok());
         assert!(general::check_output(Path::new(&output())).is_ok());
     }
 

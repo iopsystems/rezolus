@@ -58,6 +58,40 @@ const DEFAULT_OUTPUT: &str = "rezolus.dendro";
 /// the output extension used for each.
 const REMOVED_FORMATS: [&str; 3] = ["rez", "parquet", "raw"];
 
+/// Where an output path came from, so a refusal quotes it back the way the
+/// caller wrote it.
+#[derive(Clone, Copy)]
+enum OutputOrigin<'a> {
+    /// `-o/--output`.
+    Flag,
+    /// The deprecated positional OUTPUT.
+    Positional,
+    /// The `output` key of a `--config` file at this path.
+    Config(&'a Path),
+}
+
+impl OutputOrigin<'_> {
+    /// `path` as the caller wrote it: `-o out.rez`, `OUTPUT out.rez`, or
+    /// `in rec.toml: output = "out.rez"`.
+    fn quote(self, path: &Path) -> String {
+        match self {
+            Self::Flag => format!("-o {}", path.display()),
+            Self::Positional => format!("OUTPUT {}", path.display()),
+            Self::Config(file) => format!(
+                "in {}: output = {:?}",
+                file.display(),
+                path.display().to_string()
+            ),
+        }
+    }
+}
+
+/// "A rezolus 5.x recorder (5.27.0 or later)", the fallback every refusal of
+/// a removed 5.x behaviour names, at the start of a sentence.
+fn recorder_5x() -> String {
+    format!("A rezolus 5.x recorder ({} or later)", super::RELEASE_5X)
+}
+
 /// The refusal for a format 6.x no longer writes. `asked` is the flag or
 /// path that named it, quoted back first.
 fn removed_format(asked: &str, format: &str) -> String {
@@ -69,9 +103,8 @@ fn removed_format(asked: &str, format: &str) -> String {
     };
     format!(
         "{asked}: rezolus 6.x writes .dendro only (-o out.dendro); .{format} output was \
-         removed in 6.0. A rezolus 5.x recorder ({} is the latest 5.x release) still \
-         writes .{format}.{convert}",
-        super::LATEST_5X_RELEASE
+         removed in 6.0. {} still writes .{format}.{convert}",
+        recorder_5x()
     )
 }
 
@@ -87,22 +120,23 @@ fn check_format(format: &str) -> Result<(), String> {
     }
 }
 
-/// Accept an output path ending in `.dendro`, and refuse any other.
+/// Accept an output path ending in `.dendro`, and refuse any other, quoting
+/// the path back as `origin` gave it.
 ///
 /// An extension 5.x read as a format (`.rez`, `.parquet`, `.raw`) is refused
 /// by name. Any other extension, or none, is refused too: 5.x wrote parquet
 /// there, so a caller passing `-o capture.dat` expects parquet, and a
 /// `.dendro` archive under that name would be a file whose name does not say
 /// what it holds.
-fn check_output(path: &Path) -> Result<(), String> {
+fn check_output(path: &Path, origin: OutputOrigin) -> Result<(), String> {
+    let asked = origin.quote(path);
     match path.extension().and_then(|e| e.to_str()) {
         Some("dendro") => Ok(()),
-        Some(ext) if REMOVED_FORMATS.contains(&ext) => {
-            Err(removed_format(&format!("-o {}", path.display()), ext))
-        }
+        Some(ext) if REMOVED_FORMATS.contains(&ext) => Err(removed_format(&asked, ext)),
         _ => Err(format!(
-            "-o {}: the output must end in .dendro; rezolus 6.x writes .dendro archives only",
-            path.display()
+            "{asked}: the output must end in .dendro; rezolus 6.x writes .dendro archives \
+             only. {} wrote this path as parquet and still does.",
+            recorder_5x()
         )),
     }
 }
@@ -114,9 +148,9 @@ fn check_output(path: &Path) -> Result<(), String> {
 fn refuse_separate() -> String {
     format!(
         "--separate: rezolus 6.x writes one .dendro holding each endpoint as its own \
-         recording, and --separate was removed in 6.0. A rezolus 5.x recorder ({} is the \
-         latest 5.x release) still writes one parquet or raw file per endpoint.",
-        super::LATEST_5X_RELEASE
+         recording, and --separate was removed in 6.0. {} still writes one parquet or \
+         raw file per endpoint.",
+        recorder_5x()
     )
 }
 
@@ -191,6 +225,11 @@ impl RecordingConfig {
         let out_flag = args.get_one::<PathBuf>("OUTPUT_FLAG").map(|p| p.as_path());
         let out_pos = args.get_one::<PathBuf>("OUTPUT").map(|p| p.as_path());
         let (explicit_output, output_deprecated) = resolve_output(out_flag, out_pos)?;
+        let explicit_origin = if output_deprecated {
+            OutputOrigin::Positional
+        } else {
+            OutputOrigin::Flag
+        };
 
         // Mode 1: --config file.toml
         if let Some(config_path) = args.get_one::<PathBuf>("CONFIG_FILE") {
@@ -225,11 +264,14 @@ impl RecordingConfig {
                 return Err("config file must define at least one endpoint".to_string());
             }
 
-            let output = match explicit_output {
-                Some(p) => p,
-                None => PathBuf::from(toml_cfg.recording.output),
+            let (output, origin) = match explicit_output {
+                Some(p) => (p, explicit_origin),
+                None => (
+                    PathBuf::from(toml_cfg.recording.output),
+                    OutputOrigin::Config(config_path),
+                ),
             };
-            check_output(&output)?;
+            check_output(&output, origin)?;
 
             return Ok(RecordingConfig {
                 interval,
@@ -246,7 +288,7 @@ impl RecordingConfig {
 
         let output = match explicit_output {
             Some(p) => {
-                check_output(&p)?;
+                check_output(&p, explicit_origin)?;
                 p
             }
             None => PathBuf::from(DEFAULT_OUTPUT),
@@ -404,20 +446,23 @@ mod tests {
     }
 
     /// Each extension 5.x read as a format is refused by name, pointing at
-    /// `.dendro` and at a 5.x recorder, however the path was given.
+    /// `.dendro` and at a 5.x recorder, and quoting the path the way it was
+    /// given: `-o out.rez`, or `OUTPUT out.rez` for the positional form.
     #[test]
     fn an_output_in_a_removed_format_is_refused() {
         for ext in ["rez", "parquet", "raw"] {
             let path = format!("out.{ext}");
             // `-o`, and the deprecated positional OUTPUT after a positional URL.
-            for args in [vec!["-o", path.as_str()], vec!["http://h:1", &path]] {
+            for (args, asked) in [
+                (vec!["-o", path.as_str()], format!("-o {path}: ")),
+                (vec!["http://h:1", &path], format!("OUTPUT {path}: ")),
+            ] {
                 let err = parse(&args).err().unwrap_or_else(|| panic!("{args:?}"));
+                assert!(err.starts_with(&asked), "{asked:?} starts {err}");
                 for needle in [
-                    path.as_str(),
                     "writes .dendro only",
                     "-o out.dendro",
-                    "5.x recorder",
-                    crate::recorder::LATEST_5X_RELEASE,
+                    &format!("5.x recorder ({} or later)", crate::recorder::RELEASE_5X),
                 ] {
                     assert!(err.contains(needle), "{needle:?} in {err}");
                 }
@@ -426,14 +471,18 @@ mod tests {
         }
     }
 
-    /// Any other extension, or none, is refused too: 5.x wrote parquet there.
+    /// Any other extension, or none, is refused too, pointing at the 5.x
+    /// recorder that wrote parquet there.
     #[test]
     fn an_output_not_ending_in_dendro_is_refused() {
         for path in ["capture.dat", "capture", "out.dendro.tmp"] {
             let err = parse(&["-o", path])
                 .err()
                 .unwrap_or_else(|| panic!("{path}"));
+            assert!(err.starts_with(&format!("-o {path}: ")), "{err}");
             assert!(err.contains("must end in .dendro"), "{err}");
+            assert!(err.contains("5.x recorder"), "{err}");
+            assert!(err.contains("as parquet"), "{err}");
         }
     }
 
@@ -498,7 +547,14 @@ mod tests {
         let parquet = write("parquet.toml", "output = \"run.parquet\"");
         let err = parse(&["--config", &parquet]).err().unwrap();
         assert!(
-            err.contains("run.parquet") && err.contains("5.x recorder"),
+            err.starts_with(&format!("in {parquet}: output = \"run.parquet\": ")),
+            "{err}"
+        );
+        assert!(err.contains("5.x recorder"), "{err}");
+        let dat = write("dat.toml", "output = \"run.dat\"");
+        let err = parse(&["--config", &dat]).err().unwrap();
+        assert!(
+            err.starts_with(&format!("in {dat}: output = \"run.dat\": ")),
             "{err}"
         );
         assert_eq!(

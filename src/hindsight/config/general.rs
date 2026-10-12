@@ -30,24 +30,24 @@ pub struct General {
     segment_rows: Option<usize>,
 }
 
-/// Refuse an `output` naming a format hindsight wrote before 6.0: a `.rez`
-/// (the buffer and its snapshots were `.rez` then) or a `.parquet`. Any other
-/// path is written as a `.dendro` archive, as it was before 6.0.
+/// Accept an `output` ending in `.dendro`, and refuse any other, as `record`
+/// does.
+///
+/// A 5.x hindsight (5.27.0 included) wrote every `output` not ending in
+/// `.dendro` as a `.rez` archive, `.parquet` included (with a warning), and
+/// the packaged config named `rezolus.rez`. Writing a `.dendro` under such a
+/// name would leave a file whose name does not say what it holds, so the
+/// refusal names `.dendro` and the 5.x hindsight that wrote `.rez` there.
 pub(super) fn check_output(output: &Path) -> Result<(), String> {
-    let ext = output.extension().and_then(|e| e.to_str());
-    let advice = match ext {
-        Some("rez") => format!(
-            ", or a rezolus 5.x hindsight ({} is the latest 5.x release) for a .rez buffer",
-            crate::recorder::LATEST_5X_RELEASE
-        ),
-        Some("parquet") => String::new(),
-        _ => return Ok(()),
-    };
+    if output.extension().and_then(|e| e.to_str()) == Some("dendro") {
+        return Ok(());
+    }
     Err(format!(
-        "output = {:?}: hindsight writes .dendro archives only, and .{} output was \
-         removed in 6.0. Use an output ending in .dendro{advice}",
+        "output = {:?}: hindsight 6.x writes .dendro archives only; use an output \
+         ending in .dendro. A rezolus 5.x hindsight ({} or later) wrote this path as a \
+         .rez archive and still does.",
         output.display().to_string(),
-        ext.unwrap_or_default()
+        crate::recorder::RELEASE_5X
     ))
 }
 

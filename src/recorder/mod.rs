@@ -26,10 +26,12 @@ pub(crate) use ::rez::{
 #[cfg(test)]
 pub(crate) use ::rez::{schema, wal};
 
-/// The latest rezolus 5.x release, which the refusals of what 6.x no longer
-/// records (`.rez`, parquet and raw output, `--separate`, an agent that
-/// cannot stream) point at: a 5.x recorder still does all of them.
-pub(crate) const LATEST_5X_RELEASE: &str = "5.27.0";
+/// The 5.x release the refusals of what 6.x no longer records (`.rez`,
+/// parquet and raw output, `--separate`, an agent that cannot stream) point
+/// at, as "5.27.0 or later": 5.27.0 does all of them, and naming a minimum
+/// rather than the latest release keeps the messages true if another 5.x
+/// release ships.
+pub(crate) const RELEASE_5X: &str = "5.27.0";
 
 use crate::parquet_metadata;
 use crate::parquet_metadata::KEY_EVENTS;
@@ -84,9 +86,9 @@ pub fn command() -> Command {
              The output path must end in .dendro. rezolus 6.x writes no other format: an\n\
              output ending in .rez, .parquet or .raw (or in anything else) is refused, and\n\
              so is a format other than dendro; --separate (one file per endpoint) was removed.\n\
-             A rezolus 5.x recorder ({LATEST_5X_RELEASE} is the latest 5.x release) still writes .rez,\n\
-             parquet and raw, and `rezolus recording upgrade --to dendro in.rez -o out.dendro`\n\
-             converts a .rez afterwards.\n\n\
+             A rezolus 5.x recorder ({RELEASE_5X} or later) still writes .rez, parquet and\n\
+             raw, and `rezolus recording upgrade --to dendro in.rez -o out.dendro` converts\n\
+             a .rez afterwards.\n\n\
              A Prometheus endpoint records into the archive like any other. One scrape is\n\
              one request and one response, so it becomes one acquisition group per target,\n\
              windowed by the real HTTP round trip.\n\n\
@@ -161,8 +163,8 @@ pub fn command() -> Command {
              stream (older than 5.21.0, a V2 agent, a stream route that answers 404 or\n\
              another refusal, or a handshake that does not decode) is refused with its\n\
              version. At startup that refuses the run before anything is written; a rezolus\n\
-             5.x recorder ({LATEST_5X_RELEASE} is the latest 5.x release) records such an agent by\n\
-             scraping it. An agent that comes up later and is refused, or is refused on a\n\
+             5.x recorder ({RELEASE_5X} or later) records such an agent by scraping it.\n\
+             An agent that comes up later and is refused, or is refused on a\n\
              reconnect, is left out of the recording from then on (a reconnect keeps the\n\
              rows it had), the other endpoints keep recording, and the run exits 1 once\n\
              the archive is finalized. When every endpoint has been refused, the run ends.\n\n\
@@ -798,7 +800,7 @@ fn unstreamable_agent(ep: &EndpointState, reason: &str, at: RefusedAt) -> String
     };
     let fallback = format!(
         "rezolus 6.x records Rezolus agents from their replication stream only. A \
-         rezolus 5.x recorder ({LATEST_5X_RELEASE} is the latest 5.x release) records this \
+         rezolus 5.x recorder ({RELEASE_5X} or later) records this \
          agent by scraping it, and `rezolus recording upgrade --to dendro in.rez -o \
          out.dendro` converts its .rez afterwards{upgrade}"
     );
@@ -3244,7 +3246,7 @@ mod tests {
             STREAM_SINCE,
             "Nothing was recorded",
             "5.x recorder",
-            LATEST_5X_RELEASE,
+            RELEASE_5X,
             "recording upgrade --to dendro",
             "upgrade the agent",
         ] {
