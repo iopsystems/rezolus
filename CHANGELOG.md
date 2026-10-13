@@ -68,7 +68,10 @@
   evicts past its first row. That segment is sealed then and dropped whole
   once its last row is past the lookback, so a hindsight buffer whose
   lookback is shorter than the seal policy's `max_age` (300 s) keeps up to
-  twice its lookback; the 15 m default is unaffected.
+  twice its lookback plus one interval; the 15 m default is unaffected.
+  Before, such a buffer lost the rows of every open segment once its
+  lookback passed the segment's first row, and a dump with a 6 s lookback
+  held only a long table's occupant rows.
 
 - **`record` detects an endpoint by its stream.** For a URL whose path is `/`
   or `/metrics/stream`, `record` subscribes to `/metrics/stream` first; a

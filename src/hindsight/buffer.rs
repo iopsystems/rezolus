@@ -136,11 +136,12 @@ impl HindsightBuffer {
     ///
     /// Derived from the span the recording has COVERED — newest minus the very
     /// first row, which eviction never moves — not from the span it currently
-    /// retains. The retained span is the wrong instrument: it converges to just
-    /// *under* the lookback (the oldest surviving row sits one tick inside the
-    /// cutoff, and a row is stamped in nanoseconds), so `retained >= lookback`
-    /// reads false forever at steady state. Ask the question the buffer can
-    /// answer exactly instead of the one that needs a fudge factor.
+    /// retains. The retained span is the wrong instrument: eviction drops whole
+    /// segments, so it rises past the lookback and falls back each time a
+    /// segment goes (up to two lookbacks plus one interval when the lookback
+    /// is shorter than the seal policy's `max_age`), and it can sit just under
+    /// the lookback before the first segment is sealed. The covered span
+    /// crosses the lookback once and stays crossed.
     pub fn at_retention_bound(&self) -> bool {
         match (self.first_ts, self.newest_ts) {
             (Some(first), Some(newest)) => {
@@ -486,14 +487,64 @@ mod tests {
         assert_eq!(summary.first_ts, Some(ANCHOR));
     }
 
+    /// A lookback shorter than the seal policy's `max_age`: no segment seals
+    /// by policy, so every row is in the WAL when retention reaches it. For a
+    /// long table, retention used to delete the open segment's first value
+    /// row, the one that carries the table's columns, and every later value
+    /// row then read back as nothing; a dump with a 6 s lookback held only
+    /// the occupant rows. metriken-storage 0.2.3 seals the segment first, so
+    /// the lookback's values read back.
+    #[test]
+    fn a_lookback_shorter_than_max_age_keeps_its_rows_readable() {
+        use metriken_query::MetricsSource;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("buffer.dendro");
+        let mut buf = HindsightBuffer::create_dendro(
+            &path,
+            seed(),
+            Duration::from_secs(3),
+            seal_every(usize::MAX),
+        )
+        .unwrap();
+        for i in 0..20u64 {
+            let (s, ts) = slotted(ANCHOR + i * SECOND, &[(0, "nginx")], i);
+            buf.ingest(&s, ts, 0).unwrap();
+            buf.maintain().unwrap();
+        }
+        buf.sync().unwrap();
+        let reader = crate::rez_reader::RezReader::open_recordings(
+            &path,
+            metriken_storage::BufferPool::new(64 * 1024 * 1024),
+        )
+        .unwrap()
+        .remove(0)
+        .1;
+        let (start, end) = reader.time_range().unwrap();
+        let metriken_query::QueryResult::Matrix { result } = reader
+            .query_range("rate(task_ops{comm=\"nginx\"}[3s])", start, end + 1.0, 1.0)
+            .unwrap()
+        else {
+            panic!("a matrix");
+        };
+        let points: Vec<f64> = result
+            .iter()
+            .flat_map(|s| s.values.iter().map(|v| v.1))
+            .collect();
+        // At least the 3 s lookback reads back, the counter rising by one a
+        // second.
+        assert!(
+            points.len() >= 3 && points.iter().all(|v| (v - 1.0).abs() < 1e-6),
+            "{points:?}"
+        );
+    }
+
     #[test]
     fn at_retention_bound_flips_once_the_recording_outlasts_the_lookback() {
         // `/status` reports this, and the obvious derivation is wrong: the
-        // span the buffer RETAINS converges to just under the lookback — the
-        // oldest surviving row sits one tick inside the cutoff — so
-        // `retained >= lookback` reads false forever at steady state. This is
-        // the span the recording has COVERED, which crosses the lookback
-        // exactly once and stays crossed.
+        // span the buffer RETAINS rises and falls as eviction drops whole
+        // segments, so `retained >= lookback` does not flip at a fixed point.
+        // This is the span the recording has COVERED, which crosses the
+        // lookback exactly once and stays crossed.
         //
         // A 4.5 s lookback against 1 s ticks, so the cutoff lands BETWEEN two
         // rows: in the real loop the same misalignment comes from tick
@@ -521,17 +572,17 @@ mod tests {
         assert!(buf.at_retention_bound(), "5s covered: eviction has started");
 
         // The retained span is not what flipped it. Retention seals an open
-        // segment once its first row falls behind the cutoff and drops it
-        // whole once its last row does (metriken-storage 0.2.3), so the
-        // span kept ranges up to `lookback + min(lookback, max_age)` and
-        // says nothing about whether the recording has outlasted the
-        // lookback. `summarize` opens its own connection, so the barrier
-        // makes it see the eviction above.
+        // segment at the first tick its first row is behind the cutoff and
+        // drops it whole once its last row is (metriken-storage 0.2.3), so
+        // the span kept can reach two lookbacks plus one tick and says
+        // nothing about whether the recording has outlasted the lookback.
+        // `summarize` opens its own connection, so the barrier makes it see
+        // the eviction above.
         buf.sync().unwrap();
         let retained = summarize(&path).unwrap().retained().unwrap();
         assert!(
-            retained <= 2 * lookback,
-            "retained {retained:?}: eviction keeps at most two lookbacks"
+            retained <= 2 * lookback + Duration::from_secs(1),
+            "retained {retained:?}: at most two lookbacks and one tick"
         );
     }
 
@@ -1066,6 +1117,16 @@ mod tests {
             buf.maintain().unwrap();
             buf.sync().unwrap();
             let now = summarize(&path).unwrap();
+            // Retention ran on every tick: a segment is sealed at the first
+            // tick its first row is behind the cutoff and dropped once its
+            // last row is, so the quiet table (a row every 7 ticks, a segment
+            // every 5 rows) keeps up to a lookback and one tick past the
+            // cutoff. Measured: 41 s every 28 ticks from tick 41.
+            let retained = now.retained().unwrap();
+            assert!(
+                retained <= Duration::from_secs(2 * LOOKBACK + 1),
+                "tick {i}: retained {retained:?}"
+            );
             if i <= WARM {
                 warm_pages = warm_pages.max(now.pages);
             } else if now.pages > late_pages {
@@ -1077,16 +1138,6 @@ mod tests {
             late_pages <= warm_pages,
             "the buffer must plateau: at most {warm_pages} pages over ticks 0-{WARM}, \
              {late_pages} ({late_free} free) over ticks {WARM}-{TICKS}",
-        );
-        // And retention ran: the buffer holds at most two lookbacks, not the
-        // run. A segment is sealed once its first row falls behind the cutoff
-        // and dropped once its last row does, so the quiet table (a row every
-        // 7 ticks, a segment every 5 rows) can keep a lookback's worth of rows
-        // past the cutoff: `lookback + min(lookback, max_age)`.
-        let retained = summarize(&path).unwrap().retained().unwrap();
-        assert!(
-            retained <= Duration::from_secs(2 * LOOKBACK),
-            "retained {retained:?}"
         );
     }
 }

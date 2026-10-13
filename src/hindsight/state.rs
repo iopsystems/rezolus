@@ -31,8 +31,8 @@ pub struct SharedState {
     /// done.
     ticks: AtomicU64,
     /// Whether retention has begun. Published by the loop rather than derived
-    /// from the file: the buffer knows the span it has COVERED, and eviction
-    /// keeps the span it RETAINS permanently just under the lookback — see
+    /// from the file: the buffer knows the span it has COVERED, while the span
+    /// it RETAINS moves up and down as eviction drops whole segments — see
     /// [`super::buffer::HindsightBuffer::at_retention_bound`].
     at_retention_bound: AtomicBool,
 }
