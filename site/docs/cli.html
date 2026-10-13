@@ -79,7 +79,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <!-- Sidebar -->
 <aside class="h-[calc(100vh-5rem)] w-56 sticky top-20 hidden lg:flex flex-col p-6 border-r border-slate-100 dark:border-slate-800 shrink-0">
 <div class="mb-8">
-<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.26.0</div>
+<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.27.0</div>
 </div>
 <nav class="flex-1 space-y-6 overflow-y-auto text-sm">
 <div class="space-y-1">
@@ -145,18 +145,16 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record [OPTIONS] [-- &lt;COMMAND&gt;...]</code></div>
 </div>
 </div>
-<p class="text-sm text-slate-400 mt-2">With no arguments at all this records the local agent (<code>http://localhost:4241</code>) into <code>rezolus.dendro</code> until ctrl-c. The output extension picks the format, so <code>--format</code> is rarely needed.</p>
+<p class="text-sm text-slate-400 mt-2">With no arguments at all this records the local agent (<code>http://localhost:4241</code>) into <code>rezolus.dendro</code> until ctrl-c. The output must end in <code>.dendro</code>; any other output, a <code>--format</code> other than <code>dendro</code>, and <code>--separate</code> are refused. A rezolus 5.x recorder (5.27.0 or later) still writes <code>.rez</code>, parquet and raw.</p>
 <div class="mt-3 space-y-1 text-sm text-slate-500 font-mono">
 <div><span class="text-slate-400">    --url</span> &lt;URL&gt;               <span class="text-slate-600">Endpoint to record [default: http://localhost:4241]</span></div>
-<div><span class="text-slate-400">-o, --output</span> &lt;PATH&gt;           <span class="text-slate-600">Output path; .dendro | .rez | .parquet | .raw picks the format [default: rezolus.dendro]</span></div>
+<div><span class="text-slate-400">-o, --output</span> &lt;PATH&gt;           <span class="text-slate-600">Output path, ending in .dendro [default: rezolus.dendro]</span></div>
 <div><span class="text-slate-400">-i, --interval</span> &lt;INTERVAL&gt;     <span class="text-slate-600">Collection interval [default: 1s]</span></div>
 <div><span class="text-slate-400">-d, --duration</span> &lt;DURATION&gt;     <span class="text-slate-600">Record for a fixed window, then stop</span></div>
-<div><span class="text-slate-400">-f, --format</span> &lt;FORMAT&gt;         <span class="text-slate-600">dendro|rez|parquet|raw &mdash; only needed when the path cannot say</span></div>
 <div><span class="text-slate-400">-l, --label</span> &lt;KEY=VALUE&gt;       <span class="text-slate-600">Tag an archive recording (repeatable); source/host auto-filled</span></div>
-<div><span class="text-slate-400">-m, --metadata</span> &lt;KEY=VALUE&gt;    <span class="text-slate-600">File-level metadata, any format (repeatable)</span></div>
+<div><span class="text-slate-400">-m, --metadata</span> &lt;KEY=VALUE&gt;    <span class="text-slate-600">Metadata on every recording in the archive (repeatable)</span></div>
 <div><span class="text-slate-400">    --config</span> &lt;FILE&gt;           <span class="text-slate-600">TOML config for multi-endpoint recording</span></div>
 <div><span class="text-slate-400">    --endpoint</span> &lt;URL&gt;          <span class="text-slate-600">Endpoint with options (repeatable), url[,source=][,role=][,protocol=]</span></div>
-<div><span class="text-slate-400">    --separate</span>                <span class="text-slate-600">Write per-endpoint files instead of one combined</span></div>
 <div><span class="text-slate-400">-v, --verbose</span>                 <span class="text-slate-600">Increase verbosity (stackable)</span></div>
 </div>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
@@ -167,8 +165,8 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record -o run.dendro -i 100ms -d 30s</code></div>
 <div class="text-slate-600 text-sm mt-3"># Record only while a benchmark runs (perf-record style)</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record -o bench.dendro -- ./bench.sh --iters 100</code></div>
-<div class="text-slate-600 text-sm mt-3"># A Prometheus source needs parquet</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record --url http://host:9090/metrics -o svc.parquet -d 5m</code></div>
+<div class="text-slate-600 text-sm mt-3"># A Prometheus endpoint is scraped into the same kind of archive</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record --url http://host:9090/metrics -o svc.dendro -d 5m</code></div>
 </div>
 </div>
 </div>
@@ -181,7 +179,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus hindsight &lt;CONFIG&gt;</code></div>
 </div>
 </div>
-<p class="text-sm text-slate-400 mt-2">Rolling ring buffer. Send SIGHUP to trigger snapshot.</p>
+<p class="text-sm text-slate-400 mt-2">Rolling buffer kept as a <code>.dendro</code> archive. Send SIGHUP to write a snapshot. An <code>output</code> not ending in <code>.dendro</code> is refused at startup.</p>
 </div>
 
 <!-- Status -->
@@ -449,7 +447,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div><span class="text-blue-400">interval</span> = <span class="text-green-400">"1s"</span></div>
 <div><span class="text-blue-400">duration</span> = <span class="text-green-400">"1h"</span></div>
 <div><span class="text-blue-400">source</span> = <span class="text-green-400">"http://127.0.0.1:4241"</span></div>
-<div><span class="text-blue-400">output</span> = <span class="text-green-400">"/var/lib/rezolus/hindsight.parquet"</span></div>
+<div><span class="text-blue-400">output</span> = <span class="text-green-400">"/var/lib/rezolus/hindsight.dendro"</span></div>
 <div><span class="text-blue-400">listen</span> = <span class="text-green-400">"0.0.0.0:4242"</span>  <span class="text-slate-600"># optional HTTP API</span></div>
 </div>
 </div>

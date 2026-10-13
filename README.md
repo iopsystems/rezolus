@@ -161,18 +161,19 @@ can run as managed services; Recorder, Viewer, MCP, and recording tools run on
 demand. Solid boxes in the diagram are Rezolus commands; dashed boxes are the
 systems and services being measured.
 
-The normal capture format is **`.dendro`**, an archive with a recording per
-endpoint and separate acquisition groups/cadences. It accepts Rezolus and
-Prometheus sources. **`.rez`**, the archive format before 6.0, is still read and
-written. Use **`.parquet`** for a uniform tabular export or other Parquet tools;
-**`.raw`** captures snapshots for later conversion. See [format details](docs/usage.md#output-formats)
-for the tradeoffs and overwrite rules.
+Recorder and Hindsight write **`.dendro`** archives only: a recording per
+endpoint, each acquisition group at its own cadence. One archive can hold
+Rezolus agents and Prometheus endpoints. An output path not ending in
+`.dendro` is refused; a rezolus 5.x recorder (5.27.0 or later) still writes
+`.rez`, parquet and raw. Every tool still reads `.rez` and `.parquet`, and
+`rezolus recording upgrade --to dendro` converts a `.rez`. See
+[Output format](docs/usage.md#output-format) for the overwrite rules.
 
 `rezolus view` runs a local Rust server that evaluates queries and serves the
 web dashboard. The [browser-only viewer](https://rezolus.com/viewer/) instead
 uses WebAssembly to process uploaded recordings entirely in the browser.
-Both can inspect `.rez` and `.parquet` recordings; the CLI viewer also connects
-to live agents.
+Both can inspect `.dendro`, `.rez` and `.parquet` recordings; the CLI viewer
+also connects to live agents.
 
 ## Analyze with an agent
 
