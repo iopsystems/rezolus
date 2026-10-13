@@ -22,16 +22,18 @@
 //! Retention is `SourceRecorder::evict_before` each tick. The file stays
 //! bounded because freed pages are reused.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::state::TimeRange;
+#[cfg(test)]
 use crate::recorder::rez_v3_writer::ManifestSeed;
+#[cfg(test)]
 use crate::recorder::seal_policy::SealPolicy;
 
-/// The rolling buffer. One recording, fed a row per tick, trimmed to the
-/// configured lookback every tick.
+/// A rolling buffer written directly, for tests that fill one without a
+/// stream. Hindsight itself records through `metriken-recorder` with
+/// retention (see `super::run`); this keeps the same retention rule.
 ///
 /// The recorder is **declared before the writer deliberately.** Fields drop
 /// in declaration order, and dropping the writer joins its thread. Dropping
@@ -39,6 +41,7 @@ use crate::recorder::seal_policy::SealPolicy;
 /// sender, so the writer stops whoever still holds a clone — but it would stop
 /// the writer while the recorder could still queue a final seal, and that work
 /// would be dropped.
+#[cfg(test)]
 pub struct HindsightBuffer {
     rec: metriken_storage::SourceRecorder,
     writer: metriken_storage::ArchiveWriter,
@@ -55,9 +58,6 @@ pub struct HindsightBuffer {
     /// [`at_retention_bound`](Self::at_retention_bound) can be answered
     /// exactly. It is not affected by eviction, which is the point.
     first_ts: Option<u64>,
-    /// The recording's metadata as last written, for the restart patch to be
-    /// computed against.
-    metadata: BTreeMap<String, String>,
 }
 
 /// Row time the dendro writer lets pass between restatements of a long
@@ -66,10 +66,12 @@ fn restate_every_ns() -> u64 {
     metriken_storage::WriterConfig::default().restate_every_ns
 }
 
+#[cfg(test)]
 fn archive_err(e: Box<dyn std::error::Error + Send + Sync>) -> String {
     e.to_string()
 }
 
+#[cfg(test)]
 impl HindsightBuffer {
     /// Create the buffer at `path`, which must not exist, through
     /// metriken-storage's writer: groups with slots are written long.
@@ -95,7 +97,6 @@ impl HindsightBuffer {
         };
         let mut writer = metriken_storage::ArchiveWriter::create(path, config)
             .map_err(|e| format!("failed to create {}: {e}", path.display()))?;
-        let metadata = seed.metadata.clone();
         let rec = writer
             .add_source(seed.labels, seed.metadata, seed.clock_anchor_wall_ns)
             .map_err(archive_err)?;
@@ -105,34 +106,11 @@ impl HindsightBuffer {
             lookback,
             newest_ts: None,
             first_ts: None,
-            metadata,
         })
-    }
-
-    /// Write agent restarts into the buffer's metadata: see
-    /// [`crate::recorder::restart::metadata_patch`].
-    pub fn record_restarts(
-        &mut self,
-        restarts: &[crate::recorder::restart::Restart],
-        agent: &crate::recorder::restart::Agent,
-    ) -> Result<(), String> {
-        let patch = crate::recorder::restart::metadata_patch(
-            &self.metadata,
-            self.first_ts,
-            restarts,
-            agent,
-            &[],
-        );
-        let mut merged = self.metadata.clone();
-        merged.extend(patch.clone());
-        self.rec.update_metadata(patch).map_err(archive_err)?;
-        self.metadata = merged;
-        Ok(())
     }
 
     /// Append one snapshot, committed at once. The tests' way of filling a
     /// buffer without a stream.
-    #[cfg(test)]
     pub fn ingest(
         &mut self,
         snapshot: &metriken_exposition::Snapshot,
@@ -148,31 +126,9 @@ impl HindsightBuffer {
         Ok(())
     }
 
-    /// Append one pass taken off the stream, staging the groups as they
-    /// arrived.
-    pub fn ingest_streamed(
-        &mut self,
-        groups: Vec<metriken_storage::StreamedGroup>,
-        anchored_ts: u64,
-        wall_offset_ns: i64,
-    ) -> Result<(), String> {
-        let staged = self
-            .rec
-            .stage_streamed(groups, anchored_ts, wall_offset_ns)
-            .map_err(archive_err)?;
-        self.writer.commit(vec![staged]).map_err(archive_err)?;
-        self.note_ts(anchored_ts);
-        Ok(())
-    }
-
     fn note_ts(&mut self, ts: u64) {
         self.newest_ts = Some(self.newest_ts.map_or(ts, |t| t.max(ts)));
         self.first_ts.get_or_insert(ts);
-    }
-
-    /// Whether any row has been written into the buffer.
-    pub fn has_rows(&self) -> bool {
-        self.first_ts.is_some()
     }
 
     /// Whether retention has begun: the buffer is now dropping as much as it
@@ -218,7 +174,6 @@ impl HindsightBuffer {
     /// is what keeps sealing and eviction off the tick path. It is for a caller
     /// that is about to inspect the file through a second connection and needs
     /// to see its own last tick, rather than the state from before it.
-    #[cfg(test)]
     pub fn sync(&mut self) -> Result<(), String> {
         self.rec.sync().map_err(archive_err)
     }
@@ -449,6 +404,7 @@ mod tests {
     use crate::recorder::rez::recorder_tests_support::{counter, snap};
     use metriken_exposition::Snapshot;
     use metriken_storage::Catalog;
+    use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
 

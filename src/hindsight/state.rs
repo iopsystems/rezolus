@@ -54,8 +54,9 @@ impl SharedState {
         }
     }
 
-    pub fn record_tick(&self) {
-        self.ticks.fetch_add(1, Ordering::Relaxed);
+    /// Passes ingested since startup, as the recorder counts them.
+    pub fn set_ticks(&self, passes: u64) {
+        self.ticks.store(passes, Ordering::Relaxed);
     }
 
     pub fn ticks(&self) -> u64 {

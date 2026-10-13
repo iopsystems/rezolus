@@ -8,9 +8,8 @@ mod config;
 mod http;
 pub(crate) mod state;
 
-use crate::recorder::stream::{ConnectError, Layout, StreamEvent, Subscription};
-use buffer::HindsightBuffer;
 pub use config::Config;
+use metriken_recorder as mr;
 use state::{DumpToFileRequest, DumpToFileResponse, SharedState, TimeRange};
 
 pub fn command() -> Command {
@@ -102,58 +101,6 @@ pub fn run(config: Config) {
 
     let url = config.general().url();
 
-    let blocking_client = match reqwest::blocking::Client::builder().http1_only().build() {
-        Ok(c) => c,
-        Err(e) => {
-            error!("error connecting to Rezolus: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    let fetch = |path: &str| -> Option<String> {
-        let mut u = url.clone();
-        u.set_path(path);
-        blocking_client
-            .get(u)
-            .send()
-            .ok()
-            .filter(|r| r.status().is_success())
-            .and_then(|r| r.text().ok())
-    };
-
-    let agent_systeminfo = fetch("/systeminfo");
-    let agent_descriptions = fetch("/metrics/descriptions");
-    // The buffered agent's version, not this binary's: hindsight and the agent
-    // are separate processes and can be different builds. `/status` is the
-    // structured answer; the root page is the fallback for agents older than
-    // it. Same two-step as `recorder::fetch_agent_version`, done with the
-    // blocking client hindsight already has here.
-    let agent_status = fetch("/status").and_then(|body| {
-        serde_json::from_str::<crate::agent::sampler_status::AgentStatus>(&body).ok()
-    });
-    let agent_version = agent_status
-        .as_ref()
-        .map(|s| s.version.clone())
-        .filter(|v| !v.is_empty())
-        .or_else(|| {
-            fetch("/")
-                .as_deref()
-                .and_then(crate::recorder::parse_root_version)
-        });
-    // No epoch from the root-page fallback: an agent old enough to lack
-    // `/status` predates the epoch, and inventing one would claim a restart
-    // boundary nobody observed.
-    let agent_epoch = agent_status
-        .as_ref()
-        .map(|s| s.producer_epoch.clone())
-        .filter(|e| !e.is_empty());
-
-    if agent_systeminfo.is_some() {
-        debug!("fetched systeminfo from agent");
-    } else {
-        debug!("agent systeminfo not available");
-    }
-
     let async_client = match reqwest::Client::builder().http1_only().build() {
         Ok(c) => c,
         Err(e) => {
@@ -211,29 +158,34 @@ pub fn run(config: Config) {
     let lookback: Duration = config.general().duration().into();
     let timeout = crate::recorder::tick_timeout(interval_dur);
 
-    // Subscribe before the buffer exists. The handshake's anchor is the
-    // buffer's timeline (rows carry the agent's own stamps, as a recording of
-    // the stream does), and an agent that cannot stream is refused before
-    // anything is written. Groups of slots arrive long.
-    let layout = Layout::Long;
-    let connected = rt.block_on(async {
-        tokio::time::timeout(
-            timeout,
-            Subscription::connect(
-                &async_client,
-                &url,
-                interval_dur,
-                layout,
-                crate::recorder::stream::ACCEPTED_WIRE_NAMES,
-            ),
-        )
-        .await
-    });
-    let subscription = match connected {
-        Ok(Ok(sub)) => sub,
-        Ok(Err(ConnectError::Unsupported(e))) => {
-            let version = agent_version.as_deref().unwrap_or("of unknown version");
-            error!("the agent at {url} ({version}) cannot serve its replication stream: {e}");
+    // Detect the agent before the buffer exists: its stream, or a refusal
+    // naming its version. An agent that cannot stream, or is not there, ends
+    // the run before anything is written. The buffer is a recording with
+    // retention: everything older than the lookback is evicted each tick,
+    // measured back from the newest row.
+    let probe: Arc<dyn mr::Probe> = Arc::new(crate::recorder::agent_probe::RezolusProbe::new(
+        async_client.clone(),
+    ));
+    let spec = mr::EndpointSpec {
+        transport: mr::Transport::Stream,
+        ..mr::EndpointSpec::new(url.clone())
+    };
+    let detect_cfg = mr::DetectConfig {
+        interval: interval_dur,
+        timeout,
+        layout: mr::Layout::Long,
+        wire_names: crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec(),
+    };
+    let detected = rt.block_on(mr::detect(
+        &async_client,
+        &detect_cfg,
+        vec![spec],
+        probe.as_ref(),
+    ));
+    match &detected[0] {
+        mr::Detected::Streamed { .. } => {}
+        mr::Detected::Refused { reason, .. } => {
+            error!("the agent at {url} cannot serve its replication stream: {reason}");
             error!(
                 "hindsight records an agent over /metrics/stream, which agents from 5.21.0 \
                  serve; check that the path is reachable if a proxy sits in between, or \
@@ -242,47 +194,12 @@ pub fn run(config: Config) {
             );
             std::process::exit(1);
         }
-        Ok(Err(ConnectError::Unreachable(e))) => {
-            error!("could not subscribe to the agent at {url}: {e}");
+        mr::Detected::Pending { reason, .. } => {
+            error!("could not subscribe to the agent at {url}: {reason}");
             std::process::exit(1);
         }
-        Err(_) => {
-            error!(
-                "could not subscribe to the agent at {url}: no handshake within {}",
-                humantime::format_duration(timeout)
-            );
-            std::process::exit(1);
-        }
-    };
-    let source = subscription
-        .source()
-        .cloned()
-        .expect("connect returns only once the handshake has been applied");
-    // An anchor of 0 means the handshake carried none; use the local clock.
-    let clock_anchor_wall_ns = u64::try_from(source.clock_anchor_wall_ns)
-        .ok()
-        .filter(|a| *a != 0)
-        .unwrap_or_else(wall_ns);
-    // The handshake names the process whose rows arrive, so its epoch is the
-    // one the buffer opens with; `/status` is the fallback for a handshake
-    // that carried none.
-    let agent_epoch = source
-        .uuid
-        .clone()
-        .filter(|u| !u.is_empty())
-        .or(agent_epoch);
-
-    let seed = crate::recorder::rez_v3_writer::ManifestSeed {
-        labels: crate::recorder::rez::build_labels("rezolus", agent_systeminfo.as_deref(), &[]),
-        metadata: buffer_metadata(
-            interval_dur,
-            &agent_systeminfo,
-            &agent_descriptions,
-            &agent_version,
-            &agent_epoch,
-        ),
-        clock_anchor_wall_ns,
-    };
+        mr::Detected::Scraped { .. } => unreachable!("a declared stream is never scraped"),
+    }
 
     // Segment size tracks the interval rather than being fixed: the
     // writer's 900 rows is a segment per ~15 minutes at the default 1 s
@@ -294,9 +211,32 @@ pub fn run(config: Config) {
         // forever rather than doing anything useful with the 0.
         policy.max_rows = rows.max(1);
     }
-
-    let mut buffer = match HindsightBuffer::create_dendro(&buffer_path, seed, lookback, policy) {
-        Ok(b) => b,
+    let recorder_cfg = mr::RecorderConfig {
+        path: buffer_path.clone(),
+        writer: metriken_storage::WriterConfig {
+            seal: dendro::seal::SealPolicy {
+                max_bytes: policy.max_bytes,
+                max_rows: policy.max_rows,
+                max_age: policy.max_age,
+                align: None,
+            },
+            ..metriken_storage::WriterConfig::default()
+        },
+        interval: interval_dur,
+        timeout,
+        layout: mr::Layout::Long,
+        wire_names: crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec(),
+        retain: Some(lookback),
+        events: 1024,
+    };
+    let (recorder, _ids, mut events) = match rt.block_on(mr::Recorder::start(
+        recorder_cfg,
+        async_client.clone(),
+        probe,
+        detected,
+        Vec::new(),
+    )) {
+        Ok(started) => started,
         Err(e) => {
             error!("failed to create the hindsight buffer: {e}");
             std::process::exit(1);
@@ -329,39 +269,12 @@ pub fn run(config: Config) {
         // The stop's capture failed: exit 1 rather than 0, so a supervisor
         // can tell the buffer was not saved.
         let mut capture_failed = false;
-        let mut interval = crate::common::aligned_interval(interval_dur);
         // The agent refused a reconnect: capture the buffer, then exit.
         let mut refused = false;
         // Whether the capture that ends the run has started. A capture
         // already in flight when the refusal arrives was snapshotted before
         // it, so the refusal starts one of its own after that.
         let mut refusal_capture_started = false;
-
-        // The subscription runs on its own task and hands each interval over;
-        // the loop below writes them, maintains the buffer on its own tick, and
-        // serves dumps, and none of that waits on the socket.
-        let (stream_tx, mut stream_rx) = tokio::sync::mpsc::channel::<(usize, StreamEvent)>(
-            crate::recorder::STREAM_QUEUE_PER_ENDPOINT,
-        );
-        // For the restarted agent's metadata; the pump owns the other.
-        let metadata_client = async_client.clone();
-        tokio::spawn(crate::recorder::stream::pump(
-            0,
-            subscription,
-            async_client,
-            url.clone(),
-            interval_dur,
-            layout,
-            timeout,
-            stream_tx,
-        ));
-        let mut decoder = metriken_storage::StreamDecoder::new();
-        let mut epoch = source.uuid.clone();
-        // Agent restarts not yet written into the buffer's metadata.
-        let mut restarts: Vec<crate::recorder::restart::Restart> = Vec::new();
-        // Fetches of the restarted agent's metadata that failed or found
-        // another process; see `record_restarts`.
-        let mut restart_fetches = 0u32;
 
         // Dumps run OFF this loop — that is the whole shape of what follows.
         // Every dump is spawned and its result comes back asynchronously,
@@ -451,71 +364,28 @@ pub fn run(config: Config) {
                 // it.
                 Some(_) = signal_rx.recv() => {}
 
-                Some((_, event)) = stream_rx.recv() => match event {
-                    StreamEvent::Interval(applied) => {
-                        let first_ts = applied
-                            .rows
-                            .iter()
-                            .filter_map(|r| u64::try_from(r.ts).ok())
-                            .min();
-                        match ingest_interval(&mut buffer, &mut decoder, applied) {
-                            Ok(passes) => (0..passes).for_each(|_| shared_state.record_tick()),
-                            Err(e) => fatal(&e, &buffer_path),
-                        }
-                        // A restart is written into the buffer's metadata
-                        // once a row from the new process is in it.
-                        if let Some(ts) = first_ts {
-                            for r in &mut restarts {
-                                r.from_ts.get_or_insert(ts);
-                            }
-                        }
-                        if !restarts.is_empty() && restarts.iter().all(|r| r.from_ts.is_some()) {
-                            record_restarts(
-                                &mut buffer,
-                                &mut restarts,
-                                &mut restart_fetches,
-                                &metadata_client,
-                                &url,
-                                timeout,
-                            )
-                            .await;
-                        }
-                        // Seal and evict with each interval, as each scrape
-                        // did. The select is biased toward this arm, so while
-                        // intervals keep arriving the tick arm below may not
-                        // run, and sealing must not wait on it.
-                        if let Err(e) = buffer.maintain() {
-                            fatal(&e, &buffer_path);
-                        }
-                        shared_state.set_at_retention_bound(buffer.at_retention_bound());
+                event = events.recv() => match event {
+                    // Cumulative, so a dropped one loses nothing.
+                    Some(mr::Event::Committed { passes_total, first_ts, ts, .. }) => {
+                        shared_state.set_ticks(passes_total);
+                        shared_state.set_at_retention_bound(
+                            Duration::from_nanos(ts.saturating_sub(first_ts)) >= lookback,
+                        );
                     }
-                    StreamEvent::Dropped(e) => {
-                        warn!("the agent's stream ended ({e}); reconnecting");
+                    Some(mr::Event::Dropped { reason, .. }) => {
+                        warn!("the agent's stream ended ({reason}); reconnecting");
                     }
-                    StreamEvent::Connected(source) => {
+                    Some(mr::Event::Reconnected { .. }) => {
                         info!("the agent's stream reconnected");
-                        if source.uuid != epoch {
-                            warn!(
-                                "the agent restarted (producer epoch {} -> {}); its \
-                                 counters started again from zero",
-                                epoch.as_deref().unwrap_or("unknown"),
-                                source.uuid.as_deref().unwrap_or("unknown")
-                            );
-                            if let Some(new) = source.uuid.as_deref().filter(|u| !u.is_empty()) {
-                                restarts.push(crate::recorder::restart::Restart {
-                                    epoch: new.to_string(),
-                                    from_ts: None,
-                                    rows_before: buffer.has_rows(),
-                                });
-                                // The newest process gets its own attempts.
-                                restart_fetches = 0;
-                            }
-                            epoch = source.uuid;
-                        }
                     }
-                    StreamEvent::Refused(e) => {
+                    Some(mr::Event::Restarted { version, .. }) => info!(
+                        "the buffer's metadata now records the agent restart (producer_epochs; \
+                         version {})",
+                        version.as_deref().unwrap_or("not reported")
+                    ),
+                    Some(mr::Event::Refused { reason, .. }) if !refused => {
                         error!(
-                            "the agent at {url} can no longer serve /metrics/stream ({e}); \
+                            "the agent at {url} can no longer serve /metrics/stream ({reason}); \
                              capturing the buffer and exiting"
                         );
                         refused = true;
@@ -529,17 +399,12 @@ pub fn run(config: Config) {
                             Ordering::SeqCst,
                         );
                     }
+                    Some(mr::Event::Failed { error }) => fatal(&error, &buffer_path),
+                    Some(_) => {}
+                    // The recorder stopped without saying why; what it wrote
+                    // is in the buffer.
+                    None => fatal("the recorder stopped", &buffer_path),
                 },
-
-                _ = interval.tick() => {
-                    // Every tick, whether or not an interval arrived: this
-                    // is where segments seal, where retention runs, and where
-                    // a writer that died asynchronously is noticed.
-                    if let Err(e) = buffer.maintain() {
-                        fatal(&e, &buffer_path);
-                    }
-                    shared_state.set_at_retention_bound(buffer.at_retention_bound());
-                }
             }
 
             // A signal-triggered capture (SIGHUP, or the capture a stop
@@ -600,6 +465,8 @@ pub fn run(config: Config) {
             info!("waiting for {} dump(s) in flight", dumps.len());
             while dumps.join_next().await.is_some() {}
         }
+        // The buffer is temporary: stop recording and remove it.
+        recorder.discard().await;
         (refused, capture_failed)
     });
 
@@ -794,90 +661,6 @@ fn log_capture(response: &DumpToFileResponse) {
     }
 }
 
-/// Write the agent restarts in `restarts` into the buffer's metadata, with the
-/// version, systeminfo and descriptions the new process reports (see
-/// [`crate::recorder::fetch_restarted_agent`] and
-/// [`crate::recorder::restart::metadata_patch`]). A fetch that fails or finds
-/// another process leaves `restarts` for the next interval; after
-/// [`crate::recorder::restart::FETCH_ATTEMPTS`] fetches in all, counted in `fetches`,
-/// the epochs are then written without the process's metadata. A write that
-/// fails is logged, and the recording goes on.
-async fn record_restarts(
-    buffer: &mut HindsightBuffer,
-    restarts: &mut Vec<crate::recorder::restart::Restart>,
-    fetches: &mut u32,
-    client: &reqwest::Client,
-    url: &reqwest::Url,
-    timeout: Duration,
-) {
-    use crate::recorder::restart::{Agent, FETCH_ATTEMPTS};
-    let Some(newest) = restarts.last() else {
-        return;
-    };
-    let agent =
-        match crate::recorder::fetch_restarted_agent(client, url, &newest.epoch, timeout).await {
-            Some(agent) => agent,
-            None if *fetches + 1 < FETCH_ATTEMPTS => {
-                *fetches += 1;
-                return;
-            }
-            None => {
-                warn!(
-                    "could not read the restarted agent's version, systeminfo and \
-                     descriptions; the buffer's metadata records the restart without them"
-                );
-                Agent::default()
-            }
-        };
-    *fetches = 0;
-    let pending = std::mem::take(restarts);
-    match buffer.record_restarts(&pending, &agent) {
-        Ok(()) => info!(
-            "the buffer's metadata now records the agent restart (producer_epochs; version {})",
-            agent.version.as_deref().unwrap_or("not reported")
-        ),
-        Err(e) => warn!("the agent restart could not be written into the buffer's metadata: {e}"),
-    }
-}
-
-/// Write one streamed interval into `buffer`, and return how many passes it
-/// held (one, unless a relay batched several). Shared by hindsight and the
-/// viewer's live mode, which both record an agent's stream into a buffer.
-///
-/// `Err` is a row that would not decode or a write that failed; either ends
-/// the recording. Sealing and retention are the caller's, on its own tick
-/// ([`HindsightBuffer::maintain`]). A row naming a schema this connection has not sent is
-/// skipped and logged.
-pub(crate) fn ingest_interval(
-    buffer: &mut HindsightBuffer,
-    decoder: &mut metriken_storage::StreamDecoder,
-    applied: crate::recorder::stream::Applied,
-) -> Result<usize, String> {
-    if applied.gap {
-        warn!(
-            "the stream jumped to interval {}; the intervals before it produced no frame",
-            applied.seq
-        );
-    }
-    let passes = applied.for_writer()?;
-    let n = passes.len();
-    let before = decoder.unresolved;
-    for pass in passes {
-        // `for_writer` refuses a stamp before the epoch.
-        let ts = pass.ts as u64;
-        let wall_offset = pass.wall_offset;
-        let groups = decoder.decode(pass.rows)?;
-        buffer.ingest_streamed(groups, ts, wall_offset)?;
-    }
-    if decoder.unresolved > before {
-        warn!(
-            "{} streamed rows named a schema this connection had not sent; skipped",
-            decoder.unresolved - before
-        );
-    }
-    Ok(n)
-}
-
 /// A buffer write that failed is not recoverable in place — but everything
 /// committed before it is, and unlike the ring it is in a file anything can
 /// open. Say where before exiting.
@@ -895,39 +678,6 @@ fn wall_ns() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos() as u64
-}
-
-/// The recording's file-level metadata, matching what `rezolus record` writes
-/// so a dump is indistinguishable from a recording to every consumer.
-pub(crate) fn buffer_metadata(
-    interval: Duration,
-    systeminfo: &Option<String>,
-    descriptions: &Option<String>,
-    version: &Option<String>,
-    producer_epoch: &Option<String>,
-) -> std::collections::BTreeMap<String, String> {
-    let mut m = std::collections::BTreeMap::new();
-    m.insert(
-        "sampling_interval_ms".to_string(),
-        interval.as_millis().to_string(),
-    );
-    m.insert("source".to_string(), "rezolus".to_string());
-    if let Some(json) = systeminfo {
-        m.insert("systeminfo".to_string(), json.clone());
-    }
-    if let Some(json) = descriptions {
-        m.insert("descriptions".to_string(), json.clone());
-    }
-    if let Some(v) = version {
-        m.insert(crate::parquet_metadata::KEY_VERSION.to_string(), v.clone());
-    }
-    if let Some(e) = producer_epoch {
-        m.insert(
-            crate::parquet_metadata::KEY_PRODUCER_EPOCH.to_string(),
-            e.clone(),
-        );
-    }
-    m
 }
 
 #[cfg(test)]
@@ -967,30 +717,5 @@ mod tests {
         let got = shutdown_capture_path(out, 1_789_425_944_000_000_000);
         assert_ne!(got, out.to_path_buf());
         assert_eq!(got, Path::new("/var/lib/rezolus/buffer-20260914T224544Z"));
-    }
-
-    /// The buffer must be indistinguishable from a `rezolus record` capture to
-    /// every consumer, and that now includes carrying the agent's version
-    /// (issue #1195). Hindsight and the agent are separate processes, so the
-    /// version written is the one fetched from the agent, never this binary's.
-    #[test]
-    fn buffer_metadata_carries_the_agent_version_when_the_agent_reported_one() {
-        let m = buffer_metadata(
-            Duration::from_secs(1),
-            &None,
-            &None,
-            &Some("5.19.2".to_string()),
-            &None,
-        );
-        assert_eq!(
-            m.get(crate::parquet_metadata::KEY_VERSION)
-                .map(String::as_str),
-            Some("5.19.2")
-        );
-
-        // Absent, not empty: an empty value renders as the bare
-        // `Rezolus Version:` line this change exists to remove.
-        let m = buffer_metadata(Duration::from_secs(1), &None, &None, &None, &None);
-        assert!(!m.contains_key(crate::parquet_metadata::KEY_VERSION));
     }
 }

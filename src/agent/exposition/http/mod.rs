@@ -369,8 +369,6 @@ mod stream_tests {
     /// agent.
     #[tokio::test]
     async fn a_recorder_can_subscribe_to_a_real_agent_over_http() {
-        use crate::recorder::stream::Subscription;
-
         let config: Config = toml::from_str("[general]\nttl = \"1s\"\nsnapshot_format = \"v3\"\n")
             .expect("valid config");
         let state = AppState {
@@ -406,17 +404,16 @@ mod stream_tests {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let client = reqwest::Client::builder().http1_only().build().unwrap();
         let base = reqwest::Url::parse(&format!("http://{addr}")).unwrap();
-        let mut sub = Subscription::connect(
+        let mut sub = crate::recorder::stream::connect(
             &client,
             &base,
             Duration::from_secs(1),
             crate::recorder::stream::Layout::Wide,
-            crate::recorder::stream::ACCEPTED_WIRE_NAMES,
         )
         .await
         .expect("subscribes");
         assert!(
-            sub.source().is_some(),
+            Some(sub.handshake()).is_some(),
             "connect returns with the handshake applied: the recorder opens the \
              recording on its anchor before the first interval"
         );
@@ -428,7 +425,7 @@ mod stream_tests {
             .expect("the stream did not end");
 
         assert_eq!(
-            sub.source()
+            Some(sub.handshake())
                 .and_then(|s| s.labels.get("source"))
                 .map(String::as_str),
             Some("rezolus"),
@@ -441,7 +438,7 @@ mod stream_tests {
     /// introduces, and the second interval does not describe them again.
     #[tokio::test]
     async fn a_long_layout_subscription_sends_each_occupant_once() {
-        use crate::recorder::stream::{Layout, Subscription};
+        use crate::recorder::stream::Layout;
         use metriken_storage::StreamedGroup;
 
         let config: Config = toml::from_str("[general]\nttl = \"1s\"\nsnapshot_format = \"v3\"\n")
@@ -472,15 +469,10 @@ mod stream_tests {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let client = reqwest::Client::builder().http1_only().build().unwrap();
         let base = reqwest::Url::parse(&format!("http://{addr}")).unwrap();
-        let mut sub = Subscription::connect(
-            &client,
-            &base,
-            Duration::from_secs(1),
-            Layout::Long,
-            crate::recorder::stream::ACCEPTED_WIRE_NAMES,
-        )
-        .await
-        .expect("subscribes");
+        let mut sub =
+            crate::recorder::stream::connect(&client, &base, Duration::from_secs(1), Layout::Long)
+                .await
+                .expect("subscribes");
         assert_eq!(sub.layout(), Layout::Long);
 
         // Recorded as `record -o out.dendro` records it: decoded, then staged.
@@ -488,7 +480,7 @@ mod stream_tests {
         let path = dir.path().join("long.dendro");
         let mut writer =
             metriken_storage::ArchiveWriter::create(&path, Default::default()).unwrap();
-        let source = sub.source().cloned().unwrap();
+        let source = Some(sub.handshake()).cloned().unwrap();
         let mut recording = writer
             .add_source(
                 source.labels.clone(),
@@ -511,7 +503,7 @@ mod stream_tests {
                 continue;
             }
             let mut tally = (0, 0, 0);
-            for pass in applied.for_writer().unwrap() {
+            for pass in applied.passes().unwrap() {
                 let groups = decoder.decode(pass.rows).unwrap();
                 for g in &groups {
                     match g {
@@ -523,9 +515,9 @@ mod stream_tests {
                         StreamedGroup::Wide(_) => {}
                     }
                 }
-                last = (pass.ts as u64, pass.wall_offset);
+                last = (pass.ts, pass.wall_offset);
                 let staged = recording
-                    .stage_streamed(groups, pass.ts as u64, pass.wall_offset)
+                    .stage_streamed(groups, pass.ts, pass.wall_offset)
                     .unwrap();
                 writer.commit(vec![staged]).unwrap();
             }
@@ -896,18 +888,17 @@ mod stream_tests {
     /// recorder must not sit in its retry loop on them.
     #[tokio::test]
     async fn an_agent_that_cannot_serve_the_stream_is_refused_as_unsupported() {
-        use crate::recorder::stream::{ConnectError, Subscription};
+        use crate::recorder::stream::ConnectError;
         let client = test_client();
 
         // An agent from before the route existed: 404.
         let old = Router::new().route("/", get(root));
         let base = serve(old).await;
-        match Subscription::connect(
+        match crate::recorder::stream::connect(
             &client,
             &base,
             Duration::from_secs(1),
             crate::recorder::stream::Layout::Wide,
-            crate::recorder::stream::ACCEPTED_WIRE_NAMES,
         )
         .await
         {
@@ -922,12 +913,11 @@ mod stream_tests {
         // A V2 agent: the route exists and answers 409.
         let v2 = test_state("[general]\nttl = \"1s\"\nsnapshot_format = \"v2\"\n");
         let base = serve(app(v2)).await;
-        match Subscription::connect(
+        match crate::recorder::stream::connect(
             &client,
             &base,
             Duration::from_secs(1),
             crate::recorder::stream::Layout::Wide,
-            crate::recorder::stream::ACCEPTED_WIRE_NAMES,
         )
         .await
         {
@@ -945,18 +935,17 @@ mod stream_tests {
     /// Classifying it as `Unsupported` made that restart end the recording.
     #[tokio::test]
     async fn a_server_error_is_an_outage_not_a_refusal() {
-        use crate::recorder::stream::{ConnectError, Subscription};
+        use crate::recorder::stream::ConnectError;
         let proxy_down = Router::new().route(
             "/metrics/stream",
             get(|| async { (axum::http::StatusCode::SERVICE_UNAVAILABLE, "upstream down") }),
         );
         let base = serve(proxy_down).await;
-        match Subscription::connect(
+        match crate::recorder::stream::connect(
             &test_client(),
             &base,
             Duration::from_secs(1),
             crate::recorder::stream::Layout::Wide,
-            crate::recorder::stream::ACCEPTED_WIRE_NAMES,
         )
         .await
         {
@@ -1068,20 +1057,17 @@ mod stream_tests {
     /// accepted.
     #[tokio::test]
     async fn connect_reads_the_headers_of_the_names_its_content_type_matched() {
-        use crate::recorder::stream::{
-            ConnectError, Subscription, ACCEPTED_WIRE_NAMES, REZOLUS_LEGACY_WIRE_NAMES,
-        };
+        use crate::recorder::stream::{ConnectError, REZOLUS_LEGACY_WIRE_NAMES};
         use metriken_exposition::stream::WIRE_NAMES;
         let client = test_client();
         let connect = |base: reqwest::Url| {
             let client = client.clone();
             async move {
-                Subscription::connect(
+                crate::recorder::stream::connect(
                     &client,
                     &base,
                     Duration::from_secs(1),
                     Layout::Long,
-                    ACCEPTED_WIRE_NAMES,
                 )
                 .await
             }
@@ -1131,7 +1117,7 @@ mod stream_tests {
     /// builds can be read off the message.
     #[tokio::test]
     async fn a_malformed_handshake_is_refused_by_what_was_wrong() {
-        use crate::recorder::stream::{ConnectError, Subscription};
+        use crate::recorder::stream::ConnectError;
         use dendro::replicate::wire::{MAGIC, PROTOCOL_VERSION};
         let client = test_client();
 
@@ -1139,12 +1125,11 @@ mod stream_tests {
         let theirs = PROTOCOL_VERSION.wrapping_add(1);
         other_version.extend_from_slice(&theirs.to_le_bytes());
         let base = serve_stream_bytes(other_version).await;
-        match Subscription::connect(
+        match crate::recorder::stream::connect(
             &client,
             &base,
             Duration::from_secs(1),
             crate::recorder::stream::Layout::Wide,
-            crate::recorder::stream::ACCEPTED_WIRE_NAMES,
         )
         .await
         {
@@ -1157,12 +1142,11 @@ mod stream_tests {
         }
 
         let base = serve_stream_bytes(b"not a replication stream".to_vec()).await;
-        match Subscription::connect(
+        match crate::recorder::stream::connect(
             &client,
             &base,
             Duration::from_secs(1),
             crate::recorder::stream::Layout::Wide,
-            crate::recorder::stream::ACCEPTED_WIRE_NAMES,
         )
         .await
         {
@@ -1176,17 +1160,16 @@ mod stream_tests {
     /// attempt may complete it.
     #[tokio::test]
     async fn a_handshake_cut_short_is_an_outage_not_a_refusal() {
-        use crate::recorder::stream::{ConnectError, Subscription};
+        use crate::recorder::stream::ConnectError;
         use dendro::replicate::wire::{MAGIC, PROTOCOL_VERSION};
         let mut preamble_only = MAGIC.to_vec();
         preamble_only.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
         let base = serve_stream_bytes(preamble_only).await;
-        match Subscription::connect(
+        match crate::recorder::stream::connect(
             &test_client(),
             &base,
             Duration::from_secs(1),
             crate::recorder::stream::Layout::Wide,
-            crate::recorder::stream::ACCEPTED_WIRE_NAMES,
         )
         .await
         {
@@ -1204,7 +1187,7 @@ mod stream_tests {
     /// early with no warning.
     #[tokio::test]
     async fn a_stream_that_goes_silent_after_its_handshake_is_reported_dropped() {
-        use crate::recorder::stream::{pump, StreamEvent, Subscription};
+        use crate::recorder::stream::{pump, StreamEvent};
 
         // The opening bytes of a real stream, then nothing, forever.
         let silent = Router::new().route(
@@ -1236,12 +1219,11 @@ mod stream_tests {
         );
         let base = serve(silent).await;
         let client = test_client();
-        let sub = Subscription::connect(
+        let sub = crate::recorder::stream::connect(
             &client,
             &base,
             Duration::from_millis(100),
             crate::recorder::stream::Layout::Wide,
-            crate::recorder::stream::ACCEPTED_WIRE_NAMES,
         )
         .await
         .expect("the handshake arrives, so the connect succeeds");
@@ -1273,19 +1255,18 @@ mod stream_tests {
     /// exactly as a scrape of a down endpoint is.
     #[tokio::test]
     async fn a_port_with_nothing_on_it_is_unreachable() {
-        use crate::recorder::stream::{ConnectError, Subscription};
+        use crate::recorder::stream::ConnectError;
         // Bind to learn a free port, then release it.
         let addr = {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             listener.local_addr().unwrap()
         };
         let base = reqwest::Url::parse(&format!("http://{addr}")).unwrap();
-        match Subscription::connect(
+        match crate::recorder::stream::connect(
             &test_client(),
             &base,
             Duration::from_secs(1),
             crate::recorder::stream::Layout::Wide,
-            crate::recorder::stream::ACCEPTED_WIRE_NAMES,
         )
         .await
         {
@@ -1378,23 +1359,22 @@ mod stream_tests {
     /// because it counts from its own first frame.
     #[tokio::test]
     async fn a_dropped_stream_is_reconnected_and_both_ends_are_reported() {
-        use crate::recorder::stream::{pump, StreamEvent, Subscription};
+        use crate::recorder::stream::{pump, StreamEvent};
 
         let agent = KillableAgent::start(None);
         let client = test_client();
         let base = reqwest::Url::parse(&format!("http://{}", agent.addr)).unwrap();
         let interval = Duration::from_secs(1);
 
-        let sub = Subscription::connect(
+        let sub = crate::recorder::stream::connect(
             &client,
             &base,
             interval,
             crate::recorder::stream::Layout::Wide,
-            crate::recorder::stream::ACCEPTED_WIRE_NAMES,
         )
         .await
         .expect("subscribes");
-        let first = sub.source().cloned().unwrap();
+        let first = Some(sub.handshake()).cloned().unwrap();
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
         tokio::spawn(pump(
