@@ -670,12 +670,14 @@ fleet scale (docs/principles.md principle 16).
   (`src/agent/samplers/blockio/linux/latency/stats.rs`). Per device, a slow
   or saturated device on a multi-disk host would stop averaging into the
   rest, and the device/queue split would say which device queues. BPF memory
-  at grouping power 3: 496 buckets × 8 bytes, about 4 KB per histogram; 12
-  per device (4 ops × 3 families), about 48 KB; 64 devices, about 3 MB.
+  at grouping power 3, with one slice per possible CPU (principle 8): about
+  4 KB per CPU per histogram; 12 per device (4 ops × 3 families), about
+  9 MB per device at 192 CPUs; 64 devices, about 585 MB.
 - **Per-cgroup runqueue latency** — Idea. Which container waits for CPU,
-  where `scheduler_runqueue_runqlat` has one host-wide histogram. About 4 KB
-  per cgroup, 16 MB at the 4,096-cgroup cap, and a histogram exported per
-  live cgroup every tick, so the refresh cost is the question.
+  where `scheduler_runqueue_runqlat` has one host-wide histogram. With one
+  slice per possible CPU (principle 8), about 4 KB per CPU per cgroup: 3 GB
+  at the 4,096-cgroup cap on 192 CPUs. Memory, and a histogram exported per
+  live cgroup every tick, are the questions.
 
 ## Agent — per-task CPU usage completeness
 
@@ -1122,9 +1124,11 @@ cgroup references.
   9). Note `network_interfaces` is global-only today, so this is a real addition
   rather than a relabel.
 - **Per-cgroup blockio size histograms** — Deferred, deliberately.
-  `MAX_CGROUPS × 496` H2 buckets is ~16 MB per op, ~64 MB for four; that breaks
-  the bounded-memory discipline (principles 8, 13). *Reopen:* only with config
-  gating or a sparse representation, as its own proposal.
+  `MAX_CGROUPS × 496` H2 buckets is ~16 MB per op, ~64 MB for four; with
+  the per-CPU slices principle 8 requires, ~3 GB per op and ~12 GB for four
+  at 192 CPUs. That breaks the bounded-memory discipline (principles 8, 13).
+  *Reopen:* only with config gating or a sparse representation, as its own
+  proposal.
 - **Counter layout and metric naming** — Open (minor). Confirm `packed_counters`
   keyed by cgroup id, matching `cgroup_cpu_usage`; and prefer the distinct
   `cgroup_`-prefixed metric over adding a `cgroup` label to `blockio_*`.

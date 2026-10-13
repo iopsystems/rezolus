@@ -16,14 +16,17 @@ use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 ///     __uint(map_flags, BPF_F_MMAPABLE);
 ///     __type(key, u32);
 ///     __type(value, u64);
-///     __uint(max_entries, 976);
+///     __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 /// } some_distribution_name SEC(".maps");
 /// ```
 ///
-/// This histogram must also be indexed into using the `value_to_index`
-/// helper from `histogram.h`. This results in a histogram that uses 64bit
-/// counters and covers the entire range of u64 values. This histogram occupies
-/// 60KB in kernel space and an additional 60KB in user space.
+/// and written with `histogram_incr` or `histogram_index` from `helpers.h`,
+/// which put each CPU's buckets in its own slice. The builder sets the map to
+/// one slice per possible CPU before load, and `refresh()` sums the slices.
+/// At grouping power 3 a slice is 496 buckets, 3968 bytes, so a histogram
+/// takes 744 KiB at 192 possible CPUs. The kernel allocates every slice when
+/// the map is created, and the agent mmaps and reads the whole map, so the
+/// same pages count in its RSS.
 ///
 /// The distribution should be given some meaningful name in the BPF program.
 ///
@@ -45,15 +48,17 @@ use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 pub struct Histogram<'a> {
     _map: &'a libbpf_rs::Map<'a>,
     mmap: memmap2::MmapMut,
-    buckets: usize,
+    slices: usize,
+    sum: Vec<u64>,
     histogram: &'static RwLockHistogram,
 }
 
 impl<'a> Histogram<'a> {
     pub fn new(map: &'a libbpf_rs::Map, histogram: &'static RwLockHistogram) -> Self {
         let buckets = histogram.config().total_buckets();
+        let slices = possible_cpus();
 
-        let mmap_len = whole_pages::<u64>(buckets) * PAGE_SIZE;
+        let mmap_len = whole_pages::<u64>(buckets * slices) * PAGE_SIZE;
 
         let fd = map.as_fd().as_raw_fd();
         let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
@@ -76,7 +81,8 @@ impl<'a> Histogram<'a> {
         Self {
             _map: map,
             mmap,
-            buckets,
+            slices,
+            sum: vec![0; buckets],
             histogram,
         }
     }
@@ -86,9 +92,9 @@ impl<'a> Histogram<'a> {
     /// the owning [`HistogramBatch`] is what stamps a window, once, around
     /// every histogram in the batch's `refresh()`.
     pub fn refresh(&mut self) {
-        let (_prefix, buckets, _suffix) = unsafe { self.mmap.align_to::<u64>() };
-        let n = self.buckets;
-        let _ = self.histogram.update_from(&buckets[0..n]);
+        let (_prefix, mapped, _suffix) = unsafe { self.mmap.align_to::<u64>() };
+        read_slices(mapped, self.slices, &mut self.sum);
+        let _ = self.histogram.update_from(&self.sum);
     }
 }
 
@@ -168,5 +174,68 @@ impl<'a> HistogramBatch<'a> {
         }
 
         acq.finish();
+    }
+}
+
+/// The number of slices a histogram map is declared with
+/// (`HISTOGRAM_SLICES` in helpers.h, the agent's `MAX_CPUS`).
+pub const HISTOGRAM_SLICES: usize = 1024;
+
+/// Sum the first `slices` per-CPU slices of `sum.len()` buckets each from a
+/// mapped histogram (which may carry page padding after them) into `sum`.
+fn read_slices(mapped: &[u64], slices: usize, sum: &mut [u64]) {
+    let n = sum.len();
+    sum.fill(0);
+    for slice in mapped[0..n * slices].chunks_exact(n) {
+        for (total, value) in sum.iter_mut().zip(slice) {
+            *total = total.wrapping_add(*value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod read_slices_tests {
+    use super::{read_slices, HISTOGRAM_SLICES};
+
+    /// A map of three 496-bucket slices followed by a fourth slice's worth
+    /// of padding, with a distinct count in the same bucket of each slice:
+    /// the sum has all three, and the padding is not read.
+    #[test]
+    fn sums_every_slice_and_ignores_padding() {
+        let buckets = 496;
+        let mut mapped = vec![0u64; buckets * 4];
+        mapped[100] = 1;
+        mapped[buckets + 100] = 10;
+        mapped[2 * buckets + 100] = 100;
+        mapped[2 * buckets + 495] = 7;
+        mapped[3 * buckets] = 999;
+        let mut sum = vec![5u64; buckets];
+        read_slices(&mapped, 3, &mut sum);
+        assert_eq!(sum[100], 111);
+        assert_eq!(sum[495], 7);
+        assert_eq!(sum.iter().sum::<u64>(), 118);
+    }
+
+    /// The agent's histograms have the bucket count BPF strides by,
+    /// `HISTOGRAM_SLICE_BUCKETS(3)` = (65 - 3) << 3 = 496, and the slice
+    /// count matches MAX_CPUS.
+    #[test]
+    fn slice_width_matches_bpf() {
+        let config =
+            histogram::Config::new(crate::common::HISTOGRAM_GROUPING_POWER, 64).expect("config");
+        assert_eq!(config.total_buckets(), 496);
+        assert_eq!(HISTOGRAM_SLICES, crate::agent::MAX_CPUS);
+    }
+
+    /// `helpers.h` declares the same slice count and slice width as the
+    /// Rust side reads with.
+    #[test]
+    fn bpf_helper_has_the_same_slices() {
+        let helpers = include_str!("helpers.h");
+        assert!(helpers.contains(&format!("#define HISTOGRAM_SLICES {HISTOGRAM_SLICES}\n")));
+        assert!(helpers.contains(
+            "#define HISTOGRAM_SLICE_BUCKETS(grouping_power) \
+             ((65 - (grouping_power)) << (grouping_power))\n"
+        ));
     }
 }

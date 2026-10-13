@@ -648,6 +648,45 @@ where
                 }
             }
 
+            // Histogram maps are declared with HISTOGRAM_SLICES slices of
+            // buckets (`histogram_index()` in helpers.h). Each registered one
+            // is set to `possible_cpus()` slices: nr_cpu_ids, clamped to
+            // MAX_CPUS. A CPU id at or above MAX_CPUS has no slice and its
+            // samples are dropped, as with the per-CPU counters. The declared
+            // size is checked first: BPF strides by
+            // `HISTOGRAM_SLICE_BUCKETS(grouping_power)`, the bucket count for
+            // the full u64 range, so a userspace histogram with a different
+            // bucket count would read every CPU but the first from the wrong
+            // offsets.
+            for mut map in open_skel.open_object_mut().maps_mut() {
+                let map_name = map.name().to_string_lossy().to_string();
+                if let Some((_, histogram, _)) = self
+                    .histograms
+                    .iter()
+                    .find(|(name, _, _)| *name == map_name)
+                {
+                    let buckets = histogram.config().total_buckets();
+                    if map.max_entries() as usize != HISTOGRAM_SLICES * buckets {
+                        let msg = format!(
+                            "histogram map '{map_name}' has {} entries, expected {} slices of {buckets}",
+                            map.max_entries(),
+                            HISTOGRAM_SLICES
+                        );
+                        error!("{}: {msg}", self.name);
+                        let e = libbpf_rs::Error::from(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            msg.clone(),
+                        ));
+                        crate::agent::sampler_status::set_failed(self.name, msg);
+                        return Err(e);
+                    }
+                    if let Err(e) = map.set_max_entries((possible_cpus() * buckets) as u32) {
+                        crate::agent::sampler_status::set_failed(self.name, e.to_string());
+                        return Err(e);
+                    }
+                }
+            }
+
             for f in self.pre_load {
                 f(&mut open_skel);
             }
