@@ -850,6 +850,10 @@
   such as a VM without a PMU, so `rezolus status` no longer exits 1 there;
   any other open error is still a failure, now with its errno. (#1457)
 
+- Corrected the swapped `memory_numa_miss` and `memory_numa_foreign`
+  descriptions; the NUMA dashboard's remote plot now uses `memory_numa_other`.
+  (#1458)
+
 - **`xfs_log` starts when xfs loads.** On a host whose root filesystem is
   not XFS, xfs is a module that loads at the first XFS mount, often after
   the agent has started; `xfs_log` reported unsupported ("the kernel's BTF

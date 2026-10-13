@@ -1051,12 +1051,12 @@ systems.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `memory_numa_hit` | The number of allocations that succeeded on the intended node | |
-| `memory_numa_miss` | The number of allocations that did not succeed on the intended node | |
-| `memory_numa_foreign` | The number of allocations that were not intended for a node that were serviced by this node | |
-| `memory_numa_interleave` | The number of interleave policy allocations that succeeded on the intended node | |
-| `memory_numa_local` | The number of allocations that succeeded on the local node | |
-| `memory_numa_other` | The number of allocations that on this node that were allocated by a process on another node | |
+| `memory_numa_hit` | The number of allocations made on the intended node: the memory policy's choice, or the node the caller asked for (`numa_hit`) | |
+| `memory_numa_miss` | The number of allocations made on a node other than the intended one (`numa_miss`). Summed over all nodes, as `/proc/vmstat` reports it, it equals `memory_numa_foreign` | |
+| `memory_numa_foreign` | The number of allocations intended for a node that were made on another node, counted against the intended node (`numa_foreign`). Summed over all nodes, as `/proc/vmstat` reports it, it equals `memory_numa_miss` | |
+| `memory_numa_interleave` | The number of interleave-policy allocations made on their intended node (`numa_interleave`) | |
+| `memory_numa_local` | The number of allocations made on the node the allocating task was running on (`numa_local`) | |
+| `memory_numa_other` | The number of allocations made on a node other than the one the allocating task was running on (`numa_other`) | |
 | `memory_pages_dirtied` | Page-cache pages dirtied by writes (`nr_dirtied`); a page dirtied again before writeback counts once | |
 | `memory_pages_written` | Page-cache pages written back by any path (`nr_written`): flushers, reclaim and integrity syncs alike. The complete count; `writeback_pages_written` below is only what the flusher's own accounting saw | |
 | `memory_dirty_threshold` | The dirty-page limits the writeback throttle compares `Dirty` against, in bytes: `hard` throttles writers, `background` starts the flusher (`nr_dirty_threshold`, `nr_dirty_background_threshold`) | `kind={hard,background}` |
