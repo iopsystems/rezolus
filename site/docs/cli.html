@@ -320,10 +320,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <!-- combine -->
 <div>
 <h4 class="text-sm font-bold mb-2"><code>combine</code></h4>
-<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Merge multiple parquet files into one &mdash; multi-node rezolus, multi-instance services, or compare-mode A/B bundles.</p>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Merge multiple recordings into one &mdash; multi-node rezolus, multi-instance services, a multi-recording <code>.dendro</code> or <code>.rez</code>, or compare-mode A/B bundles.</p>
 <div class="space-y-1 text-sm text-slate-500 font-mono">
 <div><span class="text-slate-400">FILES...</span>                      <span class="text-slate-600">Inputs to merge (parquet, single-recording .rez, or .dendro into a .dendro output)</span></div>
-<div><span class="text-slate-400">-o, --output</span> &lt;FILE&gt;         <span class="text-slate-600">Output parquet path</span></div>
+<div><span class="text-slate-400">-o, --output</span> &lt;FILE&gt;         <span class="text-slate-600">Output path; the extension picks the result (.parquet, .rez, .dendro, .parquet.ab.tar)</span></div>
 <div><span class="text-slate-400">    --pinned</span> &lt;NAME&gt;         <span class="text-slate-600">Default rezolus node to display</span></div>
 <div><span class="text-slate-400">    --ab</span> &lt;B=SRC&gt; &lt;E=SRC&gt;   <span class="text-slate-600">Bundle as A/B compare tarball &mdash; one flag, both values: <code>--ab baseline=…&nbsp;experiment=…</code></span></div>
 <div><span class="text-slate-400">    --category</span> &lt;NAME&gt;       <span class="text-slate-600">Tag the bundle with a category template</span></div>
