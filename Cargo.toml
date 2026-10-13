@@ -18,7 +18,7 @@ log = "0.4.29"
 metriken = "0.11.3"
 metriken-exposition = "0.22.1"
 metriken-query = { version = "0.36.1", default-features = false }
-metriken-storage = { version = "0.2.2", default-features = false }
+metriken-storage = { version = "0.2.3", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
@@ -45,7 +45,7 @@ dashboard = { path = "crates/dashboard" }
 # `FrameReader` skip frame kinds it does not know. 0.3.1 adds
 # `last_caller_row_at_or_before`, which the reader for dendro archives uses
 # to find the identity index's `Full` to replay from.
-dendro = { version = "0.4.0", default-features = false }
+dendro = { version = "0.4.2", default-features = false }
 rez = { path = "crates/rez" }
 report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
@@ -109,7 +109,7 @@ metriken-query = { workspace = true, features = ["ingest"] }
 # tick that commits every source into one `.dendro`: `record`, hindsight and
 # the live viewer over the library (metriken's
 # docs/journal/2026-10-12-metriken-recorder.md).
-metriken-recorder = "0.1.0"
+metriken-recorder = "0.1.1"
 # The archive writer `record -o out.dendro` writes through (`write`), and the
 # msgpack-to-parquet conversion behind `recording convert` and the recorder's
 # parquet output (`convert`).

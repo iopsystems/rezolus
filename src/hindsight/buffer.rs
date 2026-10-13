@@ -520,16 +520,18 @@ mod tests {
         buf.maintain().unwrap();
         assert!(buf.at_retention_bound(), "5s covered: eviction has started");
 
-        // And the retained span is now just UNDER the lookback: these rows
-        // are unsealed, so retention drops them one at a time and the oldest
-        // survivor sits strictly inside the cutoff. `summarize` opens its own
-        // connection, so the barrier makes it see the eviction above.
+        // The retained span is not what flipped it. Retention seals an open
+        // segment once its first row falls behind the cutoff and drops it
+        // whole once its last row does (metriken-storage 0.2.3), so the
+        // span kept ranges up to `lookback + min(lookback, max_age)` and
+        // says nothing about whether the recording has outlasted the
+        // lookback. `summarize` opens its own connection, so the barrier
+        // makes it see the eviction above.
         buf.sync().unwrap();
         let retained = summarize(&path).unwrap().retained().unwrap();
         assert!(
-            retained < lookback,
-            "retained {retained:?} — a span-based check would read false here \
-             forever, even though eviction is plainly running"
+            retained <= 2 * lookback,
+            "retained {retained:?}: eviction keeps at most two lookbacks"
         );
     }
 
@@ -1076,10 +1078,14 @@ mod tests {
             "the buffer must plateau: at most {warm_pages} pages over ticks 0-{WARM}, \
              {late_pages} ({late_free} free) over ticks {WARM}-{TICKS}",
         );
-        // And retention ran: the buffer holds about a lookback, not the run.
+        // And retention ran: the buffer holds at most two lookbacks, not the
+        // run. A segment is sealed once its first row falls behind the cutoff
+        // and dropped once its last row does, so the quiet table (a row every
+        // 7 ticks, a segment every 5 rows) can keep a lookback's worth of rows
+        // past the cutoff: `lookback + min(lookback, max_age)`.
         let retained = summarize(&path).unwrap().retained().unwrap();
         assert!(
-            retained < Duration::from_secs(LOOKBACK + 2 * SEAL_ROWS as u64),
+            retained <= Duration::from_secs(2 * LOOKBACK),
             "retained {retained:?}"
         );
     }
