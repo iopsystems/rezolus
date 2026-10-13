@@ -2345,9 +2345,11 @@ pub fn run(config: RecordingConfig) {
                                 }
                             }
                             // The scrape's HELP lines, when it brought a name
-                            // not yet stored. A failed write is retried after
-                            // the next scrape rather than ending the run: the
-                            // rows are what the recording is for.
+                            // not yet stored. dendro's `update_metadata` only
+                            // hands the patch to the writer thread, which logs
+                            // and skips a patch it cannot apply. Only a failed
+                            // hand-off is seen here; it is retried after the
+                            // next scrape rather than ending the run.
                             if let Some(json) = conv.pending_descriptions() {
                                 let patch = BTreeMap::from([(
                                     parquet_metadata::KEY_DESCRIPTIONS.to_string(),

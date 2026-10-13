@@ -31,8 +31,9 @@ pub fn command() -> Command {
              ([general] interval, e.g. 1s), how far back the buffer reaches ([general] duration,\n\
              e.g. 15m), the agent to read from ([general] source), and the snapshot output path\n\
              ([general] output). The buffer and its snapshots are .dendro archives; an output\n\
-             ending in .rez or .parquet is refused at startup (a rezolus 5.x hindsight still\n\
-             writes .rez). See config/hindsight.toml for a documented starting point.\n\n\
+             not ending in .dendro is refused at startup; a rezolus 5.x hindsight (5.27.0 or\n\
+             later) wrote such a path as .rez. See config/hindsight.toml for a documented\n\
+             starting point.\n\n\
              TRIGGERING A SNAPSHOT: send SIGHUP to write the buffer to a timestamped file beside\n\
              the output path (rezolus-20260915T204500Z.dendro for output rezolus.dendro) without\n\
              stopping the daemon. A SIGHUP during a capture is ignored. Optionally set\n\

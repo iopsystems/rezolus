@@ -60,8 +60,10 @@ impl PrometheusConverter {
     }
 
     /// The value [`pending_descriptions`](Self::pending_descriptions) last
-    /// returned is in the recording's metadata. Called only once the write
-    /// succeeded, so a failed one is retried after the next scrape.
+    /// returned was handed to the archive writer. Called only once the
+    /// hand-off succeeded, so a failed hand-off is retried after the next
+    /// scrape. The writer applies the patch later, and one it cannot apply is
+    /// logged there and not retried.
     pub fn descriptions_stored(&mut self) {
         self.descriptions_changed = false;
     }
