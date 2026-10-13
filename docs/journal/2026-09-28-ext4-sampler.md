@@ -796,9 +796,12 @@ trampolines take at most 6 before 6.6 (`arch/x86/net/bpf_jit_comp.c`), so it
 is a kprobe on 5.8–6.5 x86_64; on aarch64 fentry needs ftrace direct calls
 (first offered by arm64 in 6.4; read from the kernel config when
 `/boot/config-<release>` exists) and at most 8 arguments (12 from 6.16). The
-other fentry samplers (`cpu_usage`, `cpu_bandwidth`, `xfs_log`, `ext4_ops`,
-`memory_pagecache`, `tcp_connect_latency`, `tcp_receive`, `tcp_traffic`) do
-not check this yet.
+other fentry samplers use the same check since #1462. Those with kprobe twins
+(`cpu_usage`, `cpu_bandwidth`, `tcp_connect_latency`, `tcp_receive`,
+`tcp_traffic`) fall back to them. The fentry-only ones (`xfs_log`, `ext4_ops`,
+`memory_pagecache`) disable the hook, log it at info and keep their
+tracepoints; `xfs_log` and `memory_pagecache` still report unsupported when
+their function is missing from BTF altogether, as before.
 
 **Correction: flushing is not where fsync waits.** The phase 1 design, the
 metric description and the dashboard said flushing is "data blocks reaching

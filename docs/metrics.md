@@ -790,7 +790,9 @@ loaded. The fsync path's force is `xfs_log_force_seq` from 5.13 and
 and on a kernel with neither the fsync-path forces are not timed. On an older
 kernel, or a host with no XFS, `rezolus status` shows the sampler unsupported
 rather than failed. A kernel without `xfs_log_cil_wait` in BTF reads 0 for the
-CIL count.
+CIL count. On aarch64 without ftrace direct calls (before 6.4) fentry cannot
+attach to the force functions: the force series read 0 and the log-space and
+CIL series are recorded.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
@@ -979,7 +981,10 @@ filling task was doing, pages evicted, and mmap faults. Reads are one
 device, each classified from the task's saved syscall number (a read
 syscall, a write syscall, a page fault, or other; every fill is `other` on
 kernels before 5.15, which lack `bpf_task_pt_regs`). Evictions are the
-delete tracepoint; faults are `fentry` on `filemap_fault`.
+delete tracepoint; faults are `fentry` on `filemap_fault`. On aarch64 without
+ftrace direct calls (before 6.4) fentry cannot attach: reads, read bytes and
+faults read 0, so the hit ratio below is undefined there, and fills and
+evictions are recorded.
 
 **The hit ratio.** `pagecache_pages_added{reason="read"} × 4096 /
 pagecache_read_bytes` is the fraction of bytes read that came from the

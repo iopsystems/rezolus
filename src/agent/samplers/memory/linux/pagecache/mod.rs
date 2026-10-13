@@ -26,7 +26,10 @@
 //!
 //! Kernel support: the tracepoints and `filemap_fault` are old; `filemap_read`
 //! is 5.12+ and `generic_file_buffered_read` serves before it, selected from
-//! BTF; a kernel with neither reports the sampler unsupported. Classifying a
+//! BTF; a kernel with neither reports the sampler unsupported. Where fentry
+//! cannot attach to them (`kernel_can_fentry`: aarch64 without ftrace direct
+//! calls, before 6.4) the read and fault series read 0 and the fill and
+//! eviction tracepoints are still recorded. Classifying a
 //! fill needs `bpf_task_pt_regs` (5.15+): before it the plain twin loads and
 //! every fill is `reason="other"`. Folio sizes come from the folio order,
 //! wherever the running kernel keeps it (`_flags_1` from 6.6,
@@ -116,15 +119,19 @@ fn syscall_lut() -> Vec<u64> {
 /// Which programs to load, from the kernel's BTF and helpers: the names to
 /// disable and the (program, capability) pairs required.
 fn select_programs(
+    has_fault: bool,
     has_filemap_read: bool,
     has_buffered_read: bool,
     has_task_pt_regs: bool,
 ) -> (Vec<&'static str>, Vec<(&'static str, &'static str)>) {
     let mut disabled = Vec::new();
-    let mut required = vec![
-        ("filemap_delete", "pages evicted"),
-        ("filemap_fault_fentry", "mmap faults"),
-    ];
+    let mut required = vec![("filemap_delete", "pages evicted")];
+
+    if has_fault {
+        required.push(("filemap_fault_fentry", "mmap faults"));
+    } else {
+        disabled.push("filemap_fault_fentry");
+    }
 
     // One read entry point per kernel: filemap_read from 5.12,
     // generic_file_buffered_read before. Prefer the newer name if BTF had both.
@@ -165,16 +172,29 @@ fn init(config: Arc<Config>) -> SamplerResult {
         .into());
     }
 
-    let has_filemap_read = kernel_btf_has_funcs(&["filemap_read"]);
-    let has_buffered_read =
-        !has_filemap_read && kernel_btf_has_funcs(&["generic_file_buffered_read"]);
-    if !has_filemap_read && !has_buffered_read {
+    let read_in_btf = kernel_btf_func_arg_count("filemap_read").is_some()
+        || kernel_btf_func_arg_count("generic_file_buffered_read").is_some();
+    if !read_in_btf {
         return Err(crate::agent::sampler_status::Unsupported(
             "the kernel's BTF has neither filemap_read nor generic_file_buffered_read to attach \
              the read hook to"
                 .to_string(),
         )
         .into());
+    }
+
+    // `kernel_can_fentry`: the function is in BTF and the trampoline can
+    // attach to it on this kernel (aarch64 needs ftrace direct calls, 6.4+).
+    // Where it cannot, the read and fault hooks are left out and the add and
+    // delete tracepoints still run.
+    let has_fault = kernel_can_fentry("filemap_fault");
+    let has_filemap_read = kernel_can_fentry("filemap_read");
+    let has_buffered_read = !has_filemap_read && kernel_can_fentry("generic_file_buffered_read");
+    if !has_fault || (!has_filemap_read && !has_buffered_read) {
+        info!(
+            "{NAME}: fentry cannot attach to the read or fault hooks on this kernel; those \
+             series read 0"
+        );
     }
 
     let has_task_pt_regs = kernel_tracing_has_task_pt_regs();
@@ -185,8 +205,12 @@ fn init(config: Arc<Config>) -> SamplerResult {
         );
     }
 
-    let (disabled, required) =
-        select_programs(has_filemap_read, has_buffered_read, has_task_pt_regs);
+    let (disabled, required) = select_programs(
+        has_fault,
+        has_filemap_read,
+        has_buffered_read,
+        has_task_pt_regs,
+    );
     let cgroup_attribution = config.cgroup_attribution(NAME);
 
     // Order MUST match the C_* indices in mod.bpf.c: reads, bytes, added by
@@ -331,17 +355,18 @@ mod tests {
         assert_eq!(lut[nr("mmap")], 0);
     }
 
-    /// Exactly one read entry point and one fill program are loaded, chosen
-    /// by what the kernel has; the eviction and fault programs always are.
+    /// At most one read entry point and exactly one fill program are loaded,
+    /// chosen by what the kernel has; the eviction program always is, and the
+    /// read and fault programs wherever fentry can attach.
     #[test]
     fn programs_are_selected_by_kernel_capability() {
-        let (disabled, required) = select_programs(true, false, true);
+        let (disabled, required) = select_programs(true, true, false, true);
         assert!(required.iter().any(|(p, _)| *p == "filemap_read_fentry"));
         assert!(required.iter().any(|(p, _)| *p == "filemap_add_classified"));
         assert!(disabled.contains(&"generic_file_buffered_read_fentry"));
         assert!(disabled.contains(&"filemap_add_plain"));
 
-        let (disabled, required) = select_programs(false, true, false);
+        let (disabled, required) = select_programs(true, false, true, false);
         assert!(required
             .iter()
             .any(|(p, _)| *p == "generic_file_buffered_read_fentry"));
@@ -354,7 +379,7 @@ mod tests {
             (false, true, false),
             (false, false, true),
         ] {
-            let (disabled, required) = select_programs(a, b, c);
+            let (disabled, required) = select_programs(true, a, b, c);
             for (prog, _) in &required {
                 assert!(
                     !disabled.contains(prog),
@@ -364,5 +389,18 @@ mod tests {
             assert!(required.iter().any(|(p, _)| *p == "filemap_delete"));
             assert!(required.iter().any(|(p, _)| *p == "filemap_fault_fentry"));
         }
+
+        // Where fentry cannot attach (aarch64 before 6.4), the read and fault
+        // programs are disabled and the add and delete tracepoints still load.
+        let (disabled, required) = select_programs(false, false, false, true);
+        for prog in [
+            "filemap_fault_fentry",
+            "filemap_read_fentry",
+            "generic_file_buffered_read_fentry",
+        ] {
+            assert!(disabled.contains(&prog), "{prog} not disabled");
+        }
+        assert!(required.iter().any(|(p, _)| *p == "filemap_delete"));
+        assert!(required.iter().any(|(p, _)| *p == "filemap_add_classified"));
     }
 }

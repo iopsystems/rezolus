@@ -170,6 +170,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
     let task_attribution = config.task_attribution(NAME);
     let cgroup_attribution = config.cgroup_attribution_or(NAME, true);
 
+    let fentry = kernel_can_fentry("cpuacct_account_field");
+
     let mut builder = BpfBuilder::new(
         &config,
         NAME,
@@ -182,24 +184,25 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .cpu_counters("cpu_usage", cpu_usage, &CPU_USAGE_ACQ)
     .cpu_counters("softirq", softirq, &SOFTIRQ_ACQ)
     .cpu_counters("softirq_time", softirq_time, &SOFTIRQ_TIME_ACQ)
-    // BTF present: use the fentry twins (cheaper dispatch), disable the
-    // kprobe/raw fallbacks. Without BTF: the reverse. cpuacct_account_field and
-    // sched_process_exit both switch on the same signal.
-    .disabled_programs(if kernel_has_btf() {
-        &[
-            "handle__sched_process_exit_raw",
-            "cpuacct_account_field_kprobe",
-        ]
-    } else {
-        &[
-            "handle__sched_process_exit_btf",
-            "cpuacct_account_field_fentry",
-        ]
-    })
+    // BTF present: the tp_btf twin of sched_process_exit, else its raw_tp
+    // twin. cpuacct_account_field: the fentry twin (cheaper dispatch) where
+    // fentry can attach to it (`kernel_can_fentry`), else the kprobe.
+    .disabled_programs(&[
+        if kernel_has_btf() {
+            "handle__sched_process_exit_raw"
+        } else {
+            "handle__sched_process_exit_btf"
+        },
+        if fentry {
+            "cpuacct_account_field_kprobe"
+        } else {
+            "cpuacct_account_field_fentry"
+        },
+    ])
     // Losing this probe (e.g. CONFIG_TICK_CPU_ACCOUNTING kernels) drops the
     // entire CPU-time-by-category breakdown; label it so the health reason is
     // legible. Require whichever variant is the active one.
-    .required_programs(if kernel_has_btf() {
+    .required_programs(if fentry {
         &[("cpuacct_account_field_fentry", "CPU time by category")]
     } else {
         &[("cpuacct_account_field_kprobe", "CPU time by category")]

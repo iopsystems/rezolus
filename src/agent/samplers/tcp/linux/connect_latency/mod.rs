@@ -36,20 +36,27 @@ fn init(config: Arc<Config>) -> SamplerResult {
         ModSkelBuilder::default,
     )
     .histogram("latency", &TCP_CONNECT_LATENCY, &LATENCY_ACQ)
-    // Prefer fentry (cheaper dispatch); fall back to kprobe without BTF.
-    .disabled_programs(if kernel_has_btf() {
-        &[
-            "tcp_v4_connect_kprobe",
-            "tcp_v6_connect_kprobe",
-            "tcp_rcv_state_process_kprobe",
-        ]
-    } else {
-        &[
+    // Per target, prefer fentry (cheaper dispatch); fall back to its kprobe
+    // where fentry cannot attach (`kernel_can_fentry`). tcp_v6_connect is in
+    // the ipv6 module on some kernels and may be absent from BTF; its kprobe
+    // then misses at attach, which is tolerated.
+    .disabled_programs(&unused_twins(&[
+        (
+            "tcp_v4_connect",
             "tcp_v4_connect_fentry",
+            "tcp_v4_connect_kprobe",
+        ),
+        (
+            "tcp_v6_connect",
             "tcp_v6_connect_fentry",
+            "tcp_v6_connect_kprobe",
+        ),
+        (
+            "tcp_rcv_state_process",
             "tcp_rcv_state_process_fentry",
-        ]
-    })
+            "tcp_rcv_state_process_kprobe",
+        ),
+    ]))
     .build()?;
 
     Ok(Some(Box::new(bpf)))

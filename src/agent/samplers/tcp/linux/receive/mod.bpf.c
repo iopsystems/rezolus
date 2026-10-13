@@ -38,8 +38,8 @@ struct {
 // fentry/kprobe twins share this handler; only the attach mechanism differs.
 // fentry is the cheaper dispatch (see
 // docs/journal/2026-09-04-fentry-vs-kprobe-dispatch.md) but needs BTF, so the
-// kprobe twin is the CO-RE-only fallback and one is disabled at load time on
-// kernel_has_btf() (see disabled_programs in mod.rs).
+// kprobe twin is the fallback and one is disabled at load time on
+// kernel_can_fentry() (see disabled_programs in mod.rs).
 static __always_inline int handle_tcp_rcv_established(struct sock* sk) {
     struct tcp_sock* ts;
     u32 mdev_us, srtt_us;

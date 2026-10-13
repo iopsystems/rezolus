@@ -99,8 +99,8 @@ fn handle_bandwidth_info(data: &[u8]) -> i32 {
 /// and an fentry program naming a target the kernel's BTF does not have fails to
 /// LOAD, which takes the whole sampler down with it. The kprobe twins miss at
 /// attach instead, which is tolerated and reported as unsupported. Hence the
-/// selection below asks whether these specific functions are in BTF, not merely
-/// whether BTF exists. See `kernel_btf_has_funcs`.
+/// selection below asks whether fentry can attach to these specific functions,
+/// not merely whether BTF exists. See `kernel_can_fentry`.
 const FENTRY_TARGETS: &[&str] = &[
     "tg_set_cfs_bandwidth",
     "throttle_cfs_rq",
@@ -112,12 +112,12 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    // Prefer the fentry twins (cheaper dispatch); fall back to kprobe when this
-    // kernel's BTF cannot name the targets.
-    let fentry = kernel_btf_has_funcs(FENTRY_TARGETS);
+    // Prefer the fentry twins (cheaper dispatch); fall back to kprobe when
+    // fentry cannot attach to the targets on this kernel.
+    let fentry = kernel_can_fentry_all(FENTRY_TARGETS);
 
     if !fentry {
-        debug!("{NAME}: no kernel BTF for the CFS bandwidth hooks, using kprobes");
+        debug!("{NAME}: fentry cannot attach to the CFS bandwidth hooks, using kprobes");
     }
 
     let bpf = BpfBuilder::new(
