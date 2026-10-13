@@ -564,11 +564,6 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   archive) is a separate one. `rezolus view archive.rez` opens by path with the
   sidecar beside it and sees further. Still open: the server viewer's API and
   MCP output, which have the flag available and do not report it.
-- **Unbounded startup probe** — Open. `probe_endpoint`/`fetch_agent_metadata`
-  have no timeout; a hung (SIGSTOPed) agent hangs `rezolus record` at startup
-  and the first ctrl-c doesn't break out. D2 bounded only the per-tick path.
-  The trade differs at startup (too tight aborts the recording rather than
-  skipping a sample).
 - **Manifest resolution is O(archive bytes)** — By design, worth knowing. The
   authoritative manifest is the last tar entry, so resolution scans the archive:
   sub-10 ms at production settings, 19.3 s on a pathological 18 GB /

@@ -207,6 +207,20 @@ impl RecordingConfig {
                     .map(|(k, v)| (k.to_string(), v.to_string()))
             })
             .collect();
+        // The recorder writes these from the producer's handshake and
+        // rewrites them on every restart; a user's value would be kept only
+        // until then, and would seed the restart history with an epoch no
+        // process had.
+        if let Some((key, _)) = metadata.iter().find(|(k, _)| {
+            k == crate::parquet_metadata::KEY_PRODUCER_EPOCH
+                || k == crate::parquet_metadata::KEY_PRODUCER_EPOCHS
+        }) {
+            return Err(format!(
+                "--metadata {key}=: {key} is written by the recorder from the producer's \
+                 stream handshake and rewritten when the producer restarts, so it cannot be \
+                 set; use another key"
+            ));
+        }
         let labels: Vec<(String, String)> = args
             .get_many::<String>("LABEL")
             .unwrap_or_default()
@@ -383,7 +397,7 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
                 "role" => role = Some(value.to_string()),
                 "protocol" => {
                     protocol = Some(match value {
-                        "rezolus" | "msgpack" => Protocol::Msgpack,
+                        "stream" | "rezolus" | "msgpack" => Protocol::Stream,
                         "prometheus" => Protocol::Prometheus,
                         other => return Err(format!("unknown protocol: '{other}'")),
                     });
@@ -649,6 +663,21 @@ mod tests {
         );
     }
 
+    /// `producer_epoch` and `producer_epochs` are the recorder's: setting
+    /// either with `--metadata` is refused rather than kept until a restart
+    /// overwrites it.
+    #[test]
+    fn metadata_naming_the_producer_epoch_is_refused() {
+        for key in ["producer_epoch", "producer_epochs"] {
+            let arg = format!("{key}=mine");
+            let err = parse(&["--url", "http://localhost:4241", "--metadata", &arg])
+                .err()
+                .unwrap_or_else(|| panic!("--metadata {arg} must be refused"));
+            assert!(err.contains("written by the recorder"), "{err}");
+        }
+        assert!(parse(&["--url", "http://localhost:4241", "--metadata", "epoch=x"]).is_ok());
+    }
+
     #[test]
     fn resolve_url_defaults_to_localhost() {
         let (url, deprecated) = resolve_url(None, None).unwrap();
@@ -722,17 +751,18 @@ mod tests {
         assert_eq!(ep.protocol, Some(Protocol::Prometheus));
     }
 
-    /// `protocol=rezolus` names a Rezolus agent; `msgpack`, the 5.x
-    /// spelling, means the same, on the command line and in a config file.
+    /// `protocol=stream` records the endpoint from its stream only;
+    /// `rezolus` and `msgpack` (the 5.x spelling, which named an agent)
+    /// mean the same, on the command line and in a config file.
     #[test]
-    fn protocol_rezolus_and_msgpack_both_name_an_agent() {
-        for p in ["rezolus", "msgpack"] {
+    fn protocol_stream_rezolus_and_msgpack_all_mean_stream() {
+        for p in ["stream", "rezolus", "msgpack"] {
             let ep = parse_endpoint_str(&format!("http://host:4241,protocol={p}")).unwrap();
-            assert_eq!(ep.protocol, Some(Protocol::Msgpack), "{p}");
+            assert_eq!(ep.protocol, Some(Protocol::Stream), "{p}");
             let ep: EndpointConfig =
                 toml::from_str(&format!("url = \"http://host:4241\"\nprotocol = \"{p}\"\n"))
                     .unwrap();
-            assert_eq!(ep.protocol, Some(Protocol::Msgpack), "{p}");
+            assert_eq!(ep.protocol, Some(Protocol::Stream), "{p}");
         }
         assert!(parse_endpoint_str("http://host:4241,protocol=binary").is_err());
     }

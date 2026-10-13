@@ -630,8 +630,14 @@ mod tests {
         let stopped = Arc::new(Mutex::new(None));
         let rec = recording(&dir.path().join("live.dendro"), &stopped);
         let (tx, rx) = tokio::sync::mpsc::channel(4);
-        tx.try_send((0, StreamEvent::Refused("HTTP 404".to_string())))
-            .unwrap();
+        tx.try_send((
+            0,
+            StreamEvent::Refused(crate::recorder::stream::Refusal {
+                answer: crate::recorder::stream::StreamAnswer::Status(404),
+                message: "HTTP 404".to_string(),
+            }),
+        ))
+        .unwrap();
         std::thread::spawn(move || rec.run(rx)).join().unwrap();
         let why = stopped.lock().unwrap().clone().expect("a reason");
         assert!(why.contains("HTTP 404"), "{why}");

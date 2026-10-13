@@ -9,38 +9,17 @@
 
 #![cfg(unix)]
 
-use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
-use metriken_exposition::{Counter, Snapshot, SnapshotV2};
-
-/// One msgpack snapshot carrying a single counter attributed to the `fake`
-/// sampler: what `/metrics/binary` answers, which the recorder probes to
-/// classify an endpoint as a Rezolus agent.
-fn snapshot_bytes(tick: u64) -> Vec<u8> {
-    let mut metadata = HashMap::new();
-    metadata.insert("sampler".to_string(), "fake".to_string());
-    let snapshot = Snapshot::V2(SnapshotV2 {
-        systemtime: SystemTime::now(),
-        duration: Duration::from_millis(1),
-        metadata: HashMap::new(),
-        counters: vec![Counter::new("fake_ops".to_string(), tick, metadata)],
-        gauges: Vec::new(),
-        histograms: Vec::new(),
-    });
-    rmp_serde::encode::to_vec(&snapshot).expect("failed to encode the fake snapshot")
-}
-
-/// Minimal stand-in for a 6.0 agent: answers `/metrics/binary` with a
-/// snapshot, serves a replication stream on `/metrics/stream` (see
-/// [`serve_stream`]), and 404s the optional metadata routes (`/systeminfo`,
-/// `/metrics/descriptions`, `/samplers`, `/status`), which the recorder treats
-/// as absent. The recorder classifies it as an agent by `/metrics/binary` and
-/// streams it. Returns the bound port; the accept loop is detached and dies
-/// with the test process.
+/// Minimal stand-in for a stream producer: serves a replication stream on
+/// `/metrics/stream` (see [`serve_stream`]) and 404s everything else,
+/// `/metrics/binary` and the agent's metadata routes (`/systeminfo`,
+/// `/metrics/descriptions`, `/status`) included. The recorder asks for the
+/// stream first and records it. Returns the bound port; the accept loop is
+/// detached and dies with the test process.
 fn spawn_fake_agent() -> u16 {
     spawn_agent(Streams::Always, None)
 }
@@ -101,7 +80,13 @@ fn spawn_fake_agent_without_stream_when(
         }
         let listener =
             TcpListener::bind(("127.0.0.1", port)).expect("failed to bind the late agent");
-        serve_agent(listener, Streams::Never, Some(version), Names::Metriken);
+        serve_agent(
+            listener,
+            Streams::Never,
+            Some(version),
+            Names::Metriken,
+            Fixture::default(),
+        );
     });
     port
 }
@@ -143,10 +128,36 @@ impl Names {
 }
 
 fn spawn_agent_with_names(streams: Streams, banner: Option<&'static str>, names: Names) -> u16 {
+    spawn_fixture(streams, banner, names, Fixture::default())
+}
+
+fn spawn_fixture(
+    streams: Streams,
+    banner: Option<&'static str>,
+    names: Names,
+    fixture: Fixture,
+) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the fake agent");
     let port = listener.local_addr().unwrap().port();
-    std::thread::spawn(move || serve_agent(listener, streams, banner, names));
+    std::thread::spawn(move || serve_agent(listener, streams, banner, names, fixture));
     port
+}
+
+/// What a fake producer says about itself, and whether it is up yet.
+#[derive(Clone, Default)]
+struct Fixture {
+    /// The handshake's labels.
+    labels: &'static [(&'static str, &'static str)],
+    /// The handshake's metadata.
+    metadata: &'static [(&'static str, &'static str)],
+    /// While this returns false, every request is answered 503, as a proxy
+    /// in front of a producer that is not up yet answers.
+    up: Option<std::sync::Arc<dyn Fn() -> bool + Send + Sync>>,
+    /// Served at `/systeminfo` as JSON; a 404 when `None`.
+    systeminfo: Option<&'static str>,
+    /// `/status`, `/systeminfo` and `/metrics/descriptions` accept the
+    /// request and never answer, so the recorder's metadata read times out.
+    hang_metadata: bool,
 }
 
 /// The fake agent's accept loop; see [`spawn_fake_agent`].
@@ -155,14 +166,14 @@ fn serve_agent(
     streams: Streams,
     banner: Option<&'static str>,
     names: Names,
+    fixture: Fixture,
 ) {
-    let tick = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let subscriptions = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
-            let tick = tick.clone();
             let subscriptions = subscriptions.clone();
+            let fixture = fixture.clone();
             // A thread per connection: a stream subscription holds its
             // connection for the whole run.
             std::thread::spawn(move || {
@@ -175,16 +186,11 @@ fn serve_agent(
                 }
                 let req = String::from_utf8_lossy(&buf[..n]);
                 let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
-                if path.starts_with("/metrics/binary") {
-                    let tick = tick.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                    let body = snapshot_bytes(tick);
-                    let head = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/msgpack\r\n\
-                         Content-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.len()
+                if fixture.up.as_ref().is_some_and(|up| !up()) {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\
+                          Connection: close\r\n\r\n",
                     );
-                    let _ = stream.write_all(head.as_bytes());
-                    let _ = stream.write_all(&body);
                 } else if path.starts_with("/metrics/stream")
                     && match streams {
                         Streams::Never => false,
@@ -207,8 +213,24 @@ fn serve_agent(
                         }
                         _ => (None, BEFORE_RESTART.0),
                     };
-                    serve_stream(stream, &path, frames, epoch, names);
+                    serve_stream(stream, &path, frames, epoch, names, &fixture);
                     return;
+                } else if fixture.hang_metadata
+                    && matches!(
+                        path.as_str(),
+                        "/status" | "/systeminfo" | "/metrics/descriptions"
+                    )
+                {
+                    std::thread::sleep(Duration::from_secs(60));
+                    return;
+                } else if let (Some(body), "/systeminfo") = (fixture.systeminfo, path.as_str()) {
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(body.as_bytes());
                 } else if let (Some(version), "/") = (banner, path.as_str()) {
                     let restarted = matches!(streams, Streams::Restarts(_))
                         && subscriptions.load(std::sync::atomic::Ordering::SeqCst) > 1;
@@ -249,6 +271,7 @@ fn serve_stream(
     frames: Option<u64>,
     epoch: &str,
     names: Names,
+    fixture: &Fixture,
 ) {
     use dendro::replicate::{wire, Frame};
     use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc};
@@ -274,8 +297,16 @@ fn serve_stream(
         &Frame::Handshake {
             source: 0,
             uuid: Some(epoch.to_string()),
-            labels: Default::default(),
-            metadata: Default::default(),
+            labels: fixture
+                .labels
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            metadata: fixture
+                .metadata
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
             clock_anchor_wall_ns: anchor as i64,
             complete: false,
         },
@@ -1698,7 +1729,7 @@ fn an_agent_refused_on_reconnect_keeps_its_rows_and_the_rest_finalize() {
     );
     for needle in [
         "Rezolus 6.0.0",
-        "returned HTTP 404",
+        "/metrics/stream answered HTTP 404",
         "recording stops here",
         dropped.as_str(),
         "1 of 2 endpoints refused; the archive holds the rest and is finalized",
@@ -1800,4 +1831,517 @@ fn a_run_whose_every_endpoint_is_refused_ends_on_its_own() {
     let rows = catalog.segment_span(id, "fake/ops").unwrap().1.rows
         + catalog.live_wal_span(id, "fake/ops").unwrap().rows;
     assert!((1..=3).contains(&rows), "the rows it streamed: {rows}");
+}
+
+/// A Prometheus exporter that serves `/metrics` and answers 404 to every
+/// other path, `/` included, as most exporters do.
+fn spawn_strict_exporter() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the fake exporter");
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let mut tick = 0u64;
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut buf = [0u8; 8192];
+            let Ok(n) = stream.read(&mut buf) else {
+                continue;
+            };
+            let req = String::from_utf8_lossy(&buf[..n]);
+            let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
+            if path != "/metrics" {
+                let _ = stream.write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                continue;
+            }
+            tick += 1;
+            let body = format!("# TYPE served_total counter\nserved_total {tick}\n");
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+        }
+    });
+    port
+}
+
+/// The labels, the metadata, and the row count in `table` of the one
+/// recording in a `.dendro`.
+type Recording = (
+    std::collections::BTreeMap<String, String>,
+    std::collections::BTreeMap<String, String>,
+    u64,
+);
+
+fn the_recording(output: &std::path::Path, table: &str) -> Recording {
+    use metriken_storage::Catalog;
+    let catalog = metriken_storage::DendroCatalog::open(output).expect("the archive opens");
+    let sources = catalog.sources().expect("the catalog reads");
+    assert_eq!(sources.len(), 1, "one endpoint, one source: {sources:?}");
+    let id = sources[0].id;
+    let rows = catalog.segment_span(id, table).unwrap().1.rows
+        + catalog.live_wal_span(id, table).unwrap().rows;
+    (
+        sources[0].labels.clone().into_iter().collect(),
+        sources[0].metadata.clone().into_iter().collect(),
+        rows,
+    )
+}
+
+/// A Prometheus endpoint given by its root URL, with no source, is detected
+/// by stream: its stream route 404s, `/status` and `/` answer without naming
+/// an agent, and it is scraped at `/metrics` under a source inferred from the
+/// URL. GO check 3 of metriken's recorder entry.
+#[test]
+fn a_prometheus_endpoint_at_the_root_is_scraped_at_metrics() {
+    let port = spawn_strict_exporter();
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("prom.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{port}"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "exits 0:\n{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "scraped as Prometheus at http://127.0.0.1:{port}/metrics"
+        )),
+        "{stderr}"
+    );
+    let (labels, _, rows) = the_recording(&output, "prometheus/scrape");
+    assert_eq!(
+        labels.get("source").map(String::as_str),
+        Some(format!("127.0.0.1-{port}").as_str()),
+        "{labels:?}"
+    );
+    assert!(rows > 0, "the scrapes were recorded");
+}
+
+/// An endpoint that answers 503 to everything at startup is pending, not
+/// refused and not scraped; once it serves its stream it is streamed and
+/// recorded beside the endpoint that was up from the start. GO check 3 of
+/// metriken's recorder entry.
+#[test]
+fn an_endpoint_answering_5xx_is_pending_then_streamed() {
+    use metriken_storage::Catalog;
+
+    let (exporter, hits) = spawn_fake_exporter_counted("http_requests_total");
+    // Up once the exporter has been asked three times: after startup's
+    // detection (one request) and two ticks' scrapes.
+    let agent = spawn_fixture(
+        Streams::Always,
+        None,
+        Names::Metriken,
+        Fixture {
+            up: Some(std::sync::Arc::new(move || {
+                hits.load(std::sync::atomic::Ordering::SeqCst) >= 3
+            })),
+            ..Fixture::default()
+        },
+    );
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("late.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{exporter}/metrics,source=svc"))
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{agent},source=late"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("200ms")
+        .arg("--duration")
+        .arg("3s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "exits 0:\n{stderr}");
+    for needle in [
+        "returned HTTP 503",
+        "will retry each tick",
+        "now reachable, subscribed to its replication stream",
+    ] {
+        assert!(stderr.contains(needle), "{needle:?} in:\n{stderr}");
+    }
+    assert!(!stderr.contains("refused"), "{stderr}");
+
+    let catalog = metriken_storage::DendroCatalog::open(&output).expect("the archive opens");
+    let sources = catalog.sources().expect("the catalog reads");
+    assert_eq!(sources.len(), 2, "{sources:?}");
+    let late = sources
+        .iter()
+        .find(|s| s.labels.get("source").map(String::as_str) == Some("late"))
+        .unwrap_or_else(|| panic!("a recording for the late endpoint: {sources:?}"));
+    assert!(late.complete, "finalized");
+    let rows = catalog.segment_span(late.id, "fake/ops").unwrap().1.rows
+        + catalog.live_wal_span(late.id, "fake/ops").unwrap().rows;
+    assert!(rows > 0, "the late endpoint was streamed");
+}
+
+/// A producer that is not a Rezolus agent and names itself in its stream
+/// handshake is recorded under that name and with its version, with no
+/// `--endpoint url,source=`. GO check 4 of metriken's recorder entry.
+#[test]
+fn a_producers_handshake_names_its_recording() {
+    let port = spawn_fixture(
+        Streams::Always,
+        None,
+        Names::Metriken,
+        Fixture {
+            labels: &[("source", "cachecannon")],
+            metadata: &[("version", "0.9.1"), ("workload", "kv")],
+            ..Fixture::default()
+        },
+    );
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("producer.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{port}"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "exits 0:\n{stderr}");
+    assert!(!stderr.contains("no source name specified"), "{stderr}");
+
+    let (labels, metadata, rows) = the_recording(&output, "fake/ops");
+    assert_eq!(
+        labels.get("source").map(String::as_str),
+        Some("cachecannon"),
+        "{labels:?}"
+    );
+    assert_eq!(
+        metadata.get("source").map(String::as_str),
+        Some("cachecannon"),
+        "{metadata:?}"
+    );
+    assert_eq!(
+        metadata.get("version").map(String::as_str),
+        Some("0.9.1"),
+        "{metadata:?}"
+    );
+    assert_eq!(
+        metadata.get("workload").map(String::as_str),
+        Some("kv"),
+        "{metadata:?}"
+    );
+    assert!(rows > 0, "the stream was recorded");
+}
+
+/// A server that accepts every connection and never answers, as a process
+/// that has bound its port but is stuck.
+fn spawn_silent_server() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the silent server");
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 8192];
+                while matches!(stream.read(&mut buf), Ok(n) if n > 0) {}
+            });
+        }
+    });
+    port
+}
+
+/// The rows in `table` of the recording whose `source` label is `source`.
+fn rows_of(output: &std::path::Path, source: &str, table: &str) -> u64 {
+    use metriken_storage::Catalog;
+    let catalog = metriken_storage::DendroCatalog::open(output).expect("the archive opens");
+    let sources = catalog.sources().expect("the catalog reads");
+    let found = sources
+        .iter()
+        .find(|s| s.labels.get("source").map(String::as_str) == Some(source))
+        .unwrap_or_else(|| panic!("a recording for {source}: {sources:?}"));
+    catalog.segment_span(found.id, table).unwrap().1.rows
+        + catalog.live_wal_span(found.id, table).unwrap().rows
+}
+
+/// A pending endpoint that accepts connections and never answers does not
+/// slow the ticks of the endpoint beside it: its detection runs off the
+/// tick. At its end the run names it as having no recording.
+///
+/// Regression: each tick waited on the pending endpoint's detection, the
+/// stream connect's timeout and then the probe hook's (4 s at a 1 s
+/// interval), so the other endpoint was scraped once per detection.
+#[test]
+fn a_pending_endpoint_that_never_answers_does_not_stall_the_ticks() {
+    let exporter = spawn_fake_exporter();
+    let silent = spawn_silent_server();
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("stall.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{exporter}/metrics,source=svc"))
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{silent},source=stuck"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("200ms")
+        .arg("--duration")
+        .arg("3s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "exits 0:\n{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "http://127.0.0.1:{silent}/ (stuck) did not become recordable during the run and \
+             has no recording in {}",
+            output.display()
+        )),
+        "{stderr}"
+    );
+    // 3 s at 200 ms is 15 ticks; a tick that waited on the detection got
+    // one scrape per 4 s.
+    let rows = rows_of(&output, "svc", "prometheus/scrape");
+    assert!(
+        rows >= 10,
+        "the exporter is scraped every tick: {rows} rows"
+    );
+}
+
+/// `--metadata systeminfo=` is kept through an agent restart, as
+/// `--metadata version=` is: the restarted agent's own systeminfo does not
+/// replace it.
+#[test]
+fn a_systeminfo_the_user_set_survives_an_agent_restart() {
+    use metriken_storage::Catalog;
+
+    let agent = spawn_fixture(
+        Streams::Restarts(5),
+        Some(BEFORE_RESTART.1),
+        Names::Metriken,
+        Fixture {
+            systeminfo: Some(r#"{"hostname":"agent-host"}"#),
+            ..Fixture::default()
+        },
+    );
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("pinned.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{agent}"))
+        .arg("--metadata")
+        .arg("systeminfo=mine")
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("3s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "exits 0:\n{stderr}");
+    assert!(
+        stderr.contains("now records the agent restart"),
+        "the restart is written into the metadata:\n{stderr}"
+    );
+
+    let catalog = metriken_storage::DendroCatalog::open(&output).expect("the archive opens");
+    let sources = catalog.sources().expect("the catalog reads");
+    assert_eq!(sources.len(), 1, "{sources:?}");
+    let metadata = &sources[0].metadata;
+    assert_eq!(
+        metadata.get("systeminfo").map(String::as_str),
+        Some("mine"),
+        "{metadata:?}"
+    );
+    assert_eq!(
+        metadata.get("version").map(String::as_str),
+        Some(AFTER_RESTART.1),
+        "an unpinned key takes the new agent's: {metadata:?}"
+    );
+}
+
+/// An endpoint that comes up mid-run and opens its stream, but whose
+/// metadata read has not returned when the run ends, is named at the end as
+/// having no recording rather than left out in silence.
+#[test]
+fn an_endpoint_still_reading_its_metadata_at_the_end_is_named() {
+    use metriken_storage::Catalog;
+
+    let (exporter, hits) = spawn_fake_exporter_counted("http_requests_total");
+    let agent = spawn_fixture(
+        Streams::Always,
+        None,
+        Names::Metriken,
+        Fixture {
+            up: Some(std::sync::Arc::new(move || {
+                hits.load(std::sync::atomic::Ordering::SeqCst) >= 3
+            })),
+            hang_metadata: true,
+            ..Fixture::default()
+        },
+    );
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("activating.dendro");
+
+    // The metadata read is bounded by the scrape timeout (2 s at this
+    // interval), which starts after the run is more than 0.6 s in: the run
+    // ends first.
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{exporter}/metrics,source=svc"))
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{agent},source=late"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("200ms")
+        .arg("--duration")
+        .arg("1600ms")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "exits 0:\n{stderr}");
+    assert!(
+        stderr.contains("now reachable, subscribed to its replication stream"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "http://127.0.0.1:{agent}/ (late) opened its stream, but the run ended before its \
+             metadata arrived; it has no recording in {}",
+            output.display()
+        )),
+        "{stderr}"
+    );
+    let catalog = metriken_storage::DendroCatalog::open(&output).expect("the archive opens");
+    let sources = catalog.sources().expect("the catalog reads");
+    assert_eq!(
+        sources.len(),
+        1,
+        "only the exporter is recorded: {sources:?}"
+    );
+}
+
+/// `--metadata descriptions=` is kept on a Prometheus endpoint: the scrape's
+/// HELP text does not replace it.
+#[test]
+fn a_descriptions_the_user_set_survives_the_help_text() {
+    let port = spawn_fake_exporter_named("widgets_total");
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("pinned-help.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{port}/metrics,source=svc"))
+        .arg("--metadata")
+        .arg("descriptions=mine")
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    let (_, metadata, rows) = the_recording(&output, "prometheus/scrape");
+    assert_eq!(
+        metadata.get("descriptions").map(String::as_str),
+        Some("mine"),
+        "{metadata:?}"
+    );
+    assert!(rows > 0, "the scrapes were recorded");
+}
+
+/// A server that answers 503 to every request, counting the requests for
+/// `/metrics/stream`.
+fn spawn_unavailable_counted() -> (u16, std::sync::Arc<std::sync::atomic::AtomicU64>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the 503 server");
+    let port = listener.local_addr().unwrap().port();
+    let streams = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let counted = streams.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut buf = [0u8; 8192];
+            let Ok(n) = stream.read(&mut buf) else {
+                continue;
+            };
+            let req = String::from_utf8_lossy(&buf[..n]);
+            if req
+                .split_whitespace()
+                .nth(1)
+                .is_some_and(|p| p.starts_with("/metrics/stream"))
+            {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            let _ = stream.write_all(
+                b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\
+                  Connection: close\r\n\r\n",
+            );
+        }
+    });
+    (port, streams)
+}
+
+/// A pending endpoint is detected again on every tick, not every other one:
+/// the tick that takes a pending answer starts the next detection.
+///
+/// Regression: a tick took the answer and the next tick started the
+/// detection, so a 503 endpoint was asked half as often (8 vs 14 stream
+/// requests in 12 s at a 1 s interval).
+#[test]
+fn a_pending_endpoint_is_detected_every_tick() {
+    let exporter = spawn_fake_exporter();
+    let (pending, streams) = spawn_unavailable_counted();
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("every-tick.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{exporter}/metrics,source=svc"))
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{pending},source=down"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("200ms")
+        .arg("--duration")
+        .arg("3s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    // Startup's detection and one per tick: 3 s at 200 ms is 15 ticks.
+    // Every other tick would be at most 9.
+    let asked = streams.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(asked >= 12, "the stream route was asked {asked} times");
 }

@@ -1,7 +1,9 @@
 use super::*;
 
+mod agent_probe;
 mod child;
 mod config;
+pub(crate) mod detect;
 mod endpoint;
 mod prometheus;
 pub(crate) mod restart;
@@ -36,8 +38,9 @@ pub(crate) const RELEASE_5X: &str = "5.27.0";
 use crate::parquet_metadata;
 use crate::parquet_metadata::KEY_EVENTS;
 use crate::viewer::{Event, Events};
+pub(crate) use agent_probe::{fetch_restarted_agent, parse_root_version};
 pub use config::RecordingConfig;
-use endpoint::{infer_source_name, AgentMetadata, EndpointState, EndpointStatus, Protocol};
+use endpoint::{EndpointState, EndpointStatus, Protocol};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -47,9 +50,10 @@ pub fn command() -> Command {
         .about("On-demand recording of metrics to a .dendro archive")
         .long_about(format!(
             "Record one or more metrics endpoints at a fixed interval into a .dendro archive.\n\n\
-             The source is auto-detected: a Rezolus agent, recorded from its replication\n\
-             stream (agents 5.21.0 or later), or a Prometheus-compatible endpoint, scraped\n\
-             each interval (see STREAMING AND SCRAPING).\n\n\
+             How each endpoint is recorded is detected (see DETECTION): from its\n\
+             replication stream when it serves one (a Rezolus agent from 5.21.0, or any\n\
+             producer serving /metrics/stream), or as a Prometheus-compatible endpoint,\n\
+             scraped each interval.\n\n\
              WHAT TO RECORD (choose one): --url for a single endpoint (default\n\
              http://localhost:4241), --endpoint (repeatable) for several at once, or --config\n\
              for a TOML file. Exactly one: passing two of them is a parse error, not a\n\
@@ -128,6 +132,15 @@ pub fn command() -> Command {
              -l/--label k=v tags the recordings inside the archive; source and host are\n\
              auto-populated, and a two-recording archive drives the viewer\'s A/B comparison,\n\
              which aliases the arms off each recording\'s arm/host labels.\n\n\
+             A recording\'s source is, first found: source= on its --endpoint (or\n\
+             --metadata source= with --url), the source label in its stream handshake,\n\
+             rezolus for a Rezolus agent, or a name made from the URL\'s host, port and\n\
+             path (with a warning). Its other labels are the user\'s --label, over host from\n\
+             a Rezolus agent\'s /systeminfo, over the handshake\'s labels. Its metadata is\n\
+             the user\'s --metadata, over the keys the recorder writes (sampling_interval_ms,\n\
+             producer_epoch, role), over a Rezolus agent\'s version, systeminfo and\n\
+             descriptions, over the handshake\'s metadata. So a producer that names itself\n\
+             and its version in its handshake is recorded under that name with no source=.\n\n\
              --label applies to EVERY recording the run produces, so it names the run, not\n\
              one endpoint in it: --label arm=redis is how you tag a whole single-endpoint\n\
              capture as one arm, to be compared against another run. Within ONE invocation,\n\
@@ -153,12 +166,23 @@ pub fn command() -> Command {
              every sampler. `rezolus recording metadata -i out.dendro` reports an interrupted\n\
              recording as \"not cleanly finalized\" and how many samples are still in its\n\
              write-ahead log.\n\n\
+             DETECTION:\n\n\
+             An endpoint whose path is / or /metrics/stream is asked for its stream first.\n\
+             A stream handshake means it is streamed. Any other answer (a 404 or 409, a\n\
+             content type that is not a stream, a 5xx, a timeout, no connection) asks the\n\
+             endpoint\'s /status, then its / page: a Rezolus agent is refused (below), or\n\
+             retried each tick on a 5xx, 408, 429, timeout or no connection; anything else\n\
+             that answered is scraped as Prometheus at /metrics once /metrics answers with\n\
+             a success, and retried each tick until then; when neither answered, the\n\
+             endpoint is retried each tick. An endpoint with any other path (e.g.\n\
+             http://host:9090/metrics) is scraped at that URL. protocol=stream on an\n\
+             --endpoint records it from its stream only (rezolus and msgpack mean the\n\
+             same), and protocol=prometheus scrapes it only.\n\n\
              STREAMING AND SCRAPING:\n\n\
-             Each Rezolus agent is recorded from its replication stream (/metrics/stream):\n\
-             the agent pushes one frame per --interval, carrying only the acquisition groups\n\
-             it re-read since the last one, stamped when the agent sampled rather than when\n\
-             the recorder asked. Prometheus endpoints cannot stream, so they are scraped each\n\
-             tick, and one run can hold both kinds.\n\n\
+             A streamed endpoint pushes one frame per --interval, carrying only the\n\
+             acquisition groups it re-read since the last one, stamped when the producer\n\
+             sampled rather than when the recorder asked. Prometheus endpoints cannot\n\
+             stream, so they are scraped each tick, and one run can hold both kinds.\n\n\
              There is no scrape path for a Rezolus agent. An agent that cannot serve the\n\
              stream (older than 5.21.0, a V2 agent, a stream route that answers 404 or\n\
              another refusal, or a handshake that does not decode) is refused with its\n\
@@ -169,10 +193,12 @@ pub fn command() -> Command {
              rows it had), the other endpoints keep recording, and the run exits 1 once\n\
              the archive is finalized. When every endpoint has been refused, the run ends.\n\n\
              An agent that is not reachable yet, or whose stream fails with an error that\n\
-             can change (a 5xx, a handshake timeout), is retried each tick. A stream that\n\
-             drops mid-run is reconnected after one interval (at least a second), as a\n\
-             failed scrape is, and one that goes silent for the scrape timeout (twice the\n\
-             interval, between 2 s and 10 s) counts as dropped.\n\n\
+             can change (a 5xx, 408 or 429, a handshake timeout), is retried each tick. A\n\
+             stream that drops mid-run is reconnected after one interval (at least a\n\
+             second), as a failed scrape is, and one that goes silent for the scrape\n\
+             timeout (twice the interval, between 2 s and 10 s) counts as dropped. A streamed endpoint is\n\
+             never switched to scraping: one whose reconnect is answered with a 404, a 409\n\
+             or a content type that is not a stream is refused.\n\n\
              A wrapped command that exits on its own waits for each agent's frame covering\n\
              the exit, at most one interval plus the scrape timeout (twice the interval,\n\
              between 2 s and 10 s)."
@@ -202,7 +228,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("ENDPOINT")
                 .long("endpoint")
-                .help("Add an endpoint as url[,source=name][,role=label][,protocol=rezolus|prometheus]; role is a free-form tag (conventionally service or loadgen); protocol skips auto-detection: rezolus is a Rezolus agent, recorded from its replication stream (msgpack is accepted for it too), prometheus a text exposition endpoint, scraped; repeat for several (e.g. http://host:9090/metrics,source=svc,role=service,protocol=prometheus)")
+                .help("Add an endpoint as url[,source=name][,role=label][,protocol=stream|prometheus]; role is a free-form tag (conventionally service or loadgen); protocol skips detection: stream records it from its replication stream only, never scraping it (rezolus and msgpack are accepted for it too), prometheus scrapes it as text exposition (at /metrics for a URL whose path is /); without protocol, a URL whose path is / or /metrics/stream is asked for its stream first and any other URL is scraped (see DETECTION); repeat for several (e.g. http://host:9090/metrics,source=svc,role=service,protocol=prometheus)")
                 .action(clap::ArgAction::Append)
                 .conflicts_with_all(["URL", "CONFIG_FILE"]),
         )
@@ -252,7 +278,7 @@ pub fn command() -> Command {
             clap::Arg::new("METADATA")
                 .long("metadata")
                 .short('m')
-                .help("Add a metadata tag as key=value (e.g. source=llm-perf) to every recording in the archive; repeat for multiple tags")
+                .help("Add a metadata tag as key=value (e.g. source=llm-perf) to every recording in the archive; it outranks the value the producer reports and is kept through a restart; producer_epoch and producer_epochs are the recorder's and are refused; repeat for multiple tags")
                 .action(clap::ArgAction::Append),
         )
         .arg(
@@ -265,7 +291,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("URL_FLAG")
                 .long("url")
-                .help("Single metrics endpoint to record; auto-detects Rezolus agent vs Prometheus (default http://localhost:4241)")
+                .help("Single metrics endpoint to record (default http://localhost:4241); a URL whose path is / is streamed when it serves /metrics/stream and otherwise scraped as Prometheus at /metrics (see DETECTION)")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(Url))
                 .conflicts_with_all(["CONFIG_FILE", "ENDPOINT", "URL"]),
@@ -298,170 +324,15 @@ pub fn command() -> Command {
         )
 }
 
-/// Probe a single endpoint to detect its protocol and resolve the scrape URL.
-async fn probe_endpoint(
-    client: &Client,
-    config: &endpoint::EndpointConfig,
-) -> Option<(Protocol, Url)> {
-    // If protocol is explicitly set, validate connectivity on the expected path
-    if let Some(ref proto) = config.protocol {
-        let url = match proto {
-            Protocol::Msgpack => {
-                let mut u = config.url.clone();
-                if u.path() == "/" {
-                    u.set_path("/metrics/binary");
-                }
-                u
-            }
-            Protocol::Prometheus => {
-                let mut u = config.url.clone();
-                if u.path() == "/" {
-                    u.set_path("/metrics");
-                }
-                u
-            }
-        };
-        if let Ok(resp) = client.get(url.clone()).send().await {
-            if resp.status().is_success() {
-                return Some((proto.clone(), url));
-            }
-        }
-        return None;
+/// The settings `record` detects endpoints with: the subscription a
+/// detected stream is opened with is the one the recording reads.
+fn detect_config(interval: Duration, timeout: Duration) -> detect::DetectConfig {
+    detect::DetectConfig {
+        interval,
+        timeout,
+        layout: stream::Layout::Long,
+        wire_names: stream::ACCEPTED_WIRE_NAMES,
     }
-
-    // Auto-detect: try Rezolus binary first, then Prometheus
-    let candidates: Vec<(Url, bool)> = if config.url.path() == "/" {
-        let mut rezolus_url = config.url.clone();
-        rezolus_url.set_path("/metrics/binary");
-        let mut prom_url = config.url.clone();
-        prom_url.set_path("/metrics");
-        vec![(rezolus_url, false), (prom_url, true)]
-    } else {
-        vec![(config.url.clone(), true)]
-    };
-
-    for (candidate_url, is_prom) in &candidates {
-        if let Ok(response) = client.get(candidate_url.clone()).send().await {
-            if !response.status().is_success() {
-                continue;
-            }
-            if let Ok(body) = response.bytes().await {
-                if *is_prom {
-                    return Some((Protocol::Prometheus, candidate_url.clone()));
-                }
-                // `from_msgpack`, not a bare `from_slice`: a depth-capped,
-                // trailing-byte-checked decode (see its doc) even for this
-                // throwaway probe — an unauthenticated endpoint offering
-                // hostile bytes at discovery time is exactly where an
-                // unbounded decode is cheapest to abuse.
-                if metriken_exposition::Snapshot::from_msgpack(&body).is_ok() {
-                    return Some((Protocol::Msgpack, candidate_url.clone()));
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Fetch systeminfo, descriptions and version from a Rezolus
-/// agent.
-pub(crate) async fn fetch_agent_metadata(client: &Client, base_url: &Url) -> AgentMetadata {
-    let mut info_url = base_url.clone();
-    info_url.set_path("/systeminfo");
-    let systeminfo = match client.get(info_url).send().await {
-        Ok(response) if response.status().is_success() => response.text().await.ok(),
-        _ => None,
-    };
-
-    let mut desc_url = base_url.clone();
-    desc_url.set_path("/metrics/descriptions");
-    let descriptions = match client.get(desc_url).send().await {
-        Ok(response) if response.status().is_success() => response.text().await.ok(),
-        _ => None,
-    };
-
-    let (version, producer_epoch, clock_anchor_wall_ns) =
-        fetch_agent_identity(client, base_url).await;
-
-    AgentMetadata {
-        systeminfo,
-        descriptions,
-        version,
-        producer_epoch,
-        clock_anchor_wall_ns,
-    }
-}
-
-/// The version of the agent being recorded — **not** this binary's.
-///
-/// The recorder and the agent are separate processes and routinely different
-/// builds (one host upgrades, the fleet does not), so `CARGO_PKG_VERSION` here
-/// would name the wrong thing precisely when the question is being asked.
-///
-/// `/status` is the structured answer and is tried first. It is also recent
-/// (5.16.0), and the whole point of recording a version is to make old
-/// captures attributable, so an agent that predates it falls back to the root
-/// page — `"Rezolus <version> Agent"`, served by every agent this project has
-/// ever shipped. A source that answers neither (a Prometheus exporter, an
-/// agent behind a proxy that rewrites `/`) simply records no version, which is
-/// how every recording before this change reads.
-async fn fetch_agent_identity(
-    client: &Client,
-    base_url: &Url,
-) -> (Option<String>, Option<String>, Option<i64>) {
-    let mut status_url = base_url.clone();
-    status_url.set_path("/status");
-    if let Ok(response) = client.get(status_url).send().await {
-        if response.status().is_success() {
-            if let Ok(body) = response.text().await {
-                if let Ok(status) =
-                    serde_json::from_str::<crate::agent::sampler_status::AgentStatus>(&body)
-                {
-                    let epoch =
-                        (!status.producer_epoch.is_empty()).then_some(status.producer_epoch);
-                    // Zero is what an agent older than the anchor
-                    // deserializes to, and no real anchor is zero: that is
-                    // 1970, and the agent would have to have started then.
-                    let anchor =
-                        (status.clock_anchor_wall_ns != 0).then_some(status.clock_anchor_wall_ns);
-                    if !status.version.is_empty() {
-                        return (Some(status.version), epoch, anchor);
-                    }
-                    if epoch.is_some() {
-                        return (None, epoch, anchor);
-                    }
-                }
-            }
-        }
-    }
-
-    let mut root_url = base_url.clone();
-    root_url.set_path("/");
-    let body = match client.get(root_url).send().await {
-        Ok(response) if response.status().is_success() => match response.text().await {
-            Ok(body) => body,
-            Err(_) => return (None, None, None),
-        },
-        _ => return (None, None, None),
-    };
-    // No epoch from this path by construction: an agent old enough to lack
-    // `/status` predates the epoch entirely, and inventing one here would
-    // claim a restart boundary nobody observed.
-    (parse_root_version(&body), None, None)
-}
-
-/// Pull the version out of the agent's root page, whose first line is
-/// `Rezolus <version> Agent`. Returns `None` for anything else, so a proxy's
-/// error page or another service on the port does not get recorded as a
-/// version.
-pub(crate) fn parse_root_version(body: &str) -> Option<String> {
-    let first = body.lines().next()?;
-    let rest = first.strip_prefix("Rezolus ")?;
-    let version = rest.strip_suffix(" Agent")?;
-    if version.is_empty() || version.contains(char::is_whitespace) {
-        return None;
-    }
-    Some(version.to_string())
 }
 
 /// The epoch an endpoint's source now carries, against the one on record:
@@ -469,8 +340,7 @@ pub(crate) fn parse_root_version(body: &str) -> Option<String> {
 /// [`adopt_source`]).
 fn note_epoch(ep: &mut EndpointState, seen: &str) {
     match ep.agent.producer_epoch.as_deref() {
-        // First epoch observed on an endpoint whose `/status` did not carry
-        // one: adopt it rather than warn. Nothing restarted.
+        // The first handshake: adopt its epoch. Nothing restarted.
         None => ep.agent.producer_epoch = Some(seen.to_string()),
         Some(known) if known == seen => {}
         Some(known) => {
@@ -492,76 +362,26 @@ fn note_epoch(ep: &mut EndpointState, seen: &str) {
     }
 }
 
-/// What the restarted agent at `base_url` reports about itself, fetched
-/// within `timeout`: `None` when nothing answered, or when `/status` names an
-/// epoch other than `epoch`, the one the restart is for (the agent restarted
-/// again). An agent whose `/status`
-/// carries no epoch cannot be checked, and what it reported is taken.
-pub(crate) async fn fetch_restarted_agent(
-    client: &Client,
-    base_url: &Url,
-    epoch: &str,
-    timeout: Duration,
-) -> Option<restart::Agent> {
-    let fetch = async {
-        let text = |path: &'static str| {
-            let mut url = base_url.clone();
-            url.set_path(path);
-            async move {
-                match client.get(url).send().await {
-                    Ok(r) if r.status().is_success() => r.text().await.ok(),
-                    _ => None,
-                }
-            }
-        };
-        let systeminfo = text("/systeminfo").await;
-        let descriptions = text("/metrics/descriptions").await;
-        let (version, reported_epoch, _) = fetch_agent_identity(client, base_url).await;
-        (
-            restart::Agent {
-                version,
-                systeminfo,
-                descriptions,
-            },
-            reported_epoch,
-        )
-    };
-    let (agent, reported_epoch) = tokio::time::timeout(timeout, fetch).await.ok()?;
-    match reported_epoch.as_deref() {
-        Some(reported) if reported != epoch => None,
-        Some(_) => Some(agent),
-        None if agent.version.is_some()
-            || agent.systeminfo.is_some()
-            || agent.descriptions.is_some() =>
-        {
-            Some(agent)
-        }
-        None => None,
-    }
-}
-
 /// Write each agent restart into its recording's metadata once a row from the
-/// new process has been staged: the epoch history, and the version,
-/// systeminfo and descriptions the new process reports (see
-/// [`fetch_restarted_agent`] and [`restart::metadata_patch`]). A fetch that
-/// fails or finds another process is tried on up to
-/// [`restart::FETCH_ATTEMPTS`] ticks in all, and the epochs are then written without
-/// the process's metadata; on the `last` call, at shutdown, there is no next
-/// tick, so they are written at once. A `version` set with `--metadata` is
-/// kept. Without
-/// an archive there is nothing to amend, and the restarts are dropped;
+/// new process has been staged: the epoch history, the version, systeminfo
+/// and descriptions the probe hook reads from the new process (its `enrich`,
+/// over the new handshake's metadata), and the new handshake's other keys
+/// (see [`restart::metadata_patch_with`]). A hook reply that is missing or
+/// describes another process is asked for on up to
+/// [`restart::FETCH_ATTEMPTS`] ticks in all, and the epochs are then written
+/// without it; on the `last` call, at shutdown, there is no next tick, so
+/// they are written at once. A key set with `--metadata` is kept. Without an
+/// archive there is nothing to amend, and the restarts are dropped;
 /// [`note_epoch`] has already logged them.
 async fn apply_restarts(
     endpoints: &mut [EndpointState],
     mut archive: Option<&mut Archive>,
-    client: &Client,
+    probe: &dyn detect::Probe,
     user_metadata: &[(String, String)],
     timeout: Duration,
     last: bool,
 ) {
-    let version_pinned = user_metadata
-        .iter()
-        .any(|(k, _)| k == parquet_metadata::KEY_VERSION);
+    let pinned: Vec<&str> = user_metadata.iter().map(|(k, _)| k.as_str()).collect();
     for (idx, ep) in endpoints.iter_mut().enumerate() {
         let Some(archive) = archive.as_deref_mut() else {
             ep.restarts.clear();
@@ -574,25 +394,36 @@ async fn apply_restarts(
             continue;
         }
         let label = ep.config.source_label().to_string();
-        let agent =
-            match fetch_restarted_agent(client, &ep.config.url, &newest.epoch, timeout).await {
-                Some(agent) => agent,
-                None if !last && ep.restart_fetches + 1 < restart::FETCH_ATTEMPTS => {
-                    ep.restart_fetches += 1;
-                    continue;
-                }
-                None => {
-                    warn!(
-                        "{label}: could not read the restarted agent's version, systeminfo \
-                         and descriptions; the recording's metadata records the restart \
-                         without them"
-                    );
-                    restart::Agent::default()
-                }
-            };
+        let hook = match detect::enrich_within(probe, &ep.config.url, Some(&newest.epoch), timeout)
+            .await
+        {
+            Ok((_, metadata)) => metadata,
+            Err(_) if !last && ep.restart_fetches + 1 < restart::FETCH_ATTEMPTS => {
+                ep.restart_fetches += 1;
+                continue;
+            }
+            Err(why) => {
+                warn!(
+                    "{label}: could not read the restarted agent's version, systeminfo \
+                     and descriptions ({why}); the recording's metadata records the restart \
+                     without them"
+                );
+                BTreeMap::new()
+            }
+        };
         ep.restart_fetches = 0;
+        let mut reported = ep.identity.handshake_metadata.clone();
+        reported.extend(hook);
+        let agent = restart::Agent::from_metadata(&reported);
         let restarts = std::mem::take(&mut ep.restarts);
-        match archive.record_restarts(idx, &restarts, &agent, version_pinned) {
+        match archive.record_restarts(
+            idx,
+            &restarts,
+            &agent,
+            &ep.identity.handshake_metadata,
+            &pinned,
+            probe,
+        ) {
             Ok(()) => info!(
                 "{label}: the recording's metadata now records the agent restart \
                  (producer_epochs; version {})",
@@ -606,57 +437,13 @@ async fn apply_restarts(
     }
 }
 
-/// Open a replication stream to `ep`, an endpoint already probed as a Rezolus
-/// agent, and mark it active and streaming.
+/// Mark `ep` active and streamed over `sub`, a subscription detection opened,
+/// and take the handshake's word on its timeline, epoch, labels and metadata.
 ///
-/// Fetches the agent's metadata, then subscribes. Two things follow from the
-/// handshake being the authority on the rows that will arrive:
-///
-/// - The recording's anchor and epoch are the handshake's, overriding what
-///   `/status` said a moment earlier. The rows are stamped on the handshake's
-///   timeline; an agent that restarted between the two fetches would
-///   otherwise have its rows anchored on a clock it no longer keeps.
-/// - The agent is asked for the stream and judged on the answer — see
-///   [`stream::ConnectError`] for the split between "not there" and "cannot".
-///   The metadata is kept on `ep` whatever the answer, so a refusal can name
-///   the agent's version.
-///
-/// `/status` is read BEFORE the stream is opened, so the handshake is the
-/// later of the two observations. The other order installed the handshake's
-/// epoch over a newer `/status` reading, and an agent that restarted between
-/// the two got a restart warning pointing backwards.
-///
-/// `timeout` bounds the connect and the handshake together, for the reason
-/// a probe is bounded: this runs on the tick loop. The metadata fetch is not
-/// bounded.
-async fn open_stream(
-    client: &Client,
-    ep: &mut EndpointState,
-    interval: Duration,
-    timeout: Duration,
-) -> Result<stream::Subscription, stream::ConnectError> {
-    ep.agent = fetch_agent_metadata(client, &ep.config.url).await;
-    let sub = match tokio::time::timeout(
-        timeout,
-        stream::Subscription::connect(
-            client,
-            &ep.config.url,
-            interval,
-            stream::Layout::Long,
-            stream::ACCEPTED_WIRE_NAMES,
-        ),
-    )
-    .await
-    {
-        Ok(result) => result?,
-        Err(_) => {
-            return Err(stream::ConnectError::Unreachable(format!(
-                "{} did not complete a handshake within {}",
-                ep.config.url,
-                humantime::format_duration(timeout)
-            )))
-        }
-    };
+/// The handshake is the authority on the rows that will arrive: the
+/// recording's anchor and epoch are its, and the probe hook's `enrich`, which
+/// runs after this, never sets either.
+fn begin_stream(ep: &mut EndpointState, sub: &stream::Subscription, interval: Duration) {
     let source = sub
         .source()
         .cloned()
@@ -675,7 +462,6 @@ async fn open_stream(
             humantime::format_duration(floor)
         );
     }
-
     if sub.layout() != stream::Layout::Long {
         // Recorded all the same: the decoder reads either layout. Said
         // because a group of slots then resends its member list on every
@@ -686,28 +472,75 @@ async fn open_stream(
             ep.config.url
         );
     }
-    if ep.config.source.is_none() {
-        ep.config.source = Some("rezolus".to_string());
-    }
+    ep.identity.handshake_labels = source.labels.clone();
     adopt_source(ep, &source);
     ep.scrape_url = Some(ep.config.url.clone());
-    ep.detected_protocol = Some(Protocol::Msgpack);
+    ep.detected_protocol = Some(Protocol::Stream);
     ep.status = EndpointStatus::Active;
     ep.streaming = true;
-    Ok(sub)
 }
 
-/// Where an agent was refused, which decides what the refusal advises.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RefusedAt {
-    /// Before the archive exists: the whole run is refused.
-    Startup,
-    /// After the archive opened, on first activation: only this endpoint is
-    /// left out.
-    MidRun,
-    /// On a reconnect, after the stream had been open: this endpoint's
-    /// recording stops with the rows it had.
-    Reconnect,
+/// Mark `ep` active and scraped as Prometheus at `url`.
+fn begin_scrape(ep: &mut EndpointState, url: Url) {
+    ep.scrape_url = Some(url);
+    ep.detected_protocol = Some(Protocol::Prometheus);
+    ep.status = EndpointStatus::Active;
+}
+
+/// Take the probe hook's first `enrich` reply for a streamed endpoint, or say
+/// why the recording is added without it.
+fn adopt_enrich(ep: &mut EndpointState, reply: Result<detect::Enriched, String>) {
+    match reply {
+        Ok((labels, metadata)) => {
+            ep.identity.hook_labels = labels;
+            ep.identity.hook_metadata = metadata;
+        }
+        Err(why) => warn!(
+            "{}: {why}; its recording is added with the labels and metadata of its \
+             stream handshake only (for a Rezolus agent: no host label, version, \
+             systeminfo or descriptions)",
+            ep.config.url
+        ),
+    }
+}
+
+/// Fix the `source` the endpoint's recording is added with (see
+/// `detect::Identity::source`), and say so when it is a name inferred from
+/// the URL.
+fn resolve_source(config: &RecordingConfig, ep: &mut EndpointState) {
+    if ep.config.source.is_some() {
+        return;
+    }
+    let source = identity(config, ep, BTreeMap::new()).source();
+    let named = ep.identity.handshake_labels.contains_key("source")
+        || ep.identity.hook_labels.contains_key("source");
+    if !named {
+        eprintln!(
+            "warn: no source name specified for {}, using \"{source}\" \
+             (pass --endpoint URL,source=NAME or --metadata source=NAME to override)",
+            ep.config.url,
+        );
+    }
+    ep.config.source = Some(source);
+}
+
+/// Where an endpoint's labels and metadata come from, in precedence order.
+fn identity<'a>(
+    config: &'a RecordingConfig,
+    ep: &'a EndpointState,
+    recorder_metadata: BTreeMap<String, String>,
+) -> detect::Identity<'a> {
+    detect::Identity {
+        user_source: ep.config.source.as_deref(),
+        user_labels: &config.labels,
+        user_metadata: &config.metadata,
+        recorder_metadata,
+        hook_labels: &ep.identity.hook_labels,
+        hook_metadata: &ep.identity.hook_metadata,
+        handshake_labels: &ep.identity.handshake_labels,
+        handshake_metadata: &ep.identity.handshake_metadata,
+        url: &ep.config.url,
+    }
 }
 
 /// Leave one endpoint out of the rest of the run: print the refusal, mark it
@@ -765,185 +598,77 @@ fn refusal_summary(endpoints: &[EndpointState], output: &Path, finalized: bool) 
     Some(lines.join("\n"))
 }
 
-/// The refusal for a Rezolus agent that cannot serve its replication stream.
-///
-/// Names the agent's version when `/status` or the `/` banner gave one. An
-/// agent older than [`STREAM_SINCE`] is said to predate the stream; one at or
-/// after it should serve the stream, so the refusal only quotes what the
-/// route answered (a proxy that does not route `/metrics/stream` gives a 404
-/// from a current agent). There is no scrape fallback: 6.x records agents by
-/// stream only, and points at a 5.x recorder, which scrapes them.
-fn unstreamable_agent(ep: &EndpointState, reason: &str, at: RefusedAt) -> String {
-    let url = &ep.config.url;
-    let mut stream_url = url.clone();
-    stream_url.set_path("/metrics/stream");
-    let why = match ep.agent.version.as_deref() {
-        Some(version) => match predates_stream(version) {
-            Some(true) => format!(
-                "{url} is Rezolus {version}, which predates the replication stream \
-                 (agents serve /metrics/stream from {STREAM_SINCE}): {reason}"
-            ),
-            _ => format!(
-                "{url} is Rezolus {version}, which serves a replication stream, but \
-                 {reason}. Check that {stream_url} is reachable from this host; a proxy in \
-                 front of the agent may not route it"
-            ),
-        },
-        None => format!(
-            "{url} is a Rezolus agent of unknown version, and its replication stream \
-             did not open: {reason}. Agents serve /metrics/stream from {STREAM_SINCE}"
-        ),
-    };
-    let upgrade = match ep.agent.version.as_deref().and_then(predates_stream) {
-        Some(false) => String::new(),
-        _ => format!("; or upgrade the agent to {STREAM_SINCE} or later"),
-    };
-    let fallback = format!(
-        "rezolus 6.x records Rezolus agents from their replication stream only. A \
-         rezolus 5.x recorder ({RELEASE_5X} or later) records this \
-         agent by scraping it, and `rezolus recording upgrade --to dendro in.rez -o \
-         out.dendro` converts its .rez afterwards{upgrade}"
-    );
-    let next = match at {
-        RefusedAt::Startup => "Nothing was recorded",
-        RefusedAt::MidRun => {
-            "This endpoint is excluded from this recording and not retried; the other \
-             endpoints keep recording"
-        }
-        RefusedAt::Reconnect => {
-            "This endpoint's recording stops here, keeping the rows it had, and is not \
-             retried; the other endpoints keep recording"
-        }
-    };
-    format!("{why}. {next}. {fallback}")
+/// One line for each endpoint the run ended without a recording for, other
+/// than a refused one ([`refusal_summary`] names those): one still pending,
+/// and one streamed whose metadata read had not returned, so it was never
+/// added to the archive.
+fn unrecorded_summary(endpoints: &[EndpointState], output: &Path) -> Vec<String> {
+    let path = output.display();
+    endpoints
+        .iter()
+        .filter_map(|ep| {
+            let who = match &ep.config.source {
+                Some(source) => format!("{} ({source})", ep.config.url),
+                None => ep.config.url.to_string(),
+            };
+            match ep.status {
+                EndpointStatus::Pending => Some(format!(
+                    "{who} did not become recordable during the run and has no recording in \
+                     {path}"
+                )),
+                EndpointStatus::Activating => Some(format!(
+                    "{who} opened its stream, but the run ended before its metadata arrived; \
+                     it has no recording in {path}"
+                )),
+                EndpointStatus::Active | EndpointStatus::Refused => None,
+            }
+        })
+        .collect()
 }
 
-/// The first Rezolus release whose agent serves `/metrics/stream`.
-const STREAM_SINCE: &str = "5.21.0";
-
-/// Whether `version` (as `/status` or the `/` banner reports it) is older
-/// than [`STREAM_SINCE`]. `None` when it does not parse as
-/// `major.minor.patch`; a pre-release or build suffix is ignored, so
-/// `5.21.0-alpha.1` counts as 5.21.0.
-fn predates_stream(version: &str) -> Option<bool> {
-    let parse = |v: &str| -> Option<(u64, u64, u64)> {
-        let core = v.split(['-', '+']).next()?;
-        let mut parts = core.split('.').map(|p| p.parse::<u64>().ok());
-        let triple = (parts.next()??, parts.next()??, parts.next()??);
-        parts.next().is_none().then_some(triple)
-    };
-    Some(parse(version)? < parse(STREAM_SINCE)?)
-}
-
-/// How an endpoint came up, from [`activate_endpoint`].
-enum Activation {
-    /// Not up yet; probed again next tick. Carries the line that says why,
-    /// for the caller to log at the level it wants.
-    Pending(String),
-    /// Active and scraped each tick: a Prometheus endpoint.
-    Scrape,
-    /// A Rezolus agent, subscribed to its stream.
-    Stream(Box<stream::Subscription>),
-}
-
-/// Probe `ep` and bring it up on the transport its kind takes.
-///
-/// Shared by startup and by the late activation of an endpoint that was not
-/// reachable at startup, so both apply one rule: a Rezolus agent is streamed
-/// and a Prometheus endpoint is scraped. The probe classifies the endpoint as
-/// it always has (`/metrics/binary` first, then `/metrics`, or the declared
-/// `protocol=`).
-///
-/// `Err` is an agent that answered and cannot serve the stream: refused, never
-/// scraped instead (see [`unstreamable_agent`]), with `at` choosing the
-/// advice. The probe and the stream connect are each bounded by `timeout`,
-/// because this runs on the tick loop.
-async fn activate_endpoint(
-    client: &Client,
-    ep: &mut EndpointState,
-    interval: Duration,
-    timeout: Duration,
-    at: RefusedAt,
-) -> Result<Activation, String> {
-    let probed = match tokio::time::timeout(timeout, probe_endpoint(client, &ep.config)).await {
-        Ok(probed) => probed,
-        Err(_) => {
-            warn!(
-                "probe of {} timed out after {}",
-                ep.config.url,
-                humantime::format_duration(timeout)
-            );
-            None
-        }
-    };
-    let Some((protocol, url)) = probed else {
-        return Ok(Activation::Pending(format!(
-            "endpoint {} not reachable, will retry each tick",
-            ep.config.url
-        )));
-    };
-
-    if protocol == Protocol::Msgpack {
-        return match open_stream(client, ep, interval, timeout).await {
-            Ok(sub) => Ok(Activation::Stream(Box::new(sub))),
-            Err(stream::ConnectError::Unsupported(e)) => Err(unstreamable_agent(ep, &e, at)),
-            // It answered the probe, so it is there; the stream route failed
-            // with an answer that may change (a 5xx from a proxy, a handshake
-            // that timed out). Retried like any unreachable endpoint rather
-            // than scraped.
-            Err(stream::ConnectError::Unreachable(e)) => Ok(Activation::Pending(format!(
-                "endpoint {} answered, but its replication stream did not open ({e}); \
-                 will retry each tick",
-                ep.config.url
-            ))),
-        };
-    }
-
-    if ep.config.source.is_none() {
-        let inferred = infer_source_name(&ep.config.url);
-        eprintln!(
-            "warn: no source name specified for {}, using \"{inferred}\" \
-             (pass --metadata source=NAME to override)",
-            ep.config.url,
-        );
-        ep.config.source = Some(inferred);
-    }
-    ep.scrape_url = Some(url);
-    ep.detected_protocol = Some(protocol);
-    ep.status = EndpointStatus::Active;
-    Ok(Activation::Scrape)
-}
-
-/// Take the handshake's word on the endpoint's timeline and epoch.
+/// Take the handshake's word on the endpoint's timeline, epoch and metadata.
 ///
 /// Also the reconnect path: a new connection's handshake names the source
 /// again, and a different uuid is a restarted agent, which `note_epoch`
-/// records as a restart.
+/// records as a restart. Its metadata is the new process's, which
+/// [`apply_restarts`] writes; its labels are not taken, since a recording's
+/// labels are fixed when it is added.
 fn adopt_source(ep: &mut EndpointState, source: &stream::Source) {
     // Zero is what no agent anchors at (1970), so it is not an anchor.
     if source.clock_anchor_wall_ns != 0 {
         ep.agent.clock_anchor_wall_ns = Some(source.clock_anchor_wall_ns);
     }
+    ep.identity.handshake_metadata = source.metadata.clone();
     if let Some(uuid) = source.uuid.as_deref().filter(|u| !u.is_empty()) {
         note_epoch(ep, uuid);
     }
 }
 
+/// What handling a stream event may need to ask: the probe hook, for the
+/// wording of a reconnect refusal, and how long it may take.
+#[derive(Clone, Copy)]
+struct Hook<'a> {
+    probe: &'a dyn detect::Probe,
+    timeout: Duration,
+}
+
 /// Stage everything the stream pumps have delivered so far.
 ///
 /// Returns the first failure that ends the recording: an interval that could
-/// not be staged, or an agent that came back unable to serve the stream.
-/// Never waits — the pumps deliver for as long as they run, and this is
-/// called from the tick and once more on the way out.
-fn drain_stream_events(
+/// not be staged. Never waits for a pump (they deliver for as long as they
+/// run); it waits only on the probe hook when an agent came back unable to
+/// serve the stream. Called from the tick and once more on the way out.
+async fn drain_stream_events(
     rx: &mut tokio::sync::mpsc::Receiver<(usize, stream::StreamEvent)>,
     endpoints: &mut [EndpointState],
     mut archive: Option<&mut Archive>,
     wall_ns: u64,
+    hook: Hook<'_>,
 ) -> Option<String> {
     let mut failed: Option<String> = None;
     while let Ok((idx, event)) = rx.try_recv() {
-        if let Some(e) = handle_stream_event(idx, event, endpoints, archive.as_deref_mut(), wall_ns)
+        if let Some(e) =
+            handle_stream_event(idx, event, endpoints, archive.as_deref_mut(), wall_ns, hook).await
         {
             failed.get_or_insert(e);
         }
@@ -952,14 +677,14 @@ fn drain_stream_events(
 }
 
 /// Act on one event from a pump. `Some` is a failure that ends the recording:
-/// an interval that could not be staged, or an agent that came back unable to
-/// serve the stream.
-fn handle_stream_event(
+/// an interval that could not be staged.
+async fn handle_stream_event(
     idx: usize,
     event: stream::StreamEvent,
     endpoints: &mut [EndpointState],
     archive: Option<&mut Archive>,
     wall_ns: u64,
+    hook: Hook<'_>,
 ) -> Option<String> {
     let mut failed: Option<String> = None;
     let label = endpoints[idx].config.source_label().to_string();
@@ -1013,13 +738,26 @@ fn handle_stream_event(
             );
             adopt_source(&mut endpoints[idx], &source);
         }
-        stream::StreamEvent::Refused(e) => {
+        stream::StreamEvent::Refused(refusal) => {
             // The agent came back unable to serve the stream. Refused as a
             // mid-run first activation is: this endpoint only, never
             // scraped instead, never retried (its pump has stopped). Its
             // recording keeps what it had and is finalized with the rest.
-            let refusal = unstreamable_agent(&endpoints[idx], &e, RefusedAt::Reconnect);
-            refuse_mid_run(&mut endpoints[idx], &refusal);
+            // The hook is asked for the wording only; a verdict other than
+            // a refusal leaves the route's answer as the reason.
+            let url = endpoints[idx].config.url.clone();
+            let verdict = tokio::time::timeout(
+                hook.timeout,
+                hook.probe
+                    .not_streamable(&url, detect::At::Reconnect, &refusal.answer),
+            )
+            .await
+            .unwrap_or(detect::Verdict::Pending);
+            let reason = match verdict {
+                detect::Verdict::Refuse { reason } => reason,
+                _ => format!("{refusal}. {}", agent_probe::RECONNECT_REFUSED),
+            };
+            refuse_mid_run(&mut endpoints[idx], &reason);
         }
     }
     failed
@@ -1245,21 +983,15 @@ fn build_metadata(
     ep: &EndpointState,
     run_events: &[Event],
 ) -> std::collections::BTreeMap<String, String> {
-    let mut m = std::collections::BTreeMap::new();
-    m.insert(
+    // The recorder's own keys: above the probe hook's and the handshake's,
+    // below the user's `--metadata`.
+    let mut recorder = std::collections::BTreeMap::new();
+    recorder.insert(
         "sampling_interval_ms".to_string(),
         config.interval.as_millis().to_string(),
     );
-    m.insert("source".to_string(), ep.config.source_label().to_string());
-    // Written whether or not the agent answered anything else: a recording
-    // with no systeminfo and no descriptions is still worth attributing to a
-    // build. Before the user's `--metadata` for the same reason `source` is —
-    // an explicit `--metadata version=...` overrides what the agent reported.
-    if let Some(ref version) = ep.agent.version {
-        m.insert(parquet_metadata::KEY_VERSION.to_string(), version.clone());
-    }
     if let Some(ref epoch) = ep.agent.producer_epoch {
-        m.insert(
+        recorder.insert(
             parquet_metadata::KEY_PRODUCER_EPOCH.to_string(),
             epoch.clone(),
         );
@@ -1268,17 +1000,9 @@ fn build_metadata(
     // which a `.dendro` has no equivalent of; one recording per endpoint
     // makes it a key of that recording's metadata.
     if let Some(ref role) = ep.config.role {
-        m.insert(parquet_metadata::NESTED_ROLE.to_string(), role.clone());
+        recorder.insert(parquet_metadata::NESTED_ROLE.to_string(), role.clone());
     }
-    for (k, v) in &config.metadata {
-        m.insert(k.clone(), v.clone());
-    }
-    if let Some(ref json) = ep.agent.systeminfo {
-        m.insert("systeminfo".to_string(), json.clone());
-    }
-    if let Some(ref json) = ep.agent.descriptions {
-        m.insert("descriptions".to_string(), json.clone());
-    }
+    let mut m = identity(config, ep, recorder).metadata();
     // Cannot fail on a map with no `events` key yet, and a user `--metadata
     // events=...` that does not parse is the user's to fix: their value is
     // kept and the run events are the ones dropped, with a warning.
@@ -1288,18 +1012,14 @@ fn build_metadata(
     m
 }
 
-/// The recording's label set: `source`, `host` (from the agent's systeminfo
-/// hostname), plus any user `--label k=v` (last-wins). Thin adapter over
-/// `rez::build_labels`; the merge logic + tests live in `rez`.
+/// The recording's label set: the handshake's, under the probe hook's (for
+/// an agent, `host` from its systeminfo), under the user's `--label k=v`,
+/// with `source` resolved as `detect::Identity::source` says.
 fn build_labels(
     config: &RecordingConfig,
     ep: &EndpointState,
 ) -> std::collections::BTreeMap<String, String> {
-    rez::build_labels(
-        ep.config.source_label(),
-        ep.agent.systeminfo.as_deref(),
-        &config.labels,
-    )
+    identity(config, ep, BTreeMap::new()).labels()
 }
 
 /// The `.dendro` archive the recording loop feeds, through metriken-storage's
@@ -1559,15 +1279,22 @@ impl Archive {
     }
 
     /// Record the agent restarts waiting on endpoint `idx` in its recording's
-    /// metadata: see [`restart::metadata_patch`]. `version_pinned` means the
-    /// user set `version` with `--metadata`, which a restart does not
+    /// metadata: see [`restart::metadata_patch_with`]. `pinned` names the
+    /// keys the user set with `--metadata`, which a restart does not
     /// overwrite.
+    ///
+    /// `handshake` is the new process's handshake metadata. Its keys other
+    /// than the ones the patch already sets, the recorder's own and the
+    /// user's are written too, each combined with the value on record by the
+    /// hook's [`merge`](detect::Probe::merge).
     fn record_restarts(
         &mut self,
         idx: usize,
         restarts: &[restart::Restart],
         agent: &restart::Agent,
-        version_pinned: bool,
+        handshake: &BTreeMap<String, String>,
+        pinned: &[&str],
+        probe: &dyn detect::Probe,
     ) -> Result<(), String> {
         let Some(current) = self.metadata.get(&idx) else {
             return Err(format!(
@@ -1575,7 +1302,31 @@ impl Archive {
             ));
         };
         let first_ts = self.first_stamp.get(&idx).copied();
-        let patch = restart::metadata_patch(current, first_ts, restarts, agent, version_pinned);
+        let merge = |key: &str, old: &str, new: &str| probe.merge(key, old, new);
+        let mut patch =
+            restart::metadata_patch_with(current, first_ts, restarts, agent, pinned, &merge);
+        for (key, value) in handshake {
+            let owned = matches!(
+                key.as_str(),
+                "source"
+                    | "sampling_interval_ms"
+                    | parquet_metadata::KEY_PRODUCER_EPOCH
+                    | parquet_metadata::KEY_PRODUCER_EPOCHS
+                    | parquet_metadata::KEY_VERSION
+                    | parquet_metadata::KEY_SYSTEMINFO
+                    | parquet_metadata::KEY_DESCRIPTIONS
+                    | parquet_metadata::NESTED_ROLE
+                    | parquet_metadata::KEY_EVENTS
+            );
+            if owned || patch.contains_key(key) || pinned.contains(&key.as_str()) {
+                continue;
+            }
+            let merged = match current.get(key) {
+                Some(old) => probe.merge(key, old, value),
+                None => value.clone(),
+            };
+            patch.insert(key.clone(), merged);
+        }
         self.patch_metadata(idx, patch)
     }
 
@@ -1893,49 +1644,81 @@ pub fn run(config: RecordingConfig) {
     let connect_timeout = tick_timeout(interval_dur);
 
     // Subscriptions opened at startup, one slot per endpoint, handed to their
-    // pumps once the archive they feed exists. Only agents fill any.
+    // pumps once the archive they feed exists. Only streamed endpoints fill
+    // any.
     let mut opened: Vec<Option<stream::Subscription>> = endpoints.iter().map(|_| None).collect();
 
-    // Probe all endpoints (best-effort startup). An agent that cannot serve
-    // its stream is fatal here, before the archive exists, so nothing is left
-    // behind; one that is not reachable yet is the ordinary retry-each-tick
-    // case.
+    // The hook that recognises a Rezolus agent and reads what its handshake
+    // does not carry (see `agent_probe`).
+    let probe: std::sync::Arc<dyn detect::Probe> =
+        std::sync::Arc::new(agent_probe::RezolusProbe::new(client.clone()));
+    let detect_cfg = detect_config(interval_dur, connect_timeout);
+
+    // Detect every endpoint before the archive exists (see `detect`). A
+    // refusal is fatal here, so nothing is left behind; an endpoint not known
+    // yet is the ordinary retry-each-tick case.
     rt.block_on(async {
         for (idx, ep) in endpoints.iter_mut().enumerate() {
-            match activate_endpoint(
+            let url = ep.config.url.clone();
+            let transport = Protocol::transport(ep.config.protocol.as_ref());
+            match detect::detect(
                 &client,
-                ep,
-                interval_dur,
-                connect_timeout,
-                RefusedAt::Startup,
+                &detect_cfg,
+                &url,
+                transport,
+                probe.as_ref(),
+                detect::At::Startup,
             )
             .await
             {
-                Ok(Activation::Stream(sub)) => {
-                    info!(
-                        "endpoint {} ({}): subscribed to its replication stream",
-                        ep.config.source_label(),
-                        ep.config.url
-                    );
+                detect::Detected::Streamed(sub) => {
+                    begin_stream(ep, &sub, interval_dur);
+                    info!("endpoint {url}: subscribed to its replication stream");
                     opened[idx] = Some(*sub);
                 }
-                Ok(Activation::Scrape) => {
-                    info!(
-                        "endpoint {} ({}): detected {:?}",
-                        ep.config.source_label(),
-                        ep.config.url,
-                        ep.protocol()
-                    );
+                detect::Detected::Scraped(scrape) => {
+                    info!("endpoint {url}: scraped as Prometheus at {scrape}");
+                    begin_scrape(ep, scrape);
                 }
-                Ok(Activation::Pending(why)) => warn!("{why}"),
-                Err(e) => {
-                    eprintln!("error: {e}");
+                detect::Detected::Pending(why) => warn!("{why}"),
+                detect::Detected::Refused(reason) => {
+                    eprintln!("error: {reason}");
                     std::process::exit(1);
                 }
             }
         }
-    });
 
+        // The probe hook's first `enrich` of every streamed endpoint, at
+        // once, each bounded by the timeout: a recording's labels are fixed
+        // when it is added, so they are read before the archive opens.
+        let enriched =
+            futures::future::join_all(opened.iter().enumerate().filter_map(|(idx, sub)| {
+                let sub = sub.as_ref()?;
+                let epoch = sub.source().and_then(|s| s.uuid.clone());
+                let url = endpoints[idx].config.url.clone();
+                let probe = probe.clone();
+                Some(async move {
+                    let reply = detect::enrich_within(
+                        probe.as_ref(),
+                        &url,
+                        epoch.as_deref(),
+                        connect_timeout,
+                    )
+                    .await;
+                    (idx, reply)
+                })
+            }))
+            .await;
+        for (idx, reply) in enriched {
+            adopt_enrich(&mut endpoints[idx], reply);
+        }
+    });
+    for ep in endpoints
+        .iter_mut()
+        .filter(|ep| ep.status == EndpointStatus::Active)
+    {
+        resolve_source(&config, ep);
+    }
     if !endpoints
         .iter()
         .any(|ep| ep.status == EndpointStatus::Active)
@@ -2100,6 +1883,29 @@ pub fn run(config: RecordingConfig) {
                 spawn_pump(idx, sub, endpoints[idx].config.url.clone());
             }
         }
+        let hook = Hook {
+            probe: probe.as_ref(),
+            timeout: scrape_timeout,
+        };
+        // Endpoints detected as streamed after startup, waiting for the
+        // probe hook's `enrich`, which runs on its own task so no tick waits
+        // on it: the subscription detection opened (unread meanwhile, which
+        // costs at most a gap) and the task. One slot per endpoint.
+        type Enriching = (
+            stream::Subscription,
+            tokio::task::JoinHandle<Result<detect::Enriched, String>>,
+        );
+        let mut enriching: Vec<Option<Enriching>> = endpoints.iter().map(|_| None).collect();
+        // Detection of each pending endpoint, on its own task for the same
+        // reason: an endpoint that accepts a connection and never answers
+        // holds a detection for the stream connect's timeout and the probe
+        // hook's, and no tick waits on that. One slot per endpoint.
+        let mut detecting: Vec<Option<tokio::task::JoinHandle<detect::Detected>>> =
+            endpoints.iter().map(|_| None).collect();
+        let descriptions_pinned = config
+            .metadata
+            .iter()
+            .any(|(k, _)| k == parquet_metadata::KEY_DESCRIPTIONS);
         // The last tick's clock observation, handed to finalization so
         // the manifest's `clock_offsets` series covers the tail of the
         // recording. Seeded with the anchor itself (offset 0 by definition).
@@ -2352,18 +2158,25 @@ pub fn run(config: RecordingConfig) {
                             // and skips a patch it cannot apply. Only a failed
                             // hand-off is seen here; it is retried after the
                             // next scrape rather than ending the run.
+                            //
+                            // A `--metadata descriptions=` is the user's and
+                            // stays: the HELP text is marked stored unwritten.
                             if let Some(json) = conv.pending_descriptions() {
-                                let patch = BTreeMap::from([(
-                                    parquet_metadata::KEY_DESCRIPTIONS.to_string(),
-                                    json,
-                                )]);
-                                match rec.patch_metadata(idx, patch) {
-                                    Ok(()) => conv.descriptions_stored(),
-                                    Err(e) => warn!(
-                                        "not storing the HELP text of {} ({}) yet: {e}",
-                                        endpoints[idx].config.source_label(),
-                                        endpoints[idx].config.url
-                                    ),
+                                if descriptions_pinned {
+                                    conv.descriptions_stored();
+                                } else {
+                                    let patch = BTreeMap::from([(
+                                        parquet_metadata::KEY_DESCRIPTIONS.to_string(),
+                                        json,
+                                    )]);
+                                    match rec.patch_metadata(idx, patch) {
+                                        Ok(()) => conv.descriptions_stored(),
+                                        Err(e) => warn!(
+                                            "not storing the HELP text of {} ({}) yet: {e}",
+                                            endpoints[idx].config.source_label(),
+                                            endpoints[idx].config.url
+                                        ),
+                                    }
                                 }
                             }
                         }
@@ -2382,20 +2195,62 @@ pub fn run(config: RecordingConfig) {
             // rather than awaited: a tick commits what has arrived, and an
             // endpoint whose frame is late is committed next tick, exactly
             // as a scrape that missed the tick would be.
-            if let Some(e) =
-                drain_stream_events(&mut stream_rx, &mut endpoints, archive.as_mut(), wall_ns)
+            if let Some(e) = drain_stream_events(
+                &mut stream_rx,
+                &mut endpoints,
+                archive.as_mut(),
+                wall_ns,
+                hook,
+            )
+            .await
             {
                 ingest_failed.get_or_insert(e);
             }
             apply_restarts(
                 &mut endpoints,
                 archive.as_mut(),
-                &client,
+                probe.as_ref(),
                 &config.metadata,
                 scrape_timeout,
                 false,
             )
             .await;
+
+            // Late activations, in steps so that no tick waits on detection
+            // or on the probe hook's `enrich`. A pending endpoint is detected
+            // on its own task, and the tick after it returns acts on the
+            // answer. A streamed endpoint whose `enrich` has returned (or
+            // timed out) gets its recording now; one just detected starts
+            // its `enrich` on its own task and is added on a later tick. A
+            // scraped endpoint has no `enrich` and is added at once.
+            //
+            // Startup only exits when no endpoint at all was reachable, so a
+            // run with one endpoint up and one still starting commits to the
+            // archive with a recording for the first and reaches this path
+            // for the second, which needs a recording opened on the live
+            // archive. That is what keeps the "will retry each tick" warning
+            // honest. When `archive` is `None` the recording already failed
+            // and was reported; the loop is about to exit.
+            let mut added: Vec<(usize, Option<stream::Subscription>)> = Vec::new();
+            for idx in 0..endpoints.len() {
+                let finished = enriching[idx]
+                    .as_ref()
+                    .is_some_and(|(_, task)| task.is_finished());
+                if !finished {
+                    continue;
+                }
+                let Some((sub, task)) = enriching[idx].take() else {
+                    continue;
+                };
+                let reply = task
+                    .await
+                    .unwrap_or_else(|e| Err(format!("its metadata fetch failed: {e}")));
+                adopt_enrich(&mut endpoints[idx], reply);
+                endpoints[idx].status = EndpointStatus::Active;
+                endpoints[idx].streaming = true;
+                resolve_source(&config, &mut endpoints[idx]);
+                added.push((idx, Some(sub)));
+            }
 
             let pending_indices: Vec<usize> = endpoints
                 .iter()
@@ -2405,68 +2260,99 @@ pub fn run(config: RecordingConfig) {
                 .collect();
 
             for idx in pending_indices {
-                // The same activation as startup, with one difference: an
-                // agent that cannot serve its stream is refused on its own.
-                // The archive already holds the other endpoints' recordings,
-                // so they keep recording and finalize as usual; the refused
-                // endpoint is never retried, and the run exits 1 at the end.
-                let activated = activate_endpoint(
-                    &client,
-                    &mut endpoints[idx],
-                    interval_dur,
-                    scrape_timeout,
-                    RefusedAt::MidRun,
-                )
-                .await;
-                let sub = match activated {
-                    Ok(Activation::Pending(why)) => {
+                // The same detection as startup, with one difference: an
+                // endpoint refused now is refused on its own. The archive
+                // already holds the other endpoints' recordings, so they keep
+                // recording and finalize as usual; the refused endpoint is
+                // never retried, and the run exits 1 at the end.
+                let url = endpoints[idx].config.url.clone();
+                let transport = Protocol::transport(endpoints[idx].config.protocol.as_ref());
+                let spawn_detect = || {
+                    let (client, cfg, probe, url) = (
+                        client.clone(),
+                        detect_cfg.clone(),
+                        probe.clone(),
+                        url.clone(),
+                    );
+                    tokio::spawn(async move {
+                        detect::detect(
+                            &client,
+                            &cfg,
+                            &url,
+                            transport,
+                            probe.as_ref(),
+                            detect::At::Activation,
+                        )
+                        .await
+                    })
+                };
+                let task = match detecting[idx].take() {
+                    None => {
+                        detecting[idx] = Some(spawn_detect());
+                        continue;
+                    }
+                    Some(task) if !task.is_finished() => {
+                        detecting[idx] = Some(task);
+                        continue;
+                    }
+                    Some(task) => task,
+                };
+                let detected = task.await.unwrap_or_else(|e| {
+                    detect::Detected::Pending(format!("endpoint {url}: detection failed: {e}"))
+                });
+                match detected {
+                    // The next detection starts now, so a pending endpoint is
+                    // asked once per tick rather than every other tick.
+                    detect::Detected::Pending(why) => {
                         debug!("{why}");
-                        continue;
+                        detecting[idx] = Some(spawn_detect());
                     }
-                    Err(e) => {
-                        refuse_mid_run(&mut endpoints[idx], &e);
-                        continue;
+                    detect::Detected::Refused(reason) => {
+                        refuse_mid_run(&mut endpoints[idx], &reason);
                     }
-                    Ok(Activation::Stream(sub)) => {
+                    detect::Detected::Streamed(sub) => {
                         info!(
-                            "endpoint {} ({}) now reachable, subscribed to its \
-                             replication stream",
-                            endpoints[idx].config.source_label(),
-                            endpoints[idx].config.url
+                            "endpoint {url} now reachable, subscribed to its replication \
+                             stream; reading its metadata"
                         );
-                        Some(*sub)
+                        begin_stream(&mut endpoints[idx], &sub, interval_dur);
+                        // Not streaming until it is added and its pump runs:
+                        // nothing waits for its frames before then.
+                        endpoints[idx].status = EndpointStatus::Activating;
+                        endpoints[idx].streaming = false;
+                        let epoch = sub.source().and_then(|s| s.uuid.clone());
+                        let probe = probe.clone();
+                        let task = tokio::spawn(async move {
+                            detect::enrich_within(
+                                probe.as_ref(),
+                                &url,
+                                epoch.as_deref(),
+                                scrape_timeout,
+                            )
+                            .await
+                        });
+                        enriching[idx] = Some((*sub, task));
                     }
-                    Ok(Activation::Scrape) => {
+                    detect::Detected::Scraped(scrape) => {
                         // Deliberately says "now reachable", not "starting
                         // capture": the block below can still fail to open a
                         // recording for it, and claiming capture had started
                         // one line before that error is how the silent-drop
                         // bug read in the logs.
-                        info!(
-                            "endpoint {} ({}) now reachable",
-                            endpoints[idx].config.source_label(),
-                            endpoints[idx].config.url
-                        );
-                        // A late endpoint that probes as prometheus gets a
-                        // converter now, the same as one present at startup.
-                        if endpoints[idx].protocol() == Some(&Protocol::Prometheus)
-                            && prom_converters[idx].is_none()
-                        {
+                        info!("endpoint {url} now reachable, scraped as Prometheus at {scrape}");
+                        begin_scrape(&mut endpoints[idx], scrape);
+                        resolve_source(&config, &mut endpoints[idx]);
+                        // A late Prometheus endpoint gets a converter now, the
+                        // same as one present at startup.
+                        if prom_converters[idx].is_none() {
                             prom_converters[idx] = Some(prometheus::PrometheusConverter::new());
                         }
-                        None
+                        added.push((idx, None));
                     }
-                };
+                }
+            }
 
-                // Startup only exits when no endpoint at all was reachable, so
-                // a run with one endpoint up and one still starting commits to
-                // the archive with a recording for the first and reaches this
-                // path for the second, which needs a recording opened on the
-                // live archive. That is what keeps the "will retry each tick"
-                // warning honest.
-                //
-                // `None` means the recording already failed and was reported;
-                // the loop is about to exit.
+            for (idx, sub) in added {
                 if let Some(rec) = archive.as_mut() {
                     match rec.add_endpoint(
                         idx,
@@ -2545,6 +2431,15 @@ pub fn run(config: RecordingConfig) {
                 warn!("every endpoint has been refused; finalizing the recording");
                 break;
             }
+        }
+
+        // Detections and metadata reads still in flight are for endpoints
+        // that will not be added now; `unrecorded_summary` names them.
+        for task in detecting.iter_mut().filter_map(Option::take) {
+            task.abort();
+        }
+        for (_, task) in enriching.iter_mut().filter_map(Option::take) {
+            task.abort();
         }
 
         // If the loop ended via ctrl-c (STATE flip) while the wrapped command
@@ -2640,7 +2535,10 @@ pub fn run(config: RecordingConfig) {
                                 &mut endpoints,
                                 archive.as_mut(),
                                 wall_now_ns(),
-                            ) {
+                                hook,
+                            )
+                            .await
+                            {
                                 failed = Some(e);
                                 break;
                             }
@@ -2662,18 +2560,23 @@ pub fn run(config: RecordingConfig) {
             } else {
                 tokio::time::sleep(interval_dur.min(Duration::from_secs(2))).await;
             }
-            let failed = failed.or_else(|| {
-                drain_stream_events(
-                    &mut stream_rx,
-                    &mut endpoints,
-                    archive.as_mut(),
-                    wall_now_ns(),
-                )
-            });
+            let failed = match failed {
+                Some(e) => Some(e),
+                None => {
+                    drain_stream_events(
+                        &mut stream_rx,
+                        &mut endpoints,
+                        archive.as_mut(),
+                        wall_now_ns(),
+                        hook,
+                    )
+                    .await
+                }
+            };
             apply_restarts(
                 &mut endpoints,
                 archive.as_mut(),
-                &client,
+                probe.as_ref(),
                 &config.metadata,
                 scrape_timeout,
                 true,
@@ -2751,6 +2654,9 @@ pub fn run(config: RecordingConfig) {
         // on a reconnect (a refusal at startup exits before the archive
         // exists). The recording went on without them; the exit status says
         // so.
+        for line in unrecorded_summary(&endpoints, &config.output) {
+            warn!("{line}");
+        }
         if let Some(summary) = refusal_summary(&endpoints, &config.output, finalized) {
             eprintln!("{summary}");
             recording_failed.store(true, Ordering::SeqCst);
@@ -2954,37 +2860,13 @@ mod tests {
     // ── agent version capture (issue #1195) ─────────────────────────────────
 
     #[test]
-    fn root_version_parses_the_agent_banner() {
-        assert_eq!(
-            parse_root_version("Rezolus 5.20.0 Agent\nFor information, see: https://rezolus.com\n")
-                .as_deref(),
-            Some("5.20.0")
-        );
-        // A prerelease is the interesting case: most of the sampler history
-        // worth bisecting lives in `-alpha.N` builds.
-        assert_eq!(
-            parse_root_version("Rezolus 5.20.1-alpha.0 Agent\n").as_deref(),
-            Some("5.20.1-alpha.0")
-        );
-    }
-
-    #[test]
-    fn root_version_refuses_anything_that_is_not_the_banner() {
-        // A proxy error page, another service on the port, and a banner with
-        // no version in it. None of these may be recorded as a version.
-        assert_eq!(parse_root_version("<html>404</html>"), None);
-        assert_eq!(parse_root_version("Prometheus 2.5\n"), None);
-        assert_eq!(parse_root_version("Rezolus  Agent\n"), None);
-        assert_eq!(parse_root_version("Rezolus 5.20.0 Exporter\n"), None);
-        assert_eq!(parse_root_version(""), None);
-    }
-
-    #[test]
     fn metadata_carries_the_agent_version() {
         let dir = tempfile::tempdir().unwrap();
         let config = test_config(&dir.path().join("out.dendro"));
         let mut ep = test_endpoint();
-        ep.agent.version = Some("5.19.2".to_string());
+        ep.identity
+            .hook_metadata
+            .insert("version".to_string(), "5.19.2".to_string());
 
         let m = build_metadata(&config, &ep, &[]);
         assert_eq!(
@@ -3184,7 +3066,9 @@ mod tests {
         let mut config = test_config(&dir.path().join("out.dendro"));
         config.metadata = vec![("version".to_string(), "custom".to_string())];
         let mut ep = test_endpoint();
-        ep.agent.version = Some("5.19.2".to_string());
+        ep.identity
+            .hook_metadata
+            .insert("version".to_string(), "5.19.2".to_string());
 
         let m = build_metadata(&config, &ep, &[]);
         assert_eq!(
@@ -3223,83 +3107,39 @@ mod tests {
         }
     }
 
+    /// An endpoint the run ends without recording is named by its URL, and
+    /// by its source only when it has one.
+    #[test]
+    fn an_unrecorded_endpoint_is_named_without_a_placeholder_source() {
+        let mut named = test_endpoint();
+        named.status = EndpointStatus::Activating;
+        let unnamed = EndpointState::new(endpoint::EndpointConfig {
+            url: Url::parse("http://localhost:9090").unwrap(),
+            source: None,
+            role: None,
+            protocol: None,
+        });
+        let mut active = test_endpoint_b();
+        active.status = EndpointStatus::Active;
+        let lines = unrecorded_summary(&[named, unnamed, active], Path::new("out.dendro"));
+        assert_eq!(
+            lines,
+            [
+                "http://localhost:4241/ (rezolus) opened its stream, but the run ended before \
+                 its metadata arrived; it has no recording in out.dendro",
+                "http://localhost:9090/ did not become recordable during the run and has no \
+                 recording in out.dendro",
+            ]
+        );
+    }
+
     fn test_endpoint() -> EndpointState {
         EndpointState::new(endpoint::EndpointConfig {
             url: Url::parse("http://localhost:4241").unwrap(),
             source: Some("rezolus".to_string()),
             role: None,
-            protocol: Some(Protocol::Msgpack),
+            protocol: Some(Protocol::Stream),
         })
-    }
-
-    /// The refusal for an agent that cannot stream names the endpoint, the
-    /// agent's version when there is one, and points at a 5.x recorder, which
-    /// scrapes it. Only an agent older than the stream is said to predate it
-    /// (and told to upgrade): a current agent's 404 is quoted as the route's
-    /// answer.
-    #[test]
-    fn an_unstreamable_agent_is_refused_by_version_pointing_at_a_5x_recorder() {
-        let reason = "http://localhost:4241/metrics/stream?interval=1s returned HTTP 404";
-        let mut ep = test_endpoint();
-        ep.agent.version = Some("5.20.0".to_string());
-        let msg = unstreamable_agent(&ep, reason, RefusedAt::Startup);
-        for needle in [
-            "http://localhost:4241/ is Rezolus 5.20.0",
-            "predates",
-            reason,
-            STREAM_SINCE,
-            "Nothing was recorded",
-            "5.x recorder",
-            RELEASE_5X,
-            "recording upgrade --to dendro",
-            "upgrade the agent",
-        ] {
-            assert!(msg.contains(needle), "{needle:?} in {msg}");
-        }
-        for gone in ["-o out.rez", "-o out.parquet"] {
-            assert!(!msg.contains(gone), "{gone:?} in {msg}");
-        }
-
-        ep.agent.version = Some("5.22.1".to_string());
-        let msg = unstreamable_agent(&ep, reason, RefusedAt::Startup);
-        assert!(!msg.contains("predates"), "{msg}");
-        assert!(!msg.contains("upgrade the agent"), "{msg}");
-        assert!(
-            msg.contains("Rezolus 5.22.1, which serves") && msg.contains(reason),
-            "{msg}"
-        );
-        assert!(
-            msg.contains("Check that http://localhost:4241/metrics/stream is reachable"),
-            "{msg}"
-        );
-        assert!(msg.contains("5.x recorder"), "{msg}");
-
-        ep.agent.version = None;
-        let msg = unstreamable_agent(&ep, reason, RefusedAt::Startup);
-        assert!(msg.contains("unknown version"), "{msg}");
-        assert!(msg.contains(STREAM_SINCE), "{msg}");
-        assert!(msg.contains("5.x recorder"), "{msg}");
-
-        // Mid-run and on a reconnect, only the endpoint is left out.
-        ep.agent.version = Some("5.20.0".to_string());
-        let msg = unstreamable_agent(&ep, reason, RefusedAt::MidRun);
-        assert!(msg.contains("excluded from this recording"), "{msg}");
-        assert!(msg.contains("5.x recorder"), "{msg}");
-        let msg = unstreamable_agent(&ep, reason, RefusedAt::Reconnect);
-        assert!(msg.contains("recording stops here"), "{msg}");
-        assert!(msg.contains("5.x recorder"), "{msg}");
-    }
-
-    #[test]
-
-    fn predates_stream_compares_the_release() {
-        assert_eq!(predates_stream("5.20.0"), Some(true));
-        assert_eq!(predates_stream("4.1.2"), Some(true));
-        assert_eq!(predates_stream("5.21.0"), Some(false));
-        assert_eq!(predates_stream("5.21.0-alpha.1"), Some(false));
-        assert_eq!(predates_stream("6.0.0-alpha.14"), Some(false));
-        assert_eq!(predates_stream("5.21"), None);
-        assert_eq!(predates_stream("dev"), None);
     }
 
     /// A second endpoint, distinguishable from [`rez_endpoint`] by `source`.
@@ -3308,7 +3148,7 @@ mod tests {
             url: Url::parse("http://localhost:4242").unwrap(),
             source: Some("valkey".to_string()),
             role: None,
-            protocol: Some(Protocol::Msgpack),
+            protocol: Some(Protocol::Stream),
         })
     }
 
