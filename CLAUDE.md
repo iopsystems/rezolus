@@ -74,7 +74,8 @@ target/release/rezolus record -o bench.dendro -- ./bench.sh   # record for the c
 # labels user --label > hook (`enrich`: source=rezolus and host from /systeminfo for an agent) >
 # handshake labels; source = user source= > handshake source label > hook's > inferred from URL;
 # metadata user --metadata > recorder keys (sampling_interval_ms, producer_epoch, role) > hook
-# (version, systeminfo, descriptions) > handshake metadata. The startup enrich runs concurrently
+# (version, systeminfo, descriptions) > handshake metadata; --metadata producer_epoch(s)= is
+# refused (config.rs), and a pinned key survives a restart and a scrape's HELP text. The startup enrich runs concurrently
 # per streamed endpoint, bounded by the scrape timeout (warning on fallback); a late activation's
 # enrich runs on its own task (EndpointStatus::Activating) and the recording is added on the
 # first tick after it returns. Restarts take the hook's enrich over the new handshake's metadata,

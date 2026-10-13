@@ -278,7 +278,7 @@ pub fn command() -> Command {
             clap::Arg::new("METADATA")
                 .long("metadata")
                 .short('m')
-                .help("Add a metadata tag as key=value (e.g. source=llm-perf) to every recording in the archive; repeat for multiple tags")
+                .help("Add a metadata tag as key=value (e.g. source=llm-perf) to every recording in the archive; it outranks the value the producer reports and is kept through a restart; producer_epoch and producer_epochs are the recorder's and are refused; repeat for multiple tags")
                 .action(clap::ArgAction::Append),
         )
         .arg(
@@ -607,11 +607,14 @@ fn unrecorded_summary(endpoints: &[EndpointState], output: &Path) -> Vec<String>
     endpoints
         .iter()
         .filter_map(|ep| {
-            let who = format!("{} ({})", ep.config.url, ep.config.source_label());
+            let who = match &ep.config.source {
+                Some(source) => format!("{} ({source})", ep.config.url),
+                None => ep.config.url.to_string(),
+            };
             match ep.status {
                 EndpointStatus::Pending => Some(format!(
-                    "{who} was never reachable as a producer during the run and has no \
-                     recording in {path}"
+                    "{who} did not become recordable during the run and has no recording in \
+                     {path}"
                 )),
                 EndpointStatus::Activating => Some(format!(
                     "{who} opened its stream, but the run ended before its metadata arrived; \
@@ -1899,6 +1902,10 @@ pub fn run(config: RecordingConfig) {
         // hook's, and no tick waits on that. One slot per endpoint.
         let mut detecting: Vec<Option<tokio::task::JoinHandle<detect::Detected>>> =
             endpoints.iter().map(|_| None).collect();
+        let descriptions_pinned = config
+            .metadata
+            .iter()
+            .any(|(k, _)| k == parquet_metadata::KEY_DESCRIPTIONS);
         // The last tick's clock observation, handed to finalization so
         // the manifest's `clock_offsets` series covers the tail of the
         // recording. Seeded with the anchor itself (offset 0 by definition).
@@ -2151,18 +2158,25 @@ pub fn run(config: RecordingConfig) {
                             // and skips a patch it cannot apply. Only a failed
                             // hand-off is seen here; it is retried after the
                             // next scrape rather than ending the run.
+                            //
+                            // A `--metadata descriptions=` is the user's and
+                            // stays: the HELP text is marked stored unwritten.
                             if let Some(json) = conv.pending_descriptions() {
-                                let patch = BTreeMap::from([(
-                                    parquet_metadata::KEY_DESCRIPTIONS.to_string(),
-                                    json,
-                                )]);
-                                match rec.patch_metadata(idx, patch) {
-                                    Ok(()) => conv.descriptions_stored(),
-                                    Err(e) => warn!(
-                                        "not storing the HELP text of {} ({}) yet: {e}",
-                                        endpoints[idx].config.source_label(),
-                                        endpoints[idx].config.url
-                                    ),
+                                if descriptions_pinned {
+                                    conv.descriptions_stored();
+                                } else {
+                                    let patch = BTreeMap::from([(
+                                        parquet_metadata::KEY_DESCRIPTIONS.to_string(),
+                                        json,
+                                    )]);
+                                    match rec.patch_metadata(idx, patch) {
+                                        Ok(()) => conv.descriptions_stored(),
+                                        Err(e) => warn!(
+                                            "not storing the HELP text of {} ({}) yet: {e}",
+                                            endpoints[idx].config.source_label(),
+                                            endpoints[idx].config.url
+                                        ),
+                                    }
                                 }
                             }
                         }
@@ -2252,11 +2266,15 @@ pub fn run(config: RecordingConfig) {
                 // recording and finalize as usual; the refused endpoint is
                 // never retried, and the run exits 1 at the end.
                 let url = endpoints[idx].config.url.clone();
-                let Some(task) = detecting[idx].as_ref() else {
-                    let transport = Protocol::transport(endpoints[idx].config.protocol.as_ref());
-                    let (client, cfg, probe, url) =
-                        (client.clone(), detect_cfg.clone(), probe.clone(), url);
-                    detecting[idx] = Some(tokio::spawn(async move {
+                let transport = Protocol::transport(endpoints[idx].config.protocol.as_ref());
+                let spawn_detect = || {
+                    let (client, cfg, probe, url) = (
+                        client.clone(),
+                        detect_cfg.clone(),
+                        probe.clone(),
+                        url.clone(),
+                    );
+                    tokio::spawn(async move {
                         detect::detect(
                             &client,
                             &cfg,
@@ -2266,20 +2284,29 @@ pub fn run(config: RecordingConfig) {
                             detect::At::Activation,
                         )
                         .await
-                    }));
-                    continue;
+                    })
                 };
-                if !task.is_finished() {
-                    continue;
-                }
-                let Some(task) = detecting[idx].take() else {
-                    continue;
+                let task = match detecting[idx].take() {
+                    None => {
+                        detecting[idx] = Some(spawn_detect());
+                        continue;
+                    }
+                    Some(task) if !task.is_finished() => {
+                        detecting[idx] = Some(task);
+                        continue;
+                    }
+                    Some(task) => task,
                 };
                 let detected = task.await.unwrap_or_else(|e| {
                     detect::Detected::Pending(format!("endpoint {url}: detection failed: {e}"))
                 });
                 match detected {
-                    detect::Detected::Pending(why) => debug!("{why}"),
+                    // The next detection starts now, so a pending endpoint is
+                    // asked once per tick rather than every other tick.
+                    detect::Detected::Pending(why) => {
+                        debug!("{why}");
+                        detecting[idx] = Some(spawn_detect());
+                    }
                     detect::Detected::Refused(reason) => {
                         refuse_mid_run(&mut endpoints[idx], &reason);
                     }
@@ -3078,6 +3105,32 @@ mod tests {
             command: None,
             record_command_line: false,
         }
+    }
+
+    /// An endpoint the run ends without recording is named by its URL, and
+    /// by its source only when it has one.
+    #[test]
+    fn an_unrecorded_endpoint_is_named_without_a_placeholder_source() {
+        let mut named = test_endpoint();
+        named.status = EndpointStatus::Activating;
+        let unnamed = EndpointState::new(endpoint::EndpointConfig {
+            url: Url::parse("http://localhost:9090").unwrap(),
+            source: None,
+            role: None,
+            protocol: None,
+        });
+        let mut active = test_endpoint_b();
+        active.status = EndpointStatus::Active;
+        let lines = unrecorded_summary(&[named, unnamed, active], Path::new("out.dendro"));
+        assert_eq!(
+            lines,
+            [
+                "http://localhost:4241/ (rezolus) opened its stream, but the run ended before \
+                 its metadata arrived; it has no recording in out.dendro",
+                "http://localhost:9090/ did not become recordable during the run and has no \
+                 recording in out.dendro",
+            ]
+        );
     }
 
     fn test_endpoint() -> EndpointState {

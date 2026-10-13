@@ -207,6 +207,20 @@ impl RecordingConfig {
                     .map(|(k, v)| (k.to_string(), v.to_string()))
             })
             .collect();
+        // The recorder writes these from the producer's handshake and
+        // rewrites them on every restart; a user's value would be kept only
+        // until then, and would seed the restart history with an epoch no
+        // process had.
+        if let Some((key, _)) = metadata.iter().find(|(k, _)| {
+            k == crate::parquet_metadata::KEY_PRODUCER_EPOCH
+                || k == crate::parquet_metadata::KEY_PRODUCER_EPOCHS
+        }) {
+            return Err(format!(
+                "--metadata {key}=: {key} is written by the recorder from the producer's \
+                 stream handshake and rewritten when the producer restarts, so it cannot be \
+                 set; use another key"
+            ));
+        }
         let labels: Vec<(String, String)> = args
             .get_many::<String>("LABEL")
             .unwrap_or_default()
@@ -647,6 +661,21 @@ mod tests {
             cfg.metadata,
             vec![("node".to_string(), "web-01".to_string())]
         );
+    }
+
+    /// `producer_epoch` and `producer_epochs` are the recorder's: setting
+    /// either with `--metadata` is refused rather than kept until a restart
+    /// overwrites it.
+    #[test]
+    fn metadata_naming_the_producer_epoch_is_refused() {
+        for key in ["producer_epoch", "producer_epochs"] {
+            let arg = format!("{key}=mine");
+            let err = parse(&["--url", "http://localhost:4241", "--metadata", &arg])
+                .err()
+                .unwrap_or_else(|| panic!("--metadata {arg} must be refused"));
+            assert!(err.contains("written by the recorder"), "{err}");
+        }
+        assert!(parse(&["--url", "http://localhost:4241", "--metadata", "epoch=x"]).is_ok());
     }
 
     #[test]

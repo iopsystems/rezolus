@@ -166,7 +166,11 @@ may not want in a file you share.
 
 ### Tagging a recording
 
-`-m/--metadata k=v` writes metadata on every recording in the archive.
+`-m/--metadata k=v` writes metadata on every recording in the archive. A key
+set this way outranks the value the producer reports, including a Prometheus
+endpoint's HELP text as `descriptions`, and is kept when an agent restarts.
+`producer_epoch` and `producer_epochs` are written by the recorder and are
+refused (exit 2).
 `-l/--label k=v` tags the recordings inside the archive (`source` and `host` are
 filled in for you), and a two-recording archive drives the viewer's A/B
 comparison, which is what `--label arm=redis` is for:

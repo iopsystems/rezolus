@@ -2113,8 +2113,8 @@ fn a_pending_endpoint_that_never_answers_does_not_stall_the_ticks() {
     assert!(out.status.success(), "exits 0:\n{stderr}");
     assert!(
         stderr.contains(&format!(
-            "http://127.0.0.1:{silent}/ (stuck) was never reachable as a producer during the \
-             run and has no recording in {}",
+            "http://127.0.0.1:{silent}/ (stuck) did not become recordable during the run and \
+             has no recording in {}",
             output.display()
         )),
         "{stderr}"
@@ -2245,4 +2245,103 @@ fn an_endpoint_still_reading_its_metadata_at_the_end_is_named() {
         1,
         "only the exporter is recorded: {sources:?}"
     );
+}
+
+/// `--metadata descriptions=` is kept on a Prometheus endpoint: the scrape's
+/// HELP text does not replace it.
+#[test]
+fn a_descriptions_the_user_set_survives_the_help_text() {
+    let port = spawn_fake_exporter_named("widgets_total");
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("pinned-help.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{port}/metrics,source=svc"))
+        .arg("--metadata")
+        .arg("descriptions=mine")
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    let (_, metadata, rows) = the_recording(&output, "prometheus/scrape");
+    assert_eq!(
+        metadata.get("descriptions").map(String::as_str),
+        Some("mine"),
+        "{metadata:?}"
+    );
+    assert!(rows > 0, "the scrapes were recorded");
+}
+
+/// A server that answers 503 to every request, counting the requests for
+/// `/metrics/stream`.
+fn spawn_unavailable_counted() -> (u16, std::sync::Arc<std::sync::atomic::AtomicU64>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the 503 server");
+    let port = listener.local_addr().unwrap().port();
+    let streams = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let counted = streams.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut buf = [0u8; 8192];
+            let Ok(n) = stream.read(&mut buf) else {
+                continue;
+            };
+            let req = String::from_utf8_lossy(&buf[..n]);
+            if req
+                .split_whitespace()
+                .nth(1)
+                .is_some_and(|p| p.starts_with("/metrics/stream"))
+            {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            let _ = stream.write_all(
+                b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\
+                  Connection: close\r\n\r\n",
+            );
+        }
+    });
+    (port, streams)
+}
+
+/// A pending endpoint is detected again on every tick, not every other one:
+/// the tick that takes a pending answer starts the next detection.
+///
+/// Regression: a tick took the answer and the next tick started the
+/// detection, so a 503 endpoint was asked half as often (8 vs 14 stream
+/// requests in 12 s at a 1 s interval).
+#[test]
+fn a_pending_endpoint_is_detected_every_tick() {
+    let exporter = spawn_fake_exporter();
+    let (pending, streams) = spawn_unavailable_counted();
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("every-tick.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{exporter}/metrics,source=svc"))
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{pending},source=down"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("200ms")
+        .arg("--duration")
+        .arg("3s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    // Startup's detection and one per tick: 3 s at 200 ms is 15 ticks.
+    // Every other tick would be at most 9.
+    let asked = streams.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(asked >= 12, "the stream route was asked {asked} times");
 }

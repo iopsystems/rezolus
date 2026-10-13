@@ -164,29 +164,29 @@ impl Probe for RezolusProbe {
     /// For a recognised agent: `source=rezolus` and `host` (from
     /// `/systeminfo`'s hostname); metadata `version`, and `systeminfo` and
     /// `descriptions` where the agent served them as JSON objects. Nothing
-    /// for an endpoint that is not an agent. `Retry` when no route answered.
+    /// for an endpoint that `/status` or `/` answered without naming an
+    /// agent. `Retry` when neither `/status` nor `/` answered, whatever the
+    /// other routes did: whether their bodies are an agent's is not known.
     async fn enrich(&self, url: &Url, _epoch: Option<&str>) -> Enrich {
         let (systeminfo, descriptions, identified) = tokio::join!(
             fetch(&self.client, url, "/systeminfo"),
             fetch(&self.client, url, "/metrics/descriptions"),
             identify(&self.client, url),
         );
-        if !systeminfo.answered()
-            && !descriptions.answered()
-            && identified == Identified::Unanswered
-        {
-            return Enrich::Retry;
-        }
         let mut labels = BTreeMap::new();
         let mut metadata = BTreeMap::new();
         // Only an agent's routes are read: on anything else `/systeminfo`
         // and `/metrics/descriptions` are whatever its catch-all serves.
-        let Identified::Agent { version, epoch } = identified else {
-            return Enrich::Metadata {
-                epoch: None,
-                labels,
-                metadata,
-            };
+        let (version, epoch) = match identified {
+            Identified::Agent { version, epoch } => (version, epoch),
+            Identified::Other => {
+                return Enrich::Metadata {
+                    epoch: None,
+                    labels,
+                    metadata,
+                }
+            }
+            Identified::Unanswered => return Enrich::Retry,
         };
         labels.insert("source".to_string(), "rezolus".to_string());
         if let Some(version) = version {
@@ -452,6 +452,9 @@ mod tests {
         /// JSON objects on `/systeminfo` and `/metrics/descriptions`, and a
         /// 200 HTML page for every other path.
         Html,
+        /// 503 on `/status` and `/`, JSON objects on `/systeminfo` and
+        /// `/metrics/descriptions`: whether it is an agent is not known.
+        UnsureAgent,
     }
 
     fn opening(
@@ -510,6 +513,9 @@ mod tests {
             (Fake::Html, "/metrics/stream") => stream(&[], &[]),
             (Fake::Html, "/systeminfo") => r#"{"hostname":"web-02"}"#.into_response(),
             (Fake::Html, "/metrics/descriptions") => r#"{"a":"b"}"#.into_response(),
+            (Fake::UnsureAgent, "/status" | "/") => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            (Fake::UnsureAgent, "/systeminfo") => r#"{"hostname":"web-03"}"#.into_response(),
+            (Fake::UnsureAgent, "/metrics/descriptions") => r#"{"a":"b"}"#.into_response(),
             (Fake::Html, _) => {
                 axum::response::Html("<html><body>hello</body></html>").into_response()
             }
@@ -714,6 +720,21 @@ mod tests {
             labels.is_empty() && metadata.is_empty(),
             "{labels:?} {metadata:?}"
         );
+    }
+
+    /// When neither `/status` nor `/` answers, `enrich` asks again later
+    /// rather than reply with nothing: `/systeminfo` and
+    /// `/metrics/descriptions` answered, but whether they are an agent's is
+    /// not known yet.
+    #[tokio::test]
+    async fn enrich_retries_while_status_and_root_do_not_answer() {
+        let (url, _) = serve(Fake::UnsureAgent).await;
+        let probe = RezolusProbe::new(client());
+        assert_eq!(probe.enrich(&url, None).await, Enrich::Retry);
+        let why = detect::enrich_within(&probe, &url, None, Duration::from_secs(2))
+            .await
+            .expect_err("nothing to take");
+        assert!(why.contains("did not answer"), "{why}");
     }
 
     /// An agent whose `/systeminfo` or `/metrics/descriptions` body is not a

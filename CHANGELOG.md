@@ -93,7 +93,10 @@
   `--metadata systeminfo=` or `descriptions=` used to be overwritten by the
   agent's own, at the start and again when the agent restarted; the user's
   value is now kept in both cases, as it already was for `version` and
-  `source`.
+  `source`. A Prometheus endpoint's HELP text no longer replaces a
+  `--metadata descriptions=`. `--metadata producer_epoch=` and
+  `producer_epochs=` are refused as usage errors (exit 2): the recorder
+  writes both from the stream handshake and rewrote them on a restart.
 - **An agent's metadata is read after its stream opens, concurrently, and
   bounded.** `/status`, `/systeminfo` and `/metrics/descriptions` were read
   one endpoint at a time, without a time bound, before the stream was
