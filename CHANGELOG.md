@@ -55,6 +55,14 @@
 
 ### Changed
 
+- **`record`, hindsight and the live viewer record through `metriken-recorder`
+  0.1.0.** Detection, the stream and scrape transports, restart metadata and
+  the recording loop moved out of rezolus into that crate; rezolus keeps the
+  CLI, its probe hook (how a Rezolus agent is identified and refused), the
+  `-- cmd` run events, signals, exit codes and messages. Recordings, exit
+  codes and messages are unchanged, except that a producer-restart warning
+  is logged by `metriken_recorder` and names the endpoint URL.
+
 - **`record` detects an endpoint by its stream.** For a URL whose path is `/`
   or `/metrics/stream`, `record` subscribes to `/metrics/stream` first; a
   stream handshake means the endpoint is streamed. Otherwise it reads
