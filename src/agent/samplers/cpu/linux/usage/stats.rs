@@ -23,12 +23,11 @@ pub static SOFTIRQ_TIME_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     "cpu_usage_softirq_time",
 );
 
-// Reader-stamped (mmap-direct `PackedCounters`) groups — see
+// Per-cgroup (`CgroupCounters`) groups — see
 // `docs/principles.md` principle 18 and
-// `crate::agent::timing::AcquisitionGroup::set_reader_stamped`.
-// `PackedCounters::new` marks these; the group's window is bracketed by the
-// snapshot builder's exposition read, not by this sampler's `refresh()`
-// (which never touches them).
+// `crate::agent::timing::AcquisitionGroup::new_slotted`.
+// The BPF maps hold `CGROUP_SHARDS` copies; `CgroupCounters` sums them in
+// the sampler's refresh, which stamps the group's window.
 //
 // `CGROUP_CPU_USAGE_USER`/`CGROUP_CPU_USAGE_SYSTEM` share ONE group: both
 // are the `cgroup_cpu_usage` metric family (distinguished by the `state`
@@ -41,11 +40,11 @@ pub static SOFTIRQ_TIME_ACQ: AcquisitionGroup = AcquisitionGroup::new(
 // not another state of the same family — see its doc comment in this
 // file) and gets its own group. `TASK_CPU_USAGE` is a third, separate
 // family (per-task, not per-cgroup) with its own group.
-pub static CGROUP_USAGE_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+pub static CGROUP_USAGE_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
     crate::agent::samplers::bpf_sampler_name("cpu_usage"),
     "cpu_usage_cgroup_usage",
 );
-pub static CGROUP_EXITED_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+pub static CGROUP_EXITED_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
     crate::agent::samplers::bpf_sampler_name("cpu_usage"),
     "cpu_usage_cgroup_exited",
 );

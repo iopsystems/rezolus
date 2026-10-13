@@ -141,7 +141,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_ops_fsync SEC(".maps");
 
 struct {
@@ -149,7 +149,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_ops_unlink SEC(".maps");
 
 struct {
@@ -157,7 +157,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_ops_write SEC(".maps");
 
 struct {
@@ -165,7 +165,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_ops_rename SEC(".maps");
 
 struct {
@@ -173,7 +173,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_time_fsync SEC(".maps");
 
 struct {
@@ -181,7 +181,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_time_unlink SEC(".maps");
 
 struct {
@@ -189,7 +189,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_time_write SEC(".maps");
 
 struct {
@@ -197,7 +197,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_time_rename SEC(".maps");
 
 static __always_inline void counter_add(u32 slot, u32 counter, u64 value) {
@@ -250,33 +250,32 @@ static __always_inline void cgroup_account(struct task_struct* task, u32 op, u64
     if (handle_new_cgroup_read(&tg->css, cgroup_id, serial_nr, &cgroup_serial_numbers,
                                &cgroup_info) == 0) {
         // New cgroup detected, zero all counters
-        u64 zero = 0;
-        bpf_map_update_elem(&cgroup_ops_fsync, &cgroup_id, &zero, BPF_ANY);
-        bpf_map_update_elem(&cgroup_ops_unlink, &cgroup_id, &zero, BPF_ANY);
-        bpf_map_update_elem(&cgroup_ops_write, &cgroup_id, &zero, BPF_ANY);
-        bpf_map_update_elem(&cgroup_ops_rename, &cgroup_id, &zero, BPF_ANY);
-        bpf_map_update_elem(&cgroup_time_fsync, &cgroup_id, &zero, BPF_ANY);
-        bpf_map_update_elem(&cgroup_time_unlink, &cgroup_id, &zero, BPF_ANY);
-        bpf_map_update_elem(&cgroup_time_write, &cgroup_id, &zero, BPF_ANY);
-        bpf_map_update_elem(&cgroup_time_rename, &cgroup_id, &zero, BPF_ANY);
+        cgroup_zero(&cgroup_ops_fsync, cgroup_id);
+        cgroup_zero(&cgroup_ops_unlink, cgroup_id);
+        cgroup_zero(&cgroup_ops_write, cgroup_id);
+        cgroup_zero(&cgroup_ops_rename, cgroup_id);
+        cgroup_zero(&cgroup_time_fsync, cgroup_id);
+        cgroup_zero(&cgroup_time_unlink, cgroup_id);
+        cgroup_zero(&cgroup_time_write, cgroup_id);
+        cgroup_zero(&cgroup_time_rename, cgroup_id);
     }
 
     switch (op) {
     case OP_FSYNC:
-        array_incr(&cgroup_ops_fsync, cgroup_id);
-        array_add(&cgroup_time_fsync, cgroup_id, lat);
+        cgroup_incr(&cgroup_ops_fsync, cgroup_id);
+        cgroup_add(&cgroup_time_fsync, cgroup_id, lat);
         break;
     case OP_UNLINK:
-        array_incr(&cgroup_ops_unlink, cgroup_id);
-        array_add(&cgroup_time_unlink, cgroup_id, lat);
+        cgroup_incr(&cgroup_ops_unlink, cgroup_id);
+        cgroup_add(&cgroup_time_unlink, cgroup_id, lat);
         break;
     case OP_WRITE:
-        array_incr(&cgroup_ops_write, cgroup_id);
-        array_add(&cgroup_time_write, cgroup_id, lat);
+        cgroup_incr(&cgroup_ops_write, cgroup_id);
+        cgroup_add(&cgroup_time_write, cgroup_id, lat);
         break;
     case OP_RENAME:
-        array_incr(&cgroup_ops_rename, cgroup_id);
-        array_add(&cgroup_time_rename, cgroup_id, lat);
+        cgroup_incr(&cgroup_ops_rename, cgroup_id);
+        cgroup_add(&cgroup_time_rename, cgroup_id, lat);
         break;
     }
 }

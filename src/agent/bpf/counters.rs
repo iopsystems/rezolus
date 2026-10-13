@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent::{MAX_CPUS, MAX_FILESYSTEMS};
+use crate::agent::{CGROUP_SHARDS, MAX_CGROUPS, MAX_CPUS, MAX_FILESYSTEMS};
 
 use libbpf_rs::{Map, MapCore, MapFlags};
 use memmap2::{MmapMut, MmapOptions};
@@ -281,8 +281,8 @@ impl<'a> PackedCounters<'a> {
     /// Create a new set of counters from the provided BPF map and collection of
     /// counter metrics. `group` is the declared [`AcquisitionGroup`] this
     /// map's values belong to — marked reader-stamped here (idempotent: two
-    /// `PackedCounters` sharing one like-entities group, e.g. `cgroup_syscall`'s
-    /// 16 op-class maps, both mark the same group harmlessly).
+    /// `PackedCounters` sharing one like-entities group, e.g. `cpu_bandwidth`'s
+    /// cgroup maps, both mark the same group harmlessly).
     ///
     /// The map layout is not cacheline padded. The ordering of the dynamic
     /// counters must exactly match the layout in the BPF map.
@@ -333,6 +333,132 @@ impl<'a> PackedCounters<'a> {
     /// is reader-stamped (see the struct-level doc comment) — its window is
     /// bracketed by `create`/`create_v3` at exposition time, not here.
     pub fn refresh(&mut self) {}
+}
+
+/// The index of `cgroup`'s counter in copy `shard` of a per-cgroup map. The
+/// BPF side writes the copy `cgroup_shard_of_cpu` assigns to the CPU
+/// (`cgroup_index()` in `bpf/cgroup.h`).
+pub(crate) fn cgroup_shard_index(shard: usize, cgroup: usize) -> usize {
+    shard * MAX_CGROUPS + cgroup
+}
+
+/// Sum `cgroup`'s counter over every copy in a per-cgroup map's values.
+pub(crate) fn sum_cgroup_shards(values: &[u64], cgroup: usize) -> u64 {
+    (0..CGROUP_SHARDS).fold(0u64, |sum, shard| {
+        sum.wrapping_add(values[cgroup_shard_index(shard, cgroup)])
+    })
+}
+
+/// Set each `occupied` slot of `counters` to its sum over the copies in
+/// `values`, and each slot in `previous` but not in `occupied` to the
+/// never-written sentinel. Both lists are ascending.
+pub(crate) fn publish_cgroup_sums(
+    values: &[u64],
+    occupied: &[usize],
+    previous: &[usize],
+    counters: &CounterGroup,
+) {
+    for &slot in occupied {
+        counters.set(slot, sum_cgroup_shards(values, slot));
+    }
+    for &slot in previous {
+        if occupied.binary_search(&slot).is_err() {
+            // u64::MAX is CounterGroup's never-written sentinel.
+            counters.set(slot, u64::MAX);
+        }
+    }
+}
+
+/// Per-cgroup totals from maps holding `CGROUP_SHARDS` copies of
+/// `MAX_CGROUPS` counters (`bpf/cgroup.h`). Every map registered against one
+/// [`AcquisitionGroup`] is read in one refresh: for each cgroup slot the
+/// identity holds, the copies are summed and set on the map's
+/// `CounterGroup`. A slot the identity released since the last refresh is set
+/// to the never-written sentinel, so it reads absent.
+///
+/// # Windowing
+///
+/// Same stamp-last discipline as [`Counters`]: one acquisition brackets the
+/// whole sweep, members are set plain, `finish()` last. The group is declared
+/// with [`AcquisitionGroup::new_slotted`], so its members are the slots with
+/// labels. The groups are owned, not mmap-attached, so a slot that has counts
+/// but no labels yet is not published.
+pub struct CgroupCounters<'a> {
+    maps: Vec<(CgroupMap<'a>, &'static CounterGroup)>,
+    group: &'static AcquisitionGroup,
+    identity: &'static SlotIdentity,
+    /// The slots the identity held at the last refresh, ascending.
+    occupied: Vec<usize>,
+}
+
+/// A per-cgroup counter map and its mmap.
+struct CgroupMap<'a> {
+    _map: &'a Map<'a>,
+    mmap: MmapMut,
+}
+
+impl<'a> CgroupCounters<'a> {
+    pub fn new(
+        group: &'static AcquisitionGroup,
+        identity: &'static SlotIdentity,
+        members: Vec<(&'a Map<'a>, &'static CounterGroup)>,
+    ) -> Self {
+        debug_assert!(
+            group.is_slotted(),
+            "a per-cgroup group is declared with AcquisitionGroup::new_slotted"
+        );
+        let total_bytes = CGROUP_SHARDS * MAX_CGROUPS * std::mem::size_of::<u64>();
+
+        let maps = members
+            .into_iter()
+            .map(|(map, counters)| {
+                assert_eq!(
+                    counters.entries(),
+                    MAX_CGROUPS,
+                    "a per-cgroup CounterGroup has one entry per cgroup slot"
+                );
+                let fd = map.as_fd().as_raw_fd();
+                let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
+                let mmap: MmapMut = unsafe {
+                    MmapOptions::new()
+                        .len(total_bytes)
+                        .map_mut(&file)
+                        .expect("failed to mmap() bpf per-cgroup counters")
+                };
+                (CgroupMap { _map: map, mmap }, counters)
+            })
+            .collect();
+
+        Self {
+            maps,
+            group,
+            identity,
+            occupied: Vec::new(),
+        }
+    }
+
+    pub fn refresh(&mut self) {
+        let mut occupied = Vec::new();
+        // `retain` with a closure that keeps every slot releases nothing; it
+        // is the identity's one way to list the live slots under its lock.
+        self.identity.retain(|slot, _| {
+            if slot < MAX_CGROUPS {
+                occupied.push(slot);
+            }
+            true
+        });
+
+        let acq = self.group.acquire();
+
+        for (map, counters) in &self.maps {
+            let (_prefix, values, _suffix) = unsafe { map.mmap.align_to::<u64>() };
+            publish_cgroup_sums(values, &occupied, &self.occupied, counters);
+        }
+
+        acq.finish();
+
+        self.occupied = occupied;
+    }
 }
 
 /// The index of counter `idx` in CPU `cpu`'s bank for filesystem `slot`, in a
@@ -522,6 +648,67 @@ impl<'a> FilesystemCounters<'a> {
         if other_moved {
             super::filesystems::request_rescan();
         }
+    }
+}
+
+#[cfg(test)]
+mod cgroup_shard_tests {
+    use super::*;
+
+    /// Copies are `MAX_CGROUPS` counters apart, so one cgroup's counters in
+    /// two copies are 32 KiB apart and never share a cache line.
+    #[test]
+    fn copies_are_pages_apart() {
+        for shard in 1..CGROUP_SHARDS {
+            let a = cgroup_shard_index(shard - 1, 7) * std::mem::size_of::<u64>();
+            let b = cgroup_shard_index(shard, 7) * std::mem::size_of::<u64>();
+            assert_eq!(b - a, 32 * 1024);
+        }
+    }
+
+    /// The sum covers every copy and only the requested cgroup.
+    #[test]
+    fn sums_every_copy_of_one_cgroup() {
+        let mut values = vec![0u64; CGROUP_SHARDS * MAX_CGROUPS];
+        for shard in 0..CGROUP_SHARDS {
+            values[cgroup_shard_index(shard, 5)] = 1 << shard;
+            values[cgroup_shard_index(shard, 6)] = 1000;
+        }
+        assert_eq!(sum_cgroup_shards(&values, 5), (1 << CGROUP_SHARDS) - 1);
+        assert_eq!(sum_cgroup_shards(&values, 4), 0);
+    }
+
+    /// Occupied slots get their sums; a slot released since the last
+    /// refresh reads absent; a slot with counts but no occupant is not set.
+    #[test]
+    fn publishes_occupied_and_clears_released() {
+        static GROUP: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+        let mut values = vec![0u64; CGROUP_SHARDS * MAX_CGROUPS];
+        values[cgroup_shard_index(0, 2)] = 3;
+        values[cgroup_shard_index(15, 2)] = 4;
+        values[cgroup_shard_index(3, 9)] = 5;
+        values[cgroup_shard_index(1, 11)] = 6;
+
+        publish_cgroup_sums(&values, &[2, 9], &[], &GROUP);
+        assert_eq!(GROUP.value(2), Some(7));
+        assert_eq!(GROUP.value(9), Some(5));
+        assert_eq!(GROUP.value(11), None);
+
+        publish_cgroup_sums(&values, &[2], &[2, 9], &GROUP);
+        assert_eq!(GROUP.value(2), Some(7));
+        assert_eq!(GROUP.value(9), None);
+    }
+
+    /// `cgroup.h` declares the same copy count and index the reader uses.
+    #[test]
+    fn bpf_header_has_the_same_layout() {
+        let header = include_str!("cgroup.h");
+        assert!(header.contains(&format!("#define CGROUP_SHARDS {CGROUP_SHARDS}\n")));
+        assert!(header.contains(&format!("#define MAX_CGROUPS {MAX_CGROUPS}\n")));
+        assert!(header.contains(
+            "return ((shard ? shard - 1 : cpu) % CGROUP_SHARDS) * MAX_CGROUPS + cgroup_id;"
+        ));
+        assert!(header.contains("u32 idx = shard * MAX_CGROUPS + cgroup_id;"));
     }
 }
 

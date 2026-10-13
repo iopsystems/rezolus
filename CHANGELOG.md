@@ -55,6 +55,10 @@
 
 ### Changed
 
+- Reduced overhead when many CPUs count the same cgroup, by giving each
+  per-cgroup BPF counter 16 copies; with cgroup attribution off the maps are
+  not created. (#1450)
+
 - **`record`, hindsight and the live viewer record through `metriken-recorder`
   0.1.1.** Detection, the stream and scrape transports, restart metadata and
   the recording loop moved out of rezolus into that crate; rezolus keeps the
