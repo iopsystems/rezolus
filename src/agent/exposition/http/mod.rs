@@ -412,11 +412,15 @@ mod stream_tests {
         )
         .await
         .expect("subscribes");
-        assert!(
-            Some(sub.handshake()).is_some(),
-            "connect returns with the handshake applied: the recorder opens the \
-             recording on its anchor before the first interval"
+        // Connect returns with the handshake applied: the recorder opens the
+        // recording on the agent's anchor and epoch before the first
+        // interval.
+        assert_eq!(
+            sub.handshake().clock_anchor_wall_ns,
+            u64::try_from(crate::agent::epoch::clock_anchor_wall_ns()).unwrap(),
+            "the agent's anchor"
         );
+        assert!(sub.handshake().epoch().is_some(), "the agent's epoch");
 
         tokio::time::timeout(Duration::from_secs(10), sub.next_interval())
             .await
@@ -485,7 +489,7 @@ mod stream_tests {
             .add_source(
                 source.labels.clone(),
                 source.metadata.clone(),
-                source.clock_anchor_wall_ns as u64,
+                source.clock_anchor_wall_ns,
             )
             .unwrap();
 

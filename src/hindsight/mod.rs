@@ -166,16 +166,9 @@ pub fn run(config: Config) {
     let probe: Arc<dyn mr::Probe> = Arc::new(crate::recorder::agent_probe::RezolusProbe::new(
         async_client.clone(),
     ));
-    let spec = mr::EndpointSpec {
-        transport: mr::Transport::Stream,
-        ..mr::EndpointSpec::new(url.clone())
-    };
-    let detect_cfg = mr::DetectConfig {
-        interval: interval_dur,
-        timeout,
-        layout: mr::Layout::Long,
-        wire_names: crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec(),
-    };
+    let spec = mr::EndpointSpec::new(url.clone()).with_transport(mr::Transport::Stream);
+    let mut detect_cfg = mr::DetectConfig::new(interval_dur, timeout);
+    detect_cfg.wire_names = crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec();
     let detected = rt.block_on(mr::detect(
         &async_client,
         &detect_cfg,
@@ -211,24 +204,26 @@ pub fn run(config: Config) {
         // forever rather than doing anything useful with the 0.
         policy.max_rows = rows.max(1);
     }
-    let recorder_cfg = mr::RecorderConfig {
-        path: buffer_path.clone(),
-        writer: metriken_storage::WriterConfig {
-            seal: dendro::seal::SealPolicy {
-                max_bytes: policy.max_bytes,
-                max_rows: policy.max_rows,
-                max_age: policy.max_age,
-                align: None,
-            },
-            ..metriken_storage::WriterConfig::default()
+    let mut recorder_cfg = mr::RecorderConfig::new(buffer_path.clone(), interval_dur);
+    recorder_cfg.writer = metriken_storage::WriterConfig {
+        seal: dendro::seal::SealPolicy {
+            max_bytes: policy.max_bytes,
+            max_rows: policy.max_rows,
+            max_age: policy.max_age,
+            align: None,
         },
-        interval: interval_dur,
-        timeout,
-        layout: mr::Layout::Long,
-        wire_names: crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec(),
-        retain: Some(lookback),
-        events: 1024,
+        ..metriken_storage::WriterConfig::default()
     };
+    recorder_cfg.timeout = timeout;
+    recorder_cfg.wire_names = crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec();
+    recorder_cfg.retain = Some(lookback);
+    // A dump copies the buffer while it records. The agent's frame for an
+    // interval arrives just after the recorder's aligned tick, so committed
+    // on the tick it waits for the next one and a dump is one interval
+    // behind. At 1 s, dumps taken at random points ended 1.0 s earlier
+    // committing on the tick than on arrival, which matches what hindsight
+    // did before it recorded through metriken-recorder.
+    recorder_cfg.commit_streams_on_arrival = true;
     let (recorder, _ids, mut events) = match rt.block_on(mr::Recorder::start(
         recorder_cfg,
         async_client.clone(),

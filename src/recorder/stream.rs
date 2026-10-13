@@ -84,11 +84,8 @@ pub(crate) async fn pump(
     timeout: Duration,
     tx: tokio::sync::mpsc::Sender<(usize, StreamEvent)>,
 ) {
-    let cfg = metriken_recorder::PumpConfig {
-        interval,
-        layout,
-        timeout,
-        wire_names: ACCEPTED_WIRE_NAMES.to_vec(),
-    };
+    let mut cfg = metriken_recorder::PumpConfig::new(interval, timeout);
+    cfg.layout = layout;
+    cfg.wire_names = ACCEPTED_WIRE_NAMES.to_vec();
     metriken_recorder::pump(idx, sub, client, base, cfg, tx).await
 }

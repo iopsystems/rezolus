@@ -470,9 +470,9 @@ impl RunMarker {
 
 /// An endpoint as the user named it: its URL, and `(source)` when it has
 /// one.
-fn who(source: &mr::SourceSummary) -> String {
-    let url = source.endpoint.as_deref().unwrap_or("?");
-    match &source.name {
+fn who(endpoint: Option<&str>, name: Option<&str>) -> String {
+    let url = endpoint.unwrap_or("?");
+    match name {
         Some(name) => format!("{url} ({name})"),
         None => url.to_string(),
     }
@@ -535,22 +535,33 @@ fn refusal_summary(
 /// and one streamed whose metadata read had not returned, so it was never
 /// added to the archive.
 fn unrecorded_summary(sources: &[mr::SourceSummary], output: &Path) -> Vec<String> {
-    let path = output.display();
     sources
         .iter()
-        .filter_map(|s| match s.state {
-            mr::SourceState::Pending => Some(format!(
-                "{} did not become recordable during the run and has no recording in {path}",
-                who(s)
-            )),
-            mr::SourceState::Activating => Some(format!(
-                "{} opened its stream, but the run ended before its metadata arrived; it has \
-                 no recording in {path}",
-                who(s)
-            )),
-            mr::SourceState::Active | mr::SourceState::Refused => None,
-        })
+        .filter_map(|s| unrecorded_line(s.endpoint.as_deref(), s.name.as_deref(), s.state, output))
         .collect()
+}
+
+/// [`unrecorded_summary`]'s line for one endpoint, or `None` when it was
+/// recorded or refused.
+fn unrecorded_line(
+    endpoint: Option<&str>,
+    name: Option<&str>,
+    state: mr::SourceState,
+    output: &Path,
+) -> Option<String> {
+    let path = output.display();
+    match state {
+        mr::SourceState::Pending => Some(format!(
+            "{} did not become recordable during the run and has no recording in {path}",
+            who(endpoint, name)
+        )),
+        mr::SourceState::Activating => Some(format!(
+            "{} opened its stream, but the run ended before its metadata arrived; it has no \
+             recording in {path}",
+            who(endpoint, name)
+        )),
+        _ => None,
+    }
 }
 
 fn wall_now_ns() -> u64 {
@@ -705,12 +716,8 @@ pub fn run(config: RecordingConfig) {
     // does not carry (see `agent_probe`).
     let probe: std::sync::Arc<dyn mr::Probe> =
         std::sync::Arc::new(agent_probe::RezolusProbe::new(client.clone()));
-    let detect_cfg = mr::DetectConfig {
-        interval: interval_dur,
-        timeout,
-        layout: mr::Layout::Long,
-        wire_names: stream::ACCEPTED_WIRE_NAMES.to_vec(),
-    };
+    let mut detect_cfg = mr::DetectConfig::new(interval_dur, timeout);
+    detect_cfg.wire_names = stream::ACCEPTED_WIRE_NAMES.to_vec();
     let specs: Vec<mr::EndpointSpec> = config
         .endpoints
         .iter()
@@ -760,16 +767,9 @@ pub fn run(config: RecordingConfig) {
     };
     let endpoints = detected.len();
 
-    let recorder_cfg = mr::RecorderConfig {
-        path: config.output.clone(),
-        writer: mr::WriterConfig::default(),
-        interval: interval_dur,
-        timeout,
-        layout: mr::Layout::Long,
-        wire_names: stream::ACCEPTED_WIRE_NAMES.to_vec(),
-        retain: None,
-        events: 1024,
-    };
+    let mut recorder_cfg = mr::RecorderConfig::new(config.output.clone(), interval_dur);
+    recorder_cfg.timeout = timeout;
+    recorder_cfg.wire_names = stream::ACCEPTED_WIRE_NAMES.to_vec();
     let started = rt.block_on(mr::Recorder::start(
         recorder_cfg,
         client.clone(),
@@ -907,6 +907,19 @@ pub fn run(config: RecordingConfig) {
             }
         }
 
+        // From here on the events are read on a task of their own, so
+        // nothing below (terminating the command, writing `run_end`,
+        // finishing) runs while they go unread. The recorder never waits for
+        // them to be read; this keeps them in order and on time for the
+        // messages they print.
+        let (failed_in_loop, streaming) = (watch.failed, !watch.streaming.is_empty());
+        let drain = tokio::spawn(async move {
+            while let Some(event) = events.recv().await {
+                watch.on(event);
+            }
+            watch
+        });
+
         // A stop while the wrapped command is still alive: terminate and
         // reap it so it is never orphaned.
         if let Some(mut c) = child.take() {
@@ -932,7 +945,7 @@ pub fn run(config: RecordingConfig) {
         // `run_end` before finish: the writer must still be open.
         if let Some(event) = run_end.take() {
             run_events.push(event);
-            if !watch.failed {
+            if !failed_in_loop {
                 if let Some(patch) = events_patch(&config, &run_events) {
                     for id in &ids {
                         if let Err(e) = recorder.patch_metadata(*id, patch.clone()).await {
@@ -943,10 +956,11 @@ pub fn run(config: RecordingConfig) {
             }
         }
 
-        if watch.failed {
+        if failed_in_loop {
             // Reported when it happened; what is on disk is the recovery
             // artifact and is left as it is.
             drop(recorder);
+            let _ = drain.await;
             recording_failed = true;
             return outcome;
         }
@@ -962,7 +976,7 @@ pub fn run(config: RecordingConfig) {
                 wall_ns,
                 bound: interval_dur + timeout,
             },
-            None if watch.streaming.is_empty() => mr::Stop::Grace(Duration::ZERO),
+            None if !streaming => mr::Stop::Grace(Duration::ZERO),
             None => mr::Stop::Grace(interval_dur.min(Duration::from_secs(2))),
         };
         let cancel = mr::CancellationToken::new();
@@ -973,14 +987,6 @@ pub fn run(config: RecordingConfig) {
                 cancel.cancel();
             })
         };
-        // Events go on arriving while the recorder finishes (a refusal while
-        // it waits for frames); they are handled as before.
-        let drain = tokio::spawn(async move {
-            while let Some(event) = events.recv().await {
-                watch.on(event);
-            }
-            watch
-        });
         let finished = recorder.finish(stop, cancel).await;
         on_signal.abort();
         let watch = drain.await.expect("the event task does not panic");
@@ -1046,12 +1052,11 @@ fn endpoint_spec(config: &RecordingConfig, ep: &endpoint::EndpointConfig) -> mr:
             .entry(crate::parquet_metadata::NESTED_ROLE.to_string())
             .or_insert_with(|| role.clone());
     }
-    mr::EndpointSpec {
-        url: ep.url.clone(),
-        transport: Protocol::transport(ep.protocol.as_ref()),
-        labels,
-        metadata,
-    }
+    let mut spec = mr::EndpointSpec::new(ep.url.clone())
+        .with_transport(Protocol::transport(ep.protocol.as_ref()));
+    spec.labels = labels;
+    spec.metadata = metadata;
+    spec
 }
 
 #[cfg(test)]
@@ -1196,35 +1201,23 @@ mod tests {
         assert_eq!(endpoint_spec(&config, &ep).metadata["role"], "mine");
     }
 
-    fn summary(endpoint: &str, name: Option<&str>, state: mr::SourceState) -> mr::SourceSummary {
-        mr::SourceSummary {
-            id: mr::SourceId(0),
-            endpoint: Some(endpoint.to_string()),
-            name: name.map(str::to_string),
-            state,
-            transport: None,
-            passes_total: 0,
-            first_wall_ns: None,
-            last_wall_ns: None,
-        }
-    }
-
     /// An endpoint the run ends without recording is named by its URL, and
     /// by its source only when it has one.
     #[test]
     fn an_unrecorded_endpoint_is_named_without_a_placeholder_source() {
-        let lines = unrecorded_summary(
-            &[
-                summary(
-                    "http://localhost:4241/",
-                    Some("rezolus"),
-                    mr::SourceState::Activating,
-                ),
-                summary("http://localhost:9090/", None, mr::SourceState::Pending),
-                summary("http://localhost:4242/", Some("b"), mr::SourceState::Active),
-            ],
-            Path::new("out.dendro"),
-        );
+        let out = Path::new("out.dendro");
+        let lines: Vec<String> = [
+            (
+                "http://localhost:4241/",
+                Some("rezolus"),
+                mr::SourceState::Activating,
+            ),
+            ("http://localhost:9090/", None, mr::SourceState::Pending),
+            ("http://localhost:4242/", Some("b"), mr::SourceState::Active),
+        ]
+        .into_iter()
+        .filter_map(|(url, name, state)| unrecorded_line(Some(url), name, state, out))
+        .collect();
         assert_eq!(
             lines,
             [

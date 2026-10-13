@@ -283,7 +283,9 @@ pub(crate) fn unstreamable_agent(url: &Url, version: Option<&str>, reason: &str,
             "This endpoint is excluded from this recording and not retried; the other \
              endpoints keep recording"
         }
-        At::Reconnect => RECONNECT_REFUSED,
+        // `At` is non-exhaustive; a moment this hook does not know is
+        // worded as a reconnect, the most conservative of the three.
+        _ => RECONNECT_REFUSED,
     };
     format!("{why}. {next}. {fallback}")
 }
@@ -527,37 +529,54 @@ mod tests {
     }
 
     fn cfg() -> detect::DetectConfig {
-        detect::DetectConfig {
-            interval: Duration::from_millis(100),
-            timeout: Duration::from_secs(2),
-            layout: crate::recorder::stream::Layout::Long,
-            wire_names: crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec(),
-        }
+        let mut cfg = detect::DetectConfig::new(Duration::from_millis(100), Duration::from_secs(2));
+        cfg.wire_names = crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec();
+        cfg
     }
 
-    /// Detection at startup through the library, with this hook. A refusal
-    /// worded for another moment is the hook's `not_streamable` at that
-    /// moment: the library asks it the same way on activation.
-    async fn detect_at(url: &Url, transport: Transport, at: At) -> Detected {
+    /// Detection at startup through the library, with this hook.
+    async fn detect_startup(url: &Url, transport: Transport) -> Detected {
         let client = client();
         let probe = RezolusProbe::new(client.clone());
-        let spec = detect::EndpointSpec {
-            transport,
-            ..detect::EndpointSpec::new(url.clone())
-        };
-        let detected = detect::detect(&client, &cfg(), vec![spec], &probe)
+        let spec = detect::EndpointSpec::new(url.clone()).with_transport(transport);
+        detect::detect(&client, &cfg(), vec![spec], &probe)
             .await
-            .remove(0);
-        match (detected, at) {
-            (Detected::Refused { spec, .. }, At::Activation | At::Reconnect) => {
-                let answer = StreamAnswer::Status(404);
-                match probe.not_streamable(url, at, &answer).await {
-                    Verdict::Refuse { reason } => Detected::Refused { spec, reason },
-                    other => panic!("{other:?}"),
+            .remove(0)
+    }
+
+    /// The refusal the library reports when the endpoint at `url`, pending
+    /// at startup, is detected on a recording's tick ([`At::Activation`]).
+    async fn refused_on_activation(url: &Url) -> String {
+        let client = client();
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg =
+            detect::RecorderConfig::new(dir.path().join("a.dendro"), Duration::from_millis(100));
+        cfg.wire_names = crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec();
+        let pending = Detected::Pending {
+            spec: detect::EndpointSpec::new(url.clone()),
+            reason: "pending at startup".to_string(),
+        };
+        let (recorder, _ids, mut events) = detect::Recorder::start(
+            cfg,
+            client.clone(),
+            std::sync::Arc::new(RezolusProbe::new(client)),
+            vec![pending],
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+        let reason = tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(event) = events.recv().await {
+                if let detect::Event::Refused { reason, .. } = event {
+                    return reason;
                 }
             }
-            (detected, _) => detected,
-        }
+            panic!("the event channel closed before a refusal");
+        })
+        .await
+        .expect("refused within 5 s");
+        recorder.discard().await;
+        reason
     }
 
     /// A Prometheus exporter given by its root URL is scraped at `/metrics`:
@@ -566,7 +585,7 @@ mod tests {
     #[tokio::test]
     async fn a_prometheus_endpoint_at_the_root_is_scraped_at_metrics() {
         let (url, _) = serve(Fake::Prometheus).await;
-        match detect_at(&url, Transport::Auto, At::Startup).await {
+        match detect_startup(&url, Transport::Auto).await {
             Detected::Scraped { url: scrape, .. } => assert_eq!(scrape.path(), "/metrics"),
             other => panic!("expected a scrape, got {}", describe(&other)),
         }
@@ -581,7 +600,7 @@ mod tests {
             vec![("version", "0.3.0")],
         ))
         .await;
-        let sub = match detect_at(&url, Transport::Auto, At::Startup).await {
+        let sub = match detect_startup(&url, Transport::Auto).await {
             Detected::Streamed { subscription, .. } => subscription,
             other => panic!("expected a stream, got {}", describe(&other)),
         };
@@ -605,17 +624,17 @@ mod tests {
     #[tokio::test]
     async fn an_agent_without_a_stream_is_refused_by_version() {
         let (url, _) = serve(Fake::OldAgent("5.20.0")).await;
-        for (at, next) in [
-            (At::Startup, "Nothing was recorded"),
-            (At::Activation, "excluded from this recording"),
+        let at_startup = match detect_startup(&url, Transport::Auto).await {
+            Detected::Refused { reason, .. } => reason,
+            other => panic!("expected a refusal, got {}", describe(&other)),
+        };
+        let on_activation = refused_on_activation(&url).await;
+        for (reason, next) in [
+            (at_startup, "Nothing was recorded"),
+            (on_activation, "excluded from this recording"),
         ] {
-            match detect_at(&url, Transport::Auto, at).await {
-                Detected::Refused { reason, .. } => {
-                    for needle in ["Rezolus 5.20.0", "predates", "answered HTTP 404", next] {
-                        assert!(reason.contains(needle), "{needle:?} in {reason}");
-                    }
-                }
-                other => panic!("expected a refusal, got {}", describe(&other)),
+            for needle in ["Rezolus 5.20.0", "predates", "answered HTTP 404", next] {
+                assert!(reason.contains(needle), "{needle:?} in {reason}");
             }
         }
     }
@@ -625,12 +644,12 @@ mod tests {
     #[tokio::test]
     async fn an_endpoint_answering_5xx_is_pending_until_it_streams() {
         let (url, fake) = serve(Fake::Failing).await;
-        match detect_at(&url, Transport::Auto, At::Startup).await {
+        match detect_startup(&url, Transport::Auto).await {
             Detected::Pending { reason: why, .. } => assert!(why.contains("HTTP 503"), "{why}"),
             other => panic!("expected pending, got {}", describe(&other)),
         }
         *fake.lock().unwrap() = Fake::Agent;
-        match detect_at(&url, Transport::Auto, At::Activation).await {
+        match detect_startup(&url, Transport::Auto).await {
             Detected::Streamed { .. } => {}
             other => panic!("expected a stream, got {}", describe(&other)),
         }
@@ -646,7 +665,7 @@ mod tests {
             .port();
         let url: Url = format!("http://127.0.0.1:{port}").parse().unwrap();
         assert!(matches!(
-            detect_at(&url, Transport::Auto, At::Startup).await,
+            detect_startup(&url, Transport::Auto).await,
             Detected::Pending { .. }
         ));
     }
@@ -656,14 +675,14 @@ mod tests {
     #[tokio::test]
     async fn a_declared_protocol_overrides_detection() {
         let (prom, _) = serve(Fake::Prometheus).await;
-        match detect_at(&prom, Transport::Stream, At::Startup).await {
+        match detect_startup(&prom, Transport::Stream).await {
             Detected::Refused { reason, .. } => {
                 assert!(reason.contains("protocol=stream"), "{reason}")
             }
             other => panic!("expected a refusal, got {}", describe(&other)),
         }
         let (agent, _) = serve(Fake::Agent).await;
-        match detect_at(&agent, Transport::Prometheus, At::Startup).await {
+        match detect_startup(&agent, Transport::Prometheus).await {
             Detected::Pending { reason: why, .. } => assert!(why.contains("HTTP 404"), "{why}"),
             other => panic!("expected pending, got {}", describe(&other)),
         }
@@ -697,13 +716,11 @@ mod tests {
     #[tokio::test]
     async fn a_root_url_whose_metrics_404s_is_pending_not_scraped() {
         let (url, _) = serve(Fake::NotFound).await;
-        for at in [At::Startup, At::Activation] {
-            match detect_at(&url, Transport::Auto, at).await {
-                Detected::Pending { reason: why, .. } => {
-                    assert!(why.contains("/metrics answered HTTP 404"), "{why}")
-                }
-                other => panic!("expected pending, got {}", describe(&other)),
+        match detect_startup(&url, Transport::Auto).await {
+            Detected::Pending { reason: why, .. } => {
+                assert!(why.contains("/metrics answered HTTP 404"), "{why}")
             }
+            other => panic!("expected pending, got {}", describe(&other)),
         }
     }
 

@@ -725,6 +725,17 @@ agent's stream, and slot groups travel in the long layout
   without bound. Hindsight's retention is the likely answer. Do before 6.0
   if hindsight's retention fits; otherwise when a long-running live session
   is reported.
+- **A hindsight lookback shorter than the seal cadence leaves dumps nearly
+  empty** — Open, pre-existing (upstream/main behaves the same). Retention
+  deletes WAL rows by age before any segment has sealed them, and dendro
+  warns "retention on source N deleted K row(s) no segment held: the
+  stream's seal cadence is slower than the lookback". With a 6 s lookback a
+  dump held only the two occupant rows; with 60 s at a 1 s interval, dumps
+  taken after the first minute ended at the last sealed segment, 60 to 78 s
+  before the request (a 2026-10-12 measurement on a macOS agent). Seal at
+  least as often as retention evicts, for example by bounding hindsight's
+  `max_age` by the lookback. Found in the review of the metriken-recorder
+  move (metriken `docs/journal/2026-10-12-metriken-recorder.md`).
 
 ## 6.0.0 release readiness
 

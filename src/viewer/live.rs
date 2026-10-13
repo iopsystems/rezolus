@@ -118,16 +118,9 @@ impl LiveSession {
         let probe: Arc<dyn mr::Probe> = Arc::new(crate::recorder::agent_probe::RezolusProbe::new(
             client.clone(),
         ));
-        let spec = mr::EndpointSpec {
-            transport: mr::Transport::Stream,
-            ..mr::EndpointSpec::new(url.clone())
-        };
-        let detect_cfg = mr::DetectConfig {
-            interval: LIVE_INTERVAL,
-            timeout,
-            layout: mr::Layout::Long,
-            wire_names: crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec(),
-        };
+        let spec = mr::EndpointSpec::new(url.clone()).with_transport(mr::Transport::Stream);
+        let mut detect_cfg = mr::DetectConfig::new(LIVE_INTERVAL, timeout);
+        detect_cfg.wire_names = crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec();
         let detected = mr::detect(client, &detect_cfg, vec![spec], probe.as_ref()).await;
         match &detected[0] {
             mr::Detected::Streamed { .. } => {}
@@ -154,11 +147,9 @@ impl LiveSession {
         let path = dir.0.path().join("live.dendro");
         // No retention: the archive holds everything since the session
         // started.
-        let cfg = mr::RecorderConfig {
-            timeout,
-            wire_names: crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec(),
-            ..mr::RecorderConfig::new(&path, LIVE_INTERVAL)
-        };
+        let mut cfg = mr::RecorderConfig::new(&path, LIVE_INTERVAL);
+        cfg.timeout = timeout;
+        cfg.wire_names = crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec();
         let (recorder, _ids, events) =
             mr::Recorder::start(cfg, client.clone(), probe, detected, Vec::new())
                 .await
