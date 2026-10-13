@@ -67,7 +67,8 @@ target/release/rezolus record -o bench.dendro -- ./bench.sh   # record for the c
 # a handshake means streamed. Any other answer goes to the hook's not_streamable(url, At, StreamAnswer)
 # -> Verdict: it identifies a Rezolus agent by /status, else the / banner; an agent is Pending on
 # a 5xx/408/429/timeout/no connection and refused otherwise (`unstreamable_agent`); neither route
-# answering is Pending; anything else that answered is scraped as Prometheus at /metrics. Any
+# answering is Pending; anything else that answered is scraped as Prometheus at /metrics once
+# /metrics answers 2xx (Pending until then). Late detection and enrich run on spawned tasks. Any
 # other path is scraped at its URL. protocol=stream (also rezolus, msgpack) streams only,
 # protocol=prometheus scrapes only. /metrics/binary is not read. Identity (`detect::Identity`):
 # labels user --label > hook (`enrich`: source=rezolus and host from /systeminfo for an agent) >
@@ -96,7 +97,7 @@ target/release/rezolus record -o bench.dendro -- ./bench.sh   # record for the c
 # with its version, pointing at a 5.x recorder (`unstreamable_agent`). At startup that is
 # before the archive exists (exit 1); an agent that comes up later, or is refused on a
 # reconnect, is marked Refused and left out from then on (a reconnect keeps the rows it had),
-# the rest finalize, and the run exits 1 (`refuse_mid_run`). An unreachable one (or a 5xx /
+# the rest finalize, and the run exits 1 (`refuse_mid_run`). An unreachable one (or a 5xx/408/429 /
 # handshake timeout) is retried each tick, and a stream that drops (or goes silent for the
 # scrape timeout) is reconnected after one interval, at least a second. A wrapped command that
 # exits on its own waits for each agent's frame stamped at or after the exit (bounded by

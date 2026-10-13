@@ -121,7 +121,7 @@ impl HindsightBuffer {
             self.first_ts,
             restarts,
             agent,
-            false,
+            &[],
         );
         let mut merged = self.metadata.clone();
         merged.extend(patch.clone());

@@ -259,9 +259,11 @@ converts one.
 - Any other answer from the stream route (a 404 or 409, a content type that
   is not a stream, a 5xx, a timeout, no connection) asks the endpoint's
   `/status`, then its `/` page. A Rezolus agent is refused (below) unless the
-  answer was a 5xx, a timeout or no connection, in which case it is retried
-  each tick. Anything else that answered is scraped as Prometheus at
-  `/metrics`. When neither route answered, the endpoint is retried each tick.
+  answer was a 5xx, a 408, a 429, a timeout or no connection, in which case
+  it is retried each tick. Anything else that answered is scraped as
+  Prometheus at `/metrics` once `/metrics` answers with a success, and
+  retried each tick until then. When neither route answered, the endpoint is
+  retried each tick.
 - A URL with any other path (`http://host:9090/metrics`) is scraped at that
   URL.
 
@@ -322,8 +324,8 @@ refuse a current agent's stream and name the content type they got. Drop
 or parquet, which scrape `/metrics/binary`.
 
 An agent that is merely unreachable is retried each tick, as is one that
-answers but whose stream fails to open with an error that can change (a 5xx
-from a proxy, a handshake that times out). A stream that drops mid-run, or that
+answers but whose stream fails to open with an error that can change (a 5xx,
+408 or 429 from a proxy, a handshake that times out). A stream that drops mid-run, or that
 produces no frame for the scrape timeout (twice the interval, between 2 s and
 10 s), is reconnected after one interval (at least a second), with the drop and the reconnect logged; rows between the two
 are lost, as a failed scrape's are. An agent that comes back unable to serve

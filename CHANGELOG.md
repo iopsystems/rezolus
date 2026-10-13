@@ -59,30 +59,41 @@
   or `/metrics/stream`, `record` subscribes to `/metrics/stream` first; a
   stream handshake means the endpoint is streamed. Otherwise it reads
   `/status`, then `/`: a Rezolus agent is refused as before (or retried on a
-  5xx, a timeout or no connection), anything else that answered is scraped
-  as Prometheus at `/metrics`, and an endpoint where neither answered is
-  retried each tick. Before, `record` classified a `/` URL by
+  5xx, a 408, a 429, a timeout or no connection), anything else that answered
+  is scraped as Prometheus at `/metrics` once `/metrics` answers with a
+  success (retried each tick until then), and an endpoint where neither
+  answered is retried each tick. Before, `record` classified a `/` URL by
   `/metrics/binary` (a msgpack snapshot meant an agent, else Prometheus), so
   a producer serving `/metrics/stream` without `/metrics/binary` was scraped.
   `/metrics/binary` is no longer read. A URL with any other path is still
   scraped at that URL. `--endpoint url,protocol=stream` is new and records
-  the endpoint from its stream only; `protocol=rezolus` and `msgpack` now
-  mean the same, and no longer require `/metrics/binary` to answer.
+  the endpoint from its stream only; `protocol=rezolus` and
+  `protocol=msgpack` (the 5.x spelling) are accepted and mean the same, and
+  no longer require `/metrics/binary` to answer. A `rezolus exporter`
+  endpoint (its `/` banner reads `Rezolus <version> Exporter`) is now scraped
+  at `/metrics` instead of refused. Detection of an endpoint that comes up
+  mid-run runs off the tick, so one that accepts connections and never
+  answers no longer delays the other endpoints' ticks. An endpoint that the
+  run ends without recording, because it never became reachable or its
+  metadata read had not returned, is named in a warning.
 - **A streamed producer's handshake names its recording.** `source` is the
   user's `source=`, else the stream handshake's `source` label, else
   `rezolus` for a Rezolus agent, else a name made from the URL. Labels are
   `--label`, over `host` from a Rezolus agent's `/systeminfo`, over the
   handshake's labels; metadata is `--metadata`, over the recorder's own keys
   (`sampling_interval_ms`, `producer_epoch`, `role`), over a Rezolus agent's
-  `version`, `systeminfo` and `descriptions`, over the handshake's metadata.
+  `version`, `systeminfo` and `descriptions` (each taken only when it is a
+  JSON object, and only from an endpoint recognised as an agent), over the
+  handshake's metadata.
   Before, the handshake's labels and metadata were dropped, any producer
   that answered `/metrics/binary` was recorded as `source=rezolus`, and a
   streamed producer without `/status` had no `version`. A restarted
   producer's new handshake metadata is written into its recording.
 - **`--metadata` outranks every other source of a metadata key.** A
   `--metadata systeminfo=` or `descriptions=` used to be overwritten by the
-  agent's own; the user's value is now kept, as it already was for
-  `version` and `source`.
+  agent's own, at the start and again when the agent restarted; the user's
+  value is now kept in both cases, as it already was for `version` and
+  `source`.
 - **An agent's metadata is read after its stream opens, concurrently, and
   bounded.** `/status`, `/systeminfo` and `/metrics/descriptions` were read
   one endpoint at a time, without a time bound, before the stream was
@@ -130,8 +141,6 @@
   written. For the merged dashboard with service KPIs, use the 5.x
   `rezolus-capture` (the v5.27.0 script or Docker image), which writes a
   merged `capture.parquet`.
-- **`record --endpoint url,protocol=rezolus`** names a Rezolus agent;
-  `protocol=msgpack`, the 5.x spelling, is still accepted.
 - **`record --endpoint url,role=...` is kept in the recording.** The role is
   the `role` key of that endpoint's recording metadata; `--metadata role=...`
   overrides it. Before, only parquet output carried it.

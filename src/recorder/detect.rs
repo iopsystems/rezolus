@@ -15,7 +15,8 @@
 //! Anything else (a 404, a 409, a foreign content type, a 5xx, a timeout, a
 //! connection error) goes to [`Probe::not_streamable`] with the route's
 //! [`StreamAnswer`], whose [`Verdict`] decides: scrape it as Prometheus at
-//! `/metrics`, refuse it, or try again next tick. An endpoint with any other
+//! `/metrics` (once `/metrics` answers with a success), refuse it, or try
+//! again next tick. An endpoint with any other
 //! path is scraped at its URL. `protocol=` on the endpoint overrides the
 //! path: `stream` (and `msgpack`, `rezolus`) is only ever streamed,
 //! `prometheus` only ever scraped.
@@ -113,6 +114,7 @@ pub(crate) enum Transport {
 
 /// The subscription settings detection opens a stream with, so the stream it
 /// hands on is the one the recording reads.
+#[derive(Clone)]
 pub(crate) struct DetectConfig {
     pub interval: Duration,
     /// Bounds the stream connect, the hook's call, and the reachability check
@@ -189,11 +191,13 @@ pub(crate) async fn detect(
                     "endpoint {url}: its replication stream did not open ({message}); will \
                      retry each tick"
                 )),
+                // Scraped once `/metrics` answers with a success, as a
+                // declared `protocol=prometheus` endpoint is.
                 Verdict::Scrape if transport == Transport::Auto => {
                     let mut scrape = url.clone();
                     scrape.set_path("/metrics");
                     scrape.set_query(None);
-                    Detected::Scraped(scrape)
+                    check_scrape(client, cfg, scrape).await
                 }
                 // Declared `protocol=stream`: never scraped instead.
                 Verdict::Scrape if answer.is_transient() => Detected::Pending(format!(

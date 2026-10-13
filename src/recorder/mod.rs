@@ -171,8 +171,9 @@ pub fn command() -> Command {
              A stream handshake means it is streamed. Any other answer (a 404 or 409, a\n\
              content type that is not a stream, a 5xx, a timeout, no connection) asks the\n\
              endpoint\'s /status, then its / page: a Rezolus agent is refused (below), or\n\
-             retried each tick on a 5xx, timeout or no connection; anything else that\n\
-             answered is scraped as Prometheus at /metrics; when neither answered, the\n\
+             retried each tick on a 5xx, 408, 429, timeout or no connection; anything else\n\
+             that answered is scraped as Prometheus at /metrics once /metrics answers with\n\
+             a success, and retried each tick until then; when neither answered, the\n\
              endpoint is retried each tick. An endpoint with any other path (e.g.\n\
              http://host:9090/metrics) is scraped at that URL. protocol=stream on an\n\
              --endpoint records it from its stream only (rezolus and msgpack mean the\n\
@@ -192,10 +193,10 @@ pub fn command() -> Command {
              rows it had), the other endpoints keep recording, and the run exits 1 once\n\
              the archive is finalized. When every endpoint has been refused, the run ends.\n\n\
              An agent that is not reachable yet, or whose stream fails with an error that\n\
-             can change (a 5xx, a handshake timeout), is retried each tick. A stream that\n\
-             drops mid-run is reconnected after one interval (at least a second), as a\n\
-             failed scrape is, and one that goes silent for the scrape timeout (twice the\n\
-             interval, between 2 s and 10 s) counts as dropped. A streamed endpoint is\n\
+             can change (a 5xx, 408 or 429, a handshake timeout), is retried each tick. A\n\
+             stream that drops mid-run is reconnected after one interval (at least a\n\
+             second), as a failed scrape is, and one that goes silent for the scrape\n\
+             timeout (twice the interval, between 2 s and 10 s) counts as dropped. A streamed endpoint is\n\
              never switched to scraping: one whose reconnect is answered with a 404, a 409\n\
              or a content type that is not a stream is refused.\n\n\
              A wrapped command that exits on its own waits for each agent's frame covering\n\
@@ -380,9 +381,7 @@ async fn apply_restarts(
     timeout: Duration,
     last: bool,
 ) {
-    let version_pinned = user_metadata
-        .iter()
-        .any(|(k, _)| k == parquet_metadata::KEY_VERSION);
+    let pinned: Vec<&str> = user_metadata.iter().map(|(k, _)| k.as_str()).collect();
     for (idx, ep) in endpoints.iter_mut().enumerate() {
         let Some(archive) = archive.as_deref_mut() else {
             ep.restarts.clear();
@@ -422,8 +421,7 @@ async fn apply_restarts(
             &restarts,
             &agent,
             &ep.identity.handshake_metadata,
-            user_metadata,
-            version_pinned,
+            &pinned,
             probe,
         ) {
             Ok(()) => info!(
@@ -598,6 +596,31 @@ fn refusal_summary(endpoints: &[EndpointState], output: &Path, finalized: bool) 
         }
     ));
     Some(lines.join("\n"))
+}
+
+/// One line for each endpoint the run ended without a recording for, other
+/// than a refused one ([`refusal_summary`] names those): one still pending,
+/// and one streamed whose metadata read had not returned, so it was never
+/// added to the archive.
+fn unrecorded_summary(endpoints: &[EndpointState], output: &Path) -> Vec<String> {
+    let path = output.display();
+    endpoints
+        .iter()
+        .filter_map(|ep| {
+            let who = format!("{} ({})", ep.config.url, ep.config.source_label());
+            match ep.status {
+                EndpointStatus::Pending => Some(format!(
+                    "{who} was never reachable as a producer during the run and has no \
+                     recording in {path}"
+                )),
+                EndpointStatus::Activating => Some(format!(
+                    "{who} opened its stream, but the run ended before its metadata arrived; \
+                     it has no recording in {path}"
+                )),
+                EndpointStatus::Active | EndpointStatus::Refused => None,
+            }
+        })
+        .collect()
 }
 
 /// Take the handshake's word on the endpoint's timeline, epoch and metadata.
@@ -1253,23 +1276,21 @@ impl Archive {
     }
 
     /// Record the agent restarts waiting on endpoint `idx` in its recording's
-    /// metadata: see [`restart::metadata_patch_with`]. `version_pinned` means
-    /// the user set `version` with `--metadata`, which a restart does not
+    /// metadata: see [`restart::metadata_patch_with`]. `pinned` names the
+    /// keys the user set with `--metadata`, which a restart does not
     /// overwrite.
     ///
     /// `handshake` is the new process's handshake metadata. Its keys other
     /// than the ones the patch already sets, the recorder's own and the
     /// user's are written too, each combined with the value on record by the
     /// hook's [`merge`](detect::Probe::merge).
-    #[allow(clippy::too_many_arguments)]
     fn record_restarts(
         &mut self,
         idx: usize,
         restarts: &[restart::Restart],
         agent: &restart::Agent,
         handshake: &BTreeMap<String, String>,
-        user_metadata: &[(String, String)],
-        version_pinned: bool,
+        pinned: &[&str],
         probe: &dyn detect::Probe,
     ) -> Result<(), String> {
         let Some(current) = self.metadata.get(&idx) else {
@@ -1279,14 +1300,8 @@ impl Archive {
         };
         let first_ts = self.first_stamp.get(&idx).copied();
         let merge = |key: &str, old: &str, new: &str| probe.merge(key, old, new);
-        let mut patch = restart::metadata_patch_with(
-            current,
-            first_ts,
-            restarts,
-            agent,
-            version_pinned,
-            &merge,
-        );
+        let mut patch =
+            restart::metadata_patch_with(current, first_ts, restarts, agent, pinned, &merge);
         for (key, value) in handshake {
             let owned = matches!(
                 key.as_str(),
@@ -1300,7 +1315,7 @@ impl Archive {
                     | parquet_metadata::NESTED_ROLE
                     | parquet_metadata::KEY_EVENTS
             );
-            if owned || patch.contains_key(key) || user_metadata.iter().any(|(k, _)| k == key) {
+            if owned || patch.contains_key(key) || pinned.contains(&key.as_str()) {
                 continue;
             }
             let merged = match current.get(key) {
@@ -1878,6 +1893,12 @@ pub fn run(config: RecordingConfig) {
             tokio::task::JoinHandle<Result<detect::Enriched, String>>,
         );
         let mut enriching: Vec<Option<Enriching>> = endpoints.iter().map(|_| None).collect();
+        // Detection of each pending endpoint, on its own task for the same
+        // reason: an endpoint that accepts a connection and never answers
+        // holds a detection for the stream connect's timeout and the probe
+        // hook's, and no tick waits on that. One slot per endpoint.
+        let mut detecting: Vec<Option<tokio::task::JoinHandle<detect::Detected>>> =
+            endpoints.iter().map(|_| None).collect();
         // The last tick's clock observation, handed to finalization so
         // the manifest's `clock_offsets` series covers the tail of the
         // recording. Seeded with the anchor itself (offset 0 by definition).
@@ -2181,12 +2202,13 @@ pub fn run(config: RecordingConfig) {
             )
             .await;
 
-            // Late activations, in two steps so that no tick waits on the
-            // probe hook's `enrich`. A streamed endpoint whose `enrich` has
-            // returned (or timed out) gets its recording now; one detected
-            // below starts its `enrich` on its own task and is added on a
-            // later tick. A scraped endpoint has no `enrich` and is added at
-            // once.
+            // Late activations, in steps so that no tick waits on detection
+            // or on the probe hook's `enrich`. A pending endpoint is detected
+            // on its own task, and the tick after it returns acts on the
+            // answer. A streamed endpoint whose `enrich` has returned (or
+            // timed out) gets its recording now; one just detected starts
+            // its `enrich` on its own task and is added on a later tick. A
+            // scraped endpoint has no `enrich` and is added at once.
             //
             // Startup only exits when no endpoint at all was reachable, so a
             // run with one endpoint up and one still starting commits to the
@@ -2230,16 +2252,32 @@ pub fn run(config: RecordingConfig) {
                 // recording and finalize as usual; the refused endpoint is
                 // never retried, and the run exits 1 at the end.
                 let url = endpoints[idx].config.url.clone();
-                let transport = Protocol::transport(endpoints[idx].config.protocol.as_ref());
-                let detected = detect::detect(
-                    &client,
-                    &detect_cfg,
-                    &url,
-                    transport,
-                    probe.as_ref(),
-                    detect::At::Activation,
-                )
-                .await;
+                let Some(task) = detecting[idx].as_ref() else {
+                    let transport = Protocol::transport(endpoints[idx].config.protocol.as_ref());
+                    let (client, cfg, probe, url) =
+                        (client.clone(), detect_cfg.clone(), probe.clone(), url);
+                    detecting[idx] = Some(tokio::spawn(async move {
+                        detect::detect(
+                            &client,
+                            &cfg,
+                            &url,
+                            transport,
+                            probe.as_ref(),
+                            detect::At::Activation,
+                        )
+                        .await
+                    }));
+                    continue;
+                };
+                if !task.is_finished() {
+                    continue;
+                }
+                let Some(task) = detecting[idx].take() else {
+                    continue;
+                };
+                let detected = task.await.unwrap_or_else(|e| {
+                    detect::Detected::Pending(format!("endpoint {url}: detection failed: {e}"))
+                });
                 match detected {
                     detect::Detected::Pending(why) => debug!("{why}"),
                     detect::Detected::Refused(reason) => {
@@ -2366,6 +2404,15 @@ pub fn run(config: RecordingConfig) {
                 warn!("every endpoint has been refused; finalizing the recording");
                 break;
             }
+        }
+
+        // Detections and metadata reads still in flight are for endpoints
+        // that will not be added now; `unrecorded_summary` names them.
+        for task in detecting.iter_mut().filter_map(Option::take) {
+            task.abort();
+        }
+        for (_, task) in enriching.iter_mut().filter_map(Option::take) {
+            task.abort();
         }
 
         // If the loop ended via ctrl-c (STATE flip) while the wrapped command
@@ -2580,6 +2627,9 @@ pub fn run(config: RecordingConfig) {
         // on a reconnect (a refusal at startup exits before the archive
         // exists). The recording went on without them; the exit status says
         // so.
+        for line in unrecorded_summary(&endpoints, &config.output) {
+            warn!("{line}");
+        }
         if let Some(summary) = refusal_summary(&endpoints, &config.output, finalized) {
             eprintln!("{summary}");
             recording_failed.store(true, Ordering::SeqCst);

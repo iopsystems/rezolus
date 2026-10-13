@@ -161,9 +161,10 @@ impl Probe for RezolusProbe {
         }
     }
 
-    /// `host` (from `/systeminfo`'s hostname) and, for a recognised agent,
-    /// `source=rezolus`; metadata `version`, `systeminfo` and `descriptions`
-    /// where the agent served them. `Retry` when no route answered.
+    /// For a recognised agent: `source=rezolus` and `host` (from
+    /// `/systeminfo`'s hostname); metadata `version`, and `systeminfo` and
+    /// `descriptions` where the agent served them as JSON objects. Nothing
+    /// for an endpoint that is not an agent. `Retry` when no route answered.
     async fn enrich(&self, url: &Url, _epoch: Option<&str>) -> Enrich {
         let (systeminfo, descriptions, identified) = tokio::join!(
             fetch(&self.client, url, "/systeminfo"),
@@ -178,23 +179,26 @@ impl Probe for RezolusProbe {
         }
         let mut labels = BTreeMap::new();
         let mut metadata = BTreeMap::new();
-        let (version, epoch) = match identified {
-            Identified::Agent { version, epoch } => {
-                labels.insert("source".to_string(), "rezolus".to_string());
-                (version, epoch)
-            }
-            _ => (None, None),
+        // Only an agent's routes are read: on anything else `/systeminfo`
+        // and `/metrics/descriptions` are whatever its catch-all serves.
+        let Identified::Agent { version, epoch } = identified else {
+            return Enrich::Metadata {
+                epoch: None,
+                labels,
+                metadata,
+            };
         };
+        labels.insert("source".to_string(), "rezolus".to_string());
         if let Some(version) = version {
             metadata.insert(KEY_VERSION.to_string(), version);
         }
-        if let Some(json) = systeminfo.body() {
+        if let Some(json) = systeminfo.body().filter(|b| is_json_object(b)) {
             if let Some(host) = super::rez::host_from_systeminfo(&json) {
                 labels.insert("host".to_string(), host);
             }
             metadata.insert(KEY_SYSTEMINFO.to_string(), json);
         }
-        if let Some(json) = descriptions.body() {
+        if let Some(json) = descriptions.body().filter(|b| is_json_object(b)) {
             metadata.insert(KEY_DESCRIPTIONS.to_string(), json);
         }
         Enrich::Metadata {
@@ -207,6 +211,12 @@ impl Probe for RezolusProbe {
     fn merge(&self, key: &str, old: &str, new: &str) -> String {
         merge(key, old, new)
     }
+}
+
+/// Whether `body` parses as a JSON object, which an agent's `/systeminfo`
+/// and `/metrics/descriptions` both are.
+fn is_json_object(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(body).is_ok()
 }
 
 /// How a restarted agent's metadata value replaces the one on record:
@@ -436,6 +446,12 @@ mod tests {
         ),
         /// 503 for everything, as a proxy whose backend is down answers.
         Failing,
+        /// 404 for everything, `/metrics` included.
+        NotFound,
+        /// A producer that is not an agent: a stream on the stream route,
+        /// JSON objects on `/systeminfo` and `/metrics/descriptions`, and a
+        /// 200 HTML page for every other path.
+        Html,
     }
 
     fn opening(
@@ -491,6 +507,12 @@ mod tests {
             (Fake::Agent, "/systeminfo") => r#"{"hostname":"web-01"}"#.into_response(),
             (Fake::Agent, "/") => "Rezolus 6.0.0 Agent\n".into_response(),
             (Fake::StreamOnly(labels, metadata), "/metrics/stream") => stream(labels, metadata),
+            (Fake::Html, "/metrics/stream") => stream(&[], &[]),
+            (Fake::Html, "/systeminfo") => r#"{"hostname":"web-02"}"#.into_response(),
+            (Fake::Html, "/metrics/descriptions") => r#"{"a":"b"}"#.into_response(),
+            (Fake::Html, _) => {
+                axum::response::Html("<html><body>hello</body></html>").into_response()
+            }
             _ => StatusCode::NOT_FOUND.into_response(),
         }
     }
@@ -659,6 +681,70 @@ mod tests {
                 .is_err(),
             "a reply naming another epoch is discarded"
         );
+    }
+
+    /// A root URL whose stream route, `/status`, `/` and `/metrics` all
+    /// answer 404 is pending, not scraped: there is nothing at `/metrics` to
+    /// scrape, as a declared `protocol=prometheus` endpoint would find.
+    #[tokio::test]
+    async fn a_root_url_whose_metrics_404s_is_pending_not_scraped() {
+        let (url, _) = serve(Fake::NotFound).await;
+        for at in [At::Startup, At::Activation] {
+            match detect_at(&url, Transport::Auto, at).await {
+                Detected::Pending(why) => {
+                    assert!(why.contains("/metrics answered HTTP 404"), "{why}")
+                }
+                other => panic!("expected pending, got {}", describe(&other)),
+            }
+        }
+    }
+
+    /// An endpoint that is not an agent gets no `host`, `systeminfo` or
+    /// `descriptions` from `enrich`, though it answers `/systeminfo` and
+    /// `/metrics/descriptions` with JSON objects.
+    #[tokio::test]
+    async fn enrich_takes_nothing_from_an_endpoint_that_is_not_an_agent() {
+        let (url, _) = serve(Fake::Html).await;
+        let probe = RezolusProbe::new(client());
+        let (labels, metadata) =
+            detect::enrich_within(&probe, &url, Some("epoch-1"), Duration::from_secs(2))
+                .await
+                .expect("the endpoint answered");
+        assert!(
+            labels.is_empty() && metadata.is_empty(),
+            "{labels:?} {metadata:?}"
+        );
+    }
+
+    /// An agent whose `/systeminfo` or `/metrics/descriptions` body is not a
+    /// JSON object (a proxy's error page served with a 200) does not have it
+    /// recorded, nor a `host` taken from it.
+    #[tokio::test]
+    async fn enrich_takes_only_a_json_object_from_an_agent() {
+        let router = axum::Router::new().fallback(|uri: axum::http::Uri| async move {
+            use axum::response::IntoResponse;
+            match uri.path() {
+                "/" => "Rezolus 6.0.0 Agent\n".into_response(),
+                "/systeminfo" => "<html>hostname</html>".into_response(),
+                "/metrics/descriptions" => "[1, 2]".into_response(),
+                _ => axum::http::StatusCode::NOT_FOUND.into_response(),
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        let url: Url = format!("http://{addr}").parse().unwrap();
+        let probe = RezolusProbe::new(client());
+        let (labels, metadata) = detect::enrich_within(&probe, &url, None, Duration::from_secs(2))
+            .await
+            .expect("the agent answered");
+        assert_eq!(labels.get("source").map(String::as_str), Some("rezolus"));
+        assert!(!labels.contains_key("host"), "{labels:?}");
+        assert!(!metadata.contains_key(KEY_SYSTEMINFO), "{metadata:?}");
+        assert!(!metadata.contains_key(KEY_DESCRIPTIONS), "{metadata:?}");
+        assert_eq!(metadata[KEY_VERSION], "6.0.0");
     }
 
     fn describe(d: &Detected) -> String {
