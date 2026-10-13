@@ -2,6 +2,40 @@
 
 ### Removed
 
+- **`record` writes `.dendro` only.** The output must end in `.dendro`
+  (`rezolus.dendro` without `-o`). `-o` ending in `.rez`, `.parquet`, `.raw`
+  or anything else, `--format` other than `dendro`, and `--separate` are
+  refused as usage errors (exit 2) before any endpoint is contacted, as are
+  the same `output`, `format` and `separate = true` in a `--config` file.
+  The refusal quotes the path as it was given (`-o`, the positional OUTPUT,
+  or the config file's `output`) and names a 5.x recorder (5.27.0 or later),
+  which still writes those formats; `rezolus recording upgrade --to dendro`
+  converts a `.rez`. Reading `.rez` and parquet is unchanged.
+- **`record` refuses every Rezolus agent that cannot stream.** An agent older
+  than 5.21.0, a v2 agent, or a stream route that answers 404, 409 or a
+  foreign content type is refused at startup (exit 1, nothing written) or,
+  if it comes up later or fails on a reconnect, left out of the recording
+  while the rest is recorded (exit 1). The refusal points at a 5.x recorder,
+  which scrapes such an agent. A 5xx or a handshake timeout is still retried
+  each tick. Before, this applied to `.dendro` output only, and `.rez` and
+  parquet output scraped the agent.
+- **Hindsight writes `.dendro` only.** An `output` not ending in `.dendro` is
+  refused when the config is loaded (exit 1), as `record` refuses one. 5.27.0
+  wrote every such path as a `.rez` archive (`.parquet` with a warning); the
+  6.0 alphas kept a `.rez` buffer for `.rez` and wrote a `.dendro` for any
+  other path.
+
+  Upgrade note: 5.27.0 shipped `/etc/rezolus/hindsight.toml` with
+  `output = "/var/lib/rezolus/rezolus.rez"`. A package upgrade replaces that
+  file only if it was never edited (dpkg conffile, rpm `%config(noreplace)`);
+  for an edited one dpkg asks which to keep (and keeps it under
+  `--force-confold`), and rpm keeps it and writes the new one beside it as
+  `hindsight.toml.rpmnew`. If the kept file still names a `.rez`
+  (or any path not ending in `.dendro`), `rezolus-hindsight` exits 1 at start
+  until `output` is changed to a `.dendro` path.
+- **`record` no longer fetches an agent's `/samplers`.** The sampler status
+  was written into parquet output only.
+
 - **The live viewer no longer reads `/metrics/binary`.** `rezolus view
   http://agent:4241` needs `/metrics/stream`: an agent from 5.21.0 with
   `snapshot_format = "v3"` (the default). An older agent, a v2 agent, a
@@ -28,6 +62,37 @@
   different CPUs, by indexing per-thread BPF arrays through a permutation of
   the TID. The `id` label and `x<n>` series-name suffix of `task_cpu_usage`
   are now that index, not the TID; select a thread by its `pid` label. (#1444)
+
+- **A Prometheus endpoint's HELP text is its recording's `descriptions`.**
+  The scrape's `# HELP` lines (first seen wins) are written into the
+  recording's `descriptions` metadata, the key an agent recording fills from
+  `/metrics/descriptions`, and updated when a later scrape brings a new
+  metric name. 5.x wrote them into parquet output only, and the `.dendro`
+  path dropped them.
+- **`rezolus-capture` records one `.dendro`.** `scripts/rezolus-capture` and
+  the Docker image's `rezolus-capture` ran `rezolus record` to parquet, which
+  6.x refuses, so every capture failed. A capture is now one `rezolus record`
+  with an `--endpoint` per source, written to `capture.dendro` in
+  `--output-dir`: a recording per endpoint, `source=rezolus` for the agent
+  and `source=<NAME>` for each service. The command-line options are
+  unchanged; `--source rezolus` is refused, since it names the agent's
+  recording.
+- **`rezolus-capture` with `--endpoint` loses the merged dashboard.** The
+  viewer opens a capture made with `--endpoint` as an A/B comparison of the
+  agent's recording against the first service's, with further services as
+  extra overlays; no dashboard queries the service metrics. Service KPI
+  dashboards (vllm, valkey, sglang and the other templates) are not shown,
+  because the template queries select a `source` label that `.dendro`
+  series do not carry. `capture.parquet` and the per-endpoint
+  `agent-<port>.parquet` / `<source>-<port>.parquet` copies are no longer
+  written. For the merged dashboard with service KPIs, use the 5.x
+  `rezolus-capture` (the v5.27.0 script or Docker image), which writes a
+  merged `capture.parquet`.
+- **`record --endpoint url,protocol=rezolus`** names a Rezolus agent;
+  `protocol=msgpack`, the 5.x spelling, is still accepted.
+- **`record --endpoint url,role=...` is kept in the recording.** The role is
+  the `role` key of that endpoint's recording metadata; `--metadata role=...`
+  overrides it. Before, only parquet output carried it.
 
 - **Exact label listings for sparse long tables** (metriken-storage 0.2.1).
   A long table whose columns have values for only some of its occupants, as

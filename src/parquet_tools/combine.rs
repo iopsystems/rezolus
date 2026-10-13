@@ -167,19 +167,6 @@ fn resolve_ab_input_indices(
     Ok((baseline_idxs[0], experiment_idxs[0]))
 }
 
-/// Combine multiple parquet files into one. Used by the `parquet combine` CLI
-/// command and by the multi-endpoint recorder for combined output.
-pub(crate) fn combine_files(
-    paths: &[PathBuf],
-    output: &PathBuf,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut inputs = load_inputs(paths)?;
-    validate_sampling_interval(&inputs)?;
-    validate_labels(&mut inputs)?;
-    validate_time_overlap(&inputs)?;
-    combine_and_write(&inputs, output, CombineOptions::default())
-}
-
 pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     let files: Vec<PathBuf> = args
         .get_many::<PathBuf>("FILES")

@@ -17,17 +17,17 @@ OUTPUT_DIR="."
 VIEWER_LISTEN="127.0.0.1:0"
 NO_VIEWER=false
 STARTED_AGENT=false
-RECORDER_PIDS=()
-SERVICE_PARQUETS=()
-CMD_PID=""
+RECORDER_PID=""
+STAGING=""
 
 help() {
     cat <<EOF
 $PROGRAM - Capture system and service metrics, then view the results.
 
-Records system metrics from a Rezolus agent and optionally records service
-metrics from Prometheus-compatible endpoints, combines them into a single
-parquet file, and launches the Rezolus viewer.
+Records system metrics from a Rezolus agent and optionally service metrics
+from Prometheus-compatible endpoints into one .dendro archive, capture.dendro,
+holding a recording per endpoint (source=rezolus for the agent, source=<NAME>
+for each service), and launches the Rezolus viewer on it.
 
 If no Rezolus agent is already running, the script will start one automatically.
 Starting the agent requires root privileges for eBPF instrumentation.
@@ -47,14 +47,26 @@ OPTIONS:
     --agent-config <PATH>       Agent config file (default: config/agent.toml)
     --endpoint <URL>            Service metrics endpoint (Prometheus-compatible).
                                 Can be specified multiple times for multiple services.
-    --source <NAME>             Source name for service metrics. Must be specified
+    --source <NAME>             Source name for service metrics: the source label
+                                of that endpoint's recording. Must be specified
                                 once per --endpoint, in the same order.
     --interval <INTERVAL>       Sampling interval (default: 1s)
-    --output-dir <DIR>          Output directory for parquet files (default: .)
+    --output-dir <DIR>          Directory capture.dendro is written to (default: .);
+                                an existing capture.dendro there is replaced
     --viewer-listen <ADDR>      Viewer listen address (default: 127.0.0.1:0)
     --no-viewer                 Skip launching the viewer after capture
     --rezolus <PATH>            Path to the rezolus binary (default: rezolus)
     -h, --help                  Show this help text
+
+EXIT STATUS:
+    0   the capture was kept (with --command, also when the command failed;
+        its status is printed)
+    1   an error, a second stop signal (abort), or a stop signal before the
+        recorder started; no capture is kept
+
+    A stop signal (SIGINT, SIGTERM, SIGHUP) finalizes the capture; a second
+    one aborts it. The recorder runs in its own process group, so with
+    "stty tostop" set it stops on its first write to the terminal.
 
 EXAMPLES:
     # System metrics only for 60 seconds
@@ -90,17 +102,6 @@ error() {
     echo "Error: $1" >&2
     echo "Try '$PROGRAM --help' for more information." >&2
     exit 1
-}
-
-# Extract port number from a URL (e.g., http://host:4241/path -> 4241)
-# Returns empty string if no numeric port is found.
-extract_port() {
-    local hostport="${1#*://}"
-    hostport="${hostport%%/*}"
-    local port="${hostport##*:}"
-    if [[ "$port" =~ ^[0-9]+$ ]]; then
-        echo "$port"
-    fi
 }
 
 # Parse arguments
@@ -186,16 +187,25 @@ if [ ${#ENDPOINTS[@]} -ne ${#SOURCES[@]} ]; then
     error "each --endpoint must have a corresponding --source (got ${#ENDPOINTS[@]} endpoints and ${#SOURCES[@]} sources)"
 fi
 
-# Validate source names are unique
-if [ ${#SOURCES[@]} -gt 0 ]; then
-    declare -A SEEN_SOURCES
-    for src in "${SOURCES[@]}"; do
-        if [ -n "${SEEN_SOURCES[$src]:-}" ]; then
-            error "duplicate source name: $src"
+# Validate source names: each names one recording in the archive, so they
+# must be unique, and `rezolus` is the agent's. A `,` or `=` would split the
+# `--endpoint url,source=NAME` value into other options. A nested loop rather
+# than an associative array, which the bash 3.2 macOS ships does not have.
+for i in "${!SOURCES[@]}"; do
+    if [ "${SOURCES[$i]}" = "rezolus" ]; then
+        error "source name 'rezolus' is reserved for the agent's recording"
+    fi
+    case "${SOURCES[$i]}" in
+        *,*|*=*)
+            error "source name must not contain ',' or '=': ${SOURCES[$i]}"
+            ;;
+    esac
+    for j in "${!SOURCES[@]}"; do
+        if [ "$j" -lt "$i" ] && [ "${SOURCES[$j]}" = "${SOURCES[$i]}" ]; then
+            error "duplicate source name: ${SOURCES[$i]}"
         fi
-        SEEN_SOURCES[$src]=1
     done
-fi
+done
 
 # Validate --pid target exists
 if [ -n "$MONITOR_PID" ]; then
@@ -254,38 +264,29 @@ fi
 REAL_USER="${SUDO_USER:-$(id -un)}"
 REAL_GROUP="$(id -gn "$REAL_USER" 2>/dev/null || id -gn)"
 
-# Set up temp files and output
-SYSTEM_PARQUET="$(mktemp /tmp/system-XXXXXX.parquet)"
-OUTPUT_FILE="${OUTPUT_DIR}/capture.parquet"
-
+# The archive is written into a staging directory beside the output, so a
+# finished capture is moved into place with a rename and a failed one never
+# replaces an earlier capture.dendro. `rezolus record` refuses an output path
+# that already exists.
 mkdir -p "$OUTPUT_DIR"
 chown "$REAL_USER:$REAL_GROUP" "$OUTPUT_DIR" 2>/dev/null || true
-
-# Helper: stop all recorder processes gracefully
-stop_recorders() {
-    for pid in "${RECORDER_PIDS[@]}"; do
-        kill "$pid" 2>/dev/null || true
-    done
-    for pid in "${RECORDER_PIDS[@]}"; do
-        wait "$pid" 2>/dev/null || true
-    done
-}
+OUTPUT_FILE="${OUTPUT_DIR%/}/capture.dendro"
+STAGING="$(mktemp -d "${OUTPUT_DIR%/}/.capture-XXXXXX")"
+STAGED_FILE="$STAGING/capture.dendro"
 
 cleanup() {
-    # Stop user command if running (--command mode)
-    if [ -n "$CMD_PID" ]; then
-        kill "$CMD_PID" 2>/dev/null || true
-        wait "$CMD_PID" 2>/dev/null || true
+    # Stop the recorder if it is still running. While it runs, SIGINT,
+    # SIGTERM and SIGHUP are trapped and forwarded to it (see forward_stop),
+    # so this is reached only when the script exits on an error. The staging
+    # directory is removed below, so this capture is discarded.
+    if [ -n "$RECORDER_PID" ]; then
+        kill "$RECORDER_PID" 2>/dev/null || true
+        wait "$RECORDER_PID" 2>/dev/null || true
     fi
 
-    # Stop all recorders
-    stop_recorders
-
-    # Clean temp files
-    rm -f "$SYSTEM_PARQUET"
-    for f in "${SERVICE_PARQUETS[@]}"; do
-        rm -f "$f"
-    done
+    if [ -n "$STAGING" ]; then
+        rm -rf "$STAGING"
+    fi
 
     # Stop the agent if we started it
     if $STARTED_AGENT && [ -n "${AGENT_PID:-}" ]; then
@@ -296,124 +297,162 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Build duration flag for recorders
-DURATION_ARGS=()
-if [ -n "$DURATION" ]; then
-    DURATION_ARGS=(-d "$DURATION")
-fi
-
-# Start system metrics recording
-if [ -n "$DURATION" ]; then
-    echo "Recording system metrics for $DURATION (interval: $INTERVAL)..."
-elif [ ${#COMMAND[@]} -gt 0 ]; then
-    echo "Recording system metrics while running command (interval: $INTERVAL)..."
-else
-    echo "Recording system metrics while process $MONITOR_PID is running (interval: $INTERVAL)..."
-fi
-
-"$REZOLUS" record "$AGENT" "$SYSTEM_PARQUET" \
-    "${DURATION_ARGS[@]}" -i "$INTERVAL" -m source=rezolus &
-RECORDER_PIDS+=($!)
-
-# Start service metrics recording for each endpoint
+# One recorder for every endpoint: the agent is recorded from its stream and
+# each service endpoint is scraped, each into its own recording of one
+# archive, told apart by its source label.
+RECORD=("$REZOLUS" record --endpoint "${AGENT},source=rezolus")
 for i in "${!ENDPOINTS[@]}"; do
-    tmp="$(mktemp "/tmp/service-${SOURCES[$i]}-XXXXXX.parquet")"
-    SERVICE_PARQUETS+=("$tmp")
-    echo "Recording service metrics from ${ENDPOINTS[$i]} (source: ${SOURCES[$i]})..."
-    "$REZOLUS" record "${ENDPOINTS[$i]}" "$tmp" \
-        "${DURATION_ARGS[@]}" -i "$INTERVAL" -m "source=${SOURCES[$i]}" &
-    RECORDER_PIDS+=($!)
+    RECORD+=(--endpoint "${ENDPOINTS[$i]},source=${SOURCES[$i]}")
+done
+RECORD+=(-o "$STAGED_FILE" -i "$INTERVAL")
+
+echo "Recording from $AGENT (source: rezolus)..."
+for i in "${!ENDPOINTS[@]}"; do
+    echo "Recording from ${ENDPOINTS[$i]} (source: ${SOURCES[$i]})..."
 done
 
-# Wait for capture to complete based on mode
-if [ -n "$DURATION" ]; then
-    # Duration mode: recorders stop themselves, just wait for them
-    FAILED=false
-    for pid in "${RECORDER_PIDS[@]}"; do
-        if ! wait "$pid"; then
-            FAILED=true
+# The recorder runs in its own process group (`set -m`), so a terminal's
+# Ctrl-C, a signal to this script alone, and a SIGTERM from a supervisor all
+# reach the recorder the same way: this script forwards one SIGINT per signal
+# it receives. The recorder finalizes the archive on the first and aborts on
+# a second, so a single Ctrl-C keeps the capture and a second one discards it.
+# Were the recorder in this script's process group, a Ctrl-C would reach it
+# directly, and whether to forward another would depend on how the signal
+# was sent, which the script cannot tell.
+forward_stop() {
+    STOP_SIGNALS=$((STOP_SIGNALS + 1))
+    if [ -n "$RECORDER_PID" ]; then
+        flush_stops
+    fi
+}
+
+# Send the recorder one SIGINT for each received signal not yet forwarded.
+flush_stops() {
+    while [ "$FORWARDED" -lt "$STOP_SIGNALS" ]; do
+        FORWARDED=$((FORWARDED + 1))
+        kill -INT "$RECORDER_PID" 2>/dev/null || true
+    done
+}
+
+# A signal received before the recorder starts ends the capture here: none
+# has begun, so there is nothing to keep. Forwarding it instead was measured
+# to fail both ways: a SIGINT that reaches the recorder before it installs
+# its handler kills it, and one that reaches the forked shell before `exec`
+# runs the inherited trap and is lost. A signal arriving between this check
+# and the recorder installing its handler is still forwarded by flush_stops,
+# with the same two possible outcomes.
+start_recorder() {
+    if [ "$STOP_SIGNALS" -gt 0 ]; then
+        echo "Interrupted before the recording started" >&2
+        exit 1
+    fi
+    set -m
+    "$@" &
+    RECORDER_PID=$!
+    set +m
+    flush_stops
+}
+
+# Wait for the recorder to exit, returning its status. `wait` returns early
+# (status > 128) when a trapped signal arrives; wait again while it runs.
+wait_recorder() {
+    local rc
+    while :; do
+        rc=0
+        wait "$RECORDER_PID" || rc=$?
+        if [ "$rc" -le 128 ] || ! kill -0 "$RECORDER_PID" 2>/dev/null; then
+            break
         fi
     done
-    # Clear the array so cleanup doesn't try to stop already-exited processes
-    RECORDER_PIDS=()
-    if $FAILED; then
-        echo "Error: one or more recordings failed" >&2
+    # A recorder that exited while the trap ran leaves the interrupted
+    # wait's status in rc; bash keeps the reaped child's own status.
+    if [ "$rc" -gt 128 ]; then
+        local again=0
+        wait "$RECORDER_PID" 2>/dev/null || again=$?
+        [ "$again" -ne 127 ] && rc=$again
+    fi
+    RECORDER_PID=""
+    return "$rc"
+}
+
+STOP_SIGNALS=0
+FORWARDED=0
+trap forward_stop INT TERM HUP
+
+if [ -n "$DURATION" ]; then
+    echo "Capturing for $DURATION (interval: $INTERVAL)..."
+    start_recorder "${RECORD[@]}" -d "$DURATION"
+    if ! wait_recorder; then
+        echo "Error: the recording failed" >&2
         exit 1
     fi
 
 elif [ ${#COMMAND[@]} -gt 0 ]; then
-    # Command mode: run the command, stop recorders when it exits
-    echo "Running: ${COMMAND[*]}"
-    set +e
-    "${COMMAND[@]}" &
-    CMD_PID=$!
-    wait "$CMD_PID"
-    CMD_EXIT=$?
-    CMD_PID=""
-    set -e
-
-    echo "Command exited with status $CMD_EXIT, stopping capture..."
-    stop_recorders
-    RECORDER_PIDS=()
-
-else
-    # PID mode: poll until the process exits, then stop recorders
-    while kill -0 "$MONITOR_PID" 2>/dev/null; do
-        sleep 1
-    done
-    echo "Process $MONITOR_PID exited, stopping capture..."
-    stop_recorders
-    RECORDER_PIDS=()
-fi
-
-echo "Recording complete."
-
-# Preserve individual parquet files in the output directory
-AGENT_PORT="$(extract_port "$AGENT")"
-AGENT_SUFFIX="${AGENT_PORT:-${AGENT_PID:-unknown}}"
-if [ -s "$SYSTEM_PARQUET" ]; then
-    cp "$SYSTEM_PARQUET" "${OUTPUT_DIR}/agent-${AGENT_SUFFIX}.parquet"
-    echo "  agent-${AGENT_SUFFIX}.parquet"
-fi
-for i in "${!ENDPOINTS[@]}"; do
-    if [ -s "${SERVICE_PARQUETS[$i]}" ]; then
-        ep_port="$(extract_port "${ENDPOINTS[$i]}")"
-        suffix="${ep_port:-${MONITOR_PID:-unknown}}"
-        cp "${SERVICE_PARQUETS[$i]}" "${OUTPUT_DIR}/${SOURCES[$i]}-${suffix}.parquet"
-        echo "  ${SOURCES[$i]}-${suffix}.parquet"
+    # The recorder runs the command and records for exactly its lifetime. It
+    # exits with the command's status, or 1 if the recording itself failed.
+    echo "Capturing while running: ${COMMAND[*]} (interval: $INTERVAL)"
+    start_recorder "${RECORD[@]}" -- "${COMMAND[@]}"
+    CMD_EXIT=0
+    wait_recorder || CMD_EXIT=$?
+    # A second signal makes the recorder exit 2 without finalizing, which in
+    # this mode is indistinguishable from the command exiting 2.
+    if [ "$STOP_SIGNALS" -ge 2 ]; then
+        echo "Error: the capture was aborted by a second signal" >&2
+        exit 1
     fi
-done
+    echo "Command exited with status $CMD_EXIT"
 
-# Combine or copy the output
-COMBINE_FILES=()
-[ -s "$SYSTEM_PARQUET" ] && COMBINE_FILES+=("$SYSTEM_PARQUET")
-for f in "${SERVICE_PARQUETS[@]}"; do
-    [ -s "$f" ] && COMBINE_FILES+=("$f")
-done
-
-if [ ${#COMBINE_FILES[@]} -eq 0 ]; then
-    echo "Error: no recordings were produced" >&2
-    exit 1
-elif [ ${#COMBINE_FILES[@]} -eq 1 ]; then
-    cp "${COMBINE_FILES[0]}" "$OUTPUT_FILE"
-    echo "Parquet saved to $OUTPUT_FILE"
 else
-    echo "Combining ${#COMBINE_FILES[@]} recordings..."
-    "$REZOLUS" parquet combine "${COMBINE_FILES[@]}" -o "$OUTPUT_FILE"
-    echo "Combined parquet saved to $OUTPUT_FILE"
+    echo "Capturing while process $MONITOR_PID is running (interval: $INTERVAL)..."
+    start_recorder "${RECORD[@]}"
+    while [ "$STOP_SIGNALS" -eq 0 ] && kill -0 "$MONITOR_PID" 2>/dev/null; do
+        if ! kill -0 "$RECORDER_PID" 2>/dev/null; then
+            break
+        fi
+        # A signal to the process group kills `sleep`, which `set -e` would
+        # make fatal.
+        # In the background, so a trapped signal interrupts the wait at once
+        # and two signals run the trap twice.
+        sleep 1 &
+        wait $! || true
+    done
+    if [ "$STOP_SIGNALS" -gt 0 ]; then
+        echo "Interrupted, waiting for the recorder to finalize the capture..."
+    elif kill -0 "$RECORDER_PID" 2>/dev/null; then
+        echo "Process $MONITOR_PID exited, stopping capture..."
+        kill -INT "$RECORDER_PID" 2>/dev/null || true
+    else
+        # Stopped by a signal sent to it directly: exit 0 is a finalized
+        # archive, anything else a failed recording.
+        echo "The recorder stopped before process $MONITOR_PID exited"
+    fi
+    if ! wait_recorder; then
+        echo "Error: the recording failed" >&2
+        exit 1
+    fi
+fi
+trap - INT TERM HUP
+
+if [ ! -s "$STAGED_FILE" ]; then
+    echo "Error: no recording was produced" >&2
+    exit 1
 fi
 
-# Fix ownership and permissions on output files
-for f in "$OUTPUT_DIR"/*.parquet; do
-    [ -f "$f" ] || continue
-    chown "$REAL_USER:$REAL_GROUP" "$f" 2>/dev/null || true
-    chmod 755 "$f" 2>/dev/null || true
-done
+# Replace an earlier capture, including any SQLite sidecars a reader left.
+# `mv -f` renames over the old file, so a reader never sees no capture.
+rm -f "$OUTPUT_FILE-wal" "$OUTPUT_FILE-shm"
+mv -f "$STAGED_FILE" "$OUTPUT_FILE"
+# Removed here rather than by the EXIT trap, which `exec` below skips.
+rm -rf "$STAGING"
+STAGING=""
+chown "$REAL_USER:$REAL_GROUP" "$OUTPUT_FILE" 2>/dev/null || true
+chmod 644 "$OUTPUT_FILE" 2>/dev/null || true
+echo "Recording complete: $OUTPUT_FILE"
 
 # Show metadata summary
 echo ""
 echo "Recording metadata:"
-"$REZOLUS" parquet metadata -i "$OUTPUT_FILE" 2>/dev/null || true
+"$REZOLUS" recording metadata -i "$OUTPUT_FILE" 2>/dev/null || true
 echo ""
 
 # Launch viewer
@@ -421,9 +460,9 @@ if ! $NO_VIEWER; then
     echo "Launching viewer at http://$VIEWER_LISTEN ..."
     if $STARTED_AGENT; then
         # Run without exec so the EXIT trap can stop the agent we started
-        "$REZOLUS" view "$OUTPUT_FILE" "$VIEWER_LISTEN"
+        "$REZOLUS" view "$OUTPUT_FILE" --listen "$VIEWER_LISTEN"
     else
-        exec "$REZOLUS" view "$OUTPUT_FILE" "$VIEWER_LISTEN"
+        exec "$REZOLUS" view "$OUTPUT_FILE" --listen "$VIEWER_LISTEN"
     fi
 else
     echo "Done. View the recording with:"

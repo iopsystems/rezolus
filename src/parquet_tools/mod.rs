@@ -24,17 +24,18 @@ pub fn command() -> Command {
     // commands is a recording.
     Command::new("recording")
         .alias("parquet")
-        .about("Inspect and transform Rezolus recordings (.parquet files and .rez archives)")
+        .about("Inspect and transform Rezolus recordings (.dendro and .rez archives, .parquet files)")
         .long_about(
-            "Offline operations on recordings produced by `rezolus record` or\n\
-             `rezolus hindsight` — both plain `.parquet` files and `.rez` archives.\n\n\
+            "Offline operations on recordings: the .dendro archives `rezolus record` and\n\
+             `rezolus hindsight` write, and the .rez archives and .parquet files that 5.x\n\
+             releases wrote.\n\n\
              SUBCOMMANDS:\n    \
              metadata   Inspect a file's file-level/column metadata, schema, and geometry\n    \
              annotate   Embed service-extension KPIs, events, or source/node tags into a file\n    \
              check      Evaluate the KPI checks a recording carries and report pass/fail verdicts\n    \
-             combine    Merge multiple files (multi-node / multi-instance), assemble an A/B .rez, or build a legacy A/B tarball\n    \
-             convert    Turn a raw msgpack recording (from `record -o out.raw`) into parquet\n    \
-             filter     Drop columns not needed by a file's service-extension KPIs (shrink it)\n    \
+             combine    Merge multiple files (multi-node / multi-instance), assemble an A/B .dendro or .rez, or build a legacy A/B tarball\n    \
+             convert    Turn a raw msgpack recording (from a 5.x `record -o out.raw`) into parquet\n    \
+             filter     Shrink a recording: parquet columns its KPIs do not need, or .dendro/.rez samplers and metrics\n    \
              upgrade    Convert a v1/v2 (tar) `.rez` archive to the v3 (SQLite) container\n\n\
              Run `rezolus recording <subcommand> --help` for per-subcommand examples.\n\n\
              `rezolus parquet ...` still works and does the same thing.",
@@ -323,10 +324,10 @@ pub fn command() -> Command {
         )
         .subcommand(
             Command::new("combine")
-                .about("Combine recordings: multi-node/multi-instance parquet, a multi-recording .rez, or an A/B tarball (legacy)")
+                .about("Combine recordings: multi-node/multi-instance parquet, a multi-recording .dendro or .rez, or an A/B tarball (legacy)")
                 .long_about(
-                    "Merge two or more parquet recordings into a single file. Requires at least\n\
-                     two inputs and an output path (-o).\n\n\
+                    "Merge two or more recordings into a single file. Requires at least two\n\
+                     inputs and an output path (-o).\n\n\
                      Default (row-merge): joins the inputs on timestamp into one recording — use\n\
                      it to stitch together multiple rezolus nodes and/or per-instance service\n\
                      files so the viewer shows them together.\n\n\
@@ -342,6 +343,11 @@ pub fn command() -> Command {
                      WINDOWLESS and the viewer/query engine shows no rate uncertainty band for\n\
                      them (the honest outcome — the windows were never recorded). Inputs must be\n\
                      all `.rez` or all `.parquet`, not a mix.\n\n\
+                     .dendro output: give a `.dendro` output path and combine assembles `.dendro`\n\
+                     and `.rez` inputs, in any mix, into one dendro archive with a recording per\n\
+                     input. A `.dendro` input can only be combined into a `.dendro` output, and a\n\
+                     `.parquet` input cannot be: combine parquet into a `.rez` first, then\n\
+                     convert it with `recording upgrade --to dendro`.\n\n\
                      --ab (tarball, legacy): packages exactly two parquet captures unmodified\n\
                      into a combined-A/B tarball. The output should end in `.parquet.ab.tar`, and\n\
                      you map each side with `baseline=<src> experiment=<src>` where <src> is a\n\
@@ -356,6 +362,8 @@ pub fn command() -> Command {
                      rezolus recording combine node1.parquet node2.parquet -o cluster.parquet --pinned node1\n\n    \
                      # A/B compare two rezolus .rez captures (PREFERRED): a 2-recording .rez\n    \
                      rezolus recording combine baseline.rez experiment.rez -o ab.rez\n\n    \
+                     # A/B compare two .dendro captures: a 2-recording .dendro\n    \
+                     rezolus recording combine baseline.dendro experiment.dendro -o ab.dendro\n\n    \
                      # A/B compare two parquet captures into one .rez (windowless recordings)\n    \
                      rezolus recording combine redis.parquet valkey.parquet -o ab.rez\n\n    \
                      # A/B tarball (legacy) — a combined tarball rather than a .rez\n    \
@@ -363,7 +371,7 @@ pub fn command() -> Command {
                 )
                 .arg(
                     clap::Arg::new("FILES")
-                        .help("Input parquet files (rezolus agent and/or service files)")
+                        .help("Input recordings: .parquet files (rezolus agent and/or service files), or .dendro and .rez archives")
                         .value_parser(value_parser!(PathBuf))
                         .required(true)
                         .num_args(2..)
@@ -373,7 +381,7 @@ pub fn command() -> Command {
                     clap::Arg::new("output")
                         .short('o')
                         .long("output")
-                        .help("Output parquet file path")
+                        .help("Output path; the extension picks the result: .parquet (row-merge), .rez or .dendro (multi-recording archive), .parquet.ab.tar (with --ab)")
                         .value_parser(value_parser!(PathBuf))
                         .required(true),
                 )
@@ -492,14 +500,10 @@ pub fn command() -> Command {
             Command::new("convert")
                 .about("Convert a raw msgpack recording into parquet")
                 .long_about(
-                    "Convert a recording made with `rezolus record -o out.raw` (concatenated msgpack\n\
-                     snapshots, one per sampling tick) into a parquet file that the viewer, the\n\
-                     MCP tools and the rest of `rezolus recording` can read.\n\n\
-                     Raw is the cheapest capture mode: the recorder appends snapshots as they\n\
-                     arrive and finalizing is a byte copy rather than a conversion that grows\n\
-                     with run length, so long unattended captures record raw and convert\n\
-                     afterwards. Recording straight to parquet (`record -o out.parquet`) is simpler\n\
-                     for a short supervised run.\n\n\
+                    "Convert a recording made with a 5.x `rezolus record -o out.raw` (concatenated\n\
+                     msgpack snapshots, one per sampling tick) into a parquet file that the\n\
+                     viewer, the MCP tools and the rest of `rezolus recording` can read. 6.x\n\
+                     records .dendro only, so this is for raw recordings made before 6.0.\n\n\
                      The input may be plain or zstd-compressed; which one it is is detected from\n\
                      the file's contents, not its name. The output path defaults to the input\n\
                      with a trailing .zst and then a trailing .raw stripped, and .parquet\n\
@@ -526,7 +530,7 @@ pub fn command() -> Command {
                      A .rez archive cannot be produced from a raw recording: it needs per-sampler\n\
                      cadence and acquisition windows that a raw snapshot stream never carried.\n\n\
                      EXAMPLES:\n    \
-                     # The producing side, for reference\n    \
+                     # The producing side, with a 5.x binary, for reference\n    \
                      rezolus record --url http://localhost:4241 -o rezolus.raw\n\n    \
                      # Convert a compressed recording (writes rezolus.parquet)\n    \
                      rezolus recording convert rezolus.raw.zst\n\n    \
@@ -609,20 +613,21 @@ pub fn command() -> Command {
         )
         .subcommand(
             Command::new("filter")
-                .about("Shrink a recording to what its KPIs need: parquet columns, or .rez samplers")
+                .about("Shrink a recording to what its KPIs need: parquet columns, or .dendro/.rez samplers and metrics")
                 .long_about(
                     "Shrink a recording by dropping what its service-extension KPIs do not need.\n\n\
                      For a parquet file that means metric COLUMNS: the KPI set comes from the\n\
                      file's embedded annotation (or a matching built-in template), and --queries\n\
                      overrides it.\n\n\
-                     For a .rez archive there is no KPI column set to filter against (it is\n\
-                     all-rezolus data), so you name what to keep directly: --samplers keeps whole\n\
-                     SAMPLERS (a sampler's group tables go together) and --metrics keeps metric\n\
-                     COLUMNS (re-encoding each table's segments, always keeping the timestamp and\n\
-                     acquisition-window sidecars; a table left with none of the kept metrics is\n\
-                     dropped). Use either alone or together; at least one is required, and both\n\
-                     are ignored for parquet. Either container works and the output is always v3\n\
-                     (SQLite).\n\n\
+                     For a .dendro or .rez archive there is no KPI column set to filter against\n\
+                     (it is all-rezolus data), so you name what to keep directly: --samplers\n\
+                     keeps whole SAMPLERS (a sampler's group tables go together) and --metrics\n\
+                     keeps metric COLUMNS (re-encoding each table's segments, always keeping the\n\
+                     timestamp and acquisition-window sidecars; a table left with none of the\n\
+                     kept metrics is dropped). Use either alone or together; at least one is\n\
+                     required, and both are ignored for parquet. The output is in the input's\n\
+                     container, whatever its extension: a .dendro input writes a .dendro\n\
+                     archive, and a .rez input (v2 tar or v3) writes a v3 (SQLite) .rez.\n\n\
                      By default the input is rewritten in place; pass -o/--output to write a new\n\
                      file and leave the original untouched.\n\n\
                      EXAMPLES:\n    \
@@ -632,6 +637,8 @@ pub fn command() -> Command {
                      rezolus recording filter rezolus.parquet -o slim.parquet\n\n    \
                      # Filter to the columns a custom KPI set needs\n    \
                      rezolus recording filter rezolus.parquet --queries ext.json -o slim.parquet\n\n    \
+                     # Keep only two samplers of a .dendro, writing a slimmed copy\n    \
+                     rezolus recording filter capture.dendro --samplers cpu_usage,scheduler -o slim.dendro\n\n    \
                      # Keep only two samplers of a .rez, writing a slimmed copy\n    \
                      rezolus recording filter out.rez --samplers cpu_usage,scheduler -o slim.rez\n\n    \
                      # Keep only specific metric columns of a .rez\n    \
@@ -639,7 +646,7 @@ pub fn command() -> Command {
                 )
                 .arg(
                     clap::Arg::new("FILE")
-                        .help("Recording to filter: a .parquet file, or a .rez archive (which needs --samplers)")
+                        .help("Recording to filter: a .parquet file, or a .dendro or .rez archive (which needs --samplers and/or --metrics)")
                         .value_parser(value_parser!(PathBuf))
                         .required(true)
                         .index(1),
@@ -673,7 +680,7 @@ pub fn command() -> Command {
                     clap::Arg::new("samplers")
                         .long("samplers")
                         .value_name("A,B,...")
-                        .help("For .rez archives: comma-separated sampler names to KEEP; every other sampler's tables are dropped (ignored for parquet). Filtering is by sampler, so a sampler's group tables go together. Either container works; the output is always v3 (SQLite)")
+                        .help("For .dendro and .rez archives: comma-separated sampler names to KEEP; every other sampler's tables are dropped (ignored for parquet). Filtering is by sampler, so a sampler's group tables go together. The output is in the input's container: .dendro for a .dendro input, v3 (SQLite) for a .rez")
                         .value_parser(value_parser!(String))
                         .action(clap::ArgAction::Set),
                 )
@@ -681,7 +688,7 @@ pub fn command() -> Command {
                     clap::Arg::new("metrics")
                         .long("metrics")
                         .value_name("A,B,...")
-                        .help("For .rez archives: comma-separated metric names to KEEP as COLUMNS; every other metric's columns are dropped and re-encoded (ignored for parquet). Timestamp and acquisition-window sidecars are always kept; a table left with none of the kept metrics is dropped. Combine with --samplers, or use either alone (at least one is required for a .rez)")
+                        .help("For .dendro and .rez archives: comma-separated metric names to KEEP as COLUMNS; every other metric's columns are dropped and re-encoded (ignored for parquet). Timestamp and acquisition-window sidecars are always kept; a table left with none of the kept metrics is dropped. Combine with --samplers, or use either alone (at least one is required for an archive)")
                         .value_parser(value_parser!(String))
                         .action(clap::ArgAction::Set),
                 ),

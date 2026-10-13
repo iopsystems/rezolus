@@ -51,7 +51,7 @@ ttl = "10ms"
 #   - Anything parsing /metrics/json DIRECTLY. Its shape changes wholesale:
 #     a flat `{counters: [...], gauges: [...], histograms: [...]}` becomes
 #     `{groups: [{name, schema, counters, gauges, histograms}, ...]}`. The
-#     exporter, and `record` to .rez, parquet or raw, handle both; a
+#     exporter, and a 5.x `record` to .rez, parquet or raw, handle both; a
 #     homegrown scraper of that endpoint needs changing.
 #
 #   - A consumer built before SnapshotV3 existed. It cannot decode a v3

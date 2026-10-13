@@ -1,5 +1,4 @@
 use super::endpoint::{EndpointConfig, Protocol};
-use crate::Format;
 
 use clap::ArgMatches;
 use reqwest::Url;
@@ -19,8 +18,11 @@ struct TomlConfig {
 struct RecordingSection {
     interval: Option<String>,
     output: String,
+    /// Kept so a config written for 5.x is refused by name: `dendro` is
+    /// accepted, and every other value is refused by [`check_format`].
     #[serde(default)]
     format: Option<String>,
+    /// As `format`: `separate = true` is refused (see [`refuse_separate`]).
     #[serde(default)]
     separate: Option<bool>,
 }
@@ -28,20 +30,16 @@ struct RecordingSection {
 pub struct RecordingConfig {
     pub interval: humantime::Duration,
     pub duration: Option<humantime::Duration>,
-    pub format: Format,
     pub verbose: u8,
+    /// The `.dendro` archive to write. Always ends in `.dendro`: see
+    /// [`check_output`].
     pub output: PathBuf,
-    pub separate: bool,
     pub metadata: Vec<(String, String)>,
-    /// Recording labels for `.rez` output (`--label k=v`); `source`/`host` auto-added.
+    /// Recording labels (`--label k=v`); `source`/`host` auto-added.
     pub labels: Vec<(String, String)>,
     pub endpoints: Vec<EndpointConfig>,
     /// When set, record only while this command runs (perf-record style).
     pub command: Option<Vec<String>>,
-    /// True when the format came from the default rather than from `--format`
-    /// or an output extension. Only such a run may fall back from `.rez` to
-    /// parquet for an endpoint `.rez` cannot record.
-    pub format_defaulted: bool,
     /// `--record-command-line`: put the wrapped command's full argument list
     /// in the `run_start` event's `details`. Off by default because an
     /// argument list can carry paths and tokens the recording's reader should
@@ -52,96 +50,108 @@ pub struct RecordingConfig {
 /// Default endpoint used when neither `--url` nor a positional URL is given.
 const DEFAULT_URL: &str = "http://localhost:4241";
 
-/// Default output file for a format, used when neither `-o` nor a positional
-/// OUTPUT is given. The stem is constant; the extension follows the format so
-/// the file never lies about what is inside it.
-fn default_output_for(format: Format) -> PathBuf {
-    PathBuf::from(match format {
-        Format::Rez => "rezolus.rez",
-        Format::Dendro => "rezolus.dendro",
-        Format::Parquet => "rezolus.parquet",
-        Format::Raw => "rezolus.raw",
-    })
+/// Default output file, used when neither `-o` nor a positional OUTPUT is
+/// given.
+const DEFAULT_OUTPUT: &str = "rezolus.dendro";
+
+/// The output formats 5.x wrote and 6.x does not, by the name `--format` and
+/// the output extension used for each.
+const REMOVED_FORMATS: [&str; 3] = ["rez", "parquet", "raw"];
+
+/// Where an output path came from, so a refusal quotes it back the way the
+/// caller wrote it.
+#[derive(Clone, Copy)]
+enum OutputOrigin<'a> {
+    /// `-o/--output`.
+    Flag,
+    /// The deprecated positional OUTPUT.
+    Positional,
+    /// The `output` key of a `--config` file at this path.
+    Config(&'a Path),
 }
 
-/// The format an output path's extension names, if it names one. An unknown
-/// extension has no opinion, leaving `--format` (or the parquet fallback) to
-/// decide.
-fn format_from_extension(path: &Path) -> Option<Format> {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("rez") => Some(Format::Rez),
-        Some("dendro") => Some(Format::Dendro),
-        Some("parquet") => Some(Format::Parquet),
-        Some("raw") => Some(Format::Raw),
-        _ => None,
-    }
-}
-
-/// A resolved `(format, output)` pair.
-#[derive(Debug)]
-pub struct OutputPlan {
-    pub format: Format,
-    pub output: PathBuf,
-    /// True only when nothing pinned the format: no `--format`, and no output
-    /// path to read an extension off. Those runs default to `.dendro`, and
-    /// only those may be demoted to parquet when the run cannot be recorded
-    /// into an archive (see `recorder::run`).
-    pub defaulted: bool,
-}
-
-/// Resolve the output format and path.
-///
-/// `--format` and the output extension are both authoritative, so when both
-/// name a format and disagree the command is rejected rather than silently
-/// resolved one way: writing a `.rez` archive to a file called `out.parquet`
-/// (which is what the old extension-wins rule did) breaks every tool
-/// downstream that dispatches on the name.
-fn resolve_format_and_output(
-    explicit_format: Option<Format>,
-    output: Option<&Path>,
-) -> Result<OutputPlan, String> {
-    let Some(path) = output else {
-        let format = explicit_format.unwrap_or(Format::Dendro);
-        return Ok(OutputPlan {
-            format,
-            output: default_output_for(format),
-            defaulted: explicit_format.is_none(),
-        });
-    };
-
-    let from_ext = format_from_extension(path);
-    if let (Some(flag), Some(ext)) = (explicit_format, from_ext) {
-        if flag != ext {
-            return Err(format!(
-                "--format {} conflicts with the output path {}; drop one of them",
-                format_name(flag),
-                path.display()
-            ));
+impl OutputOrigin<'_> {
+    /// `path` as the caller wrote it: `-o out.rez`, `OUTPUT out.rez`, or
+    /// `in rec.toml: output = "out.rez"`.
+    fn quote(self, path: &Path) -> String {
+        match self {
+            Self::Flag => format!("-o {}", path.display()),
+            Self::Positional => format!("OUTPUT {}", path.display()),
+            Self::Config(file) => format!(
+                "in {}: output = {:?}",
+                file.display(),
+                path.display().to_string()
+            ),
         }
     }
-
-    Ok(OutputPlan {
-        format: explicit_format.or(from_ext).unwrap_or(Format::Parquet),
-        output: path.to_path_buf(),
-        defaulted: false,
-    })
 }
 
-/// Whether a format is an archive of recordings (`.rez` or dendro) rather
-/// than one file of rows. Archive formats hold every endpoint as its own
-/// recording, and are written through the recording writers, not the parquet
-/// or raw path.
-pub fn is_archive(format: Format) -> bool {
-    matches!(format, Format::Rez | Format::Dendro)
+/// "A rezolus 5.x recorder (5.27.0 or later)", the fallback every refusal of
+/// a removed 5.x behaviour names, at the start of a sentence.
+fn recorder_5x() -> String {
+    format!("A rezolus 5.x recorder ({} or later)", super::RELEASE_5X)
 }
 
-pub fn format_name(format: Format) -> &'static str {
+/// The refusal for a format 6.x no longer writes. `asked` is the flag or
+/// path that named it, quoted back first.
+fn removed_format(asked: &str, format: &str) -> String {
+    let convert = if format == "rez" {
+        " `rezolus recording upgrade --to dendro in.rez -o out.dendro` converts a .rez \
+         afterwards."
+    } else {
+        ""
+    };
+    format!(
+        "{asked}: rezolus 6.x writes .dendro only (-o out.dendro); .{format} output was \
+         removed in 6.0. {} still writes .{format}.{convert}",
+        recorder_5x()
+    )
+}
+
+/// Accept `--format dendro` (or the TOML `format` key), and refuse every
+/// other value: the 5.x formats by name, anything else as unknown.
+fn check_format(format: &str) -> Result<(), String> {
     match format {
-        Format::Rez => "rez",
-        Format::Dendro => "dendro",
-        Format::Parquet => "parquet",
-        Format::Raw => "raw",
+        "dendro" => Ok(()),
+        f if REMOVED_FORMATS.contains(&f) => Err(removed_format(&format!("--format {f}"), f)),
+        other => Err(format!(
+            "unknown format {other:?}: rezolus 6.x writes .dendro only"
+        )),
     }
+}
+
+/// Accept an output path ending in `.dendro`, and refuse any other, quoting
+/// the path back as `origin` gave it.
+///
+/// An extension 5.x read as a format (`.rez`, `.parquet`, `.raw`) is refused
+/// by name. Any other extension, or none, is refused too: 5.x wrote parquet
+/// there, so a caller passing `-o capture.dat` expects parquet, and a
+/// `.dendro` archive under that name would be a file whose name does not say
+/// what it holds.
+fn check_output(path: &Path, origin: OutputOrigin) -> Result<(), String> {
+    let asked = origin.quote(path);
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("dendro") => Ok(()),
+        Some(ext) if REMOVED_FORMATS.contains(&ext) => Err(removed_format(&asked, ext)),
+        _ => Err(format!(
+            "{asked}: the output must end in .dendro; rezolus 6.x writes .dendro archives \
+             only. {} wrote this path as parquet and still does.",
+            recorder_5x()
+        )),
+    }
+}
+
+/// `--separate` (or `separate = true`) wrote one parquet or raw file per
+/// endpoint. A `.dendro` holds each endpoint as its own recording, so the
+/// flag has nothing left to do. It is refused rather than ignored: a caller
+/// expecting one file per endpoint would otherwise find one archive.
+fn refuse_separate() -> String {
+    format!(
+        "--separate: rezolus 6.x writes one .dendro holding each endpoint as its own \
+         recording, and --separate was removed in 6.0. {} still writes one parquet or \
+         raw file per endpoint.",
+        recorder_5x()
+    )
 }
 
 /// Resolve the recording URL from the `--url` flag and the deprecated
@@ -160,8 +170,7 @@ fn resolve_url(flag: Option<&Url>, positional: Option<&Url>) -> Result<(Url, boo
 
 /// Resolve the output path from `-o/--output` and the deprecated positional
 /// OUTPUT. Returns `(path, positional_was_used)`; `None` means neither was
-/// given, which is what lets the format pick the default filename. Errors if
-/// both are supplied.
+/// given. Errors if both are supplied.
 fn resolve_output(
     flag: Option<&Path>,
     positional: Option<&Path>,
@@ -176,65 +185,19 @@ fn resolve_output(
     }
 }
 
-/// `--separate` writes one file per endpoint, which a `.rez` has no way to do:
-/// every endpoint is already its own recording inside the one archive.
-///
-/// Rejected rather than ignored, but only when `.rez` was actually ASKED for.
-/// Before `.rez` learned to hold several recordings this combination hit the
-/// multi-endpoint blocker, so silently accepting it now would turn a run that
-/// used to fail loudly into one that writes a single file the caller is not
-/// expecting. Checked against the RESOLVED format, so `-o out.rez` is caught
-/// as well as an explicit `--format rez`.
-///
-/// A *defaulted* format is not an ask: a bare `record --separate --endpoint a
-/// --endpoint b` chose nothing, and erroring on it would regress a run that
-/// used to write one parquet per endpoint. That case demotes to parquet at
-/// startup instead, the same way a Prometheus endpoint demotes it — see
-/// `demote_from_rez`.
-///
-/// And with ONE endpoint `--separate` is a no-op by definition — there is
-/// nothing to separate — so it is left alone. The old multi-endpoint blocker
-/// never fired on a single-endpoint run either, and a harness that passes
-/// `--separate` unconditionally must not start failing when it happens to be
-/// given one endpoint.
-fn reject_separate_with_rez(
-    separate: bool,
-    format: Format,
-    defaulted: bool,
-    endpoints: usize,
-) -> Result<(), String> {
-    if separate && is_archive(format) && !defaulted && endpoints > 1 {
-        return Err(format!(
-            "--separate does not apply to .{}: every endpoint already becomes its \
-                    own recording inside the one archive. Drop --separate, or pass \
-                    --format parquet (or -o with a .parquet extension) for a file per \
-                    endpoint",
-            format_name(format)
-        ));
-    }
-    Ok(())
-}
-
 impl RecordingConfig {
-    /// Whether Rezolus agents in this run are streamed rather than scraped.
-    ///
-    /// True exactly when the run writes a `.dendro`: that archive records
-    /// every agent from `/metrics/stream`, and every other format scrapes.
-    /// Prometheus endpoints are scraped either way. Read after the startup
-    /// demotion (`demote_from_rez`), which can turn a defaulted `.dendro` into
-    /// parquet.
-    pub fn streams_agents(&self) -> bool {
-        self.format == Format::Dendro
-    }
-
     pub fn from_args(args: &ArgMatches) -> Result<Self, String> {
         let verbose = *args.get_one::<u8>("VERBOSE").unwrap_or(&0);
         let interval = *args
             .get_one::<humantime::Duration>("INTERVAL")
             .unwrap_or(&humantime::Duration::from_str("1s").unwrap());
         let duration = args.get_one::<humantime::Duration>("DURATION").copied();
-        let explicit_format = args.get_one::<Format>("FORMAT").copied();
-        let separate = args.get_flag("SEPARATE");
+        if let Some(format) = args.get_one::<String>("FORMAT") {
+            check_format(format)?;
+        }
+        if args.get_flag("SEPARATE") {
+            return Err(refuse_separate());
+        }
         let record_command_line = args.get_flag("RECORD_COMMAND_LINE");
         let metadata: Vec<(String, String)> = args
             .get_many::<String>("METADATA")
@@ -262,7 +225,11 @@ impl RecordingConfig {
         let out_flag = args.get_one::<PathBuf>("OUTPUT_FLAG").map(|p| p.as_path());
         let out_pos = args.get_one::<PathBuf>("OUTPUT").map(|p| p.as_path());
         let (explicit_output, output_deprecated) = resolve_output(out_flag, out_pos)?;
-        let plan = resolve_format_and_output(explicit_format, explicit_output.as_deref())?;
+        let explicit_origin = if output_deprecated {
+            OutputOrigin::Positional
+        } else {
+            OutputOrigin::Flag
+        };
 
         // Mode 1: --config file.toml
         if let Some(config_path) = args.get_one::<PathBuf>("CONFIG_FILE") {
@@ -282,62 +249,50 @@ impl RecordingConfig {
                     interval
                 };
 
-            // The TOML `[recording]` table stands in for the flags it
-            // mirrors: its `format` is as explicit as `--format`, and its
-            // `output` is mandatory, so a config-file run is never a
-            // defaulted-format run.
-            let config_format = match explicit_format {
-                Some(f) => Some(f),
-                None => match toml_cfg.recording.format {
-                    Some(ref s) => Some(match s.as_str() {
-                        "parquet" => Format::Parquet,
-                        "raw" => Format::Raw,
-                        "rez" => Format::Rez,
-                        "dendro" => Format::Dendro,
-                        other => return Err(format!("unknown format in config: {other}")),
-                    }),
-                    None => None,
-                },
-            };
-
-            let separate =
-                if args.value_source("SEPARATE") == Some(clap::parser::ValueSource::CommandLine) {
-                    separate
-                } else {
-                    toml_cfg.recording.separate.unwrap_or(false)
-                };
+            if let Some(ref format) = toml_cfg.recording.format {
+                check_format(format).map_err(|e| format!("in {}: {e}", config_path.display()))?;
+            }
+            if toml_cfg.recording.separate == Some(true) {
+                return Err(format!(
+                    "in {}: {}",
+                    config_path.display(),
+                    refuse_separate()
+                ));
+            }
 
             if toml_cfg.endpoints.is_empty() {
                 return Err("config file must define at least one endpoint".to_string());
             }
 
-            let config_output = match explicit_output {
-                Some(ref p) => p.clone(),
-                None => PathBuf::from(toml_cfg.recording.output),
+            let (output, origin) = match explicit_output {
+                Some(p) => (p, explicit_origin),
+                None => (
+                    PathBuf::from(toml_cfg.recording.output),
+                    OutputOrigin::Config(config_path),
+                ),
             };
-            let plan = resolve_format_and_output(config_format, Some(&config_output))?;
-            reject_separate_with_rez(
-                separate,
-                plan.format,
-                plan.defaulted,
-                toml_cfg.endpoints.len(),
-            )?;
+            check_output(&output, origin)?;
 
             return Ok(RecordingConfig {
                 interval,
                 duration,
-                format: plan.format,
                 verbose,
-                output: plan.output,
-                separate,
+                output,
                 metadata,
                 labels,
                 endpoints: toml_cfg.endpoints,
                 command: command.clone(),
-                format_defaulted: plan.defaulted,
                 record_command_line,
             });
         }
+
+        let output = match explicit_output {
+            Some(p) => {
+                check_output(&p, explicit_origin)?;
+                p
+            }
+            None => PathBuf::from(DEFAULT_OUTPUT),
+        };
 
         // Mode 2: --endpoint url,source=name (repeatable)
         if let Some(endpoint_strs) = args.get_many::<String>("ENDPOINT") {
@@ -348,20 +303,16 @@ impl RecordingConfig {
             if endpoints.is_empty() {
                 return Err("at least one --endpoint is required".to_string());
             }
-            reject_separate_with_rez(separate, plan.format, plan.defaulted, endpoints.len())?;
 
             return Ok(RecordingConfig {
                 interval,
                 duration,
-                format: plan.format,
                 verbose,
-                output: plan.output,
-                separate,
+                output,
                 metadata,
                 labels,
                 endpoints,
                 command: command.clone(),
-                format_defaulted: plan.defaulted,
                 record_command_line,
             });
         }
@@ -389,21 +340,16 @@ impl RecordingConfig {
             role: None,
             protocol: None,
         };
-        // One endpoint by construction, so `--separate` has nothing to split.
-        reject_separate_with_rez(separate, plan.format, plan.defaulted, 1)?;
 
         Ok(RecordingConfig {
             interval,
             duration,
-            format: plan.format,
             verbose,
-            output: plan.output,
-            separate,
+            output,
             metadata,
             labels,
             endpoints: vec![endpoint],
             command,
-            format_defaulted: plan.defaulted,
             record_command_line,
         })
     }
@@ -437,7 +383,7 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
                 "role" => role = Some(value.to_string()),
                 "protocol" => {
                     protocol = Some(match value {
-                        "msgpack" => Protocol::Msgpack,
+                        "rezolus" | "msgpack" => Protocol::Msgpack,
                         "prometheus" => Protocol::Prometheus,
                         other => return Err(format!("unknown protocol: '{other}'")),
                     });
@@ -460,20 +406,26 @@ mod tests {
     use super::*;
     use crate::recorder::endpoint::Protocol;
 
+    fn parse(args: &[&str]) -> Result<RecordingConfig, String> {
+        let mut argv = vec!["record"];
+        argv.extend_from_slice(args);
+        crate::recorder::command()
+            .try_get_matches_from(argv)
+            .map_err(|e| e.to_string())
+            .and_then(|m| RecordingConfig::from_args(&m))
+    }
+
     #[test]
     fn label_flag_parses_into_config() {
-        let matches = crate::recorder::command()
-            .try_get_matches_from([
-                "record",
-                "--url",
-                "http://localhost:4241",
-                "--label",
-                "arm=redis",
-                "--label",
-                "role=server",
-            ])
-            .unwrap();
-        let cfg = RecordingConfig::from_args(&matches).unwrap();
+        let cfg = parse(&[
+            "--url",
+            "http://localhost:4241",
+            "--label",
+            "arm=redis",
+            "--label",
+            "role=server",
+        ])
+        .unwrap();
         assert_eq!(
             cfg.labels,
             vec![
@@ -483,32 +435,144 @@ mod tests {
         );
     }
 
-    /// A `.dendro` streams agents and every other format scrapes them.
+    /// A bare `rezolus record` writes `rezolus.dendro`.
     #[test]
-    fn dendro_streams_agents_and_every_other_format_scrapes() {
-        let parse = |args: &[&str]| {
-            let mut argv = vec!["record"];
-            argv.extend_from_slice(args);
-            crate::recorder::command()
-                .try_get_matches_from(argv)
-                .map_err(|e| e.to_string())
-                .and_then(|m| RecordingConfig::from_args(&m))
+    fn no_output_defaults_to_rezolus_dendro() {
+        assert_eq!(parse(&[]).unwrap().output, PathBuf::from("rezolus.dendro"));
+        assert_eq!(
+            parse(&["-o", "out.dendro"]).unwrap().output,
+            PathBuf::from("out.dendro")
+        );
+    }
+
+    /// Each extension 5.x read as a format is refused by name, pointing at
+    /// `.dendro` and at a 5.x recorder, and quoting the path the way it was
+    /// given: `-o out.rez`, or `OUTPUT out.rez` for the positional form.
+    #[test]
+    fn an_output_in_a_removed_format_is_refused() {
+        for ext in ["rez", "parquet", "raw"] {
+            let path = format!("out.{ext}");
+            // `-o`, and the deprecated positional OUTPUT after a positional URL.
+            for (args, asked) in [
+                (vec!["-o", path.as_str()], format!("-o {path}: ")),
+                (vec!["http://h:1", &path], format!("OUTPUT {path}: ")),
+            ] {
+                let err = parse(&args).err().unwrap_or_else(|| panic!("{args:?}"));
+                assert!(err.starts_with(&asked), "{asked:?} starts {err}");
+                for needle in [
+                    "writes .dendro only",
+                    "-o out.dendro",
+                    &format!("5.x recorder ({} or later)", crate::recorder::RELEASE_5X),
+                ] {
+                    assert!(err.contains(needle), "{needle:?} in {err}");
+                }
+                assert_eq!(err.contains("upgrade --to dendro"), ext == "rez", "{err}");
+            }
+        }
+    }
+
+    /// Any other extension, or none, is refused too, pointing at the 5.x
+    /// recorder that wrote parquet there.
+    #[test]
+    fn an_output_not_ending_in_dendro_is_refused() {
+        for path in ["capture.dat", "capture", "out.dendro.tmp"] {
+            let err = parse(&["-o", path])
+                .err()
+                .unwrap_or_else(|| panic!("{path}"));
+            assert!(err.starts_with(&format!("-o {path}: ")), "{err}");
+            assert!(err.contains("must end in .dendro"), "{err}");
+            assert!(err.contains("5.x recorder"), "{err}");
+            assert!(err.contains("as parquet"), "{err}");
+        }
+    }
+
+    /// `--format dendro` is still accepted; the removed formats are refused
+    /// by name and anything else as unknown.
+    #[test]
+    fn format_accepts_only_dendro() {
+        assert!(parse(&["--format", "dendro"]).is_ok());
+        assert!(parse(&["-f", "dendro", "-o", "x.dendro"]).is_ok());
+        for f in ["rez", "parquet", "raw"] {
+            let err = parse(&["--format", f]).err().unwrap();
+            assert!(err.contains(&format!("--format {f}")), "{err}");
+            assert!(err.contains("writes .dendro only"), "{err}");
+            assert!(err.contains("5.x recorder"), "{err}");
+        }
+        let err = parse(&["--format", "csv"]).err().unwrap();
+        assert!(err.contains("unknown format"), "{err}");
+    }
+
+    /// `--separate` is refused with any number of endpoints, rather than
+    /// ignored.
+    #[test]
+    fn separate_is_refused() {
+        for args in [
+            &["--separate"][..],
+            &[
+                "--separate",
+                "--endpoint",
+                "http://a:1",
+                "--endpoint",
+                "http://b:1",
+            ],
+        ] {
+            let err = parse(args).err().unwrap();
+            assert!(err.contains("--separate"), "{err}");
+            assert!(err.contains("5.x recorder"), "{err}");
+        }
+    }
+
+    /// A config file is held to the same rules: its output must be a
+    /// `.dendro`, its `format` must be `dendro`, and `separate = true` is
+    /// refused. `-o` on the command line overrides its output.
+    #[test]
+    fn a_config_file_is_held_to_the_same_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |name: &str, recording: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(
+                &path,
+                format!(
+                    "[recording]\n{recording}\n\n[[endpoints]]\nurl = \"http://localhost:4241\"\n"
+                ),
+            )
+            .unwrap();
+            path.to_str().unwrap().to_string()
         };
 
-        // The default output is a .dendro.
-        let defaulted = parse(&[]).unwrap();
-        assert_eq!(defaulted.format, Format::Dendro);
-        assert!(defaulted.streams_agents());
-        for args in [&["-o", "out.dendro"][..], &["--format", "dendro"]] {
-            assert!(parse(args).unwrap().streams_agents(), "{args:?}");
-        }
-        for args in [
-            &["-o", "out.rez"][..],
-            &["-o", "out.parquet"],
-            &["--format", "raw"],
-        ] {
-            assert!(!parse(args).unwrap().streams_agents(), "{args:?} scrapes");
-        }
+        let ok = write("ok.toml", "output = \"run.dendro\"\nformat = \"dendro\"");
+        let cfg = parse(&["--config", &ok]).unwrap();
+        assert_eq!(cfg.output, PathBuf::from("run.dendro"));
+
+        let parquet = write("parquet.toml", "output = \"run.parquet\"");
+        let err = parse(&["--config", &parquet]).err().unwrap();
+        assert!(
+            err.starts_with(&format!("in {parquet}: output = \"run.parquet\": ")),
+            "{err}"
+        );
+        assert!(err.contains("5.x recorder"), "{err}");
+        let dat = write("dat.toml", "output = \"run.dat\"");
+        let err = parse(&["--config", &dat]).err().unwrap();
+        assert!(
+            err.starts_with(&format!("in {dat}: output = \"run.dat\": ")),
+            "{err}"
+        );
+        assert_eq!(
+            parse(&["--config", &parquet, "-o", "run.dendro"])
+                .unwrap()
+                .output,
+            PathBuf::from("run.dendro")
+        );
+
+        let rez = write("rez.toml", "output = \"run.dendro\"\nformat = \"rez\"");
+        let err = parse(&["--config", &rez]).err().unwrap();
+        assert!(err.contains("--format rez"), "{err}");
+
+        let separate = write("separate.toml", "output = \"run.dendro\"\nseparate = true");
+        let err = parse(&["--config", &separate]).err().unwrap();
+        assert!(err.contains("--separate"), "{err}");
+        let not_separate = write("not.toml", "output = \"run.dendro\"\nseparate = false");
+        assert!(parse(&["--config", &not_separate]).is_ok());
     }
 
     /// `--stream` was removed before 6.0.0: the output format decides the
@@ -527,14 +591,8 @@ mod tests {
 
     /// `--rez-version` is gone, and a script still passing it must FAIL rather
     /// than be silently ignored.
-    ///
-    /// The flag selected a container this binary no longer writes. Accepting
-    /// and ignoring it would be the worst outcome: someone asking for the tar
-    /// container would get a v3 archive and no indication their request was
-    /// dropped. Old archives are still readable, and `parquet upgrade`
-    /// converts them.
     #[test]
-    fn rez_version_is_rejected_now_that_only_one_container_is_written() {
+    fn rez_version_is_rejected() {
         let parse = |args: &[&str]| crate::recorder::command().try_get_matches_from(args);
 
         // The recorder still works without it.
@@ -559,13 +617,9 @@ mod tests {
     /// FAIL rather than be silently ignored.
     ///
     /// They were added by #795 ("labeling at capture time") but no reader was
-    /// ever written for either, in that commit or any since — so they spent
-    /// their whole life accepting a value and dropping it. The keys they were
-    /// meant to set are plain file metadata (`node`, `instance`, the same ones
-    /// `recording combine` reads), so `--metadata node=web-01` was always the
-    /// working form. Erroring is the point: someone who typed `--node` was
-    /// already not getting what they asked for, and silence is how that went
-    /// unnoticed for four months.
+    /// ever written for either. The keys they were meant to set are plain file
+    /// metadata (`node`, `instance`, the same ones `recording combine` reads),
+    /// so `--metadata node=web-01` was always the working form.
     #[test]
     fn node_and_instance_are_rejected_now_that_the_dead_flags_are_gone() {
         let parse = |args: &[&str]| crate::recorder::command().try_get_matches_from(args);
@@ -626,117 +680,15 @@ mod tests {
     }
 
     #[test]
-    fn resolve_output_has_no_path_of_its_own_until_the_format_is_known() {
+    fn resolve_output_none_when_neither_is_given() {
         let (out, dep) = resolve_output(None, None).unwrap();
         assert_eq!(out, None);
         assert!(!dep);
     }
 
-    /// A bare `rezolus record` writes a dendro archive (since 6.0; `.rez`
-    /// before), and marks the run as defaulted so the recorder may fall back
-    /// to parquet when the run cannot be written into one archive.
-    #[test]
-    fn no_output_and_no_format_defaults_to_dendro() {
-        let plan = resolve_format_and_output(None, None).unwrap();
-        assert_eq!(plan.format, Format::Dendro);
-        assert_eq!(plan.output, PathBuf::from("rezolus.dendro"));
-        assert!(plan.defaulted);
-    }
-
-    /// `--format X` with no `-o` names the file after the format, so the
-    /// extension never lies about the contents. `--format raw` used to write
-    /// its msgpack stream to a file called `rezolus.parquet`.
-    #[test]
-    fn an_explicit_format_names_the_default_file_after_itself() {
-        for (format, name) in [
-            (Format::Rez, "rezolus.rez"),
-            (Format::Dendro, "rezolus.dendro"),
-            (Format::Parquet, "rezolus.parquet"),
-            (Format::Raw, "rezolus.raw"),
-        ] {
-            let plan = resolve_format_and_output(Some(format), None).unwrap();
-            assert_eq!(plan.format, format);
-            assert_eq!(plan.output, PathBuf::from(name));
-            assert!(
-                !plan.defaulted,
-                "{name}: an explicit --format is a choice, not a default"
-            );
-        }
-    }
-
-    #[test]
-    fn the_output_extension_picks_the_format() {
-        for (name, format) in [
-            ("out.rez", Format::Rez),
-            ("out.dendro", Format::Dendro),
-            ("out.parquet", Format::Parquet),
-            ("out.raw", Format::Raw),
-        ] {
-            let plan = resolve_format_and_output(None, Some(Path::new(name))).unwrap();
-            assert_eq!(plan.format, format, "{name}");
-            assert_eq!(plan.output, PathBuf::from(name));
-            assert!(!plan.defaulted, "{name}: the path is a choice too");
-        }
-    }
-
-    /// An extension nobody recognizes is not an opinion, so parquet stays the
-    /// fallback for a named path — `.rez` is only ever chosen by a name that
-    /// says `.rez`, or by having nothing to go on at all.
-    #[test]
-    fn an_unknown_extension_leaves_the_format_to_the_flag() {
-        let plan = resolve_format_and_output(None, Some(Path::new("out.dat"))).unwrap();
-        assert_eq!(plan.format, Format::Parquet);
-        assert!(!plan.defaulted);
-
-        let plan =
-            resolve_format_and_output(Some(Format::Rez), Some(Path::new("out.dat"))).unwrap();
-        assert_eq!(plan.format, Format::Rez);
-        assert_eq!(plan.output, PathBuf::from("out.dat"));
-    }
-
-    /// Silently resolving this either way produces a file whose name lies:
-    /// a `.rez` archive called `out.parquet`, or a parquet table called
-    /// `out.rez`. Everything downstream dispatches on that name.
-    #[test]
-    fn a_format_contradicting_the_extension_is_rejected() {
-        let err = resolve_format_and_output(Some(Format::Parquet), Some(Path::new("out.rez")))
-            .expect_err("--format parquet with a .rez path must not be resolved silently");
-        assert!(err.contains("conflicts"), "{err}");
-
-        let err = resolve_format_and_output(Some(Format::Rez), Some(Path::new("out.parquet")))
-            .expect_err("--format rez with a .parquet path must not be resolved silently");
-        assert!(err.contains("conflicts"), "{err}");
-
-        // Agreeing is fine, and stays fine.
-        let plan =
-            resolve_format_and_output(Some(Format::Rez), Some(Path::new("out.rez"))).unwrap();
-        assert_eq!(plan.format, Format::Rez);
-    }
-
-    /// A config-file run always has an output (the TOML field is mandatory),
-    /// so it is never a defaulted-format run and never falls back.
-    #[test]
-    fn a_config_file_run_is_never_defaulted() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("endpoints.toml");
-        std::fs::write(
-            &path,
-            "[recording]\noutput = \"run.parquet\"\n\n[[endpoints]]\nurl = \"http://localhost:4241\"\n",
-        )
-        .unwrap();
-
-        let matches = crate::recorder::command()
-            .try_get_matches_from(["record", "--config", path.to_str().unwrap()])
-            .unwrap();
-        let cfg = RecordingConfig::from_args(&matches).unwrap();
-        assert_eq!(cfg.format, Format::Parquet);
-        assert_eq!(cfg.output, PathBuf::from("run.parquet"));
-        assert!(!cfg.format_defaulted);
-    }
-
     #[test]
     fn resolve_output_positional_is_deprecated() {
-        let pos = PathBuf::from("legacy.parquet");
+        let pos = PathBuf::from("legacy.dendro");
         let (out, dep) = resolve_output(None, Some(&pos)).unwrap();
         assert_eq!(out, Some(pos));
         assert!(dep);
@@ -744,8 +696,8 @@ mod tests {
 
     #[test]
     fn resolve_output_both_is_error() {
-        let flag = PathBuf::from("new.parquet");
-        let pos = PathBuf::from("legacy.parquet");
+        let flag = PathBuf::from("new.dendro");
+        let pos = PathBuf::from("legacy.dendro");
         assert!(resolve_output(Some(&flag), Some(&pos)).is_err());
     }
 
@@ -770,6 +722,21 @@ mod tests {
         assert_eq!(ep.protocol, Some(Protocol::Prometheus));
     }
 
+    /// `protocol=rezolus` names a Rezolus agent; `msgpack`, the 5.x
+    /// spelling, means the same, on the command line and in a config file.
+    #[test]
+    fn protocol_rezolus_and_msgpack_both_name_an_agent() {
+        for p in ["rezolus", "msgpack"] {
+            let ep = parse_endpoint_str(&format!("http://host:4241,protocol={p}")).unwrap();
+            assert_eq!(ep.protocol, Some(Protocol::Msgpack), "{p}");
+            let ep: EndpointConfig =
+                toml::from_str(&format!("url = \"http://host:4241\"\nprotocol = \"{p}\"\n"))
+                    .unwrap();
+            assert_eq!(ep.protocol, Some(Protocol::Msgpack), "{p}");
+        }
+        assert!(parse_endpoint_str("http://host:4241,protocol=binary").is_err());
+    }
+
     #[test]
     fn test_parse_endpoint_str_invalid_url() {
         let result = parse_endpoint_str("not-a-url,source=test");
@@ -780,69 +747,5 @@ mod tests {
     fn test_parse_endpoint_str_unknown_option() {
         let result = parse_endpoint_str("http://host:80,source=x,foo=bar");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn separate_is_rejected_for_rez_however_the_format_was_chosen() {
-        // Before `.rez` could hold several recordings, `--separate` with a
-        // multi-endpoint `.rez` hit the multi-endpoint blocker and exited 1.
-        // Now that the blocker is gone the combination has to be rejected
-        // here, or a caller scripting out_a.rez/out_b.rez silently gets one
-        // out.rez instead.
-        assert!(
-            reject_separate_with_rez(true, Format::Rez, false, 2).is_err(),
-            "--separate cannot write a file per endpoint from one archive"
-        );
-        // Caught for a format that came from the extension, not just an
-        // explicit --format: `-o out.rez --separate` is the likelier typo.
-        let plan = resolve_format_and_output(None, Some(Path::new("out.rez"))).unwrap();
-        assert_eq!(plan.format, Format::Rez);
-        assert!(!plan.defaulted);
-        assert!(reject_separate_with_rez(true, plan.format, plan.defaulted, 2).is_err());
-
-        // The combinations --separate exists for are untouched.
-        assert!(reject_separate_with_rez(true, Format::Parquet, false, 2).is_ok());
-        assert!(reject_separate_with_rez(true, Format::Raw, false, 2).is_ok());
-        // And a .rez without --separate is the ordinary multi-recording case.
-        assert!(reject_separate_with_rez(false, Format::Rez, false, 2).is_ok());
-
-        // A dendro archive holds a recording per endpoint the same way, and
-        // the refusal names the format the run asked for.
-        let err = reject_separate_with_rez(true, Format::Dendro, false, 2).unwrap_err();
-        assert!(err.contains(".dendro"), "{err}");
-        assert!(reject_separate_with_rez(false, Format::Dendro, false, 2).is_ok());
-    }
-
-    #[test]
-    fn separate_with_one_endpoint_is_left_alone() {
-        // `--separate` has nothing to split with one endpoint, and the
-        // multi-endpoint blocker it replaced never fired on a single-endpoint
-        // run either — so `record --url ... -o out.rez --separate` must keep
-        // recording, not start exiting 1. A harness that passes --separate
-        // unconditionally would otherwise break when handed one endpoint.
-        assert!(
-            reject_separate_with_rez(true, Format::Rez, false, 1).is_ok(),
-            "one endpoint: --separate is a no-op, not an error"
-        );
-        // Including the --config path, where the format is never 'defaulted'
-        // because the TOML output key is mandatory.
-        let plan = resolve_format_and_output(None, Some(Path::new("out.rez"))).unwrap();
-        assert!(!plan.defaulted);
-        assert!(reject_separate_with_rez(true, plan.format, plan.defaulted, 1).is_ok());
-    }
-
-    #[test]
-    fn separate_with_a_defaulted_archive_is_not_an_error() {
-        // `record --separate --endpoint a --endpoint b` picks no format at
-        // all. Before an archive could hold several recordings this demoted
-        // to parquet and wrote a file per endpoint; erroring on it here would
-        // regress that, so the run is left to demote at startup instead.
-        let plan = resolve_format_and_output(None, None).unwrap();
-        assert_eq!(plan.format, Format::Dendro);
-        assert!(plan.defaulted, "a bare run defaults the format");
-        assert!(
-            reject_separate_with_rez(true, plan.format, plan.defaulted, 2).is_ok(),
-            "a defaulted archive must demote for --separate, not error"
-        );
     }
 }

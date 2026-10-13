@@ -4,7 +4,7 @@
 //! The unit tests in `src/hindsight/buffer.rs` pin the dump's snapshot
 //! semantics at the container level, where the seams are reachable. These pin
 //! the same properties end to end — a real `rezolus hindsight` process, a real
-//! HTTP dump, a real `.rez` on disk — because the claims are about two
+//! HTTP dump, a real `.dendro` on disk — because the claims are about two
 //! *connections* running at once (the daemon's writer and the dump's reader),
 //! and a single-threaded unit test can only approximate that.
 //!
@@ -32,7 +32,7 @@
 //! buffer size, so it was worst on the large buffers an incident is captured
 //! from. The three tests below are one body run over each trigger in turn.
 //!
-//! Reading the archives directly with `rusqlite` and `parquet` rather than
+//! Reading the archives directly with `metriken-storage` and `parquet` rather than
 //! through the crate: `rezolus` has no library target, so an integration test
 //! sees the binary and the dependencies and nothing else. That turns out to be
 //! the right constraint anyway — these assertions are about bytes on disk.
@@ -48,8 +48,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
-
-use rusqlite::{Connection, OpenFlags};
 
 /// The scrape interval every test here runs at.
 const INTERVAL: Duration = Duration::from_millis(100);
@@ -272,6 +270,36 @@ fn http_client() -> reqwest::blocking::Client {
 // The daemon under test
 // ---------------------------------------------------------------------------
 
+/// Write a hindsight config into `dir` recording `agent` to `output`, and
+/// return its path.
+fn write_config(dir: &Path, agent: u16, segment_rows: usize, output: &Path) -> PathBuf {
+    let config = dir.join("hindsight.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "[general]\n\
+             interval = \"{}ms\"\n\
+             duration = \"15m\"\n\
+             source = \"127.0.0.1:{agent}\"\n\
+             output = \"{}\"\n\
+             buffer_dir = \"{}\"\n\
+             listen = \"127.0.0.1:0\"\n\
+             segment_rows = {segment_rows}\n\
+             [log]\n\
+             level = \"info\"\n",
+            INTERVAL.as_millis(),
+            output.display(),
+            // Pinned to this test's temp dir. `buffer_dir` defaults to
+            // $STATE_DIRECTORY or /var/lib/rezolus, neither of which a test
+            // may write to — and setting it here is also what keeps each
+            // test's buffer isolated from every other's.
+            dir.display(),
+        ),
+    )
+    .expect("failed to write the hindsight config");
+    config
+}
+
 /// A running `rezolus hindsight`, its HTTP endpoint, and the buffer file it is
 /// writing. Killed on drop, so a failed assertion does not leave a daemon
 /// scraping in the background.
@@ -319,38 +347,9 @@ impl Hindsight {
     /// and `ready` reached the fake agent instead: CI saw its empty 404 fail
     /// to parse as a `/status` body. With nothing reserved there is no gap.
     fn try_start(agent: u16, segment_rows: usize) -> Result<Self, String> {
-        Self::try_start_as(agent, segment_rows, "rez")
-    }
-
-    /// [`try_start`](Self::try_start) with the output's extension, which
-    /// picks the buffer's container: `rez` or `dendro`.
-    fn try_start_as(agent: u16, segment_rows: usize, ext: &str) -> Result<Self, String> {
         let dir = tempfile::tempdir().expect("failed to create a temp dir");
-        let config = dir.path().join("hindsight.toml");
-        let output = dir.path().join(format!("snapshot.{ext}"));
-        std::fs::write(
-            &config,
-            format!(
-                "[general]\n\
-                 interval = \"{}ms\"\n\
-                 duration = \"15m\"\n\
-                 source = \"127.0.0.1:{agent}\"\n\
-                 output = \"{}\"\n\
-                 buffer_dir = \"{}\"\n\
-                 listen = \"127.0.0.1:0\"\n\
-                 segment_rows = {segment_rows}\n\
-                 [log]\n\
-                 level = \"info\"\n",
-                INTERVAL.as_millis(),
-                output.display(),
-                // Pinned to this test's temp dir. `buffer_dir` defaults to
-                // $STATE_DIRECTORY or /var/lib/rezolus, neither of which a
-                // test may write to — and setting it here is also what keeps
-                // each test's buffer isolated from every other's.
-                dir.path().display(),
-            ),
-        )
-        .expect("failed to write the hindsight config");
+        let output = dir.path().join("snapshot.dendro");
+        let config = write_config(dir.path(), agent, segment_rows, &output);
 
         let mut child = Command::new(env!("CARGO_BIN_EXE_rezolus"))
             .arg("hindsight")
@@ -504,17 +503,17 @@ impl Hindsight {
 
     /// Download a dump over `GET /dump?start=0` and write it to `dest`.
     ///
-    /// `?start=0` rather than a bare `/dump` on purpose: an unbounded dump is a
-    /// whole-file `VACUUM INTO`, which carries the `wal` table across verbatim.
-    /// A *ranged* dump is the path that selects segments and materializes the
-    /// live tail into one, which is the boundary these tests are about.
+    /// `?start=0`, a ranged dump: it selects segments and materializes the
+    /// live tail into one, which is the boundary these tests are about. (A
+    /// dendro dump does the same unranged; the `.rez` buffer these tests were
+    /// written against copied an unranged dump with `VACUUM INTO`.)
     fn dump_to(&self, dest: &Path) -> Duration {
         let (elapsed, body) = self.dump_bytes();
         std::fs::write(dest, &body).expect("failed to save the dump");
         elapsed
     }
 
-    /// `GET /dump?start=0`, checked to be a `.rez` and returned with how long
+    /// `GET /dump?start=0`, checked to be a SQLite archive and returned with how long
     /// the request took. [`Self::dump_to`] saves it; a test that only needs the
     /// dump to have happened can drop it, and so not spend time on a disk write
     /// that it would otherwise have to count as time between dumps.
@@ -530,7 +529,7 @@ impl Hindsight {
         let elapsed = start.elapsed();
         assert!(
             body.starts_with(b"SQLite format 3\0"),
-            "a dump must be a v3 .rez ({} bytes)",
+            "a dump must be a .dendro (SQLite) archive ({} bytes)",
             body.len()
         );
         (elapsed, body)
@@ -684,21 +683,21 @@ impl Status {
 }
 
 // ---------------------------------------------------------------------------
-// Reading a `.rez` v3 from outside the crate
+// Reading a dendro archive from outside the crate
 // ---------------------------------------------------------------------------
 
 struct Segment {
     rows: u64,
     first_ts: u64,
     last_ts: u64,
-    /// The `timestamp` column decoded from the segment's parquet BLOB — the
+    /// The `timestamp` column decoded from the segment's parquet bytes — the
     /// actual rows, not the catalog's summary of them.
     timestamps: Vec<u64>,
 }
 
 struct Archive {
     segments: Vec<Segment>,
-    /// Every row in the `wal` table, oldest first.
+    /// The WAL rows past the last sealed segment, oldest first.
     wal: Vec<u64>,
 }
 
@@ -711,69 +710,45 @@ impl Archive {
             .collect()
     }
 
-    /// The WAL rows a reader would splice on: those past the sealed watermark.
-    /// This is `RezDb::live_wal`'s rule, restated here because an integration
-    /// test cannot call it.
-    fn live_wal(&self) -> Vec<u64> {
-        let watermark = self.segments.iter().map(|s| s.last_ts).max().unwrap_or(0);
-        self.wal
-            .iter()
-            .copied()
-            .filter(|ts| *ts > watermark)
-            .collect()
-    }
-
     /// Every row stamp a reader would see, sealed then live, in order.
     fn timeline(&self) -> Vec<u64> {
         let mut out = self.sealed();
-        out.extend(self.live_wal());
+        out.extend(self.wal.iter().copied());
         out
     }
 }
 
-/// Read one sampler's segments and WAL rows out of a `.rez` v3 file, decoding
-/// each segment's parquet so the assertions can talk about rows rather than
-/// about the catalog's claims about rows.
-fn read_rez(path: &Path, sampler: &str) -> Archive {
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+/// Read one table's segments and live WAL rows out of the one source of a
+/// dendro archive, decoding each segment's parquet so the assertions can
+/// talk about rows rather than about the catalog's claims about rows.
+fn read_archive(path: &Path, table: &str) -> Archive {
+    use metriken_storage::Catalog;
+    let catalog = metriken_storage::DendroCatalog::open(path)
         .unwrap_or_else(|e| panic!("failed to open {}: {e}", path.display()));
-
-    let mut stmt = conn
-        .prepare(
-            "SELECT rows, first_ts, last_ts, bytes FROM segments \
-             WHERE sampler = ?1 ORDER BY recording_id, seq",
-        )
-        .expect("failed to prepare the segment query");
-    let segments: Vec<Segment> = stmt
-        .query_map([sampler], |row| {
-            Ok((
-                row.get::<_, i64>(0)? as u64,
-                row.get::<_, i64>(1)? as u64,
-                row.get::<_, i64>(2)? as u64,
-                row.get::<_, Vec<u8>>(3)?,
-            ))
-        })
-        .expect("failed to query segments")
-        .map(|r| {
-            let (rows, first_ts, last_ts, bytes) = r.expect("failed to read a segment");
+    let id = catalog.sources().expect("the catalog reads")[0].id;
+    let segments = catalog
+        .segment_meta(id, table)
+        .expect("failed to read the segments")
+        .into_iter()
+        .map(|(seq, meta)| {
+            let bytes = catalog
+                .segment_bytes(id, table, seq)
+                .expect("failed to read a segment")
+                .expect("a catalogued segment has bytes");
             Segment {
-                rows,
-                first_ts,
-                last_ts,
+                rows: meta.rows,
+                first_ts: meta.first_ts,
+                last_ts: meta.last_ts,
                 timestamps: parquet_timestamps(&bytes),
             }
         })
         .collect();
-
-    let mut stmt = conn
-        .prepare("SELECT ts FROM wal WHERE sampler = ?1 ORDER BY ts")
-        .expect("failed to prepare the WAL query");
-    let wal = stmt
-        .query_map([sampler], |row| Ok(row.get::<_, i64>(0)? as u64))
-        .expect("failed to query the WAL")
-        .map(|r| r.expect("failed to read a WAL row"))
+    let wal = catalog
+        .live_wal(id, table)
+        .expect("failed to read the WAL")
+        .iter()
+        .map(|r| r.ts)
         .collect();
-
     Archive { segments, wal }
 }
 
@@ -874,10 +849,13 @@ fn sealing_continues_while_file_dumps_are_in_flight() {
 /// on coverage still has to clear.
 ///
 /// A *fatter* buffer than the HTTP paths use — 60 segments rather than 12 —
-/// because a SIGHUP capture takes no time range, and an unbounded dump is a
-/// whole-file `VACUUM INTO` that runs several times faster than the ranged copy
-/// the HTTP tests take. Calibrated against the unfixed daemon, which is the
-/// only calibration worth anything here: at 12 segments a capture finished in
+/// because a SIGHUP capture takes no time range, and on the `.rez` buffer
+/// (removed in 6.0) an unbounded dump was a whole-file `VACUUM INTO` that ran
+/// several times faster than the ranged copy the HTTP tests take; the
+/// calibration loop in `sealing_continues_through` grows the buffer further
+/// when a capture is still too fast. Calibrated against the unfixed daemon,
+/// which is the only calibration worth anything here: at 12 segments a
+/// capture finished in
 /// ~66 ms, inside a single 100 ms tick, and this test passed on a daemon that
 /// paused; at 40 it took ~220 ms and the daemon still got 3 of the 4 seals the
 /// assertion demands through the gaps; at 60 it took ~330 ms and a paused
@@ -1176,7 +1154,7 @@ fn a_dump_cuts_the_timeline_at_its_snapshot_and_seals_the_live_tail() {
 
     let h = Hindsight::start(SEGMENT_ROWS as usize, 1);
     let dir = tempfile::tempdir().unwrap();
-    let dest = dir.path().join("dump.rez");
+    let dest = dir.path().join("dump.dendro");
 
     let mut missed = Vec::new();
     let (dumped, live_before, live_after) = loop {
@@ -1205,7 +1183,7 @@ fn a_dump_cuts_the_timeline_at_its_snapshot_and_seals_the_live_tail() {
         // that landed on a seal boundary.
         let sealed_between = after.segments(TABLE) != segments_before;
 
-        let dumped = read_rez(&dest, TABLE);
+        let dumped = read_archive(&dest, TABLE);
         // True of every dump taken here, not only the one that is kept.
         assert!(
             dumped.wal.is_empty(),
@@ -1275,12 +1253,12 @@ fn a_dump_cuts_the_timeline_at_its_snapshot_and_seals_the_live_tail() {
     h.wait_until("the source to seal past the dump", |s| {
         s.segments(TABLE) > dumped.segments.len() as u64
     });
-    let source = read_rez(&h.buffer, TABLE);
+    let source = read_archive(&h.buffer, TABLE);
     let source_timeline = source.timeline();
     assert_strictly_increasing("the source", &source_timeline);
 
     let sealed = source.sealed();
-    let live = source.live_wal();
+    let live = &source.wal;
     for ts in &tail.timestamps {
         assert_eq!(
             sealed.iter().filter(|s| *s == ts).count(),
@@ -1340,7 +1318,7 @@ fn a_dump_cuts_the_timeline_at_its_snapshot_and_seals_the_live_tail() {
             .map(|s| s.first_ts)
             .collect::<Vec<_>>()
     );
-    let reread = read_rez(&dest, TABLE);
+    let reread = read_archive(&dest, TABLE);
     assert_eq!(
         reread.timeline(),
         dump_timeline,
@@ -1356,75 +1334,6 @@ fn a_dump_cuts_the_timeline_at_its_snapshot_and_seals_the_live_tail() {
             s.first_ts
         );
     }
-}
-
-/// A dump is an ordinary `.rez`, and the ordinary tools open it.
-///
-/// The point of the v3 migration for hindsight: the slot ring's only consumer
-/// was its own dump routine. Both front doors are checked, because they are
-/// different code paths — `parquet metadata` describes the container, while
-/// `mcp query` goes through `RezReader` and actually decodes the segments and
-/// splices the materialized tail onto them.
-#[test]
-fn a_dump_opens_in_the_ordinary_rez_tools() {
-    let h = Hindsight::start(2, 1);
-    let dir = tempfile::tempdir().unwrap();
-    let dest = dir.path().join("dump.rez");
-    // More than a second of data, and that is a property of `mcp query` rather
-    // than of the dump: `run_query` walks the recording's time range at a fixed
-    // 1 s step, so a sub-second recording — v3 or v2, dump or `record` output —
-    // yields no sample and reports the metric as missing. Reproduced against
-    // `rezolus record --duration 600ms`, so it is not something a dump does.
-    let status = h.wait_until("more than a second of buffered rows", |s| {
-        s.segments(TABLE) >= 3 && s.rows >= 25
-    });
-    h.dump_to(&dest);
-
-    let described = Command::new(env!("CARGO_BIN_EXE_rezolus"))
-        .args(["parquet", "metadata", "-i"])
-        .arg(&dest)
-        .output()
-        .expect("failed to run rezolus parquet metadata");
-    let stdout = String::from_utf8_lossy(&described.stdout);
-    assert!(
-        described.status.success(),
-        "metadata must describe a dump\nstdout:\n{stdout}\nstderr:\n{}",
-        String::from_utf8_lossy(&described.stderr)
-    );
-    assert!(stdout.contains(".rez archive v3"), "{stdout}");
-    assert!(
-        stdout.contains("fake"),
-        "the sampler must be listed: {stdout}"
-    );
-    assert!(
-        !stdout.contains("not cleanly finalized"),
-        "a dump is a finished artifact even though the buffer runs on: {stdout}"
-    );
-
-    // Through `RezReader`: the counter is scraped as a rising value once per
-    // 100 ms tick, so its rate is ~10/s. The assertion is deliberately loose on
-    // the value and strict on it resolving at all — the arithmetic is the query
-    // engine's business, but "the dump's rows come back out" is this test's.
-    let queried = Command::new(env!("CARGO_BIN_EXE_rezolus"))
-        .args(["mcp", "query"])
-        .arg(&dest)
-        .arg("rate(fake_ops_0[1s])")
-        .output()
-        .expect("failed to run rezolus mcp query");
-    let stdout = String::from_utf8_lossy(&queried.stdout);
-    assert!(
-        queried.status.success(),
-        "a dump must be queryable\nstdout:\n{stdout}\nstderr:\n{}",
-        String::from_utf8_lossy(&queried.stderr)
-    );
-    assert!(
-        stdout.contains("fake_ops_0"),
-        "the query must resolve against the dump's rows: {stdout}"
-    );
-    assert!(
-        status.rows > 0,
-        "fixture: the buffer had rows to be queried"
-    );
 }
 
 /// What a dump costs on disk: **while a dump holds its read mark, the `-wal`
@@ -1483,7 +1392,7 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
 
     let h = Hindsight::start(2, WIDE);
     let dir = tempfile::tempdir().unwrap();
-    let dest = dir.path().join("dump.rez");
+    let dest = dir.path().join("dump.dendro");
     let wal = {
         let mut p = h.buffer.clone().into_os_string();
         p.push("-wal");
@@ -1679,7 +1588,7 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
 #[test]
 fn a_refused_reconnect_captures_the_buffer_then_exits() {
     let agent = spawn_fake_agent_that_stops(1, 20);
-    let mut h = Hindsight::try_start_as(agent, 8, "dendro")
+    let mut h = Hindsight::try_start(agent, 8)
         .unwrap_or_else(|why| panic!("rezolus hindsight failed to come up: {why}"));
     let status = h.wait_for_exit(Duration::from_secs(60));
     assert_eq!(status.code(), Some(1), "{}", h.log_text());
@@ -1727,7 +1636,7 @@ fn an_agent_restart_is_written_into_a_dendro_buffers_metadata() {
     use metriken_storage::Catalog;
 
     let agent = spawn_fake_agent_that_restarts(1, 10);
-    let h = Hindsight::try_start_as(agent, 2, "dendro")
+    let h = Hindsight::try_start(agent, 2)
         .unwrap_or_else(|why| panic!("rezolus hindsight failed to come up: {why}"));
     h.wait_for_log("now records the agent restart", Duration::from_secs(30));
     let dir = tempfile::tempdir().unwrap();
@@ -1758,49 +1667,17 @@ fn an_agent_restart_is_written_into_a_dendro_buffers_metadata() {
     );
 }
 
-/// As [`an_agent_restart_is_written_into_a_dendro_buffers_metadata`], for a
-/// `.rez` buffer, whose writer replaces the whole metadata map: the restart is
-/// recorded and the keys written at startup are kept.
-#[test]
-fn an_agent_restart_is_written_into_a_rez_buffers_metadata() {
-    let agent = spawn_fake_agent_that_restarts(1, 10);
-    let h = Hindsight::try_start(agent, 2)
-        .unwrap_or_else(|why| panic!("rezolus hindsight failed to come up: {why}"));
-    h.wait_for_log("now records the agent restart", Duration::from_secs(30));
-    let dir = tempfile::tempdir().unwrap();
-    let dest = dir.path().join("dump.rez");
-    h.dump_to(&dest);
-
-    let conn = Connection::open_with_flags(&dest, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .unwrap_or_else(|e| panic!("failed to open {}: {e}", dest.display()));
-    let json: String = conn
-        .query_row("SELECT metadata FROM recordings", [], |row| row.get(0))
-        .expect("one recording");
-    let metadata: std::collections::BTreeMap<String, String> = serde_json::from_str(&json).unwrap();
-    assert_eq!(
-        metadata.get("producer_epoch").map(String::as_str),
-        Some(RESTARTED_EPOCH),
-        "{metadata:?}"
-    );
-    assert!(
-        metadata.contains_key("sampling_interval_ms"),
-        "a startup key is kept: {metadata:?}"
-    );
-    let epochs: serde_json::Value =
-        serde_json::from_str(&metadata["producer_epochs"]).expect("producer_epochs parses");
-    assert_eq!(epochs[0]["epoch"], EPOCH, "{epochs}");
-    assert_eq!(epochs[1]["epoch"], RESTARTED_EPOCH, "{epochs}");
-}
-
-/// A `.dendro` output keeps the buffer as a dendro archive, and its dumps
-/// are dendro archives that the ordinary readers open, finished and
-/// queryable, while the buffer runs on.
+/// The buffer is a dendro archive, and its dumps are dendro archives that the
+/// ordinary tools open, finished and queryable, while the buffer runs on.
+/// Both front doors are checked, because they are different code paths:
+/// `recording metadata` describes the container, while `mcp query` goes
+/// through `RezReader` and decodes the segments.
 #[test]
 fn a_dendro_buffer_dumps_a_dendro_archive() {
     use metriken_storage::Catalog;
 
     let agent = spawn_fake_agent(1);
-    let h = Hindsight::try_start_as(agent, 2, "dendro")
+    let h = Hindsight::try_start(agent, 2)
         .unwrap_or_else(|why| panic!("rezolus hindsight failed to come up: {why}"));
     assert_eq!(
         h.buffer.extension().and_then(|e| e.to_str()),
@@ -1820,6 +1697,19 @@ fn a_dendro_buffer_dumps_a_dendro_archive() {
     let sources = catalog.sources().unwrap();
     assert_eq!(sources.len(), 1);
     assert!(sources[0].complete, "a dump is a finished artifact");
+
+    let described = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .args(["recording", "metadata", "-i"])
+        .arg(&dest)
+        .output()
+        .expect("failed to run rezolus recording metadata");
+    let stdout = String::from_utf8_lossy(&described.stdout);
+    assert!(described.status.success(), "{stdout}");
+    assert!(stdout.contains(TABLE), "the table is listed: {stdout}");
+    assert!(
+        !stdout.contains("not cleanly finalized"),
+        "a dump is a finished artifact even though the buffer runs on: {stdout}"
+    );
 
     let queried = Command::new(env!("CARGO_BIN_EXE_rezolus"))
         .args(["mcp", "query"])
@@ -1877,4 +1767,42 @@ fn a_second_stop_exits_at_once_and_removes_the_buffer() {
         "the buffer directory {} is left behind",
         dir.display()
     );
+}
+
+/// An `output` not ending in `.dendro` is refused when the config is loaded,
+/// before the agent is contacted or a buffer is created: exit 1, with a
+/// message naming the path, `.dendro`, and the 5.x hindsight that wrote such
+/// a path as a `.rez`.
+#[test]
+fn an_output_not_ending_in_dendro_is_refused_at_startup() {
+    for name in ["snapshot.rez", "snapshot.parquet", "snapshot"] {
+        let dir = tempfile::tempdir().expect("failed to create a temp dir");
+        let output = dir.path().join(name);
+        // Nothing listens on port 1: a daemon that got as far as the agent
+        // would fail differently.
+        let config = write_config(dir.path(), 1, 2, &output);
+        let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+            .arg("hindsight")
+            .arg(&config)
+            .output()
+            .expect("failed to run rezolus hindsight");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{name}:\n{stderr}");
+        for needle in [
+            output.display().to_string(),
+            "ending in .dendro".to_string(),
+            "5.x hindsight (5.27.0 or later)".to_string(),
+        ] {
+            assert!(stderr.contains(&needle), "{needle:?} in:\n{stderr}");
+        }
+        let left: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            left,
+            vec!["hindsight.toml".to_string()],
+            "neither the output nor a buffer is created"
+        );
+    }
 }

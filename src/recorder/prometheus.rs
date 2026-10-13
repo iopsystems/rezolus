@@ -2,20 +2,26 @@ use metriken_exposition::{
     Counter, Gauge, GroupSchema, GroupSnapshot, Histogram as SnapshotHistogram, MetricDesc,
     Snapshot, SnapshotV2, SnapshotV3,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tracing::warn;
 
-/// Converts Prometheus text format responses into SnapshotV2 objects that can be
-/// serialized as msgpack and processed by the existing parquet conversion pipeline.
+/// Converts Prometheus text format responses into snapshots the archive
+/// writer stages.
 ///
 /// Maintains a stable mapping from (metric_name, labels) to numeric IDs across
-/// scrapes within a recording session, ensuring consistent parquet column identity.
+/// scrapes within a recording session, ensuring consistent column identity.
 pub struct PrometheusConverter {
     metric_ids: HashMap<MetricKey, usize>,
     next_id: usize,
-    descriptions: HashMap<String, String>,
+    /// The scrapes' `# HELP` text by metric name, first seen wins. Written
+    /// into the recording's `descriptions` metadata, the key an agent's
+    /// `/metrics/descriptions` fills for an agent recording.
+    descriptions: BTreeMap<String, String>,
+    /// A name was added to `descriptions` since the recording last stored
+    /// them: see [`pending_descriptions`](Self::pending_descriptions).
+    descriptions_changed: bool,
 }
 
 #[derive(Clone, Hash, Eq, PartialEq)]
@@ -36,13 +42,30 @@ impl PrometheusConverter {
         Self {
             metric_ids: HashMap::new(),
             next_id: 0,
-            descriptions: HashMap::new(),
+            descriptions: BTreeMap::new(),
+            descriptions_changed: false,
         }
     }
 
-    /// Returns the accumulated metric descriptions from all scrapes.
-    pub fn descriptions(&self) -> &HashMap<String, String> {
-        &self.descriptions
+    /// The `descriptions` metadata value (a JSON object of metric name to
+    /// HELP text) when a scrape since the last
+    /// [`descriptions_stored`](Self::descriptions_stored) added a name, else
+    /// `None`. An exporter's HELP lines rarely change, so this is normally
+    /// `Some` after the first scrape and `None` from then on.
+    pub fn pending_descriptions(&self) -> Option<String> {
+        if !self.descriptions_changed {
+            return None;
+        }
+        serde_json::to_string(&self.descriptions).ok()
+    }
+
+    /// The value [`pending_descriptions`](Self::pending_descriptions) last
+    /// returned was handed to the archive writer. Called only once the
+    /// hand-off succeeded, so a failed hand-off is retried after the next
+    /// scrape. The writer applies the patch later, and one it cannot apply is
+    /// logged there and not retried.
+    pub fn descriptions_stored(&mut self) {
+        self.descriptions_changed = false;
     }
 
     fn get_or_assign_id(&mut self, name: &str, labels: &[(String, String)]) -> String {
@@ -98,11 +121,11 @@ impl PrometheusConverter {
             }
         };
 
-        // Accumulate HELP descriptions across scrapes
         for (name, doc) in &scrape.docs {
-            self.descriptions
-                .entry(name.clone())
-                .or_insert_with(|| doc.clone());
+            if !self.descriptions.contains_key(name) {
+                self.descriptions.insert(name.clone(), doc.clone());
+                self.descriptions_changed = true;
+            }
         }
 
         let mut counters = Vec::new();
@@ -492,6 +515,42 @@ fn empty_snapshot() -> Snapshot {
 mod tests {
     use super::*;
 
+    /// HELP text accumulates across scrapes, first seen wins, and
+    /// `pending_descriptions` reports a value only when a scrape added a name
+    /// since the last `descriptions_stored`.
+    #[test]
+    fn help_lines_accumulate_and_are_pending_only_when_a_name_is_new() {
+        let mut conv = PrometheusConverter::new();
+        assert_eq!(conv.pending_descriptions(), None);
+
+        conv.convert("# HELP a_total Apples.\na_total 1\n", 0, 1);
+        let json = conv.pending_descriptions().expect("a new name is pending");
+        let map: BTreeMap<String, String> = serde_json::from_str(&json).unwrap();
+        assert_eq!(map, BTreeMap::from([("a_total".into(), "Apples.".into())]));
+
+        // Not stored yet, so still pending after a scrape that adds nothing.
+        conv.convert("# HELP a_total Apples.\na_total 2\n", 0, 1);
+        assert!(conv.pending_descriptions().is_some());
+        conv.descriptions_stored();
+        assert_eq!(conv.pending_descriptions(), None);
+
+        // The same name with different text keeps the first; nothing pending.
+        conv.convert("# HELP a_total Changed.\na_total 3\n", 0, 1);
+        assert_eq!(conv.pending_descriptions(), None);
+
+        // A new name makes the whole map pending again.
+        conv.convert("# HELP b Bananas.\nb 4\n", 0, 1);
+        let map: BTreeMap<String, String> =
+            serde_json::from_str(&conv.pending_descriptions().unwrap()).unwrap();
+        assert_eq!(
+            map,
+            BTreeMap::from([
+                ("a_total".into(), "Apples.".into()),
+                ("b".into(), "Bananas.".into()),
+            ])
+        );
+    }
+
     /// An exporter's own trailing timestamp must NOT become the acquisition
     /// window.
     ///
@@ -583,16 +642,13 @@ b 2
         }
     }
 
-    /// The parquet path must not notice the version change.
+    /// The flat view of a converted scrape keeps each value's name, metadata
+    /// and window.
     ///
     /// `metriken-exposition` contracts that a V3 snapshot and the V2 describing
-    /// the same readings produce the same `HashedSnapshot`, which is what
-    /// `MsgpackToParquet` consumes — but that is THEIR invariant about THEIR
-    /// types, and it says nothing about whether this converter still puts the
-    /// same names, values, metadata and windows into it. Pinned here, on our
-    /// side of the boundary: parquet is the shipping output for a Prometheus
-    /// source, and a silent change to it would be a regression nobody asked
-    /// for.
+    /// the same readings produce the same `HashedSnapshot`, but that says
+    /// nothing about whether this converter puts the same names, values,
+    /// metadata and windows into it. Pinned here, on our side of the boundary.
     #[test]
     fn the_flat_view_of_a_scrape_is_unchanged_by_the_group_shape() {
         let mut conv = PrometheusConverter::new();

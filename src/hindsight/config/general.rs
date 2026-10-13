@@ -30,6 +30,27 @@ pub struct General {
     segment_rows: Option<usize>,
 }
 
+/// Accept an `output` ending in `.dendro`, and refuse any other, as `record`
+/// does.
+///
+/// A 5.x hindsight (5.27.0 included) wrote every `output` not ending in
+/// `.dendro` as a `.rez` archive, `.parquet` included (with a warning), and
+/// the packaged config named `rezolus.rez`. Writing a `.dendro` under such a
+/// name would leave a file whose name does not say what it holds, so the
+/// refusal names `.dendro` and the 5.x hindsight that wrote `.rez` there.
+pub(super) fn check_output(output: &Path) -> Result<(), String> {
+    if output.extension().and_then(|e| e.to_str()) == Some("dendro") {
+        return Ok(());
+    }
+    Err(format!(
+        "output = {:?}: hindsight 6.x writes .dendro archives only; use an output \
+         ending in .dendro. A rezolus 5.x hindsight ({} or later) wrote this path as a \
+         .rez archive and still does.",
+        output.display().to_string(),
+        crate::recorder::RELEASE_5X
+    ))
+}
+
 impl Default for General {
     fn default() -> Self {
         Self {
@@ -48,6 +69,10 @@ impl General {
     pub fn check(&self) {
         if let Err(e) = self.interval.parse::<humantime::Duration>() {
             eprintln!("prometheus sample interval couldn't be parsed: {e}");
+            std::process::exit(1);
+        }
+        if let Err(e) = check_output(Path::new(&self.output)) {
+            eprintln!("{e}");
             std::process::exit(1);
         }
     }

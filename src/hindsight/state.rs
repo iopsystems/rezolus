@@ -9,15 +9,15 @@ use super::buffer::Summary;
 ///
 /// What used to live here was the ring's geometry — slot size, slot count, the
 /// write index, and how many writes had happened so the handlers could tell a
-/// wrapped buffer from a partly-filled one. None of it has a v3 analogue: the
-/// buffer is a `.rez` file, and every question the handlers used to answer
+/// wrapped buffer from a partly-filled one. None of it has an analogue now: the
+/// buffer is a `.dendro` archive, and every question the handlers used to answer
 /// from these fields is now answered by reading its catalog
 /// ([`super::buffer::summarize`]), which any process can do at any time.
 ///
 /// What remains is what the file cannot tell you: where it is, where a dump
 /// should go, and the configuration the loop is running at.
 pub struct SharedState {
-    /// The buffer `.rez` the loop is writing.
+    /// The buffer `.dendro` the loop is writing.
     pub buffer_path: PathBuf,
     /// Where `/dump/file` writes the buffer out, and the path a signal-
     /// triggered capture's timestamped file is named after.
@@ -83,7 +83,7 @@ impl TimeRange {
         Self { start, end }
     }
 
-    /// The range as row stamps. A `.rez` row is stamped `anchor + monotonic
+    /// The range as row stamps. A buffer row is stamped `anchor + monotonic
     /// elapsed` where the anchor is a wall-clock reading, so nanoseconds since
     /// the epoch is the comparable form. A time before the epoch clamps to 0,
     /// which selects everything — the same thing it meant as a filter.

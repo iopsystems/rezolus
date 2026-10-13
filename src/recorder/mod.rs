@@ -26,14 +26,12 @@ pub(crate) use ::rez::{
 #[cfg(test)]
 pub(crate) use ::rez::{schema, wal};
 
-/// True when the recording should be written as an archive of recordings: a
-/// `.rez`, or a dendro archive (`.dendro`).
-///
-/// Lives here rather than in the `rez` crate because `Format` is this binary's
-/// CLI vocabulary — the archive format has no opinion about how a run chose it.
-fn wants_rez(format: crate::Format) -> bool {
-    config::is_archive(format)
-}
+/// The 5.x release the refusals of what 6.x no longer records (`.rez`,
+/// parquet and raw output, `--separate`, an agent that cannot stream) point
+/// at, as "5.27.0 or later": 5.27.0 does all of them, and naming a minimum
+/// rather than the latest release keeps the messages true if another 5.x
+/// release ships.
+pub(crate) const RELEASE_5X: &str = "5.27.0";
 
 use crate::parquet_metadata;
 use crate::parquet_metadata::KEY_EVENTS;
@@ -46,82 +44,57 @@ use std::sync::atomic::AtomicBool;
 
 pub fn command() -> Command {
     Command::new("record")
-        .about("On-demand recording of metrics to a file")
-        .long_about(
-            "Record one or more metrics endpoints at a fixed interval and write the samples to\n\
-             a file.\n\n\
-             The source is auto-detected: a Rezolus agent (msgpack) or a Prometheus-compatible\n\
-             endpoint. A .dendro output (the default) records each Rezolus agent from its\n\
-             replication stream and scrapes each Prometheus endpoint; every other format\n\
-             scrapes both (see STREAMING AND SCRAPING).\n\n\
+        .about("On-demand recording of metrics to a .dendro archive")
+        .long_about(format!(
+            "Record one or more metrics endpoints at a fixed interval into a .dendro archive.\n\n\
+             The source is auto-detected: a Rezolus agent, recorded from its replication\n\
+             stream (agents 5.21.0 or later), or a Prometheus-compatible endpoint, scraped\n\
+             each interval (see STREAMING AND SCRAPING).\n\n\
              WHAT TO RECORD (choose one): --url for a single endpoint (default\n\
              http://localhost:4241), --endpoint (repeatable) for several at once, or --config\n\
              for a TOML file. Exactly one: passing two of them is a parse error, not a\n\
              merge — and the deprecated positional URL counts as --url for that rule, as\n\
              positional OUTPUT counts as -o. Prefer the flags.\n\n\
              --url is shorthand for a single endpoint with no modifiers; reach for a single\n\
-             --endpoint when you need source=, role= or protocol= on it. Several rezolus\n\
-             endpoints are eligible for .rez too, and become one multi-recording archive\n\
-             (see WHAT IT WRITES). --config conflicts only with --url/--endpoint: every other\n\
-             flag still applies alongside it, and -o, --interval and --format override the\n\
-             file\'s [recording] table. There is no duration key —\n\
-             a bounded config-driven run passes --duration on the command line.\n\n\
+             --endpoint when you need source=, role= or protocol= on it. Several endpoints\n\
+             become one archive holding a recording each (see WHAT IT WRITES). --config\n\
+             conflicts only with --url/--endpoint: every other flag still applies alongside\n\
+             it, and -o and --interval override the file\'s [recording] table. There is no\n\
+             duration key — a bounded config-driven run passes --duration on the command line.\n\n\
              HOW LONG TO RECORD (choose one): --duration for a fixed window, nothing to run\n\
              until Ctrl-C, or `-- <command>` to record for exactly the lifetime of a wrapped\n\
              command (perf-record style) — it stops when the command exits.\n\n\
              A wrapped command keeps this terminal: its stdin/stdout/stderr pass straight\n\
              through, and rezolus exits with the command\'s own exit status, so\n\
-             `rezolus record -o bench.rez -- ./bench.sh && analyze bench.rez` gates on the\n\
-             benchmark exactly as it would without the wrapper. Two substitutions: the\n\
+             `rezolus record -o bench.dendro -- ./bench.sh && analyze bench.dendro` gates on\n\
+             the benchmark exactly as it would without the wrapper. Two substitutions: the\n\
              --duration cap exits 124 if it kills the command, and a recording failure (an\n\
              endpoint refused mid-run, a write error) exits 1 whatever the command returned.\n\n\
              A wrapped run is also marked in the recording: a `run_start` event when the\n\
              command spawns and a `run_end` event when it exits, so the viewer can draw the\n\
-             run's edges and align two recordings on them. Only the program name is stored\n\
-             unless --record-command-line is given. .rez, .dendro and parquet output carry\n\
-             the events; raw output has no metadata to carry them in.\n\n\
-             WHAT IT WRITES: the output path is -o/--output, and its extension picks the\n\
-             format, so --format is rarely needed. With no -o at all the recording goes to\n\
-             rezolus.<ext> for the format in play — by default rezolus.dendro. (A \"sampler\" below\n\
-             is one metric collector — cpu_usage, scheduler, blockio — and each reads on its\n\
-             own schedule rather than on one global clock.)\n\n    \
-             .dendro   (default) A per-sampler archive: one table per acquisition group,\n    \
-             \x20         each at its own cadence, carrying the window each read covered so\n    \
-             \x20         PromQL rate() queries in `rezolus view` and `rezolus mcp` can\n    \
-             \x20         report uncertainty bounds instead of a bare number. Groups whose\n    \
-             \x20         members come and go (threads, cgroups, CPUs) are stored one row\n    \
-             \x20         per member. Rezolus agents are streamed (5.21.0 or later) and\n    \
-             \x20         Prometheus endpoints scraped; several of them become one archive\n    \
-             \x20         holding a recording each, which is what `rezolus view` reads as an\n    \
-             \x20         A/B or multi-host comparison. Prefer it.\n    \
-             .rez      The same recordings in the archive format before 6.0, several\n    \
-             \x20         times larger. Every tool still reads and writes it; choose it\n    \
-             \x20         only for a consumer that has not moved to .dendro, or to record an\n    \
-             \x20         agent older than 5.21.0 (which a .dendro refuses); `rezolus\n    \
-             \x20         recording upgrade --to dendro out.rez -o out.dendro` converts it\n    \
-             \x20         afterwards.\n    \
-             .parquet  One columnar table on a single uniform clock. Use it for a uniform\n    \
-             \x20         tabular export or other parquet tooling.\n    \
-             \x20         (Multiple endpoints, including Prometheus, do NOT need\n    \
-             \x20         parquet — .dendro holds them as separate recordings.)\n    \
-             .raw      The msgpack snapshots as scraped, concatenated (a Prometheus source\n    \
-             \x20         is converted to snapshots on the way in, so either source works).\n    \
-             \x20         Cheapest thing the recorder can do: it appends and never rewrites.\n    \
-             \x20         Turn it into parquet later with `rezolus recording convert` — which\n    \
-             \x20         you can redo, re-stamping metadata, since the raw input is kept.\n\n\
-             Any other extension (-o capture.dat, or no extension at all) is not an error and\n\
-             not .dendro: it means parquet, unless --format says otherwise. A --format that\n\
-             contradicts the extension (say --format parquet with -o out.rez) IS an error,\n\
-             rather than a silent choice between them.\n\n\
-             A Prometheus endpoint records into a .rez or .dendro like any other. One\n\
-             scrape is one request and one response, so it becomes one acquisition group\n\
-             per target, windowed by the real HTTP round trip. Neither the source nor the\n\
-             endpoint count demotes the format any more; only --separate does, since one\n\
-             archive cannot be one file per endpoint.\n\n\
-             OVERWRITING: a .rez or .dendro output path must NOT already exist — the\n\
-             recorder refuses rather than truncate, because the archive is committed as it\n\
-             goes and has no staging file. A parquet or raw output IS overwritten. There is\n\
-             no --force; remove the old file or pick a new path.\n\n\
+             run\'s edges and align two recordings on them. Only the program name is stored\n\
+             unless --record-command-line is given.\n\n\
+             WHAT IT WRITES: a .dendro archive at -o/--output, rezolus.dendro by default. A\n\
+             per-sampler archive: one table per acquisition group, each at its own cadence\n\
+             (a \"sampler\" is one metric collector — cpu_usage, scheduler, blockio — and\n\
+             each reads on its own schedule rather than on one global clock), carrying the\n\
+             window each read covered so PromQL rate() queries in `rezolus view` and\n\
+             `rezolus mcp` can report uncertainty bounds instead of a bare number. Groups\n\
+             whose members come and go (threads, cgroups, CPUs) are stored one row per\n\
+             member. Several endpoints become one archive holding a recording each, which\n\
+             is what `rezolus view` reads as an A/B or multi-host comparison.\n\n\
+             The output path must end in .dendro. rezolus 6.x writes no other format: an\n\
+             output ending in .rez, .parquet or .raw (or in anything else) is refused, and\n\
+             so is a format other than dendro; --separate (one file per endpoint) was removed.\n\
+             A rezolus 5.x recorder ({RELEASE_5X} or later) still writes .rez, parquet and\n\
+             raw, and `rezolus recording upgrade --to dendro in.rez -o out.dendro` converts\n\
+             a .rez afterwards.\n\n\
+             A Prometheus endpoint records into the archive like any other. One scrape is\n\
+             one request and one response, so it becomes one acquisition group per target,\n\
+             windowed by the real HTTP round trip.\n\n\
+             OVERWRITING: the output path must NOT already exist — the recorder refuses\n\
+             rather than truncate, because the archive is committed as it goes and has no\n\
+             staging file. There is no --force; remove the old file or pick a new path.\n\n\
              EXAMPLES:\n    \
              # Record the local agent until ctrl-c (defaults: localhost:4241 -> rezolus.dendro)\n    \
              rezolus record\n\n    \
@@ -133,36 +106,28 @@ pub fn command() -> Command {
              rezolus record -o redis.dendro --label arm=redis -- ./bench.sh\n\n    \
              # High-resolution capture: sample every 100ms for 30 seconds\n    \
              rezolus record -o out.dendro --interval 100ms --duration 30s\n\n    \
-             # Record a Prometheus endpoint to parquet, tagging the source in the metadata\n    \
-             rezolus record --url http://host:9090/metrics -o out.parquet --metadata source=llm-perf\n\n    \
+             # Record a Prometheus endpoint, tagging the source in the metadata\n    \
+             rezolus record --url http://host:9090/metrics -o out.dendro --metadata source=llm-perf\n\n    \
              # Record two agents into ONE archive holding a recording each (multi-host / A/B)\n    \
              rezolus record --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.dendro\n\n    \
              # Same host, two agents: give each a source= so the recordings are tellable apart\n    \
              rezolus record --endpoint http://localhost:4241,source=redis --endpoint http://localhost:4242,source=valkey -o ab.dendro\n\n    \
-             # Record several endpoints into ONE combined parquet file (uniform tabular export)\n    \
-             rezolus record --endpoint http://localhost:4241 --endpoint http://svc:9090/metrics,source=svc -o run.parquet\n\n    \
-             # ...or one file per endpoint: writes run_rezolus.parquet and run_svc.parquet\n    \
-             rezolus record --separate --endpoint http://localhost:4241 --endpoint http://svc:9090/metrics,source=svc -o run.parquet\n\n    \
-             # Capture raw msgpack now, convert later\n    \
-             rezolus record -o run.raw --duration 1m && rezolus recording convert run.raw\n\n    \
-             # Write the pre-6.0 .rez format\n    \
-             rezolus record --url http://host:4241 --format rez --duration 5m\n\n    \
+             # An agent and a Prometheus endpoint in one archive\n    \
+             rezolus record --endpoint http://localhost:4241 --endpoint http://svc:9090/metrics,source=svc -o run.dendro\n\n    \
              # Take the endpoints and the output from a file\n    \
              rezolus record --config rec.toml\n    \
              #   [recording]\n    \
-             #   output = \"run.parquet\"   # required; its extension picks the format\n    \
+             #   output = \"run.dendro\"    # required; must end in .dendro\n    \
              #   interval = \"1s\"          # optional\n    \
-             #   separate = false         # optional\n    \
              #   [[endpoints]]\n    \
              #   url = \"http://localhost:4241\"\n    \
              #   [[endpoints]]\n    \
              #   url = \"http://svc:9090/metrics\"\n    \
              #   source = \"svc\"           # optional, as are role = and protocol =\n\n\
-             TAGGING: -m/--metadata k=v writes file-level metadata and applies to EVERY\n\
-             format. -l/--label k=v applies to .rez and .dendro (it is dropped for parquet and raw):\n\
-             it tags the recordings inside the archive, source and host are auto-populated,\n\
-             and a two-recording archive drives the viewer\'s A/B comparison, which aliases the\n\
-             arms off each recording\'s arm/host labels.\n\n\
+             TAGGING: -m/--metadata k=v writes metadata on every recording in the archive.\n\
+             -l/--label k=v tags the recordings inside the archive; source and host are\n\
+             auto-populated, and a two-recording archive drives the viewer\'s A/B comparison,\n\
+             which aliases the arms off each recording\'s arm/host labels.\n\n\
              --label applies to EVERY recording the run produces, so it names the run, not\n\
              one endpoint in it: --label arm=redis is how you tag a whole single-endpoint\n\
              capture as one arm, to be compared against another run. Within ONE invocation,\n\
@@ -175,8 +140,8 @@ pub fn command() -> Command {
              combine`, set the metadata keys it reads: --metadata node=web-01 and\n\
              --metadata instance=0. (`record --node` / `--instance` were removed: they were\n\
              never wired to anything, and these are what they were meant to set.)\n\n\
-             ABOUT .dendro AND .rez:\n\n\
-             Archive recordings are written to disk as they run, so stopping costs the same\n\
+             ABOUT THE ARCHIVE:\n\n\
+             The archive is written to disk as the recording runs, so stopping costs the same\n\
              whether the recording ran for a minute or a day. Ctrl-c and SIGTERM (e.g. a\n\
              docker stop) are clean stops: the signal interrupts the wait between samples\n\
              straight away, so finalizing costs only the write of the still-open segments —\n\
@@ -189,18 +154,17 @@ pub fn command() -> Command {
              recording as \"not cleanly finalized\" and how many samples are still in its\n\
              write-ahead log.\n\n\
              STREAMING AND SCRAPING:\n\n\
-             A .dendro records each Rezolus agent from its replication stream\n\
-             (/metrics/stream): the agent pushes one frame per --interval, carrying only\n\
-             the acquisition groups it re-read since the last one, stamped when the agent\n\
-             sampled rather than when the recorder asked. Prometheus endpoints cannot\n\
-             stream, so they are scraped each tick, and one run can hold both kinds.\n\n\
-             There is no scrape path for a Rezolus agent into a .dendro. An agent that\n\
-             cannot serve the stream (older than 5.21.0, a V2 agent, a stream route that\n\
-             answers 404 or another refusal, or a handshake that does not decode) is\n\
-             refused with its version. At startup that refuses the run before anything is\n\
-             written; record such an agent with -o out.rez or -o out.parquet, which\n\
-             scrape, and convert a .rez afterwards with `rezolus recording upgrade --to\n\
-             dendro`. An agent that comes up later and is refused, or is refused on a\n\
+             Each Rezolus agent is recorded from its replication stream (/metrics/stream):\n\
+             the agent pushes one frame per --interval, carrying only the acquisition groups\n\
+             it re-read since the last one, stamped when the agent sampled rather than when\n\
+             the recorder asked. Prometheus endpoints cannot stream, so they are scraped each\n\
+             tick, and one run can hold both kinds.\n\n\
+             There is no scrape path for a Rezolus agent. An agent that cannot serve the\n\
+             stream (older than 5.21.0, a V2 agent, a stream route that answers 404 or\n\
+             another refusal, or a handshake that does not decode) is refused with its\n\
+             version. At startup that refuses the run before anything is written; a rezolus\n\
+             5.x recorder ({RELEASE_5X} or later) records such an agent by scraping it.\n\
+             An agent that comes up later and is refused, or is refused on a\n\
              reconnect, is left out of the recording from then on (a reconnect keeps the\n\
              rows it had), the other endpoints keep recording, and the run exits 1 once\n\
              the archive is finalized. When every endpoint has been refused, the run ends.\n\n\
@@ -211,8 +175,8 @@ pub fn command() -> Command {
              interval, between 2 s and 10 s) counts as dropped.\n\n\
              A wrapped command that exits on its own waits for each agent's frame covering\n\
              the exit, at most one interval plus the scrape timeout (twice the interval,\n\
-             between 2 s and 10 s).",
-        )
+             between 2 s and 10 s)."
+        ))
         .arg(
             clap::Arg::new("URL")
                 .help("Deprecated positional form of --url; prefer --url")
@@ -230,7 +194,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("CONFIG_FILE")
                 .long("config")
-                .help("Record endpoints defined in a TOML file: a [recording] table (output, interval, format, separate) plus [[endpoints]] entries mirroring the --endpoint fields (url, source, role, protocol)")
+                .help("Record endpoints defined in a TOML file: a [recording] table (output, interval) plus [[endpoints]] entries mirroring the --endpoint fields (url, source, role, protocol)")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(PathBuf))
                 .conflicts_with_all(["URL"]),
@@ -238,14 +202,16 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("ENDPOINT")
                 .long("endpoint")
-                .help("Add an endpoint as url[,source=name][,role=label][,protocol=msgpack|prometheus]; role is a free-form tag (conventionally service or loadgen); repeat for several (e.g. http://host:9090/metrics,source=svc,role=service,protocol=prometheus)")
+                .help("Add an endpoint as url[,source=name][,role=label][,protocol=rezolus|prometheus]; role is a free-form tag (conventionally service or loadgen); protocol skips auto-detection: rezolus is a Rezolus agent, recorded from its replication stream (msgpack is accepted for it too), prometheus a text exposition endpoint, scraped; repeat for several (e.g. http://host:9090/metrics,source=svc,role=service,protocol=prometheus)")
                 .action(clap::ArgAction::Append)
                 .conflicts_with_all(["URL", "CONFIG_FILE"]),
         )
         .arg(
+            // Removed in 6.0. Hidden, and refused with a message naming a
+            // 5.x recorder rather than with clap's unknown-argument error.
             clap::Arg::new("SEPARATE")
                 .long("separate")
-                .help("Write one file per endpoint instead of combining; each is named <OUTPUT-stem>_<source>.<ext> alongside the output path. Without an explicit source=, a rezolus agent endpoint is named \"rezolus\" and a Prometheus one falls back to its host-port plus any distinguishing path (e.g. svc-9090, or svc-9090-federate — the conventional /metrics is left off). For parquet or raw output only: a .rez or .dendro archive already keeps each endpoint as its own recording, so --separate does not apply to it")
+                .hide(true)
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
@@ -273,25 +239,27 @@ pub fn command() -> Command {
                 .value_parser(value_parser!(humantime::Duration)),
         )
         .arg(
+            // Hidden: `dendro` is the only value 6.x accepts, kept so a script
+            // passing `--format dendro` keeps working. The 5.x values are
+            // refused by name (`config::check_format`).
             clap::Arg::new("FORMAT")
                 .long("format")
                 .short('f')
-                .help("Output format: dendro (per-sampler archive, the default), rez (the archive format before 6.0), parquet (one columnar table), or raw (concatenated msgpack snapshots). Usually unnecessary — the -o extension picks the format, and giving both a --format and a conflicting extension is an error. An archive takes any number of endpoints, rezolus or Prometheus, each as its own recording")
-                .action(clap::ArgAction::Set)
-                .value_parser(value_parser!(Format)),
+                .hide(true)
+                .action(clap::ArgAction::Set),
         )
         .arg(
             clap::Arg::new("METADATA")
                 .long("metadata")
                 .short('m')
-                .help("Add a file-level metadata tag as key=value (e.g. source=llm-perf); repeat for multiple tags. Applies to every output format")
+                .help("Add a metadata tag as key=value (e.g. source=llm-perf) to every recording in the archive; repeat for multiple tags")
                 .action(clap::ArgAction::Append),
         )
         .arg(
             clap::Arg::new("LABEL")
                 .long("label")
                 .short('l')
-                .help("Tag the recording with a label as key=value (e.g. arm=redis, role=server); repeat for multiple. A value without `=` is ignored. `source` and `host` are auto-populated. Applies to EVERY recording in the run, so it cannot tell two endpoints apart — use --endpoint url,source=name for that. .rez and .dendro output only — dropped for parquet and raw, where --metadata is the equivalent")
+                .help("Tag the recording with a label as key=value (e.g. arm=redis, role=server); repeat for multiple. A value without `=` is ignored. `source` and `host` are auto-populated. Applies to EVERY recording in the run, so it cannot tell two endpoints apart — use --endpoint url,source=name for that")
                 .action(clap::ArgAction::Append),
         )
         .arg(
@@ -306,7 +274,7 @@ pub fn command() -> Command {
             clap::Arg::new("OUTPUT_FLAG")
                 .long("output")
                 .short('o')
-                .help("Path to the output file; its extension picks the format (.rez, .dendro, .parquet, .raw). Defaults to rezolus.<format>, i.e. rezolus.dendro")
+                .help("Path to the .dendro archive to write; it must end in .dendro and must not exist. Defaults to rezolus.dendro")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(PathBuf))
                 .conflicts_with("OUTPUT"),
@@ -320,7 +288,7 @@ pub fn command() -> Command {
         )
         .arg(
             clap::Arg::new("COMMAND")
-                .help("Wrap a command: record only while it runs, then stop when it exits. Give it after `--`, e.g. rezolus record -o out.parquet -- ./bench.sh --iters 100. The run is marked in the recording by two events: run_start (kind run_start, description = the program name, e.g. bench.sh) when the command spawns, and run_end (kind run_end, description = the program name plus `exited <code>`, `capped` or `interrupted`) when its exit is observed. Only the program name is recorded unless --record-command-line is given. .rez, .dendro and parquet output carry the events; raw output has no metadata and cannot, and a run that captured no samples writes no file at all")
+                .help("Wrap a command: record only while it runs, then stop when it exits. Give it after `--`, e.g. rezolus record -o out.dendro -- ./bench.sh --iters 100. The run is marked in the recording by two events: run_start (kind run_start, description = the program name, e.g. bench.sh) when the command spawns, and run_end (kind run_end, description = the program name plus `exited <code>`, `capped` or `interrupted`) when its exit is observed. Only the program name is recorded unless --record-command-line is given. A run that captured no samples writes no file at all")
                 .action(clap::ArgAction::Set)
                 .index(3)
                 .num_args(1..)
@@ -395,7 +363,7 @@ async fn probe_endpoint(
     None
 }
 
-/// Fetch systeminfo, descriptions, sampler status and version from a Rezolus
+/// Fetch systeminfo, descriptions and version from a Rezolus
 /// agent.
 pub(crate) async fn fetch_agent_metadata(client: &Client, base_url: &Url) -> AgentMetadata {
     let mut info_url = base_url.clone();
@@ -412,20 +380,12 @@ pub(crate) async fn fetch_agent_metadata(client: &Client, base_url: &Url) -> Age
         _ => None,
     };
 
-    let mut samplers_url = base_url.clone();
-    samplers_url.set_path("/samplers");
-    let sampler_status = match client.get(samplers_url).send().await {
-        Ok(response) if response.status().is_success() => response.text().await.ok(),
-        _ => None,
-    };
-
     let (version, producer_epoch, clock_anchor_wall_ns) =
         fetch_agent_identity(client, base_url).await;
 
     AgentMetadata {
         systeminfo,
         descriptions,
-        sampler_status,
         version,
         producer_epoch,
         clock_anchor_wall_ns,
@@ -504,73 +464,9 @@ pub(crate) fn parse_root_version(body: &str) -> Option<String> {
     Some(version.to_string())
 }
 
-/// The producer epoch carried by a snapshot's metadata, if it has one.
-///
-/// Read from the snapshot rather than only from `/status` because this is the
-/// channel that can catch a restart BETWEEN two scrapes: at that moment every
-/// counter in the payload restarted from zero together, and no comparison of
-/// the values can say so — a counter that reset and one that wrapped both just
-/// went down.
-fn snapshot_producer_epoch(snapshot: &metriken_exposition::Snapshot) -> Option<&str> {
-    use metriken_exposition::Snapshot;
-    let metadata = match snapshot {
-        Snapshot::V1(s) => &s.metadata,
-        Snapshot::V2(s) => &s.metadata,
-        Snapshot::V3(s) => &s.metadata,
-    };
-    metadata
-        .get(parquet_metadata::KEY_PRODUCER_EPOCH)
-        .map(String::as_str)
-        .filter(|e| !e.is_empty())
-}
-
-/// The producer's own stamp for this pass, if it sent one.
-///
-/// Returns `(ts, wall_offset)` on the AGENT's timeline: when it read the
-/// values, and the wall clock's disagreement with that timeline at the read.
-///
-/// The recorder's alternative is its own tick, which names when it ASKED. The
-/// two differ by the network round trip and by however long the agent had been
-/// serving this pass from its TTL cache — a scrape inside that window gets
-/// values read up to a TTL earlier, and one HTTP response looks the same
-/// either way. Only the agent can tell the difference, so when it does, that
-/// is what the recording keeps.
-///
-/// Absent for a Prometheus source, which has no such clock to offer, and for
-/// an agent older than these keys. Both fall back to the recorder's stamp,
-/// which is what every recording before this held.
-fn snapshot_producer_stamp(snapshot: &metriken_exposition::Snapshot) -> Option<(u64, i64)> {
-    use metriken_exposition::Snapshot;
-    let metadata = match snapshot {
-        Snapshot::V1(s) => &s.metadata,
-        Snapshot::V2(s) => &s.metadata,
-        Snapshot::V3(s) => &s.metadata,
-    };
-    let ts: i64 = metadata.get("ts")?.parse().ok()?;
-    let wall_offset: i64 = metadata.get("wall_offset")?.parse().ok()?;
-    // A negative stamp is not a timeline this recorder can write: `wal.ts` is
-    // unsigned, and a producer that sent one is not one to guess for.
-    Some((u64::try_from(ts).ok()?, wall_offset))
-}
-
-/// Note a change of the agent's epoch mid-recording, read off a snapshot.
-///
-/// An archive (`.dendro` or `.rez`) records the restart in its metadata once a
-/// row from the new process is staged: see [`apply_restarts`]. A parquet
-/// recording writes its metadata once, when it closes, with no history, and a
-/// raw one has none, so for those the warning is the only record of the
-/// restart.
-fn note_epoch_change(ep: &mut EndpointState, snapshot: &metriken_exposition::Snapshot) {
-    if let Some(seen) = snapshot_producer_epoch(snapshot) {
-        note_epoch(ep, seen);
-    }
-}
-
-/// The epoch an endpoint's source now carries, against the one on record.
-///
-/// The shared half of [`note_epoch_change`]: the scrape path reads the epoch
-/// off a snapshot, the stream path off a handshake, and both must react the
-/// same way to the same change.
+/// The epoch an endpoint's source now carries, against the one on record:
+/// the uuid of each stream handshake, the first and every reconnect's (see
+/// [`adopt_source`]).
 fn note_epoch(ep: &mut EndpointState, seen: &str) {
     match ep.agent.producer_epoch.as_deref() {
         // First epoch observed on an endpoint whose `/status` did not carry
@@ -657,7 +553,7 @@ pub(crate) async fn fetch_restarted_agent(
 /// [`note_epoch`] has already logged them.
 async fn apply_restarts(
     endpoints: &mut [EndpointState],
-    mut archive: Option<&mut RezStream>,
+    mut archive: Option<&mut Archive>,
     client: &Client,
     user_metadata: &[(String, String)],
     timeout: Duration,
@@ -713,9 +609,8 @@ async fn apply_restarts(
 /// Open a replication stream to `ep`, an endpoint already probed as a Rezolus
 /// agent, and mark it active and streaming.
 ///
-/// The stream path's `fetch_agent_metadata`. Two things differ from the
-/// scrape path, and both follow from the handshake being the authority on the
-/// rows that will arrive:
+/// Fetches the agent's metadata, then subscribes. Two things follow from the
+/// handshake being the authority on the rows that will arrive:
 ///
 /// - The recording's anchor and epoch are the handshake's, overriding what
 ///   `/status` said a moment earlier. The rows are stamped on the handshake's
@@ -732,8 +627,8 @@ async fn apply_restarts(
 /// the two got a restart warning pointing backwards.
 ///
 /// `timeout` bounds the connect and the handshake together, for the reason
-/// the scrape path bounds a probe: this runs on the tick loop. The metadata
-/// fetch is not bounded, exactly as the scrape path's is not.
+/// a probe is bounded: this runs on the tick loop. The metadata fetch is not
+/// bounded.
 async fn open_stream(
     client: &Client,
     ep: &mut EndpointState,
@@ -870,16 +765,14 @@ fn refusal_summary(endpoints: &[EndpointState], output: &Path, finalized: bool) 
     Some(lines.join("\n"))
 }
 
-/// The refusal for a Rezolus agent that cannot serve its replication stream
-/// into a `.dendro`.
+/// The refusal for a Rezolus agent that cannot serve its replication stream.
 ///
 /// Names the agent's version when `/status` or the `/` banner gave one. An
 /// agent older than [`STREAM_SINCE`] is said to predate the stream; one at or
 /// after it should serve the stream, so the refusal only quotes what the
 /// route answered (a proxy that does not route `/metrics/stream` gives a 404
-/// from a current agent). There is no scrape fallback: a `.dendro` records
-/// agents by stream only, and a run that quietly scraped one agent would put
-/// two endpoints of one A/B on different transports.
+/// from a current agent). There is no scrape fallback: 6.x records agents by
+/// stream only, and points at a 5.x recorder, which scrapes them.
 fn unstreamable_agent(ep: &EndpointState, reason: &str, at: RefusedAt) -> String {
     let url = &ep.config.url;
     let mut stream_url = url.clone();
@@ -901,30 +794,28 @@ fn unstreamable_agent(ep: &EndpointState, reason: &str, at: RefusedAt) -> String
              did not open: {reason}. Agents serve /metrics/stream from {STREAM_SINCE}"
         ),
     };
+    let upgrade = match ep.agent.version.as_deref().and_then(predates_stream) {
+        Some(false) => String::new(),
+        _ => format!("; or upgrade the agent to {STREAM_SINCE} or later"),
+    };
+    let fallback = format!(
+        "rezolus 6.x records Rezolus agents from their replication stream only. A \
+         rezolus 5.x recorder ({RELEASE_5X} or later) records this \
+         agent by scraping it, and `rezolus recording upgrade --to dendro in.rez -o \
+         out.dendro` converts its .rez afterwards{upgrade}"
+    );
     let next = match at {
-        RefusedAt::Startup => {
-            "A .dendro records Rezolus agents from their replication stream only; \
-             record this agent to a .rez (-o out.rez) or to parquet (-o out.parquet) \
-             instead, both of which scrape. `rezolus recording upgrade --to dendro out.rez \
-             -o out.dendro` converts the .rez afterwards"
-        }
+        RefusedAt::Startup => "Nothing was recorded",
         RefusedAt::MidRun => {
             "This endpoint is excluded from this recording and not retried; the other \
-             endpoints keep recording. A .dendro records Rezolus agents from their \
-             replication stream only; a separate `rezolus record` to a .rez or to \
-             parquet, both of which scrape, can record this agent, and `rezolus recording \
-             upgrade --to dendro out.rez -o out.dendro` converts the .rez afterwards"
+             endpoints keep recording"
         }
         RefusedAt::Reconnect => {
             "This endpoint's recording stops here, keeping the rows it had, and is not \
-             retried; the other endpoints keep recording. A .dendro records Rezolus \
-             agents from their replication stream only; a separate `rezolus record` to a \
-             .rez or to parquet, both of which scrape, can record this agent, and \
-             `rezolus recording upgrade --to dendro out.rez -o out.dendro` converts the \
-             .rez afterwards"
+             retried; the other endpoints keep recording"
         }
     };
-    format!("{why}. {next}")
+    format!("{why}. {next}. {fallback}")
 }
 
 /// The first Rezolus release whose agent serves `/metrics/stream`.
@@ -949,21 +840,19 @@ enum Activation {
     /// Not up yet; probed again next tick. Carries the line that says why,
     /// for the caller to log at the level it wants.
     Pending(String),
-    /// Active and scraped each tick: a Prometheus endpoint, or any endpoint of
-    /// a run that does not write a `.dendro`.
+    /// Active and scraped each tick: a Prometheus endpoint.
     Scrape,
-    /// A Rezolus agent in a `.dendro` run, subscribed to its stream.
+    /// A Rezolus agent, subscribed to its stream.
     Stream(Box<stream::Subscription>),
 }
 
 /// Probe `ep` and bring it up on the transport its kind takes.
 ///
 /// Shared by startup and by the late activation of an endpoint that was not
-/// reachable at startup, so both apply one rule: with `stream_agents` (a
-/// `.dendro` run) a Rezolus agent is streamed and a Prometheus endpoint is
-/// scraped; without it everything is scraped. The probe classifies the
-/// endpoint as it always has (`/metrics/binary` first, then `/metrics`, or
-/// the declared `protocol=`).
+/// reachable at startup, so both apply one rule: a Rezolus agent is streamed
+/// and a Prometheus endpoint is scraped. The probe classifies the endpoint as
+/// it always has (`/metrics/binary` first, then `/metrics`, or the declared
+/// `protocol=`).
 ///
 /// `Err` is an agent that answered and cannot serve the stream: refused, never
 /// scraped instead (see [`unstreamable_agent`]), with `at` choosing the
@@ -972,7 +861,6 @@ enum Activation {
 async fn activate_endpoint(
     client: &Client,
     ep: &mut EndpointState,
-    stream_agents: bool,
     interval: Duration,
     timeout: Duration,
     at: RefusedAt,
@@ -995,7 +883,7 @@ async fn activate_endpoint(
         )));
     };
 
-    if stream_agents && protocol == Protocol::Msgpack {
+    if protocol == Protocol::Msgpack {
         return match open_stream(client, ep, interval, timeout).await {
             Ok(sub) => Ok(Activation::Stream(Box::new(sub))),
             Err(stream::ConnectError::Unsupported(e)) => Err(unstreamable_agent(ep, &e, at)),
@@ -1012,20 +900,13 @@ async fn activate_endpoint(
     }
 
     if ep.config.source.is_none() {
-        if protocol == Protocol::Msgpack {
-            ep.config.source = Some("rezolus".to_string());
-        } else {
-            let inferred = infer_source_name(&ep.config.url);
-            eprintln!(
-                "warn: no source name specified for {}, using \"{inferred}\" \
-                 (pass --metadata source=NAME to override)",
-                ep.config.url,
-            );
-            ep.config.source = Some(inferred);
-        }
-    }
-    if protocol == Protocol::Msgpack {
-        ep.agent = fetch_agent_metadata(client, &ep.config.url).await;
+        let inferred = infer_source_name(&ep.config.url);
+        eprintln!(
+            "warn: no source name specified for {}, using \"{inferred}\" \
+             (pass --metadata source=NAME to override)",
+            ep.config.url,
+        );
+        ep.config.source = Some(inferred);
     }
     ep.scrape_url = Some(url);
     ep.detected_protocol = Some(protocol);
@@ -1037,7 +918,7 @@ async fn activate_endpoint(
 ///
 /// Also the reconnect path: a new connection's handshake names the source
 /// again, and a different uuid is a restarted agent, which `note_epoch`
-/// warns about exactly as the scrape path does on a changed snapshot epoch.
+/// records as a restart.
 fn adopt_source(ep: &mut EndpointState, source: &stream::Source) {
     // Zero is what no agent anchors at (1970), so it is not an anchor.
     if source.clock_anchor_wall_ns != 0 {
@@ -1057,13 +938,12 @@ fn adopt_source(ep: &mut EndpointState, source: &stream::Source) {
 fn drain_stream_events(
     rx: &mut tokio::sync::mpsc::Receiver<(usize, stream::StreamEvent)>,
     endpoints: &mut [EndpointState],
-    mut rez_recorder: Option<&mut RezStream>,
+    mut archive: Option<&mut Archive>,
     wall_ns: u64,
 ) -> Option<String> {
     let mut failed: Option<String> = None;
     while let Ok((idx, event)) = rx.try_recv() {
-        if let Some(e) =
-            handle_stream_event(idx, event, endpoints, rez_recorder.as_deref_mut(), wall_ns)
+        if let Some(e) = handle_stream_event(idx, event, endpoints, archive.as_deref_mut(), wall_ns)
         {
             failed.get_or_insert(e);
         }
@@ -1078,7 +958,7 @@ fn handle_stream_event(
     idx: usize,
     event: stream::StreamEvent,
     endpoints: &mut [EndpointState],
-    rez_recorder: Option<&mut RezStream>,
+    archive: Option<&mut Archive>,
     wall_ns: u64,
 ) -> Option<String> {
     let mut failed: Option<String> = None;
@@ -1107,7 +987,7 @@ fn handle_stream_event(
                 .iter()
                 .filter_map(|r| u64::try_from(r.ts).ok())
                 .min();
-            if let Some(rec) = rez_recorder {
+            if let Some(rec) = archive {
                 match rec.stage_stream(idx, &endpoints[idx].config.url, applied) {
                     Ok(()) => {
                         if let Some(ts) = first_ts {
@@ -1215,137 +1095,6 @@ async fn scrape_one(
         // part of the interval they were actually read over.
         response_ns: anchored_at(anchor_wall_ns, anchor_mono.elapsed()),
     })
-}
-
-fn separate_output_path(base: &Path, source: &str) -> PathBuf {
-    let stem = base.file_stem().unwrap_or_default().to_string_lossy();
-    let ext = base.extension().unwrap_or_default().to_string_lossy();
-    let filename = if ext.is_empty() {
-        format!("{stem}_{source}")
-    } else {
-        format!("{stem}_{source}.{ext}")
-    };
-    base.with_file_name(filename)
-}
-
-fn output_dir(output: &Path) -> PathBuf {
-    match output.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
-        _ => PathBuf::from("."),
-    }
-}
-
-fn build_parquet_converter(
-    config: &RecordingConfig,
-    ep: &EndpointState,
-    prom_converter: &Option<prometheus::PrometheusConverter>,
-    run_events: &[Event],
-) -> MsgpackToParquet {
-    let mut converter = MsgpackToParquet::with_options(
-        ParquetOptions::new().max_batch_size(parquet_metadata::MAX_ROW_GROUP_SIZE),
-    )
-    .metadata(
-        "sampling_interval_ms".to_string(),
-        config.interval.as_millis().to_string(),
-    );
-
-    converter = converter.metadata("source".to_string(), ep.config.source_label().to_string());
-    // Where the recording was scraped from. It used to ride in every metric's
-    // metadata, where nothing read it; a flat parquet has no manifest, so file
-    // level is the only place provenance can live for this format.
-    converter = converter.metadata("endpoint".to_string(), ep.config.url.to_string());
-
-    // Before the user's `--metadata`, the same as `source` above: what the
-    // agent reported is the default, and an explicit `--metadata version=...`
-    // overrides it.
-    if let Some(ref version) = ep.agent.version {
-        converter = converter.metadata(parquet_metadata::KEY_VERSION.to_string(), version.clone());
-    }
-
-    if let Some(ref epoch) = ep.agent.producer_epoch {
-        converter = converter.metadata(
-            parquet_metadata::KEY_PRODUCER_EPOCH.to_string(),
-            epoch.clone(),
-        );
-    }
-
-    for (key, value) in &config.metadata {
-        // A user `--metadata events=...` is merged with the run events below
-        // rather than written here, where the run events would replace it.
-        if key == KEY_EVENTS {
-            continue;
-        }
-        converter = converter.metadata(key.clone(), value.clone());
-    }
-
-    if let Some(ref json) = ep.agent.systeminfo {
-        converter = converter.metadata("systeminfo".to_string(), json.clone());
-    }
-
-    // Descriptions: prefer agent-fetched, fall back to Prometheus HELP
-    let prom_desc = prom_converter
-        .as_ref()
-        .filter(|c| !c.descriptions().is_empty())
-        .and_then(|c| serde_json::to_string(c.descriptions()).ok());
-    let desc = ep.agent.descriptions.clone().or(prom_desc);
-    if let Some(ref json) = desc {
-        converter = converter.metadata("descriptions".to_string(), json.clone());
-    }
-
-    // A user-supplied --metadata source=... takes precedence over the
-    // endpoint's source. If the value parses as a JSON array the stream
-    // represents multiple logical sources and we emit one
-    // per_source_metadata entry per name.
-    let effective_source = config
-        .metadata
-        .iter()
-        .find(|(k, _)| k == "source")
-        .map(|(_, v)| v.as_str())
-        .unwrap_or(ep.config.source_label());
-
-    if let Some(json) = build_per_source_metadata(
-        effective_source,
-        ep.first_success_ns,
-        ep.last_success_ns,
-        ep.config.role.as_deref(),
-        ep.agent.sampler_status.as_deref(),
-    ) {
-        converter = converter.metadata("per_source_metadata".to_string(), json);
-    }
-
-    // The wrapped run's `run_start`/`run_end` events, under the key `annotate`
-    // uses, merged with any `--metadata events=...` the user gave, the same
-    // rule `build_rez_metadata` applies. Every endpoint's file gets the same
-    // two: they are global (no source/node/instance), and a multi-endpoint
-    // parquet run goes through `combine_files`, which concatenates the key
-    // and dedups by event id.
-    let user_events = config
-        .metadata
-        .iter()
-        .rev()
-        .find(|(k, _)| k == KEY_EVENTS)
-        .map(|(_, v)| v.as_str());
-    if let Some(json) = events_payload(user_events, run_events) {
-        converter = converter.metadata(KEY_EVENTS.to_string(), json);
-    }
-
-    converter
-}
-
-/// The `KEY_EVENTS` payload for a parquet footer: `run_events` merged into
-/// the user's own `--metadata events=...` value, or `None` when there is
-/// neither. A user value that does not parse is kept verbatim, with a
-/// warning, and the run events are the ones dropped; an empty result drops
-/// the key rather than storing `{"events":[]}`, as `annotate` does.
-fn events_payload(user_events: Option<&str>, run_events: &[Event]) -> Option<String> {
-    let mut m = BTreeMap::new();
-    if let Some(raw) = user_events {
-        m.insert(KEY_EVENTS.to_string(), raw.to_string());
-    }
-    if let Err(e) = merge_events_into(&mut m, run_events) {
-        warn!("not adding the run events to the parquet footer: {e}");
-    }
-    m.remove(KEY_EVENTS)
 }
 
 /// Append `events` to the `KEY_EVENTS` payload in `metadata`, in place.
@@ -1483,15 +1232,15 @@ impl RunMarker {
     }
 }
 
-/// File-level metadata for a `.rez` archive manifest, mirroring the keys
-/// `build_parquet_converter` writes (`sampling_interval_ms`, `source`,
-/// `version`, user `--metadata`, `systeminfo`, `descriptions`).
+/// One recording's metadata in the archive: `sampling_interval_ms`, `source`,
+/// `version`, `producer_epoch`, user `--metadata`, `systeminfo`,
+/// `descriptions`, and the run events.
 ///
 /// `run_events` are the wrapped run's events known so far, so a recording
 /// opened after the command spawned (a late-joining endpoint) carries
 /// `run_start` from its seed rather than waiting for an update that already
 /// happened.
-fn build_rez_metadata(
+fn build_metadata(
     config: &RecordingConfig,
     ep: &EndpointState,
     run_events: &[Event],
@@ -1515,6 +1264,12 @@ fn build_rez_metadata(
             epoch.clone(),
         );
     }
+    // `--endpoint url,role=...`. Parquet carried it in its per-source map,
+    // which a `.dendro` has no equivalent of; one recording per endpoint
+    // makes it a key of that recording's metadata.
+    if let Some(ref role) = ep.config.role {
+        m.insert(parquet_metadata::NESTED_ROLE.to_string(), role.clone());
+    }
     for (k, v) in &config.metadata {
         m.insert(k.clone(), v.clone());
     }
@@ -1533,10 +1288,10 @@ fn build_rez_metadata(
     m
 }
 
-/// The recording's label set for a `.rez` manifest: `source`, `host` (from the
-/// agent's systeminfo hostname), plus any user `--label k=v` (last-wins). Thin
-/// adapter over `rez::build_labels`; the merge logic + tests live in `rez`.
-fn build_rez_labels(
+/// The recording's label set: `source`, `host` (from the agent's systeminfo
+/// hostname), plus any user `--label k=v` (last-wins). Thin adapter over
+/// `rez::build_labels`; the merge logic + tests live in `rez`.
+fn build_labels(
     config: &RecordingConfig,
     ep: &EndpointState,
 ) -> std::collections::BTreeMap<String, String> {
@@ -1547,21 +1302,38 @@ fn build_rez_labels(
     )
 }
 
-/// The recorder the loop feeds in archive mode (`.rez` or `.dendro`).
+/// The `.dendro` archive the recording loop feeds, through metriken-storage's
+/// writer: groups with slots are written long, with their occupants in a
+/// stream beside each.
 ///
-/// A newtype rather than a bare writer because the recording loop needs two
-/// things the writers have no opinion about: what to tell the user after a
+/// A wrapper rather than a bare writer because the recording loop needs
+/// things the writer has no opinion about: what to tell the user after a
 /// mid-recording failure, and how to leave nothing behind when a run captured
 /// no samples at all.
-struct RezStream {
-    /// The container being written, and its per-recording state.
-    sink: Sink,
+///
+/// The writer is **declared after the recorders deliberately.** Fields drop
+/// in declaration order, and dropping the writer joins its thread. Dropping
+/// it first would not block (`join` sends a shutdown before releasing its own
+/// sender, and the writer honours it whoever still holds a clone), but it
+/// would stop the writer while the recordings could still queue their final
+/// seals, silently losing them.
+struct Archive {
+    /// One recorder per recording, keyed by the endpoint index it serves:
+    /// sparse rather than a `Vec` parallel to `endpoints`, because an
+    /// endpoint gets one only once it is active.
+    recs: BTreeMap<usize, metriken_storage::SourceRecorder>,
+    /// This tick's rows, per recording, waiting for one commit. Cleared by
+    /// `commit_tick`.
+    staged: Vec<metriken_storage::writer::Staged>,
+    /// Streamed endpoints only: per endpoint, the decoder that turns its
+    /// rows back into the groups the writer stages.
+    decoders: BTreeMap<usize, metriken_storage::StreamDecoder>,
+    writer: metriken_storage::ArchiveWriter,
+    /// The archive's path; the writer does not report it.
+    path: std::path::PathBuf,
     /// Each recording's metadata map as last written, keyed by endpoint
-    /// index like the recorders.
-    ///
-    /// Kept because the `.rez` writer's `update_metadata` replaces the whole
-    /// map: adding a run event means sending the seed back with the event
-    /// merged in, and the writer does not hand the seed back.
+    /// index like the recorders. Kept so a run event can be merged into the
+    /// events payload already there; the writer does not hand it back.
     metadata: BTreeMap<usize, BTreeMap<String, String>>,
     /// The first stamp each recording ingested: where the epoch it opened
     /// with begins, should the agent restart. See `recorder::restart`.
@@ -1577,49 +1349,10 @@ struct RezStream {
     /// Canonical label key -> the endpoint URL that claimed it first, for the
     /// indistinguishable-labels warning.
     ///
-    /// Held here rather than locally in `start_rez_recorder` because an
-    /// endpoint that was down at startup opens its recording later, and it
-    /// has to be checked against the recordings already open.
+    /// Held here rather than locally in `start_recorder` because an endpoint
+    /// that was down at startup opens its recording later, and it has to be
+    /// checked against the recordings already open.
     seen_labels: BTreeMap<String, String>,
-}
-
-/// The two archive writers. Each keeps one recorder per recording, keyed by
-/// the endpoint index it serves: sparse rather than a `Vec` parallel to
-/// `endpoints`, because only the endpoints being archived get one.
-///
-/// In both, the writer is **declared after the recorders deliberately.**
-/// Fields drop in declaration order, and dropping the writer joins its
-/// thread. Dropping it first would not block (`join` sends a shutdown before
-/// releasing its own sender, and the writer honours it whoever still holds a
-/// clone), but it would stop the writer while the recordings could still
-/// queue their final seals, silently losing them.
-enum Sink {
-    /// The `.rez` v3 container.
-    Rez {
-        recs: BTreeMap<usize, rez_v3_writer::StreamRecorderV3>,
-        /// This tick's rows, per recording, waiting for one commit.
-        ///
-        /// Cleared by `commit_tick`. Rows sitting here have already advanced
-        /// each recorder's dedup and seal accounting — the same as the moment
-        /// between `StreamRecorderV3::ingest` building its rows and its send
-        /// returning, so a failure to commit loses the tick exactly as a
-        /// failed send always did.
-        staged: Vec<rez_sqlite::TickBatch>,
-        archive: rez_v3_writer::RezArchive,
-    },
-    /// A dendro archive through metriken-storage's writer: groups with slots
-    /// are written long, with their occupants in a stream beside each.
-    Dendro {
-        recs: BTreeMap<usize, metriken_storage::SourceRecorder>,
-        /// This tick's rows, as for `Rez`.
-        staged: Vec<metriken_storage::writer::Staged>,
-        writer: metriken_storage::ArchiveWriter,
-        /// The archive's path; the writer does not report it.
-        path: std::path::PathBuf,
-        /// Streamed endpoints only: per endpoint, the decoder that turns its
-        /// rows back into the groups the writer stages.
-        decoders: BTreeMap<usize, metriken_storage::StreamDecoder>,
-    },
 }
 
 /// A metriken-storage error as the recorder reports errors.
@@ -1627,22 +1360,15 @@ fn archive_err(e: Box<dyn std::error::Error + Send + Sync>) -> String {
     e.to_string()
 }
 
-impl RezStream {
-    /// Append one scraped snapshot.
-    ///
-    /// Fallible because the tick is written to the WAL here, rather than
-    /// only appended to an in-memory builder that could not fail until a seal.
-    /// Route one endpoint's snapshot to that endpoint's recording.
-    ///
-    /// A snapshot with no recording to land in is an ERROR, not a skip. In
-    /// `.rez` mode there is no parquet writer to catch it — `writers` is all
-    /// `None` — so returning `Ok` here would decode a scrape, inject its
-    /// provenance and then drop it, every tick, for the whole run, and the
-    /// archive would finalize successfully one recording short. Every endpoint
-    /// that scrapes in this mode opens its recording first, at startup or on
-    /// activation, so reaching this arm means that invariant broke.
-    /// Stage one endpoint's tick. Nothing reaches the archive until
+impl Archive {
+    /// Stage one endpoint's scrape. Nothing reaches the archive until
     /// [`commit_tick`](Self::commit_tick).
+    ///
+    /// A snapshot with no recording to land in is an ERROR, not a skip:
+    /// returning `Ok` would decode a scrape and drop it, every tick, for the
+    /// whole run, and the archive would finalize one recording short. Every
+    /// endpoint opens its recording first, at startup or on activation, so
+    /// reaching that arm means that invariant broke.
     ///
     /// Staged rather than committed because the archive commits the whole tick
     /// at once: at `synchronous=FULL` every commit is an fsync, and the
@@ -1659,39 +1385,24 @@ impl RezStream {
         self.first_stamp.entry(endpoint).or_insert(anchored_ts);
         self.last_stamp
             .insert(endpoint, (anchored_ts, wall_offset_ns));
-        let missing = || {
+        let rec = self.recs.get_mut(&endpoint).ok_or_else(|| {
             format!(
                 "{url} was scraped with no recording open for it; its samples would be \
                  discarded"
             )
-        };
-        match &mut self.sink {
-            Sink::Rez { recs, staged, .. } => {
-                let rec = recs.get_mut(&endpoint).ok_or_else(missing)?;
-                let rows = rec.stage(snapshot, anchored_ts, wall_offset_ns)?;
-                // Keyed by recording id, which is what the writer commits
-                // against.
-                staged.push(rez_sqlite::TickBatch {
-                    recording_id: rec.recording_id(),
-                    rows,
-                });
-            }
-            Sink::Dendro { recs, staged, .. } => {
-                let rec = recs.get_mut(&endpoint).ok_or_else(missing)?;
-                staged.push(
-                    rec.stage(snapshot, anchored_ts, wall_offset_ns)
-                        .map_err(archive_err)?,
-                );
-            }
-        }
+        })?;
+        self.staged.push(
+            rec.stage(snapshot, anchored_ts, wall_offset_ns)
+                .map_err(archive_err)?,
+        );
         Ok(())
     }
 
     /// Stage one interval off an endpoint's replication stream.
     ///
-    /// [`stage`](Self::stage) for the stream path, which writes `.dendro`
-    /// only: each pass's rows are decoded by the endpoint's
-    /// `metriken_storage::StreamDecoder` and staged with `stage_streamed`.
+    /// [`stage`](Self::stage) for the stream path: each pass's rows are
+    /// decoded by the endpoint's `metriken_storage::StreamDecoder` and staged
+    /// with `stage_streamed`.
     ///
     /// The stamp is the producer's: an interval carries when the agent
     /// sampled, and there is no recorder-side reading to prefer over it.
@@ -1702,26 +1413,13 @@ impl RezStream {
         applied: stream::Applied,
     ) -> Result<(), String> {
         let passes = applied.for_writer()?;
-        let Sink::Dendro {
-            recs,
-            staged,
-            decoders,
-            ..
-        } = &mut self.sink
-        else {
-            // Only a `.dendro` run streams; see `RecordingConfig::streams_agents`.
-            return Err(format!(
-                "{url} streamed an interval into a .rez archive, which records agents by \
-                 scraping them"
-            ));
-        };
-        let Some(rec) = recs.get_mut(&endpoint) else {
+        let Some(rec) = self.recs.get_mut(&endpoint) else {
             return Err(format!(
                 "{url} streamed an interval with no recording open for it; its rows \
                  would be discarded"
             ));
         };
-        let decoder = decoders.entry(endpoint).or_default();
+        let decoder = self.decoders.entry(endpoint).or_default();
         let before = decoder.unresolved;
         for pass in passes {
             let ts = u64::try_from(pass.ts)
@@ -1730,7 +1428,7 @@ impl RezStream {
             self.first_stamp.entry(endpoint).or_insert(ts);
             self.last_stamp.insert(endpoint, (ts, wall_offset));
             let groups = decoder.decode(pass.rows)?;
-            staged.push(
+            self.staged.push(
                 rec.stage_streamed(groups, ts, wall_offset)
                     .map_err(archive_err)?,
             );
@@ -1751,24 +1449,18 @@ impl RezStream {
     /// does not write, but it does check the writer is still alive, so a run
     /// whose endpoints all went quiet cannot sit on a dead writer unnoticed.
     fn commit_tick(&mut self) -> Result<(), String> {
-        match &mut self.sink {
-            Sink::Rez {
-                staged, archive, ..
-            } => archive.wal_tick(std::mem::take(staged)),
-            Sink::Dendro { staged, writer, .. } => {
-                writer.commit(std::mem::take(staged)).map_err(archive_err)
-            }
-        }
+        self.writer
+            .commit(std::mem::take(&mut self.staged))
+            .map_err(archive_err)
     }
 
-    /// Open a recording for an endpoint that became reachable after the
-    /// archive was created.
+    /// Open a recording for endpoint `idx`: at startup, or for an endpoint
+    /// that became reachable after the archive was created.
     ///
-    /// The writer thread is still running and the archive still holds its
-    /// sender, so a recording can join an open archive at any point. The
-    /// endpoint's `systeminfo` must already be fetched — that is what supplies
-    /// the `host` label — which is why the caller does this after the metadata
-    /// fetch rather than at probe time.
+    /// The writer thread is still running, so a recording can join an open
+    /// archive at any point. The endpoint's `systeminfo` must already be
+    /// fetched — that is what supplies the `host` label — which is why the
+    /// caller does this after the metadata fetch rather than at probe time.
     ///
     /// `run_events` are the wrapped run's events so far; a recording opened
     /// after the command spawned gets `run_start` in its seed.
@@ -1780,40 +1472,29 @@ impl RezStream {
         clock_anchor_wall_ns: u64,
         run_events: &[Event],
     ) -> Result<(), String> {
-        let labels = build_rez_labels(config, ep);
+        let labels = build_labels(config, ep);
         warn_if_indistinguishable(&mut self.seen_labels, &labels, &ep.config.url);
-        let metadata = build_rez_metadata(config, ep, run_events);
-        let seed = rez_v3_writer::ManifestSeed {
-            labels,
-            metadata: metadata.clone(),
-            // The SOURCE's anchor where there is one. This recording's rows
-            // carry the agent's timestamps, so anchoring it on the recorder's
-            // clock instead would make `ts + wall_offset` resolve against a
-            // reading neither party took — and the two clocks are on different
-            // hosts, so the error is the skew between them, not a rounding.
-            //
-            // A Prometheus source, or an agent too old to report an anchor,
-            // keeps the recorder's: that recording's rows are the recorder's
-            // stamps too, so the pair stays coherent either way. Coherence is
-            // per recording, which is what lets one archive hold both.
-            clock_anchor_wall_ns: ep
-                .agent
-                .clock_anchor_wall_ns
-                .and_then(|a| u64::try_from(a).ok())
-                .unwrap_or(clock_anchor_wall_ns),
-        };
-        match &mut self.sink {
-            Sink::Rez { recs, archive, .. } => {
-                let writer = archive.add_recording(seed)?;
-                recs.insert(idx, rez_v3_writer::StreamRecorderV3::new(writer));
-            }
-            Sink::Dendro { recs, writer, .. } => {
-                let rec = writer
-                    .add_source(seed.labels, seed.metadata, seed.clock_anchor_wall_ns)
-                    .map_err(archive_err)?;
-                recs.insert(idx, rec);
-            }
-        }
+        let metadata = build_metadata(config, ep, run_events);
+        // The SOURCE's anchor where there is one. This recording's rows carry
+        // the agent's timestamps, so anchoring it on the recorder's clock
+        // instead would make `ts + wall_offset` resolve against a reading
+        // neither party took — and the two clocks are on different hosts, so
+        // the error is the skew between them, not a rounding.
+        //
+        // A Prometheus source keeps the recorder's: that recording's rows are
+        // the recorder's stamps too, so the pair stays coherent either way.
+        // Coherence is per recording, which is what lets one archive hold
+        // both.
+        let anchor = ep
+            .agent
+            .clock_anchor_wall_ns
+            .and_then(|a| u64::try_from(a).ok())
+            .unwrap_or(clock_anchor_wall_ns);
+        let rec = self
+            .writer
+            .add_source(labels, metadata.clone(), anchor)
+            .map_err(archive_err)?;
+        self.recs.insert(idx, rec);
         self.metadata.insert(idx, metadata);
         Ok(())
     }
@@ -1827,10 +1508,7 @@ impl RezStream {
     /// error is reported.
     fn merge_events(&mut self, events: &[Event]) -> Result<(), String> {
         let mut first_err = None;
-        let indices: Vec<usize> = match &self.sink {
-            Sink::Rez { recs, .. } => recs.keys().copied().collect(),
-            Sink::Dendro { recs, .. } => recs.keys().copied().collect(),
-        };
+        let indices: Vec<usize> = self.recs.keys().copied().collect();
         for idx in indices {
             let Some(current) = self.metadata.get(&idx) else {
                 first_err.get_or_insert(format!(
@@ -1856,11 +1534,9 @@ impl RezStream {
     /// Replace the keys in `patch` in one recording's metadata, keeping every
     /// other key.
     ///
-    /// Sent to a dendro archive as the patch itself, since dendro merges a
-    /// patch key by key, and to a `.rez` as the whole merged map, since its
-    /// writer replaces the map. The stored copy is updated only once the
-    /// writer accepts it, so a failed update can be retried with the same
-    /// input.
+    /// Sent to the writer as the patch itself, since dendro merges a patch
+    /// key by key. The stored copy is updated only once the writer accepts
+    /// it, so a failed update can be retried with the same input.
     fn patch_metadata(
         &mut self,
         idx: usize,
@@ -1873,20 +1549,11 @@ impl RezStream {
         };
         let mut merged = current.clone();
         merged.extend(patch.clone());
-        match &mut self.sink {
-            Sink::Rez { recs, .. } => {
-                let rec = recs
-                    .get(&idx)
-                    .ok_or_else(|| format!("no recording is open for endpoint {idx}"))?;
-                rec.update_metadata(merged.clone())?;
-            }
-            Sink::Dendro { recs, .. } => {
-                let rec = recs
-                    .get_mut(&idx)
-                    .ok_or_else(|| format!("no recording is open for endpoint {idx}"))?;
-                rec.update_metadata(patch).map_err(archive_err)?;
-            }
-        }
+        let rec = self
+            .recs
+            .get_mut(&idx)
+            .ok_or_else(|| format!("no recording is open for endpoint {idx}"))?;
+        rec.update_metadata(patch).map_err(archive_err)?;
         self.metadata.insert(idx, merged);
         Ok(())
     }
@@ -1914,30 +1581,19 @@ impl RezStream {
 
     /// Run every recording's seal check.
     ///
-    /// All of them every tick, not just the ones that scraped: a seal decision
-    /// that were ingest-driven would leave an unreachable endpoint's pre-outage
-    /// rows unsealed forever, and the age bound would stop bounding the
-    /// kill-loss window. Reports the first failure but still checks the rest,
-    /// so a failure is attributed to the recording that caused it rather than
-    /// to whichever happened to be checked first — note this is about
+    /// All of them every tick, not just the ones that delivered rows: a seal
+    /// decision that were ingest-driven would leave an unreachable endpoint's
+    /// pre-outage rows unsealed forever, and the age bound would stop bounding
+    /// the kill-loss window. Reports the first failure but still checks the
+    /// rest, so a failure is attributed to the recording that caused it rather
+    /// than to whichever happened to be checked first — note this is about
     /// reporting, not survival: the recordings share one writer thread, and a
     /// failure in any of its arms tears that writer down for all of them.
     fn maybe_seal(&mut self) -> Result<(), String> {
         let mut first_err = None;
-        match &mut self.sink {
-            Sink::Rez { recs, .. } => {
-                for rec in recs.values_mut() {
-                    if let Err(e) = rec.maybe_seal() {
-                        first_err.get_or_insert(e);
-                    }
-                }
-            }
-            Sink::Dendro { recs, .. } => {
-                for rec in recs.values_mut() {
-                    if let Err(e) = rec.maybe_seal() {
-                        first_err.get_or_insert(archive_err(e));
-                    }
-                }
+        for rec in self.recs.values_mut() {
+            if let Err(e) = rec.maybe_seal() {
+                first_err.get_or_insert(archive_err(e));
             }
         }
         first_err.map_or(Ok(()), Err)
@@ -1946,19 +1602,18 @@ impl RezStream {
     /// Mark the recording complete and stop the writer, reporting either
     /// failure.
     ///
-    /// Both halves matter. `RecordingWriter::finalize` only *queues* the
-    /// completion — the writer owns the thread now, so the handle cannot join
-    /// it — and the final seal it triggers runs after that hand-off returns. So
-    /// the archive is joined here, unconditionally, and its result is folded
-    /// in: without it a failure while sealing the last segments would surface
-    /// only as a `Drop` warning and the recording would report success.
+    /// Both halves matter. A recorder's `finalize` only *queues* the
+    /// completion — the writer owns the thread — and the final seal it
+    /// triggers runs after that hand-off returns. So the writer is joined
+    /// here, unconditionally, and its result is folded in: without it a
+    /// failure while sealing the last segments would surface only as a `Drop`
+    /// warning and the recording would report success.
     fn finalize(self, clock_offset: (u64, i64)) -> Result<(), String> {
-        let RezStream {
-            sink,
-            seen_labels: _,
-            metadata: _,
-            first_stamp: _,
+        let Archive {
+            recs,
+            mut writer,
             last_stamp,
+            ..
         } = self;
         // This recording's own last observation. The argument is the fallback
         // for one that ingested nothing, which has no clock of its own to
@@ -1971,40 +1626,23 @@ impl RezStream {
         // been consumed: it can only complete once they have all released
         // their senders.
         let mut first_err = None;
-        let joined = match sink {
-            Sink::Rez {
-                recs, mut archive, ..
-            } => {
-                for (idx, rec) in recs {
-                    if let Err(e) = rec.finalize(close(idx)) {
-                        first_err.get_or_insert(e);
-                    }
-                }
-                archive.join()
+        for (idx, rec) in recs {
+            if let Err(e) = rec.finalize(close(idx)) {
+                first_err.get_or_insert(archive_err(e));
             }
-            Sink::Dendro {
-                recs, mut writer, ..
-            } => {
-                for (idx, rec) in recs {
-                    let (ts, wall_offset) = close(idx);
-                    if let Err(e) = rec.finalize((ts, wall_offset)) {
-                        first_err.get_or_insert(archive_err(e));
-                    }
-                }
-                writer.join().map_err(archive_err)
-            }
-        };
+        }
+        let joined = writer.join().map_err(archive_err);
         first_err.map_or(joined, Err)
     }
 
     /// What to tell the user after a mid-recording failure: where the data
-    /// captured so far can still be read from — which for v3 is the output
-    /// path itself, since the file is a valid `.rez` from the moment it is
+    /// captured so far can still be read from, which is the output path
+    /// itself, since the file is a valid archive from the moment it is
     /// created.
     fn recovery_note(&self) -> String {
         format!(
             "note: the recording so far is readable at {}",
-            self.sink.path().display()
+            self.path.display()
         )
     }
 
@@ -2013,77 +1651,53 @@ impl RezStream {
     /// artifact, and the writer refuses to overwrite, so leaving one behind
     /// would also block the retry.
     fn discard(self) {
-        let path = self.sink.path().to_path_buf();
+        let path = self.path.clone();
         // Drop first: joining the writer thread is what guarantees nothing is
         // still appending to the file we are about to unlink. There is no
         // abort — a dropped writer leaves a valid recording, which is exactly
         // why this path has to remove it explicitly rather than rely on a
         // staging convention. The recorders drop before the writer (see
-        // `Sink`).
-        drop(self.sink);
-        // Safe to remove: both writers claimed this path with O_EXCL during
-        // THIS run, so it cannot be a file that was already there. Both
-        // containers are SQLite, with the same sidecars.
+        // `Archive`).
+        drop(self);
+        // Safe to remove: the writer claimed this path with O_EXCL during
+        // THIS run, so it cannot be a file that was already there.
         //
-        // Sidecars included. A `.rez` is three files while it is open, and
-        // SQLite only cleans `-wal`/`-shm` up on a CLEAN close — so removing
-        // the main file alone can leave a stray `-wal` beside a path the next
-        // run believes is free. That is worse than a stale main file: `O_EXCL`
-        // catches the main file and says so, while a stray sidecar is adopted
-        // silently by the newly created database.
+        // Sidecars included. A SQLite archive is three files while it is
+        // open, and SQLite only cleans `-wal`/`-shm` up on a CLEAN close — so
+        // removing the main file alone can leave a stray `-wal` beside a path
+        // the next run believes is free. That is worse than a stale main
+        // file: `O_EXCL` catches the main file and says so, while a stray
+        // sidecar is adopted silently by the newly created database.
         rez_sqlite::RezDb::remove_archive(&path);
     }
 }
 
-impl Sink {
-    fn path(&self) -> &Path {
-        match self {
-            Sink::Rez { archive, .. } => archive.path(),
-            Sink::Dendro { path, .. } => path,
-        }
-    }
-}
-
-/// Open the streaming `.rez` writer for a just-activated endpoint and spawn
-/// its writer thread, creating the output file.
+/// Open the archive and one recording per endpoint in `eps`, creating the
+/// output file.
 ///
-/// Both the file creation and the thread spawn can fail, which is why this
-/// happens at activation rather than lazily on the first snapshot.
-/// Open the archive and one recording per endpoint in `eps`.
+/// `eps` carries each endpoint's index alongside it so the returned archive
+/// can route a scrape or a streamed interval back to the recording that owns
+/// it.
 ///
-/// `eps` carries each endpoint's index alongside it so the returned stream can
-/// route a scrape back to the recording that owns it.
-///
-/// Every recording lands in ONE archive: that is what a multi-recording `.rez`
-/// is, and it is why the arms of an A/B captured this way share a clock anchor
-/// and a load environment rather than differing in both, as two sequential
-/// single-endpoint runs would.
-fn start_rez_recorder(
+/// Every recording lands in ONE archive, which is why the arms of an A/B
+/// captured this way share a clock anchor and a load environment rather than
+/// differing in both, as two sequential single-endpoint runs would.
+fn start_recorder(
     config: &RecordingConfig,
     eps: &[(usize, &EndpointState)],
     clock_anchor_wall_ns: u64,
-) -> Result<RezStream, String> {
-    let sink = if config.format == Format::Dendro {
-        Sink::Dendro {
-            recs: BTreeMap::new(),
-            staged: Vec::new(),
-            writer: metriken_storage::ArchiveWriter::create(
-                &config.output,
-                metriken_storage::WriterConfig::default(),
-            )
-            .map_err(|e| format!("failed to create {}: {e}", config.output.display()))?,
-            path: config.output.clone(),
-            decoders: BTreeMap::new(),
-        }
-    } else {
-        Sink::Rez {
-            recs: BTreeMap::new(),
-            staged: Vec::new(),
-            archive: rez_v3_writer::RezArchive::create(&config.output)?,
-        }
-    };
-    let mut stream = RezStream {
-        sink,
+) -> Result<Archive, String> {
+    let writer = metriken_storage::ArchiveWriter::create(
+        &config.output,
+        metriken_storage::WriterConfig::default(),
+    )
+    .map_err(|e| format!("failed to create {}: {e}", config.output.display()))?;
+    let mut archive = Archive {
+        recs: BTreeMap::new(),
+        staged: Vec::new(),
+        decoders: BTreeMap::new(),
+        writer,
+        path: config.output.clone(),
         metadata: BTreeMap::new(),
         first_stamp: BTreeMap::new(),
         last_stamp: BTreeMap::new(),
@@ -2093,17 +1707,17 @@ fn start_rez_recorder(
     for (idx, ep) in eps {
         // No run events yet: the archive is opened before the wrapped command
         // is spawned, so `run_start` reaches these recordings by update.
-        if let Err(e) = stream.add_endpoint(*idx, config, ep, clock_anchor_wall_ns, &[]) {
-            // `RezArchive::create` claimed the path with O_EXCL moments ago, so
-            // the half-built archive is unambiguously ours to remove. Leaving
-            // it would both look like a recording and block the retry, since
-            // the writer refuses to overwrite an existing path.
-            stream.discard();
+        if let Err(e) = archive.add_endpoint(*idx, config, ep, clock_anchor_wall_ns, &[]) {
+            // `ArchiveWriter::create` claimed the path with O_EXCL moments
+            // ago, so the half-built archive is unambiguously ours to remove.
+            // Leaving it would both look like a recording and block the
+            // retry, since the writer refuses to overwrite an existing path.
+            archive.discard();
             return Err(e);
         }
     }
 
-    Ok(stream)
+    Ok(archive)
 }
 
 /// Warn when a recording's labels match one already open.
@@ -2190,64 +1804,6 @@ pub(crate) fn anchored_at(anchor_wall_ns: u64, elapsed: Duration) -> u64 {
     anchor_wall_ns.saturating_add(elapsed.as_nanos() as u64)
 }
 
-/// Build the `per_source_metadata` JSON written by the recorder.
-///
-/// When `source` is a JSON array, each name in the array becomes an entry
-/// with the same per-source fields duplicated — a single endpoint
-/// represents all the listed sources, so the timing and role apply
-/// identically to every name.
-///
-/// Returns `None` when no per-source fields are available.
-fn build_per_source_metadata(
-    source: &str,
-    first_sample_ns: Option<u64>,
-    last_sample_ns: Option<u64>,
-    role: Option<&str>,
-    sampler_status: Option<&str>,
-) -> Option<String> {
-    let mut source_meta = serde_json::Map::new();
-    if let Some(ns) = first_sample_ns {
-        source_meta.insert(
-            parquet_metadata::NESTED_FIRST_SAMPLE_NS.to_string(),
-            serde_json::json!(ns),
-        );
-    }
-    if let Some(ns) = last_sample_ns {
-        source_meta.insert(
-            parquet_metadata::NESTED_LAST_SAMPLE_NS.to_string(),
-            serde_json::json!(ns),
-        );
-    }
-    if let Some(role) = role {
-        source_meta.insert(
-            parquet_metadata::NESTED_ROLE.to_string(),
-            serde_json::json!(role),
-        );
-    }
-    if let Some(ss) = sampler_status {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(ss) {
-            source_meta.insert(parquet_metadata::NESTED_SAMPLER_STATUS.to_string(), value);
-        }
-    }
-
-    if source_meta.is_empty() {
-        return None;
-    }
-
-    let source_names: Vec<String> =
-        serde_json::from_str::<Vec<String>>(source).unwrap_or_else(|_| vec![source.to_string()]);
-
-    let mut psm = serde_json::Map::new();
-    for name in &source_names {
-        psm.insert(name.clone(), serde_json::Value::Object(source_meta.clone()));
-    }
-    serde_json::to_string(&psm).ok()
-}
-
-struct EndpointWriter {
-    writer: std::fs::File,
-}
-
 /// Upper bound on a single scrape or endpoint probe, whatever the interval.
 /// The bound exists to keep the tick responsive (age seals, ctrl-c), and that
 /// is a human/container-teardown timescale — a long `--interval` must not buy a
@@ -2258,7 +1814,7 @@ const MAX_SCRAPE_TIMEOUT: Duration = Duration::from_secs(10);
 /// gives up on it.
 ///
 /// Without a bound a *hung* endpoint (stalled server, SYN blackhole) parks the
-/// tick for TCP-timeout scales, and the tick is what drives `.rez` age seals
+/// tick for TCP-timeout scales, and the tick is what drives age seals
 /// and the ctrl-c check (`STATE` is only re-checked at the loop top) — so one
 /// hung endpoint would stall durability and shutdown, not just this sample.
 ///
@@ -2281,56 +1837,10 @@ pub(crate) fn tick_timeout(interval: Duration) -> Duration {
 /// on the socket rather than growing without limit.
 pub(crate) const STREAM_QUEUE_PER_ENDPOINT: usize = 16;
 
-/// Handle a run that asked for (or defaulted to) archive output that this
-/// endpoint set cannot produce: either rewrite `config` to record parquet and
-/// carry on, or exit non-zero.
-///
-/// The distinction is who chose the archive. `--format dendro` or an
-/// `-o out.dendro` is a request the recorder must not quietly substitute — a
-/// pipeline that goes on to read `out.dendro` would find a parquet file, or
-/// nothing. But an archive is also what a bare `rezolus record` picks with
-/// nothing to go on, and demanding a flag before it will record a run it
-/// recorded before archives became the default is a regression for no gain:
-/// nothing downstream has been promised a filename yet, so the recorder picks
-/// the format that fits.
-///
-/// The refusal exits 1 rather than returning, because a `record && analyze`
-/// pipeline sees only the exit code: this used to print the error and exit 0,
-/// leaving the next command to read whatever `out.rez` a previous run left
-/// behind.
-fn demote_from_rez(config: &mut RecordingConfig, reason: &str) {
-    if !config.format_defaulted {
-        eprintln!("error: {reason}");
-        std::process::exit(1);
-    }
-    let name = config::format_name(config.format);
-    config.format = Format::Parquet;
-    config.output = PathBuf::from("rezolus.parquet");
-    // `--separate` finalizes through `separate_output_path`, so the run writes
-    // `rezolus_<source>.parquet` per endpoint and never `config.output` itself.
-    // Naming the file it will not write is worse than saying nothing, and the
-    // `--separate` demotion makes this the message that user actually sees.
-    let written = if config.separate {
-        format!(
-            "{}_<source>.parquet per endpoint",
-            config
-                .output
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-        )
-    } else {
-        config.output.display().to_string()
-    };
-    eprintln!(
-        "note: {reason}; recording parquet to {written} instead (pass --format {name} to require a .{name} archive)"
-    );
-}
-
-/// Runs the Rezolus `recorder` which pulls metrics from one or more endpoints
-/// and writes them to parquet file(s). Supports Rezolus msgpack and Prometheus
-/// text format endpoints, with auto-detection.
-pub fn run(mut config: RecordingConfig) {
+/// Runs the Rezolus `recorder`, which records one or more endpoints into one
+/// `.dendro` archive: Rezolus agents from their replication stream,
+/// Prometheus endpoints by scraping them, detected per endpoint.
+pub fn run(config: RecordingConfig) {
     let _log_drain = configure_logging(verbosity_to_level(config.verbose));
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -2348,7 +1858,9 @@ pub fn run(mut config: RecordingConfig) {
 
     ctrlc::set_handler(move || {
         let state = STATE.load(Ordering::SeqCst);
-        println!();
+        // A closed terminal makes this write fail; that must not panic the
+        // handler before the recording is finalized.
+        let _ = std::io::Write::write_all(&mut std::io::stdout(), b"\n");
         if state == RUNNING {
             info!("finalizing recording... ctrl+c to terminate early");
             STATE.store(TERMINATING, Ordering::SeqCst);
@@ -2377,67 +1889,22 @@ pub fn run(mut config: RecordingConfig) {
         .map(|ep| EndpointState::new(ep.clone()))
         .collect();
 
-    // `.rez` per-sampler archive mode. By this point the output extension has
-    // already been folded into the format, so the format is the whole answer.
-    let mut rez_mode = wants_rez(config.format);
-
-    if rez_mode {
-        // Neither a Prometheus endpoint nor several endpoints is a blocker any
-        // more. Each endpoint becomes its own label-tagged recording in one
-        // archive, and a Prometheus scrape converts to a V3 acquisition group
-        // on the way in — one request and one response is exactly one
-        // acquisition, which is what the group models.
-        //
-        // `--separate` is what remains: it writes a file per endpoint, which
-        // one archive cannot do. An explicit archive was already rejected at
-        // parse time; reaching here means the format was merely defaulted, so
-        // demote to the parquet-per-endpoint run the flag asked for rather
-        // than erroring on a format nobody chose.
-        let blocker = None.or_else(|| {
-            // Only with several endpoints: with one there is nothing to
-            // separate, and `main`'s multi-endpoint blocker never fired
-            // on a single-endpoint run either.
-            (config.separate && config.endpoints.len() > 1).then(|| {
-                format!(
-                    "--separate writes one file per endpoint, which a .{} cannot do (every \
-                     endpoint is a recording inside the one archive)",
-                    config::format_name(config.format)
-                )
-            })
-        });
-
-        if let Some(reason) = blocker {
-            demote_from_rez(&mut config, &reason);
-            rez_mode = false;
-        }
-    }
-
-    let out_dir = output_dir(&config.output);
-
-    // A `.dendro` records every Rezolus agent from its replication stream and
-    // scrapes every Prometheus endpoint; every other format scrapes both. Read
-    // after the demotion above, which can turn a defaulted `.dendro` into
-    // parquet.
-    let stream_agents = rez_mode && config.streams_agents();
-
     let interval_dur: Duration = config.interval.into();
     let connect_timeout = tick_timeout(interval_dur);
 
     // Subscriptions opened at startup, one slot per endpoint, handed to their
-    // pumps once the archive they feed exists. Only a `.dendro` run's agents
-    // fill any.
+    // pumps once the archive they feed exists. Only agents fill any.
     let mut opened: Vec<Option<stream::Subscription>> = endpoints.iter().map(|_| None).collect();
 
     // Probe all endpoints (best-effort startup). An agent that cannot serve
-    // its stream into a `.dendro` is fatal here, before the archive exists,
-    // so nothing is left behind; one that is not reachable yet is the
-    // ordinary retry-each-tick case.
+    // its stream is fatal here, before the archive exists, so nothing is left
+    // behind; one that is not reachable yet is the ordinary retry-each-tick
+    // case.
     rt.block_on(async {
         for (idx, ep) in endpoints.iter_mut().enumerate() {
             match activate_endpoint(
                 &client,
                 ep,
-                stream_agents,
                 interval_dur,
                 connect_timeout,
                 RefusedAt::Startup,
@@ -2488,70 +1955,33 @@ pub fn run(mut config: RecordingConfig) {
         .as_nanos() as u64;
     let clock_anchor_mono = Instant::now();
 
-    // The streaming `.rez` writer is opened here — when the endpoints become
-    // active, not lazily on the first snapshot — because creating the
-    // output (or, in v2, the `<output>.partial`) and spawning the writer thread
-    // are both fallible.
-    let mut rez_recorder: Option<RezStream> = None;
-    if rez_mode {
-        {
-            // Every active endpoint becomes a recording in ONE archive. Only
-            // the endpoints active at this point: a `.rez` recording is opened
-            // when its writer is, and an endpoint that activates later through
-            // the Pending path has no recording to append to.
-            let active: Vec<(usize, &EndpointState)> = endpoints
-                .iter()
-                .enumerate()
-                .filter(|(_, ep)| ep.status == EndpointStatus::Active)
-                .collect();
-
-            if !active.is_empty() {
-                match start_rez_recorder(&config, &active, clock_anchor_wall_ns) {
-                    Ok(rec) => rez_recorder = Some(rec),
-                    Err(e) => {
-                        eprintln!(
-                            "error: failed to start the .{} recording: {e}",
-                            config::format_name(config.format)
-                        );
-                        std::process::exit(1);
-                    }
-                }
-            }
+    // The archive is opened here — when the endpoints become active, not
+    // lazily on the first snapshot — because creating the output and
+    // spawning the writer thread are both fallible. Every endpoint active at
+    // this point becomes a recording in it; one that activates later through
+    // the Pending path is added when it does.
+    let active: Vec<(usize, &EndpointState)> = endpoints
+        .iter()
+        .enumerate()
+        .filter(|(_, ep)| ep.status == EndpointStatus::Active)
+        .collect();
+    let mut archive: Option<Archive> = match start_recorder(&config, &active, clock_anchor_wall_ns)
+    {
+        Ok(archive) => Some(archive),
+        Err(e) => {
+            eprintln!("error: failed to start the recording: {e}");
+            std::process::exit(1);
         }
-    }
+    };
 
-    // Per-endpoint Prometheus converters, kept OUTSIDE `EndpointWriter`
-    // because `.rez` mode has no writer to hang them on: it has no msgpack
-    // spool at all, snapshots go straight into the streaming writer. Both
-    // modes need the same converter — one per endpoint, because it holds the
-    // (name, labels) -> id map that keeps a column's identity stable across
-    // scrapes, and two endpoints' id spaces must not mix.
+    // Per-endpoint Prometheus converters: one per endpoint, because each
+    // holds the (name, labels) -> id map that keeps a column's identity
+    // stable across scrapes, and two endpoints' id spaces must not mix.
     let mut prom_converters: Vec<Option<prometheus::PrometheusConverter>> = endpoints
         .iter()
         .map(|ep| {
             (ep.status == EndpointStatus::Active && ep.protocol() == Some(&Protocol::Prometheus))
                 .then(prometheus::PrometheusConverter::new)
-        })
-        .collect();
-
-    let mut writers: Vec<Option<EndpointWriter>> = endpoints
-        .iter()
-        .map(|ep| {
-            // In `.rez` mode there is no msgpack spool at all: snapshots go
-            // straight into the streaming writer, so the temp file and the
-            // re-serialization that fed it are both gone.
-            if ep.status == EndpointStatus::Active && !rez_mode {
-                let writer = match tempfile_in(out_dir.clone()) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        eprintln!("failed to create temp file: {e}");
-                        std::process::exit(1);
-                    }
-                };
-                Some(EndpointWriter { writer })
-            } else {
-                None
-            }
         })
         .collect();
 
@@ -2580,7 +2010,7 @@ pub fn run(mut config: RecordingConfig) {
                     // Nothing was recorded, and `exit` skips destructors: stop
                     // the writer thread and remove the empty recording
                     // explicitly.
-                    if let Some(rec) = rez_recorder.take() {
+                    if let Some(rec) = archive.take() {
                         rec.discard();
                     }
                     std::process::exit(1);
@@ -2593,16 +2023,15 @@ pub fn run(mut config: RecordingConfig) {
 
         // The wrapped run's marker events. `run_start` is stamped now, on the
         // recorder's clock (the same `anchored_at` the rows use), not from
-        // the child's own start time; it goes to the open `.rez` recordings
-        // at once and rides in the seed of any recording opened later. The
-        // parquet footer takes the whole list after the loop.
+        // the child's own start time; it goes to the open recordings at once
+        // and rides in the seed of any recording opened later.
         let run_marker = config.command.as_deref().map(RunMarker::new);
         let mut run_events: Vec<Event> = Vec::new();
         if let (Some(marker), Some(cmd)) = (&run_marker, config.command.as_deref()) {
             let command_line = config.record_command_line.then(|| cmd.join(" "));
             let spawned_at = anchored_at(clock_anchor_wall_ns, clock_anchor_mono.elapsed());
             run_events.push(marker.start_event(spawned_at, command_line));
-            if let Some(rec) = rez_recorder.as_mut() {
+            if let Some(rec) = archive.as_mut() {
                 // Not fatal: the samples are the product and they are
                 // unaffected. A writer that has died surfaces on the next
                 // tick's commit with the writer's own error.
@@ -2671,7 +2100,7 @@ pub fn run(mut config: RecordingConfig) {
                 spawn_pump(idx, sub, endpoints[idx].config.url.clone());
             }
         }
-        // The last tick's clock observation, handed to `.rez` finalization so
+        // The last tick's clock observation, handed to finalization so
         // the manifest's `clock_offsets` series covers the tail of the
         // recording. Seeded with the anchor itself (offset 0 by definition).
         let mut last_clock: (u64, i64) = (clock_anchor_wall_ns, 0);
@@ -2766,7 +2195,7 @@ pub fn run(mut config: RecordingConfig) {
             // at the loop top, so an uninterruptible `tick()` bounds
             // ctrl-c/SIGTERM → exit by a full `--interval`: at `--interval 30s`
             // a `docker stop` (10s default grace) is SIGKILLed long before the
-            // loop notices, losing every still-unsealed `.rez` segment — which
+            // loop notices, losing every still-unsealed segment — which
             // is exactly the tear-down this feature exists for. Wake early on
             // the shutdown signal and on the stop deadline; both then take the
             // decision at the loop top, unchanged.
@@ -2828,33 +2257,32 @@ pub fn run(mut config: RecordingConfig) {
                     }
                 }
             }
-            // Both clocks, every tick. `wall_ns` is the raw reading every
-            // non-`.rez` consumer has always used (endpoint success stamps, the
-            // msgpack spool); `.rez` rows are stamped on the anchored monotonic
-            // timeline and carry the difference as a per-row observation
-            // instead. The prometheus converter used to be in the first group
-            // and is now in the second: its scrape window is stored relative
-            // to an anchored row `ts`, so it has to be anchored too.
+            // Both clocks, every tick. `wall_ns` is the raw reading (endpoint
+            // success stamps); a scraped row is stamped on the anchored
+            // monotonic timeline and carries the difference as a per-row
+            // observation instead. The prometheus converter's scrape window
+            // is stored relative to an anchored row `ts`, so it is anchored
+            // too.
             let wall_ns = wall_now_ns();
             let (anchored_ns, wall_offset_ns) =
                 anchored_stamp(clock_anchor_wall_ns, clock_anchor_mono.elapsed(), wall_ns);
             last_clock = (anchored_ns, wall_offset_ns);
 
-            // A `.rez` ingest failure for this tick. Held rather than acted on
-            // where it happens: that is inside the per-endpoint result loop,
-            // whose `break` would only leave that loop. Surfaced below,
-            // alongside `maybe_seal`'s — the same class of failure at the same
-            // cadence, and the earlier and more specific of the two wins.
+            // An ingest failure for this tick. Held rather than acted on where
+            // it happens: that is inside the per-endpoint result loop, whose
+            // `break` would only leave that loop. Surfaced below, alongside
+            // `maybe_seal`'s — the same class of failure at the same cadence,
+            // and the earlier and more specific of the two wins.
             let mut ingest_failed: Option<String> = None;
-            // A `.rez` endpoint that activated mid-run and could not be given a
+            // An endpoint that activated mid-run and could not be given a
             // recording. Surfaced on the same path as an ingest failure, below,
             // so the partial archive is named and the run exits non-zero rather
             // than finalizing one recording short.
             let mut late_endpoint_failure: Option<String> = None;
 
-            // Scrape all active endpoints concurrently. A streamed agent is
-            // not scraped: its pump delivers, and the loop stages what
-            // arrived alongside the scrapes, below.
+            // Scrape all active Prometheus endpoints concurrently. A streamed
+            // agent is not scraped: its pump delivers, and the loop stages
+            // what arrived alongside the scrapes, below.
             let active_indices: Vec<usize> = endpoints
                 .iter()
                 .enumerate()
@@ -2895,150 +2323,48 @@ pub fn run(mut config: RecordingConfig) {
                         response_ns,
                     }) => {
                         endpoints[idx].record_success(wall_ns);
-
-                        // `.rez`: decode once and hand the snapshot straight to
-                        // the streaming writer. No spool, no re-serialization.
-                        //
-                        // `Snapshot::from_msgpack`, not a bare `from_slice`:
-                        // this is the exact wire the recorder controls end to
-                        // end for `.rez` mode (single endpoint, msgpack-only,
-                        // never Prometheus), so the depth-capped,
-                        // trailing-byte-checked decode applies uniformly to
-                        // whichever version the agent sends — including the
-                        // V3 groups this build natively ingests. Decoding a
-                        // concrete `SnapshotV3` directly (skipping the
-                        // untagged enum probe entirely) would need to know the
-                        // endpoint's `snapshot_format` ahead of time, which
-                        // the recorder does not: it is agent-side config, not
-                        // negotiated over HTTP, and `.rez` mode serves V1/V2/V3
-                        // endpoints alike from this one call site.
-                        //
-                        // Correction to this decision's original reasoning
-                        // (recorded here rather than by editing the already-
-                        // committed history): a "try SnapshotV3 first, fall
-                        // back to the untagged decode" scheme was rejected
-                        // partly on the claim that a V2 payload with an empty
-                        // `counters` vec could decode as a spurious
-                        // empty-`groups` SnapshotV3 by reading only 4 of the
-                        // 6 top-level array elements and silently ignoring
-                        // the rest. That claim is wrong:
-                        // metriken-exposition's own
-                        // `trailing_extra_field_errors_not_ignored` test
-                        // shows a too-long positional payload FAILS a
-                        // struct's decode rather than having the extra
-                        // elements silently ignored, so that specific
-                        // landmine does not exist even without a hand-rolled
-                        // trailing-byte check. The rest of the decision
-                        // stands on its own: the recorder still cannot know
-                        // an endpoint's `snapshot_format` ahead of time, so
-                        // there is no reliable way to pick "try V3 first" over
-                        // "try the untagged decode" without guessing wrong on
-                        // most of a V1/V2-heavy fleet — `from_msgpack` is
-                        // still the right-sized, version-agnostic fix here.
-                        if rez_mode {
-                            // A Prometheus endpoint converts its text to a
-                            // snapshot here; a rezolus one decodes msgpack.
-                            // Both reach the same `ingest` — the archive has no
-                            // opinion about which wire a recording came off.
-                            //
-                            // The converted snapshot is NOT run through
-                            // `inject_provenance`: the converter already writes
-                            // `source` and `endpoint` into every metric's
-                            // metadata, so injecting again would be a second
-                            // spelling of the same fact, free to disagree.
-                            let snapshot = match prom_converters[idx].as_mut() {
-                                Some(conv) => {
-                                    let text = String::from_utf8_lossy(&body);
-                                    Some(conv.convert(&text, request_ns, response_ns))
-                                }
-                                None => match metriken_exposition::Snapshot::from_msgpack(&body) {
-                                    Ok(snapshot) => {
-                                        note_epoch_change(&mut endpoints[idx], &snapshot);
-                                        Some(snapshot)
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            "msgpack decode error for {}: {e}",
-                                            endpoints[idx].config.source_label()
-                                        );
-                                        None
-                                    }
-                                },
-                            };
-                            if let (Some(snapshot), Some(rec)) = (snapshot, rez_recorder.as_mut()) {
-                                // The producer's stamp when it sent one, this
-                                // tick's otherwise. See
-                                // `snapshot_producer_stamp`.
-                                let (ts, wall_offset) = snapshot_producer_stamp(&snapshot)
-                                    .unwrap_or((anchored_ns, wall_offset_ns));
-                                match rec.stage(
-                                    idx,
-                                    &endpoints[idx].config.url,
-                                    &snapshot,
-                                    ts,
-                                    wall_offset,
-                                ) {
-                                    Ok(()) => endpoints[idx].note_row_staged(ts),
-                                    Err(e) => {
-                                        ingest_failed.get_or_insert(e);
-                                    }
+                        // Only a Prometheus endpoint is scraped, and each has
+                        // a converter from its activation.
+                        let Some(conv) = prom_converters[idx].as_mut() else {
+                            continue;
+                        };
+                        // The real round trip, not the tick's clock: every
+                        // value in this body was read somewhere inside it.
+                        // See `Scraped`.
+                        let text = String::from_utf8_lossy(&body);
+                        let snapshot = conv.convert(&text, request_ns, response_ns);
+                        if let Some(rec) = archive.as_mut() {
+                            match rec.stage(
+                                idx,
+                                &endpoints[idx].config.url,
+                                &snapshot,
+                                anchored_ns,
+                                wall_offset_ns,
+                            ) {
+                                Ok(()) => endpoints[idx].note_row_staged(anchored_ns),
+                                Err(e) => {
+                                    ingest_failed.get_or_insert(e);
                                 }
                             }
-                            continue;
-                        }
-
-                        if let Some(ref mut ew) = writers[idx] {
-                            let bytes = if let Some(ref mut conv) = prom_converters[idx] {
-                                // Prometheus: parse text → snapshot → msgpack
-                                let text = String::from_utf8_lossy(&body);
-                                // The real round trip, not the tick's clock:
-                                // every value in this body was read somewhere
-                                // inside it. See `Scraped`.
-                                let snapshot = conv.convert(&text, request_ns, response_ns);
-                                match rmp_serde::encode::to_vec(&snapshot) {
-                                    Ok(b) => b,
-                                    Err(e) => {
-                                        error!(
-                                            "serialize error for {}: {e}",
-                                            endpoints[idx].config.source_label()
-                                        );
-                                        continue;
-                                    }
+                            // The scrape's HELP lines, when it brought a name
+                            // not yet stored. dendro's `update_metadata` only
+                            // hands the patch to the writer thread, which logs
+                            // and skips a patch it cannot apply. Only a failed
+                            // hand-off is seen here; it is retried after the
+                            // next scrape rather than ending the run.
+                            if let Some(json) = conv.pending_descriptions() {
+                                let patch = BTreeMap::from([(
+                                    parquet_metadata::KEY_DESCRIPTIONS.to_string(),
+                                    json,
+                                )]);
+                                match rec.patch_metadata(idx, patch) {
+                                    Ok(()) => conv.descriptions_stored(),
+                                    Err(e) => warn!(
+                                        "not storing the HELP text of {} ({}) yet: {e}",
+                                        endpoints[idx].config.source_label(),
+                                        endpoints[idx].config.url
+                                    ),
                                 }
-                            } else {
-                                // Msgpack: deserialize, inject provenance,
-                                // re-serialize. `from_msgpack`, not a bare
-                                // `from_slice` — same depth-cap/trailing-byte
-                                // hardening as the `.rez`-mode call site above,
-                                // and just as contained here: this branch is
-                                // unconditionally msgpack (the Prometheus
-                                // sibling branch above never reaches it).
-                                match metriken_exposition::Snapshot::from_msgpack(&body) {
-                                    Ok(snapshot) => {
-                                        note_epoch_change(&mut endpoints[idx], &snapshot);
-                                        // The body goes through verbatim. It
-                                        // used to be decoded, relabelled and
-                                        // re-encoded here; provenance is the
-                                        // recording's now, so there is nothing
-                                        // to rewrite and no reason to pay a
-                                        // round trip.
-                                        body.clone()
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            "msgpack decode error for {}: {e}",
-                                            endpoints[idx].config.source_label()
-                                        );
-                                        continue;
-                                    }
-                                }
-                            };
-
-                            if let Err(e) = ew.writer.write_all(&bytes) {
-                                error!(
-                                    "write error for {}: {e}",
-                                    endpoints[idx].config.source_label()
-                                );
                             }
                         }
                     }
@@ -3056,17 +2382,14 @@ pub fn run(mut config: RecordingConfig) {
             // rather than awaited: a tick commits what has arrived, and an
             // endpoint whose frame is late is committed next tick, exactly
             // as a scrape that missed the tick would be.
-            if let Some(e) = drain_stream_events(
-                &mut stream_rx,
-                &mut endpoints,
-                rez_recorder.as_mut(),
-                wall_ns,
-            ) {
+            if let Some(e) =
+                drain_stream_events(&mut stream_rx, &mut endpoints, archive.as_mut(), wall_ns)
+            {
                 ingest_failed.get_or_insert(e);
             }
             apply_restarts(
                 &mut endpoints,
-                rez_recorder.as_mut(),
+                archive.as_mut(),
                 &client,
                 &config.metadata,
                 scrape_timeout,
@@ -3090,7 +2413,6 @@ pub fn run(mut config: RecordingConfig) {
                 let activated = activate_endpoint(
                     &client,
                     &mut endpoints[idx],
-                    stream_agents,
                     interval_dur,
                     scrape_timeout,
                     RefusedAt::MidRun,
@@ -3136,44 +2458,37 @@ pub fn run(mut config: RecordingConfig) {
                     }
                 };
 
-                // An archive DOES reach here: startup only exits when no
-                // endpoint at all was reachable, so a run with one endpoint up
-                // and one still starting commits to the archive with a
-                // recording for the first and reaches this path for the
-                // second. It has no spool to create — it needs a recording
-                // opened on the live archive instead, which is what keeps the
-                // "will retry each tick" warning honest.
-                if rez_mode {
-                    // `None` means the recording already failed and was
-                    // reported; the loop is about to exit.
-                    if let Some(rec) = rez_recorder.as_mut() {
-                        match rec.add_endpoint(
-                            idx,
-                            &config,
-                            &endpoints[idx],
-                            clock_anchor_wall_ns,
-                            &run_events,
-                        ) {
-                            Ok(()) => {
-                                if let Some(sub) = sub {
-                                    spawn_pump(idx, sub, endpoints[idx].config.url.clone());
-                                }
-                            }
-                            Err(e) => {
-                                // First failure wins, as `ingest_failed` does:
-                                // two endpoints can activate in one tick.
-                                late_endpoint_failure.get_or_insert(format!(
-                                    "failed to open a .{} recording for {}: {e}",
-                                    config::format_name(config.format),
-                                    endpoints[idx].config.url
-                                ));
+                // Startup only exits when no endpoint at all was reachable, so
+                // a run with one endpoint up and one still starting commits to
+                // the archive with a recording for the first and reaches this
+                // path for the second, which needs a recording opened on the
+                // live archive. That is what keeps the "will retry each tick"
+                // warning honest.
+                //
+                // `None` means the recording already failed and was reported;
+                // the loop is about to exit.
+                if let Some(rec) = archive.as_mut() {
+                    match rec.add_endpoint(
+                        idx,
+                        &config,
+                        &endpoints[idx],
+                        clock_anchor_wall_ns,
+                        &run_events,
+                    ) {
+                        Ok(()) => {
+                            if let Some(sub) = sub {
+                                spawn_pump(idx, sub, endpoints[idx].config.url.clone());
                             }
                         }
+                        Err(e) => {
+                            // First failure wins, as `ingest_failed` does:
+                            // two endpoints can activate in one tick.
+                            late_endpoint_failure.get_or_insert(format!(
+                                "failed to open a recording for {}: {e}",
+                                endpoints[idx].config.url
+                            ));
+                        }
                     }
-                } else {
-                    writers[idx] = Some(EndpointWriter {
-                        writer: tempfile_in(out_dir.clone()).expect("failed to create temp file"),
-                    });
                 }
             }
 
@@ -3187,7 +2502,7 @@ pub fn run(mut config: RecordingConfig) {
             // unconditionally: an empty commit writes nothing but does check
             // the writer is alive, so a run whose endpoints all went quiet
             // cannot sit on a dead writer unnoticed.
-            let committed = match rez_recorder.as_mut() {
+            let committed = match archive.as_mut() {
                 Some(rec) => rec.commit_tick(),
                 None => Ok(()),
             };
@@ -3196,7 +2511,7 @@ pub fn run(mut config: RecordingConfig) {
             // ingest-driven an unreachable endpoint would leave its pre-outage
             // rows unsealed forever and the age bound would stop bounding the
             // kill-loss window.
-            let sealed = match rez_recorder.as_mut() {
+            let sealed = match archive.as_mut() {
                 Some(rec) => rec.maybe_seal(),
                 None => Ok(()),
             };
@@ -3208,7 +2523,7 @@ pub fn run(mut config: RecordingConfig) {
             {
                 eprintln!("error: recording failed: {e}");
                 recording_failed.store(true, Ordering::SeqCst);
-                if let Some(rec) = rez_recorder.take() {
+                if let Some(rec) = archive.take() {
                     // Dropped, not discarded: what is on disk holds everything
                     // written before the failure and is the recovery artifact —
                     // in v2 every sealed segment, in v3 every committed tick.
@@ -3255,8 +2570,7 @@ pub fn run(mut config: RecordingConfig) {
             }
         }
         // Every exit path of a wrapped run has produced its `run_end` by now.
-        // The parquet path reads `run_events` after the loop; the `.rez`
-        // path merges it into each recording right before finalizing.
+        // It is merged into each recording right before finalizing.
         if let Some(event) = run_end.take() {
             run_events.push(event);
         }
@@ -3287,7 +2601,7 @@ pub fn run(mut config: RecordingConfig) {
         // Skipped when the recording already failed: it was reported when it
         // did, and there is nothing left to commit into; and when no endpoint
         // streams, since a scraped endpoint has nothing in flight.
-        if endpoints.iter().any(|ep| ep.streaming) && rez_recorder.is_some() {
+        if endpoints.iter().any(|ep| ep.streaming) && archive.is_some() {
             let mut failed = None;
             if let Some((exit_wall, frames_at_exit)) = child_exit_wall.as_ref() {
                 // By stamp, including an endpoint's first frame: a frame the
@@ -3324,7 +2638,7 @@ pub fn run(mut config: RecordingConfig) {
                                 idx,
                                 event,
                                 &mut endpoints,
-                                rez_recorder.as_mut(),
+                                archive.as_mut(),
                                 wall_now_ns(),
                             ) {
                                 failed = Some(e);
@@ -3352,35 +2666,28 @@ pub fn run(mut config: RecordingConfig) {
                 drain_stream_events(
                     &mut stream_rx,
                     &mut endpoints,
-                    rez_recorder.as_mut(),
+                    archive.as_mut(),
                     wall_now_ns(),
                 )
             });
             apply_restarts(
                 &mut endpoints,
-                rez_recorder.as_mut(),
+                archive.as_mut(),
                 &client,
                 &config.metadata,
                 scrape_timeout,
                 true,
             )
             .await;
-            let failed = failed.or_else(|| {
-                rez_recorder
-                    .as_mut()
-                    .and_then(|rec| rec.commit_tick().err())
-            });
+            let failed =
+                failed.or_else(|| archive.as_mut().and_then(|rec| rec.commit_tick().err()));
             if let Some(e) = failed {
                 eprintln!("error: recording failed: {e}");
                 recording_failed.store(true, Ordering::SeqCst);
-                if let Some(rec) = rez_recorder.take() {
+                if let Some(rec) = archive.take() {
                     eprintln!("{}", rec.recovery_note());
                 }
             }
-        }
-
-        for ew in writers.iter_mut().flatten() {
-            let _ = ew.writer.flush();
         }
 
         let active_count = endpoints
@@ -3392,7 +2699,7 @@ pub fn run(mut config: RecordingConfig) {
             // Nothing was captured, so the recording holds no recoverable data:
             // stop the writer and remove it rather than leaving a stub behind.
             // Explicit because the `exit` below skips destructors.
-            if let Some(rec) = rez_recorder.take() {
+            if let Some(rec) = archive.take() {
                 rec.discard();
             }
             if wrapped {
@@ -3408,254 +2715,55 @@ pub fn run(mut config: RecordingConfig) {
             std::process::exit(1);
         }
 
-        // `.rez` mode finalizes a per-sampler archive instead of parquet/raw:
-        // the segments are already on disk, so this only seals the (small) open
-        // ones and marks the recording complete — in v2 by writing the final
-        // manifest and renaming the `.partial` into place, in v3 by one commit.
-        if rez_mode {
-            // `None` means the recording already failed mid-run and reported it
-            // (what was on disk was left in place there, and its path printed);
-            // nothing to add here.
-            let mut finalized = false;
-            if let Some(mut rec) = rez_recorder.take() {
-                // `run_end` before finalize: `update_metadata` needs a live
-                // writer, and finalize is what stops it. Not fatal for the
-                // same reason the `run_start` merge is not.
-                if let Some(event) = run_events
-                    .iter()
-                    .find(|e| e.kind.as_deref() == Some("run_end"))
-                {
-                    if let Err(e) = rec.merge_events(std::slice::from_ref(event)) {
-                        warn!("failed to add the run_end event to the recording: {e}");
-                    }
-                }
-                if let Err(e) = rec.finalize(last_clock) {
-                    // Must flip `recording_failed`: without it a failed tail
-                    // seal / manifest write / rename (ENOSPC at the end of a
-                    // long capture, a rename EACCES) exits 0, and neither
-                    // container overwrites a pre-existing output — v2 because
-                    // it stages at `.partial`, v3 because `create` refuses an
-                    // existing file — so the PREVIOUS run's `out.rez` is still
-                    // sitting there for the next command in the pipeline to
-                    // analyze.
-                    eprintln!(
-                        "error saving .{} archive: {e}",
-                        config::format_name(config.format)
-                    );
-                    recording_failed.store(true, Ordering::SeqCst);
-                } else {
-                    info!(
-                        "wrote .{} archive to {}",
-                        config::format_name(config.format),
-                        config.output.display()
-                    );
-                    finalized = true;
+        // The segments are already on disk, so this only seals the (small)
+        // open ones and marks each recording complete.
+        //
+        // `None` means the recording already failed mid-run and reported it
+        // (what was on disk was left in place there, and its path printed);
+        // nothing to add here.
+        let mut finalized = false;
+        if let Some(mut rec) = archive.take() {
+            // `run_end` before finalize: `update_metadata` needs a live
+            // writer, and finalize is what stops it. Not fatal for the same
+            // reason the `run_start` merge is not.
+            if let Some(event) = run_events
+                .iter()
+                .find(|e| e.kind.as_deref() == Some("run_end"))
+            {
+                if let Err(e) = rec.merge_events(std::slice::from_ref(event)) {
+                    warn!("failed to add the run_end event to the recording: {e}");
                 }
             }
-            // Endpoints refused after the archive opened, on first
-            // activation or on a reconnect (a refusal at startup exits
-            // before the archive exists). The recording went on without
-            // them; the exit status says so.
-            if let Some(summary) = refusal_summary(&endpoints, &config.output, finalized) {
-                eprintln!("{summary}");
+            if let Err(e) = rec.finalize(last_clock) {
+                // Must flip `recording_failed`: without it a failed tail seal
+                // (ENOSPC at the end of a long capture) exits 0, and the
+                // writer refuses an existing output, so the PREVIOUS run's
+                // archive at that path would be sitting there for the next
+                // command in the pipeline to analyze.
+                eprintln!("error saving the archive: {e}");
                 recording_failed.store(true, Ordering::SeqCst);
+            } else {
+                info!("wrote the archive to {}", config.output.display());
+                finalized = true;
             }
-            return outcome;
         }
-
-        // Every finalization error below is the same class as the `.rez`
-        // finalize failure above: the samples are gone (or partial) and the
-        // only thing a supervisor, CI job or `record && analyze` pipeline can
-        // see is the exit code, so none of these may report success.
-        let fail = |msg: String| {
-            eprintln!("{msg}");
+        // Endpoints refused after the archive opened, on first activation or
+        // on a reconnect (a refusal at startup exits before the archive
+        // exists). The recording went on without them; the exit status says
+        // so.
+        if let Some(summary) = refusal_summary(&endpoints, &config.output, finalized) {
+            eprintln!("{summary}");
             recording_failed.store(true, Ordering::SeqCst);
-        };
-
-        match config.format {
-            Format::Raw => {
-                for (idx, ew) in writers.iter_mut().enumerate() {
-                    if let Some(ref mut ew) = ew {
-                        if endpoints[idx].first_success_ns.is_none() {
-                            continue;
-                        }
-                        let dest_path = if config.separate || active_count > 1 {
-                            separate_output_path(
-                                &config.output,
-                                endpoints[idx].config.source_label(),
-                            )
-                        } else {
-                            config.output.clone()
-                        };
-                        let _ = ew.writer.rewind();
-                        match std::fs::File::create(&dest_path) {
-                            Ok(mut dest) => {
-                                if let Err(e) = std::io::copy(&mut ew.writer, &mut dest) {
-                                    fail(format!("error writing {}: {e}", dest_path.display()));
-                                }
-                            }
-                            Err(e) => fail(format!("error creating {}: {e}", dest_path.display())),
-                        }
-                    }
-                }
-                debug!("finished (raw)");
-            }
-            Format::Parquet if config.separate => {
-                info!("converting recordings to parquet (separate files)...");
-                for (idx, ew) in writers.iter_mut().enumerate() {
-                    if let Some(ref mut ew) = ew {
-                        if endpoints[idx].first_success_ns.is_none() {
-                            continue;
-                        }
-                        let dest_path = separate_output_path(
-                            &config.output,
-                            endpoints[idx].config.source_label(),
-                        );
-                        match std::fs::File::create(&dest_path) {
-                            Ok(dest) => {
-                                let _ = ew.writer.rewind();
-                                let converter = build_parquet_converter(
-                                    &config,
-                                    &endpoints[idx],
-                                    &prom_converters[idx],
-                                    &run_events,
-                                );
-                                if let Err(e) = converter
-                                    .convert_file_handle(ew.writer.try_clone().unwrap(), dest)
-                                {
-                                    fail(format!(
-                                        "error saving parquet for {}: {e}",
-                                        endpoints[idx].config.source_label()
-                                    ));
-                                } else {
-                                    info!("wrote {}", dest_path.display());
-                                }
-                            }
-                            Err(e) => {
-                                fail(format!("error creating {}: {e}", dest_path.display()));
-                            }
-                        }
-                    }
-                }
-            }
-            Format::Parquet => {
-                if active_count == 1 {
-                    // Single endpoint — direct conversion, no combine needed
-                    info!("converting the recording to parquet... please wait");
-                    let idx = endpoints
-                        .iter()
-                        .position(|ep| ep.first_success_ns.is_some())
-                        .unwrap();
-                    if let Some(ref mut ew) = writers[idx] {
-                        let _ = ew.writer.rewind();
-                        match std::fs::File::create(&config.output) {
-                            Ok(dest) => {
-                                let converter = build_parquet_converter(
-                                    &config,
-                                    &endpoints[idx],
-                                    &prom_converters[idx],
-                                    &run_events,
-                                );
-                                if let Err(e) = converter
-                                    .convert_file_handle(ew.writer.try_clone().unwrap(), dest)
-                                {
-                                    fail(format!("error saving parquet file: {e}"));
-                                }
-                            }
-                            Err(e) => {
-                                fail(format!("error creating output file: {e}"));
-                            }
-                        }
-                    }
-                } else {
-                    // Multiple endpoints — convert each to temp parquet, then combine
-                    info!("converting and combining recordings to parquet... please wait");
-                    let mut temp_parquets: Vec<tempfile::NamedTempFile> = Vec::new();
-
-                    for (idx, ew) in writers.iter_mut().enumerate() {
-                        if let Some(ref mut ew) = ew {
-                            if endpoints[idx].first_success_ns.is_none() {
-                                continue;
-                            }
-                            let _ = ew.writer.rewind();
-
-                            let temp = match tempfile::NamedTempFile::new_in(&out_dir) {
-                                Ok(t) => t,
-                                Err(e) => {
-                                    fail(format!("failed to create temp parquet file: {e}"));
-                                    continue;
-                                }
-                            };
-
-                            match std::fs::File::create(temp.path()) {
-                                Ok(dest) => {
-                                    let converter = build_parquet_converter(
-                                        &config,
-                                        &endpoints[idx],
-                                        &prom_converters[idx],
-                                        &run_events,
-                                    );
-                                    if let Err(e) = converter
-                                        .convert_file_handle(ew.writer.try_clone().unwrap(), dest)
-                                    {
-                                        fail(format!(
-                                            "error converting {} to parquet: {e}",
-                                            endpoints[idx].config.source_label()
-                                        ));
-                                        continue;
-                                    }
-                                    temp_parquets.push(temp);
-                                }
-                                Err(e) => {
-                                    fail(format!("error creating temp parquet: {e}"));
-                                }
-                            }
-                        }
-                    }
-
-                    if temp_parquets.len() < 2 {
-                        // Only one file survived — just move it
-                        if let Some(temp) = temp_parquets.into_iter().next() {
-                            if let Err(e) = std::fs::copy(temp.path(), &config.output) {
-                                fail(format!("error writing output: {e}"));
-                            }
-                        } else {
-                            fail("error: no data was recorded".to_string());
-                        }
-                    } else {
-                        let paths: Vec<PathBuf> = temp_parquets
-                            .iter()
-                            .map(|t| t.path().to_path_buf())
-                            .collect();
-
-                        if let Err(e) =
-                            crate::parquet_tools::combine::combine_files(&paths, &config.output)
-                        {
-                            fail(format!("error combining parquet files: {e}"));
-                        } else {
-                            info!("wrote combined recording to {}", config.output.display());
-                        }
-                    }
-                    // temp files cleaned up on drop
-                }
-            }
-            Format::Rez | Format::Dendro => {
-                // `.rez` output is finalized above via the `rez_mode` short-circuit,
-                // so this arm is never reached (Format::Rez always sets rez_mode).
-                unreachable!("rez output is finalized before the format match");
-            }
         }
-
         outcome
     });
 
     // Every path out of the block above already finalized or discarded the
-    // `.rez` writer; this is the backstop for the ones below that skip
-    // destructors (`std::process::exit`). Dropping joins the writer thread and
-    // leaves what is on disk alone — v2's `.partial`, v3's output file — so a
-    // missed path costs a recoverable archive, never a detached thread
-    // appending to it after we exit.
-    drop(rez_recorder);
+    // archive; this is the backstop for the ones below that skip destructors
+    // (`std::process::exit`). Dropping joins the writer thread and leaves what
+    // is on disk alone, so a missed path costs a recoverable archive, never a
+    // detached thread appending to it after we exit.
+    drop(archive);
 
     // Flush buffered logs before exiting the process: std::process::exit
     // skips destructors, so drop the log drain explicitly first.
@@ -3772,7 +2880,6 @@ mod tests {
         );
         // Defaults apply when no --url/-o are given.
         assert_eq!(config.output, PathBuf::from("rezolus.dendro"));
-        assert_eq!(config.format, Format::Dendro);
         assert_eq!(config.endpoints.len(), 1);
         assert_eq!(config.endpoints[0].url.as_str(), "http://localhost:4241/");
     }
@@ -3834,15 +2941,15 @@ mod tests {
         assert_eq!(after.1, -5_000_000_000);
     }
 
-    // ── `--rez-version` wiring ───────────────────────────────────────────────
+    // ── the archive ─────────────────────────────────────────────────────────
     //
-    // These drive `start_rez_recorder` and the `RezStream` it returns rather
-    // than `run()`, which owns `std::process::exit` and a tokio runtime. What
-    // they cover is the wiring: which container a version selects, that the
-    // result is readable end to end, and that a discarded recording leaves
-    // nothing behind. What they do NOT cover is the loop around it — the tick
-    // scheduling, the scrape timeouts and the exit paths are exercised by
-    // `tests/record_lifecycle.rs` against the real binary.
+    // These drive `start_recorder` and the `Archive` it returns rather than
+    // `run()`, which owns `std::process::exit` and a tokio runtime. What they
+    // cover is the wiring: that the result is readable end to end, and that a
+    // discarded recording leaves nothing behind. What they do NOT cover is the
+    // loop around it — the tick scheduling, the scrape timeouts and the exit
+    // paths are exercised by `tests/record_lifecycle.rs` against the real
+    // binary.
 
     // ── agent version capture (issue #1195) ─────────────────────────────────
 
@@ -3873,46 +2980,47 @@ mod tests {
     }
 
     #[test]
-    fn rez_metadata_carries_the_agent_version() {
+    fn metadata_carries_the_agent_version() {
         let dir = tempfile::tempdir().unwrap();
-        let config = rez_config(&dir.path().join("out.rez"));
-        let mut ep = rez_endpoint();
+        let config = test_config(&dir.path().join("out.dendro"));
+        let mut ep = test_endpoint();
         ep.agent.version = Some("5.19.2".to_string());
 
-        let m = build_rez_metadata(&config, &ep, &[]);
+        let m = build_metadata(&config, &ep, &[]);
         assert_eq!(
             m.get(parquet_metadata::KEY_VERSION).map(String::as_str),
             Some("5.19.2")
         );
     }
 
-    // ── producer epoch (#1224) ──────────────────────────────────────────────
+    /// `--endpoint url,role=...` is kept as the recording's `role`, and a
+    /// `--metadata role=...` overrides it, as for `version`.
+    #[test]
+    fn metadata_carries_the_endpoint_role() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(&dir.path().join("out.dendro"));
+        let mut ep = test_endpoint();
+        assert!(!build_metadata(&config, &ep, &[]).contains_key("role"));
 
-    fn snap_with_epoch(epoch: Option<&str>) -> metriken_exposition::Snapshot {
-        use std::collections::HashMap;
-        let mut metadata = HashMap::new();
-        metadata.insert("source".to_string(), "rezolus".to_string());
-        if let Some(e) = epoch {
-            metadata.insert("producer_epoch".to_string(), e.to_string());
-        }
-        metriken_exposition::Snapshot::V2(metriken_exposition::SnapshotV2 {
-            systemtime: std::time::SystemTime::UNIX_EPOCH,
-            duration: Duration::ZERO,
-            metadata,
-            counters: vec![],
-            gauges: vec![],
-            histograms: vec![],
-        })
+        ep.config.role = Some("loadgen".to_string());
+        let m = build_metadata(&config, &ep, &[]);
+        assert_eq!(m.get("role").map(String::as_str), Some("loadgen"));
+
+        config.metadata = vec![("role".to_string(), "service".to_string())];
+        let m = build_metadata(&config, &ep, &[]);
+        assert_eq!(m.get("role").map(String::as_str), Some("service"));
     }
 
+    // ── producer epoch (#1224) ──────────────────────────────────────────────
+
     #[test]
-    fn rez_metadata_carries_the_producer_epoch() {
+    fn metadata_carries_the_producer_epoch() {
         let dir = tempfile::tempdir().unwrap();
-        let config = rez_config(&dir.path().join("out.rez"));
-        let mut ep = rez_endpoint();
+        let config = test_config(&dir.path().join("out.dendro"));
+        let mut ep = test_endpoint();
         ep.agent.producer_epoch = Some("11111111-2222-4333-8444-555555555555".to_string());
 
-        let m = build_rez_metadata(&config, &ep, &[]);
+        let m = build_metadata(&config, &ep, &[]);
         assert_eq!(
             m.get(parquet_metadata::KEY_PRODUCER_EPOCH)
                 .map(String::as_str),
@@ -3923,11 +3031,11 @@ mod tests {
     /// Absent, not empty. An empty epoch would read as "this recording knows
     /// its counters did not restart", which is the opposite of not knowing.
     #[test]
-    fn rez_metadata_omits_the_epoch_when_the_agent_reported_none() {
+    fn metadata_omits_the_epoch_when_the_agent_reported_none() {
         let dir = tempfile::tempdir().unwrap();
-        let config = rez_config(&dir.path().join("out.rez"));
-        let ep = rez_endpoint();
-        let m = build_rez_metadata(&config, &ep, &[]);
+        let config = test_config(&dir.path().join("out.dendro"));
+        let ep = test_endpoint();
+        let m = build_metadata(&config, &ep, &[]);
         assert!(!m.contains_key(parquet_metadata::KEY_PRODUCER_EPOCH));
     }
 
@@ -3937,14 +3045,14 @@ mod tests {
     /// recording opened after the wrapped command spawned starts with
     /// `run_start` rather than waiting for an update that already happened.
     #[test]
-    fn rez_metadata_carries_the_run_events_when_there_are_any() {
+    fn metadata_carries_the_run_events_when_there_are_any() {
         let dir = tempfile::tempdir().unwrap();
-        let config = rez_config(&dir.path().join("out.rez"));
-        let ep = rez_endpoint();
+        let config = test_config(&dir.path().join("out.dendro"));
+        let ep = test_endpoint();
         let marker = RunMarker::new(&["/usr/local/bin/bench.sh".to_string()]);
         let start = marker.start_event(TEST_ANCHOR, None);
 
-        let m = build_rez_metadata(&config, &ep, std::slice::from_ref(&start));
+        let m = build_metadata(&config, &ep, std::slice::from_ref(&start));
         let payload: Events = serde_json::from_str(m.get(KEY_EVENTS).expect("events key")).unwrap();
         assert_eq!(payload.events, vec![start]);
         assert_eq!(payload.events[0].description, "bench.sh");
@@ -3959,11 +3067,11 @@ mod tests {
     /// No key at all without run events: an unwrapped run must not write
     /// `{"events":[]}`, which `annotate` treats as a payload to keep.
     #[test]
-    fn rez_metadata_omits_the_events_key_without_run_events() {
+    fn metadata_omits_the_events_key_without_run_events() {
         let dir = tempfile::tempdir().unwrap();
-        let config = rez_config(&dir.path().join("out.rez"));
-        let ep = rez_endpoint();
-        let m = build_rez_metadata(&config, &ep, &[]);
+        let config = test_config(&dir.path().join("out.dendro"));
+        let ep = test_endpoint();
+        let m = build_metadata(&config, &ep, &[]);
         assert!(!m.contains_key(KEY_EVENTS));
     }
 
@@ -3992,38 +3100,29 @@ mod tests {
         assert!(end.details.is_some());
     }
 
-    /// The parquet footer merges the run events into a user `--metadata
-    /// events=...` value, as the `.rez` seed does, rather than replacing it.
+    /// The run events merge into a user `--metadata events=...` value rather
+    /// than replacing it, and a user value that does not parse is kept
+    /// verbatim, with the run events the ones dropped.
     #[test]
-    fn parquet_events_payload_merges_into_the_users_events() {
+    fn run_events_merge_into_the_users_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(&dir.path().join("out.dendro"));
+        let ep = test_endpoint();
         let marker = RunMarker::new(&["bench".to_string()]);
         let start = marker.start_event(TEST_ANCHOR + TEST_SECOND, None);
+
         let user =
             r#"{"events":[{"timestamp":1700000000000000000,"description":"deploy","id":"d1"}]}"#;
-
-        let json = events_payload(Some(user), std::slice::from_ref(&start)).unwrap();
-        let payload: Events = serde_json::from_str(&json).unwrap();
+        config.metadata = vec![(KEY_EVENTS.to_string(), user.to_string())];
+        let m = build_metadata(&config, &ep, std::slice::from_ref(&start));
+        let payload: Events = serde_json::from_str(m.get(KEY_EVENTS).unwrap()).unwrap();
         assert_eq!(payload.events.len(), 2);
         assert_eq!(payload.events[0].description, "deploy");
         assert_eq!(payload.events[1], start);
 
-        // Without run events the user's value is carried as given.
-        assert_eq!(events_payload(Some(user), &[]).as_deref(), Some(user));
-        // Without either there is no key.
-        assert!(events_payload(None, &[]).is_none());
-    }
-
-    /// A user value that does not parse is kept verbatim; the run events are
-    /// the ones dropped.
-    #[test]
-    fn parquet_events_payload_keeps_an_unparseable_user_value() {
-        let marker = RunMarker::new(&["bench".to_string()]);
-        let start = marker.start_event(TEST_ANCHOR, None);
-        let garbage = "not json";
-        assert_eq!(
-            events_payload(Some(garbage), std::slice::from_ref(&start)).as_deref(),
-            Some(garbage)
-        );
+        config.metadata = vec![(KEY_EVENTS.to_string(), "not json".to_string())];
+        let m = build_metadata(&config, &ep, std::slice::from_ref(&start));
+        assert_eq!(m.get(KEY_EVENTS).map(String::as_str), Some("not json"));
     }
 
     /// The other two endings name the run the same way and say what happened.
@@ -4041,46 +3140,39 @@ mod tests {
     }
 
     /// An endpoint whose `/status` carried no epoch adopts the first one a
-    /// snapshot shows. Nothing restarted; there was simply nothing to compare.
+    /// handshake shows. Nothing restarted; there was simply nothing to
+    /// compare.
     #[test]
     fn a_first_epoch_is_adopted_rather_than_reported_as_a_restart() {
-        let mut ep = rez_endpoint();
+        let mut ep = test_endpoint();
         assert!(ep.agent.producer_epoch.is_none());
-        note_epoch_change(&mut ep, &snap_with_epoch(Some("epoch-a")));
+        note_epoch(&mut ep, "epoch-a");
         assert_eq!(ep.agent.producer_epoch.as_deref(), Some("epoch-a"));
+        assert!(ep.restarts.is_empty());
     }
 
     /// The same epoch twice is the ordinary case and must not move anything.
     #[test]
     fn an_unchanged_epoch_leaves_the_recorded_one_alone() {
-        let mut ep = rez_endpoint();
+        let mut ep = test_endpoint();
         ep.agent.producer_epoch = Some("epoch-a".to_string());
-        note_epoch_change(&mut ep, &snap_with_epoch(Some("epoch-a")));
+        note_epoch(&mut ep, "epoch-a");
         assert_eq!(ep.agent.producer_epoch.as_deref(), Some("epoch-a"));
+        assert!(ep.restarts.is_empty());
     }
 
     /// A change is a restart: every cumulative counter reset between these two
-    /// scrapes. The recorder tracks the new one so it warns once rather than
-    /// once per tick for the rest of the recording.
+    /// handshakes. The recorder tracks the new one so it is recorded once.
     #[test]
-    fn a_changed_epoch_is_tracked_so_the_warning_fires_once() {
-        let mut ep = rez_endpoint();
+    fn a_changed_epoch_is_tracked_so_the_restart_is_recorded_once() {
+        let mut ep = test_endpoint();
         ep.agent.producer_epoch = Some("epoch-a".to_string());
-        note_epoch_change(&mut ep, &snap_with_epoch(Some("epoch-b")));
+        note_epoch(&mut ep, "epoch-b");
         assert_eq!(ep.agent.producer_epoch.as_deref(), Some("epoch-b"));
         // A second look at the same epoch is not another restart.
-        note_epoch_change(&mut ep, &snap_with_epoch(Some("epoch-b")));
+        note_epoch(&mut ep, "epoch-b");
         assert_eq!(ep.agent.producer_epoch.as_deref(), Some("epoch-b"));
-    }
-
-    /// A snapshot from an agent that predates the epoch must not clear one we
-    /// already have — absence is not a restart.
-    #[test]
-    fn a_snapshot_without_an_epoch_does_not_clear_the_known_one() {
-        let mut ep = rez_endpoint();
-        ep.agent.producer_epoch = Some("epoch-a".to_string());
-        note_epoch_change(&mut ep, &snap_with_epoch(None));
-        assert_eq!(ep.agent.producer_epoch.as_deref(), Some("epoch-a"));
+        assert_eq!(ep.restarts.len(), 1);
     }
 
     /// Same precedence as `source`: what the agent reported is the default,
@@ -4089,12 +3181,12 @@ mod tests {
     #[test]
     fn an_explicit_metadata_version_overrides_the_agent_reported_one() {
         let dir = tempfile::tempdir().unwrap();
-        let mut config = rez_config(&dir.path().join("out.rez"));
+        let mut config = test_config(&dir.path().join("out.dendro"));
         config.metadata = vec![("version".to_string(), "custom".to_string())];
-        let mut ep = rez_endpoint();
+        let mut ep = test_endpoint();
         ep.agent.version = Some("5.19.2".to_string());
 
-        let m = build_rez_metadata(&config, &ep, &[]);
+        let m = build_metadata(&config, &ep, &[]);
         assert_eq!(
             m.get(parquet_metadata::KEY_VERSION).map(String::as_str),
             Some("custom")
@@ -4102,39 +3194,36 @@ mod tests {
     }
 
     #[test]
-    fn rez_metadata_omits_the_version_when_the_agent_did_not_report_one() {
+    fn metadata_omits_the_version_when_the_agent_did_not_report_one() {
         // A Prometheus endpoint, or an agent that answers neither `/status`
         // nor `/`. Absent, not empty: an empty string would render as the
         // blank `Rezolus Version:` line this change exists to remove.
         let dir = tempfile::tempdir().unwrap();
-        let config = rez_config(&dir.path().join("out.rez"));
-        let ep = rez_endpoint();
+        let config = test_config(&dir.path().join("out.dendro"));
+        let ep = test_endpoint();
 
-        let m = build_rez_metadata(&config, &ep, &[]);
+        let m = build_metadata(&config, &ep, &[]);
         assert!(!m.contains_key(parquet_metadata::KEY_VERSION));
     }
 
     const TEST_ANCHOR: u64 = 1_700_000_000_000_000_000;
     const TEST_SECOND: u64 = 1_000_000_000;
 
-    fn rez_config(output: &Path) -> RecordingConfig {
+    fn test_config(output: &Path) -> RecordingConfig {
         RecordingConfig {
             interval: humantime::Duration::from(Duration::from_secs(1)),
             duration: None,
-            format: Format::Rez,
             verbose: 0,
             output: output.to_path_buf(),
-            separate: false,
             metadata: Vec::new(),
             labels: vec![("arm".to_string(), "redis".to_string())],
             endpoints: Vec::new(),
             command: None,
-            format_defaulted: false,
             record_command_line: false,
         }
     }
 
-    fn rez_endpoint() -> EndpointState {
+    fn test_endpoint() -> EndpointState {
         EndpointState::new(endpoint::EndpointConfig {
             url: Url::parse("http://localhost:4241").unwrap(),
             source: Some("rezolus".to_string()),
@@ -4144,13 +3233,14 @@ mod tests {
     }
 
     /// The refusal for an agent that cannot stream names the endpoint, the
-    /// agent's version when there is one, and the outputs that record such an
-    /// agent. Only an agent older than the stream is said to predate it: a
-    /// current agent's 404 is quoted as the route's answer.
+    /// agent's version when there is one, and points at a 5.x recorder, which
+    /// scrapes it. Only an agent older than the stream is said to predate it
+    /// (and told to upgrade): a current agent's 404 is quoted as the route's
+    /// answer.
     #[test]
-    fn an_unstreamable_agent_is_refused_by_version_with_the_alternatives() {
+    fn an_unstreamable_agent_is_refused_by_version_pointing_at_a_5x_recorder() {
         let reason = "http://localhost:4241/metrics/stream?interval=1s returned HTTP 404";
-        let mut ep = rez_endpoint();
+        let mut ep = test_endpoint();
         ep.agent.version = Some("5.20.0".to_string());
         let msg = unstreamable_agent(&ep, reason, RefusedAt::Startup);
         for needle in [
@@ -4158,15 +3248,22 @@ mod tests {
             "predates",
             reason,
             STREAM_SINCE,
-            "-o out.rez",
-            "-o out.parquet",
+            "Nothing was recorded",
+            "5.x recorder",
+            RELEASE_5X,
+            "recording upgrade --to dendro",
+            "upgrade the agent",
         ] {
             assert!(msg.contains(needle), "{needle:?} in {msg}");
+        }
+        for gone in ["-o out.rez", "-o out.parquet"] {
+            assert!(!msg.contains(gone), "{gone:?} in {msg}");
         }
 
         ep.agent.version = Some("5.22.1".to_string());
         let msg = unstreamable_agent(&ep, reason, RefusedAt::Startup);
         assert!(!msg.contains("predates"), "{msg}");
+        assert!(!msg.contains("upgrade the agent"), "{msg}");
         assert!(
             msg.contains("Rezolus 5.22.1, which serves") && msg.contains(reason),
             "{msg}"
@@ -4175,23 +3272,26 @@ mod tests {
             msg.contains("Check that http://localhost:4241/metrics/stream is reachable"),
             "{msg}"
         );
-        assert!(msg.contains("recording upgrade --to dendro"), "{msg}");
+        assert!(msg.contains("5.x recorder"), "{msg}");
 
         ep.agent.version = None;
         let msg = unstreamable_agent(&ep, reason, RefusedAt::Startup);
         assert!(msg.contains("unknown version"), "{msg}");
         assert!(msg.contains(STREAM_SINCE), "{msg}");
+        assert!(msg.contains("5.x recorder"), "{msg}");
 
-        // Mid-run, only the endpoint is left out: switching the run's format
-        // is not the advice.
+        // Mid-run and on a reconnect, only the endpoint is left out.
         ep.agent.version = Some("5.20.0".to_string());
         let msg = unstreamable_agent(&ep, reason, RefusedAt::MidRun);
         assert!(msg.contains("excluded from this recording"), "{msg}");
-        assert!(msg.contains("separate"), "{msg}");
-        assert!(!msg.contains("-o out.rez"), "{msg}");
+        assert!(msg.contains("5.x recorder"), "{msg}");
+        let msg = unstreamable_agent(&ep, reason, RefusedAt::Reconnect);
+        assert!(msg.contains("recording stops here"), "{msg}");
+        assert!(msg.contains("5.x recorder"), "{msg}");
     }
 
     #[test]
+
     fn predates_stream_compares_the_release() {
         assert_eq!(predates_stream("5.20.0"), Some(true));
         assert_eq!(predates_stream("4.1.2"), Some(true));
@@ -4203,7 +3303,7 @@ mod tests {
     }
 
     /// A second endpoint, distinguishable from [`rez_endpoint`] by `source`.
-    fn rez_endpoint_b() -> EndpointState {
+    fn test_endpoint_b() -> EndpointState {
         EndpointState::new(endpoint::EndpointConfig {
             url: Url::parse("http://localhost:4242").unwrap(),
             source: Some("valkey".to_string()),
@@ -4265,7 +3365,7 @@ mod tests {
     }
 
     /// One tick of one counter for `endpoint`.
-    fn tick(rec: &mut RezStream, endpoint: usize, i: u64) -> Result<(), String> {
+    fn tick(rec: &mut Archive, endpoint: usize, i: u64) -> Result<(), String> {
         let ts = TEST_ANCHOR + i * TEST_SECOND;
         let c = rez::recorder_tests_support::counter(
             "fake_ops",
@@ -4284,15 +3384,14 @@ mod tests {
 
     #[test]
     fn a_scrape_with_no_recording_is_an_error_not_a_silent_drop() {
-        // In `.rez` mode there is no parquet writer to catch an unrouted
-        // snapshot: `writers` is all `None`. So returning Ok here would decode
-        // a scrape and throw it away every tick for the whole run, and the
-        // archive would finalize one recording short with exit 0. That was the
-        // behaviour when an endpoint down at startup activated later.
+        // Nothing else catches an unrouted snapshot. Returning Ok here would
+        // decode a scrape and throw it away every tick for the whole run, and
+        // the archive would finalize one recording short with exit 0. That
+        // was the behaviour when an endpoint down at startup activated later.
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("out.rez");
-        let config = rez_config(&path);
-        let mut rec = start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR).unwrap();
+        let path = dir.path().join("out.dendro");
+        let config = test_config(&path);
+        let mut rec = start_recorder(&config, &[(0, &test_endpoint())], TEST_ANCHOR).unwrap();
 
         assert!(tick(&mut rec, 0, 0).is_ok(), "endpoint 0 has a recording");
         let err = tick(&mut rec, 1, 0).expect_err("endpoint 1 has none");
@@ -4351,56 +3450,6 @@ mod tests {
         assert_eq!(wall as i64 - row_ts as i64, DIVERGENCE);
     }
 
-    /// The recorder keeps the producer's stamp when the agent sends one, and
-    /// falls back to its own tick when it does not.
-    ///
-    /// The fallback is not a nicety: a Prometheus target has no such clock,
-    /// and neither does an agent older than these keys, and a recorder that
-    /// insisted on one would have nothing to stamp their rows with.
-    #[test]
-    fn a_producers_stamp_is_used_where_there_is_one_and_not_invented_where_there_is_not() {
-        use metriken_exposition::{Snapshot, SnapshotV2};
-
-        let with = |pairs: &[(&str, &str)]| {
-            Snapshot::V2(SnapshotV2 {
-                systemtime: std::time::SystemTime::UNIX_EPOCH,
-                duration: Duration::from_secs(1),
-                metadata: pairs
-                    .iter()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-                    .collect(),
-                counters: Vec::new(),
-                gauges: Vec::new(),
-                histograms: Vec::new(),
-            })
-        };
-
-        assert_eq!(
-            snapshot_producer_stamp(&with(&[
-                ("ts", "1700000000000000000"),
-                ("wall_offset", "-42")
-            ])),
-            Some((1_700_000_000_000_000_000, -42)),
-            "both halves come from the producer or neither does"
-        );
-        assert_eq!(
-            snapshot_producer_stamp(&with(&[("ts", "1700000000000000000")])),
-            None,
-            "a ts with no offset cannot be turned into a wall clock, so it is \
-             not half-used"
-        );
-        assert_eq!(
-            snapshot_producer_stamp(&with(&[])),
-            None,
-            "a source that sends no stamp gets the recorder's"
-        );
-        assert_eq!(
-            snapshot_producer_stamp(&with(&[("ts", "-1"), ("wall_offset", "0")])),
-            None,
-            "a negative stamp is not a timeline this archive can hold"
-        );
-    }
-
     /// A rezolus recording is anchored on the AGENT's timeline, not the
     /// recorder's.
     ///
@@ -4413,28 +3462,30 @@ mod tests {
     fn a_recording_is_anchored_on_the_source_that_fills_it() {
         const AGENT_ANCHOR: i64 = 1_600_000_000_000_000_000;
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("anchored.rez");
-        let config = rez_config(&path);
+        let path = dir.path().join("anchored.dendro");
+        let config = test_config(&path);
 
-        let mut agent = rez_endpoint();
+        let mut agent = test_endpoint();
         agent.agent.clock_anchor_wall_ns = Some(AGENT_ANCHOR);
         // A Prometheus target has no clock of its own to offer, so it keeps
         // the recorder's — one archive, two recordings, each coherent.
-        let prom = rez_endpoint_b();
+        let prom = test_endpoint_b();
 
-        let mut rec = start_rez_recorder(&config, &[(0, &agent), (1, &prom)], TEST_ANCHOR).unwrap();
+        let mut rec = start_recorder(&config, &[(0, &agent), (1, &prom)], TEST_ANCHOR).unwrap();
         tick(&mut rec, 0, 0).expect("ingest a");
         tick(&mut rec, 1, 0).expect("ingest b");
         rec.finalize((TEST_ANCHOR, 0)).unwrap();
 
-        let db = rez_sqlite::RezDb::open(&path).expect("the archive opens");
-        let recordings = db.read_recordings().expect("the manifest reads");
+        use metriken_storage::Catalog;
+        let sources = metriken_storage::DendroCatalog::open(&path)
+            .expect("the archive opens")
+            .sources()
+            .expect("the catalog reads");
         let anchor_of = |source: &str| -> u64 {
-            recordings
+            sources
                 .iter()
-                .find(|r| r.meta.labels.get("source").map(String::as_str) == Some(source))
+                .find(|s| s.labels.get("source").map(String::as_str) == Some(source))
                 .unwrap_or_else(|| panic!("a recording for {source}"))
-                .meta
                 .clock_anchor_wall_ns
         };
         assert_eq!(
@@ -4456,13 +3507,13 @@ mod tests {
         // recording and must be able to add the second one to the live
         // archive. Otherwise the second endpoint's scrapes go nowhere.
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("out.rez");
-        let config = rez_config(&path);
-        let mut rec = start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR).unwrap();
+        let path = dir.path().join("out.dendro");
+        let config = test_config(&path);
+        let mut rec = start_recorder(&config, &[(0, &test_endpoint())], TEST_ANCHOR).unwrap();
 
         tick(&mut rec, 0, 0).expect("the endpoint up at startup records");
         // ... endpoint 1 comes up mid-run.
-        rec.add_endpoint(1, &config, &rez_endpoint_b(), TEST_ANCHOR, &[])
+        rec.add_endpoint(1, &config, &test_endpoint_b(), TEST_ANCHOR, &[])
             .expect("a recording can join an open archive");
         for i in 1..3 {
             tick(&mut rec, 0, i).expect("ingest a");
@@ -4505,7 +3556,7 @@ mod tests {
 
     /// Drive a recorder the way the loop does — ingest, `maybe_seal` every
     /// tick, then finalize — over `ticks` one-second samples of one counter.
-    fn record_ticks(rec: &mut RezStream, ticks: u64) {
+    fn record_ticks(rec: &mut Archive, ticks: u64) {
         for i in 0..ticks {
             let ts = TEST_ANCHOR + i * TEST_SECOND;
             let c = rez::recorder_tests_support::counter(
@@ -4515,66 +3566,11 @@ mod tests {
                 Some(::rez::window::Window::new(ts - 500, ts)),
             );
             let snapshot = rez::recorder_tests_support::snap(ts, vec![c]);
-            rec.stage(0, &rez_endpoint().config.url, &snapshot, ts, 0)
+            rec.stage(0, &test_endpoint().config.url, &snapshot, ts, 0)
                 .expect("stage");
             rec.commit_tick().expect("commit");
             rec.maybe_seal().expect("seal");
         }
-    }
-
-    #[test]
-    fn recording_writes_a_sqlite_container_that_round_trips_through_rezreader() {
-        // The only container this binary writes. Writing it is half the
-        // wiring — the recording has to come back out through the same reader
-        // every consumer uses, or the recorder is producing a file nothing can
-        // query.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("out.rez");
-        let config = rez_config(&path);
-        let mut rec = start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR).unwrap();
-
-        // Valid and openable before a single row is written — there is no
-        // `.partial` standing in for it.
-        assert!(path.exists(), "v3 records at the output path itself");
-        assert!(!dir.path().join("out.rez.partial").exists());
-
-        record_ticks(&mut rec, 3);
-        rec.finalize((TEST_ANCHOR + 3 * TEST_SECOND, 0)).unwrap();
-
-        assert_eq!(
-            rez::detect_rez_format(&path).unwrap(),
-            rez::RezFormat::V3Sqlite
-        );
-        use metriken_query::MetricsSource;
-        let reader = crate::rez_reader::RezReader::open_with_pool(
-            &path,
-            metriken_storage::BufferPool::new(64 * 1024 * 1024),
-        )
-        .unwrap();
-        assert_eq!(reader.counter_names(), vec!["fake_ops".to_string()]);
-        let (start, end) = reader.time_range().unwrap();
-        // A bare counter is not an instant vector; `rate()` is how a counter is
-        // read, and it is also what consumes the acquisition windows the rows
-        // carry.
-        let r = reader.query_range("rate(fake_ops[5s])", start, end + 1.0, 1.0);
-        let metriken_query::QueryResult::Matrix { result } = r.expect("the query must resolve")
-        else {
-            panic!("a range query over a counter is a matrix");
-        };
-        // Values, not merely a successful parse: the counter rises by 1 every
-        // second, so the rate is 1/s wherever it is defined.
-        let points: Vec<f64> = result
-            .iter()
-            .flat_map(|s| s.values.iter().map(|(_, v)| *v))
-            .collect();
-        assert!(!points.is_empty(), "the recorded rows must come back out");
-        assert!(
-            points.iter().all(|v| (*v - 1.0).abs() < 1e-6),
-            "a counter rising 1/s must read back as 1/s: {points:?}"
-        );
-        // The recording's identity survives: labels the run was tagged with,
-        // and the metadata the manifest used to carry.
-        assert_eq!(reader.source(), "rezolus");
     }
 
     /// A streamed agent in `-o out.dendro`: a slotted group's rows become a long table
@@ -4636,10 +3632,10 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("streamed.dendro");
-        let config = dendro_config(&path);
-        let mut ep = rez_endpoint();
+        let config = test_config(&path);
+        let mut ep = test_endpoint();
         adopt_source(&mut ep, &source);
-        let mut rec = start_rez_recorder(&config, &[(0, &ep)], TEST_ANCHOR).unwrap();
+        let mut rec = start_recorder(&config, &[(0, &ep)], TEST_ANCHOR).unwrap();
 
         let anchor = u64::try_from(source.clock_anchor_wall_ns).unwrap();
         let ticks = 8u64;
@@ -4749,8 +3745,8 @@ mod tests {
     fn a_streamed_interval_with_no_recording_is_an_error_not_a_silent_drop() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.dendro");
-        let config = dendro_config(&path);
-        let mut rec = start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR).unwrap();
+        let config = test_config(&path);
+        let mut rec = start_recorder(&config, &[(0, &test_endpoint())], TEST_ANCHOR).unwrap();
         let url = Url::parse("http://localhost:4242").unwrap();
         let err = rec
             .stage_stream(1, &url, stream::Applied::default())
@@ -4764,8 +3760,7 @@ mod tests {
 
     /// The handshake is the authority on the timeline the rows arrive on, so
     /// it overrides what `/status` said a moment earlier — and on a reconnect
-    /// a new uuid is a restarted agent, tracked the way a changed snapshot
-    /// epoch is on the scrape path.
+    /// a new uuid is a restarted agent, tracked as a restart.
     #[test]
     fn a_handshake_sets_the_anchor_and_epoch_and_a_new_uuid_is_a_restart() {
         let source = |uuid: Option<&str>, anchor: i64| stream::Source {
@@ -4774,7 +3769,7 @@ mod tests {
             metadata: BTreeMap::new(),
             clock_anchor_wall_ns: anchor,
         };
-        let mut ep = rez_endpoint();
+        let mut ep = test_endpoint();
         ep.agent.clock_anchor_wall_ns = Some(1);
         ep.agent.producer_epoch = Some("from-status".to_string());
 
@@ -4794,13 +3789,6 @@ mod tests {
         assert_eq!(ep.agent.producer_epoch.as_deref(), Some("after-restart"));
     }
 
-    fn dendro_config(output: &Path) -> RecordingConfig {
-        RecordingConfig {
-            format: Format::Dendro,
-            ..rez_config(output)
-        }
-    }
-
     #[test]
     fn a_dendro_recording_round_trips_through_rezreader() {
         // `-o out.dendro` writes through metriken-storage's writer, and the
@@ -4809,12 +3797,12 @@ mod tests {
         // one that activated mid-run.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.dendro");
-        let config = dendro_config(&path);
-        let mut rec = start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR).unwrap();
+        let config = test_config(&path);
+        let mut rec = start_recorder(&config, &[(0, &test_endpoint())], TEST_ANCHOR).unwrap();
         assert!(path.exists(), "the archive is created at the output path");
 
         record_ticks(&mut rec, 2);
-        rec.add_endpoint(1, &config, &rez_endpoint_b(), TEST_ANCHOR, &[])
+        rec.add_endpoint(1, &config, &test_endpoint_b(), TEST_ANCHOR, &[])
             .unwrap();
         for i in 2..5 {
             tick(&mut rec, 0, i).unwrap();
@@ -4867,140 +3855,15 @@ mod tests {
     fn discarding_a_dendro_recording_leaves_no_file_behind() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.dendro");
-        let config = dendro_config(&path);
-        let rec = start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR).unwrap();
+        let config = test_config(&path);
+        let rec = start_recorder(&config, &[(0, &test_endpoint())], TEST_ANCHOR).unwrap();
         rec.discard();
         for suffix in ["", "-wal", "-shm"] {
             let p = dir.path().join(format!("out.dendro{suffix}"));
             assert!(!p.exists(), "discard left {} behind", p.display());
         }
-        start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR)
+        start_recorder(&config, &[(0, &test_endpoint())], TEST_ANCHOR)
             .unwrap_or_else(|e| panic!("the output path is still claimed: {e}"))
             .discard();
-    }
-
-    #[test]
-    fn discarding_a_recording_that_captured_nothing_leaves_no_file_behind() {
-        // The "no data was recorded" / "failed to start command" paths: there
-        // is nothing to recover, and the writer refuses to overwrite an
-        // existing output (`RezDb::create` claims the path with O_EXCL), so a
-        // stub left behind would block the retry as well as lying about what
-        // was captured.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("out.rez");
-        let config = rez_config(&path);
-        let rec = start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR).unwrap();
-        rec.discard();
-        assert!(
-            !path.exists() && !dir.path().join("out.rez.partial").exists(),
-            "discard must leave neither the output nor a staging file"
-        );
-        // And the path is free again, which is the property the retry needs.
-        let config = rez_config(&path);
-        start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR)
-            .unwrap_or_else(|e| panic!("the output path is still claimed: {e}"))
-            .discard();
-    }
-
-    #[test]
-    fn test_separate_output_path() {
-        let base = PathBuf::from("/tmp/recording.parquet");
-        assert_eq!(
-            separate_output_path(&base, "rezolus"),
-            PathBuf::from("/tmp/recording_rezolus.parquet")
-        );
-    }
-
-    #[test]
-    fn test_separate_output_path_no_extension() {
-        let base = PathBuf::from("/tmp/recording");
-        assert_eq!(
-            separate_output_path(&base, "vllm"),
-            PathBuf::from("/tmp/recording_vllm")
-        );
-    }
-
-    #[test]
-    fn test_output_dir() {
-        assert_eq!(
-            output_dir(&PathBuf::from("/tmp/out.parquet")),
-            PathBuf::from("/tmp")
-        );
-        assert_eq!(
-            output_dir(&PathBuf::from("out.parquet")),
-            PathBuf::from(".")
-        );
-    }
-
-    #[test]
-    fn test_build_per_source_metadata_single_source() {
-        let json =
-            build_per_source_metadata("rezolus", Some(100), Some(200), Some("service"), None)
-                .unwrap();
-        let psm: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(
-            psm["rezolus"]["first_sample_ns"].as_u64(),
-            Some(100),
-            "got: {psm}"
-        );
-        assert_eq!(psm["rezolus"]["last_sample_ns"].as_u64(), Some(200));
-        assert_eq!(psm["rezolus"]["role"].as_str(), Some("service"));
-        // Only one source entry
-        assert_eq!(psm.as_object().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn test_build_per_source_metadata_array_source_duplicates_fields() {
-        // When the source is a JSON array, one entry per source name is
-        // emitted with the same per-source fields duplicated.
-        let json = build_per_source_metadata(
-            "[\"rezolus\",\"llm-perf\"]",
-            Some(100),
-            Some(200),
-            Some("service"),
-            None,
-        )
-        .unwrap();
-        let psm: serde_json::Value = serde_json::from_str(&json).unwrap();
-        for name in ["rezolus", "llm-perf"] {
-            assert_eq!(
-                psm[name]["first_sample_ns"].as_u64(),
-                Some(100),
-                "missing first_sample_ns for {name}"
-            );
-            assert_eq!(psm[name]["last_sample_ns"].as_u64(), Some(200));
-            assert_eq!(psm[name]["role"].as_str(), Some("service"));
-        }
-        assert_eq!(psm.as_object().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn test_build_per_source_metadata_returns_none_when_empty() {
-        // No per-source fields at all → no per_source_metadata.
-        assert!(build_per_source_metadata("rezolus", None, None, None, None).is_none());
-    }
-
-    #[test]
-    fn test_build_per_source_metadata_array_with_partial_fields() {
-        // Array source with only a subset of per-source fields populated.
-        let json =
-            build_per_source_metadata("[\"a\",\"b\",\"c\"]", Some(50), None, None, None).unwrap();
-        let psm: serde_json::Value = serde_json::from_str(&json).unwrap();
-        for name in ["a", "b", "c"] {
-            assert_eq!(psm[name]["first_sample_ns"].as_u64(), Some(50));
-            assert!(psm[name].get("last_sample_ns").is_none());
-            assert!(psm[name].get("role").is_none());
-        }
-    }
-
-    #[test]
-    fn test_build_per_source_metadata_includes_sampler_status() {
-        let ss = r#"[{"name":"cpu_usage","state":"active"}]"#;
-        let json = build_per_source_metadata("rezolus", None, None, None, Some(ss)).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let arr = &v["rezolus"]["sampler_status"];
-        assert!(arr.is_array());
-        assert_eq!(arr[0]["name"], "cpu_usage");
-        assert_eq!(arr[0]["state"], "active");
     }
 }

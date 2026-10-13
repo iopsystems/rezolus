@@ -1,14 +1,10 @@
 use async_trait::async_trait;
 use backtrace::Backtrace;
-use clap::{value_parser, Command, ValueEnum};
+use clap::{value_parser, Command};
 use linkme::distributed_slice;
-use metriken_storage::convert::{MsgpackToParquet, ParquetOptions};
 use reqwest::{Client, Url};
-use serde::Deserialize;
-use tempfile::tempfile_in;
 use tracing::{debug, error, info, warn};
 
-use std::io::{Seek, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -37,17 +33,6 @@ static STATE: AtomicUsize = AtomicUsize::new(RUNNING);
 static RUNNING: usize = 0;
 static TERMINATING: usize = 2;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum Format {
-    Parquet,
-    Raw,
-    Rez,
-    /// A dendro archive, written through metriken-storage. The default since
-    /// 6.0.
-    Dendro,
-}
-
 fn main() {
     // custom panic hook to terminate whole process after unwinding
     std::panic::set_hook(Box::new(|s| {
@@ -72,8 +57,8 @@ fn main() {
              \x20              Run with no subcommand: `rezolus <config.toml>`.\n    \
              exporter   Re-expose an agent's metrics on a Prometheus-compatible endpoint.\n    \
              hindsight  Keep an on-disk ring buffer for after-the-fact incident snapshots.\n    \
-             record     Scrape an endpoint to a recording on disk — a .rez archive by default,\n\
-             \x20              or parquet (optionally wrapping a command).\n    \
+             record     Record one or more endpoints to a .dendro archive on disk (optionally\n\
+             \x20              wrapping a command).\n    \
              view       Serve a web dashboard for a recording or a live agent.\n    \
              mcp        AI analysis tools (PromQL, anomaly detection, correlation, feature\n\
              \x20              extraction) over a file.\n    \
@@ -85,8 +70,8 @@ fn main() {
              # Run the agent (needs root for eBPF on Linux)\n    \
              sudo rezolus config/agent.toml\n\n    \
              # Record the local agent for 5 minutes, then view it\n    \
-             rezolus record --duration 5m -o out.rez\n    \
-             rezolus view out.rez",
+             rezolus record --duration 5m -o out.dendro\n    \
+             rezolus view out.dendro",
         )
         .subcommand_negates_reqs(true)
         .arg(

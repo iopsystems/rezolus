@@ -802,29 +802,25 @@ mod tests {
     /// a reopen that finds one resets it, and the follow does not end.
     #[test]
     fn a_rez_backs_off_while_idle_and_resets_on_growth() {
-        use crate::hindsight::buffer::HindsightBuffer;
+        // A `.rez` still being written, as a 5.x recorder or hindsight
+        // leaves one; 6.x writes none, so the fixture uses the v3 writer
+        // directly.
+        use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("buffer.rez");
-        let seed = crate::recorder::rez_v3_writer::ManifestSeed {
+        let seed = ManifestSeed {
             labels: [("source".to_string(), "rezolus".to_string())]
                 .into_iter()
                 .collect(),
             metadata: Default::default(),
             clock_anchor_wall_ns: ANCHOR,
         };
-        let mut buffer = HindsightBuffer::create(
-            &path,
-            seed,
-            Duration::MAX,
-            crate::recorder::seal_policy::SealPolicy::default(),
-        )
-        .unwrap();
+        let mut archive = RezArchive::create(&path).unwrap();
+        let mut rec = StreamRecorderV3::new(archive.add_recording(seed).unwrap());
         let mut record = |i: u64| {
-            buffer
-                .ingest(&tick(i), ANCHOR + i * 60 * SECOND, 0)
-                .unwrap();
-            buffer.maintain().unwrap();
-            buffer.sync().unwrap();
+            rec.ingest(&tick(i), ANCHOR + i * 60 * SECOND, 0).unwrap();
+            rec.maybe_seal().unwrap();
+            rec.sync().unwrap();
         };
         record(0);
         let state = view(&path);

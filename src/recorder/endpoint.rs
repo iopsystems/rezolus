@@ -4,6 +4,11 @@ use serde::Deserialize;
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Protocol {
+    /// A Rezolus agent: detected by its msgpack snapshot on
+    /// `/metrics/binary`, recorded from its replication stream. Spelled
+    /// `rezolus` in an endpoint's options; `msgpack`, the 5.x spelling, is
+    /// still accepted.
+    #[serde(alias = "rezolus")]
     Msgpack,
     Prometheus,
 }
@@ -41,8 +46,8 @@ impl EndpointConfig {
 pub enum EndpointStatus {
     Active,
     Pending,
-    /// Answered and cannot be recorded into this run's output (an agent
-    /// without a replication stream in a `.dendro` run). Never retried.
+    /// Answered and cannot be recorded (an agent without a replication
+    /// stream). Never retried.
     Refused,
 }
 
@@ -55,7 +60,6 @@ pub enum EndpointStatus {
 pub struct AgentMetadata {
     pub systeminfo: Option<String>,
     pub descriptions: Option<String>,
-    pub sampler_status: Option<String>,
     /// The agent's own crate version, recorded so a capture can be attributed
     /// to a build after the fact. See `recorder::fetch_agent_version`.
     pub version: Option<String>,
@@ -85,8 +89,8 @@ pub struct EndpointState {
     pub agent: AgentMetadata,
     pub first_success_ns: Option<u64>,
     pub last_success_ns: Option<u64>,
-    /// True for a Rezolus agent whose rows arrive off its replication stream
-    /// (a `.dendro` run) rather than from a scrape each tick.
+    /// True for a Rezolus agent, whose rows arrive off its replication stream
+    /// rather than from a scrape each tick.
     pub streaming: bool,
     /// Stream intervals received so far (streamed endpoints only).
     pub frames: u64,
@@ -176,9 +180,9 @@ fn distinguishing_path(url: &Url) -> Option<String> {
     if path.is_empty() || path == "metrics" {
         return None;
     }
-    // Slashes and anything else awkward become `-`: this ends up as a label
-    // value, a `.rez` recording's directory slug and a `--separate` filename,
-    // so it has to be a plain word in all three.
+    // Slashes and anything else awkward become `-`: this ends up as the
+    // recording's `source` label value, which `--recording source=...`
+    // selectors match, so it has to be a plain word.
     let slug: String = path
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
@@ -233,9 +237,9 @@ mod tests {
         }
     }
 
-    /// The inferred name becomes a label value, a `.rez` recording's directory
-    /// slug and a `--separate` filename, so it has to be a plain word in all
-    /// three — no slashes, no runs of separators, no leading or trailing dash.
+    /// The inferred name becomes the recording's `source` label value, so it
+    /// has to be a plain word — no slashes, no runs of separators, no leading
+    /// or trailing dash.
     #[test]
     fn a_nested_path_becomes_one_plain_word() {
         let url: Url = "http://svc:9090/metrics//v2/tenant_a/".parse().unwrap();

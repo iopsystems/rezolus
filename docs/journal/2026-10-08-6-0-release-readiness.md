@@ -192,11 +192,13 @@ rezolus's callers of it and its own parquet and raw writers. The fixture
 writers behind `test-support` (`rez::rez::recorder_tests_support`,
 `rez_stream`) stay, because the read path is still tested on `.rez`.
 
-`record` and hindsight. The metriken-recorder entry's step 2 removes these and
-states the refusals: `record -o x.rez`, `.parquet`, `.raw`, `--format` other
-than `dendro` and `--separate` are refused with a pointer to a 5.x recorder or
-`rezolus recording upgrade --to dendro`; hindsight refuses an `output` ending
-in `.rez` or `.parquet` at startup.
+`record` and hindsight: **done (this PR).** The metriken-recorder entry's
+step 2 removes these and states the refusals: `record -o x.rez`, `.parquet`,
+`.raw`, any other non-`.dendro` output, `--format` other than `dendro` and
+`--separate` are refused with a pointer to a 5.x recorder (5.27.0 or later) or
+`rezolus recording upgrade --to dendro`; hindsight refuses an `output` not
+ending in `.dendro` at startup. The table below is the inventory as taken; the
+Save as Report and `recording` rows after it are still open.
 
 | Writer | Where | Writes |
 |---|---|---|
@@ -295,16 +297,15 @@ no longer write back. They were proposed here and accepted as a set, with
 Each must ask for `.dendro` (and, where it combines files afterwards, combine
 `.dendro`) before 6.0.0, because 6.x refuses the other outputs.
 
-- `docker/rezolus-capture` and `scripts/rezolus-capture`: record parquet
-  (`docker/rezolus-capture:197-198`, `:246`, `:255`;
-  `scripts/rezolus-capture:258-259`, `:314`, `:323`) and then run `parquet
-  combine` (`docker/rezolus-capture:331`, `scripts/rezolus-capture:402`). One
-  `record` with several `--endpoint` flags writes one `.dendro` instead.
-- `data/test_fixtures/compare-demo.sh`: records `baseline.parquet` and
-  `experiment.parquet` (`:30`, `:37`).
-- CI smoke steps in `.github/workflows/cargo.yml`, release (`:330-351`) and
-  debug (`:361-382`): `-o rezolus.parquet`, `-o rezolus.rez` and the wrap-mode
-  runs to `wrap.parquet`, `false.parquet` and `cap.parquet`.
+- `docker/rezolus-capture` and `scripts/rezolus-capture`: **done (this
+  PR).** They recorded parquet and then ran `parquet combine`; each capture is
+  now one `record` with an `--endpoint` per source writing `capture.dendro`.
+- `data/test_fixtures/compare-demo.sh`: **done (this PR).** Records
+  `baseline.dendro` and `experiment.dendro` and combines them into one
+  `.dendro`.
+- CI smoke steps in `.github/workflows/cargo.yml`: **done (this PR).** The
+  release and debug steps record `.dendro`, and `-o rezolus.rez` is kept as
+  a check that the refusal exits 2.
 - llm-perf's server metrics: an `output` not ending in `.dendro` asks for
   parquet (llm-perf `src/server_metrics.rs:22,46-53`, per the
   metriken-recorder entry).

@@ -42,7 +42,7 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
             let metrics = csv("metrics");
             if samplers.is_none() && metrics.is_none() {
                 eprintln!(
-                    "error: filtering a .rez requires --samplers <a,b,...> (samplers to keep) \
+                    "error: filtering a .dendro or .rez archive requires --samplers <a,b,...> (samplers to keep) \
                      and/or --metrics <a,b,...> (metric columns to keep)"
                 );
                 std::process::exit(1);

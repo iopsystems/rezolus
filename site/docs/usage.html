@@ -79,7 +79,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <!-- Sidebar -->
 <aside class="h-[calc(100vh-5rem)] w-56 sticky top-20 hidden lg:flex flex-col p-6 border-r border-slate-100 dark:border-slate-800 shrink-0">
 <div class="mb-8">
-<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.26.0</div>
+<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.27.0</div>
 </div>
 <nav class="flex-1 space-y-6 overflow-y-auto text-sm">
 <div class="space-y-1">
@@ -157,7 +157,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div class="p-5 font-mono text-base leading-8">
 <div><span class="text-purple-400">[recording]</span></div>
 <div><span class="text-blue-400">interval</span> = <span class="text-green-400">"1s"</span></div>
-<div><span class="text-blue-400">output</span> = <span class="text-green-400">"combined.parquet"</span></div>
+<div><span class="text-blue-400">output</span> = <span class="text-green-400">"combined.dendro"</span></div>
 <div class="mt-3"><span class="text-purple-400">[[endpoints]]</span>  <span class="text-slate-600"># rezolus agent</span></div>
 <div><span class="text-blue-400">url</span> = <span class="text-green-400">"http://127.0.0.1:4241"</span></div>
 <div><span class="text-blue-400">source</span> = <span class="text-green-400">"rezolus"</span></div>
@@ -188,13 +188,13 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <!-- Single recording -->
 <div>
 <h3 class="text-base font-bold mb-3">Capture a recording for performance analysis</h3>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">Run a workload while recording at a high enough resolution to catch what you're looking for. The output parquet is self-contained &mdash; open it later, share it, archive it.</p>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">Run a workload while recording at a high enough resolution to catch what you're looking for. The output <code>.dendro</code> archive is self-contained &mdash; open it later, share it, archive it.</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="p-5 font-mono text-base leading-8">
 <div class="text-slate-500 text-sm"># Record 60s at 100ms intervals against a running agent</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record -i 100ms -d 60s -o run-1.rez</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record -i 100ms -d 60s -o run-1.dendro</code></div>
 <div class="mt-3 text-slate-500 text-sm"># Open it in the viewer</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view run-1.rez</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view run-1.dendro</code></div>
 </div>
 </div>
 </div>

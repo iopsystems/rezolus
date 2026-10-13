@@ -6,8 +6,8 @@ service metrics, then view them in an interactive dashboard.
 The container runs the Rezolus agent automatically for system metrics collection
 (CPU, memory, network, disk, scheduler, syscalls, TCP) via eBPF. It also
 includes a `rezolus-capture` script that records metrics for a given duration,
-optionally combines system metrics with service metrics from one or more
-Prometheus-compatible endpoints, and launches the Rezolus viewer.
+optionally alongside service metrics from one or more Prometheus-compatible
+endpoints, into one `.dendro` archive, and launches the Rezolus viewer.
 
 ## Quick Start
 
@@ -60,8 +60,16 @@ docker run --rm -it --privileged --network=host \
     --source redis
 ```
 
-The combined dashboard at http://localhost:8080 shows system-level and
-Redis metrics side by side.
+The archive holds a recording per endpoint: `source=rezolus` for the system
+metrics and `source=redis` for Redis. The viewer at http://localhost:8080
+opens it as an A/B comparison of the system recording against the Redis
+recording, with further services as extra overlays; no dashboard queries the
+service metrics. Service KPI dashboards (valkey, vllm, sglang and the other
+templates) are not shown, because the template queries select a `source`
+label that `.dendro` series do not carry, and no per-endpoint parquet copies
+are written. For the merged dashboard with service KPIs, use the 5.x
+`rezolus-capture` (the v5.27.0 script or Docker image), which writes a
+merged `capture.parquet`.
 
 ### System + service metrics (e.g., Valkey)
 
@@ -138,10 +146,12 @@ CAPTURE MODE (exactly one required):
 OPTIONS:
   --endpoint <URL>            Service metrics endpoint (Prometheus-compatible).
                               Can be specified multiple times.
-  --source <NAME>             Source name for service metrics (required with
-                              --endpoint, one per endpoint in order)
+  --source <NAME>             Source name for service metrics, the source label
+                              of that endpoint's recording (required with
+                              --endpoint, one per endpoint in order; not
+                              `rezolus`, which names the agent's recording)
   --interval <INTERVAL>       Sampling interval (default: 1s)
-  --output-dir <DIR>          Output directory for parquet files (default: /data)
+  --output-dir <DIR>          Directory capture.dendro is written to (default: /data)
   --viewer-listen <ADDR>      Viewer listen address (default: 0.0.0.0:8080)
   --no-viewer                 Skip launching the viewer after capture
   --rezolus <PATH>            Path to the rezolus binary (default: rezolus)
@@ -163,7 +173,10 @@ Mount `/data` to persist capture output on the host:
 -v $(pwd)/data:/data
 ```
 
-The capture script writes `capture.parquet` to this directory.
+The capture script writes `capture.dendro` to this directory, replacing an
+earlier one once the new capture has finished. It holds a recording per
+endpoint; select one with `--recording source=<NAME>` in `rezolus mcp`, or
+`--baseline source=<NAME>` in `rezolus view`.
 
 ## Privileged Mode
 
