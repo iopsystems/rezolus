@@ -101,15 +101,39 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &CPU_INSTRUCTIONS,
         &CPU_PERF_ACQ,
     )
-    .disabled_programs(disabled);
+    .disabled_programs(disabled)
+    // With attribution off no program is loaded that uses these maps.
+    .pre_load(move |open| {
+        if !cgroup_attribution {
+            let maps = &mut open.maps;
+            for map in [
+                &mut maps.cgroup_info,
+                &mut maps.cgroup_serial_numbers,
+                &mut maps.cgroup_cycles,
+                &mut maps.cgroup_instructions,
+                &mut maps.cycles_prev,
+                &mut maps.instructions_prev,
+            ] {
+                if let Err(e) = map.set_autocreate(false) {
+                    debug!("{NAME}: could not leave a map out of the object: {e}");
+                }
+            }
+        }
+    });
 
     if cgroup_attribution {
         builder = builder
-            .packed_counters("cgroup_cycles", &CGROUP_CPU_CYCLES, &CGROUP_CYCLES_ACQ)
-            .packed_counters(
+            .cgroup_counters(
+                "cgroup_cycles",
+                &CGROUP_CPU_CYCLES,
+                &CGROUP_CYCLES_ACQ,
+                &CGROUP_IDENTITY,
+            )
+            .cgroup_counters(
                 "cgroup_instructions",
                 &CGROUP_CPU_INSTRUCTIONS,
                 &CGROUP_INSTRUCTIONS_ACQ,
+                &CGROUP_IDENTITY,
             )
             .ringbuf_handler("cgroup_info", handle_event);
     }

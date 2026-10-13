@@ -79,7 +79,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_task_switch SEC(".maps");
 
 struct {
@@ -87,7 +87,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_remote_shootdown SEC(".maps");
 
 struct {
@@ -95,7 +95,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_local_shootdown SEC(".maps");
 
 struct {
@@ -103,7 +103,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_local_mm_shootdown SEC(".maps");
 
 struct {
@@ -111,7 +111,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_remote_send_ipi SEC(".maps");
 
 // `btf` is a compile-time constant: true in the tp_btf program, which can read
@@ -143,31 +143,30 @@ static __always_inline int account_tlb_flush(int reason, bool btf) {
 
             if (ret == 0) {
                 // New cgroup detected, zero the counters
-                u64 zero = 0;
-                bpf_map_update_elem(&cgroup_task_switch, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_remote_shootdown, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_local_shootdown, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_local_mm_shootdown, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_remote_send_ipi, &cgroup_id, &zero, BPF_ANY);
+                cgroup_zero(&cgroup_task_switch, cgroup_id);
+                cgroup_zero(&cgroup_remote_shootdown, cgroup_id);
+                cgroup_zero(&cgroup_local_shootdown, cgroup_id);
+                cgroup_zero(&cgroup_local_mm_shootdown, cgroup_id);
+                cgroup_zero(&cgroup_remote_send_ipi, cgroup_id);
             }
 
             // update cgroup counter
 
             switch (reason) {
             case REASON_TASK_SWITCH:
-                array_incr(&cgroup_task_switch, cgroup_id);
+                cgroup_incr(&cgroup_task_switch, cgroup_id);
                 break;
             case REASON_REMOTE_SHOOTDOWN:
-                array_incr(&cgroup_remote_shootdown, cgroup_id);
+                cgroup_incr(&cgroup_remote_shootdown, cgroup_id);
                 break;
             case REASON_LOCAL_SHOOTDOWN:
-                array_incr(&cgroup_local_shootdown, cgroup_id);
+                cgroup_incr(&cgroup_local_shootdown, cgroup_id);
                 break;
             case REASON_LOCAL_MM_SHOOTDOWN:
-                array_incr(&cgroup_local_mm_shootdown, cgroup_id);
+                cgroup_incr(&cgroup_local_mm_shootdown, cgroup_id);
                 break;
             case REASON_REMOTE_SEND_IPI:
-                array_incr(&cgroup_remote_send_ipi, cgroup_id);
+                cgroup_incr(&cgroup_remote_send_ipi, cgroup_id);
                 break;
             }
         }
@@ -208,13 +207,12 @@ int BPF_KPROBE(tlb_finish_mmu) {
 
             if (ret == 0) {
                 // New cgroup detected, zero the counters
-                u64 zero = 0;
-                bpf_map_update_elem(&cgroup_task_switch, &cgroup_id, &zero, BPF_ANY);
+                cgroup_zero(&cgroup_task_switch, cgroup_id);
             }
 
             // On ARM64, count all flushes in the task_switch bucket
             // (we don't have reason breakdown)
-            array_incr(&cgroup_task_switch, cgroup_id);
+            cgroup_incr(&cgroup_task_switch, cgroup_id);
         }
     }
 

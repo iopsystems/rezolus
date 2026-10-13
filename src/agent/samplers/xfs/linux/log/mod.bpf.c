@@ -137,7 +137,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_waits_space SEC(".maps");
 
 struct {
@@ -145,7 +145,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_waits_force SEC(".maps");
 
 struct {
@@ -153,7 +153,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_time_space SEC(".maps");
 
 struct {
@@ -161,7 +161,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_time_force SEC(".maps");
 
 static __always_inline void counter_add(u32 slot, u32 counter, u64 value) {
@@ -221,21 +221,20 @@ static __always_inline void cgroup_account(struct task_struct* task, u32 wait, u
     if (handle_new_cgroup_read(&tg->css, cgroup_id, serial_nr, &cgroup_serial_numbers,
                                &cgroup_info) == 0) {
         // New cgroup detected, zero all counters
-        u64 zero = 0;
-        bpf_map_update_elem(&cgroup_waits_space, &cgroup_id, &zero, BPF_ANY);
-        bpf_map_update_elem(&cgroup_waits_force, &cgroup_id, &zero, BPF_ANY);
-        bpf_map_update_elem(&cgroup_time_space, &cgroup_id, &zero, BPF_ANY);
-        bpf_map_update_elem(&cgroup_time_force, &cgroup_id, &zero, BPF_ANY);
+        cgroup_zero(&cgroup_waits_space, cgroup_id);
+        cgroup_zero(&cgroup_waits_force, cgroup_id);
+        cgroup_zero(&cgroup_time_space, cgroup_id);
+        cgroup_zero(&cgroup_time_force, cgroup_id);
     }
 
     switch (wait) {
     case WAIT_SPACE:
-        array_incr(&cgroup_waits_space, cgroup_id);
-        array_add(&cgroup_time_space, cgroup_id, lat);
+        cgroup_incr(&cgroup_waits_space, cgroup_id);
+        cgroup_add(&cgroup_time_space, cgroup_id, lat);
         break;
     case WAIT_FORCE:
-        array_incr(&cgroup_waits_force, cgroup_id);
-        array_add(&cgroup_time_force, cgroup_id, lat);
+        cgroup_incr(&cgroup_waits_force, cgroup_id);
+        cgroup_add(&cgroup_time_force, cgroup_id, lat);
         break;
     }
 }

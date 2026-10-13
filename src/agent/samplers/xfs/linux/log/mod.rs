@@ -232,29 +232,48 @@ fn init(config: Arc<Config>) -> SamplerResult {
             .as_mut()
             .expect("the program declares read-only data")
             .cgroup_attribution = cgroup_attribution as u8;
+        if !cgroup_attribution {
+            let maps = &mut open.maps;
+            for map in [
+                &mut maps.cgroup_info,
+                &mut maps.cgroup_serial_numbers,
+                &mut maps.cgroup_waits_space,
+                &mut maps.cgroup_waits_force,
+                &mut maps.cgroup_time_space,
+                &mut maps.cgroup_time_force,
+            ] {
+                if let Err(e) = map.set_autocreate(false) {
+                    debug!("{NAME}: could not leave a map out of the object: {e}");
+                }
+            }
+        }
     });
 
     if cgroup_attribution {
         builder = builder
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_waits_space",
                 &CGROUP_XFS_LOG_WAITS_SPACE,
                 &CGROUP_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_waits_force",
                 &CGROUP_XFS_LOG_WAITS_FORCE,
                 &CGROUP_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_time_space",
                 &CGROUP_XFS_LOG_WAIT_TIME_SPACE,
                 &CGROUP_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_time_force",
                 &CGROUP_XFS_LOG_WAIT_TIME_FORCE,
                 &CGROUP_ACQ,
+                &CGROUP_IDENTITY,
             )
             .ringbuf_handler("cgroup_info", handle_cgroup_info);
     }

@@ -611,7 +611,7 @@ fn whole_pages<T>(count: usize) -> usize {
     (count * std::mem::size_of::<T>()).div_ceil(PAGE_SIZE)
 }
 
-use counters::{Counters, CpuCounters, FilesystemCounters, PackedCounters};
+use counters::{CgroupCounters, Counters, CpuCounters, FilesystemCounters, PackedCounters};
 use histogram::{Histogram, HistogramBatch, HISTOGRAM_SLICES};
 pub use sync_primitive::SyncPrimitive;
 
@@ -769,6 +769,237 @@ pub(crate) fn possible_cpus() -> usize {
         }
         clamped
     })
+}
+
+/// Entries in the CPU-to-copy table of per-cgroup counter maps,
+/// `cgroup_shard_of_cpu` in `bpf/cgroup.h`. A CPU id at or above it uses
+/// entry `cpu % CGROUP_SHARD_TABLE`.
+pub(crate) const CGROUP_SHARD_TABLE: usize = 1024;
+
+/// The CPU-to-copy table for per-cgroup counter maps (`cgroup_shard_of_cpu`
+/// in `bpf/cgroup.h`), read once from sysfs. See [`assign_cgroup_shards`].
+pub(crate) fn cgroup_shard_table() -> &'static [u8; CGROUP_SHARD_TABLE] {
+    static TABLE: OnceLock<[u8; CGROUP_SHARD_TABLE]> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let cpus: Vec<(usize, usize)> = (0..possible_cpus())
+            .filter_map(|cpu| l3_group(cpu).map(|group| (cpu, group)))
+            .collect();
+        if cpus.is_empty() {
+            debug!("no L3 cache topology in sysfs; per-cgroup counters use cpu % CGROUP_SHARDS");
+        }
+        assign_cgroup_shards(&cpus)
+    })
+}
+
+/// The lowest CPU id sharing `cpu`'s L3 cache, from sysfs, or `cpu` itself
+/// when the CPU has cache information but no L3. `None` when sysfs has no
+/// cache information for the CPU (offline, or not exposed).
+fn l3_group(cpu: usize) -> Option<usize> {
+    let base = format!("/sys/devices/system/cpu/cpu{cpu}/cache");
+    let mut found = false;
+    for index in 0.. {
+        let dir = format!("{base}/index{index}");
+        let Ok(level) = std::fs::read_to_string(format!("{dir}/level")) else {
+            break;
+        };
+        found = true;
+        if level.trim() != "3" {
+            continue;
+        }
+        let list = std::fs::read_to_string(format!("{dir}/shared_cpu_list")).ok()?;
+        return list
+            .trim()
+            .split([',', '-'])
+            .next()
+            .and_then(|first| first.parse().ok());
+    }
+    found.then_some(cpu)
+}
+
+/// Each listed CPU's entry in the CPU-to-copy table: 1 + its copy. The CPUs
+/// are given as `(cpu, l3 group)`, and no copy is shared across two L3
+/// caches unless there are more L3 caches than copies:
+///
+/// - With at least `CGROUP_SHARDS` L3 caches, each copy takes whole caches,
+///   in order of group.
+/// - With fewer, the copies are divided among the caches in proportion to
+///   their CPUs, at least one each and at most one per CPU, and each cache's
+///   CPUs are divided among its copies in id order.
+///
+/// An unlisted CPU's entry is 0, which the BPF side reads as copy
+/// `cpu % CGROUP_SHARDS`.
+pub(crate) fn assign_cgroup_shards(cpus: &[(usize, usize)]) -> [u8; CGROUP_SHARD_TABLE] {
+    let shards = crate::agent::CGROUP_SHARDS;
+    let mut table = [0u8; CGROUP_SHARD_TABLE];
+
+    let mut by_group: std::collections::BTreeMap<usize, Vec<usize>> = Default::default();
+    for &(cpu, group) in cpus {
+        by_group.entry(group).or_default().push(cpu);
+    }
+    let groups: Vec<Vec<usize>> = by_group
+        .into_values()
+        .map(|mut members| {
+            members.sort_unstable();
+            members
+        })
+        .collect();
+    if groups.is_empty() {
+        return table;
+    }
+
+    let mut set = |cpu: usize, shard: usize| table[cpu % CGROUP_SHARD_TABLE] = shard as u8 + 1;
+
+    if groups.len() >= shards {
+        for (j, members) in groups.iter().enumerate() {
+            for &cpu in members {
+                set(cpu, j * shards / groups.len());
+            }
+        }
+        return table;
+    }
+
+    // Copies per group: the floor of its share, clamped to [1, its CPUs],
+    // then moved one at a time to the group with the most CPUs per copy (or
+    // from the group with the fewest) until they add up to `shards` or no
+    // group can take another.
+    let total: usize = groups.iter().map(Vec::len).sum();
+    let mut counts: Vec<usize> = groups
+        .iter()
+        .map(|members| (members.len() * shards / total).clamp(1, members.len()))
+        .collect();
+    loop {
+        let sum: usize = counts.iter().sum();
+        let pick = if sum < shards {
+            (0..groups.len())
+                .filter(|&i| counts[i] < groups[i].len())
+                .max_by(|&a, &b| (groups[a].len() * counts[b]).cmp(&(groups[b].len() * counts[a])))
+                .map(|i| (i, true))
+        } else if sum > shards {
+            (0..groups.len())
+                .filter(|&i| counts[i] > 1)
+                .min_by(|&a, &b| (groups[a].len() * counts[b]).cmp(&(groups[b].len() * counts[a])))
+                .map(|i| (i, false))
+        } else {
+            None
+        };
+        match pick {
+            Some((i, true)) => counts[i] += 1,
+            Some((i, false)) => counts[i] -= 1,
+            None => break,
+        }
+    }
+
+    let mut base = 0;
+    for (members, &count) in groups.iter().zip(&counts) {
+        for (i, &cpu) in members.iter().enumerate() {
+            set(cpu, base + i * count / members.len());
+        }
+        base += count;
+    }
+    table
+}
+
+#[cfg(test)]
+mod cgroup_shard_table_tests {
+    use super::*;
+    use crate::agent::CGROUP_SHARDS;
+
+    fn copies(table: &[u8; CGROUP_SHARD_TABLE], cpus: impl Iterator<Item = usize>) -> Vec<u8> {
+        cpus.map(|cpu| table[cpu]).collect()
+    }
+
+    /// A 32-core host with SMT, siblings numbered 32-63, and eight L3 caches
+    /// of four cores: each copy is written by the four threads of one L3
+    /// cache's first or second pair of cores, never by two L3 caches.
+    #[test]
+    fn copies_stay_within_an_l3_cache() {
+        let cpus: Vec<(usize, usize)> = (0..64).map(|cpu| (cpu, (cpu % 32) / 4 * 4)).collect();
+        let table = assign_cgroup_shards(&cpus);
+        for shard in 1..=CGROUP_SHARDS as u8 {
+            let writers: Vec<usize> = (0..64).filter(|&cpu| table[cpu] == shard).collect();
+            assert_eq!(writers.len(), 4, "copy {shard}: {writers:?}");
+            let groups: std::collections::HashSet<usize> =
+                writers.iter().map(|cpu| (cpu % 32) / 4).collect();
+            assert_eq!(groups.len(), 1, "copy {shard}: {writers:?}");
+        }
+    }
+
+    /// The hv01 guest's shape, seven L3 caches of eight consecutive CPUs:
+    /// all 16 copies are used and none is shared across two caches.
+    #[test]
+    fn copies_do_not_straddle_l3_caches() {
+        let cpus: Vec<(usize, usize)> = (0..56).map(|cpu| (cpu, cpu / 8 * 8)).collect();
+        let table = assign_cgroup_shards(&cpus);
+        for shard in 1..=CGROUP_SHARDS as u8 {
+            let writers: Vec<usize> = (0..56).filter(|&cpu| table[cpu] == shard).collect();
+            assert!(
+                (2..=4).contains(&writers.len()),
+                "copy {shard}: {writers:?}"
+            );
+            assert!(
+                writers.iter().all(|cpu| cpu / 8 == writers[0] / 8),
+                "copy {shard}: {writers:?}"
+            );
+        }
+    }
+
+    /// More L3 caches than copies: each copy takes whole caches.
+    #[test]
+    fn many_l3_caches_share_copies_whole() {
+        let cpus: Vec<(usize, usize)> = (0..192).map(|cpu| (cpu, cpu / 8)).collect();
+        let table = assign_cgroup_shards(&cpus);
+        for group in 0..24 {
+            let copies: std::collections::HashSet<u8> =
+                (group * 8..group * 8 + 8).map(|cpu| table[cpu]).collect();
+            assert_eq!(copies.len(), 1, "cache {group}");
+        }
+        let used: std::collections::HashSet<u8> = table[..192].iter().copied().collect();
+        assert_eq!(used.len(), CGROUP_SHARDS);
+    }
+
+    /// With no more CPUs than copies, every CPU has a copy of its own.
+    #[test]
+    fn small_hosts_get_a_copy_per_cpu() {
+        let cpus: Vec<(usize, usize)> = (0..8).map(|cpu| (cpu, 0)).collect();
+        let table = assign_cgroup_shards(&cpus);
+        let mut seen = copies(&table, 0..8);
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), 8);
+        assert!(!seen.contains(&0));
+    }
+
+    /// Every listed CPU gets a copy in 1..=CGROUP_SHARDS, unlisted ones 0, and
+    /// a large host uses every copy.
+    #[test]
+    fn entries_are_in_range() {
+        let cpus: Vec<(usize, usize)> = (0..192)
+            .filter(|c| c % 7 != 3)
+            .map(|c| (c, c / 16))
+            .collect();
+        let table = assign_cgroup_shards(&cpus);
+        for (cpu, &entry) in table.iter().enumerate().take(192) {
+            if cpu % 7 == 3 {
+                assert_eq!(entry, 0);
+            } else {
+                assert!((1..=CGROUP_SHARDS as u8).contains(&entry));
+            }
+        }
+        let mut used = copies(&table, (0..192).filter(|c| c % 7 != 3));
+        used.sort();
+        used.dedup();
+        assert_eq!(used.len(), CGROUP_SHARDS);
+    }
+
+    /// `cgroup.h` declares the table with the same length.
+    #[test]
+    fn bpf_header_has_the_same_table() {
+        let header = include_str!("cgroup.h");
+        assert!(header.contains(&format!(
+            "#define CGROUP_SHARD_TABLE {CGROUP_SHARD_TABLE}\n"
+        )));
+        assert!(header.contains("const volatile u8 cgroup_shard_of_cpu[CGROUP_SHARD_TABLE] = {};"));
+    }
 }
 
 /// The multiplier in `pid_slot`, and in `pid_slot()` in

@@ -73,9 +73,9 @@ Structural differences from a single parquet file:
   must not treat `:window_*` columns as metrics.
 - **Reader-stamped (packed cgroup/task) windows are exposition-derived, not
   a staleness claim.** For mmap-direct cgroup/task counters
-  (`cgroup_cpu_usage`, `task_cpu_usage`, and similar `PackedCounters`-backed
-  metrics), the window brackets the snapshot builder's own read of the
-  value out of the BPF map, not any property of when the underlying BPF
+  (`task_cpu_usage`, the `cpu_bandwidth` cgroup maps, and similar
+  `PackedCounters`-backed metrics), the window brackets the snapshot
+  builder's own read of the value out of the BPF map, not any property of when the underlying BPF
   counter last changed — an artifact of how the value is exposed. It is a
   deliberate upper bound on the read span, honest in the same "never
   under-states uncertainty" direction as every other acquisition window,
@@ -83,7 +83,9 @@ Structural differences from a single parquet file:
   a group's members, not at eventual publish time) reflects the group's
   own read span rather than whole-walk time — not a claim that the
   counter is only that fresh. Spans vary by group: sparse task metrics on
-  the v2 format include a capacity walk and read millisecond-scale.
+  the v2 format include a capacity walk and read millisecond-scale. The
+  other per-cgroup counters (`CgroupCounters`) are summed in the sampler's
+  refresh, and their window brackets that sum.
 - **Raw timestamps survive combining.** `parquet combine` on `.rez` inputs
   assembles recordings **verbatim** (rows untouched, `dir`s deduped) — unlike
   `.parquet` combine, nothing is quantized, so windows and sampling-jitter

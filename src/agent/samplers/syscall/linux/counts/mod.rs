@@ -114,94 +114,139 @@ fn init(config: Arc<Config>) -> SamplerResult {
             .as_mut()
             .expect("the program declares read-only data")
             .cgroup_attribution = cgroup_attribution as u8;
+        if !cgroup_attribution {
+            let maps = &mut open.maps;
+            for map in [
+                &mut maps.cgroup_info,
+                &mut maps.cgroup_serial_numbers,
+                &mut maps.cgroup_syscall_other,
+                &mut maps.cgroup_syscall_read,
+                &mut maps.cgroup_syscall_write,
+                &mut maps.cgroup_syscall_poll,
+                &mut maps.cgroup_syscall_lock,
+                &mut maps.cgroup_syscall_time,
+                &mut maps.cgroup_syscall_sleep,
+                &mut maps.cgroup_syscall_socket,
+                &mut maps.cgroup_syscall_yield,
+                &mut maps.cgroup_syscall_filesystem,
+                &mut maps.cgroup_syscall_memory,
+                &mut maps.cgroup_syscall_process,
+                &mut maps.cgroup_syscall_query,
+                &mut maps.cgroup_syscall_ipc,
+                &mut maps.cgroup_syscall_timer,
+                &mut maps.cgroup_syscall_event,
+                &mut maps.cgroup_syscall_sync,
+            ] {
+                if let Err(e) = map.set_autocreate(false) {
+                    debug!("{NAME}: could not leave a map out of the object: {e}");
+                }
+            }
+        }
     });
 
     if cgroup_attribution {
         builder = builder
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_syscall_other",
                 &CGROUP_SYSCALL_OTHER,
                 &CGROUP_COUNTERS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_syscall_read",
                 &CGROUP_SYSCALL_READ,
                 &CGROUP_COUNTERS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_syscall_write",
                 &CGROUP_SYSCALL_WRITE,
                 &CGROUP_COUNTERS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_syscall_poll",
                 &CGROUP_SYSCALL_POLL,
                 &CGROUP_COUNTERS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_syscall_lock",
                 &CGROUP_SYSCALL_LOCK,
                 &CGROUP_COUNTERS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_syscall_time",
                 &CGROUP_SYSCALL_TIME,
                 &CGROUP_COUNTERS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_syscall_sleep",
                 &CGROUP_SYSCALL_SLEEP,
                 &CGROUP_COUNTERS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_syscall_socket",
                 &CGROUP_SYSCALL_SOCKET,
                 &CGROUP_COUNTERS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_syscall_yield",
                 &CGROUP_SYSCALL_YIELD,
                 &CGROUP_COUNTERS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_syscall_filesystem",
                 &CGROUP_SYSCALL_FILESYSTEM,
                 &CGROUP_COUNTERS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_syscall_memory",
                 &CGROUP_SYSCALL_MEMORY,
                 &CGROUP_COUNTERS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_syscall_process",
                 &CGROUP_SYSCALL_PROCESS,
                 &CGROUP_COUNTERS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_syscall_query",
                 &CGROUP_SYSCALL_QUERY,
                 &CGROUP_COUNTERS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_syscall_ipc",
                 &CGROUP_SYSCALL_IPC,
                 &CGROUP_COUNTERS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_syscall_timer",
                 &CGROUP_SYSCALL_TIMER,
                 &CGROUP_COUNTERS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_syscall_event",
                 &CGROUP_SYSCALL_EVENT,
                 &CGROUP_COUNTERS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_syscall_sync",
                 &CGROUP_SYSCALL_SYNC,
                 &CGROUP_COUNTERS_ACQ,
+                &CGROUP_IDENTITY,
             )
             .ringbuf_handler("cgroup_info", handle_cgroup_info);
     }

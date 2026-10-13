@@ -21,15 +21,15 @@ pub static COUNTERS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static COUNTERS_ACQ_REG: &'static AcquisitionGroup = &COUNTERS_ACQ;
 
-// Reader-stamped (mmap-direct `PackedCounters`) group for the per-cgroup
+// Per-cgroup (`CgroupCounters`) group for the per-cgroup
 // syscall-class breakdown — see `docs/principles.md` principle 18 and
-// `crate::agent::timing::AcquisitionGroup::set_reader_stamped`. All 17
+// `crate::agent::timing::AcquisitionGroup::new_slotted`. All 17
 // `CGROUP_SYSCALL_*` counters below share this ONE group: they are all the
 // `cgroup_syscall` metric family (distinguished by the `op` label, backed
 // by 17 separate BPF maps) — the exact like-entities shape principle 18
 // cites `syscall_latency`'s 16 op-class histograms for (see that sampler's
 // stats.rs), applied here to counters instead of histograms.
-pub static CGROUP_COUNTERS_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+pub static CGROUP_COUNTERS_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
     crate::agent::samplers::bpf_sampler_name("syscall_counts"),
     "syscall_counts_cgroup",
 );

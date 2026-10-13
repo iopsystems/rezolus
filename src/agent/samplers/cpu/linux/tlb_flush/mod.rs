@@ -126,34 +126,55 @@ fn init(config: Arc<Config>) -> SamplerResult {
             .as_mut()
             .expect("the program declares read-only data")
             .cgroup_attribution = cgroup_attribution as u8;
+        if !cgroup_attribution {
+            let maps = &mut open.maps;
+            for map in [
+                &mut maps.cgroup_info,
+                &mut maps.cgroup_serial_numbers,
+                &mut maps.cgroup_task_switch,
+                &mut maps.cgroup_remote_shootdown,
+                &mut maps.cgroup_local_shootdown,
+                &mut maps.cgroup_local_mm_shootdown,
+                &mut maps.cgroup_remote_send_ipi,
+            ] {
+                if let Err(e) = map.set_autocreate(false) {
+                    debug!("{NAME}: could not leave a map out of the object: {e}");
+                }
+            }
+        }
     });
 
     if cgroup_attribution {
         builder = builder
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_task_switch",
                 &CGROUP_TLB_FLUSH_TASK_SWITCH,
                 &CGROUP_EVENTS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_remote_shootdown",
                 &CGROUP_TLB_FLUSH_REMOTE_SHOOTDOWN,
                 &CGROUP_EVENTS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_local_shootdown",
                 &CGROUP_TLB_FLUSH_LOCAL_SHOOTDOWN,
                 &CGROUP_EVENTS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_local_mm_shootdown",
                 &CGROUP_TLB_FLUSH_LOCAL_MM_SHOOTDOWN,
                 &CGROUP_EVENTS_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_remote_send_ipi",
                 &CGROUP_TLB_FLUSH_REMOTE_SEND_IPI,
                 &CGROUP_EVENTS_ACQ,
+                &CGROUP_IDENTITY,
             )
             .ringbuf_handler("cgroup_info", handle_cgroup_info);
     }

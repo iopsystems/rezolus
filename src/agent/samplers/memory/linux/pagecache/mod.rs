@@ -241,20 +241,41 @@ fn init(config: Arc<Config>) -> SamplerResult {
             .as_mut()
             .expect("the program declares read-only data")
             .cgroup_attribution = cgroup_attribution as u8;
+        if !cgroup_attribution {
+            let maps = &mut open.maps;
+            for map in [
+                &mut maps.cgroup_info,
+                &mut maps.cgroup_serial_numbers,
+                &mut maps.cgroup_reads,
+                &mut maps.cgroup_read_bytes,
+                &mut maps.cgroup_pages_added,
+            ] {
+                if let Err(e) = map.set_autocreate(false) {
+                    debug!("{NAME}: could not leave a map out of the object: {e}");
+                }
+            }
+        }
     });
 
     if cgroup_attribution {
         builder = builder
-            .packed_counters("cgroup_reads", &CGROUP_PAGECACHE_READS, &CGROUP_ACQ)
-            .packed_counters(
+            .cgroup_counters(
+                "cgroup_reads",
+                &CGROUP_PAGECACHE_READS,
+                &CGROUP_ACQ,
+                &CGROUP_IDENTITY,
+            )
+            .cgroup_counters(
                 "cgroup_read_bytes",
                 &CGROUP_PAGECACHE_READ_BYTES,
                 &CGROUP_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_pages_added",
                 &CGROUP_PAGECACHE_PAGES_ADDED,
                 &CGROUP_ACQ,
+                &CGROUP_IDENTITY,
             )
             .ringbuf_handler("cgroup_info", handle_cgroup_info);
     }

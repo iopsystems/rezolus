@@ -18,7 +18,7 @@ static LATENCY_HISTOGRAM_MAX: u8 = 64;
 // Three groups (principle 18): the two latency histograms are one family
 // distinguished by `wait` and share a group; every per-filesystem counter
 // lives in one `counters` map read in one sweep; the per-cgroup counters are
-// mmap-attached and reader-stamped, as `ext4_ops`'s are.
+// summed over their copies by `CgroupCounters`, as `ext4_ops`'s are.
 pub static LATENCIES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("xfs_log"),
     "xfs_log_latencies",
@@ -35,7 +35,7 @@ pub static COUNTERS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static COUNTERS_ACQ_REG: &'static AcquisitionGroup = &COUNTERS_ACQ;
 
-pub static CGROUP_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+pub static CGROUP_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
     crate::agent::samplers::bpf_sampler_name("xfs_log"),
     "xfs_log_cgroup",
 );

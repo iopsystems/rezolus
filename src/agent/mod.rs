@@ -82,6 +82,12 @@ pub const MAX_PACKAGES: usize = 8;
 // This is the maximum number of cgroups we track with BPF counters.
 pub const MAX_CGROUPS: usize = 4096;
 
+/// The number of copies of each per-cgroup counter map; each CPU writes the
+/// copy `cgroup_shard_table()` assigns it. Must match `CGROUP_SHARDS` in
+/// `bpf/cgroup.h`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub const CGROUP_SHARDS: usize = 16;
+
 // This is the maximum PID we track with BPF counters.
 pub const MAX_PID: usize = 4194304;
 

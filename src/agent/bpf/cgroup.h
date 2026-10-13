@@ -10,6 +10,66 @@
 #define MAX_CGROUPS 4096
 #define RINGBUF_CAPACITY 262144
 
+// A per-cgroup counter map holds CGROUP_SHARDS copies of the MAX_CGROUPS
+// counters, one after another, and each CPU adds to one copy. Each copy is
+// 32 KiB, so two copies never share a cache line. Userspace sums the copies.
+// The map is declared with MAX_CGROUPS * CGROUP_SHARDS entries. Must match
+// crate::agent::CGROUP_SHARDS.
+#define CGROUP_SHARDS 16
+
+// Entry `cpu` is 1 + the copy that CPU adds to. The agent writes it before
+// load (`cgroup_shard_table()` in src/agent/bpf/mod.rs), giving CPUs that
+// share an L3 cache the same copy where it can: a line moving between them
+// is cheaper than one moving between L3 caches. An entry left 0 falls back
+// to copy cpu % CGROUP_SHARDS. Must match crate::agent::bpf::CGROUP_SHARD_TABLE.
+#define CGROUP_SHARD_TABLE 1024
+const volatile u8 cgroup_shard_of_cpu[CGROUP_SHARD_TABLE] = {};
+
+// The index of `cgroup_id`'s counter in this CPU's copy.
+static __always_inline u32 cgroup_index(u32 cgroup_id) {
+    u32 cpu = bpf_get_smp_processor_id();
+    u32 shard = cgroup_shard_of_cpu[cpu & (CGROUP_SHARD_TABLE - 1)];
+
+    return ((shard ? shard - 1 : cpu) % CGROUP_SHARDS) * MAX_CGROUPS + cgroup_id;
+}
+
+// An id at or above MAX_CGROUPS would land in another copy, so it is dropped.
+static __always_inline void cgroup_add(void* map, u32 cgroup_id, u64 value) {
+    if (cgroup_id >= MAX_CGROUPS) {
+        return;
+    }
+
+    u32 idx = cgroup_index(cgroup_id);
+    u64* elem = bpf_map_lookup_elem(map, &idx);
+
+    if (elem) {
+        __atomic_fetch_add(elem, value, __ATOMIC_RELAXED);
+    }
+}
+
+static __always_inline void cgroup_incr(void* map, u32 cgroup_id) {
+    cgroup_add(map, cgroup_id, 1);
+}
+
+// Zero `cgroup_id`'s counter in every copy, for a new cgroup that reuses the
+// id. A CPU adding to the old cgroup at the same moment can leave its add in
+// place, as with a single copy. Adds from other CPUs between the serial
+// update and the last copy's zero are lost, and a refresh in that window can
+// read the old cgroup's counts under the new cgroup's labels.
+static __always_inline void cgroup_zero(void* map, u32 cgroup_id) {
+    u64 zero = 0;
+
+    if (cgroup_id >= MAX_CGROUPS) {
+        return;
+    }
+
+#pragma unroll
+    for (u32 shard = 0; shard < CGROUP_SHARDS; shard++) {
+        u32 idx = shard * MAX_CGROUPS + cgroup_id;
+        bpf_map_update_elem(map, &idx, &zero, BPF_ANY);
+    }
+}
+
 struct cgroup_info {
     int id;
     int level;

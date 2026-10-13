@@ -249,25 +249,76 @@ fn init(config: Arc<Config>) -> SamplerResult {
             .as_mut()
             .expect("the program declares read-only data")
             .cgroup_attribution = cgroup_attribution as u8;
+        if !cgroup_attribution {
+            let maps = &mut open.maps;
+            for map in [
+                &mut maps.cgroup_info,
+                &mut maps.cgroup_serial_numbers,
+                &mut maps.cgroup_ops_fsync,
+                &mut maps.cgroup_ops_unlink,
+                &mut maps.cgroup_ops_write,
+                &mut maps.cgroup_ops_rename,
+                &mut maps.cgroup_time_fsync,
+                &mut maps.cgroup_time_unlink,
+                &mut maps.cgroup_time_write,
+                &mut maps.cgroup_time_rename,
+            ] {
+                if let Err(e) = map.set_autocreate(false) {
+                    debug!("{NAME}: could not leave a map out of the object: {e}");
+                }
+            }
+        }
     });
 
     if cgroup_attribution {
         builder = builder
-            .packed_counters("cgroup_ops_fsync", &CGROUP_EXT4_OPS_FSYNC, &CGROUP_ACQ)
-            .packed_counters("cgroup_ops_unlink", &CGROUP_EXT4_OPS_UNLINK, &CGROUP_ACQ)
-            .packed_counters("cgroup_ops_write", &CGROUP_EXT4_OPS_WRITE, &CGROUP_ACQ)
-            .packed_counters("cgroup_ops_rename", &CGROUP_EXT4_OPS_RENAME, &CGROUP_ACQ)
-            .packed_counters("cgroup_time_fsync", &CGROUP_EXT4_OP_TIME_FSYNC, &CGROUP_ACQ)
-            .packed_counters(
+            .cgroup_counters(
+                "cgroup_ops_fsync",
+                &CGROUP_EXT4_OPS_FSYNC,
+                &CGROUP_ACQ,
+                &CGROUP_IDENTITY,
+            )
+            .cgroup_counters(
+                "cgroup_ops_unlink",
+                &CGROUP_EXT4_OPS_UNLINK,
+                &CGROUP_ACQ,
+                &CGROUP_IDENTITY,
+            )
+            .cgroup_counters(
+                "cgroup_ops_write",
+                &CGROUP_EXT4_OPS_WRITE,
+                &CGROUP_ACQ,
+                &CGROUP_IDENTITY,
+            )
+            .cgroup_counters(
+                "cgroup_ops_rename",
+                &CGROUP_EXT4_OPS_RENAME,
+                &CGROUP_ACQ,
+                &CGROUP_IDENTITY,
+            )
+            .cgroup_counters(
+                "cgroup_time_fsync",
+                &CGROUP_EXT4_OP_TIME_FSYNC,
+                &CGROUP_ACQ,
+                &CGROUP_IDENTITY,
+            )
+            .cgroup_counters(
                 "cgroup_time_unlink",
                 &CGROUP_EXT4_OP_TIME_UNLINK,
                 &CGROUP_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters("cgroup_time_write", &CGROUP_EXT4_OP_TIME_WRITE, &CGROUP_ACQ)
-            .packed_counters(
+            .cgroup_counters(
+                "cgroup_time_write",
+                &CGROUP_EXT4_OP_TIME_WRITE,
+                &CGROUP_ACQ,
+                &CGROUP_IDENTITY,
+            )
+            .cgroup_counters(
                 "cgroup_time_rename",
                 &CGROUP_EXT4_OP_TIME_RENAME,
                 &CGROUP_ACQ,
+                &CGROUP_IDENTITY,
             )
             .ringbuf_handler("cgroup_info", handle_cgroup_info);
     }

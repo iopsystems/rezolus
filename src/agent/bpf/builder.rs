@@ -3,6 +3,7 @@ use crate::agent::*;
 use crate::{error, warn};
 use tracing::trace;
 
+use crate::agent::identity::SlotIdentity;
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{MapCore, MapFlags, OpenObject, PrintLevel, RingBuffer, RingBufferBuilder};
 use metriken::{CounterGroup, LazyCounter, RwLockHistogram};
@@ -54,6 +55,59 @@ fn batch_by_group<T>(
         }
     }
     batches
+}
+
+/// Copy [`cgroup_shard_table`] into `cgroup_shard_of_cpu` in the object's
+/// `.rodata`, found through the object's BTF. A program without the variable
+/// is left alone.
+fn write_cgroup_shard_table(object: &mut OpenObject) -> Result<(), String> {
+    use libbpf_rs::btf::types::{DataSec, Var};
+    use libbpf_rs::{AsRawLibbpf, Btf};
+
+    let place = {
+        // SAFETY: the pointer is the open object's own, and the BTF borrowed
+        // from it is dropped at the end of this block, before the maps are
+        // borrowed mutably.
+        let raw = unsafe { object.as_libbpf_object().as_ref() };
+        let Some(btf) = Btf::from_bpf_object(raw).map_err(|e| e.to_string())? else {
+            return Ok(());
+        };
+        let Some(section) = btf.type_by_name::<DataSec>(".rodata") else {
+            return Ok(());
+        };
+        let found = section
+            .iter()
+            .find(|info| {
+                btf.type_by_id::<Var>(info.ty)
+                    .and_then(|var| var.name())
+                    .is_some_and(|name| name == "cgroup_shard_of_cpu")
+            })
+            .map(|info| (info.offset as usize, info.size));
+        found
+    };
+    let Some((offset, size)) = place else {
+        return Ok(());
+    };
+    if size != CGROUP_SHARD_TABLE {
+        return Err(format!(
+            "cgroup_shard_of_cpu is {size} bytes, expected {CGROUP_SHARD_TABLE}"
+        ));
+    }
+    let table = cgroup_shard_table();
+    for mut map in object.maps_mut() {
+        if !map.name().to_string_lossy().ends_with(".rodata") {
+            continue;
+        }
+        let Some(data) = map.initial_value_mut() else {
+            return Err("the .rodata map has no initial value".to_string());
+        };
+        let Some(dest) = data.get_mut(offset..offset + size) else {
+            return Err("cgroup_shard_of_cpu lies outside .rodata".to_string());
+        };
+        dest.copy_from_slice(table);
+        return Ok(());
+    }
+    Err("no .rodata map for cgroup_shard_of_cpu".to_string())
 }
 
 #[cfg(test)]
@@ -459,6 +513,15 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
         &'static CounterGroup,
         &'static AcquisitionGroup,
     )>,
+    /// Per-cgroup counter maps with `CGROUP_SHARDS` copies: the map, its
+    /// metric, the group and the identity that labels the slots. See
+    /// `cgroup_counters`.
+    cgroup_counters: Vec<(
+        &'static str,
+        &'static CounterGroup,
+        &'static AcquisitionGroup,
+        &'static SlotIdentity,
+    )>,
     /// Per-filesystem counter maps: the counters map, the `dev_t → slot`
     /// lookup map, the per-slot metrics, their group and the identity that
     /// labels the slots. See `filesystem_counters`.
@@ -520,6 +583,7 @@ where
             perf_events: Vec::new(),
             perf_group: None,
             packed_counters: Vec::new(),
+            cgroup_counters: Vec::new(),
             filesystem_counters: Vec::new(),
             ringbuf_handler: Vec::new(),
             btf_path: config.general().btf_path().map(|s| s.to_string()),
@@ -685,6 +749,42 @@ where
                         return Err(e);
                     }
                 }
+            }
+
+            // Per-cgroup counter maps are declared with CGROUP_SHARDS copies
+            // of MAX_CGROUPS counters (`cgroup_index()` in cgroup.h). A map
+            // registered with `.cgroup_counters()` but declared with one copy
+            // would be read past its end, so the size is checked here.
+            for map in open_skel.open_object_mut().maps_mut() {
+                let map_name = map.name().to_string_lossy().to_string();
+                if self
+                    .cgroup_counters
+                    .iter()
+                    .any(|(name, _, _, _)| *name == map_name)
+                    && map.max_entries() as usize != CGROUP_SHARDS * MAX_CGROUPS
+                {
+                    let msg = format!(
+                        "per-cgroup map '{map_name}' has {} entries, expected {CGROUP_SHARDS} \
+                         copies of {MAX_CGROUPS}",
+                        map.max_entries(),
+                    );
+                    error!("{}: {msg}", self.name);
+                    let e = libbpf_rs::Error::from(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        msg.clone(),
+                    ));
+                    crate::agent::sampler_status::set_failed(self.name, msg);
+                    return Err(e);
+                }
+            }
+
+            // A program that includes cgroup.h declares the CPU-to-copy table
+            // its per-cgroup writers index through; fill it before load.
+            if let Err(msg) = write_cgroup_shard_table(open_skel.open_object_mut()) {
+                warn!(
+                    "{}: {msg}; per-cgroup counters use cpu % CGROUP_SHARDS",
+                    self.name
+                );
             }
 
             for f in self.pre_load {
@@ -1013,6 +1113,32 @@ where
                 .map(|(name, counters, group)| PackedCounters::new(skel.map(name), counters, group))
                 .collect();
 
+            // One `CgroupCounters` per group, as for histograms: the maps of
+            // a like-entities family (e.g. `cgroup_syscall`'s 17 op-class
+            // maps) are read in one sweep under one window.
+            let mut cgroup_counters: Vec<CgroupCounters> = batch_by_group(
+                self.cgroup_counters
+                    .into_iter()
+                    .map(|(name, counters, group, identity)| {
+                        ((skel.map(name), counters, identity), group)
+                    })
+                    .collect(),
+            )
+            .into_iter()
+            .map(|(group, members)| {
+                let identity = members[0].2;
+                assert!(
+                    members.iter().all(|(_, _, i)| std::ptr::eq(*i, identity)),
+                    "every .cgroup_counters() call naming one group must name one identity"
+                );
+                CgroupCounters::new(
+                    group,
+                    identity,
+                    members.into_iter().map(|(map, c, _)| (map, c)).collect(),
+                )
+            })
+            .collect();
+
             for (name, values) in self.maps.into_iter() {
                 let fd = skel.map(name).as_fd().as_raw_fd();
                 let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
@@ -1064,6 +1190,10 @@ where
                 }
 
                 for v in &mut packed_counters {
+                    v.refresh();
+                }
+
+                for v in &mut cgroup_counters {
                     v.refresh();
                 }
 
@@ -1280,8 +1410,7 @@ where
     /// instead, and `create`/`create_v3` bracket its window at exposition
     /// time. As with `histogram`, `group` is NOT required to be unique per
     /// call — several `.packed_counters()` calls naming the same group (the
-    /// like-entities case, e.g. `cgroup_syscall`'s 16 op-class maps) share
-    /// one window, not one each.
+    /// like-entities case) share one window, not one each.
     pub fn packed_counters(
         mut self,
         name: &'static str,
@@ -1292,9 +1421,27 @@ where
         self
     }
 
+    /// Register a per-cgroup counter map with `CGROUP_SHARDS` copies of
+    /// `MAX_CGROUPS` counters (`cgroup_add()`/`cgroup_incr()` in
+    /// `bpf/cgroup.h`). `counters` has one entry per cgroup slot and
+    /// `identity` is the sampler's cgroup identity, whose live slots are the
+    /// ones summed. Calls naming the same `group` are read in one sweep and
+    /// must name the same `identity`. The group must be declared with
+    /// `AcquisitionGroup::new_slotted`. See `CgroupCounters`.
+    pub fn cgroup_counters(
+        mut self,
+        name: &'static str,
+        counters: &'static CounterGroup,
+        group: &'static AcquisitionGroup,
+        identity: &'static SlotIdentity,
+    ) -> Self {
+        self.cgroup_counters.push((name, counters, group, identity));
+        self
+    }
+
     /// Register a set of sparse packed counters. Alias for `packed_counters`
     /// since metriken's `CounterGroup` uses sparse metadata by default —
-    /// both dense (cgroup) and sparse (task) packed groups resolve their
+    /// both dense (`cpu_bandwidth`'s cgroup maps) and sparse (task) packed groups resolve their
     /// V3 declared-group membership from registration (metadata presence),
     /// not from a walked bound; see `create_v3`'s reader-stamped handling.
     pub fn sparse_packed_counters(
