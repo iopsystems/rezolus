@@ -575,6 +575,11 @@
 
 ### Added
 
+- `drivehealth` reads the EC2 NVMe detailed performance statistics (log page
+  0xD0) from EBS and instance store volumes on Nitro instances:
+  `drive_performance_exceeded_time` (time demand exceeded the volume's or
+  instance's IOPS or throughput limit) and `drive_queue_length`. (#1455)
+
 - **Block IO and NVMe drive health on macOS.** `blockio` publishes
   `blockio_operations` and `blockio_bytes` from the storage drivers' IOKit
   statistics, plus the macOS-only `blockio_retries`, `blockio_service_time`

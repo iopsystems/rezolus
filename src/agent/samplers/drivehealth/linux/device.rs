@@ -6,6 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
+use super::ec2::{Ec2Stats, Ec2Storage};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DriveType {
     Nvme,
@@ -35,6 +37,9 @@ pub struct Drive {
     pub serial: String,
     /// Device node for the pass-through ioctl (`/dev/nvme0`, `/dev/sda`).
     pub node: PathBuf,
+    /// For an Amazon EBS or instance store NVMe controller, which one, from its
+    /// model; `None` for every other drive.
+    pub ec2: Option<Ec2Storage>,
 }
 
 fn read_trim(path: PathBuf) -> Option<String> {
@@ -79,6 +84,7 @@ fn enumerate_in(sys_block: &Path, sys_nvme: &Path, dev: &Path) -> Vec<Drive> {
                 node: dev.join(&name),
                 device: name,
                 drive_type: DriveType::Sata,
+                ec2: None,
             });
         }
     }
@@ -92,8 +98,10 @@ fn enumerate_in(sys_block: &Path, sys_nvme: &Path, dev: &Path) -> Vec<Drive> {
         names.sort();
         for name in names {
             let ctrl = sys_nvme.join(&name);
+            let model = read_trim(ctrl.join("model")).unwrap_or_default();
             out.push(Drive {
-                model: read_trim(ctrl.join("model")).unwrap_or_default(),
+                ec2: Ec2Storage::from_model(&model),
+                model,
                 serial: read_trim(ctrl.join("serial")).unwrap_or_default(),
                 node: dev.join(&name),
                 device: name,
@@ -117,16 +125,19 @@ fn enumerate_in(sys_block: &Path, sys_nvme: &Path, dev: &Path) -> Vec<Drive> {
 pub struct DriveReading {
     pub temperature_c: Option<i64>,
     pub nvme: Option<super::nvme::NvmeHealth>,
+    /// The EC2 statistics page, for an EBS or instance store device.
+    pub ec2: Option<Ec2Stats>,
 }
 
 /// Read one drive via the appropriate read-only pass-through ioctl.
 fn read_one(drive: &Drive) -> DriveReading {
     match drive.drive_type {
         DriveType::Nvme => {
-            let nvme = super::nvme::read_health(&drive.node);
+            let (nvme, ec2) = super::nvme::read_health(&drive.node, drive.ec2);
             DriveReading {
                 temperature_c: nvme.as_ref().and_then(|h| h.temperature_c),
                 nvme,
+                ec2,
             }
         }
         DriveType::Sata => {
@@ -134,6 +145,7 @@ fn read_one(drive: &Drive) -> DriveReading {
             DriveReading {
                 temperature_c,
                 nvme: None,
+                ec2: None,
             }
         }
     }
@@ -181,13 +193,22 @@ mod tests {
         fs::create_dir_all(sys_block.join("dm-0")).unwrap();
         fs::create_dir_all(sys_block.join("nvme0n1")).unwrap(); // namespace, not counted here
 
-        // An NVMe controller.
+        // An NVMe controller, and an EBS volume's controller.
         write(&sys_nvme.join("nvme0/model"), "Samsung SSD 990 PRO\n");
         write(&sys_nvme.join("nvme0/serial"), "S1A2B3\n");
+        write(
+            &sys_nvme.join("nvme1/model"),
+            "Amazon Elastic Block Store              \n",
+        );
+        write(&sys_nvme.join("nvme1/serial"), "vol0123456789abcdef0\n");
 
         let drives = enumerate_in(&sys_block, &sys_nvme, &dev);
 
-        assert_eq!(drives.len(), 2, "expected exactly sda + nvme0: {drives:?}");
+        assert_eq!(
+            drives.len(),
+            3,
+            "expected exactly sda + nvme0 + nvme1: {drives:?}"
+        );
 
         let sata = drives.iter().find(|d| d.device == "sda").unwrap();
         assert_eq!(sata.drive_type, DriveType::Sata);
@@ -199,6 +220,12 @@ mod tests {
         assert_eq!(nvme.model, "Samsung SSD 990 PRO");
         assert_eq!(nvme.serial, "S1A2B3");
         assert_eq!(nvme.node, dev.join("nvme0"));
+        assert_eq!(nvme.ec2, None);
+        assert_eq!(sata.ec2, None);
+
+        let ebs = drives.iter().find(|d| d.device == "nvme1").unwrap();
+        assert_eq!(ebs.model, "Amazon Elastic Block Store");
+        assert_eq!(ebs.ec2, Some(Ec2Storage::Ebs));
 
         fs::remove_dir_all(&tmp).ok();
     }

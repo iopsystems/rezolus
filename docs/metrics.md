@@ -428,6 +428,26 @@ counters are always maintained by the controller.
 | `drive_thermal_throttle_time` | Cumulative seconds in NVMe host thermal-management state | `level={1,2}`, `device`, `type=nvme`, … |
 | `drive_thermal_throttle_transitions` | Count of transitions into NVMe host thermal-management state | `level={1,2}`, `device`, `type=nvme`, … |
 
+On Linux on Amazon EC2 Nitro instances, the same read of an EBS volume's or NVMe
+instance store volume's controller also fetches the device's detailed
+performance statistics, vendor log page 0xD0 ([EBS][ebs-stats], [instance
+store][is-stats]; layout from nvme-cli's `amzn` plugin, AWS's `ebsnvme` script
+and the CloudWatch agent's NVMe receiver). A drive is read for these only when
+its NVMe model is `Amazon Elastic Block Store` or starts with `Amazon EC2 NVMe
+Instance Storage`. The counters are cumulative microseconds, published in
+nanoseconds, so `rate(drive_performance_exceeded_time[5m]) / 1e9` is the
+fraction of time the device was throttled by that limit. AWS documents reads up
+to once a second; the sampler reads at its `interval`. The macOS sampler does
+not read this page, and neither decode has been checked on a device.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `drive_performance_exceeded_time` | Cumulative time I/O demand exceeded a performance limit, in nanoseconds | `storage=ebs` with `limit=ebs_volume` (the volume's provisioned IOPS/throughput) or `limit=ec2_instance` (the instance's EBS IOPS/throughput limit); `storage=instance_store` with `limit=instance_store_volume` (the volume's maximum); `resource={iops,throughput}`, `device`, `type=nvme`, `model`, `serial` (for EBS, the volume id without its dash, `vol0123…`) |
+| `drive_queue_length` | Read and write operations waiting on the device when it was read | `storage={ebs,instance_store}`, `device`, `type=nvme`, `model`, `serial` |
+
+[ebs-stats]: https://docs.aws.amazon.com/ebs/latest/userguide/nvme-detailed-performance-stats.html
+[is-stats]: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/nvme-detailed-performance-stats.html
+
 ## ext4
 
 Metrics from inside the ext4 filesystem and its journal, between the syscall
