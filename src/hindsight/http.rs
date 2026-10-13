@@ -283,7 +283,7 @@ async fn dump(State(state): State<Arc<AppState>>, Query(params): Query<DumpParam
     };
 
     let shared = Arc::clone(&state.shared);
-    // The dump is the buffer's container: `rez` or `dendro`.
+    // The dump is the buffer's container, a dendro archive.
     let ext = shared
         .buffer_path
         .extension()

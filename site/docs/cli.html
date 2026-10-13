@@ -279,7 +279,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording &lt;SUBCOMMAND&gt; [OPTIONS]</code></div>
 </div>
 </div>
-<p class="text-sm text-slate-400 mt-2">Offline operations on recordings &mdash; both <code>.parquet</code> files and <code>.rez</code> archives. Inspect metadata, trim what you do not need, embed service KPI definitions, merge multi-source captures, or convert older formats. <code>rezolus parquet &hellip;</code> still works as an alias.</p>
+<p class="text-sm text-slate-400 mt-2">Offline operations on recordings &mdash; <code>.dendro</code> and <code>.rez</code> archives and <code>.parquet</code> files. Inspect metadata, trim what you do not need, embed service KPI definitions, merge multi-source captures, or convert older formats. <code>rezolus parquet &hellip;</code> still works as an alias.</p>
 
 <div class="mt-6 space-y-6">
 
@@ -288,7 +288,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <h4 class="text-sm font-bold mb-2"><code>metadata</code></h4>
 <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Show file-level + column metadata for a recording.</p>
 <div class="space-y-1 text-sm text-slate-500 font-mono">
-<div><span class="text-slate-400">-i, --input</span> &lt;FILE&gt;          <span class="text-slate-600">Recording to inspect (.parquet, or a .rez manifest)</span></div>
+<div><span class="text-slate-400">-i, --input</span> &lt;FILE&gt;          <span class="text-slate-600">Recording to inspect (.parquet, or a .dendro or .rez archive)</span></div>
 <div><span class="text-slate-400">    --schema</span>               <span class="text-slate-600">Show only column-level metadata</span></div>
 <div><span class="text-slate-400">    --file</span>                 <span class="text-slate-600">Show only file-level metadata</span></div>
 <div><span class="text-slate-400">    --geometry</span>             <span class="text-slate-600">Show only table shape + row group layout</span></div>
@@ -322,7 +322,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <h4 class="text-sm font-bold mb-2"><code>combine</code></h4>
 <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Merge multiple parquet files into one &mdash; multi-node rezolus, multi-instance services, or compare-mode A/B bundles.</p>
 <div class="space-y-1 text-sm text-slate-500 font-mono">
-<div><span class="text-slate-400">FILES...</span>                      <span class="text-slate-600">Inputs to merge (parquet, or single-recording .rez)</span></div>
+<div><span class="text-slate-400">FILES...</span>                      <span class="text-slate-600">Inputs to merge (parquet, single-recording .rez, or .dendro into a .dendro output)</span></div>
 <div><span class="text-slate-400">-o, --output</span> &lt;FILE&gt;         <span class="text-slate-600">Output parquet path</span></div>
 <div><span class="text-slate-400">    --pinned</span> &lt;NAME&gt;         <span class="text-slate-600">Default rezolus node to display</span></div>
 <div><span class="text-slate-400">    --ab</span> &lt;B=SRC&gt; &lt;E=SRC&gt;   <span class="text-slate-600">Bundle as A/B compare tarball &mdash; one flag, both values: <code>--ab baseline=…&nbsp;experiment=…</code></span></div>
@@ -334,10 +334,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <!-- filter -->
 <div>
 <h4 class="text-sm font-bold mb-2"><code>filter</code></h4>
-<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Shrink a recording to what it needs &mdash; parquet columns referenced by its service-extension KPIs, or whole samplers of a <code>.rez</code>. Useful before sharing a focused report.</p>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Shrink a recording to what it needs &mdash; parquet columns referenced by its service-extension KPIs, or whole samplers of a <code>.dendro</code> or <code>.rez</code>. Useful before sharing a focused report.</p>
 <div class="space-y-1 text-sm text-slate-500 font-mono">
-<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">Recording to filter (.parquet, or .rez with --samplers)</span></div>
-<div><span class="text-slate-400">    --samplers</span> &lt;A,B,...&gt;    <span class="text-slate-600">For .rez: samplers to KEEP (required there, ignored for parquet)</span></div>
+<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">Recording to filter (.parquet, or .dendro or .rez with --samplers)</span></div>
+<div><span class="text-slate-400">    --samplers</span> &lt;A,B,...&gt;    <span class="text-slate-600">For .dendro and .rez: samplers to KEEP (required there, ignored for parquet)</span></div>
 <div><span class="text-slate-400">    --queries</span> &lt;JSON&gt;        <span class="text-slate-600">Custom KPI JSON (overrides embedded/template)</span></div>
 <div><span class="text-slate-400">    --templates</span> &lt;DIR&gt;       <span class="text-slate-600">Template directory to resolve KPIs from</span></div>
 <div><span class="text-slate-400">-o, --output</span> &lt;FILE&gt;         <span class="text-slate-600">Output path (defaults to in-place overwrite)</span></div>
@@ -347,7 +347,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <!-- convert -->
 <div>
 <h4 class="text-sm font-bold mb-2"><code>convert</code></h4>
-<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Turn a raw msgpack recording (from <code>record -o out.raw</code>) into parquet. Plain or zstd input, detected by content.</p>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Turn a raw msgpack recording (from a 5.x <code>record -o out.raw</code>) into parquet. Plain or zstd input, detected by content.</p>
 <div class="space-y-1 text-sm text-slate-500 font-mono">
 <div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">Raw recording to convert</span></div>
 <div><span class="text-slate-400">-o, --output</span> &lt;PATH&gt;         <span class="text-slate-600">Output parquet path (default: input with .parquet)</span></div>
