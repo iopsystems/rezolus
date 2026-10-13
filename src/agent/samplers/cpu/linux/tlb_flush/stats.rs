@@ -17,16 +17,16 @@ pub static EVENTS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     "cpu_tlb_flush_events",
 );
 
-// Reader-stamped (mmap-direct `PackedCounters`) group for the per-cgroup
+// Per-cgroup (`CgroupCounters`) group for the per-cgroup
 // tlb_flush breakdown — see `docs/principles.md` principle 18 and
-// `crate::agent::timing::AcquisitionGroup::set_reader_stamped`. All five
+// `crate::agent::timing::AcquisitionGroup::new_slotted`. All five
 // `CGROUP_TLB_FLUSH_*` counters below share this ONE group: they are all
 // the `cgroup_cpu_tlb_flush` metric family (distinguished by the `reason`
 // label, backed by five separate BPF maps) — like-entities collapse per
 // principle 18, the same rule syscall_latency's 16 op-class histograms and
 // this sampler's own per-CPU `TLB_FLUSH_*` breakdown (via `cpu_counters`,
 // `EVENTS_ACQ` above) already apply.
-pub static CGROUP_EVENTS_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+pub static CGROUP_EVENTS_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
     crate::agent::samplers::bpf_sampler_name("cpu_tlb_flush"),
     "cpu_tlb_flush_cgroup",
 );
