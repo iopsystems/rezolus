@@ -7,7 +7,9 @@
   against tracefs, refresh 151–301 µs; see *Results — phase 2*. Phase 3
   (per-filesystem counters): exact attribution across three mounts, a mount
   added while running attributed within a second, the lookup's probe cost
-  in *Results — phase 3*.** Phase 3 was re-prioritized by
+  in *Results — phase 3*. Phase 4 (latencies timed in BPF instead of from
+  jbd2's jiffies): verifier, counts and per-probe cost checked on x86_64 6.12;
+  see *Phase 4 — nanosecond timing*.** Phase 3 was re-prioritized by
   `2026-09-28-filesystem-telemetry-gaps.md`. Two BPF
   samplers are specified: `ext4_journal` (jbd2 commit and checkpoint phases,
   fsync counts, filesystem errors) and `ext4_alloc` (block allocator effort,
@@ -165,6 +167,8 @@ constant 100) or a `__kconfig` extern (needs `/proc/config.gz`, and a
 `__weak` fallback would be an untested default). The resolution is one jiffy,
 1 to 10 ms; the metric descriptions say so, since a distribution of ms-scale
 commit phases quantized to 4 ms is honest only if the reader knows it.
+*Superseded by phase 4: the commit phases and checkpoint latency are now timed
+in BPF, and the tick conversion is gone.*
 
 **No side maps in phase 1; fsync latency comes from the syscall sampler.**
 The obvious ext4 latency metric is `ext4_sync_file_enter` to `_exit`, and it
@@ -240,7 +244,8 @@ needs phase 3. Reopen condition in *Deferred*.
 **Acquisition groups.** Following principle 18's like-entities rule as
 `blockio_latency` applies it:
 
-- `ext4_journal_commit_latencies` — six histograms, one family, `phase` label.
+- `ext4_journal_commit_latencies` — six histograms, one family, `phase` label
+  (four from phase 4, which also adds `ext4_journal_handle_latencies`).
 - `ext4_journal_checkpoint_latencies` — one histogram.
 - `ext4_journal_stall_latencies` — one histogram.
 - `ext4_journal_counters` — one `counters` array read in one sweep, as
@@ -756,6 +761,135 @@ saturation the 3% is real and the host-wide phase 1 shape is no longer
 available as a cheaper option, which is a deliberate trade and recorded
 here.
 
+## Phase 4 — nanosecond timing
+
+**Why.** An 8.7 h recording at 1 s from a host with a busy journal (5.25.1
+agent, 10 ms tick) showed the cost of tick resolution. Flushing p50 was 0 in
+every one of 31,018 seconds that had commits, at 1,400–2,000 commits/s, and
+every nonzero flushing value was the bucket containing 10 ms. jbd2 computes
+each phase as a difference of two `jiffies` reads, so a phase shorter than one
+tick reads 1 tick with probability (length / tick), else 0. No phase's distribution under one tick was visible. The viewer also drew
+those charts with a 1–10 ns axis, a separate bug (#1453).
+
+**What changed** (kernel source read at v5.8 and v6.12, the same sequence in
+both; line numbers are v6.12's):
+
+| metric | start | end |
+|---|---|---|
+| `phase="running"` | `transaction->t_start_time`, set with `ktime_get()` in `jbd2_get_transaction` | `jbd2_commit_locking` |
+| `phase="locked"` | `jbd2_commit_locking` (`commit.c:442`) | `jbd2_commit_flushing` (`:527`) |
+| `phase="flushing"` | `jbd2_commit_flushing` | `jbd2_commit_logging` (`:564`) |
+| `phase="logging"` | `jbd2_commit_logging` | `jbd2_run_stats` (`:1104`; jbd2's own end read is `:1094`) |
+| `ext4_journal_handle_start_latency` | entry of `jbd2__journal_start`, `jbd2_journal_start`, `jbd2_journal_start_reserved` (fentry, else kprobe) | `jbd2_handle_start` |
+| `ext4_journal_checkpoint_latency` | `jbd2_checkpoint` when the list head's `cs_chp_time` is 0 (`checkpoint.c:170`, jbd2 stamps at `:184`) | `jbd2_checkpoint_stats` |
+
+Each tracepoint fires just before the `jiffies` read jbd2 takes for the same
+boundary, so the phases keep jbd2's boundaries. Per-commit state and
+checkpoint starts live in arrays indexed by a hash of the journal's device
+number, each entry keyed by the device and tid; `fs_slot()` is not used
+because its slot 0 is shared by every journal the mount table does not know
+(an agent in a container, or past 63 mounts). Handle starts are a `MAX_PID`
+array at `pid_slot(tid)` (32 MB, as in the `syscall` sampler). Each handle
+entry hook is a kprobe where fentry cannot attach to its function
+(`kernel_can_fentry`): `jbd2__journal_start` takes 7 arguments, and x86_64
+trampolines take at most 6 before 6.6 (`arch/x86/net/bpf_jit_comp.c`), so it
+is a kprobe on 5.8–6.5 x86_64; on aarch64 fentry needs ftrace direct calls
+(first offered by arm64 in 6.4; read from the kernel config when
+`/boot/config-<release>` exists) and at most 8 arguments (12 from 6.16). The
+other fentry samplers (`cpu_usage`, `cpu_bandwidth`, `xfs_log`, `ext4_ops`,
+`memory_pagecache`, `tcp_connect_latency`, `tcp_receive`, `tcp_traffic`) do
+not check this yet.
+
+**Correction: flushing is not where fsync waits.** The phase 1 design, the
+metric description and the dashboard said flushing is "data blocks reaching
+the device in ordered mode and is where fsync waits". Between
+`jbd2_commit_flushing` and `jbd2_commit_logging` jbd2 only submits the data
+writes (`journal_submit_data_buffers`, `:546`) and the revoke records
+(`:551`). The wait for the data writes (`journal_finish_inode_data_buffers`,
+`:742`) and the commit record, written with barriers on (the default) as
+`REQ_PREFLUSH | REQ_FUA` so it carries the device cache flush (`:154`), are
+both in logging; the separate
+`blkdev_issue_flush` calls (`:784`, `:891`) run only with an external journal
+or `async_commit`, also in logging. A flushing p50 of 0 ticks is what that
+predicts. The descriptions now say so; found by review.
+
+**Removed.** `phase="wait"` (jbd2's `t_max_wait`) is replaced by the
+per-handle start latency: `t_max_wait` was one maximum per commit, counted only
+handles that began before their transaction existed, and before v5.18 was
+updated only on a `CONFIG_JBD2_DEBUG` kernel with the `jbd2_debug` module
+parameter set, so it read 0. `phase="request_delay"` is dropped: `t_requested`
+is stamped only in `__jbd2_log_start_commit` (static from v6.0, four call sites
+in `journal.c`), so a probe on it could miss inlined calls without any error,
+and no tracepoint marks the request. Its jiffies value was also 0 for every
+timer-driven commit.
+
+**Fixed along the way.** `jbd2_checkpoint_stats` also fires for transactions
+dropped without a checkpoint, with `cs_chp_time` 0; those went into the
+histogram as zeros. They have no start stamp now and are left out (the
+counters still count them). Lock-buffer stalls are unchanged: jbd2 reports
+only stalls over 100 ms (`HZ/10`), in whole milliseconds, and there is no
+probe point around `lock_buffer`, which is inline.
+
+**Not comparable across the change.** Recordings from before phase 4 have
+phase values in whole ticks, checkpoint latency with a zero per transaction
+dropped without a checkpoint, and `wait`/`request_delay` series that new
+recordings lack.
+
+**Results** (systemslab `01a13717-fadd-71db-32d3-ac4ecb9fd280`, Debian 13
+x86_64 guest, 6.12.63, `CONFIG_EXT4_FS=m`, `HZ=250`; ext4 on a loop file on
+the guest's disk; fio 4 KiB, `fsync=1`, `psync`, 30 s each: 8 jobs of random
+overwrite in 256 MiB files, then sequential writes into 2 GiB files fio laid
+out first (7 jobs: the eighth hit ENOSPC on the 16 GiB filesystem);
+`ext4_journal` the only sampler; `kernel.bpf_stats_enabled=1`). Every
+program passed the verifier and attached as `tp_btf` and `fentry` against
+jbd2's module BTF.
+
+Counts against tracefs hist triggers over the same window:
+
+| histogram | samples | tracefs |
+|---|---|---|
+| each `ext4_journal_commit_latency{phase}` | 23,705 | `jbd2_commit_locking` 23,705, `jbd2_run_stats` 23,705 |
+| `ext4_journal_handle_start_latency` | 187,363 | `jbd2_handle_start` 187,375 (triggers set before the first snapshot) |
+| `ext4_journal_checkpoint_latency` | 13 | `jbd2_checkpoint` 22 calls; `jbd2_checkpoint_stats` 23,706, every one with `chp_time` 0 |
+
+jbd2's own `flushing` was 0 jiffies in 23,697 of the 23,705 commits. The
+timed phases, overwrite run (sequential run in parentheses):
+
+| phase | p50 | p99 |
+|---|---|---|
+| running | 360 µs (246 µs) | 10.5 ms (18.9 ms) |
+| locked | 2.05 µs (2.3 µs) | 3.58 µs (5.63 µs) |
+| flushing | 895 ns (1.02 µs) | 1.41 µs (2.05 µs) |
+| logging | 2.62 ms (6.29 ms) | 11.5 ms (23.1 ms) |
+| handle start | 575 ns (639 ns) | 1.92 µs (2.05 µs) |
+
+Logging carries the commit, as the correction above predicts.
+
+Probe cost from `bpf_stats` (run time over run count, which includes the
+stats' own two clock reads):
+
+| program | runs | ns/run |
+|---|---|---|
+| `jbd2_commit_locking_btf` | 23,705 | 391 |
+| `jbd2_commit_flushing_btf` | 23,705 | 260 |
+| `jbd2_commit_logging_btf` | 23,705 | 254 |
+| `jbd2_run_stats_btf` | 23,705 | 400 |
+| `jbd2_handle_start_btf` | 187,375 | 165 |
+| `jbd2__journal_start_fentry` | 152,377 | 230 |
+| `jbd2_journal_start_reserved_fentry` | 70,092 | 227 |
+| `ext4_sync_file_enter_btf` (phase 1, for scale) | 47,099 | 325 |
+
+Per commit the four phase programs take about 1.3 µs, of which
+`jbd2_run_stats` (400 ns) ran before phase 4 too, with less work. Per handle
+the entry and grant programs take about 0.44 µs (222,469 entries, 187,375
+grants; the difference is nested and failed starts). Divided by the 47,099
+fsyncs the agent counted on all ext4 filesystems, that is 1.74 µs of handle
+probes and 0.66 µs of commit probes per fsync, 2.4 µs in all, against 0.66 µs
+for the two `ext4_sync_file` programs phase 1 already runs per fsync. Divided
+by fio's own 30,938 fsyncs it is 3.6 µs. Not measured: the throughput cost on a CPU-bound
+fsync workload (phase 1's `null_blk` bench), aarch64, and a pre-6.6 x86_64
+kernel where `jbd2__journal_start` is a kprobe.
+
 ## Deferred / reopen
 
 - **Probe-cost bench** — Done (GO), in a guest rather than on bare metal:
@@ -781,8 +915,9 @@ here.
   fires per block mapping; measure its rate on a read-heavy workload before
   attaching. `ext4_es_shrink_scan_exit` alone is cheap and could join
   `ext4_alloc`.
-- **Handle-level stats** (`jbd2_handle_stats`, `ext4_journal_start`) — Idea.
-  Per metadata operation; measured-first.
+- **Handle-level stats** (`jbd2_handle_stats`, `ext4_journal_start`) — Partly
+  taken up by phase 4's handle start latency. The rest (`jbd2_handle_stats`:
+  handle run time, blocks) is still an Idea, measured-first.
 - **Fast commit** (`ext4_fc_*`) — By design, off by default in ext4. Reopen if
   a fleet enables `fast_commit`.
 - **sysfs `errors_count` and `lifetime_write_kbytes` in the `filesystem` sweep**

@@ -16,11 +16,11 @@ static LATENCY_HISTOGRAM_MAX: u8 = 64;
 // Linux-only.
 //
 // Groups follow principle 18's like-entities rule as `blockio`'s latency
-// phases apply it: the six commit-phase histograms are one family
-// distinguished by the `phase` label and share a group; the checkpoint and
-// lock-stall histograms are each their own family; every counter lives in one
-// `counters` map read in one sweep, as `blockio` reads ops and bytes from one
-// map.
+// phases apply it: the four commit-phase histograms are one family
+// distinguished by the `phase` label and share a group; the checkpoint,
+// lock-stall and handle-start histograms are each their own family; every
+// counter lives in one `counters` map read in one sweep, as `blockio` reads
+// ops and bytes from one map.
 pub static COMMIT_LATENCIES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("ext4_journal"),
     "ext4_journal_commit_latencies",
@@ -44,6 +44,14 @@ pub static STALL_LATENCIES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static STALL_LATENCIES_ACQ_REG: &'static AcquisitionGroup = &STALL_LATENCIES_ACQ;
+
+pub static HANDLE_LATENCIES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    crate::agent::samplers::bpf_sampler_name("ext4_journal"),
+    "ext4_journal_handle_latencies",
+);
+
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static HANDLE_LATENCIES_ACQ_REG: &'static AcquisitionGroup = &HANDLE_LATENCIES_ACQ;
 
 pub static COUNTERS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("ext4_journal"),
@@ -74,30 +82,14 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
 /*
  * journal commit phases
  *
- * jbd2 reports each phase in jiffies; the BPF program converts to nanoseconds
- * with the tick length userspace measured, so every value below is a whole
- * multiple of one jiffy (1–10 ms depending on CONFIG_HZ).
+ * Each phase is timed in BPF with bpf_ktime_get_ns() between jbd2's
+ * commit-phase tracepoints, not taken from jbd2_run_stats, whose phases are
+ * differences of two jiffies reads.
  */
 
 #[metric(
     name = "ext4_journal_commit_latency",
-    description = "Distribution of the time, per journal commit, that a handle had to wait to join the transaction (the longest such wait in the transaction). In nanoseconds, at one-jiffy resolution",
-    metadata = { unit = "nanoseconds", phase = "wait", acq_group = "ext4_journal_commit_latencies" }
-)]
-pub static EXT4_JOURNAL_COMMIT_WAIT: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
-
-#[metric(
-    name = "ext4_journal_commit_latency",
-    description = "Distribution of the time, per journal commit, between the commit being requested and the commit thread starting it. In nanoseconds, at one-jiffy resolution",
-    metadata = { unit = "nanoseconds", phase = "request_delay", acq_group = "ext4_journal_commit_latencies" }
-)]
-pub static EXT4_JOURNAL_COMMIT_REQUEST_DELAY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
-
-#[metric(
-    name = "ext4_journal_commit_latency",
-    description = "Distribution of the time, per journal commit, that the transaction was open and accumulating handles before the commit began. Bounded above by the journal's commit interval (5 s by default) and cut short by every fsync. In nanoseconds, at one-jiffy resolution",
+    description = "Distribution of the time, per journal commit, that the transaction was open and accumulating handles before the commit began. A commit is requested when the journal's commit interval (5 s by default) expires, or sooner by an fsync or other synchronous operation, a full transaction or a shortage of journal space, and starts once the previous commit has finished. In nanoseconds",
     metadata = { unit = "nanoseconds", phase = "running", acq_group = "ext4_journal_commit_latencies" }
 )]
 pub static EXT4_JOURNAL_COMMIT_RUNNING: RwLockHistogram =
@@ -105,7 +97,7 @@ pub static EXT4_JOURNAL_COMMIT_RUNNING: RwLockHistogram =
 
 #[metric(
     name = "ext4_journal_commit_latency",
-    description = "Distribution of the time, per journal commit, that the transaction spent locked, waiting for its outstanding handles to finish before its buffers could be written. In nanoseconds, at one-jiffy resolution",
+    description = "Distribution of the time, per journal commit, that the transaction spent locked: waiting for its outstanding handles to finish, cleaning the checkpoint list and switching the revoke table. In nanoseconds",
     metadata = { unit = "nanoseconds", phase = "locked", acq_group = "ext4_journal_commit_latencies" }
 )]
 pub static EXT4_JOURNAL_COMMIT_LOCKED: RwLockHistogram =
@@ -113,7 +105,7 @@ pub static EXT4_JOURNAL_COMMIT_LOCKED: RwLockHistogram =
 
 #[metric(
     name = "ext4_journal_commit_latency",
-    description = "Distribution of the time, per journal commit, spent flushing the transaction's data blocks to disk (ordered mode). This is where fsync waits on the device. In nanoseconds, at one-jiffy resolution",
+    description = "Distribution of the time, per journal commit, spent submitting the transaction's data writes (ordered mode) and its revoke records. The wait for those writes is in the logging phase. In nanoseconds",
     metadata = { unit = "nanoseconds", phase = "flushing", acq_group = "ext4_journal_commit_latencies" }
 )]
 pub static EXT4_JOURNAL_COMMIT_FLUSHING: RwLockHistogram =
@@ -121,10 +113,18 @@ pub static EXT4_JOURNAL_COMMIT_FLUSHING: RwLockHistogram =
 
 #[metric(
     name = "ext4_journal_commit_latency",
-    description = "Distribution of the time, per journal commit, spent writing the transaction's metadata blocks and commit record to the journal. In nanoseconds, at one-jiffy resolution",
+    description = "Distribution of the time, per journal commit, spent writing the transaction's metadata blocks to the journal, waiting for its data writes, flushing the device cache and writing the commit record. This is where fsync waits on the device. In nanoseconds",
     metadata = { unit = "nanoseconds", phase = "logging", acq_group = "ext4_journal_commit_latencies" }
 )]
 pub static EXT4_JOURNAL_COMMIT_LOGGING: RwLockHistogram =
+    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+
+#[metric(
+    name = "ext4_journal_handle_start_latency",
+    description = "Distribution of the time a thread took to start a journal handle, from calling into jbd2 to the handle being granted. Includes waiting for the committing transaction to leave the locked state, for journal space and for credits. Handle restarts are not included. In nanoseconds",
+    metadata = { unit = "nanoseconds", acq_group = "ext4_journal_handle_latencies" }
+)]
+pub static EXT4_JOURNAL_HANDLE_START_LATENCY: RwLockHistogram =
     RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 /*
@@ -133,7 +133,7 @@ pub static EXT4_JOURNAL_COMMIT_LOGGING: RwLockHistogram =
 
 #[metric(
     name = "ext4_journal_checkpoint_latency",
-    description = "Distribution of the time each journal checkpoint took to write a committed transaction's buffers to their final location and free the journal space. In nanoseconds, at one-jiffy resolution",
+    description = "Distribution of the time from a checkpoint first working on a committed transaction to the transaction being dropped from the checkpoint list with its buffers at their final location. Transactions dropped without being checkpointed are not included. In nanoseconds",
     metadata = { unit = "nanoseconds", acq_group = "ext4_journal_checkpoint_latencies" }
 )]
 pub static EXT4_JOURNAL_CHECKPOINT_LATENCY: RwLockHistogram =

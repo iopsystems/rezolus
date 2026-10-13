@@ -78,6 +78,72 @@ pub fn kernel_btf_has_funcs(names: &[&str]) -> bool {
     all
 }
 
+/// Whether an `fentry` program can attach to kernel function `name` on the
+/// running kernel: BTF describes it, the architecture can attach a trampoline
+/// to a kernel function, and the function's argument count is within the
+/// trampoline's limit. Where any of these fails, a trampoline program loads
+/// and then fails at attach with `ENOTSUPP`, which the builder reports as a
+/// required program that failed, so callers pick the kprobe twin instead.
+/// The count is BTF's parameter count; a struct passed by value takes more
+/// than one register and is not accounted for.
+///
+/// - x86_64: up to 6 arguments before 6.6, 12 from 6.6.
+/// - aarch64: up to 8 arguments (the 6.4–6.15 limit, kept as the floor), and
+///   only with
+///   `CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS`, which arm64 first offers in
+///   6.4 and which `CFI_CLANG`, or a size-optimized GCC build (any
+///   size-optimized build before 6.9), rules out. Read from
+///   `/boot/config-<release>` when that file exists, else taken as release
+///   6.4 or later; an agent in a container usually has no `/boot`, and gets
+///   the release rule.
+///
+/// A release that cannot be read or parsed is taken as older than either
+/// limit, since the kprobe twin attaches everywhere.
+pub fn kernel_can_fentry(name: &str) -> bool {
+    let Some(args) = kernel_btf_func_arg_count(name) else {
+        return false;
+    };
+
+    let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    let config = std::fs::read_to_string(format!("/boot/config-{}", release.trim())).ok();
+
+    can_fentry(std::env::consts::ARCH, &release, config.as_deref(), args)
+}
+
+fn can_fentry(arch: &str, release: &str, config: Option<&str>, args: u32) -> bool {
+    let version = release_version(release);
+
+    match arch {
+        "x86_64" => {
+            let limit = if version.is_some_and(|v| v >= (6, 6)) {
+                12
+            } else {
+                6
+            };
+            args <= limit
+        }
+        "aarch64" => {
+            let direct_calls = match config {
+                Some(config) => config
+                    .lines()
+                    .any(|line| line.trim() == "CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS=y"),
+                None => version.is_some_and(|v| v >= (6, 4)),
+            };
+            direct_calls && args <= 8
+        }
+        _ => true,
+    }
+}
+
+/// `(major, minor)` from a kernel release string such as `6.12.75+deb13-arm64`
+/// or `6.4-rc1`, or `None` when it does not start with two numbers.
+fn release_version(release: &str) -> Option<(u32, u32)> {
+    let mut parts = release.trim().split(['.', '-', '+']);
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    Some((major, minor))
+}
+
 /// The number of parameters kernel function `name` takes, from its BTF
 /// prototype in vmlinux or a module, or `None` when no BTF describes it.
 ///
@@ -514,8 +580,8 @@ mod task_storage_probe_tests {
 /// `HZ=1000`. Measured, not configured, so it needs no `/proc/config.gz`; and
 /// not `sysconf(_SC_CLK_TCK)`, which is `USER_HZ`, a constant 100.
 ///
-/// For BPF programs whose tracepoint arguments are in jiffies (jbd2's commit
-/// phases, the writeback throttle's `pause`): hand this to the program through
+/// For BPF programs whose tracepoint arguments are in jiffies (the writeback
+/// throttle's `pause`): hand this to the program through
 /// a one-entry `BPF_F_MMAPABLE` map and multiply there.
 pub fn jiffy_ns() -> Option<u64> {
     let mut ts = libc::timespec {
@@ -1315,5 +1381,66 @@ mod pid_slot_tests {
             pid_slot(u32::MAX as usize),
             (u32::MAX as usize & !511) | ((511 * 277) & 511)
         );
+    }
+}
+
+#[cfg(test)]
+mod fentry_tests {
+    use super::{can_fentry, release_version};
+
+    #[test]
+    fn release_versions_parse_as_numbers() {
+        assert_eq!(release_version("6.10.0"), Some((6, 10)));
+        assert_eq!(release_version("6.4-rc1"), Some((6, 4)));
+        assert_eq!(release_version("6.12.75+deb13-arm64\n"), Some((6, 12)));
+        assert_eq!(release_version("7.0.0-rc1"), Some((7, 0)));
+        assert_eq!(release_version(""), None);
+    }
+
+    #[test]
+    fn x86_64_allows_six_arguments_before_6_6() {
+        assert!(can_fentry(
+            "x86_64",
+            "5.10.240-238.959.amzn2.x86_64",
+            None,
+            6
+        ));
+        assert!(!can_fentry(
+            "x86_64",
+            "5.10.240-238.959.amzn2.x86_64",
+            None,
+            7
+        ));
+        assert!(!can_fentry("x86_64", "6.5.0", None, 7));
+        assert!(can_fentry("x86_64", "6.6.0", None, 7));
+        assert!(can_fentry("x86_64", "6.12.63+deb13-amd64", None, 7));
+        assert!(!can_fentry("x86_64", "6.12.63+deb13-amd64", None, 13));
+        assert!(!can_fentry("x86_64", "", None, 7));
+        assert!(can_fentry("x86_64", "", None, 6));
+    }
+
+    #[test]
+    fn aarch64_needs_direct_calls() {
+        assert!(!can_fentry(
+            "aarch64",
+            "5.10.240-238.959.amzn2.aarch64",
+            None,
+            2
+        ));
+        assert!(!can_fentry("aarch64", "6.1.0-40-arm64", None, 2));
+        assert!(!can_fentry("aarch64", "6.3.13", None, 2));
+        assert!(can_fentry("aarch64", "6.4-rc1", None, 2));
+        assert!(can_fentry("aarch64", "6.10.0", None, 7));
+        assert!(!can_fentry("aarch64", "6.10.0", None, 9));
+        assert!(!can_fentry("aarch64", "", None, 2));
+    }
+
+    #[test]
+    fn aarch64_kernel_config_decides_when_present() {
+        let with = "CONFIG_FTRACE=y\nCONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS=y\n";
+        let without = "CONFIG_FTRACE=y\n# CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS is not set\n";
+        assert!(can_fentry("aarch64", "6.1.0", Some(with), 2));
+        assert!(!can_fentry("aarch64", "6.12.0", Some(without), 2));
+        assert!(can_fentry("x86_64", "6.12.0", Some(without), 2));
     }
 }

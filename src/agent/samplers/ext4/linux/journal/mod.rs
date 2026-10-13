@@ -1,12 +1,17 @@
 //! Collects ext4 journal (jbd2) stats using BPF and traces:
-//! * `jbd2_run_stats` — once per commit, every phase of the commit
-//! * `jbd2_checkpoint_stats` — once per checkpoint
+//! * `jbd2_commit_locking` / `jbd2_commit_flushing` / `jbd2_commit_logging` —
+//!   the boundaries of each commit's phases
+//! * `jbd2_run_stats` — once per commit, the end of logging and the counts
+//! * `jbd2_checkpoint` / `jbd2_checkpoint_stats` — a checkpoint's start and end
+//! * `jbd2__journal_start`, `jbd2_journal_start`, `jbd2_journal_start_reserved`
+//!   (fentry, or kprobe) and `jbd2_handle_start` — handle start latency
 //! * `jbd2_lock_buffer_stall`
 //! * `ext4_sync_file_enter` / `ext4_sync_file_exit` — fsync counts and errors
 //! * `ext4_error` / `ext4_shutdown`
 //!
 //! And produces these stats:
 //! * `ext4_journal_commit_latency` — labeled by `phase`
+//! * `ext4_journal_handle_start_latency`
 //! * `ext4_journal_commits`, `ext4_journal_commit_handles`,
 //!   `ext4_journal_commit_blocks` (labeled by `kind`)
 //! * `ext4_journal_checkpoint_latency`, `ext4_journal_checkpoints`,
@@ -25,17 +30,25 @@
 //! in step with the mount table (`bpf/filesystems.rs`). Histograms stay
 //! host-wide until histogram groups have slots.
 //!
-//! jbd2 reports commit and checkpoint phases in jiffies. The BPF program
-//! converts them to nanoseconds with a tick length this module measures with
-//! `clock_getres(CLOCK_MONOTONIC_COARSE)` — which the kernel answers with
-//! `TICK_NSEC` — and hands over through the `jiffy_ns` map. `sysconf(_SC_CLK_TCK)`
-//! would be wrong here: that is `USER_HZ`, a constant 100.
+//! Every latency except lock-buffer stalls is timed in BPF with
+//! `bpf_ktime_get_ns()`. jbd2's own `jbd2_run_stats` and
+//! `jbd2_checkpoint_stats` times are differences of two jiffies reads, which
+//! put a phase shorter than one tick (1–10 ms) at 0 or 1 tick, so they are not
+//! used. jbd2's `rs_wait` is not published; `ext4_journal_handle_start_latency`
+//! measures every handle's wait to start. `rs_request_delay` is not published:
+//! jbd2 stamps the request only in `__jbd2_log_start_commit` (static from 6.0,
+//! called from four places in one file, so it may be inlined), and no
+//! tracepoint marks the request.
 //!
-//! Kernel support: reading the jbd2 stats structs needs their BTF, which is in
-//! vmlinux when ext4 is built in and in module BTF (`/sys/kernel/btf/jbd2`,
-//! kernels 5.11+) when it is a module. A 5.8–5.10 kernel with `CONFIG_EXT4_FS=m`
-//! has neither, so the struct-reading programs fail to load there and the
-//! sampler reports failed rather than publishing zeros. See
+//! Kernel support: reading jbd2's structs (stats, transaction, journal) needs
+//! their BTF, which is in vmlinux when ext4 is built in and in module BTF
+//! (`/sys/kernel/btf/jbd2`, kernels 5.11+) when it is a module. A 5.8–5.10
+//! kernel with `CONFIG_EXT4_FS=m` has neither, so the struct-reading programs
+//! fail to load there and the sampler reports failed rather than publishing
+//! zeros. Each handle-start entry hook uses a kprobe where fentry cannot
+//! attach to its function (`kernel_can_fentry`): `jbd2__journal_start` on
+//! x86_64 before 6.6, which takes trampolines of up to 6 arguments, and every
+//! hook on aarch64 without ftrace direct calls (before 6.4). See
 //! docs/journal/2026-09-28-ext4-sampler.md and its entry in docs/backlog.md.
 
 const NAME: &str = "ext4_journal";
@@ -53,10 +66,28 @@ use crate::agent::*;
 
 use std::sync::Arc;
 
-/// Every hook: the tracepoint name, its `tp_btf` and `raw_tp` program names,
-/// and the capability label `rezolus status` shows if the active twin fails
-/// to attach.
+/// Every tracepoint hook: the tracepoint name, its `tp_btf` and `raw_tp`
+/// program names, and the capability label `rezolus status` shows if the
+/// active twin fails to attach.
 const HOOKS: &[(&str, &str, &str, &str)] = &[
+    (
+        "jbd2_commit_locking",
+        "jbd2_commit_locking_btf",
+        "jbd2_commit_locking_raw",
+        "journal commit phases",
+    ),
+    (
+        "jbd2_commit_flushing",
+        "jbd2_commit_flushing_btf",
+        "jbd2_commit_flushing_raw",
+        "journal commit phases",
+    ),
+    (
+        "jbd2_commit_logging",
+        "jbd2_commit_logging_btf",
+        "jbd2_commit_logging_raw",
+        "journal commit phases",
+    ),
     (
         "jbd2_run_stats",
         "jbd2_run_stats_btf",
@@ -64,10 +95,22 @@ const HOOKS: &[(&str, &str, &str, &str)] = &[
         "journal commit phases",
     ),
     (
+        "jbd2_checkpoint",
+        "jbd2_checkpoint_btf",
+        "jbd2_checkpoint_raw",
+        "journal checkpoints",
+    ),
+    (
         "jbd2_checkpoint_stats",
         "jbd2_checkpoint_stats_btf",
         "jbd2_checkpoint_stats_raw",
         "journal checkpoints",
+    ),
+    (
+        "jbd2_handle_start",
+        "jbd2_handle_start_btf",
+        "jbd2_handle_start_raw",
+        "journal handle start latency",
     ),
     (
         "jbd2_lock_buffer_stall",
@@ -98,6 +141,30 @@ const HOOKS: &[(&str, &str, &str, &str)] = &[
         "ext4_shutdown_btf",
         "ext4_shutdown_raw",
         "filesystem shutdowns",
+    ),
+];
+
+/// Every function hook: the kernel function, its `fentry` and `kprobe` program
+/// names, and the capability label. All three stamp a handle's start; the
+/// `jbd2_handle_start` tracepoint ends it.
+const FUNCTION_HOOKS: &[(&str, &str, &str, &str)] = &[
+    (
+        "jbd2__journal_start",
+        "jbd2__journal_start_fentry",
+        "jbd2__journal_start_kprobe",
+        "journal handle start latency",
+    ),
+    (
+        "jbd2_journal_start",
+        "jbd2_journal_start_fentry",
+        "jbd2_journal_start_kprobe",
+        "journal handle start latency",
+    ),
+    (
+        "jbd2_journal_start_reserved",
+        "jbd2_journal_start_reserved_fentry",
+        "jbd2_journal_start_reserved_kprobe",
+        "journal handle start latency",
     ),
 ];
 
@@ -156,24 +223,13 @@ fn init_now(config: Arc<Config>) -> SamplerResult {
         &EXT4_JOURNAL_LOCK_BUFFER_STALLS,
     ];
 
-    let tick = match jiffy_ns() {
-        Some(ns) => ns,
-        None => {
-            warn!(
-                "{NAME}: clock_getres(CLOCK_MONOTONIC_COARSE) gave no tick length; \
-                 journal commit and checkpoint latency histograms will stay empty"
-            );
-            0
-        }
-    };
-    debug!("{NAME} jiffy = {tick} ns");
-
     // Per hook, keep the tp_btf twin only when the kernel's BTF (vmlinux or a
     // module's) carries that tracepoint; otherwise the raw_tp twin, whose miss
     // on a kernel without the tracepoint is a tolerated ENOENT at attach. See
     // `kernel_btf_has_tracepoints` for why `kernel_has_btf()` is not enough.
-    let mut disabled: Vec<&'static str> = Vec::with_capacity(HOOKS.len());
-    let mut required: Vec<(&'static str, &'static str)> = Vec::with_capacity(HOOKS.len());
+    let hooks = HOOKS.len() + FUNCTION_HOOKS.len();
+    let mut disabled: Vec<&'static str> = Vec::with_capacity(hooks);
+    let mut required: Vec<(&'static str, &'static str)> = Vec::with_capacity(hooks);
 
     for (tracepoint, btf, raw, label) in HOOKS {
         if kernel_btf_has_tracepoints(&[tracepoint]) {
@@ -182,6 +238,21 @@ fn init_now(config: Arc<Config>) -> SamplerResult {
         } else {
             disabled.push(btf);
             required.push((raw, label));
+        }
+    }
+
+    // Per function, the fentry twin when it can attach there (BTF, vmlinux or
+    // jbd2's module, describes the function and the trampoline supports its
+    // architecture and argument count), else the kprobe twin.
+    // jbd2__journal_start takes 7 arguments, more than x86_64 trampolines
+    // take before 6.6.
+    for (function, fentry, kprobe, label) in FUNCTION_HOOKS {
+        if kernel_can_fentry(function) {
+            disabled.push(kprobe);
+            required.push((fentry, label));
+        } else {
+            disabled.push(fentry);
+            required.push((kprobe, label));
         }
     }
 
@@ -201,18 +272,8 @@ fn init_now(config: Arc<Config>) -> SamplerResult {
         &COUNTERS_ACQ,
         &FS_IDENTITY,
     )
-    // The six commit phases share ONE group: like entities of one family,
+    // The four commit phases share ONE group: like entities of one family,
     // distinguished by `phase` — see stats.rs.
-    .histogram(
-        "commit_wait",
-        &EXT4_JOURNAL_COMMIT_WAIT,
-        &COMMIT_LATENCIES_ACQ,
-    )
-    .histogram(
-        "commit_request_delay",
-        &EXT4_JOURNAL_COMMIT_REQUEST_DELAY,
-        &COMMIT_LATENCIES_ACQ,
-    )
     .histogram(
         "commit_running",
         &EXT4_JOURNAL_COMMIT_RUNNING,
@@ -243,7 +304,11 @@ fn init_now(config: Arc<Config>) -> SamplerResult {
         &EXT4_JOURNAL_LOCK_BUFFER_STALL_LATENCY,
         &STALL_LATENCIES_ACQ,
     )
-    .map("jiffy_ns", vec![tick])
+    .histogram(
+        "handle_start_latency",
+        &EXT4_JOURNAL_HANDLE_START_LATENCY,
+        &HANDLE_LATENCIES_ACQ,
+    )
     .disabled_programs(&disabled)
     .required_programs(&required)
     .build()?;
@@ -263,15 +328,13 @@ impl SkelExt for ModSkel<'_> {
         match name {
             "counters" => &self.maps.counters,
             "fs_slots" => &self.maps.fs_slots,
-            "jiffy_ns" => &self.maps.jiffy_ns,
-            "commit_wait" => &self.maps.commit_wait,
-            "commit_request_delay" => &self.maps.commit_request_delay,
             "commit_running" => &self.maps.commit_running,
             "commit_locked" => &self.maps.commit_locked,
             "commit_flushing" => &self.maps.commit_flushing,
             "commit_logging" => &self.maps.commit_logging,
             "checkpoint_latency" => &self.maps.checkpoint_latency,
             "lock_buffer_stall_latency" => &self.maps.lock_buffer_stall_latency,
+            "handle_start_latency" => &self.maps.handle_start_latency,
             _ => unimplemented!(),
         }
     }
@@ -302,12 +365,63 @@ mod tests {
     fn hook_program_names_are_distinct() {
         let mut names: Vec<&str> = HOOKS
             .iter()
-            .flat_map(|(_, btf, raw, _)| [*btf, *raw])
+            .chain(FUNCTION_HOOKS)
+            .flat_map(|(_, first, second, _)| [*first, *second])
             .collect();
         let total = names.len();
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), total);
-        assert_eq!(total, 2 * HOOKS.len());
+        assert_eq!(total, 2 * (HOOKS.len() + FUNCTION_HOOKS.len()));
+    }
+
+    /// Every hook's programs exist in the BPF source under the section that
+    /// attaches them to the named tracepoint or function. A wrong `raw_tp` or
+    /// `kprobe` target is an ENOENT at attach, which the builder reports as
+    /// unsupported, so on a kernel that selects that twin the histogram stays
+    /// empty with no error.
+    #[test]
+    fn hook_programs_attach_to_their_targets() {
+        let source = include_str!("mod.bpf.c");
+
+        for (tracepoint, btf, raw, _) in HOOKS {
+            for (section, program) in [("tp_btf", btf), ("raw_tp", raw)] {
+                let attach = format!("SEC(\"{section}/{tracepoint}\")\nint BPF_PROG({program}");
+                assert!(source.contains(&attach), "missing {attach}");
+            }
+        }
+
+        for (function, fentry, kprobe, _) in FUNCTION_HOOKS {
+            let attach = format!("SEC(\"fentry/{function}\")\nint BPF_PROG({fentry})");
+            assert!(source.contains(&attach), "missing {attach}");
+            let attach = format!("SEC(\"kprobe/{function}\")\nint BPF_KPROBE({kprobe})");
+            assert!(source.contains(&attach), "missing {attach}");
+        }
+    }
+
+    /// Each histogram's map is read into its own metric: the builder pairs
+    /// the map name with the metric, and the skeleton lookup returns the map
+    /// of that name. Swapping two phases in either place fails here.
+    #[test]
+    fn histogram_maps_feed_their_metrics() {
+        let source = include_str!("mod.rs");
+
+        for (map, metric) in [
+            ("commit_running", "EXT4_JOURNAL_COMMIT_RUNNING"),
+            ("commit_locked", "EXT4_JOURNAL_COMMIT_LOCKED"),
+            ("commit_flushing", "EXT4_JOURNAL_COMMIT_FLUSHING"),
+            ("commit_logging", "EXT4_JOURNAL_COMMIT_LOGGING"),
+            ("checkpoint_latency", "EXT4_JOURNAL_CHECKPOINT_LATENCY"),
+            (
+                "lock_buffer_stall_latency",
+                "EXT4_JOURNAL_LOCK_BUFFER_STALL_LATENCY",
+            ),
+            ("handle_start_latency", "EXT4_JOURNAL_HANDLE_START_LATENCY"),
+        ] {
+            let pair = format!("\"{map}\",\n        &{metric},");
+            assert!(source.contains(&pair), "missing {pair}");
+            let arm = format!("\"{map}\" => &self.maps.{map},");
+            assert!(source.contains(&arm), "missing {arm}");
+        }
     }
 }
