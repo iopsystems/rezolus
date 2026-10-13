@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+### Added
+
+- `drivehealth` reads the EC2 NVMe detailed performance statistics (log page
+  0xD0) from EBS and instance store volumes on Nitro instances:
+  `drive_performance_exceeded_time` (time demand exceeded the volume's or
+  instance's IOPS or throughput limit) and `drive_queue_length`. Backported
+  from 6.0 (#1455) in #1456.
+
 ### Changed
 
 The pid_slot and per-CPU histogram changes from 6.0 (#1444, #1445),
