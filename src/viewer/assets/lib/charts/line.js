@@ -436,22 +436,41 @@ function refreshTotalCheckbox(chart) {
     if (el) renderTotalCheckbox(el, !!chart._showTotal, !!chart._totalPending);
 }
 
-async function toggleTotal(chart) {
+// A display-mode chart renders from `boxplot` (the envelope) whenever it is
+// non-empty, so each mode's state is the data plus both boxplot fields; saving
+// or restoring `data` alone would draw the Mean envelope under Total, or lose
+// it on the way back.
+function saveDisplayState(spec) {
+    return {
+        data: spec.data,
+        boxplot: spec.boxplot,
+        boxplotDecimated: spec.boxplotDecimated,
+    };
+}
+
+function restoreDisplayState(spec, state) {
+    spec.data = state.data;
+    spec.boxplot = state.boxplot;
+    spec.boxplotDecimated = state.boxplotDecimated;
+}
+
+// `query` is the range-query function, a parameter only so tests can stub it.
+export async function toggleTotal(chart, query = executePromQLRangeQuery) {
     if (chart._totalPending) return;
     const totalQuery = chart.spec.promql_query_total;
     if (!totalQuery) return;
 
     if (chart._showTotal) {
-        if (chart._meanDataCache) chart.spec.data = chart._meanDataCache;
+        if (chart._meanDataCache) restoreDisplayState(chart.spec, chart._meanDataCache);
         chart._showTotal = false;
         refreshTotalCheckbox(chart);
         chart.configureChartByType();
         return;
     }
 
-    chart._meanDataCache = chart.spec.data;
+    chart._meanDataCache = saveDisplayState(chart.spec);
     if (chart._totalDataCache) {
-        chart.spec.data = chart._totalDataCache;
+        restoreDisplayState(chart.spec, chart._totalDataCache);
         chart._showTotal = true;
         refreshTotalCheckbox(chart);
         chart.configureChartByType();
@@ -461,22 +480,25 @@ async function toggleTotal(chart) {
     chart._totalPending = true;
     refreshTotalCheckbox(chart);
     try {
-        const result = await executePromQLRangeQuery(totalQuery);
+        const result = await query(totalQuery);
         chart._totalPending = false;
         const ok = result?.status === 'success'
             && (result.data?.result?.length ?? 0) > 0;
         if (!ok) {
+            restoreDisplayState(chart.spec, chart._meanDataCache);
             chart._meanDataCache = null;
             refreshTotalCheckbox(chart);
             return;
         }
+        // A JSON result: applyResultToPlot clears `boxplot`, so Total
+        // renders as a plain line.
         applyResultToPlot(chart.spec, result);
-        chart._totalDataCache = chart.spec.data;
+        chart._totalDataCache = saveDisplayState(chart.spec);
         chart._showTotal = true;
     } catch (e) {
         console.warn('[total-toggle] fetch failed:', e);
         chart._totalPending = false;
-        chart.spec.data = chart._meanDataCache;
+        restoreDisplayState(chart.spec, chart._meanDataCache);
         chart._meanDataCache = null;
     }
     refreshTotalCheckbox(chart);
