@@ -216,41 +216,47 @@ fn init(config: Arc<Config>) -> SamplerResult {
     }
 
     if cgroup_attribution {
+        let (cgroup_identity, handler): (&'static metriken::group::SlotIdentity, fn(&[u8]) -> i32) =
+            match (runqueue, migrations) {
+                (true, true) => (&CGROUP_IDENTITY_BOTH, handle_cgroup_info_both),
+                (true, false) => (&CGROUP_IDENTITY_RUNQUEUE, handle_cgroup_info_runqueue),
+                _ => (&CGROUP_IDENTITY_MIGRATIONS, handle_cgroup_info_migrations),
+            };
         if runqueue {
             builder = builder
-                .packed_counters(
+                .cgroup_counters(
                     "cgroup_runq_wait",
                     &CGROUP_SCHEDULER_RUNQUEUE_WAIT,
                     &CGROUP_WAIT_ACQ,
+                    cgroup_identity,
                 )
-                .packed_counters(
+                .cgroup_counters(
                     "cgroup_offcpu",
                     &CGROUP_SCHEDULER_OFFCPU,
                     &CGROUP_OFFCPU_ACQ,
+                    cgroup_identity,
                 )
-                .packed_counters(
+                .cgroup_counters(
                     "cgroup_ivcsw",
                     &CGROUP_SCHEDULER_IVCSW,
                     &CGROUP_CONTEXT_SWITCH_ACQ,
+                    cgroup_identity,
                 )
-                .packed_counters(
+                .cgroup_counters(
                     "cgroup_vcsw",
                     &CGROUP_SCHEDULER_VCSW,
                     &CGROUP_CONTEXT_SWITCH_ACQ,
+                    cgroup_identity,
                 );
         }
         if migrations {
-            builder = builder.packed_counters(
+            builder = builder.cgroup_counters(
                 "cgroup_cpu_migrations",
                 &CGROUP_CPU_MIGRATIONS,
                 &CGROUP_MIGRATIONS_ACQ,
+                cgroup_identity,
             );
         }
-        let handler: fn(&[u8]) -> i32 = match (runqueue, migrations) {
-            (true, true) => handle_cgroup_info_both,
-            (true, false) => handle_cgroup_info_runqueue,
-            _ => handle_cgroup_info_migrations,
-        };
         builder = builder.ringbuf_handler("cgroup_info", handler);
     }
 

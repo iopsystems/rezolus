@@ -45,7 +45,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_cycles SEC(".maps");
 
 struct {
@@ -53,24 +53,25 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_instructions SEC(".maps");
 
-// previous readings for various events
+// previous readings for various events, one per CPU at processor id * 8 so
+// each CPU's reading is in its own cache line
 // (BPF-internal state, not read by userspace, so not mmapable)
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CPUS * 8);
 } cycles_prev SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CPUS * 8);
 } instructions_prev SEC(".maps");
 
 /**
@@ -101,7 +102,7 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
 
     u64 *elem, delta_c, delta_i;
 
-    u32 processor_id = bpf_get_smp_processor_id();
+    u32 prev_idx = bpf_get_smp_processor_id() * 8;
 
     u64 c = bpf_perf_event_read(&cycles, BPF_F_CURRENT_CPU);
     u64 i = bpf_perf_event_read(&instructions, BPF_F_CURRENT_CPU);
@@ -119,35 +120,34 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
 
             if (ret == 0) {
                 // New cgroup detected, zero the counters
-                u64 zero = 0;
-                bpf_map_update_elem(&cgroup_cycles, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_instructions, &cgroup_id, &zero, BPF_ANY);
+                cgroup_zero(&cgroup_cycles, cgroup_id);
+                cgroup_zero(&cgroup_instructions, cgroup_id);
             }
 
             // update cgroup cycles
 
-            elem = bpf_map_lookup_elem(&cycles_prev, &processor_id);
+            elem = bpf_map_lookup_elem(&cycles_prev, &prev_idx);
 
             if (elem) {
                 delta_c = c - *elem;
 
-                array_add(&cgroup_cycles, cgroup_id, delta_c);
+                cgroup_add(&cgroup_cycles, cgroup_id, delta_c);
             }
 
             // update cgroup instructions
 
-            elem = bpf_map_lookup_elem(&instructions_prev, &processor_id);
+            elem = bpf_map_lookup_elem(&instructions_prev, &prev_idx);
 
             if (elem) {
                 delta_i = i - *elem;
 
-                array_add(&cgroup_instructions, cgroup_id, delta_i);
+                cgroup_add(&cgroup_instructions, cgroup_id, delta_i);
             }
         }
     }
 
-    bpf_map_update_elem(&cycles_prev, &processor_id, &c, BPF_ANY);
-    bpf_map_update_elem(&instructions_prev, &processor_id, &i, BPF_ANY);
+    bpf_map_update_elem(&cycles_prev, &prev_idx, &c, BPF_ANY);
+    bpf_map_update_elem(&instructions_prev, &prev_idx, &i, BPF_ANY);
 
     return 0;
 }

@@ -80,6 +80,8 @@ pub(super) fn group_registry() -> &'static GroupRegistry {
 ///   mmap-direct `PackedCounters`): the slots with metadata
 ///   ([`Membership::Slots`]), walked from the metadata store, so a 4M-slot
 ///   `MAX_PID` array costs its live population and not its capacity;
+/// - slotted group ([`AcquisitionGroup::is_slotted`], `CgroupCounters`): the
+///   slots with metadata, as above, with the window its sampler stamped;
 /// - declared group with a member set: exactly those slots;
 /// - declared group with a member bound: the first `bound` slots;
 /// - any other declared group: every slot of the backing array;
@@ -156,7 +158,7 @@ impl Router for RezolusRouter {
         };
         // A set wins over a bound: a sampler that knows the indices knows
         // more than one that knows a count.
-        let membership = if ag.is_reader_stamped() {
+        let membership = if ag.is_reader_stamped() || ag.is_slotted() {
             Membership::Slots
         } else if let Some(set) = ag.member_set() {
             Membership::Set(set)

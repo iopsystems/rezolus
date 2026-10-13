@@ -245,7 +245,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_syscall_other SEC(".maps");
 
 struct {
@@ -253,7 +253,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_syscall_read SEC(".maps");
 
 struct {
@@ -261,7 +261,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_syscall_write SEC(".maps");
 
 struct {
@@ -269,7 +269,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_syscall_poll SEC(".maps");
 
 struct {
@@ -277,7 +277,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_syscall_lock SEC(".maps");
 
 struct {
@@ -285,7 +285,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_syscall_time SEC(".maps");
 
 struct {
@@ -293,7 +293,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_syscall_sleep SEC(".maps");
 
 struct {
@@ -301,7 +301,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_syscall_socket SEC(".maps");
 
 struct {
@@ -309,7 +309,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_syscall_yield SEC(".maps");
 
 struct {
@@ -317,7 +317,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_syscall_filesystem SEC(".maps");
 
 struct {
@@ -325,7 +325,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_syscall_memory SEC(".maps");
 
 struct {
@@ -333,7 +333,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_syscall_process SEC(".maps");
 
 struct {
@@ -341,7 +341,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_syscall_query SEC(".maps");
 
 struct {
@@ -349,7 +349,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_syscall_ipc SEC(".maps");
 
 struct {
@@ -357,7 +357,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_syscall_timer SEC(".maps");
 
 struct {
@@ -365,7 +365,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_syscall_event SEC(".maps");
 
 struct {
@@ -373,7 +373,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_syscall_sync SEC(".maps");
 
 // `btf` is a compile-time constant from each program below: the tp_btf
@@ -417,77 +417,76 @@ static __always_inline void count_syscall(long id, bool btf) {
 
             if (ret == 0) {
                 // New cgroup detected, zero all counters
-                u64 zero = 0;
-                bpf_map_update_elem(&cgroup_syscall_other, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_syscall_read, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_syscall_write, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_syscall_poll, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_syscall_lock, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_syscall_time, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_syscall_sleep, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_syscall_socket, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_syscall_yield, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_syscall_filesystem, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_syscall_memory, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_syscall_process, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_syscall_query, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_syscall_ipc, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_syscall_timer, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_syscall_event, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_syscall_sync, &cgroup_id, &zero, BPF_ANY);
+                cgroup_zero(&cgroup_syscall_other, cgroup_id);
+                cgroup_zero(&cgroup_syscall_read, cgroup_id);
+                cgroup_zero(&cgroup_syscall_write, cgroup_id);
+                cgroup_zero(&cgroup_syscall_poll, cgroup_id);
+                cgroup_zero(&cgroup_syscall_lock, cgroup_id);
+                cgroup_zero(&cgroup_syscall_time, cgroup_id);
+                cgroup_zero(&cgroup_syscall_sleep, cgroup_id);
+                cgroup_zero(&cgroup_syscall_socket, cgroup_id);
+                cgroup_zero(&cgroup_syscall_yield, cgroup_id);
+                cgroup_zero(&cgroup_syscall_filesystem, cgroup_id);
+                cgroup_zero(&cgroup_syscall_memory, cgroup_id);
+                cgroup_zero(&cgroup_syscall_process, cgroup_id);
+                cgroup_zero(&cgroup_syscall_query, cgroup_id);
+                cgroup_zero(&cgroup_syscall_ipc, cgroup_id);
+                cgroup_zero(&cgroup_syscall_timer, cgroup_id);
+                cgroup_zero(&cgroup_syscall_event, cgroup_id);
+                cgroup_zero(&cgroup_syscall_sync, cgroup_id);
             }
 
             switch (group) {
             case 1:
-                array_incr(&cgroup_syscall_read, cgroup_id);
+                cgroup_incr(&cgroup_syscall_read, cgroup_id);
                 break;
             case 2:
-                array_incr(&cgroup_syscall_write, cgroup_id);
+                cgroup_incr(&cgroup_syscall_write, cgroup_id);
                 break;
             case 3:
-                array_incr(&cgroup_syscall_poll, cgroup_id);
+                cgroup_incr(&cgroup_syscall_poll, cgroup_id);
                 break;
             case 4:
-                array_incr(&cgroup_syscall_lock, cgroup_id);
+                cgroup_incr(&cgroup_syscall_lock, cgroup_id);
                 break;
             case 5:
-                array_incr(&cgroup_syscall_time, cgroup_id);
+                cgroup_incr(&cgroup_syscall_time, cgroup_id);
                 break;
             case 6:
-                array_incr(&cgroup_syscall_sleep, cgroup_id);
+                cgroup_incr(&cgroup_syscall_sleep, cgroup_id);
                 break;
             case 7:
-                array_incr(&cgroup_syscall_socket, cgroup_id);
+                cgroup_incr(&cgroup_syscall_socket, cgroup_id);
                 break;
             case 8:
-                array_incr(&cgroup_syscall_yield, cgroup_id);
+                cgroup_incr(&cgroup_syscall_yield, cgroup_id);
                 break;
             case 9:
-                array_incr(&cgroup_syscall_filesystem, cgroup_id);
+                cgroup_incr(&cgroup_syscall_filesystem, cgroup_id);
                 break;
             case 10:
-                array_incr(&cgroup_syscall_memory, cgroup_id);
+                cgroup_incr(&cgroup_syscall_memory, cgroup_id);
                 break;
             case 11:
-                array_incr(&cgroup_syscall_process, cgroup_id);
+                cgroup_incr(&cgroup_syscall_process, cgroup_id);
                 break;
             case 12:
-                array_incr(&cgroup_syscall_query, cgroup_id);
+                cgroup_incr(&cgroup_syscall_query, cgroup_id);
                 break;
             case 13:
-                array_incr(&cgroup_syscall_ipc, cgroup_id);
+                cgroup_incr(&cgroup_syscall_ipc, cgroup_id);
                 break;
             case 14:
-                array_incr(&cgroup_syscall_timer, cgroup_id);
+                cgroup_incr(&cgroup_syscall_timer, cgroup_id);
                 break;
             case 15:
-                array_incr(&cgroup_syscall_event, cgroup_id);
+                cgroup_incr(&cgroup_syscall_event, cgroup_id);
                 break;
             case 16:
-                array_incr(&cgroup_syscall_sync, cgroup_id);
+                cgroup_incr(&cgroup_syscall_sync, cgroup_id);
                 break;
             default:
-                array_incr(&cgroup_syscall_other, cgroup_id);
+                cgroup_incr(&cgroup_syscall_other, cgroup_id);
                 break;
             }
         }

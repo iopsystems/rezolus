@@ -145,6 +145,9 @@ pub(crate) struct AcquisitionGroup {
     // read itself (mmap-direct `PackedCounters`), not a sampler `refresh()`.
     // See `set_reader_stamped`/`is_reader_stamped`.
     reader_stamped: AtomicBool,
+    // Members are the slots with metadata, as for a reader-stamped group,
+    // while the sampler stamps the window. See `new_slotted`.
+    slotted: bool,
 }
 
 impl AcquisitionGroup {
@@ -159,6 +162,7 @@ impl AcquisitionGroup {
             member_bound: AtomicUsize::new(usize::MAX),
             member_set: OnceLock::new(),
             reader_stamped: AtomicBool::new(false),
+            slotted: false,
         }
     }
 
@@ -202,7 +206,31 @@ impl AcquisitionGroup {
             member_bound: AtomicUsize::new(usize::MAX),
             member_set: OnceLock::new(),
             reader_stamped: AtomicBool::new(true),
+            slotted: false,
         }
+    }
+
+    /// Declare a sampler-stamped group whose members are the slots with
+    /// metadata, as a reader-stamped group's are. For `CgroupCounters`: its
+    /// refresh stamps the window, and a cgroup slot is a member once the
+    /// cgroup's labels are set. A bound would publish every slot below the
+    /// highest live cgroup id, and css ids are allocated across all cgroups,
+    /// not only the ones that run.
+    pub(crate) const fn new_slotted(sampler: &'static str, name: &'static str) -> Self {
+        Self {
+            sampler,
+            name,
+            slot: GroupWindowSlot::new(),
+            member_bound: AtomicUsize::new(usize::MAX),
+            member_set: OnceLock::new(),
+            reader_stamped: AtomicBool::new(false),
+            slotted: true,
+        }
+    }
+
+    /// Whether this group was declared with [`new_slotted`](Self::new_slotted).
+    pub(crate) fn is_slotted(&self) -> bool {
+        self.slotted
     }
 
     /// Limits the V3 member walk to `0..n`; zero declares an empty population.

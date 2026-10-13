@@ -55,6 +55,10 @@
 
 ### Changed
 
+- Reduced overhead when many CPUs count the same cgroup, by giving each
+  per-cgroup BPF counter 16 copies; with cgroup attribution off the maps are
+  not created. (#1450)
+
 - **`record` detects an endpoint by its stream.** For a URL whose path is `/`
   or `/metrics/stream`, `record` subscribes to `/metrics/stream` first; a
   stream handshake means the endpoint is streamed. Otherwise it reads

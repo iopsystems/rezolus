@@ -202,7 +202,7 @@ a constant; over-allocates on small machines, silently under-counts past
 
 ### 7. Counter map layout matches the writer-concurrency pattern
 
-Three counter strategies coexist in `src/agent/bpf/counters.rs`, and the
+Five counter strategies coexist in `src/agent/bpf/counters.rs`, and the
 choice is principled:
 
 - **`Counters`** (per-CPU bank, cacheline-padded, summed at userspace) — for
@@ -212,23 +212,43 @@ choice is principled:
   writer pattern, but per-CPU detail surfaces NUMA imbalance and hot-CPU
   skew at exposition time.
 - **`PackedCounters`** (dense, no padding, mmap-attached directly to a
-  metric group) — for high-cardinality keyed counters where the natural
-  cardinality (per-task, per-cgroup) already separates writers; padding
-  would waste memory.
+  metric group) — for high-cardinality keyed counters with one writer per
+  slot at a time, such as per-task counters; padding would waste memory.
+- **`CgroupCounters`** (`CGROUP_SHARDS` = 16 dense copies of a per-cgroup
+  array, summed at refresh for the live cgroup slots) — for per-cgroup
+  counters, which every CPU running one of the cgroup's tasks writes.
+- **`FilesystemCounters`** (a cacheline-padded bank per CPU and filesystem
+  slot, summed at refresh) — for per-filesystem counters, which every CPU
+  writes.
 
-Padding solves cross-CPU contention. For keys whose natural cardinality
-already separates writers (one task → one slot, one cgroup → one slot),
-padding is wasted memory and packing wins.
+Padding solves cross-CPU contention. A task runs on one CPU at a time, so
+a per-task slot has one writer and packing wins. A cgroup's tasks run on
+many CPUs at once, so one dense copy puts all of them on the same line.
+Measured in a 56-vCPU KVM guest (7 L3 domains) with every sampler on and
+4, 16 and 48 threads calling `getppid(2)` in one cgroup, `sys_enter` took
+246-247, 299-305 and 503-508 ns per run with one copy and 142, 145 and 171
+ns with 16 copies, none shared across two L3 caches. Copies assigned as
+`cpu % 16`, each shared by CPUs in different L3 caches, left 280 ns at 48
+threads, so the agent assigns copies from the L3 topology at startup
+(`cgroup_shard_table()`; `cgroup_shard_of_cpu` in `bpf/cgroup.h`). A CPU
+that sysfs does not list at startup writes copy `cpu % 16`. A copy
+per possible CPU would remove the remaining sharing but costs 1.5 MiB per
+CPU for the 47 maps (282 MiB at 192 CPUs); 16 copies cost 23.5 MiB on any
+host. A sampler with a `cgroup_attribution` switch does not create its
+cgroup maps when the switch is off.
 
 **How to apply.**
 - New samplers prefer `CpuCounters` over `Counters` (see also principle 9).
-- Choose `PackedCounters` for high-cardinality keyed counters.
+- Choose `PackedCounters` for per-task keyed counters and
+  `CgroupCounters` (`cgroup_add()`/`cgroup_incr()` in `bpf/cgroup.h`) for
+  per-cgroup ones. Per-cgroup gauges set by `array_set_if_larger` and
+  rarely written counts keep one `PackedCounters` copy (`cpu_bandwidth`).
 - Group widths (`COUNTER_GROUP_WIDTH` etc.) are sized to a whole number of
   cachelines (each cacheline is 8 × `u64` = 64 bytes); typical values are
   8 or 16.
 
 **What we refuse.**
-- Hand-rolling a fourth counter strategy when one of the three fits.
+- Hand-rolling another counter strategy when one of the five fits.
 - Padding `PackedCounters`-style keyed slots where each slot has one
   natural writer.
 
@@ -645,7 +665,8 @@ sampler's windowless default group), plus external metrics (`record`/
 push-ingested values carried on `ExternalMetric`, which stamps its own
 per-value `Window` from the *source's* observation, not a Rezolus read
 section — structurally outside acquisition-group discipline, not a pending
-migration). `PackedCounters` (mmap-direct cgroup/task counters — its
+migration). `PackedCounters` (mmap-direct per-task counters and `cpu_bandwidth`'s
+cgroup maps — its
 acquisition is the exposition read, bracketed by `create`/`create_v3`
 themselves) migrated in wave-2 Part A; declared reader-stamped groups use
 metadata-presence membership (`load_metadata(idx).is_some()`), never
@@ -729,7 +750,8 @@ change. Each item is a yes/no question, or "justify in a comment."
   does; elsewhere `BPF_MAP_TYPE_HASH`, justified in a comment. Anything else
   needs explicit reasoning. (Principle 5.)
 - **Counter layout.** Choose `Counters` / `CpuCounters` / `PackedCounters`
-  based on the writer concurrency pattern (principle 7). Prefer
+  / `CgroupCounters` based on the writer concurrency pattern (principle
+  7). Prefer
   `CpuCounters` over `Counters` for new samplers (principle 9). Group
   width is a whole-number multiple of a cacheline (8 × `u64` = 64 bytes).
 - **Histogram parameters.** Use `histogram_incr(&map, HISTOGRAM_POWER,

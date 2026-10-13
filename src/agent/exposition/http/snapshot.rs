@@ -650,7 +650,7 @@ fn create(
     // end immediately after each touching metric's member-value loop
     // (`AcquisitionGuard::mark_end` — the LAST such call before finish()
     // wins, so a group touched by several like-entity members, e.g.
-    // `cgroup_syscall`'s 16 op-class maps, still ends up with its true
+    // `cpu_bandwidth`'s cgroup maps, still ends up with its true
     // last-member-read as the end), then finish() (publish) once the whole
     // per-metric loop completes (see the finalization loop after it) and
     // patch every entry pushed for that group to the published window.
@@ -2762,6 +2762,62 @@ mod tests {
                 "acq_group must still be stripped on a bounded declared group's members"
             );
         }
+    }
+
+    // A `new_slotted` group (`CgroupCounters`): 64 backing entries, labels on
+    // slots 3 and 40, a value with no labels on slot 10.
+    static V3_SLOTTED_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new_slotted("unattributed", "slotted_counter_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_SLOTTED_GROUP_ENTRY: &'static AcquisitionGroup = &V3_SLOTTED_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_slotted_counters",
+        metadata = { acq_group = "slotted_counter_probe" }
+    )]
+    static V3_SLOTTED_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(64);
+
+    #[test]
+    fn slotted_group_members_are_the_labelled_slots() {
+        for idx in [3usize, 40] {
+            let mut md = HashMap::new();
+            md.insert("name".to_string(), format!("cg{idx}"));
+            V3_SLOTTED_COUNTERS.set_metadata(idx, md);
+            V3_SLOTTED_COUNTERS.set(idx, idx as u64);
+        }
+        V3_SLOTTED_COUNTERS.set(10, 10);
+        // What `samplers::deferred` does to every group: bound 0 while the
+        // sampler waits, lifted after a late init.
+        V3_SLOTTED_GROUP.set_member_bound(0);
+        V3_SLOTTED_GROUP.lift_zero_bound();
+        V3_SLOTTED_GROUP.acquire().finish();
+
+        let mut cache = v3_builder();
+        let snap = create_v3(Duration::from_secs(1), vec![], &mut cache, (0, 0));
+        let Snapshot::V3(s) = snap else {
+            panic!("expected V3")
+        };
+
+        let group = s
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/slotted_counter_probe")
+            .expect("slotted group present");
+        assert_eq!(group.validate(), Ok(()));
+        let schema = group.schema.as_ref().expect("schema present");
+        let names: Vec<_> = schema
+            .counters
+            .iter()
+            .map(|d| d.metadata.get("name").cloned())
+            .collect();
+        assert_eq!(
+            names,
+            [Some("cg3".to_string()), Some("cg40".to_string())],
+            "members are the labelled slots, not a prefix or the backing capacity"
+        );
+        assert_eq!(group.counters, [Some(3), Some(40)]);
+        assert!(group.window.is_some(), "the sampler's stamp is published");
     }
 
     // Dedicated group + metric: 2 backing entries, member_bound set larger

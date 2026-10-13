@@ -43,23 +43,23 @@ static RUNNING_ACQ_REG: &'static AcquisitionGroup = &RUNNING_ACQ;
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static OFFCPU_ACQ_REG: &'static AcquisitionGroup = &OFFCPU_ACQ;
 
-// Reader-stamped (mmap-direct `PackedCounters`) groups for the per-cgroup
+// Per-cgroup (`CgroupCounters`) groups for the per-cgroup
 // breakdown — see `docs/principles.md` principle 18 and
-// `crate::agent::timing::AcquisitionGroup::set_reader_stamped`.
+// `crate::agent::timing::AcquisitionGroup::new_slotted`.
 // `CGROUP_SCHEDULER_IVCSW`/`CGROUP_SCHEDULER_VCSW` share ONE group: both
 // are the `cgroup_scheduler_context_switch` family (distinguished by the
 // `kind` label) — like-entities collapse per principle 18.
 // `cgroup_scheduler_runqueue_wait`/`cgroup_scheduler_offcpu` are distinct
 // families and keep their own groups.
-pub static CGROUP_WAIT_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+pub static CGROUP_WAIT_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
     crate::agent::samplers::bpf_sampler_name("scheduler"),
     "scheduler_runqueue_cgroup_wait",
 );
-pub static CGROUP_OFFCPU_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+pub static CGROUP_OFFCPU_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
     crate::agent::samplers::bpf_sampler_name("scheduler"),
     "scheduler_runqueue_cgroup_offcpu",
 );
-pub static CGROUP_CONTEXT_SWITCH_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+pub static CGROUP_CONTEXT_SWITCH_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
     crate::agent::samplers::bpf_sampler_name("scheduler"),
     "scheduler_runqueue_cgroup_context_switch",
 );
@@ -185,10 +185,10 @@ pub static MIGRATIONS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     "scheduler_migrations",
 );
 
-// Reader-stamped (mmap-direct `PackedCounters`) group for the per-cgroup
+// Per-cgroup (`CgroupCounters`) group for the per-cgroup
 // migration count — see `docs/principles.md` principle 18 and
-// `crate::agent::timing::AcquisitionGroup::set_reader_stamped`.
-pub static CGROUP_MIGRATIONS_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+// `crate::agent::timing::AcquisitionGroup::new_slotted`.
+pub static CGROUP_MIGRATIONS_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
     crate::agent::samplers::bpf_sampler_name("scheduler"),
     "scheduler_cgroup_migrations",
 );

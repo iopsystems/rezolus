@@ -150,7 +150,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_ivcsw SEC(".maps");
 
 struct {
@@ -158,7 +158,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_vcsw SEC(".maps");
 
 struct {
@@ -166,7 +166,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_runq_wait SEC(".maps");
 
 struct {
@@ -174,7 +174,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_offcpu SEC(".maps");
 
 /*
@@ -195,7 +195,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_cpu_migrations SEC(".maps");
 
 // For storing the CPU a process was last seen on, at pid_slot(pid)
@@ -254,15 +254,14 @@ static __always_inline u32 resolve_cgroup(struct task_struct* task, bool btf) {
 
     if (handle_new_cgroup_read(&tg->css, id, serial_nr, &cgroup_serial_numbers, &cgroup_info) ==
         0) {
-        u64 zero = 0;
         if (runqueue) {
-            bpf_map_update_elem(&cgroup_ivcsw, &id, &zero, BPF_ANY);
-            bpf_map_update_elem(&cgroup_vcsw, &id, &zero, BPF_ANY);
-            bpf_map_update_elem(&cgroup_runq_wait, &id, &zero, BPF_ANY);
-            bpf_map_update_elem(&cgroup_offcpu, &id, &zero, BPF_ANY);
+            cgroup_zero(&cgroup_ivcsw, id);
+            cgroup_zero(&cgroup_vcsw, id);
+            cgroup_zero(&cgroup_runq_wait, id);
+            cgroup_zero(&cgroup_offcpu, id);
         }
         if (migrations) {
-            bpf_map_update_elem(&cgroup_cpu_migrations, &id, &zero, BPF_ANY);
+            cgroup_zero(&cgroup_cpu_migrations, id);
         }
     }
 
@@ -325,7 +324,7 @@ static __always_inline u32 runqueue_switch(struct task_struct* prev, struct task
             array_incr(&counters, idx);
 
             if (prev_cgroup_id < MAX_CGROUPS) {
-                array_incr(&cgroup_ivcsw, prev_cgroup_id);
+                cgroup_incr(&cgroup_ivcsw, prev_cgroup_id);
             }
 
             bpf_map_update_elem(&enqueued_at, &prev_slot, &ts, 0);
@@ -357,7 +356,7 @@ static __always_inline u32 runqueue_switch(struct task_struct* prev, struct task
         array_incr(&counters, idx);
 
         if (prev_cgroup_id < MAX_CGROUPS) {
-            array_incr(&cgroup_vcsw, prev_cgroup_id);
+            cgroup_incr(&cgroup_vcsw, prev_cgroup_id);
         }
     }
 
@@ -389,7 +388,7 @@ static __always_inline u32 runqueue_switch(struct task_struct* prev, struct task
                 array_add(&counters, idx, delta_ns);
 
                 if (next_cgroup_id < MAX_CGROUPS) {
-                    array_add(&cgroup_runq_wait, next_cgroup_id, delta_ns);
+                    cgroup_add(&cgroup_runq_wait, next_cgroup_id, delta_ns);
                 }
 
                 *tsp = 0;
@@ -407,7 +406,7 @@ static __always_inline u32 runqueue_switch(struct task_struct* prev, struct task
                             histogram_incr(&offcpu, HISTOGRAM_POWER, offcpu_ns);
 
                             if (next_cgroup_id < MAX_CGROUPS) {
-                                array_add(&cgroup_offcpu, next_cgroup_id, offcpu_ns);
+                                cgroup_add(&cgroup_offcpu, next_cgroup_id, offcpu_ns);
                             }
                         }
                     } else {
@@ -461,7 +460,7 @@ static __always_inline void migrations_switch(struct task_struct* next, u32 next
             if (cgroup_attribution) {
                 u32 cgroup_id = next_cgroup_known ? next_cgroup_id : resolve_cgroup(next, btf);
                 if (cgroup_id < MAX_CGROUPS) {
-                    array_incr(&cgroup_cpu_migrations, cgroup_id);
+                    cgroup_incr(&cgroup_cpu_migrations, cgroup_id);
                 }
             }
         }
