@@ -97,7 +97,7 @@ struct {
     __uint(max_entries, TASK_RINGBUF_CAPACITY);
 } task_exit SEC(".maps");
 
-// holds task start times to detect new or reused PIDs
+// holds task start times to detect new or reused PIDs, at pid_slot(pid)
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(map_flags, BPF_F_MMAPABLE);
@@ -155,7 +155,8 @@ struct {
     __uint(max_entries, MAX_CPUS* CPU_USAGE_GROUP_WIDTH);
 } cpu_usage SEC(".maps");
 
-// tracking per-task user time (internal, for delta calculation)
+// tracking per-task user time (internal, for delta calculation), at
+// pid_slot(pid)
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(map_flags, BPF_F_MMAPABLE);
@@ -164,7 +165,8 @@ struct {
     __uint(max_entries, MAX_PID);
 } task_utime SEC(".maps");
 
-// tracking per-task system time (internal, for delta calculation)
+// tracking per-task system time (internal, for delta calculation), at
+// pid_slot(pid)
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(map_flags, BPF_F_MMAPABLE);
@@ -173,7 +175,8 @@ struct {
     __uint(max_entries, MAX_PID);
 } task_stime SEC(".maps");
 
-// per-task cpu usage in nanoseconds (user + system, exported)
+// per-task cpu usage in nanoseconds (user + system, exported), at
+// pid_slot(pid); userspace assigns each task's series to that index
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(map_flags, BPF_F_MMAPABLE);
@@ -312,7 +315,9 @@ static __noinline int handle_new_task(struct task_struct* task, u32 pid, u64 sta
     if (pid == 0 || pid >= MAX_PID)
         return -1;
 
-    u64* last_start = bpf_map_lookup_elem(&task_start_times, &pid);
+    u32 slot = pid_slot(pid);
+
+    u64* last_start = bpf_map_lookup_elem(&task_start_times, &slot);
     if (!last_start)
         return -1;
 
@@ -321,7 +326,7 @@ static __noinline int handle_new_task(struct task_struct* task, u32 pid, u64 sta
     // The instance whose counters are live: only its metadata may be owed.
     if ((marker & ~METADATA_PENDING) == start_time) {
         if ((marker & METADATA_PENDING) && send_task_info(task)) {
-            bpf_map_update_elem(&task_start_times, &pid, &start_time, BPF_ANY);
+            bpf_map_update_elem(&task_start_times, &slot, &start_time, BPF_ANY);
         }
         return 1;
     }
@@ -333,20 +338,20 @@ static __noinline int handle_new_task(struct task_struct* task, u32 pid, u64 sta
 
     u64 zero = 0;
     if (start_time >= attach_ns) {
-        bpf_map_update_elem(&task_utime, &pid, &zero, BPF_ANY);
-        bpf_map_update_elem(&task_stime, &pid, &zero, BPF_ANY);
+        bpf_map_update_elem(&task_utime, &slot, &zero, BPF_ANY);
+        bpf_map_update_elem(&task_stime, &slot, &zero, BPF_ANY);
     } else {
         u64 utime = BPF_CORE_READ(task, utime);
         u64 stime = BPF_CORE_READ(task, stime);
-        bpf_map_update_elem(&task_utime, &pid, &utime, BPF_ANY);
-        bpf_map_update_elem(&task_stime, &pid, &stime, BPF_ANY);
+        bpf_map_update_elem(&task_utime, &slot, &utime, BPF_ANY);
+        bpf_map_update_elem(&task_stime, &slot, &stime, BPF_ANY);
     }
-    bpf_map_update_elem(&task_cpu_usage, &pid, &zero, BPF_ANY);
+    bpf_map_update_elem(&task_cpu_usage, &slot, &zero, BPF_ANY);
 
     marker = start_time;
     if (!send_task_info(task))
         marker |= METADATA_PENDING;
-    bpf_map_update_elem(&task_start_times, &pid, &marker, BPF_ANY);
+    bpf_map_update_elem(&task_start_times, &slot, &marker, BPF_ANY);
 
     return 0;
 }
@@ -378,13 +383,15 @@ static __always_inline int handle_cpuacct_account_field(struct task_struct* task
     if (pid == 0 || pid >= MAX_PID)
         return 0;
 
+    u32 slot = pid_slot(pid);
+
     handle_new_task(task, pid, BTF_READ(btf, task, start_time));
 
     curr_utime = BTF_READ(btf, task, utime);
     curr_stime = BTF_READ(btf, task, stime);
 
-    last_utime = bpf_map_lookup_elem(&task_utime, &pid);
-    last_stime = bpf_map_lookup_elem(&task_stime, &pid);
+    last_utime = bpf_map_lookup_elem(&task_utime, &slot);
+    last_stime = bpf_map_lookup_elem(&task_stime, &slot);
 
     if (!last_utime || !last_stime)
         return 0;
@@ -432,7 +439,7 @@ static __always_inline int handle_cpuacct_account_field(struct task_struct* task
 
     u64 delta_total = delta_utime + delta_stime;
     if (delta_total > 0) {
-        array_add(&task_cpu_usage, pid, delta_total);
+        array_add(&task_cpu_usage, slot, delta_total);
     }
 
     if (!cgroup_attribution)
@@ -483,6 +490,8 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
     if (pid == 0 || pid >= MAX_PID)
         return 0;
 
+    u32 slot = pid_slot(pid);
+
     // Fold this task's total into the exited-task aggregates before dropping it.
     // The per-task counter and its metadata are released together below, so
     // without this the time is simply gone: the cgroup and host totals still
@@ -490,7 +499,7 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
     // tell how much of the task view is missing. These aggregates let the books
     // be reconciled -- sum(live tasks) + exited ~= cgroup total -- at O(1) cost
     // and with no additional cardinality.
-    u64* usage = bpf_map_lookup_elem(&task_cpu_usage, &pid);
+    u64* usage = bpf_map_lookup_elem(&task_cpu_usage, &slot);
     if (usage && *usage) {
         u32 cpu = bpf_get_smp_processor_id();
 
@@ -511,18 +520,18 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
 
     // Zero the exported counter FIRST to prevent exporting values without metadata
     u64 zero = 0;
-    bpf_map_update_elem(&task_cpu_usage, &pid, &zero, BPF_ANY);
+    bpf_map_update_elem(&task_cpu_usage, &slot, &zero, BPF_ANY);
 
-    bpf_map_update_elem(&task_utime, &pid, &zero, BPF_ANY);
-    bpf_map_update_elem(&task_stime, &pid, &zero, BPF_ANY);
-    bpf_map_update_elem(&task_start_times, &pid, &zero, BPF_ANY);
+    bpf_map_update_elem(&task_utime, &slot, &zero, BPF_ANY);
+    bpf_map_update_elem(&task_stime, &slot, &zero, BPF_ANY);
+    bpf_map_update_elem(&task_start_times, &slot, &zero, BPF_ANY);
 
     // Unlike handle_new_task above, there is no cheap retry available here
     // if the reserve fails: `sched_process_exit` fires exactly once per
     // task's lifetime, so there is no "next event" for this task to retry
     // on the way `cpuacct_account_field`'s frequent firing gives
     // handle_new_task one. A dropped exit event means userspace never
-    // calls clear_metadata(pid) (see handle_task_exit in mod.rs), so the
+    // releases the task's slot (see handle_task_exit in mod.rs), so the
     // task's OLD metadata (comm, tgid, cgroup) lingers as a phantom
     // metadata-presence member after the task is actually gone. The
     // residual is bounded and self-healing, not unbounded staleness: the

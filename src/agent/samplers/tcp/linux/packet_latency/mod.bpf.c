@@ -98,7 +98,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } latency SEC(".maps");
 
 // The murmur3 64-bit finalizer. Socket addresses are slab objects at a fixed

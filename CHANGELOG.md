@@ -55,6 +55,14 @@
 
 ### Changed
 
+- Reduced overhead by giving each CPU its own slice of every BPF histogram,
+  at about 4 KiB of memory per possible CPU per histogram. (#1445)
+
+- Reduced overhead when threads with neighbouring thread IDs (TIDs) run on
+  different CPUs, by indexing per-thread BPF arrays through a permutation of
+  the TID. The `id` label and `x<n>` series-name suffix of `task_cpu_usage`
+  are now that index, not the TID; select a thread by its `pid` label. (#1444)
+
 - **A Prometheus endpoint's HELP text is its recording's `descriptions`.**
   The scrape's `# HELP` lines (first seen wins) are written into the
   recording's `descriptions` metadata, the key an agent recording fills from

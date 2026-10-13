@@ -62,11 +62,12 @@ struct {
 } counters SEC(".maps");
 
 /*
- * tracking structs
+ * tracking structs, per pid at pid_slot(pid) (see helpers.h)
  */
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
     __uint(max_entries, MAX_PID);
     __type(key, u32);
     __type(value, u64);
@@ -74,6 +75,7 @@ struct {
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
     __uint(max_entries, MAX_PID);
     __type(key, u32);
     __type(value, u64);
@@ -81,6 +83,7 @@ struct {
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
     __uint(max_entries, MAX_PID);
     __type(key, u32);
     __type(value, u64);
@@ -119,7 +122,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } runqlat SEC(".maps");
 
 struct {
@@ -127,7 +130,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } running SEC(".maps");
 
 struct {
@@ -135,7 +138,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } offcpu SEC(".maps");
 
 /*
@@ -195,9 +198,10 @@ struct {
     __uint(max_entries, MAX_CGROUPS);
 } cgroup_cpu_migrations SEC(".maps");
 
-// For storing the CPU a process was last seen on
+// For storing the CPU a process was last seen on, at pid_slot(pid)
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
     __uint(max_entries, MAX_PID);
     __type(key, u32);   // pid
     __type(value, u32); // cpu
@@ -214,8 +218,10 @@ static __always_inline int trace_enqueue(u32 pid) {
         return 0;
     }
 
+    u32 slot = pid_slot(pid);
+
     ts = bpf_ktime_get_ns();
-    bpf_map_update_elem(&enqueued_at, &pid, &ts, 0);
+    bpf_map_update_elem(&enqueued_at, &slot, &ts, 0);
     return 0;
 }
 
@@ -290,6 +296,8 @@ static __always_inline u32 runqueue_switch(struct task_struct* prev, struct task
     // `trace_enqueue()` already skips pid 0 on the wakeup path; skipping it here
     // keeps the switch path consistent with it.
     u32 prev_pid = BTF_READ(btf, prev, pid);
+    u32 prev_slot = pid_slot(prev_pid);
+    u32 next_slot = pid_slot(next_pid);
 
     // read the prev task cgroup details and push to ringbuf if new cgroup
     if (cgroup_attribution) {
@@ -320,9 +328,9 @@ static __always_inline u32 runqueue_switch(struct task_struct* prev, struct task
                 array_incr(&cgroup_ivcsw, prev_cgroup_id);
             }
 
-            bpf_map_update_elem(&enqueued_at, &prev_pid, &ts, 0);
+            bpf_map_update_elem(&enqueued_at, &prev_slot, &ts, 0);
 
-            tsp = bpf_map_lookup_elem(&running_at, &prev_pid);
+            tsp = bpf_map_lookup_elem(&running_at, &prev_slot);
             if (tsp && *tsp) {
                 // A timestamp pair can arrive out of order across CPUs; an
                 // unguarded subtraction would wrap to ~2^64 and land in the top
@@ -355,7 +363,7 @@ static __always_inline u32 runqueue_switch(struct task_struct* prev, struct task
 
     // for all tasks: track when it went off-cpu
     if (prev_pid) {
-        bpf_map_update_elem(&offcpu_at, &prev_pid, &ts, 0);
+        bpf_map_update_elem(&offcpu_at, &prev_slot, &ts, 0);
     }
 
     // next task has moved into running
@@ -368,9 +376,9 @@ static __always_inline u32 runqueue_switch(struct task_struct* prev, struct task
     }
 
     if (next_pid) {
-        bpf_map_update_elem(&running_at, &next_pid, &ts, 0);
+        bpf_map_update_elem(&running_at, &next_slot, &ts, 0);
 
-        tsp = bpf_map_lookup_elem(&enqueued_at, &next_pid);
+        tsp = bpf_map_lookup_elem(&enqueued_at, &next_slot);
         if (tsp && *tsp) {
             if (ts >= *tsp) {
                 delta_ns = ts - *tsp;
@@ -388,7 +396,7 @@ static __always_inline u32 runqueue_switch(struct task_struct* prev, struct task
 
                 // calculate how long it was off-cpu, not including runqueue wait,
                 // and increment stats
-                tsp = bpf_map_lookup_elem(&offcpu_at, &next_pid);
+                tsp = bpf_map_lookup_elem(&offcpu_at, &next_slot);
                 if (tsp && *tsp) {
                     if (ts >= *tsp) {
                         offcpu_ns = ts - *tsp;
@@ -431,8 +439,10 @@ static __always_inline void migrations_switch(struct task_struct* next, u32 next
         return;
     }
 
+    u32 next_slot = pid_slot(next_pid);
+
     // find the last cpu the task ran on
-    u32* last_cpu_ptr = bpf_map_lookup_elem(&last_cpu, &next_pid);
+    u32* last_cpu_ptr = bpf_map_lookup_elem(&last_cpu, &next_slot);
 
     // check the ptr and that the last cpu is known (it is stored one-indexed)
     if (last_cpu_ptr && *last_cpu_ptr) {
@@ -459,7 +469,7 @@ static __always_inline void migrations_switch(struct task_struct* next, u32 next
 
     // store the current cpu for the next task (converted to one-indexed)
     u32 stored = cpu + 1;
-    bpf_map_update_elem(&last_cpu, &next_pid, &stored, BPF_ANY);
+    bpf_map_update_elem(&last_cpu, &next_slot, &stored, BPF_ANY);
 }
 
 // `btf` is a compile-time constant: true in the tp_btf program.
