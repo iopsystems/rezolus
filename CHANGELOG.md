@@ -1,45 +1,57 @@
 ## [Unreleased]
 
+## [5.28.0] - 2026-10-13
+
 ### Added
 
 - `drivehealth` reads the EC2 NVMe detailed performance statistics (log page
   0xD0) from EBS and instance store volumes on Nitro instances:
   `drive_performance_exceeded_time` (time demand exceeded the volume's or
-  instance's IOPS or throughput limit) and `drive_queue_length`. Backported
-  from 6.0 (#1455) in #1456.
+  instance's IOPS or throughput limit) and `drive_queue_length`. Not yet run
+  against a real EBS or instance store device. Backported from 6.0 (#1455)
+  in #1456.
 
 ### Changed
 
-The pid_slot and per-CPU histogram changes from 6.0 (#1444, #1445),
-backported in #1451.
+- **`task_cpu_usage` series are no longer keyed by thread ID.** With
+  `task_attribution = true`, the `id` label and `x<n>` series-name suffix
+  are a slot index; select a thread by its `pid` label. (#1451)
 
-- Reduced overhead when threads with neighbouring thread IDs (TIDs) run on
+- Reduced overhead when threads with neighbouring thread IDs run on
   different CPUs, by indexing per-thread BPF arrays through a permutation of
-  the TID. With `task_attribution = true`, the `id` label and `x<n>`
-  series-name suffix of `task_cpu_usage` are now that index, not the TID;
-  select a thread by its `pid` label.
+  the thread ID. (#1451)
 
 - Reduced overhead by giving each CPU its own slice of every BPF histogram,
-  at about 4 KiB of memory per possible CPU per histogram.
+  at about 4 KiB of memory per possible CPU per histogram (about 42 MiB for
+  all 58 at 192 CPUs). A read sums the slices: agent CPU over 30 s of
+  `/metrics/json` reads every 50 ms went from 8570-8600 ms to 8880-8930 ms
+  on 56 vCPUs. (#1451)
 
 - Reduced overhead when many CPUs count the same cgroup, by giving each
-  per-cgroup BPF counter 16 copies: 23.5 MiB of BPF maps with cgroup
-  attribution on, against 1.5 MiB before; with it off the maps are not
-  created. Backported from 6.0 (#1450) in #1452.
+  per-cgroup BPF counter 16 copies: 512 KiB per per-cgroup map instead of
+  32 KiB, 23.5 MiB with every cgroup-counting sampler enabled (19.3 MB
+  measured with the default samplers, against 3.5 MB). With cgroup
+  attribution off the maps are not created. (#1452)
+
+These BPF changes were measured on kernel 6.12 and have not yet been loaded
+on 5.8-5.10 kernels.
 
 ### Fixed
 
-The `cpu_l3` and NUMA fixes from 6.0 (#1457, #1458), backported in #1459.
-
 - `cpu_l3` reports unsupported on a machine without L3 cache perf counters,
-  such as a VM without a PMU, so `rezolus status` no longer exits 1 there;
-  any other open error is still a failure, now with its errno.
+  such as a VM without a PMU, so `rezolus status` no longer exits 1 there. A
+  permission refusal is also unsupported and names `perf_event_paranoid`,
+  `CAP_PERFMON` and seccomp; any other open error is still a failure, now
+  with its errno. (#1459)
 
 - Corrected the swapped `memory_numa_miss` and `memory_numa_foreign`
-  descriptions; the NUMA dashboard's remote plot now uses `memory_numa_other`.
+  descriptions. The NUMA dashboard's remote plot now uses
+  `memory_numa_other`, a Memory Policy subgroup plots hit, miss and
+  interleave, and MCP anomaly detection analyses local, other and miss.
+  (#1459)
 
 - The agent's start-up log gives the reason for a sampler that is
-  unsupported at init; it printed nothing after the dash. From 6.0's #1441.
+  unsupported at init; it printed nothing after the dash. (#1459)
 
 ## [5.27.0] - 2026-10-12
 
@@ -1977,7 +1989,8 @@ focal.
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.27.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.28.0...HEAD
+[5.28.0]: https://github.com/iopsystems/rezolus/compare/v5.27.0...v5.28.0
 [5.27.0]: https://github.com/iopsystems/rezolus/compare/v5.26.0...v5.27.0
 [5.26.0]: https://github.com/iopsystems/rezolus/compare/v5.25.1...v5.26.0
 [5.25.1]: https://github.com/iopsystems/rezolus/compare/v5.25.0...v5.25.1
