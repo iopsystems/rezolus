@@ -102,29 +102,48 @@ fn init(config: Arc<Config>) -> SamplerResult {
             .as_mut()
             .expect("the program declares read-only data")
             .cgroup_attribution = cgroup_attribution as u8;
+        if !cgroup_attribution {
+            let maps = &mut open.maps;
+            for map in [
+                &mut maps.cgroup_info,
+                &mut maps.cgroup_serial_numbers,
+                &mut maps.cgroup_ivcsw,
+                &mut maps.cgroup_vcsw,
+                &mut maps.cgroup_runq_wait,
+                &mut maps.cgroup_offcpu,
+            ] {
+                if let Err(e) = map.set_autocreate(false) {
+                    debug!("{NAME}: could not leave a map out of the object: {e}");
+                }
+            }
+        }
     });
 
     if cgroup_attribution {
         builder = builder
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_runq_wait",
                 &CGROUP_SCHEDULER_RUNQUEUE_WAIT,
                 &CGROUP_WAIT_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_offcpu",
                 &CGROUP_SCHEDULER_OFFCPU,
                 &CGROUP_OFFCPU_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_ivcsw",
                 &CGROUP_SCHEDULER_IVCSW,
                 &CGROUP_CONTEXT_SWITCH_ACQ,
+                &CGROUP_IDENTITY,
             )
-            .packed_counters(
+            .cgroup_counters(
                 "cgroup_vcsw",
                 &CGROUP_SCHEDULER_VCSW,
                 &CGROUP_CONTEXT_SWITCH_ACQ,
+                &CGROUP_IDENTITY,
             )
             .ringbuf_handler("cgroup_info", handle_cgroup_info);
     }

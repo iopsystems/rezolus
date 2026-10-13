@@ -14,6 +14,11 @@ backported in #1451.
 - Reduced overhead by giving each CPU its own slice of every BPF histogram,
   at about 4 KiB of memory per possible CPU per histogram.
 
+- Reduced overhead when many CPUs count the same cgroup, by giving each
+  per-cgroup BPF counter 16 copies: 23.5 MiB of BPF maps with cgroup
+  attribution on, against 1.5 MiB before; with it off the maps are not
+  created. Backported from 6.0 (#1450) in #1452.
+
 ## [5.27.0] - 2026-10-12
 
 ### Changed

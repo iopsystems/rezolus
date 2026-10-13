@@ -23,14 +23,14 @@ pub static CPU_PERF_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     "cpu_perf_sweep",
 );
 
-// Reader-stamped (mmap-direct `PackedCounters`) groups, one per distinct
+// Per-cgroup (`CgroupCounters`) groups, one per distinct
 // metric family — see `docs/principles.md` principle 18 and
-// `crate::agent::timing::AcquisitionGroup::set_reader_stamped`.
-pub static CGROUP_CYCLES_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+// `crate::agent::timing::AcquisitionGroup::new_slotted`.
+pub static CGROUP_CYCLES_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
     crate::agent::samplers::bpf_sampler_name("cpu_perf"),
     "cpu_perf_cgroup_cycles",
 );
-pub static CGROUP_INSTRUCTIONS_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+pub static CGROUP_INSTRUCTIONS_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
     crate::agent::samplers::bpf_sampler_name("cpu_perf"),
     "cpu_perf_cgroup_instructions",
 );

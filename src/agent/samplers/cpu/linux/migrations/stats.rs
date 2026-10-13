@@ -19,10 +19,10 @@ pub static MIGRATIONS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     "cpu_migrations_migrations",
 );
 
-// Reader-stamped (mmap-direct `PackedCounters`) group for the per-cgroup
+// Per-cgroup (`CgroupCounters`) group for the per-cgroup
 // migration count — see `docs/principles.md` principle 18 and
-// `crate::agent::timing::AcquisitionGroup::set_reader_stamped`.
-pub static CGROUP_MIGRATIONS_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+// `crate::agent::timing::AcquisitionGroup::new_slotted`.
+pub static CGROUP_MIGRATIONS_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
     crate::agent::samplers::bpf_sampler_name("cpu_migrations"),
     "cpu_migrations_cgroup",
 );

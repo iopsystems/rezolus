@@ -566,8 +566,8 @@ fn create(
     // first touch (below, in the CounterGroup/GaugeGroup arms), mark its
     // end immediately after each touching metric's member-value loop
     // (`AcquisitionGuard::mark_end` — the LAST such call before finish()
-    // wins, so a group touched by several like-entity members, e.g.
-    // `cgroup_syscall`'s 16 op-class maps, still ends up with its true
+    // wins, so a group touched by several like-entity members still ends
+    // up with its true
     // last-member-read as the end), then finish() (publish) once the whole
     // per-metric loop completes (see the finalization loop after it) and
     // patch every entry pushed for that group to the published window.
@@ -801,7 +801,9 @@ fn create(
                 // beyond `id`, but present, still summable); metadata-
                 // presence membership would silently drop it. Keeping V2's
                 // existing walk preserves that fallback robustness, not
-                // just historical byte-parity.
+                // just historical byte-parity. That holds for
+                // reader-stamped groups; `CgroupCounters` sets a slot only
+                // once its labels arrive, so V2 omits it until then.
                 if let Some(ag) = reader_stamped_group {
                     let bracket = reader_stamped_brackets
                         .entry((ag.sampler, ag.name))
@@ -1698,7 +1700,9 @@ fn fold_group_identities<'a>(
                     declared = true;
                     member_bound = ag.member_bound();
                     member_set = ag.member_set();
-                    reader_stamped = ag.is_reader_stamped();
+                    // A slotted group (`CgroupCounters`) takes the same
+                    // metadata-presence membership with its sampler's window.
+                    reader_stamped = ag.is_reader_stamped() || ag.is_slotted();
                     (ag.sampler, ag.name)
                 } else {
                     (sampler, "main")
@@ -2006,7 +2010,9 @@ fn resolve_walk_window(first: Option<Window>, latest: Option<Window>) -> Option<
 /// # A third membership mode: reader-stamped (metadata-presence)
 ///
 /// [`AcquisitionGroup::is_reader_stamped`] groups (mmap-direct
-/// `PackedCounters` — cgroup and task counters) use neither the unbounded
+/// `PackedCounters`: task counters and `cpu_bandwidth`'s cgroup maps) and
+/// [`AcquisitionGroup::is_slotted`] groups (`CgroupCounters`, with their
+/// sampler's window) use neither the unbounded
 /// `0..entries()` walk nor `member_bound`'s dense prefix. Membership is
 /// `load_metadata(idx).is_some()`: an index the sampler's ringbuf handler
 /// has registered metadata for (a live cgroup, a live task) is a member,
@@ -2111,7 +2117,9 @@ fn create_v3(
                     declared = true;
                     member_bound = ag.member_bound();
                     member_set = ag.member_set();
-                    reader_stamped = ag.is_reader_stamped();
+                    // A slotted group (`CgroupCounters`) takes the same
+                    // metadata-presence membership with its sampler's window.
+                    reader_stamped = ag.is_reader_stamped() || ag.is_slotted();
                     (ag.sampler, ag.name)
                 } else {
                     debug_assert!(
@@ -2275,7 +2283,8 @@ fn create_v3(
                     );
                     if reader_stamped {
                         // Reader-stamped (mmap-direct `PackedCounters`)
-                        // group: membership is metadata-presence, not
+                        // or slotted (`CgroupCounters`) group: membership
+                        // is metadata-presence, not
                         // `0..bound` — a registered index (a live cgroup/
                         // task the sampler's ringbuf handler attached
                         // metadata to) is a member, full stop, regardless of
@@ -2341,8 +2350,7 @@ fn create_v3(
                         // the walk (every other group's schema assembly,
                         // hashing, etc.) has also happened. See
                         // `AcquisitionGuard::mark_end`. A group with several
-                        // like-entity members (e.g. `cgroup_syscall`'s 16
-                        // op-class maps) touches this arm once per member;
+                        // like-entity members touches this arm once per member;
                         // each call moves the mark forward, so the LAST
                         // touch — this group's true last member read — is
                         // what ends up published, exactly like `finish()`'s
@@ -4978,6 +4986,64 @@ mod tests {
                 "acq_group must still be stripped on a bounded declared group's members"
             );
         }
+    }
+
+    // A `new_slotted` group (`CgroupCounters`): 64 backing entries, labels on
+    // slots 3 and 40, a value with no labels on slot 10.
+    static V3_SLOTTED_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new_slotted("unattributed", "slotted_counter_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_SLOTTED_GROUP_ENTRY: &'static AcquisitionGroup = &V3_SLOTTED_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_slotted_counters",
+        metadata = { acq_group = "slotted_counter_probe" }
+    )]
+    static V3_SLOTTED_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(64);
+
+    #[test]
+    fn slotted_group_members_are_the_labelled_slots() {
+        for idx in [3usize, 40] {
+            let mut md = HashMap::new();
+            md.insert("name".to_string(), format!("cg{idx}"));
+            V3_SLOTTED_COUNTERS.set_metadata(idx, md);
+            V3_SLOTTED_COUNTERS.set(idx, idx as u64);
+        }
+        V3_SLOTTED_COUNTERS.set(10, 10);
+        V3_SLOTTED_GROUP.acquire().finish();
+
+        let mut cache = SkeletonCache::new();
+        let snap = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+            (0, 0),
+        );
+        let Snapshot::V3(s) = snap else {
+            panic!("expected V3")
+        };
+
+        let group = s
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/slotted_counter_probe")
+            .expect("slotted group present");
+        assert_eq!(group.validate(), Ok(()));
+        let schema = group.schema.as_ref().expect("schema present");
+        let names: Vec<_> = schema
+            .counters
+            .iter()
+            .map(|d| d.metadata.get("name").cloned())
+            .collect();
+        assert_eq!(
+            names,
+            [Some("cg3".to_string()), Some("cg40".to_string())],
+            "members are the labelled slots, not a prefix or the backing capacity"
+        );
+        assert_eq!(group.counters, [Some(3), Some(40)]);
+        assert!(group.window.is_some(), "the sampler's stamp is published");
     }
 
     // Dedicated group + metric: 2 backing entries, member_bound set larger

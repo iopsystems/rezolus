@@ -191,7 +191,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_user SEC(".maps");
 
 // per-cgroup system
@@ -200,7 +200,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_system SEC(".maps");
 
 // per-cgroup CPU time belonging to tasks that have since exited
@@ -209,7 +209,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_exited SEC(".maps");
 
 /*
@@ -455,18 +455,17 @@ static __always_inline int handle_cpuacct_account_field(struct task_struct* task
                                      &cgroup_info);
     if (ret == 0) {
         // New cgroup detected, zero the counters
-        u64 zero = 0;
-        bpf_map_update_elem(&cgroup_user, &cgroup_id, &zero, BPF_ANY);
-        bpf_map_update_elem(&cgroup_system, &cgroup_id, &zero, BPF_ANY);
-        bpf_map_update_elem(&cgroup_exited, &cgroup_id, &zero, BPF_ANY);
+        cgroup_zero(&cgroup_user, cgroup_id);
+        cgroup_zero(&cgroup_system, cgroup_id);
+        cgroup_zero(&cgroup_exited, cgroup_id);
     }
 
     if (delta_utime > 0) {
-        array_add(&cgroup_user, cgroup_id, delta_utime);
+        cgroup_add(&cgroup_user, cgroup_id, delta_utime);
     }
 
     if (delta_stime > 0) {
-        array_add(&cgroup_system, cgroup_id, delta_stime);
+        cgroup_add(&cgroup_system, cgroup_id, delta_stime);
     }
 
     return 0;
@@ -513,7 +512,7 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
             cgroup_attribution ? task_group_of(task, btf, &cgroup_id, &serial_nr) : NULL;
         if (tg) {
             if (cgroup_id > 0 && cgroup_id < MAX_CGROUPS) {
-                array_add(&cgroup_exited, cgroup_id, *usage);
+                cgroup_add(&cgroup_exited, cgroup_id, *usage);
             }
         }
     }

@@ -60,7 +60,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_cpu_migrations SEC(".maps");
 
 // For storing the CPU a process was last seen on, at pid_slot(pid)
@@ -116,12 +116,11 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
 
                     if (ret == 0) {
                         // New cgroup detected, zero the counter
-                        u64 zero = 0;
-                        bpf_map_update_elem(&cgroup_cpu_migrations, &cgroup_id, &zero, BPF_ANY);
+                        cgroup_zero(&cgroup_cpu_migrations, cgroup_id);
                     }
 
                     // Increment the per-cgroup counter
-                    array_incr(&cgroup_cpu_migrations, cgroup_id);
+                    cgroup_incr(&cgroup_cpu_migrations, cgroup_id);
                 }
             }
         }

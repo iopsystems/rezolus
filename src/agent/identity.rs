@@ -338,6 +338,13 @@ impl SlotIdentity {
         }
     }
 
+    /// Append the live slots to `out`, ascending.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn live_slots(&self, out: &mut Vec<usize>) {
+        let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        out.extend(live.keys().copied());
+    }
+
     /// The slot no longer means anything. Published for the same reason: a
     /// subscriber that is not told keeps attributing rows to a dead task.
     pub fn clear(&self, slot: usize) {

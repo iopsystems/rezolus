@@ -135,7 +135,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_ivcsw SEC(".maps");
 
 struct {
@@ -143,7 +143,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_vcsw SEC(".maps");
 
 struct {
@@ -151,7 +151,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_runq_wait SEC(".maps");
 
 struct {
@@ -159,7 +159,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_offcpu SEC(".maps");
 
 /* record enqueue timestamp */
@@ -242,11 +242,10 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
 
             if (ret == 0) {
                 // New cgroup detected, zero the counters
-                u64 zero = 0;
-                bpf_map_update_elem(&cgroup_ivcsw, &prev_cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_vcsw, &prev_cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_runq_wait, &prev_cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_offcpu, &prev_cgroup_id, &zero, BPF_ANY);
+                cgroup_zero(&cgroup_ivcsw, prev_cgroup_id);
+                cgroup_zero(&cgroup_vcsw, prev_cgroup_id);
+                cgroup_zero(&cgroup_runq_wait, prev_cgroup_id);
+                cgroup_zero(&cgroup_offcpu, prev_cgroup_id);
             }
         }
     }
@@ -272,7 +271,7 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
             array_incr(&counters, idx);
 
             if (prev_cgroup_id < MAX_CGROUPS) {
-                array_incr(&cgroup_ivcsw, prev_cgroup_id);
+                cgroup_incr(&cgroup_ivcsw, prev_cgroup_id);
             }
 
             bpf_map_update_elem(&enqueued_at, &prev_slot, &ts, 0);
@@ -304,7 +303,7 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
         array_incr(&counters, idx);
 
         if (prev_cgroup_id < MAX_CGROUPS) {
-            array_incr(&cgroup_vcsw, prev_cgroup_id);
+            cgroup_incr(&cgroup_vcsw, prev_cgroup_id);
         }
     }
 
@@ -329,11 +328,10 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
 
             if (ret == 0) {
                 // New cgroup detected, zero the counters
-                u64 zero = 0;
-                bpf_map_update_elem(&cgroup_ivcsw, &next_cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_vcsw, &next_cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_runq_wait, &next_cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_offcpu, &next_cgroup_id, &zero, BPF_ANY);
+                cgroup_zero(&cgroup_ivcsw, next_cgroup_id);
+                cgroup_zero(&cgroup_vcsw, next_cgroup_id);
+                cgroup_zero(&cgroup_runq_wait, next_cgroup_id);
+                cgroup_zero(&cgroup_offcpu, next_cgroup_id);
             }
         }
     }
@@ -352,7 +350,7 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
                 array_add(&counters, idx, delta_ns);
 
                 if (next_cgroup_id < MAX_CGROUPS) {
-                    array_add(&cgroup_runq_wait, next_cgroup_id, delta_ns);
+                    cgroup_add(&cgroup_runq_wait, next_cgroup_id, delta_ns);
                 }
 
                 *tsp = 0;
@@ -370,7 +368,7 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
                             histogram_incr(&offcpu, HISTOGRAM_POWER, offcpu_ns);
 
                             if (next_cgroup_id < MAX_CGROUPS) {
-                                array_add(&cgroup_offcpu, next_cgroup_id, offcpu_ns);
+                                cgroup_add(&cgroup_offcpu, next_cgroup_id, offcpu_ns);
                             }
                         }
                     } else {

@@ -101,7 +101,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_reads SEC(".maps");
 
 struct {
@@ -109,7 +109,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_read_bytes SEC(".maps");
 
 struct {
@@ -117,7 +117,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CGROUPS);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_pages_added SEC(".maps");
 
 static __always_inline void counter_add(u32 slot, u32 counter, u64 value) {
@@ -264,10 +264,9 @@ static __always_inline u32 cgroup_slot(void) {
     if (handle_new_cgroup_read(&tg->css, cgroup_id, serial_nr, &cgroup_serial_numbers,
                                &cgroup_info) == 0) {
         // New cgroup detected, zero all counters
-        u64 zero = 0;
-        bpf_map_update_elem(&cgroup_reads, &cgroup_id, &zero, BPF_ANY);
-        bpf_map_update_elem(&cgroup_read_bytes, &cgroup_id, &zero, BPF_ANY);
-        bpf_map_update_elem(&cgroup_pages_added, &cgroup_id, &zero, BPF_ANY);
+        cgroup_zero(&cgroup_reads, cgroup_id);
+        cgroup_zero(&cgroup_read_bytes, cgroup_id);
+        cgroup_zero(&cgroup_pages_added, cgroup_id);
     }
 
     return cgroup_id;
@@ -298,8 +297,8 @@ static __always_inline int read_call(struct kiocb* iocb, struct iov_iter* iter) 
 
     u32 cg = cgroup_slot();
     if (cg < MAX_CGROUPS) {
-        array_incr(&cgroup_reads, cg);
-        array_add(&cgroup_read_bytes, cg, bytes);
+        cgroup_incr(&cgroup_reads, cg);
+        cgroup_add(&cgroup_read_bytes, cg, bytes);
     }
 
     return 0;
@@ -328,7 +327,7 @@ static __always_inline int fill(struct folio* folio, u32 reason) {
 
     u32 cg = cgroup_slot();
     if (cg < MAX_CGROUPS) {
-        array_add(&cgroup_pages_added, cg, pages);
+        cgroup_add(&cgroup_pages_added, cg, pages);
     }
 
     return 0;
