@@ -3,7 +3,6 @@
 //!
 //! - AMD Zen: Uses uncore L3 PMU (type 0xb) per CCX/CCD
 //! - Intel: Uses CHA (Caching Home Agent) uncore PMU per core
-//! - ARM Graviton: Uses core PMU events (L3D_CACHE, L3D_CACHE_REFILL)
 //!
 //! This requires that we identify each L3 cache domain and the correct raw perf
 //! events to use which are processor dependent.
@@ -142,15 +141,24 @@ struct L3Cache {
     shared_cores: Vec<usize>,
 }
 
+/// Why an L3 domain's counters did not open.
+#[derive(Debug)]
+enum OpenError {
+    /// This processor has no L3 events the sampler knows how to program.
+    NoEvents,
+    /// `perf_event_open` or enabling the group failed.
+    Perf(std::io::Error),
+}
+
 impl L3Cache {
-    pub fn new(shared_cores: Vec<usize>) -> Result<Self, ()> {
+    pub fn new(shared_cores: Vec<usize>) -> Result<Self, OpenError> {
         let cpu = *shared_cores.first().expect("empty l3 domain");
 
         let (access_event, miss_event) = if let Some(events) = get_events() {
             events
         } else {
             debug!("no L3 cache events available for CPU{cpu}");
-            return Err(());
+            return Err(OpenError::NoEvents);
         };
 
         match perf_event::Builder::new(access_event)
@@ -173,28 +181,27 @@ impl L3Cache {
                     .build_with_group(&mut access)
                 {
                     Ok(miss) => match access.enable_group() {
-                        Ok(_) => {
-                            return Ok(L3Cache {
-                                access,
-                                miss,
-                                shared_cores,
-                            });
-                        }
+                        Ok(_) => Ok(L3Cache {
+                            access,
+                            miss,
+                            shared_cores,
+                        }),
                         Err(e) => {
                             error!("failed to enable the perf group on CPU{cpu}: {e}");
+                            Err(OpenError::Perf(e))
                         }
                     },
                     Err(e) => {
                         debug!("failed to create L3 miss counter on CPU{cpu}: {e}");
+                        Err(OpenError::Perf(e))
                     }
                 }
             }
             Err(e) => {
                 debug!("failed to create L3 access counter on CPU{cpu}: {e}");
+                Err(OpenError::Perf(e))
             }
         }
-
-        Err(())
     }
 
     pub fn refresh(&mut self) {
@@ -280,19 +287,59 @@ fn get_l3_caches() -> anyhow::Result<Vec<L3Cache>> {
     }
 
     let mut l3_caches = Vec::new();
+    let mut errors = Vec::new();
 
     for l3_domain in l3_domains.drain(..) {
-        if let Ok(l3_cache) = L3Cache::new(l3_domain) {
-            l3_caches.push(l3_cache);
+        match L3Cache::new(l3_domain) {
+            Ok(l3_cache) => l3_caches.push(l3_cache),
+            Err(e) => errors.push(e),
         }
     }
 
     if l3_caches.is_empty() {
         debug!("failed to create perf counters for any L3 cache domain");
-        return Err(anyhow::anyhow!("failed to create L3 cache perf counters"));
+        return Err(classify_open_errors(&errors));
     }
 
     Ok(l3_caches)
+}
+
+/// The sampler's status when no L3 domain's counters opened. A guest commonly
+/// sees the host's cache topology in sysfs and has no PMU, so the counters do
+/// not exist. No known events for the processor, or an absent event or PMU
+/// (`ENOENT`, `ENODEV`, `EOPNOTSUPP`), is unsupported, as is a permission
+/// refusal, which names what to change. Any other errno (file descriptors
+/// exhausted `EMFILE`, PMU held `EBUSY`, an invalid event `EINVAL`, ...) is a
+/// failure.
+fn classify_open_errors(errors: &[OpenError]) -> anyhow::Error {
+    let errno = |e: &OpenError| match e {
+        OpenError::NoEvents => None,
+        OpenError::Perf(e) => e.raw_os_error(),
+    };
+    let unavailable = |e: &OpenError| {
+        matches!(e, OpenError::NoEvents)
+            || matches!(
+                errno(e),
+                Some(libc::ENOENT | libc::ENODEV | libc::EOPNOTSUPP)
+            )
+    };
+    let refused = |e: &OpenError| matches!(errno(e), Some(libc::EACCES | libc::EPERM));
+
+    if let Some(OpenError::Perf(e)) = errors.iter().find(|e| !unavailable(e) && !refused(e)) {
+        return anyhow::anyhow!("failed to create L3 cache perf counters: {e}");
+    }
+    if errors.iter().any(refused) {
+        return crate::agent::sampler_status::Unsupported(
+            "L3 cache perf counters not permitted (perf_event_paranoid, CAP_PERFMON, or a seccomp profile)"
+                .to_string(),
+        )
+        .into();
+    }
+    crate::agent::sampler_status::Unsupported(
+        "no L3 cache perf counters for this processor (microarchitecture not supported, uncore PMU not loaded, or no PMU in this VM)"
+            .to_string(),
+    )
+    .into()
 }
 
 fn parse_cpu_list(list: &str) -> Vec<usize> {
@@ -489,4 +536,52 @@ fn spawn_threads_multi() -> anyhow::Result<(Vec<JoinHandle<()>>, Vec<SyncPrimiti
     debug!("all perf threads launched");
 
     Ok((perf_threads, perf_sync))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::sampler_status::Unsupported;
+
+    fn perf(errno: i32) -> OpenError {
+        OpenError::Perf(std::io::Error::from_raw_os_error(errno))
+    }
+
+    fn unsupported(errors: &[OpenError]) -> Option<String> {
+        classify_open_errors(errors)
+            .downcast_ref::<Unsupported>()
+            .map(|u| u.0.clone())
+    }
+
+    #[test]
+    fn a_missing_pmu_or_event_is_unsupported() {
+        for errors in [
+            vec![perf(libc::ENOENT)],
+            vec![perf(libc::ENODEV), perf(libc::EOPNOTSUPP)],
+            vec![OpenError::NoEvents],
+        ] {
+            let reason = unsupported(&errors).expect("unsupported");
+            assert!(reason.contains("no L3 cache perf counters"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn a_permission_refusal_is_unsupported_and_names_the_setting() {
+        let reason = unsupported(&[perf(libc::ENOENT), perf(libc::EACCES)]).expect("unsupported");
+        assert!(reason.contains("perf_event_paranoid"), "{reason}");
+    }
+
+    #[test]
+    fn other_errnos_are_a_failure() {
+        for errno in [libc::EMFILE, libc::ENOSPC, libc::EBUSY, libc::EINVAL] {
+            let error = classify_open_errors(&[perf(libc::ENOENT), perf(errno)]);
+            assert!(error.downcast_ref::<Unsupported>().is_none(), "{error}");
+            assert!(
+                error
+                    .to_string()
+                    .starts_with("failed to create L3 cache perf counters: "),
+                "{error}"
+            );
+        }
+    }
 }
