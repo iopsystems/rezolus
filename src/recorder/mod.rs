@@ -1858,7 +1858,9 @@ pub fn run(config: RecordingConfig) {
 
     ctrlc::set_handler(move || {
         let state = STATE.load(Ordering::SeqCst);
-        println!();
+        // A closed terminal makes this write fail; that must not panic the
+        // handler before the recording is finalized.
+        let _ = std::io::Write::write_all(&mut std::io::stdout(), b"\n");
         if state == RUNNING {
             info!("finalizing recording... ctrl+c to terminate early");
             STATE.store(TERMINATING, Ordering::SeqCst);

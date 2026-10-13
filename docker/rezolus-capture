@@ -52,6 +52,16 @@ OPTIONS:
     --rezolus <PATH>            Path to the rezolus binary (default: rezolus)
     -h, --help                  Show this help text
 
+EXIT STATUS:
+    0   the capture was kept (with --command, also when the command failed;
+        its status is printed)
+    1   an error, a second stop signal (abort), or a stop signal before the
+        recorder started; no capture is kept
+
+    A stop signal (SIGINT, SIGTERM, SIGHUP) finalizes the capture; a second
+    one aborts it. The recorder runs in its own process group, so with
+    "stty tostop" set it stops on its first write to the terminal.
+
 EXAMPLES:
     # System metrics only for 60 seconds
     $PROGRAM --duration 60s
@@ -287,6 +297,13 @@ wait_recorder() {
             break
         fi
     done
+    # A recorder that exited while the trap ran leaves the interrupted
+    # wait's status in rc; bash keeps the reaped child's own status.
+    if [ "$rc" -gt 128 ]; then
+        local again=0
+        wait "$RECORDER_PID" 2>/dev/null || again=$?
+        [ "$again" -ne 127 ] && rc=$again
+    fi
     RECORDER_PID=""
     return "$rc"
 }
@@ -327,7 +344,10 @@ else
         fi
         # A signal to the process group kills `sleep`, which `set -e` would
         # make fatal.
-        sleep 1 || true
+        # In the background, so a trapped signal interrupts the wait at once
+        # and two signals run the trap twice.
+        sleep 1 &
+        wait $! || true
     done
     if [ "$STOP_SIGNALS" -gt 0 ]; then
         echo "Interrupted, waiting for the recorder to finalize the capture..."
