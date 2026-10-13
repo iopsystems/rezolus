@@ -19,42 +19,42 @@ static VMSTAT_ACQ_REG: &'static AcquisitionGroup = &VMSTAT_ACQ;
 
 #[metric(
     name = "memory_numa_hit",
-    description = "The number of allocations that succeeded on the intended node",
+    description = "The number of allocations made on the intended node: the memory policy's choice, or the node the caller asked for (numa_hit)",
     metadata = { acq_group = "memory_vmstat_read" }
 )]
 pub static MEMORY_NUMA_HIT: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "memory_numa_miss",
-    description = "The number of allocations that did not succeed on the intended node",
+    description = "The number of allocations made on a node other than the intended one (numa_miss). Summed over all nodes, as /proc/vmstat reports it, it equals memory_numa_foreign",
     metadata = { acq_group = "memory_vmstat_read" }
 )]
 pub static MEMORY_NUMA_MISS: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "memory_numa_foreign",
-    description = "The number of allocations that were not intended for a node that were serviced by this node",
+    description = "The number of allocations intended for a node that were made on another node, counted against the intended node (numa_foreign). Summed over all nodes, as /proc/vmstat reports it, it equals memory_numa_miss",
     metadata = { acq_group = "memory_vmstat_read" }
 )]
 pub static MEMORY_NUMA_FOREIGN: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "memory_numa_interleave",
-    description = "The number of interleave policy allocations that succeeded on the intended node",
+    description = "The number of interleave-policy allocations made on their intended node (numa_interleave)",
     metadata = { acq_group = "memory_vmstat_read" }
 )]
 pub static MEMORY_NUMA_INTERLEAVE: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "memory_numa_local",
-    description = "The number of allocations that succeeded on the local node",
+    description = "The number of allocations made on the node the allocating task was running on (numa_local)",
     metadata = { acq_group = "memory_vmstat_read" }
 )]
 pub static MEMORY_NUMA_LOCAL: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "memory_numa_other",
-    description = "The number of allocations that on this node that were allocated by a process on another node",
+    description = "The number of allocations made on a node other than the one the allocating task was running on (numa_other)",
     metadata = { acq_group = "memory_vmstat_read" }
 )]
 pub static MEMORY_NUMA_OTHER: LazyCounter = LazyCounter::new(Counter::default);

@@ -364,15 +364,42 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
 
     let mut numa = Group::new("NUMA", "numa");
 
+    // Two questions with different counters: where the allocating task ran
+    // (local/other, which sum to every allocation), and whether the intended
+    // node served it (hit/miss, which also sum to every allocation).
     let locality = numa.subgroup("Local vs Remote");
-    locality.describe("Local allocations hit node-local RAM (fast); remote allocations cross the interconnect (slow).");
+    locality.describe(
+        "Allocations by where the allocating task ran: local allocations were made on the \
+         task's own node (fast); remote ones on another node, across the interconnect (slow). \
+         The two sum to every allocation.",
+    );
     locality.plot_promql(
         PlotOpts::counter("Local Rate", "numa-local-rate", Unit::Rate),
         "rate(memory_numa_local[5m])".to_string(),
     );
     locality.plot_promql(
         PlotOpts::counter("Remote Rate", "numa-remote-rate", Unit::Rate),
-        "rate(memory_numa_foreign[5m])".to_string(),
+        "rate(memory_numa_other[5m])".to_string(),
+    );
+
+    let policy = numa.subgroup("Memory Policy");
+    policy.describe(
+        "Allocations by whether the intended node (the memory policy's choice, or the node the \
+         caller asked for) served them. Hits were served by the intended node; misses by \
+         another node, usually because the intended node was short of free pages. Interleave \
+         counts allocations under the interleave policy that landed on their intended node.",
+    );
+    policy.plot_promql(
+        PlotOpts::counter("Hit Rate", "numa-hit-rate", Unit::Rate),
+        "rate(memory_numa_hit[5m])".to_string(),
+    );
+    policy.plot_promql(
+        PlotOpts::counter("Miss Rate", "numa-miss-rate", Unit::Rate),
+        "rate(memory_numa_miss[5m])".to_string(),
+    );
+    policy.plot_promql(
+        PlotOpts::counter("Interleave Rate", "numa-interleave-rate", Unit::Rate),
+        "rate(memory_numa_interleave[5m])".to_string(),
     );
 
     view.group(numa);
@@ -409,6 +436,19 @@ mod tests {
 
     fn json(view: &View) -> String {
         serde_json::to_string(view).unwrap().replace("\\\"", "\"")
+    }
+
+    /// Local vs Remote pairs the two counters that sum to every allocation;
+    /// the policy counters have their own subgroup.
+    #[test]
+    fn numa_locality_pairs_local_with_other_and_policy_has_its_own_plots() {
+        let j = json(&generate(&store_with(&["memory_total"]), vec![]));
+        assert!(j.contains("rate(memory_numa_local[5m])"));
+        assert!(j.contains("rate(memory_numa_other[5m])"));
+        assert!(!j.contains("memory_numa_foreign"));
+        assert!(j.contains("rate(memory_numa_hit[5m])"));
+        assert!(j.contains("rate(memory_numa_miss[5m])"));
+        assert!(j.contains("rate(memory_numa_interleave[5m])"));
     }
 
     #[test]

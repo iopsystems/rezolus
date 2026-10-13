@@ -786,10 +786,9 @@ fn run_exhaustive_detection(reader: Arc<dyn MetricsSource>) {
         "cpu_mperf",        // Max perf counter - combine with aperf for frequency
         "cgroup_cpu_aperf", // Same for cgroup versions
         "cgroup_cpu_mperf",
-        // NUMA metrics - focus on local (good) and foreign (bad) instead of these
-        "memory_numa_hit",        // Redundant with local/foreign
-        "memory_numa_miss",       // Redundant with local/foreign
-        "memory_numa_other",      // Less actionable than foreign
+        // NUMA metrics - analyze local, other (remote) and miss instead of these
+        "memory_numa_hit",        // local + other - miss
+        "memory_numa_foreign",    // Equals memory_numa_miss in /proc/vmstat's system-wide sum
         "memory_numa_interleave", // Rarely used policy
         // Cgroup CPU bandwidth config - skip static configuration values
         "cgroup_cpu_bandwidth_periods", // Total periods elapsed - not actionable
