@@ -1,16 +1,29 @@
 use reqwest::Url;
 use serde::Deserialize;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Protocol {
-    /// A Rezolus agent: detected by its msgpack snapshot on
-    /// `/metrics/binary`, recorded from its replication stream. Spelled
-    /// `rezolus` in an endpoint's options; `msgpack`, the 5.x spelling, is
-    /// still accepted.
-    #[serde(alias = "rezolus")]
-    Msgpack,
+    /// Recorded from its replication stream only, never scraped. Spelled
+    /// `stream` in an endpoint's options; `rezolus` and `msgpack` (the 5.x
+    /// spelling, which named an agent) mean the same.
+    #[serde(alias = "rezolus", alias = "msgpack")]
+    Stream,
+    /// Scraped as Prometheus text only, at `/metrics` for a URL whose path
+    /// is `/` and at the URL otherwise.
     Prometheus,
+}
+
+impl Protocol {
+    /// The detection rule a declared protocol (or none) selects.
+    pub fn transport(protocol: Option<&Protocol>) -> super::detect::Transport {
+        match protocol {
+            None => super::detect::Transport::Auto,
+            Some(Protocol::Stream) => super::detect::Transport::Stream,
+            Some(Protocol::Prometheus) => super::detect::Transport::Prometheus,
+        }
+    }
 }
 
 fn deserialize_url<'de, D>(deserializer: D) -> Result<Url, D::Error>
@@ -25,8 +38,9 @@ where
 pub struct EndpointConfig {
     #[serde(deserialize_with = "deserialize_url")]
     pub url: Url,
-    /// None until probe resolves it: Msgpack → "rezolus",
-    /// Prometheus → URL-derived (with warning).
+    /// The user's `source`. When `None`, the recording's `source` is resolved
+    /// on activation: the stream handshake's, `rezolus` for a recognised
+    /// agent, or a name inferred from the URL (see `detect::Identity`).
     #[serde(default)]
     pub source: Option<String>,
     #[serde(default)]
@@ -46,36 +60,49 @@ impl EndpointConfig {
 pub enum EndpointStatus {
     Active,
     Pending,
+    /// Streamed and waiting for the probe hook's `enrich`, which runs off the
+    /// tick; added to the archive on the first tick after it returns.
+    Activating,
     /// Answered and cannot be recorded (an agent without a replication
     /// stream). Never retried.
     Refused,
 }
 
-/// What a Rezolus agent tells the recorder about itself, once, at probe time.
-///
-/// A struct rather than a tuple because the fetch grew a fourth element: four
-/// same-typed `Option<String>`s in a row is a bug waiting for someone to swap
-/// two of them at the call site.
+/// What a streamed producer's handshake says about its process: the uuid and
+/// the clock anchor. Both are the handshake's, never the probe hook's.
 #[derive(Default)]
 pub struct AgentMetadata {
-    pub systeminfo: Option<String>,
-    pub descriptions: Option<String>,
-    /// The agent's own crate version, recorded so a capture can be attributed
-    /// to a build after the fact. See `recorder::fetch_agent_version`.
-    pub version: Option<String>,
-    /// The agent's producer epoch as of the probe: an opaque id that changes
-    /// when, and only when, every cumulative counter restarted from zero —
-    /// which for a process-scoped producer is once per process.
+    /// The producer epoch: an opaque id that changes when, and only when,
+    /// every cumulative counter restarted from zero, which for a
+    /// process-scoped producer is once per process. The stream handshake's
+    /// uuid.
     pub producer_epoch: Option<String>,
-    /// The wall clock the agent's timeline is anchored to, from `/status`.
+    /// The wall clock the producer's timeline is anchored to, from the
+    /// handshake.
     ///
     /// The recording is anchored here rather than on the recorder's own clock,
-    /// because its rows carry the agent's timestamps: an anchor from one clock
-    /// and rows from another would make `ts + wall_offset` resolve to a wall
-    /// time neither party observed. `None` for a Prometheus source, and for an
-    /// agent too old to report it — both then use the recorder's anchor, and
-    /// its stamps, together.
+    /// because its rows carry the producer's timestamps: an anchor from one
+    /// clock and rows from another would make `ts + wall_offset` resolve to a
+    /// wall time neither party observed. `None` for a Prometheus source,
+    /// which uses the recorder's anchor and its stamps together.
     pub clock_anchor_wall_ns: Option<i64>,
+}
+
+/// The labels and metadata a streamed endpoint's recording is added with,
+/// besides the user's and the recorder's (see `detect::Identity`).
+#[derive(Default)]
+pub struct SourceIdentity {
+    /// From the probe hook's `enrich`: for an agent, `source=rezolus` and
+    /// `host`.
+    pub hook_labels: BTreeMap<String, String>,
+    /// From the probe hook's `enrich`: for an agent, `version`, `systeminfo`
+    /// and `descriptions`.
+    pub hook_metadata: BTreeMap<String, String>,
+    /// From the stream handshake, the first connection's.
+    pub handshake_labels: BTreeMap<String, String>,
+    /// From the stream handshake, the latest connection's: a restarted
+    /// producer's handshake replaces it.
+    pub handshake_metadata: BTreeMap<String, String>,
 }
 
 /// Runtime state for a single endpoint during recording.
@@ -84,9 +111,11 @@ pub struct EndpointState {
     pub status: EndpointStatus,
     pub detected_protocol: Option<Protocol>,
     pub scrape_url: Option<Url>,
-    /// What the agent said about itself at probe time. All-`None` until the
-    /// endpoint probes as msgpack; a Prometheus endpoint never fills it.
+    /// The epoch and anchor of a streamed endpoint's handshake. All-`None`
+    /// until the endpoint streams; a Prometheus endpoint never fills it.
     pub agent: AgentMetadata,
+    /// Where a streamed endpoint's labels and metadata come from.
+    pub identity: SourceIdentity,
     pub first_success_ns: Option<u64>,
     pub last_success_ns: Option<u64>,
     /// True for a Rezolus agent, whose rows arrive off its replication stream
@@ -117,6 +146,7 @@ impl EndpointState {
             detected_protocol,
             scrape_url: None,
             agent: AgentMetadata::default(),
+            identity: SourceIdentity::default(),
             first_success_ns: None,
             last_success_ns: None,
             streaming: false,
@@ -262,11 +292,11 @@ mod tests {
             url: "http://localhost:4241".parse().unwrap(),
             source: Some("rezolus".to_string()),
             role: None,
-            protocol: Some(Protocol::Msgpack),
+            protocol: Some(Protocol::Stream),
         };
         let state = EndpointState::new(config);
         assert_eq!(state.status, EndpointStatus::Pending);
-        assert_eq!(state.protocol(), Some(&Protocol::Msgpack));
+        assert_eq!(state.protocol(), Some(&Protocol::Stream));
         assert!(state.first_success_ns.is_none());
     }
 

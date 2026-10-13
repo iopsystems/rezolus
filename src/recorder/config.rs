@@ -383,7 +383,7 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
                 "role" => role = Some(value.to_string()),
                 "protocol" => {
                     protocol = Some(match value {
-                        "rezolus" | "msgpack" => Protocol::Msgpack,
+                        "stream" | "rezolus" | "msgpack" => Protocol::Stream,
                         "prometheus" => Protocol::Prometheus,
                         other => return Err(format!("unknown protocol: '{other}'")),
                     });
@@ -722,17 +722,18 @@ mod tests {
         assert_eq!(ep.protocol, Some(Protocol::Prometheus));
     }
 
-    /// `protocol=rezolus` names a Rezolus agent; `msgpack`, the 5.x
-    /// spelling, means the same, on the command line and in a config file.
+    /// `protocol=stream` records the endpoint from its stream only;
+    /// `rezolus` and `msgpack` (the 5.x spelling, which named an agent)
+    /// mean the same, on the command line and in a config file.
     #[test]
-    fn protocol_rezolus_and_msgpack_both_name_an_agent() {
-        for p in ["rezolus", "msgpack"] {
+    fn protocol_stream_rezolus_and_msgpack_all_mean_stream() {
+        for p in ["stream", "rezolus", "msgpack"] {
             let ep = parse_endpoint_str(&format!("http://host:4241,protocol={p}")).unwrap();
-            assert_eq!(ep.protocol, Some(Protocol::Msgpack), "{p}");
+            assert_eq!(ep.protocol, Some(Protocol::Stream), "{p}");
             let ep: EndpointConfig =
                 toml::from_str(&format!("url = \"http://host:4241\"\nprotocol = \"{p}\"\n"))
                     .unwrap();
-            assert_eq!(ep.protocol, Some(Protocol::Msgpack), "{p}");
+            assert_eq!(ep.protocol, Some(Protocol::Stream), "{p}");
         }
         assert!(parse_endpoint_str("http://host:4241,protocol=binary").is_err());
     }

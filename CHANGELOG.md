@@ -55,6 +55,48 @@
 
 ### Changed
 
+- **`record` detects an endpoint by its stream.** For a URL whose path is `/`
+  or `/metrics/stream`, `record` subscribes to `/metrics/stream` first; a
+  stream handshake means the endpoint is streamed. Otherwise it reads
+  `/status`, then `/`: a Rezolus agent is refused as before (or retried on a
+  5xx, a timeout or no connection), anything else that answered is scraped
+  as Prometheus at `/metrics`, and an endpoint where neither answered is
+  retried each tick. Before, `record` classified a `/` URL by
+  `/metrics/binary` (a msgpack snapshot meant an agent, else Prometheus), so
+  a producer serving `/metrics/stream` without `/metrics/binary` was scraped.
+  `/metrics/binary` is no longer read. A URL with any other path is still
+  scraped at that URL. `--endpoint url,protocol=stream` is new and records
+  the endpoint from its stream only; `protocol=rezolus` and `msgpack` now
+  mean the same, and no longer require `/metrics/binary` to answer.
+- **A streamed producer's handshake names its recording.** `source` is the
+  user's `source=`, else the stream handshake's `source` label, else
+  `rezolus` for a Rezolus agent, else a name made from the URL. Labels are
+  `--label`, over `host` from a Rezolus agent's `/systeminfo`, over the
+  handshake's labels; metadata is `--metadata`, over the recorder's own keys
+  (`sampling_interval_ms`, `producer_epoch`, `role`), over a Rezolus agent's
+  `version`, `systeminfo` and `descriptions`, over the handshake's metadata.
+  Before, the handshake's labels and metadata were dropped, any producer
+  that answered `/metrics/binary` was recorded as `source=rezolus`, and a
+  streamed producer without `/status` had no `version`. A restarted
+  producer's new handshake metadata is written into its recording.
+- **`--metadata` outranks every other source of a metadata key.** A
+  `--metadata systeminfo=` or `descriptions=` used to be overwritten by the
+  agent's own; the user's value is now kept, as it already was for
+  `version` and `source`.
+- **An agent's metadata is read after its stream opens, concurrently, and
+  bounded.** `/status`, `/systeminfo` and `/metrics/descriptions` were read
+  one endpoint at a time, without a time bound, before the stream was
+  opened. They are now read after the handshake, for every streamed endpoint
+  at once, each bounded by the scrape timeout (twice the interval, between
+  2 s and 10 s); a reply that names another producer epoch is discarded. An
+  endpoint whose metadata does not arrive in time is recorded with its
+  handshake's labels and metadata only, with a warning. For an endpoint that
+  comes up mid-run the read runs off the tick, and its recording is added on
+  the first tick after the read returns.
+- **A refusal quotes the stream route's answer.** A refused agent's message
+  says `<url>/metrics/stream answered HTTP 404` (or the content type, or the
+  malformed handshake) rather than the full subscription URL with its query.
+
 - Reduced overhead by giving each CPU its own slice of every BPF histogram,
   at about 4 KiB of memory per possible CPU per histogram. (#1445)
 

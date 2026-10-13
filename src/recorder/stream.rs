@@ -332,23 +332,96 @@ impl FrameDecoder {
     }
 }
 
-/// Why a subscription could not be opened, split by whether trying again
-/// could change the answer.
+/// What the stream route answered when it did not open a subscription.
 ///
-/// The recorder treats the two differently on purpose. An agent that is not
-/// there yet is the ordinary "will retry each tick" case scraping already has.
-/// An agent that answered and cannot serve the stream — no route (404), no
-/// acquisition groups to stream (the 409 a V2 agent gives), a body of the
-/// wrong type — is a configuration the run was not written for, and it fails
-/// loudly rather than falling back to scraping: 6.x records agents by
-/// stream only, and a run that silently scraped one would put two endpoints of
-/// one A/B on different transports.
+/// Structured so that what decides the next step (the recorder's
+/// [`Probe`](super::detect::Probe) hook, the refusal text) reads the answer
+/// rather than parsing an error message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum StreamAnswer {
+    /// An HTTP status other than success.
+    Status(u16),
+    /// A success whose `Content-Type` is none of the accepted wire names.
+    ContentType(String),
+    /// A success in an accepted content type whose first frame does not
+    /// decode, is not a handshake, or does not apply. The metriken recorder
+    /// design lists no answer for this case.
+    Malformed(String),
+    /// No handshake within the caller's timeout.
+    Timeout,
+    /// No answer: the connection failed, or closed before the handshake.
+    Unreachable,
+}
+
+impl StreamAnswer {
+    /// Whether asking again could get a different answer: a 5xx, 408 or 429
+    /// (the path between here and the producer; a proxy answering while the
+    /// producer behind it restarts is the common case), a timeout, or a
+    /// connection failure. Every other answer is the producer saying what it
+    /// is.
+    pub(crate) fn is_transient(&self) -> bool {
+        match self {
+            StreamAnswer::Status(code) => matches!(code, 408 | 429 | 500..=599),
+            StreamAnswer::Timeout | StreamAnswer::Unreachable => true,
+            StreamAnswer::ContentType(_) | StreamAnswer::Malformed(_) => false,
+        }
+    }
+}
+
+impl std::fmt::Display for StreamAnswer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StreamAnswer::Status(code) => write!(f, "HTTP {code}"),
+            StreamAnswer::ContentType(ct) if ct.is_empty() => {
+                f.write_str("a response with no content type")
+            }
+            StreamAnswer::ContentType(ct) => write!(f, "content type `{ct}`"),
+            StreamAnswer::Malformed(e) => write!(f, "a malformed handshake ({e})"),
+            StreamAnswer::Timeout => f.write_str("no handshake within the timeout"),
+            StreamAnswer::Unreachable => f.write_str("no answer"),
+        }
+    }
+}
+
+/// A subscription that did not open: what the route answered, and a line
+/// saying so with the URL and the detail.
+#[derive(Clone, Debug)]
+pub(crate) struct Refusal {
+    pub answer: StreamAnswer,
+    pub message: String,
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+/// Why a subscription could not be opened, split by whether trying again
+/// could change the answer ([`StreamAnswer::is_transient`]).
+///
+/// An agent that is not there yet is the ordinary "will retry" case. An agent
+/// that answered and cannot serve the stream (no route (404), no acquisition
+/// groups to stream (the 409 a V2 agent gives), a body of the wrong type) is
+/// refused rather than scraped: 6.x records agents by stream only, and a run
+/// that silently scraped one would put two endpoints of one A/B on different
+/// transports.
 #[derive(Debug)]
 pub(crate) enum ConnectError {
     /// Nothing answered, or the connection dropped before the handshake.
     Unreachable(String),
     /// Something answered, and it cannot serve a replication stream.
     Unsupported(String),
+}
+
+impl From<Refusal> for ConnectError {
+    fn from(refusal: Refusal) -> Self {
+        if refusal.answer.is_transient() {
+            ConnectError::Unreachable(refusal.message)
+        } else {
+            ConnectError::Unsupported(refusal.message)
+        }
+    }
 }
 
 impl std::fmt::Display for ConnectError {
@@ -418,6 +491,24 @@ impl Subscription {
         layout: Layout,
         names: &[WireNames],
     ) -> Result<Self, ConnectError> {
+        Self::connect_answered(client, base, interval, layout, names)
+            .await
+            .map_err(ConnectError::from)
+    }
+
+    /// [`connect`](Self::connect), keeping the route's answer as a
+    /// [`StreamAnswer`] on failure. Detection and the pump's reconnect read
+    /// the answer; a caller that needs only the retry split uses `connect`.
+    ///
+    /// Not bounded in time: the caller wraps it in its own timeout, and a
+    /// timeout is [`StreamAnswer::Timeout`].
+    pub(crate) async fn connect_answered(
+        client: &reqwest::Client,
+        base: &reqwest::Url,
+        interval: Duration,
+        layout: Layout,
+        names: &[WireNames],
+    ) -> Result<Self, Refusal> {
         let mut url = base.clone();
         url.set_path("/metrics/stream");
         let interval = humantime::format_duration(interval);
@@ -426,33 +517,30 @@ impl Subscription {
             Layout::Long => format!("interval={interval}&layout={}", layout.as_str()),
         }));
 
-        let response =
-            client.get(url.clone()).send().await.map_err(|e| {
-                ConnectError::Unreachable(format!("failed to subscribe to {url}: {e}"))
-            })?;
+        let response = client.get(url.clone()).send().await.map_err(|e| Refusal {
+            answer: StreamAnswer::Unreachable,
+            message: format!("failed to subscribe to {url}: {e}"),
+        })?;
 
         if !response.status().is_success() {
-            // Which class a status falls in is what the recorder acts on: an
-            // answer that will not change with retrying ends the run, one
-            // that might is retried. 404 and 409 are the agent saying what it
-            // is. A 5xx, 408 or 429 is the path between here and the agent —
-            // a proxy answering while the agent behind it restarts is the
-            // common case, and it is exactly the moment a stream has just
-            // dropped and the pump is reconnecting.
+            // Which class a status falls in is what the caller acts on (see
+            // `StreamAnswer::is_transient`): an answer that will not change
+            // with retrying is refused, one that might is retried. 404 and
+            // 409 are the agent saying what it is.
             let code = response.status().as_u16();
-            return Err(match code {
-                409 => ConnectError::Unsupported(format!(
+            let message = match code {
+                409 => format!(
                     "{url} cannot serve a replication stream: the agent reports no \
                      acquisition groups, which a V2 agent never has"
-                )),
+                ),
                 // Not "predates the stream": a current agent behind a proxy
                 // that does not route this path answers the same way. The
                 // caller knows the agent's version and says which it is.
-                404 => ConnectError::Unsupported(format!("{url} returned HTTP 404")),
-                408 | 429 | 500..=599 => {
-                    ConnectError::Unreachable(format!("{url} returned HTTP {code}"))
-                }
-                _ => ConnectError::Unsupported(format!("{url} returned HTTP {code}")),
+                _ => format!("{url} returned HTTP {code}"),
+            };
+            return Err(Refusal {
+                answer: StreamAnswer::Status(code),
+                message,
             });
         }
 
@@ -471,11 +559,14 @@ impl Subscription {
                 .iter()
                 .map(|n| format!("`{}`", n.content_type))
                 .collect();
-            return Err(ConnectError::Unsupported(format!(
-                "{url} serves `{content_type}`, not a replication stream this recorder \
-                 reads ({})",
-                accepted.join(" or ")
-            )));
+            return Err(Refusal {
+                message: format!(
+                    "{url} serves `{content_type}`, not a replication stream this recorder \
+                     reads ({})",
+                    accepted.join(" or ")
+                ),
+                answer: StreamAnswer::ContentType(content_type),
+            });
         };
 
         let update_floor = response
@@ -510,29 +601,38 @@ impl Subscription {
         // transport failure like any other.
         while sub.pending.is_empty() {
             let filled = sub.fill().await.map_err(|e| match e {
-                FillError::Transport(e) => ConnectError::Unreachable(e),
-                FillError::Decode(e) => {
-                    ConnectError::Unsupported(format!("{url} sent a malformed handshake: {e}"))
-                }
+                FillError::Transport(e) => Refusal {
+                    answer: StreamAnswer::Unreachable,
+                    message: e,
+                },
+                FillError::Decode(e) => Refusal {
+                    message: format!("{url} sent a malformed handshake: {e}"),
+                    answer: StreamAnswer::Malformed(e),
+                },
             })?;
             if !filled {
-                return Err(ConnectError::Unreachable(format!(
-                    "{url} closed the stream before sending a handshake"
-                )));
+                return Err(Refusal {
+                    answer: StreamAnswer::Unreachable,
+                    message: format!("{url} closed the stream before sending a handshake"),
+                });
             }
         }
         match sub.pending.first() {
             Some(Frame::Handshake { .. }) => {
                 let handshake = sub.pending.remove(0);
-                sub.subscriber
-                    .apply(vec![handshake])
-                    .map_err(ConnectError::Unsupported)?;
+                sub.subscriber.apply(vec![handshake]).map_err(|e| Refusal {
+                    message: e.clone(),
+                    answer: StreamAnswer::Malformed(e),
+                })?;
             }
             Some(other) => {
-                return Err(ConnectError::Unsupported(format!(
-                    "{url} opened its stream with a {} frame instead of a handshake",
-                    frame_kind(other)
-                )))
+                let kind = frame_kind(other);
+                return Err(Refusal {
+                    message: format!(
+                        "{url} opened its stream with a {kind} frame instead of a handshake"
+                    ),
+                    answer: StreamAnswer::Malformed(format!("a {kind} frame came first")),
+                });
             }
             None => unreachable!("the loop above exits with a frame pending"),
         }
@@ -621,8 +721,9 @@ pub(crate) enum StreamEvent {
     /// uuid is a restarted agent, and every cumulative counter reset with it.
     Connected(Source),
     /// The agent answered a reconnect and cannot serve the stream. Retrying
-    /// will not change that, so the pump has stopped.
-    Refused(String),
+    /// will not change that, so the pump has stopped. Never followed by a
+    /// switch to scraping: a streamed source stays streamed.
+    Refused(Refusal),
 }
 
 /// Drive one subscription for the life of the run.
@@ -685,15 +786,22 @@ pub(crate) async fn pump(
             tokio::time::sleep(retry).await;
             let connected = tokio::time::timeout(
                 timeout,
-                Subscription::connect(&client, &base, interval, layout, ACCEPTED_WIRE_NAMES),
+                Subscription::connect_answered(
+                    &client,
+                    &base,
+                    interval,
+                    layout,
+                    ACCEPTED_WIRE_NAMES,
+                ),
             )
             .await;
             match connected {
                 Ok(Ok(sub)) => break sub,
                 // A connect that hangs is an outage like any other.
-                Err(_) | Ok(Err(ConnectError::Unreachable(_))) => continue,
-                Ok(Err(ConnectError::Unsupported(e))) => {
-                    let _ = tx.send((idx, StreamEvent::Refused(e))).await;
+                Err(_) => continue,
+                Ok(Err(refusal)) if refusal.answer.is_transient() => continue,
+                Ok(Err(refusal)) => {
+                    let _ = tx.send((idx, StreamEvent::Refused(refusal))).await;
                     return;
                 }
             }

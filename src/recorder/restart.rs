@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use crate::parquet_metadata::{
     KEY_DESCRIPTIONS, KEY_PRODUCER_EPOCH, KEY_PRODUCER_EPOCHS, KEY_SYSTEMINFO, KEY_VERSION,
@@ -62,6 +62,27 @@ pub fn metadata_patch(
     restarts: &[Restart],
     agent: &Agent,
     version_pinned: bool,
+) -> BTreeMap<String, String> {
+    metadata_patch_with(
+        current,
+        first_ts,
+        restarts,
+        agent,
+        version_pinned,
+        &super::agent_probe::merge,
+    )
+}
+
+/// [`metadata_patch`], with `descriptions` combined by `merge(key, old, new)`
+/// (the probe hook's [`merge`](super::detect::Probe::merge)) where the
+/// recording already has descriptions.
+pub fn metadata_patch_with(
+    current: &BTreeMap<String, String>,
+    first_ts: Option<u64>,
+    restarts: &[Restart],
+    agent: &Agent,
+    version_pinned: bool,
+    merge: &dyn Fn(&str, &str, &str) -> String,
 ) -> BTreeMap<String, String> {
     let mut patch = BTreeMap::new();
     let Some(newest) = restarts.last() else {
@@ -120,9 +141,11 @@ pub fn metadata_patch(
     if let Some(systeminfo) = &agent.systeminfo {
         patch.insert(KEY_SYSTEMINFO.to_string(), systeminfo.clone());
     }
-    if let Some(descriptions) =
-        merge_descriptions(current.get(KEY_DESCRIPTIONS), agent.descriptions.as_ref())
-    {
+    if let Some(new) = &agent.descriptions {
+        let descriptions = match current.get(KEY_DESCRIPTIONS) {
+            Some(old) => merge(KEY_DESCRIPTIONS, old, new),
+            None => new.clone(),
+        };
         patch.insert(KEY_DESCRIPTIONS.to_string(), descriptions);
     }
     patch
@@ -136,17 +159,15 @@ fn entry(epoch: &str, from_ts: u64, version: Option<&String>) -> Value {
     e
 }
 
-/// The union of two JSON description maps, `new` winning on a shared key.
-/// When either does not parse as a JSON object, `new` replaces `old`.
-fn merge_descriptions(old: Option<&String>, new: Option<&String>) -> Option<String> {
-    let new = new?;
-    let parse = |s: &String| serde_json::from_str::<Map<String, Value>>(s).ok();
-    match (old.and_then(parse), parse(new)) {
-        (Some(mut merged), Some(new_map)) => {
-            merged.extend(new_map);
-            Some(Value::Object(merged).to_string())
+impl Agent {
+    /// The agent's description of itself from a metadata map: the probe
+    /// hook's reply, with the handshake's beneath it.
+    pub fn from_metadata(metadata: &BTreeMap<String, String>) -> Self {
+        Self {
+            version: metadata.get(KEY_VERSION).cloned(),
+            systeminfo: metadata.get(KEY_SYSTEMINFO).cloned(),
+            descriptions: metadata.get(KEY_DESCRIPTIONS).cloned(),
         }
-        _ => Some(new.clone()),
     }
 }
 

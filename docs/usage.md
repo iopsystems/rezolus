@@ -98,7 +98,8 @@ management — see [HTTP Endpoint](#http-endpoint-optional) below.
 ## Recorder
 
 Records metrics to disk for benchmarking, lab tests, or offline workload
-characterization. It auto-detects Rezolus agent vs Prometheus sources and
+characterization. It detects how to record each endpoint (from its replication
+stream, or by scraping it as Prometheus; see [Detection](#detection)) and
 supports custom file-level metadata. The endpoint must already be running;
 `record` does not launch an agent.
 
@@ -178,6 +179,25 @@ rezolus record --url http://localhost:4241 -o out.dendro --label arm=redis
 run it cannot tell two endpoints apart — see below. An endpoint's `role=`
 modifier is kept as the `role` key of that endpoint's recording metadata.
 
+A recording's `source` is the first of: `source=` on its `--endpoint` (or
+`--metadata source=` with `--url`); the `source` label in its stream
+handshake; `rezolus` for a Rezolus agent; a name made from the URL's host,
+port and path, with a warning. The rest of its labels are `--label`, over
+`host` from a Rezolus agent's `/systeminfo`, over the handshake's labels. Its
+metadata is `--metadata`, over the keys the recorder writes
+(`sampling_interval_ms`, `producer_epoch`, `role`), over a Rezolus agent's
+`version`, `systeminfo` and `descriptions`, over the handshake's metadata. A
+producer that names itself and its version in its handshake is therefore
+recorded under that name, with that version, and needs no `source=`:
+
+```bash
+rezolus record --url http://loadgen:9090 -o run.dendro   # source and version from its handshake
+```
+
+When a Rezolus agent's metadata routes do not answer within the timeout, its
+recording is added with its handshake's labels and metadata only (no `host`
+label), and a warning says so.
+
 ### Several endpoints in one archive
 
 An archive holds one *recording* per endpoint, so several endpoints can be
@@ -230,12 +250,32 @@ main file can miss recent samples.
 everywhere, and `rezolus recording upgrade --to dendro old.rez -o new.dendro`
 converts one.
 
+### Detection
+
+`record` decides per endpoint, before it creates the archive:
+
+- A URL whose path is `/` or `/metrics/stream` is asked for its stream first.
+  A stream handshake means the endpoint is streamed.
+- Any other answer from the stream route (a 404 or 409, a content type that
+  is not a stream, a 5xx, a timeout, no connection) asks the endpoint's
+  `/status`, then its `/` page. A Rezolus agent is refused (below) unless the
+  answer was a 5xx, a timeout or no connection, in which case it is retried
+  each tick. Anything else that answered is scraped as Prometheus at
+  `/metrics`. When neither route answered, the endpoint is retried each tick.
+- A URL with any other path (`http://host:9090/metrics`) is scraped at that
+  URL.
+
+`--endpoint url,protocol=stream` records the endpoint from its stream only and
+never scrapes it (`rezolus` and `msgpack` are accepted for it too);
+`protocol=prometheus` scrapes it only, at `/metrics` when the URL's path is
+`/`. A producer needs no `/metrics/binary`: only a 5.x recorder reads it.
+
 ### Streaming and scraping
 
-`record` takes each Rezolus agent from its replication stream
-(`/metrics/stream`). The agent pushes one frame per `--interval`, carrying
+`record` takes each streamed endpoint from its replication stream
+(`/metrics/stream`). The producer pushes one frame per `--interval`, carrying
 only the acquisition groups it re-read since the last frame, stamped when the
-agent sampled rather than when the recorder asked. A group of slots (per
+producer sampled rather than when the recorder asked. A group of slots (per
 task, per cgroup, per CPU) arrives keyed by occupant, and each occupant's
 labels arrive when it appears on the connection, so a task starting or
 exiting costs that task's labels rather than the group's whole member list.
@@ -290,7 +330,7 @@ are lost, as a failed scrape's are. An agent that comes back unable to serve
 the stream (a 404, a wrong content type, a handshake that does not decode) is
 refused as a late agent is: its recording stops with the rows it had and is
 finalized, it is not retried, the other endpoints keep recording, and the run
-exits 1.
+exits 1. A streamed endpoint is never switched to scraping.
 
 A wrapped command (`-- <command>`) that exits on its own is followed by a wait
 for each agent's frame stamped at or after the exit, at most one interval plus

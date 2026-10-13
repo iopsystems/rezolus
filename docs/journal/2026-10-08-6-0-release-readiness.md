@@ -183,6 +183,14 @@ on request (`record -o x.dendro`, a hindsight `output` ending in `.dendro`,
   route. This is the metriken-recorder entry's step 2, in rezolus's own
   recorder, before the library is extracted.
 
+  Done 2026-10-12 (6.0.0-alpha.50): `src/recorder/detect.rs` asks a `/` or
+  `/metrics/stream` URL for its stream first and hands any other answer to
+  the `Probe` hook (`src/recorder/agent_probe.rs`), which recognises an
+  agent by `/status` or the `/` banner; `/metrics/binary` is no longer read.
+  The handshake's labels and metadata are adopted below the user's and the
+  hook's. The metadata reads are bounded by the scrape timeout, which also
+  closes the backlog's "unbounded startup probe".
+
 ### Removing the `.rez`, parquet and raw writers (blocks 6.0.0)
 
 Inventory taken at upstream/main 4ffded35. The `.rez` container code (the v3
