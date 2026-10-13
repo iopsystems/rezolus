@@ -100,7 +100,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } commit_wait SEC(".maps");
 
 struct {
@@ -108,7 +108,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } commit_request_delay SEC(".maps");
 
 struct {
@@ -116,7 +116,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } commit_running SEC(".maps");
 
 struct {
@@ -124,7 +124,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } commit_locked SEC(".maps");
 
 struct {
@@ -132,7 +132,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } commit_flushing SEC(".maps");
 
 struct {
@@ -140,7 +140,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } commit_logging SEC(".maps");
 
 struct {
@@ -148,7 +148,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } checkpoint_latency SEC(".maps");
 
 struct {
@@ -156,7 +156,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } lock_buffer_stall_latency SEC(".maps");
 
 static __always_inline u64 tick_ns(void) {

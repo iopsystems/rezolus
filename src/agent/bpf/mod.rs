@@ -612,7 +612,7 @@ fn whole_pages<T>(count: usize) -> usize {
 }
 
 use counters::{Counters, CpuCounters, FilesystemCounters, PackedCounters};
-use histogram::{Histogram, HistogramBatch};
+use histogram::{Histogram, HistogramBatch, HISTOGRAM_SLICES};
 pub use sync_primitive::SyncPrimitive;
 
 /// The CPU ids this host actually has, for declaring a per-CPU group's
@@ -739,9 +739,10 @@ pub(crate) fn possible_cpus() -> usize {
         let contents = match std::fs::read_to_string("/sys/devices/system/cpu/possible") {
             Ok(contents) => contents,
             Err(e) => {
-                debug!(
+                warn!(
                     "failed to read /sys/devices/system/cpu/possible ({e}); \
-                     falling back to MAX_CPUS={}",
+                     falling back to MAX_CPUS={}, which sizes every BPF histogram \
+                     for that many CPUs (about 3.9 MiB each)",
                     crate::agent::MAX_CPUS
                 );
                 return crate::agent::MAX_CPUS;
@@ -768,6 +769,19 @@ pub(crate) fn possible_cpus() -> usize {
         }
         clamped
     })
+}
+
+/// The multiplier in `pid_slot`, and in `pid_slot()` in
+/// `src/agent/bpf/helpers.h`.
+const PID_SLOT_MULTIPLIER: usize = 277;
+
+/// The index of `pid` in a per-pid BPF array, the same mapping as
+/// `pid_slot()` in `src/agent/bpf/helpers.h`: the pid's offset within its
+/// block of 512 is multiplied by 277 mod 512, so 48 consecutive pids write
+/// 48 different cache lines (`helpers.h` gives the line counts at other
+/// strides). One to one, and every pid stays in its own 512-entry block.
+pub fn pid_slot(pid: usize) -> usize {
+    (pid & !511) | (pid.wrapping_mul(PID_SLOT_MULTIPLIER) & 511)
 }
 
 pub fn process_cgroup_info<T>(
@@ -1017,5 +1031,62 @@ mod possible_cpus_tests {
     fn clamp_bounds_a_mask_beyond_max_cpus() {
         assert_eq!(clamp_possible_cpus(8192), crate::agent::MAX_CPUS);
         assert_eq!(clamp_possible_cpus(usize::MAX), crate::agent::MAX_CPUS);
+    }
+}
+
+#[cfg(test)]
+mod pid_slot_tests {
+    use super::{pid_slot, PID_SLOT_MULTIPLIER};
+
+    /// Every pid below the kernel's PID_MAX_LIMIT (2^22) has its own slot,
+    /// in the same 512-entry block (4 KiB page of u64s) as the pid.
+    #[test]
+    fn one_to_one_within_each_block() {
+        let n = 1usize << 22;
+        let mut seen = vec![false; n];
+        for pid in 0..n {
+            let slot = pid_slot(pid);
+            assert_eq!(slot / 512, pid / 512, "pid {pid} -> {slot}");
+            assert!(!seen[slot], "pid {pid} shares slot {slot}");
+            seen[slot] = true;
+        }
+    }
+
+    /// 48 threads whose pids are consecutive, or spaced by a power of two up
+    /// to 64, write 48 different cache lines of 8 entries, from any start.
+    /// Indexed by pid, 48 consecutive pids share 6 or 7 lines.
+    #[test]
+    fn threads_at_common_strides_use_different_lines() {
+        for stride in [1, 2, 4, 8, 16, 32, 64] {
+            for start in 0..1024 {
+                let lines: std::collections::HashSet<usize> =
+                    (0..48).map(|k| pid_slot(start + k * stride) / 8).collect();
+                assert_eq!(lines.len(), 48, "stride {stride} start {start}");
+            }
+        }
+    }
+
+    /// The BPF helper in helpers.h computes the same expression with the
+    /// same multiplier. It is not compiled for the host, so its source is
+    /// checked here: a change to the helper fails this test until
+    /// `PID_SLOT_MULTIPLIER` matches it.
+    #[test]
+    fn bpf_helper_is_the_same_expression() {
+        let helpers = include_str!("helpers.h");
+        let expr = format!("return (pid & ~511U) | ((pid * {PID_SLOT_MULTIPLIER}) & 511);");
+        assert!(helpers.contains(&expr), "helpers.h does not contain {expr}");
+    }
+
+    /// Fixed values, so a change to this function shows up.
+    #[test]
+    fn known_values() {
+        assert_eq!(pid_slot(0), 0);
+        assert_eq!(pid_slot(1), 277);
+        assert_eq!(pid_slot(2), 42);
+        assert_eq!(pid_slot(512 + 1), 512 + 277);
+        assert_eq!(
+            pid_slot(u32::MAX as usize),
+            (u32::MAX as usize & !511) | ((511 * 277) & 511)
+        );
     }
 }

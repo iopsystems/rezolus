@@ -25,8 +25,10 @@
 #define MAX_PID 4194304
 #define MAX_SYSCALL_ID 1024
 
+// the start stamp per thread, at pid_slot(tid)
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
     __uint(max_entries, MAX_PID);
     __type(key, u32);
     __type(value, u64);
@@ -38,7 +40,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } other_latency SEC(".maps");
 
 struct {
@@ -46,7 +48,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } read_latency SEC(".maps");
 
 struct {
@@ -54,7 +56,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } write_latency SEC(".maps");
 
 struct {
@@ -62,7 +64,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } poll_latency SEC(".maps");
 
 struct {
@@ -70,7 +72,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } lock_latency SEC(".maps");
 
 struct {
@@ -78,7 +80,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } time_latency SEC(".maps");
 
 struct {
@@ -86,7 +88,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } sleep_latency SEC(".maps");
 
 struct {
@@ -94,7 +96,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } socket_latency SEC(".maps");
 
 struct {
@@ -102,7 +104,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } yield_latency SEC(".maps");
 
 struct {
@@ -110,7 +112,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } filesystem_latency SEC(".maps");
 
 struct {
@@ -118,7 +120,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } memory_latency SEC(".maps");
 
 struct {
@@ -126,7 +128,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } process_latency SEC(".maps");
 
 struct {
@@ -134,7 +136,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } query_latency SEC(".maps");
 
 struct {
@@ -142,7 +144,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } ipc_latency SEC(".maps");
 
 struct {
@@ -150,7 +152,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } timer_latency SEC(".maps");
 
 struct {
@@ -158,7 +160,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } event_latency SEC(".maps");
 
 struct {
@@ -166,7 +168,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } sync_latency SEC(".maps");
 
 // provides a lookup table from syscall id to a counter index offset
@@ -184,12 +186,11 @@ struct {
 // syscall number and six arguments, or the return value, into a trace record
 // before the program ran.
 static __always_inline int account_sys_enter(void) {
-    u64 id = bpf_get_current_pid_tgid();
-    u32 tid = id;
+    u32 slot = pid_slot(bpf_get_current_pid_tgid());
     u64 ts;
 
     ts = bpf_ktime_get_ns();
-    bpf_map_update_elem(&start, &tid, &ts, 0);
+    bpf_map_update_elem(&start, &slot, &ts, 0);
     return 0;
 }
 
@@ -211,7 +212,7 @@ static __always_inline long exit_syscall_nr(struct pt_regs* regs, bool btf) {
 static __always_inline int account_sys_exit(struct pt_regs* regs, bool btf) {
     u64 id = bpf_get_current_pid_tgid();
     u64 *start_ts, lat = 0;
-    u32 tid = id, group = 0;
+    u32 slot = pid_slot(id), group = 0;
 
     long nr = exit_syscall_nr(regs, btf);
     if (nr < 0) {
@@ -220,7 +221,7 @@ static __always_inline int account_sys_exit(struct pt_regs* regs, bool btf) {
 
     u32 syscall_id = nr;
 
-    start_ts = bpf_map_lookup_elem(&start, &tid);
+    start_ts = bpf_map_lookup_elem(&start, &slot);
 
     // possible we missed the start
     if (!start_ts || *start_ts == 0) {

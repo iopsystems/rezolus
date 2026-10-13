@@ -47,11 +47,12 @@ struct {
 } counters SEC(".maps");
 
 /*
- * tracking structs
+ * tracking structs, per pid at pid_slot(pid) (see helpers.h)
  */
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
     __uint(max_entries, MAX_PID);
     __type(key, u32);
     __type(value, u64);
@@ -59,6 +60,7 @@ struct {
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
     __uint(max_entries, MAX_PID);
     __type(key, u32);
     __type(value, u64);
@@ -66,6 +68,7 @@ struct {
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
     __uint(max_entries, MAX_PID);
     __type(key, u32);
     __type(value, u64);
@@ -104,7 +107,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } runqlat SEC(".maps");
 
 struct {
@@ -112,7 +115,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } running SEC(".maps");
 
 struct {
@@ -120,7 +123,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } offcpu SEC(".maps");
 
 /*
@@ -167,8 +170,10 @@ static __always_inline int trace_enqueue(u32 pid) {
         return 0;
     }
 
+    u32 slot = pid_slot(pid);
+
     ts = bpf_ktime_get_ns();
-    bpf_map_update_elem(&enqueued_at, &pid, &ts, 0);
+    bpf_map_update_elem(&enqueued_at, &slot, &ts, 0);
     return 0;
 }
 
@@ -220,6 +225,8 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
     // keeps the switch path consistent with it.
     u32 prev_pid = BTF_READ(btf, prev, pid);
     u32 next_pid = BTF_READ(btf, next, pid);
+    u32 prev_slot = pid_slot(prev_pid);
+    u32 next_slot = pid_slot(next_pid);
 
     // read the prev task cgroup details and push to ringbuf if new cgroup
     u32 id = 0;
@@ -268,9 +275,9 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
                 array_incr(&cgroup_ivcsw, prev_cgroup_id);
             }
 
-            bpf_map_update_elem(&enqueued_at, &prev_pid, &ts, 0);
+            bpf_map_update_elem(&enqueued_at, &prev_slot, &ts, 0);
 
-            tsp = bpf_map_lookup_elem(&running_at, &prev_pid);
+            tsp = bpf_map_lookup_elem(&running_at, &prev_slot);
             if (tsp && *tsp) {
                 // A timestamp pair can arrive out of order across CPUs; an
                 // unguarded subtraction would wrap to ~2^64 and land in the top
@@ -303,7 +310,7 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
 
     // for all tasks: track when it went off-cpu
     if (prev_pid) {
-        bpf_map_update_elem(&offcpu_at, &prev_pid, &ts, 0);
+        bpf_map_update_elem(&offcpu_at, &prev_slot, &ts, 0);
     }
 
     // next task has moved into running
@@ -332,9 +339,9 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
     }
 
     if (next_pid) {
-        bpf_map_update_elem(&running_at, &next_pid, &ts, 0);
+        bpf_map_update_elem(&running_at, &next_slot, &ts, 0);
 
-        tsp = bpf_map_lookup_elem(&enqueued_at, &next_pid);
+        tsp = bpf_map_lookup_elem(&enqueued_at, &next_slot);
         if (tsp && *tsp) {
             if (ts >= *tsp) {
                 delta_ns = ts - *tsp;
@@ -352,7 +359,7 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
 
                 // calculate how long it was off-cpu, not including runqueue wait,
                 // and increment stats
-                tsp = bpf_map_lookup_elem(&offcpu_at, &next_pid);
+                tsp = bpf_map_lookup_elem(&offcpu_at, &next_slot);
                 if (tsp && *tsp) {
                     if (ts >= *tsp) {
                         offcpu_ns = ts - *tsp;

@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+### Changed
+
+The pid_slot and per-CPU histogram changes from 6.0 (#1444, #1445),
+backported in #1451.
+
+- Reduced overhead when threads with neighbouring thread IDs (TIDs) run on
+  different CPUs, by indexing per-thread BPF arrays through a permutation of
+  the TID. With `task_attribution = true`, the `id` label and `x<n>`
+  series-name suffix of `task_cpu_usage` are now that index, not the TID;
+  select a thread by its `pid` label.
+
+- Reduced overhead by giving each CPU its own slice of every BPF histogram,
+  at about 4 KiB of memory per possible CPU per histogram.
+
 ## [5.27.0] - 2026-10-12
 
 ### Changed

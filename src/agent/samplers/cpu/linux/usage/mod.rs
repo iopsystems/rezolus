@@ -126,7 +126,7 @@ fn handle_task_info(data: &[u8]) -> i32 {
             labels.insert("comm".to_string(), comm);
         }
         labels.insert("cgroup".to_string(), cgroup);
-        TASK_IDENTITY.set(pid, labels);
+        TASK_IDENTITY.set(pid_slot(pid), labels);
     }
 
     0
@@ -138,7 +138,7 @@ fn handle_task_exit(data: &[u8]) -> i32 {
     if plain::copy_from_bytes(&mut exit, data).is_ok() {
         let pid = exit.pid as usize;
 
-        TASK_IDENTITY.clear(pid);
+        TASK_IDENTITY.clear(pid_slot(pid));
     }
 
     0

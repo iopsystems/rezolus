@@ -63,9 +63,10 @@ struct {
     __uint(max_entries, MAX_CGROUPS);
 } cgroup_cpu_migrations SEC(".maps");
 
-// For storing the CPU a process was last seen on
+// For storing the CPU a process was last seen on, at pid_slot(pid)
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
     __uint(max_entries, MAX_PID);
     __type(key, u32);   // pid
     __type(value, u32); // cpu
@@ -85,8 +86,10 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
         return 0;
     }
 
+    u32 next_slot = pid_slot(next_pid);
+
     // find the last cpu the task ran on
-    u32* last_cpu_ptr = bpf_map_lookup_elem(&last_cpu, &next_pid);
+    u32* last_cpu_ptr = bpf_map_lookup_elem(&last_cpu, &next_slot);
 
     // check the ptr and that the last cpu is known (it is stored one-indexed)
     if (last_cpu_ptr && *last_cpu_ptr) {
@@ -126,7 +129,7 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
 
     // store the current cpu for the next task (converted to one-indexed)
     cpu = cpu + 1;
-    bpf_map_update_elem(&last_cpu, &next_pid, &cpu, BPF_ANY);
+    bpf_map_update_elem(&last_cpu, &next_slot, &cpu, BPF_ANY);
 
     return 0;
 }

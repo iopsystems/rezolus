@@ -90,7 +90,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } allocation_size SEC(".maps");
 
 static __always_inline void counter_add(u32 slot, u32 counter, u64 value) {

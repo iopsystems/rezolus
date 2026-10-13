@@ -76,7 +76,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } read_size SEC(".maps");
 
 struct {
@@ -84,7 +84,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } write_size SEC(".maps");
 
 struct {
@@ -92,7 +92,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } flush_size SEC(".maps");
 
 struct {
@@ -100,7 +100,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, HISTOGRAM_BUCKETS);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } discard_size SEC(".maps");
 
 // errors[cpu * ERR_BANK_WIDTH + op * ERR_BUCKETS + cls]
@@ -163,7 +163,7 @@ static int __always_inline handle_block_rq_complete(struct request* rq, int erro
         // flush completions transfer no data (nr_bytes is always 0), so a
         // size observation would just pile zeros into the first bucket
         if (nr_bytes > 0) {
-            idx = value_to_index(nr_bytes, HISTOGRAM_POWER);
+            idx = histogram_index(nr_bytes, HISTOGRAM_POWER);
 
             switch (op) {
             case REQ_OP_READ:

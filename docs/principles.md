@@ -157,6 +157,12 @@ acceptable; hashmap latency in a hot probe is not.
 **How to apply.**
 - New per-PID, per-CPU, per-cgroup-id, or per-syscall maps use
   `BPF_MAP_TYPE_ARRAY` with `BPF_F_MMAPABLE`.
+- Per-PID arrays are indexed through `pid_slot()` (`bpf/helpers.h`), not by
+  the pid. Indexed by pid, eight entries share a cache line, so CPUs running
+  threads with neighbouring pids write the same line. `pid_slot()` permutes
+  each page so 48 consecutive pids use 48 different lines; `helpers.h` gives
+  the line counts at other strides. Userspace that reads or labels a per-PID
+  array by index uses the Rust `pid_slot`.
 - Pointer keys on a hot path use a hashed array of one-word slots, with
   the miss rate stated next to it.
 - A new `BPF_MAP_TYPE_HASH` requires a comment justifying why the key
@@ -240,26 +246,50 @@ from bytes to GB).
 cannot loop, so CLZ is implemented as a 6-deep branch tree
 (`src/agent/bpf/histogram.h`).
 
-*Tradeoff we accept:* histograms are not per-CPU sharded; bucket increments
-may contend across CPUs. Bet: typical traffic spreads across enough buckets
-that contention is rare. Per-bucket per-CPU shards would cost ~4 MB per
-histogram (`MAX_CPUS × 496 × 8`) and we will not pay that. Possible
-refinement: a small fixed shard count (e.g., 4) costs ~16 KB per histogram
-and meaningfully reduces contention.
+*Histograms are per-CPU sharded.* Each histogram map holds one slice of
+buckets per possible CPU (`histogram_index()` in `bpf/helpers.h`), and
+userspace sums the slices on read. With grouping power 3, the 8 buckets of
+one power of two are one 64-byte cache line, so every value in
+[1024, 2048) ns increments the same line however the values spread across
+buckets; unsharded, every CPU recording latencies in that range would
+write it. This was measured on 6.x (#1445) in a 56-vCPU KVM guest (7 L3
+domains) with
+threads calling `getppid(2)` in a loop, their thread ids spaced so the
+per-thread map did not share cache lines. A `sys_exit` program writing one
+shared histogram took 207, 263 and 284-294 ns per run at 4, 16 and 48
+threads, against 96, 97 and 116 with per-CPU slices and 87, 89 and 104 with
+no write.
+
+The cost is memory: the kernel allocates every slice when the map is
+created, and the agent mmaps and reads the whole map, so the same pages
+count in its RSS. A slice is 3968 bytes; at 192 CPUs that is 744 KiB per
+histogram, 42 MiB for the 58 histograms at the time of writing, and
+225 MiB for those at 1024 possible CPUs. Each read also sums every slice:
+on 6.x with every sampler on at 56 CPUs the agent used about 0.7 ms more
+CPU per `/metrics/json` read than with unsharded histograms (0.35-1.0 ms
+pairing the extremes of two runs per build of 600 reads each). On 5.x with
+the default samplers at 56 CPUs, 30 s of reads every 50 ms took 8880-8930
+ms of agent CPU against 8570-8600 ms. The cost grows with the number of
+possible CPUs. The map is declared for `MAX_CPUS`
+slices and the builder sets it to the possible CPUs before load.
 
 *Read shear:* userspace reads buckets non-atomically; this does not bias
 percentile estimates meaningfully.
 
 **How to apply.**
 - Use `histogram_incr(&map, HISTOGRAM_POWER, value)` from
-  `src/agent/bpf/helpers.h` with `HISTOGRAM_POWER = 3`.
+  `src/agent/bpf/helpers.h` with `HISTOGRAM_POWER = 3`, or
+  `histogram_index()` for the index; never `value_to_index()` alone.
+- Declare the map with `HISTOGRAM_BUCKETS * HISTOGRAM_SLICES` entries and
+  register it with `.histogram()`, which sizes it and sums the slices.
 - Deviate from `grouping_power = 3` only with a documented reason in the
   sampler.
 
 **What we refuse.**
 - Pure log2 / linear histograms when the value range demands bounded
   relative error.
-- Per-bucket per-CPU sharding at full `MAX_CPUS` width.
+- A histogram map in which two CPUs increment buckets in the same cache
+  line.
 
 ### 9. The agent exposes detail; aggregation lives downstream
 
@@ -293,9 +323,10 @@ summing is cheap and reversible — un-summing is impossible.
 
 Counters, gauges, and histograms live in mmap'd memory; the agent does no
 periodic flushing or downsampling. Recorder, exporter, viewer's live mode,
-and MCP queries each drive their own read cadence. Reading is just memory
-reads against the mmap'd arrays — no syscalls, no agent-side work — so
-multiple consumers at independent cadences are essentially free.
+and MCP queries each drive their own read cadence. Reading is memory
+reads against the mmap'd arrays plus summing per-CPU histogram slices
+(principle 8), with no syscalls, so multiple consumers at independent
+cadences cost little.
 
 *Why this matters:* it cleanly separates "produce metrics" from "decide
 when to record them," and makes mmap-direct reads the right architecture.
@@ -342,7 +373,7 @@ new samplers, not reinvented:
 - `src/agent/bpf/cgroup.h` — cgroup attribution helpers.
 - `src/agent/bpf/task.h` — task tracking helpers.
 - `src/agent/bpf/helpers.h` — `array_add`, `array_set_if_larger`,
-  `histogram_incr`.
+  `histogram_incr`, `histogram_index`, `pid_slot`.
 - `src/agent/bpf/histogram.h` — CLZ + H2 indexing.
 
 *Why:* anti-drift insurance — the next sampler should not grow a duplicate
@@ -371,6 +402,9 @@ principle.
 **How to apply.**
 - A sampler's userspace refresh path is bounded constant or O(active
   keys), not O(full keyspace) and not proportional to workload throughput.
+  Per-CPU state (`CpuCounters`, histogram slices) is read once per
+  possible CPU, so those reads are O(possible CPUs); a histogram slice is
+  496 `u64`s, against 8-32 for a counter bank (principle 8).
 - High-cardinality metrics use sparse representations.
 
 **What we refuse.**
@@ -703,7 +737,8 @@ change. Each item is a yes/no question, or "justify in a comment."
   width is a whole-number multiple of a cacheline (8 × `u64` = 64 bytes).
 - **Histogram parameters.** Use `histogram_incr(&map, HISTOGRAM_POWER,
   value)` with `HISTOGRAM_POWER = 3` unless there is a documented reason
-  to deviate. (Principle 8.)
+  to deviate, and declare the map with `HISTOGRAM_BUCKETS *
+  HISTOGRAM_SLICES` entries. (Principle 8.)
 - **Increments.** `array_add` / `__atomic_fetch_add(__ATOMIC_RELAXED)`. No
   spin locks. Non-atomic patterns (`array_set_if_larger`) are acceptable
   only for monotone values and must be commented. (Principles 3, 14.)
@@ -832,11 +867,6 @@ Lower priority but in the same family:
 Sysfs use elsewhere (`cpu/{frequency,l3,branch,dtlb}`,
 `network/ethtool`) is one-time discovery (CPU enumeration, perf event
 source IDs, interface listing) — not drift.
-
-### Possible refinement: small per-CPU shard count for hot histograms (principle 8)
-
-4 shards × 496 buckets × 8 bytes ≈ 16 KB per histogram, eliminates most
-contention without the prohibitive ~4 MB cost of full per-CPU sharding.
 
 ### Low priority
 
