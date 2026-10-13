@@ -71,13 +71,15 @@
   recording.
 - **`rezolus-capture` with `--endpoint` loses the merged dashboard.** The
   viewer opens a capture made with `--endpoint` as an A/B comparison of the
-  agent's recording against the first service's; a second service is not
-  shown. Service KPI dashboards (vllm, valkey, sglang and the other
-  templates) are not shown, because the template queries select a `source`
-  label that `.dendro` series do not carry. `capture.parquet` and the
-  per-endpoint `agent-<port>.parquet` / `<source>-<port>.parquet` copies are
-  no longer written. For the merged dashboard with service KPIs, capture
-  with a 5.x recorder (5.27.0 or later).
+  agent's recording against the first service's, with further services as
+  extra overlays; no dashboard queries the service metrics. Service KPI
+  dashboards (vllm, valkey, sglang and the other templates) are not shown,
+  because the template queries select a `source` label that `.dendro`
+  series do not carry. `capture.parquet` and the per-endpoint
+  `agent-<port>.parquet` / `<source>-<port>.parquet` copies are no longer
+  written. For the merged dashboard with service KPIs, use the 5.x
+  `rezolus-capture` (the v5.27.0 script or Docker image), which writes a
+  merged `capture.parquet`.
 - **`record --endpoint url,protocol=rezolus`** names a Rezolus agent;
   `protocol=msgpack`, the 5.x spelling, is still accepted.
 - **`record --endpoint url,role=...` is kept in the recording.** The role is

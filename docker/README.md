@@ -63,11 +63,13 @@ docker run --rm -it --privileged --network=host \
 The archive holds a recording per endpoint: `source=rezolus` for the system
 metrics and `source=redis` for Redis. The viewer at http://localhost:8080
 opens it as an A/B comparison of the system recording against the Redis
-recording. Service KPI dashboards (valkey, vllm, sglang and the other
+recording, with further services as extra overlays; no dashboard queries the
+service metrics. Service KPI dashboards (valkey, vllm, sglang and the other
 templates) are not shown, because the template queries select a `source`
 label that `.dendro` series do not carry, and no per-endpoint parquet copies
-are written. For the merged dashboard with service KPIs, capture with a
-Rezolus 5.x recorder (5.27.0 or later).
+are written. For the merged dashboard with service KPIs, use the 5.x
+`rezolus-capture` (the v5.27.0 script or Docker image), which writes a
+merged `capture.parquet`.
 
 ### System + service metrics (e.g., Valkey)
 
