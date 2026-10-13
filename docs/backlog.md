@@ -799,6 +799,15 @@ Source: [Rezolus 6.0.0: release readiness](journal/2026-10-08-6-0-release-readin
   path change, and `CLAUDE.md`, `docs/usage.md` and `record`'s help once the
   writers go. The upgrade page covers `.dendro`-only writing and the refusal
   of agents older than 5.21.0.
+- **Multi-source single-run recordings open as A/B; templates don't match
+  `.dendro` series** — Open, blocks 6.0.0. A `.dendro` from one `record` run
+  with an agent and a Prometheus endpoint (`rezolus-capture --endpoint`, or
+  `record --endpoint a --endpoint b`) opens in the viewer as an A/B
+  comparison of the first two recordings, not as one merged dashboard. The
+  service KPI templates (`site/viewer/templates/*.json`) select
+  `source="<name>"`, a label `.dendro` series do not carry, so no service
+  dashboard is shown. 5.x wrote one merged parquet that both worked on. The
+  viewer fix is the owner's decision.
 - **Homebrew tap at 5.19.0** — Open. Sixteen bump PRs open in
   `iopsystems/homebrew-iop` (#134–#151).
 - **Release candidate soak** — Open. A day on a Linux host and a fleet host,
