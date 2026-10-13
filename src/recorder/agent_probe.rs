@@ -1,19 +1,19 @@
 //! The recorder's [`Probe`] hook for Rezolus agents.
 //!
-//! The rezolus half of detection and identity (see `detect`): recognising a
+//! The rezolus half of `metriken-recorder`'s detection and identity:
+//! recognising a
 //! Rezolus agent by `/status`, else the `/` banner every agent serves;
 //! wording the refusal of one that cannot stream; and fetching what an agent
 //! does not yet put in its handshake (`host` from `/systeminfo`, `version`,
 //! `systeminfo`, `descriptions`).
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use reqwest::{Client, Url};
 
-use super::detect::{At, Enrich, Probe, StreamAnswer, Verdict};
 use super::RELEASE_5X;
 use crate::parquet_metadata::{KEY_DESCRIPTIONS, KEY_SYSTEMINFO, KEY_VERSION};
+use metriken_recorder::{At, Enrich, Probe, StreamAnswer, Verdict};
 
 /// The first Rezolus release whose agent serves `/metrics/stream`.
 pub(crate) const STREAM_SINCE: &str = "5.21.0";
@@ -238,26 +238,6 @@ pub(crate) fn merge(key: &str, old: &str, new: &str) -> String {
     }
 }
 
-/// What the restarted agent at `base_url` reports about itself, fetched
-/// within `timeout`: `None` when nothing answered, or when it describes a
-/// process other than `epoch`'s (the agent restarted again). The agent's
-/// `version`, `systeminfo` and `descriptions`, through [`RezolusProbe`]'s
-/// `enrich`.
-pub(crate) async fn fetch_restarted_agent(
-    client: &Client,
-    base_url: &Url,
-    epoch: &str,
-    timeout: Duration,
-) -> Option<super::restart::Agent> {
-    let probe = RezolusProbe::new(client.clone());
-    let (_, metadata) = super::detect::enrich_within(&probe, base_url, Some(epoch), timeout)
-        .await
-        .ok()?;
-    let agent = super::restart::Agent::from_metadata(&metadata);
-    (agent.version.is_some() || agent.systeminfo.is_some() || agent.descriptions.is_some())
-        .then_some(agent)
-}
-
 /// The refusal for a Rezolus agent that cannot serve its replication stream.
 ///
 /// Names the agent's version when `/status` or the `/` banner gave one. An
@@ -303,7 +283,9 @@ pub(crate) fn unstreamable_agent(url: &Url, version: Option<&str>, reason: &str,
             "This endpoint is excluded from this recording and not retried; the other \
              endpoints keep recording"
         }
-        At::Reconnect => RECONNECT_REFUSED,
+        // `At` is non-exhaustive; a moment this hook does not know is
+        // worded as a reconnect, the most conservative of the three.
+        _ => RECONNECT_REFUSED,
     };
     format!("{why}. {next}. {fallback}")
 }
@@ -330,6 +312,7 @@ pub(crate) fn predates_stream(version: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn root_version_parses_the_agent_banner() {
@@ -424,7 +407,7 @@ mod tests {
 
     // ── detection against in-process producers ──────────────────────────────
 
-    use crate::recorder::detect::{self, Detected, Transport};
+    use metriken_recorder::{self as detect, Detected, Transport};
     use std::sync::{Arc, Mutex};
 
     /// What a fake producer serves.
@@ -546,18 +529,54 @@ mod tests {
     }
 
     fn cfg() -> detect::DetectConfig {
-        detect::DetectConfig {
-            interval: Duration::from_millis(100),
-            timeout: Duration::from_secs(2),
-            layout: crate::recorder::stream::Layout::Long,
-            wire_names: crate::recorder::stream::ACCEPTED_WIRE_NAMES,
-        }
+        let mut cfg = detect::DetectConfig::new(Duration::from_millis(100), Duration::from_secs(2));
+        cfg.wire_names = crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec();
+        cfg
     }
 
-    async fn detect_at(url: &Url, transport: Transport, at: At) -> Detected {
+    /// Detection at startup through the library, with this hook.
+    async fn detect_startup(url: &Url, transport: Transport) -> Detected {
         let client = client();
         let probe = RezolusProbe::new(client.clone());
-        detect::detect(&client, &cfg(), url, transport, &probe, at).await
+        let spec = detect::EndpointSpec::new(url.clone()).with_transport(transport);
+        detect::detect(&client, &cfg(), vec![spec], &probe)
+            .await
+            .remove(0)
+    }
+
+    /// The refusal the library reports when the endpoint at `url`, pending
+    /// at startup, is detected on a recording's tick ([`At::Activation`]).
+    async fn refused_on_activation(url: &Url) -> String {
+        let client = client();
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg =
+            detect::RecorderConfig::new(dir.path().join("a.dendro"), Duration::from_millis(100));
+        cfg.wire_names = crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec();
+        let pending = Detected::Pending {
+            spec: detect::EndpointSpec::new(url.clone()),
+            reason: "pending at startup".to_string(),
+        };
+        let (recorder, _ids, mut events) = detect::Recorder::start(
+            cfg,
+            client.clone(),
+            std::sync::Arc::new(RezolusProbe::new(client)),
+            vec![pending],
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+        let reason = tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(event) = events.recv().await {
+                if let detect::Event::Refused { reason, .. } = event {
+                    return reason;
+                }
+            }
+            panic!("the event channel closed before a refusal");
+        })
+        .await
+        .expect("refused within 5 s");
+        recorder.discard().await;
+        reason
     }
 
     /// A Prometheus exporter given by its root URL is scraped at `/metrics`:
@@ -566,8 +585,8 @@ mod tests {
     #[tokio::test]
     async fn a_prometheus_endpoint_at_the_root_is_scraped_at_metrics() {
         let (url, _) = serve(Fake::Prometheus).await;
-        match detect_at(&url, Transport::Auto, At::Startup).await {
-            Detected::Scraped(scrape) => assert_eq!(scrape.path(), "/metrics"),
+        match detect_startup(&url, Transport::Auto).await {
+            Detected::Scraped { url: scrape, .. } => assert_eq!(scrape.path(), "/metrics"),
             other => panic!("expected a scrape, got {}", describe(&other)),
         }
     }
@@ -581,11 +600,11 @@ mod tests {
             vec![("version", "0.3.0")],
         ))
         .await;
-        let sub = match detect_at(&url, Transport::Auto, At::Startup).await {
-            Detected::Streamed(sub) => sub,
+        let sub = match detect_startup(&url, Transport::Auto).await {
+            Detected::Streamed { subscription, .. } => subscription,
             other => panic!("expected a stream, got {}", describe(&other)),
         };
-        let source = sub.source().unwrap();
+        let source = sub.handshake();
         assert_eq!(source.labels["source"], "cachecannon");
         assert_eq!(source.metadata["version"], "0.3.0");
 
@@ -605,17 +624,17 @@ mod tests {
     #[tokio::test]
     async fn an_agent_without_a_stream_is_refused_by_version() {
         let (url, _) = serve(Fake::OldAgent("5.20.0")).await;
-        for (at, next) in [
-            (At::Startup, "Nothing was recorded"),
-            (At::Activation, "excluded from this recording"),
+        let at_startup = match detect_startup(&url, Transport::Auto).await {
+            Detected::Refused { reason, .. } => reason,
+            other => panic!("expected a refusal, got {}", describe(&other)),
+        };
+        let on_activation = refused_on_activation(&url).await;
+        for (reason, next) in [
+            (at_startup, "Nothing was recorded"),
+            (on_activation, "excluded from this recording"),
         ] {
-            match detect_at(&url, Transport::Auto, at).await {
-                Detected::Refused(reason) => {
-                    for needle in ["Rezolus 5.20.0", "predates", "answered HTTP 404", next] {
-                        assert!(reason.contains(needle), "{needle:?} in {reason}");
-                    }
-                }
-                other => panic!("expected a refusal, got {}", describe(&other)),
+            for needle in ["Rezolus 5.20.0", "predates", "answered HTTP 404", next] {
+                assert!(reason.contains(needle), "{needle:?} in {reason}");
             }
         }
     }
@@ -625,13 +644,13 @@ mod tests {
     #[tokio::test]
     async fn an_endpoint_answering_5xx_is_pending_until_it_streams() {
         let (url, fake) = serve(Fake::Failing).await;
-        match detect_at(&url, Transport::Auto, At::Startup).await {
-            Detected::Pending(why) => assert!(why.contains("HTTP 503"), "{why}"),
+        match detect_startup(&url, Transport::Auto).await {
+            Detected::Pending { reason: why, .. } => assert!(why.contains("HTTP 503"), "{why}"),
             other => panic!("expected pending, got {}", describe(&other)),
         }
         *fake.lock().unwrap() = Fake::Agent;
-        match detect_at(&url, Transport::Auto, At::Activation).await {
-            Detected::Streamed(_) => {}
+        match detect_startup(&url, Transport::Auto).await {
+            Detected::Streamed { .. } => {}
             other => panic!("expected a stream, got {}", describe(&other)),
         }
     }
@@ -646,8 +665,8 @@ mod tests {
             .port();
         let url: Url = format!("http://127.0.0.1:{port}").parse().unwrap();
         assert!(matches!(
-            detect_at(&url, Transport::Auto, At::Startup).await,
-            Detected::Pending(_)
+            detect_startup(&url, Transport::Auto).await,
+            Detected::Pending { .. }
         ));
     }
 
@@ -656,13 +675,15 @@ mod tests {
     #[tokio::test]
     async fn a_declared_protocol_overrides_detection() {
         let (prom, _) = serve(Fake::Prometheus).await;
-        match detect_at(&prom, Transport::Stream, At::Startup).await {
-            Detected::Refused(reason) => assert!(reason.contains("protocol=stream"), "{reason}"),
+        match detect_startup(&prom, Transport::Stream).await {
+            Detected::Refused { reason, .. } => {
+                assert!(reason.contains("protocol=stream"), "{reason}")
+            }
             other => panic!("expected a refusal, got {}", describe(&other)),
         }
         let (agent, _) = serve(Fake::Agent).await;
-        match detect_at(&agent, Transport::Prometheus, At::Startup).await {
-            Detected::Pending(why) => assert!(why.contains("HTTP 404"), "{why}"),
+        match detect_startup(&agent, Transport::Prometheus).await {
+            Detected::Pending { reason: why, .. } => assert!(why.contains("HTTP 404"), "{why}"),
             other => panic!("expected pending, got {}", describe(&other)),
         }
     }
@@ -695,13 +716,11 @@ mod tests {
     #[tokio::test]
     async fn a_root_url_whose_metrics_404s_is_pending_not_scraped() {
         let (url, _) = serve(Fake::NotFound).await;
-        for at in [At::Startup, At::Activation] {
-            match detect_at(&url, Transport::Auto, at).await {
-                Detected::Pending(why) => {
-                    assert!(why.contains("/metrics answered HTTP 404"), "{why}")
-                }
-                other => panic!("expected pending, got {}", describe(&other)),
+        match detect_startup(&url, Transport::Auto).await {
+            Detected::Pending { reason: why, .. } => {
+                assert!(why.contains("/metrics answered HTTP 404"), "{why}")
             }
+            other => panic!("expected pending, got {}", describe(&other)),
         }
     }
 
@@ -770,10 +789,10 @@ mod tests {
 
     fn describe(d: &Detected) -> String {
         match d {
-            Detected::Streamed(_) => "a stream".to_string(),
-            Detected::Scraped(url) => format!("a scrape at {url}"),
-            Detected::Refused(r) => format!("a refusal: {r}"),
-            Detected::Pending(w) => format!("pending: {w}"),
+            Detected::Streamed { .. } => "a stream".to_string(),
+            Detected::Scraped { url, .. } => format!("a scrape at {url}"),
+            Detected::Refused { reason: r, .. } => format!("a refusal: {r}"),
+            Detected::Pending { reason: w, .. } => format!("pending: {w}"),
         }
     }
 

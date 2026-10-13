@@ -22,16 +22,18 @@
 //! Retention is `SourceRecorder::evict_before` each tick. The file stays
 //! bounded because freed pages are reused.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::state::TimeRange;
+#[cfg(test)]
 use crate::recorder::rez_v3_writer::ManifestSeed;
+#[cfg(test)]
 use crate::recorder::seal_policy::SealPolicy;
 
-/// The rolling buffer. One recording, fed a row per tick, trimmed to the
-/// configured lookback every tick.
+/// A rolling buffer written directly, for tests that fill one without a
+/// stream. Hindsight itself records through `metriken-recorder` with
+/// retention (see `super::run`); this keeps the same retention rule.
 ///
 /// The recorder is **declared before the writer deliberately.** Fields drop
 /// in declaration order, and dropping the writer joins its thread. Dropping
@@ -39,6 +41,7 @@ use crate::recorder::seal_policy::SealPolicy;
 /// sender, so the writer stops whoever still holds a clone — but it would stop
 /// the writer while the recorder could still queue a final seal, and that work
 /// would be dropped.
+#[cfg(test)]
 pub struct HindsightBuffer {
     rec: metriken_storage::SourceRecorder,
     writer: metriken_storage::ArchiveWriter,
@@ -55,9 +58,6 @@ pub struct HindsightBuffer {
     /// [`at_retention_bound`](Self::at_retention_bound) can be answered
     /// exactly. It is not affected by eviction, which is the point.
     first_ts: Option<u64>,
-    /// The recording's metadata as last written, for the restart patch to be
-    /// computed against.
-    metadata: BTreeMap<String, String>,
 }
 
 /// Row time the dendro writer lets pass between restatements of a long
@@ -66,10 +66,12 @@ fn restate_every_ns() -> u64 {
     metriken_storage::WriterConfig::default().restate_every_ns
 }
 
+#[cfg(test)]
 fn archive_err(e: Box<dyn std::error::Error + Send + Sync>) -> String {
     e.to_string()
 }
 
+#[cfg(test)]
 impl HindsightBuffer {
     /// Create the buffer at `path`, which must not exist, through
     /// metriken-storage's writer: groups with slots are written long.
@@ -95,7 +97,6 @@ impl HindsightBuffer {
         };
         let mut writer = metriken_storage::ArchiveWriter::create(path, config)
             .map_err(|e| format!("failed to create {}: {e}", path.display()))?;
-        let metadata = seed.metadata.clone();
         let rec = writer
             .add_source(seed.labels, seed.metadata, seed.clock_anchor_wall_ns)
             .map_err(archive_err)?;
@@ -105,34 +106,11 @@ impl HindsightBuffer {
             lookback,
             newest_ts: None,
             first_ts: None,
-            metadata,
         })
-    }
-
-    /// Write agent restarts into the buffer's metadata: see
-    /// [`crate::recorder::restart::metadata_patch`].
-    pub fn record_restarts(
-        &mut self,
-        restarts: &[crate::recorder::restart::Restart],
-        agent: &crate::recorder::restart::Agent,
-    ) -> Result<(), String> {
-        let patch = crate::recorder::restart::metadata_patch(
-            &self.metadata,
-            self.first_ts,
-            restarts,
-            agent,
-            &[],
-        );
-        let mut merged = self.metadata.clone();
-        merged.extend(patch.clone());
-        self.rec.update_metadata(patch).map_err(archive_err)?;
-        self.metadata = merged;
-        Ok(())
     }
 
     /// Append one snapshot, committed at once. The tests' way of filling a
     /// buffer without a stream.
-    #[cfg(test)]
     pub fn ingest(
         &mut self,
         snapshot: &metriken_exposition::Snapshot,
@@ -148,31 +126,9 @@ impl HindsightBuffer {
         Ok(())
     }
 
-    /// Append one pass taken off the stream, staging the groups as they
-    /// arrived.
-    pub fn ingest_streamed(
-        &mut self,
-        groups: Vec<metriken_storage::StreamedGroup>,
-        anchored_ts: u64,
-        wall_offset_ns: i64,
-    ) -> Result<(), String> {
-        let staged = self
-            .rec
-            .stage_streamed(groups, anchored_ts, wall_offset_ns)
-            .map_err(archive_err)?;
-        self.writer.commit(vec![staged]).map_err(archive_err)?;
-        self.note_ts(anchored_ts);
-        Ok(())
-    }
-
     fn note_ts(&mut self, ts: u64) {
         self.newest_ts = Some(self.newest_ts.map_or(ts, |t| t.max(ts)));
         self.first_ts.get_or_insert(ts);
-    }
-
-    /// Whether any row has been written into the buffer.
-    pub fn has_rows(&self) -> bool {
-        self.first_ts.is_some()
     }
 
     /// Whether retention has begun: the buffer is now dropping as much as it
@@ -180,11 +136,12 @@ impl HindsightBuffer {
     ///
     /// Derived from the span the recording has COVERED — newest minus the very
     /// first row, which eviction never moves — not from the span it currently
-    /// retains. The retained span is the wrong instrument: it converges to just
-    /// *under* the lookback (the oldest surviving row sits one tick inside the
-    /// cutoff, and a row is stamped in nanoseconds), so `retained >= lookback`
-    /// reads false forever at steady state. Ask the question the buffer can
-    /// answer exactly instead of the one that needs a fudge factor.
+    /// retains. The retained span is the wrong instrument: eviction drops whole
+    /// segments, so it rises past the lookback and falls back each time a
+    /// segment goes (up to two lookbacks plus one interval when the lookback
+    /// is shorter than the seal policy's `max_age`), and it can sit just under
+    /// the lookback before the first segment is sealed. The covered span
+    /// crosses the lookback once and stays crossed.
     pub fn at_retention_bound(&self) -> bool {
         match (self.first_ts, self.newest_ts) {
             (Some(first), Some(newest)) => {
@@ -218,7 +175,6 @@ impl HindsightBuffer {
     /// is what keeps sealing and eviction off the tick path. It is for a caller
     /// that is about to inspect the file through a second connection and needs
     /// to see its own last tick, rather than the state from before it.
-    #[cfg(test)]
     pub fn sync(&mut self) -> Result<(), String> {
         self.rec.sync().map_err(archive_err)
     }
@@ -449,6 +405,7 @@ mod tests {
     use crate::recorder::rez::recorder_tests_support::{counter, snap};
     use metriken_exposition::Snapshot;
     use metriken_storage::Catalog;
+    use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
 
@@ -530,14 +487,64 @@ mod tests {
         assert_eq!(summary.first_ts, Some(ANCHOR));
     }
 
+    /// A lookback shorter than the seal policy's `max_age`: no segment seals
+    /// by policy, so every row is in the WAL when retention reaches it. For a
+    /// long table, retention used to delete the open segment's first value
+    /// row, the one that carries the table's columns, and every later value
+    /// row then read back as nothing; a dump with a 6 s lookback held only
+    /// the occupant rows. metriken-storage 0.2.3 seals the segment first, so
+    /// the lookback's values read back.
+    #[test]
+    fn a_lookback_shorter_than_max_age_keeps_its_rows_readable() {
+        use metriken_query::MetricsSource;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("buffer.dendro");
+        let mut buf = HindsightBuffer::create_dendro(
+            &path,
+            seed(),
+            Duration::from_secs(3),
+            seal_every(usize::MAX),
+        )
+        .unwrap();
+        for i in 0..20u64 {
+            let (s, ts) = slotted(ANCHOR + i * SECOND, &[(0, "nginx")], i);
+            buf.ingest(&s, ts, 0).unwrap();
+            buf.maintain().unwrap();
+        }
+        buf.sync().unwrap();
+        let reader = crate::rez_reader::RezReader::open_recordings(
+            &path,
+            metriken_storage::BufferPool::new(64 * 1024 * 1024),
+        )
+        .unwrap()
+        .remove(0)
+        .1;
+        let (start, end) = reader.time_range().unwrap();
+        let metriken_query::QueryResult::Matrix { result } = reader
+            .query_range("rate(task_ops{comm=\"nginx\"}[3s])", start, end + 1.0, 1.0)
+            .unwrap()
+        else {
+            panic!("a matrix");
+        };
+        let points: Vec<f64> = result
+            .iter()
+            .flat_map(|s| s.values.iter().map(|v| v.1))
+            .collect();
+        // At least the 3 s lookback reads back, the counter rising by one a
+        // second.
+        assert!(
+            points.len() >= 3 && points.iter().all(|v| (v - 1.0).abs() < 1e-6),
+            "{points:?}"
+        );
+    }
+
     #[test]
     fn at_retention_bound_flips_once_the_recording_outlasts_the_lookback() {
         // `/status` reports this, and the obvious derivation is wrong: the
-        // span the buffer RETAINS converges to just under the lookback — the
-        // oldest surviving row sits one tick inside the cutoff — so
-        // `retained >= lookback` reads false forever at steady state. This is
-        // the span the recording has COVERED, which crosses the lookback
-        // exactly once and stays crossed.
+        // span the buffer RETAINS rises and falls as eviction drops whole
+        // segments, so `retained >= lookback` does not flip at a fixed point.
+        // This is the span the recording has COVERED, which crosses the
+        // lookback exactly once and stays crossed.
         //
         // A 4.5 s lookback against 1 s ticks, so the cutoff lands BETWEEN two
         // rows: in the real loop the same misalignment comes from tick
@@ -564,16 +571,18 @@ mod tests {
         buf.maintain().unwrap();
         assert!(buf.at_retention_bound(), "5s covered: eviction has started");
 
-        // And the retained span is now just UNDER the lookback: these rows
-        // are unsealed, so retention drops them one at a time and the oldest
-        // survivor sits strictly inside the cutoff. `summarize` opens its own
-        // connection, so the barrier makes it see the eviction above.
+        // The retained span is not what flipped it. Retention seals an open
+        // segment at the first tick its first row is behind the cutoff and
+        // drops it whole once its last row is (metriken-storage 0.2.3), so
+        // the span kept can reach two lookbacks plus one tick and says
+        // nothing about whether the recording has outlasted the lookback.
+        // `summarize` opens its own connection, so the barrier makes it see
+        // the eviction above.
         buf.sync().unwrap();
         let retained = summarize(&path).unwrap().retained().unwrap();
         assert!(
-            retained < lookback,
-            "retained {retained:?} — a span-based check would read false here \
-             forever, even though eviction is plainly running"
+            retained <= 2 * lookback + Duration::from_secs(1),
+            "retained {retained:?}: at most two lookbacks and one tick"
         );
     }
 
@@ -1108,6 +1117,16 @@ mod tests {
             buf.maintain().unwrap();
             buf.sync().unwrap();
             let now = summarize(&path).unwrap();
+            // Retention ran on every tick: a segment is sealed at the first
+            // tick its first row is behind the cutoff and dropped once its
+            // last row is, so the quiet table (a row every 7 ticks, a segment
+            // every 5 rows) keeps up to a lookback and one tick past the
+            // cutoff. Measured: 41 s every 28 ticks from tick 41.
+            let retained = now.retained().unwrap();
+            assert!(
+                retained <= Duration::from_secs(2 * LOOKBACK + 1),
+                "tick {i}: retained {retained:?}"
+            );
             if i <= WARM {
                 warm_pages = warm_pages.max(now.pages);
             } else if now.pages > late_pages {
@@ -1119,12 +1138,6 @@ mod tests {
             late_pages <= warm_pages,
             "the buffer must plateau: at most {warm_pages} pages over ticks 0-{WARM}, \
              {late_pages} ({late_free} free) over ticks {WARM}-{TICKS}",
-        );
-        // And retention ran: the buffer holds about a lookback, not the run.
-        let retained = summarize(&path).unwrap().retained().unwrap();
-        assert!(
-            retained < Duration::from_secs(LOOKBACK + 2 * SEAL_ROWS as u64),
-            "retained {retained:?}"
         );
     }
 }

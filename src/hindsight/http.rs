@@ -115,15 +115,18 @@ pub struct StatusResponse {
     /// Passes received and ingested since startup.
     pub ticks_recorded: u64,
     /// The span actually retained. It reaches at least the lookback once the
-    /// buffer is full, and typically a little further: retention drops whole
-    /// segments rather than rewriting them.
+    /// buffer is full, and further because retention drops whole segments
+    /// rather than rewriting them: up to two lookbacks plus one interval
+    /// when the lookback is shorter than the seal policy's `max_age`, and up
+    /// to the lookback plus `max_age` otherwise.
     pub oldest_timestamp: Option<u64>,
     pub newest_timestamp: Option<u64>,
     pub retained_secs: Option<u64>,
     /// Whether retention has begun — the buffer is now dropping as much as it
-    /// takes in rather than still filling. Note this becomes true while
-    /// `retained_secs` still reads just *under* `lookback_secs`: the oldest
-    /// surviving row sits one tick inside the cutoff, by construction.
+    /// takes in rather than still filling. Derived from the span the
+    /// recording has covered, not from `retained_secs`, which moves up and
+    /// down as whole segments are dropped and does not cross `lookback_secs`
+    /// at a fixed point.
     pub at_retention_bound: bool,
     /// Rows a reader would see across every table.
     pub rows: u64,

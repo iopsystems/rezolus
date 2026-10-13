@@ -1,10 +1,10 @@
 //! Live mode: an agent's replication stream recorded into a temporary archive
 //! and read back while it grows.
 //!
-//! A [`LiveSession`] subscribes to the agent's `/metrics/stream`, writes each
-//! interval into a temporary `.dendro` through hindsight's buffer writer with
-//! no retention, and serves the archive through a [`LiveReader`] refreshed
-//! after each interval. Saving copies the archive.
+//! A [`LiveSession`] records the agent's `/metrics/stream` into a temporary
+//! `.dendro` through `metriken-recorder` with no retention, and serves the
+//! archive through a [`LiveReader`] refreshed after each commit. Saving copies
+//! the archive.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -17,8 +17,7 @@ use rez::live::LiveReader;
 use tracing::{error, info, warn};
 
 use super::actions::AgentInfo;
-use crate::hindsight::buffer::HindsightBuffer;
-use crate::recorder::stream::{ConnectError, Layout, StreamEvent, Subscription};
+use metriken_recorder as mr;
 
 /// The interval the live view subscribes at.
 pub const LIVE_INTERVAL: Duration = Duration::from_secs(1);
@@ -97,9 +96,9 @@ pub struct LiveSession {
     /// Why the recording stopped, once it has: a failed write, or an agent
     /// that refused a reconnect.
     stopped: Arc<Mutex<Option<String>>>,
-    /// Aborted on drop, which closes the channel and ends the recording
-    /// thread.
-    _pump: AbortOnDrop,
+    /// Dropped with the session, which stops the recording and closes its
+    /// event channel, ending the recording thread.
+    _recorder: Option<mr::Recorder>,
 }
 
 impl LiveSession {
@@ -116,104 +115,63 @@ impl LiveSession {
         pool: Arc<BufferPool>,
     ) -> Result<Self, String> {
         let timeout = crate::recorder::tick_timeout(LIVE_INTERVAL);
-        let subscription = match tokio::time::timeout(
-            timeout,
-            Subscription::connect(
-                client,
-                url,
-                LIVE_INTERVAL,
-                Layout::Long,
-                crate::recorder::stream::ACCEPTED_WIRE_NAMES,
-            ),
-        )
-        .await
-        {
-            Ok(Ok(sub)) => sub,
-            Ok(Err(ConnectError::Unsupported(e))) => {
+        let probe: Arc<dyn mr::Probe> = Arc::new(crate::recorder::agent_probe::RezolusProbe::new(
+            client.clone(),
+        ));
+        let spec = mr::EndpointSpec::new(url.clone()).with_transport(mr::Transport::Stream);
+        let mut detect_cfg = mr::DetectConfig::new(LIVE_INTERVAL, timeout);
+        detect_cfg.wire_names = crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec();
+        let detected = mr::detect(client, &detect_cfg, vec![spec], probe.as_ref()).await;
+        match &detected[0] {
+            mr::Detected::Streamed { .. } => {}
+            mr::Detected::Refused { reason, .. } => {
                 return Err(format!(
-                    "the agent at {url} ({}) cannot serve its replication stream: {e}. \
+                    "the agent at {url} ({}) cannot serve its replication stream: {reason}. \
                      Live mode reads /metrics/stream, which agents from 5.21.0 serve \
                      when snapshot_format is \"v3\".",
                     info.version
                 ))
             }
-            Ok(Err(ConnectError::Unreachable(e))) => {
-                return Err(format!("could not subscribe to the agent at {url}: {e}"))
-            }
-            Err(_) => {
+            mr::Detected::Pending { reason, .. } => {
                 return Err(format!(
-                    "could not subscribe to the agent at {url}: no handshake within {}",
-                    humantime::format_duration(timeout)
+                    "could not subscribe to the agent at {url}: {reason}"
                 ))
             }
-        };
-        let source = subscription
-            .source()
-            .cloned()
-            .expect("connect returns only once the handshake has been applied");
+            mr::Detected::Scraped { .. } => unreachable!("a declared stream is never scraped"),
+        }
 
         let dir = Arc::new(
             LiveDir::create()
                 .map_err(|e| format!("could not create a directory for the live archive: {e}"))?,
         );
         let path = dir.0.path().join("live.dendro");
-        // An anchor of 0 means the handshake carried none; use the local clock.
-        let clock_anchor_wall_ns = u64::try_from(source.clock_anchor_wall_ns)
-            .ok()
-            .filter(|a| *a != 0)
-            .unwrap_or_else(wall_ns);
-        let seed = crate::recorder::rez_v3_writer::ManifestSeed {
-            labels: crate::recorder::rez::build_labels("rezolus", info.sysinfo.as_deref(), &[]),
-            metadata: crate::hindsight::buffer_metadata(
-                LIVE_INTERVAL,
-                &info.sysinfo,
-                &None,
-                &Some(info.version.clone()).filter(|v| !v.is_empty()),
-                &source.uuid,
-            ),
-            clock_anchor_wall_ns,
-        };
         // No retention: the archive holds everything since the session
         // started.
-        let buffer = HindsightBuffer::create_dendro(
-            &path,
-            seed,
-            Duration::MAX,
-            crate::recorder::seal_policy::SealPolicy::default(),
-        )?;
+        let mut cfg = mr::RecorderConfig::new(&path, LIVE_INTERVAL);
+        cfg.timeout = timeout;
+        cfg.wire_names = crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec();
+        let (recorder, _ids, events) =
+            mr::Recorder::start(cfg, client.clone(), probe, detected, Vec::new())
+                .await
+                .map_err(|e| format!("could not start the live recording: {e}"))?;
         let reader = Arc::new(
             LiveReader::open(&path, None, pool)
                 .map_err(|e| format!("could not read the live archive: {e}"))?
                 .named(url.to_string()),
         );
 
-        let (tx, rx) = tokio::sync::mpsc::channel::<(usize, StreamEvent)>(
-            crate::recorder::STREAM_QUEUE_PER_ENDPOINT,
-        );
-        let pump = AbortOnDrop(tokio::spawn(crate::recorder::stream::pump(
-            0,
-            subscription,
-            client.clone(),
-            url.clone(),
-            LIVE_INTERVAL,
-            Layout::Long,
-            timeout,
-            tx,
-        )));
-        // The writes, seals and reopens block, so they run on their own
-        // thread rather than on the runtime that serves the viewer's HTTP.
+        // The reader's reopens block, so they run on their own thread
+        // rather than on the runtime that serves the viewer's HTTP.
         let stopped = Arc::new(Mutex::new(None));
         let recording = Recording {
             label: url.to_string(),
-            buffer,
             reader: Arc::clone(&reader),
-            epoch: source.uuid,
             dir: Arc::clone(&dir),
             stopped: Arc::clone(&stopped),
         };
         let thread = std::thread::Builder::new()
             .name("rezolus-live".to_string())
-            .spawn(move || recording.run(rx))
+            .spawn(move || recording.run(events))
             .map_err(|e| format!("could not start the live recording: {e}"))?;
         {
             // Join the threads of sessions already ended, so the list holds
@@ -234,7 +192,7 @@ impl LiveSession {
             path,
             dir,
             stopped,
-            _pump: pump,
+            _recorder: Some(recorder),
         })
     }
 
@@ -290,7 +248,7 @@ impl LiveSession {
             path: path.to_path_buf(),
             dir: Arc::new(LiveDir::create().unwrap()),
             stopped: Arc::new(Mutex::new(stopped)),
-            _pump: AbortOnDrop(tokio::spawn(async {})),
+            _recorder: None,
         }
     }
 }
@@ -298,87 +256,63 @@ impl LiveSession {
 /// The recording thread's state.
 struct Recording {
     label: String,
-    buffer: HindsightBuffer,
     reader: Arc<LiveReader>,
-    epoch: Option<String>,
     dir: Arc<LiveDir>,
     stopped: Arc<Mutex<Option<String>>>,
 }
 
 impl Recording {
-    /// Write each interval as it arrives, until the channel closes (the
-    /// session was dropped), a write fails, or the agent refuses a reconnect.
-    fn run(mut self, mut rx: tokio::sync::mpsc::Receiver<(usize, StreamEvent)>) {
+    /// Reread the archive after each commit, until the channel closes (the
+    /// session was dropped, which stops the recorder and closes its writer
+    /// first), a write fails, or the agent refuses a reconnect.
+    fn run(self, mut events: tokio::sync::mpsc::Receiver<mr::Event>) {
         let label = self.label.clone();
-        let mut decoder = metriken_storage::StreamDecoder::new();
-        while let Some((_, event)) = rx.blocking_recv() {
+        while let Some(event) = events.blocking_recv() {
             match event {
-                StreamEvent::Interval(applied) => {
-                    let written =
-                        crate::hindsight::ingest_interval(&mut self.buffer, &mut decoder, applied)
-                            .and_then(|_| self.buffer.maintain());
-                    if let Err(e) = written {
-                        error!("{label}: the live recording stopped: {e}");
-                        self.stop(format!("writing the live archive failed: {e}"));
-                        break;
-                    }
+                mr::Event::Committed { .. } => {
                     if let Err(e) = self.reader.refresh() {
                         warn!("{label}: could not reread the live archive: {e}");
                     }
                 }
-                StreamEvent::Dropped(e) => {
-                    warn!("{label}: the stream ended ({e}); reconnecting");
+                mr::Event::Dropped { reason, .. } => {
+                    warn!("{label}: the stream ended ({reason}); reconnecting");
                 }
-                StreamEvent::Connected(source) => {
+                mr::Event::Reconnected { restarted, .. } => {
                     info!("{label}: the stream reconnected");
-                    if source.uuid != self.epoch {
+                    if restarted {
                         warn!("{label}: the agent restarted; its counters started again from zero");
-                        self.epoch = source.uuid;
                     }
                 }
-                StreamEvent::Refused(e) => {
-                    error!("{label}: the agent can no longer serve its stream: {e}");
+                mr::Event::Refused { reason, .. } => {
+                    error!("{label}: the agent can no longer serve its stream: {reason}");
                     self.stop(format!(
-                        "the agent can no longer serve /metrics/stream: {e}"
+                        "the agent can no longer serve /metrics/stream: {reason}"
                     ));
                     break;
                 }
+                mr::Event::Failed { error } => {
+                    error!("{label}: the live recording stopped: {error}");
+                    self.stop(format!("writing the live archive failed: {error}"));
+                    break;
+                }
+                _ => {}
             }
         }
-        // Close the writer before releasing this thread's hold on the
-        // directory; the last hold deletes it.
-        let Recording { buffer, dir, .. } = self;
-        drop(buffer);
-        drop(dir);
+        // Release this thread's hold on the directory; the last hold
+        // deletes it.
+        drop(self.dir);
     }
-}
 
-impl Recording {
     fn stop(&self, why: String) {
         *self.stopped.lock().unwrap_or_else(|e| e.into_inner()) = Some(why);
     }
-}
-
-/// Aborts the task when dropped.
-struct AbortOnDrop(tokio::task::JoinHandle<()>);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
-fn wall_ns() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::dendro_copy::fixtures::{tick, ANCHOR, SECOND};
+    use crate::hindsight::buffer::HindsightBuffer;
     use metriken_query::MetricsSource;
 
     fn buffer(path: &Path) -> HindsightBuffer {
@@ -611,12 +545,11 @@ mod tests {
     }
 
     fn recording(path: &Path, stopped: &Arc<Mutex<Option<String>>>) -> Recording {
-        let buffer = buffer(path);
+        let mut buffer = buffer(path);
+        buffer.sync().unwrap();
         Recording {
             label: "test".to_string(),
             reader: Arc::new(LiveReader::open(path, None, BufferPool::new(64 << 20)).unwrap()),
-            buffer,
-            epoch: None,
             dir: Arc::new(LiveDir::create().unwrap()),
             stopped: Arc::clone(stopped),
         }
@@ -630,13 +563,10 @@ mod tests {
         let stopped = Arc::new(Mutex::new(None));
         let rec = recording(&dir.path().join("live.dendro"), &stopped);
         let (tx, rx) = tokio::sync::mpsc::channel(4);
-        tx.try_send((
-            0,
-            StreamEvent::Refused(crate::recorder::stream::Refusal {
-                answer: crate::recorder::stream::StreamAnswer::Status(404),
-                message: "HTTP 404".to_string(),
-            }),
-        ))
+        tx.try_send(mr::Event::Refused {
+            source: mr::SourceId(0),
+            reason: "http://agent.test:4241/metrics/stream answered HTTP 404".to_string(),
+        })
         .unwrap();
         std::thread::spawn(move || rec.run(rx)).join().unwrap();
         let why = stopped.lock().unwrap().clone().expect("a reason");
@@ -649,7 +579,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let stopped = Arc::new(Mutex::new(None));
         let rec = recording(&dir.path().join("live.dendro"), &stopped);
-        let (tx, rx) = tokio::sync::mpsc::channel::<(usize, StreamEvent)>(4);
+        let (tx, rx) = tokio::sync::mpsc::channel::<mr::Event>(4);
         drop(tx);
         std::thread::spawn(move || rec.run(rx)).join().unwrap();
         assert!(stopped.lock().unwrap().is_none());

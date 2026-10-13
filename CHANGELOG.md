@@ -59,6 +59,24 @@
   per-cgroup BPF counter 16 copies; with cgroup attribution off the maps are
   not created. (#1450)
 
+- **`record`, hindsight and the live viewer record through `metriken-recorder`
+  0.1.1.** Detection, the stream and scrape transports, restart metadata and
+  the recording loop moved out of rezolus into that crate; rezolus keeps the
+  CLI, its probe hook (how a Rezolus agent is identified and refused), the
+  `-- cmd` run events, signals, exit codes and messages. Recordings, exit
+  codes and messages are unchanged, except that a producer-restart warning
+  is logged by `metriken_recorder` and names the endpoint URL. With it come
+  metriken-storage 0.2.3 and dendro 0.4.2, which seal no segment past the
+  seal policy's row cap, keep a group's rows when its schema returns to an
+  earlier one, and keep an open segment's rows when hindsight's lookback
+  evicts past its first row. That segment is sealed then and dropped whole
+  once its last row is past the lookback, so a hindsight buffer whose
+  lookback is shorter than the seal policy's `max_age` (300 s) keeps up to
+  twice its lookback plus one interval; the 15 m default is unaffected.
+  Before, such a buffer lost the rows of every open segment once its
+  lookback passed the segment's first row, and a dump with a 6 s lookback
+  held only a long table's occupant rows.
+
 - **`record` detects an endpoint by its stream.** For a URL whose path is `/`
   or `/metrics/stream`, `record` subscribes to `/metrics/stream` first; a
   stream handshake means the endpoint is streamed. Otherwise it reads
