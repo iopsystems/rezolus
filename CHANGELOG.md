@@ -27,6 +27,20 @@ backported in #1451.
   attribution on, against 1.5 MiB before; with it off the maps are not
   created. Backported from 6.0 (#1450) in #1452.
 
+### Fixed
+
+The `cpu_l3` and NUMA fixes from 6.0 (#1457, #1458), backported in #1459.
+
+- `cpu_l3` reports unsupported on a machine without L3 cache perf counters,
+  such as a VM without a PMU, so `rezolus status` no longer exits 1 there;
+  any other open error is still a failure, now with its errno.
+
+- Corrected the swapped `memory_numa_miss` and `memory_numa_foreign`
+  descriptions; the NUMA dashboard's remote plot now uses `memory_numa_other`.
+
+- The agent's start-up log gives the reason for a sampler that is
+  unsupported at init; it printed nothing after the dash. From 6.0's #1441.
+
 ## [5.27.0] - 2026-10-12
 
 ### Changed
