@@ -19,7 +19,6 @@ NO_VIEWER=false
 STARTED_AGENT=false
 RECORDER_PID=""
 STAGING=""
-INTERRUPTED=false
 
 help() {
     cat <<EOF
@@ -266,10 +265,10 @@ STAGING="$(mktemp -d "${OUTPUT_DIR%/}/.capture-XXXXXX")"
 STAGED_FILE="$STAGING/capture.dendro"
 
 cleanup() {
-    # Stop the recorder if it is still running: the script is exiting on an
-    # error or a signal other than the SIGINT the --pid loop handles. The
-    # recorder treats a second SIGINT or SIGTERM as "terminate immediately",
-    # and the staging directory is removed below, so this capture is lost.
+    # Stop the recorder if it is still running. While it runs, SIGINT,
+    # SIGTERM and SIGHUP are trapped and forwarded to it (see forward_stop),
+    # so this is reached only when the script exits on an error. The staging
+    # directory is removed below, so this capture is discarded.
     if [ -n "$RECORDER_PID" ]; then
         kill "$RECORDER_PID" 2>/dev/null || true
         wait "$RECORDER_PID" 2>/dev/null || true
@@ -302,9 +301,71 @@ for i in "${!ENDPOINTS[@]}"; do
     echo "Recording from ${ENDPOINTS[$i]} (source: ${SOURCES[$i]})..."
 done
 
+# The recorder runs in its own process group (`set -m`), so a terminal's
+# Ctrl-C, a signal to this script alone, and a SIGTERM from a supervisor all
+# reach the recorder the same way: this script forwards one SIGINT per signal
+# it receives. The recorder finalizes the archive on the first and aborts on
+# a second, so a single Ctrl-C keeps the capture and a second one discards it.
+# Were the recorder in this script's process group, a Ctrl-C would reach it
+# directly, and whether to forward another would depend on how the signal
+# was sent, which the script cannot tell.
+forward_stop() {
+    STOP_SIGNALS=$((STOP_SIGNALS + 1))
+    if [ -n "$RECORDER_PID" ]; then
+        flush_stops
+    fi
+}
+
+# Send the recorder one SIGINT for each received signal not yet forwarded.
+flush_stops() {
+    while [ "$FORWARDED" -lt "$STOP_SIGNALS" ]; do
+        FORWARDED=$((FORWARDED + 1))
+        kill -INT "$RECORDER_PID" 2>/dev/null || true
+    done
+}
+
+# A signal received before the recorder starts ends the capture here: none
+# has begun, so there is nothing to keep. Forwarding it instead was measured
+# to fail both ways: a SIGINT that reaches the recorder before it installs
+# its handler kills it, and one that reaches the forked shell before `exec`
+# runs the inherited trap and is lost. A signal arriving between this check
+# and the recorder installing its handler is still forwarded by flush_stops,
+# with the same two possible outcomes.
+start_recorder() {
+    if [ "$STOP_SIGNALS" -gt 0 ]; then
+        echo "Interrupted before the recording started" >&2
+        exit 1
+    fi
+    set -m
+    "$@" &
+    RECORDER_PID=$!
+    set +m
+    flush_stops
+}
+
+# Wait for the recorder to exit, returning its status. `wait` returns early
+# (status > 128) when a trapped signal arrives; wait again while it runs.
+wait_recorder() {
+    local rc
+    while :; do
+        rc=0
+        wait "$RECORDER_PID" || rc=$?
+        if [ "$rc" -le 128 ] || ! kill -0 "$RECORDER_PID" 2>/dev/null; then
+            break
+        fi
+    done
+    RECORDER_PID=""
+    return "$rc"
+}
+
+STOP_SIGNALS=0
+FORWARDED=0
+trap forward_stop INT TERM HUP
+
 if [ -n "$DURATION" ]; then
     echo "Capturing for $DURATION (interval: $INTERVAL)..."
-    if ! "${RECORD[@]}" -d "$DURATION"; then
+    start_recorder "${RECORD[@]}" -d "$DURATION"
+    if ! wait_recorder; then
         echo "Error: the recording failed" >&2
         exit 1
     fi
@@ -313,45 +374,44 @@ elif [ ${#COMMAND[@]} -gt 0 ]; then
     # The recorder runs the command and records for exactly its lifetime. It
     # exits with the command's status, or 1 if the recording itself failed.
     echo "Capturing while running: ${COMMAND[*]} (interval: $INTERVAL)"
-    set +e
-    "${RECORD[@]}" -- "${COMMAND[@]}"
-    CMD_EXIT=$?
-    set -e
+    start_recorder "${RECORD[@]}" -- "${COMMAND[@]}"
+    CMD_EXIT=0
+    wait_recorder || CMD_EXIT=$?
+    # A second signal makes the recorder exit 2 without finalizing, which in
+    # this mode is indistinguishable from the command exiting 2.
+    if [ "$STOP_SIGNALS" -ge 2 ]; then
+        echo "Error: the capture was aborted by a second signal" >&2
+        exit 1
+    fi
     echo "Command exited with status $CMD_EXIT"
 
 else
     echo "Capturing while process $MONITOR_PID is running (interval: $INTERVAL)..."
-    # Ctrl-C at a terminal sends SIGINT to the whole process group, so the
-    # recorder already has it and is finalizing the archive. Without this
-    # trap the script would exit and the EXIT trap would send the recorder a
-    # second signal, which aborts the archive, and then remove it.
-    trap 'INTERRUPTED=true' INT
-    "${RECORD[@]}" &
-    RECORDER_PID=$!
-    while ! $INTERRUPTED && kill -0 "$MONITOR_PID" 2>/dev/null; do
+    start_recorder "${RECORD[@]}"
+    while [ "$STOP_SIGNALS" -eq 0 ] && kill -0 "$MONITOR_PID" 2>/dev/null; do
         if ! kill -0 "$RECORDER_PID" 2>/dev/null; then
-            wait "$RECORDER_PID" || true
-            RECORDER_PID=""
-            echo "Error: the recorder exited before process $MONITOR_PID did" >&2
-            exit 1
+            break
         fi
-        # The same SIGINT kills `sleep`, which `set -e` would make fatal.
+        # A signal to the process group kills `sleep`, which `set -e` would
+        # make fatal.
         sleep 1 || true
     done
-    if $INTERRUPTED; then
+    if [ "$STOP_SIGNALS" -gt 0 ]; then
         echo "Interrupted, waiting for the recorder to finalize the capture..."
-    else
+    elif kill -0 "$RECORDER_PID" 2>/dev/null; then
         echo "Process $MONITOR_PID exited, stopping capture..."
-        kill "$RECORDER_PID" 2>/dev/null || true
+        kill -INT "$RECORDER_PID" 2>/dev/null || true
+    else
+        # Stopped by a signal sent to it directly: exit 0 is a finalized
+        # archive, anything else a failed recording.
+        echo "The recorder stopped before process $MONITOR_PID exited"
     fi
-    if ! wait "$RECORDER_PID"; then
-        RECORDER_PID=""
+    if ! wait_recorder; then
         echo "Error: the recording failed" >&2
         exit 1
     fi
-    RECORDER_PID=""
-    trap - INT
 fi
+trap - INT TERM HUP
 
 if [ ! -s "$STAGED_FILE" ]; then
     echo "Error: no recording was produced" >&2
