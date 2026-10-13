@@ -6,7 +6,8 @@
 //! deliberate principle-15 exception (see `docs/principles.md`): discovery is
 //! one-time at startup (sysfs), and temperature is read with a read-only
 //! command per drive — ATA `SMART READ DATA` via `SG_IO` for SATA
-//! ([`ata`]), NVMe Get Log Page 0x02 for NVMe ([`nvme`]). No `drivetemp` or any
+//! ([`ata`]), NVMe Get Log Page 0x02 for NVMe ([`nvme`]) and, on EBS and
+//! instance store devices, the vendor page 0xD0 ([`ec2`]). No `drivetemp` or any
 //! other module is loaded; `smartctl`/`hddtemp` use the same mechanism.
 //!
 //! Each read is a device command (measured ~ms), so reads are **not** driven on
@@ -32,10 +33,12 @@ use std::time::{Duration, Instant};
 
 mod ata;
 mod device;
+mod ec2;
 mod nvme;
 mod stats;
 
 use device::*;
+use ec2::{Ec2Stats, Ec2Storage};
 use stats::*;
 
 /// The NVMe-only throttle counter groups, in a fixed order, for per-drive label
@@ -85,6 +88,53 @@ static NVME_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &NVME_
 
 static NVME_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] =
     &[(&DRIVEHEALTH_NVME_ACQ, NVME_COUNTER_GROUPS)];
+
+/// The EC2 statistics groups: EBS volumes and instance store volumes are
+/// separate populations.
+static EBS_METRIC_GROUPS: &[&dyn GroupMetadata] = &[
+    &DRIVE_EBS_VOLUME_EXCEEDED_IOPS,
+    &DRIVE_EBS_VOLUME_EXCEEDED_TP,
+    &DRIVE_EBS_INSTANCE_EXCEEDED_IOPS,
+    &DRIVE_EBS_INSTANCE_EXCEEDED_TP,
+    &DRIVE_EBS_QUEUE_LENGTH,
+];
+
+static INSTANCE_STORE_METRIC_GROUPS: &[&dyn GroupMetadata] = &[
+    &DRIVE_INSTANCE_STORE_EXCEEDED_IOPS,
+    &DRIVE_INSTANCE_STORE_EXCEEDED_TP,
+    &DRIVE_INSTANCE_STORE_QUEUE_LENGTH,
+];
+
+static EBS_IDENTITY: crate::agent::identity::SlotIdentity =
+    crate::agent::identity::SlotIdentity::new(EBS_IDENTITY_GROUPS);
+
+#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
+static EBS_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &EBS_IDENTITY;
+
+static EBS_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] =
+    &[(&DRIVEHEALTH_EBS_ACQ, EBS_METRIC_GROUPS)];
+
+static INSTANCE_STORE_IDENTITY: crate::agent::identity::SlotIdentity =
+    crate::agent::identity::SlotIdentity::new(INSTANCE_STORE_IDENTITY_GROUPS);
+
+#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
+static INSTANCE_STORE_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity =
+    &INSTANCE_STORE_IDENTITY;
+
+static INSTANCE_STORE_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
+    &DRIVEHEALTH_INSTANCE_STORE_ACQ,
+    INSTANCE_STORE_METRIC_GROUPS,
+)];
+
+/// The indices of the drives of EC2 storage kind `storage`.
+fn ec2_members(drives: &[Drive], storage: Ec2Storage) -> Vec<usize> {
+    drives
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| d.ec2 == Some(storage))
+        .map(|(idx, _)| idx)
+        .collect()
+}
 
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
@@ -163,6 +213,14 @@ impl DriveHealth {
                 .map(|(idx, _)| idx)
                 .collect::<Vec<_>>(),
         );
+        // The EC2 statistics groups' members are the EBS and the instance
+        // store drives.
+        for (group, storage) in [
+            (&DRIVEHEALTH_EBS_ACQ, Ec2Storage::Ebs),
+            (&DRIVEHEALTH_INSTANCE_STORE_ACQ, Ec2Storage::InstanceStore),
+        ] {
+            group.set_member_set(&ec2_members(&drives, storage));
+        }
 
         // Per-index labels are read once at discovery and never change for the
         // life of the process (startup-only discovery; hotplug is out of scope
@@ -172,7 +230,12 @@ impl DriveHealth {
             let labels = drive_labels(drive);
             SWEEP_IDENTITY.set(idx, labels.clone());
             if drive.drive_type == DriveType::Nvme {
-                NVME_IDENTITY.set(idx, labels);
+                NVME_IDENTITY.set(idx, labels.clone());
+            }
+            match drive.ec2 {
+                Some(Ec2Storage::Ebs) => EBS_IDENTITY.set(idx, labels),
+                Some(Ec2Storage::InstanceStore) => INSTANCE_STORE_IDENTITY.set(idx, labels),
+                None => {}
             }
         }
 
@@ -250,8 +313,14 @@ impl Sampler for DriveHealth {
         let reading = self.reading.clone();
         tokio::task::spawn_blocking(move || {
             let guard = DRIVEHEALTH_SWEEP_ACQ.acquire();
+            // The EC2 page is read in the same sweep; its groups' single
+            // writer is this task too.
+            let ebs_guard = DRIVEHEALTH_EBS_ACQ.acquire();
+            let instance_store_guard = DRIVEHEALTH_INSTANCE_STORE_ACQ.acquire();
 
             let readings = read_all(&drives);
+            let mut ebs_ok = 0;
+            let mut instance_store_ok = 0;
             let ok = readings
                 .iter()
                 .filter(|r| r.temperature_c.is_some() || r.nvme.is_some())
@@ -280,6 +349,33 @@ impl Sampler for DriveHealth {
                         let _ = group.set(idx, value);
                     }
                 }
+                // EC2 statistics, microseconds published as nanoseconds.
+                let ns = |us: u64| us.saturating_mul(1_000);
+                let ops = |n: u64| n.min(i64::MAX as u64) as i64;
+                match r.ec2 {
+                    Some(Ec2Stats::Ebs {
+                        volume,
+                        instance,
+                        queue_length,
+                    }) => {
+                        ebs_ok += 1;
+                        let _ = DRIVE_EBS_VOLUME_EXCEEDED_IOPS.set(idx, ns(volume.iops_us));
+                        let _ = DRIVE_EBS_VOLUME_EXCEEDED_TP.set(idx, ns(volume.throughput_us));
+                        let _ = DRIVE_EBS_INSTANCE_EXCEEDED_IOPS.set(idx, ns(instance.iops_us));
+                        let _ = DRIVE_EBS_INSTANCE_EXCEEDED_TP.set(idx, ns(instance.throughput_us));
+                        let _ = DRIVE_EBS_QUEUE_LENGTH.set(idx, ops(queue_length));
+                    }
+                    Some(Ec2Stats::InstanceStore {
+                        volume,
+                        queue_length,
+                    }) => {
+                        instance_store_ok += 1;
+                        let _ = DRIVE_INSTANCE_STORE_EXCEEDED_IOPS.set(idx, ns(volume.iops_us));
+                        let _ = DRIVE_INSTANCE_STORE_EXCEEDED_TP.set(idx, ns(volume.throughput_us));
+                        let _ = DRIVE_INSTANCE_STORE_QUEUE_LENGTH.set(idx, ops(queue_length));
+                    }
+                    None => {}
+                }
             }
 
             if ok > 0 {
@@ -287,9 +383,23 @@ impl Sampler for DriveHealth {
             } else {
                 guard.discard();
             }
+            // As for the sweep: a group is stamped when any of its drives
+            // read, and a drive whose read failed keeps its previous values
+            // under the new window.
+            for (guard, ok) in [
+                (ebs_guard, ebs_ok),
+                (instance_store_guard, instance_store_ok),
+            ] {
+                if ok > 0 {
+                    guard.finish();
+                } else {
+                    guard.discard();
+                }
+            }
 
             debug!(
-                "{NAME}: published readings for {ok}/{} drive(s)",
+                "{NAME}: published readings for {ok}/{} drive(s), EC2 statistics for \
+                 ebs={ebs_ok} instance_store={instance_store_ok}",
                 drives.len()
             );
             reading.store(false, Ordering::Release);
@@ -300,6 +410,28 @@ impl Sampler for DriveHealth {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each EC2 group's members are the drives of its kind only, so neither
+    /// group declares a slot its metrics never write.
+    #[test]
+    fn each_ec2_group_has_only_its_own_drives() {
+        let drive = |device: &str, ec2| Drive {
+            device: device.to_string(),
+            drive_type: DriveType::Nvme,
+            model: String::new(),
+            serial: String::new(),
+            node: std::path::PathBuf::from("/dev").join(device),
+            ec2,
+        };
+        let drives = [
+            drive("nvme0", Some(Ec2Storage::Ebs)),
+            drive("nvme1", Some(Ec2Storage::InstanceStore)),
+            drive("nvme2", None),
+            drive("nvme3", Some(Ec2Storage::Ebs)),
+        ];
+        assert_eq!(ec2_members(&drives, Ec2Storage::Ebs), [0, 3]);
+        assert_eq!(ec2_members(&drives, Ec2Storage::InstanceStore), [1]);
+    }
 
     /// Hardware integration test — requires root and at least one drive.
     /// Ignored by default. Exercises the real async dispatch: `refresh()` on a
