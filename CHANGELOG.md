@@ -55,6 +55,11 @@
 
 ### Changed
 
+- `ext4_journal` times commit phases, handle start and checkpoints in
+  nanoseconds instead of jbd2's jiffies; `phase="wait"` and
+  `phase="request_delay"` are removed, `ext4_journal_handle_start_latency` is
+  new, and recordings from before are not comparable. (#1461)
+
 - Reduced overhead when many CPUs count the same cgroup, by giving each
   per-cgroup BPF counter 16 copies; with cgroup attribution off the maps are
   not created. (#1450)

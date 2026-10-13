@@ -476,10 +476,12 @@ before that stay under `other`. jbd2 is also ocfs2's journal, and an ocfs2
 mount gets its own slot with `fstype="ocfs2"`. **Histograms are host-wide**
 until histogram groups have slots.
 
-jbd2 reports commit and checkpoint phases in **jiffies**, so those histograms
-have one-jiffy resolution (1–10 ms depending on `CONFIG_HZ`); the sampler
-measures the tick with `clock_getres(CLOCK_MONOTONIC_COARSE)` and converts to
-nanoseconds. Lock-buffer stalls are reported by jbd2 in whole milliseconds.
+Commit phases, handle start and checkpoints are timed in BPF with
+`bpf_ktime_get_ns()` between jbd2's tracepoints (and, for handle start, the
+entry of `jbd2__journal_start`, `jbd2_journal_start` and
+`jbd2_journal_start_reserved`). jbd2's own figures for these are differences
+of two jiffies reads and are not used. Lock-buffer stalls are reported by
+jbd2 in whole milliseconds, and only stalls over 100 ms (`HZ/10`).
 
 Reading the jbd2 statistics needs their types in BTF: vmlinux when ext4 is
 built in, module BTF (`/sys/kernel/btf/jbd2`, kernels 5.11+) when it is a
@@ -490,11 +492,12 @@ degraded and the rest of the metrics are unaffected.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `ext4_journal_commit_latency` | Distribution of each phase of a journal commit, in nanoseconds at one-jiffy resolution. `wait`: longest a handle waited to join the transaction; `request_delay`: commit requested to commit started; `running`: how long the transaction was open (bounded by the commit interval, cut short by fsync); `locked`: waiting for outstanding handles; `flushing`: data blocks to disk (ordered mode, where fsync waits on the device); `logging`: metadata and commit record to the journal | `phase={wait,request_delay,running,locked,flushing,logging}` |
+| `ext4_journal_commit_latency` | Distribution of each phase of a journal commit, in nanoseconds. `running`: how long the transaction was open before the commit began; `locked`: waiting for outstanding handles, cleaning the checkpoint list and switching the revoke table; `flushing`: submitting the data writes (ordered mode) and revoke records; `logging`: writing metadata to the journal, waiting for the data writes, flushing the device cache and writing the commit record, where fsync waits on the device | `phase={running,locked,flushing,logging}` |
+| `ext4_journal_handle_start_latency` | Distribution of the time a thread took to start a journal handle, from calling into jbd2 to the handle being granted, including waits for the committing transaction to leave the locked state, for journal space and for credits, in nanoseconds; handle restarts are not included | |
 | `ext4_journal_commits` | The number of journal transaction commits | |
 | `ext4_journal_commit_handles` | Handles (metadata operations) committed, summed over commits | |
 | `ext4_journal_commit_blocks` | Blocks per commit, summed: `dirtied` is metadata blocks in the transaction, `logged` is blocks written to the journal including descriptor and commit blocks | `kind={dirtied,logged}` |
-| `ext4_journal_checkpoint_latency` | Distribution of the time each checkpoint took, in nanoseconds at one-jiffy resolution | |
+| `ext4_journal_checkpoint_latency` | Distribution of the time from a checkpoint first working on a transaction to that transaction being dropped, in nanoseconds; transactions dropped without a checkpoint are not included | |
 | `ext4_journal_checkpoints` | The number of journal checkpoints | |
 | `ext4_journal_checkpoint_buffers` | Buffers a checkpoint wrote to their final location, or found already written and dropped | `outcome={written,dropped}` |
 | `ext4_journal_checkpoint_forced_to_close` | Transactions a checkpoint forced closed to free journal space; a rising rate means the journal is too small for the write rate | |

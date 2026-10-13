@@ -188,24 +188,34 @@ fn journal(view: &mut View) {
 
     let phases = journal.subgroup("Commit Phases");
     phases.describe(
-        "Where each commit spent its time. Flushing is data blocks reaching the device in \
-         ordered mode and is where fsync waits; logging is the metadata and commit record \
-         reaching the journal; running is how long the transaction stayed open before the \
-         commit began. jbd2 reports these in jiffies, so the resolution is one tick (1–10 ms).",
+        "Where each commit spent its time. Running is how long the transaction stayed open \
+         before the commit began; locked is waiting for outstanding handles to finish; \
+         flushing is submitting the data writes (ordered mode); logging is writing the \
+         metadata, waiting for the data writes, flushing the device cache and writing the \
+         commit record, and is where fsync waits on the device.",
     );
     for (phase, title) in [
         ("flushing", "Flushing"),
         ("logging", "Logging"),
         ("running", "Running"),
         ("locked", "Locked"),
-        ("wait", "Handle Wait"),
-        ("request_delay", "Request Delay"),
     ] {
         phases.plot_promql(
             PlotOpts::histogram_latency(title, format!("commit-{phase}")),
             format!("ext4_journal_commit_latency{{phase=\"{phase}\"}}"),
         );
     }
+
+    let handles = journal.subgroup("Handle Start");
+    handles.describe(
+        "The time a thread took to start a journal handle before a metadata change: waiting \
+         for the committing transaction to leave the locked state, for journal space and for \
+         credits.",
+    );
+    handles.plot_promql(
+        PlotOpts::histogram_latency("Handle Start", "handle-start"),
+        "ext4_journal_handle_start_latency".to_string(),
+    );
 
     let checkpoint = journal.subgroup("Checkpoint");
     checkpoint.describe(
@@ -451,19 +461,15 @@ mod tests {
     fn every_commit_phase_gets_a_percentile_plot() {
         let view = generate(&store_with(&["ext4_journal_commits"]), vec![]);
         let j = json(&view);
-        for phase in [
-            "wait",
-            "request_delay",
-            "running",
-            "locked",
-            "flushing",
-            "logging",
-        ] {
+        for phase in ["running", "locked", "flushing", "logging"] {
             assert!(
                 j.contains(&format!("ext4_journal_commit_latency{{phase=\"{phase}\"}}")),
                 "missing phase {phase}"
             );
         }
+        assert!(j.contains("ext4_journal_handle_start_latency"));
+        assert!(!j.contains("phase=\"wait\""));
+        assert!(!j.contains("request_delay"));
         assert!(j.contains("sum by (mount) (irate(ext4_journal_commits[5m]))"));
         assert!(j.contains("sum by (mount) (irate(ext4_journal_checkpoint_forced_to_close[5m]))"));
         // No allocator sampler in this recording: its groups stay out.

@@ -1092,11 +1092,17 @@ The entry specifies `ext4_journal` (phase 1, implemented and measured),
   `ext4_file_read_iter`/`ext4_file_write_iter`; page-cache hit/miss split per
   filesystem. Reopen with phase 3; check the symbol set on the oldest fleet
   kernel first.
-- **Extent-status cache, handle-level stats, per-page writeback hooks** —
+- **Phase 4: latencies timed in BPF** — In progress. Commit-phase counts
+  equal tracefs's, handle starts within 12 of 187,375, and per-probe cost
+  measured on x86_64 6.12 (ext4 entry, "Phase 4": 2.4 µs of probe time per
+  fsync at 4 handles per fsync). Open: the `null_blk`
+  throughput bench, aarch64, and a pre-6.6 x86_64 kernel (kprobe on
+  `jbd2__journal_start`).
+- **Extent-status cache, handle stats, per-page writeback hooks** —
   Idea. `ext4_es_lookup_extent_exit`, `jbd2_handle_stats`,
-  `ext4_journal_start`, `ext4_da_write_pages`, `ext4_da_reserve_space`: all
-  fire per lookup, per handle or per page. Measure the rate on a
-  representative workload before attaching any of them.
+  `ext4_da_write_pages`, `ext4_da_reserve_space`: all fire per lookup, per
+  handle or per page. Measure the rate on a representative workload before
+  attaching any of them. Phase 4 measures the per-handle hook rate.
 - **Fast commit** — By design. `ext4_fc_*` off by default; reopen if a fleet
   enables `fast_commit`.
 - **jbd2 counts include ocfs2** — Resolved by phase 3 (per-filesystem
