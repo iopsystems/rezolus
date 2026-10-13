@@ -189,6 +189,8 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("cpu_package_energy", "cpu_power"),
     ("cpu_platform_energy", "cpu_power"),
     ("cpu_tsc", "cpu_frequency"),
+    ("drive_performance_exceeded_time", "drivehealth"),
+    ("drive_queue_length", "drivehealth"),
     ("drive_temperature", "drivehealth"),
     ("drive_temperature_critical_time", "drivehealth"),
     ("drive_temperature_warning_time", "drivehealth"),

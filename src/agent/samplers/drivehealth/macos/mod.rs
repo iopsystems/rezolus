@@ -66,9 +66,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         .into());
     }
 
-    // Every drive here is NVMe, so both groups have the same members.
-    DRIVEHEALTH_SWEEP_ACQ.set_member_bound(drives.len());
-    DRIVEHEALTH_NVME_ACQ.set_member_bound(drives.len());
+    declare_members(drives.len());
     for (idx, drive) in drives.iter().enumerate() {
         SWEEP_IDENTITY.assign(idx, drive.labels.clone());
         NVME_IDENTITY.assign(idx, drive.labels.clone());
@@ -233,9 +231,30 @@ fn sweep(drives: &[Drive]) -> usize {
     ok
 }
 
+/// Declare each group's members for `drives` NVMe drives. Every drive here is
+/// NVMe, so the sweep and NVMe groups have the same members. The EC2 statistics
+/// groups, registered from the shared `stats.rs`, are read on Linux only and
+/// have none.
+fn declare_members(drives: usize) {
+    DRIVEHEALTH_SWEEP_ACQ.set_member_bound(drives);
+    DRIVEHEALTH_NVME_ACQ.set_member_bound(drives);
+    DRIVEHEALTH_EBS_ACQ.set_member_bound(0);
+    DRIVEHEALTH_INSTANCE_STORE_ACQ.set_member_bound(0);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The EC2 groups are registered on macOS but never written: without a
+    /// bound they would publish every one of their `MAX_DRIVES` slots as an
+    /// empty member.
+    #[test]
+    fn the_ec2_groups_have_no_members_on_macos() {
+        declare_members(2);
+        assert_eq!(DRIVEHEALTH_EBS_ACQ.member_bound(), Some(0));
+        assert_eq!(DRIVEHEALTH_INSTANCE_STORE_ACQ.member_bound(), Some(0));
+    }
 
     /// The read needs no privileges, so this runs on any Mac with an NVMe
     /// SMART capable drive (every Apple silicon Mac's internal SSD is one),

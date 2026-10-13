@@ -108,3 +108,81 @@ pub static DRIVE_THERMAL_THROTTLE_TRANSITIONS_1: CounterGroup = CounterGroup::ne
     metadata = { level = "2", acq_group = "drivehealth_nvme" }
 )]
 pub static DRIVE_THERMAL_THROTTLE_TRANSITIONS_2: CounterGroup = CounterGroup::new(MAX_DRIVES);
+
+// The EC2 NVMe statistics (vendor log page 0xD0), read from Amazon EBS and
+// instance store volumes; see `ec2.rs` for the page and its references. Each
+// kind is its own population and group: an EBS volume has two limits, an
+// instance store volume one. The time counters are cumulative microseconds,
+// published as nanoseconds, so `rate() / 1e9` is the fraction of time
+// throttled.
+
+/// The EBS volumes' statistics.
+pub static DRIVEHEALTH_EBS_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(GROUP_SAMPLER, "drivehealth_ebs");
+
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static DRIVEHEALTH_EBS_ACQ_REG: &'static AcquisitionGroup = &DRIVEHEALTH_EBS_ACQ;
+
+/// The instance store volumes' statistics.
+pub static DRIVEHEALTH_INSTANCE_STORE_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(GROUP_SAMPLER, "drivehealth_instance_store");
+
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static DRIVEHEALTH_INSTANCE_STORE_ACQ_REG: &'static AcquisitionGroup =
+    &DRIVEHEALTH_INSTANCE_STORE_ACQ;
+
+#[metric(
+    name = "drive_performance_exceeded_time",
+    description = "Cumulative time IOPS demand exceeded the EBS volume's provisioned IOPS (ebs_volume_performance_exceeded_iops).",
+    metadata = { storage = "ebs", limit = "ebs_volume", resource = "iops", unit = "nanoseconds", acq_group = "drivehealth_ebs" }
+)]
+pub static DRIVE_EBS_VOLUME_EXCEEDED_IOPS: CounterGroup = CounterGroup::new(MAX_DRIVES);
+
+#[metric(
+    name = "drive_performance_exceeded_time",
+    description = "Cumulative time throughput demand exceeded the EBS volume's provisioned throughput (ebs_volume_performance_exceeded_tp).",
+    metadata = { storage = "ebs", limit = "ebs_volume", resource = "throughput", unit = "nanoseconds", acq_group = "drivehealth_ebs" }
+)]
+pub static DRIVE_EBS_VOLUME_EXCEEDED_TP: CounterGroup = CounterGroup::new(MAX_DRIVES);
+
+#[metric(
+    name = "drive_performance_exceeded_time",
+    description = "Cumulative time the EBS volume exceeded the attached instance's maximum EBS IOPS (ec2_instance_ebs_performance_exceeded_iops).",
+    metadata = { storage = "ebs", limit = "ec2_instance", resource = "iops", unit = "nanoseconds", acq_group = "drivehealth_ebs" }
+)]
+pub static DRIVE_EBS_INSTANCE_EXCEEDED_IOPS: CounterGroup = CounterGroup::new(MAX_DRIVES);
+
+#[metric(
+    name = "drive_performance_exceeded_time",
+    description = "Cumulative time the EBS volume exceeded the attached instance's maximum EBS throughput (ec2_instance_ebs_performance_exceeded_tp).",
+    metadata = { storage = "ebs", limit = "ec2_instance", resource = "throughput", unit = "nanoseconds", acq_group = "drivehealth_ebs" }
+)]
+pub static DRIVE_EBS_INSTANCE_EXCEEDED_TP: CounterGroup = CounterGroup::new(MAX_DRIVES);
+
+#[metric(
+    name = "drive_queue_length",
+    description = "Read and write operations waiting to complete on the EBS volume when its statistics were last read (volume_queue_length).",
+    metadata = { storage = "ebs", unit = "operations", acq_group = "drivehealth_ebs" }
+)]
+pub static DRIVE_EBS_QUEUE_LENGTH: GaugeGroup = GaugeGroup::new(MAX_DRIVES);
+
+#[metric(
+    name = "drive_performance_exceeded_time",
+    description = "Cumulative time IOPS demand exceeded the instance store volume's maximum IOPS (instance_store_volume_performance_exceeded_iops).",
+    metadata = { storage = "instance_store", limit = "instance_store_volume", resource = "iops", unit = "nanoseconds", acq_group = "drivehealth_instance_store" }
+)]
+pub static DRIVE_INSTANCE_STORE_EXCEEDED_IOPS: CounterGroup = CounterGroup::new(MAX_DRIVES);
+
+#[metric(
+    name = "drive_performance_exceeded_time",
+    description = "Cumulative time throughput demand exceeded the instance store volume's maximum throughput (instance_store_volume_performance_exceeded_tp).",
+    metadata = { storage = "instance_store", limit = "instance_store_volume", resource = "throughput", unit = "nanoseconds", acq_group = "drivehealth_instance_store" }
+)]
+pub static DRIVE_INSTANCE_STORE_EXCEEDED_TP: CounterGroup = CounterGroup::new(MAX_DRIVES);
+
+#[metric(
+    name = "drive_queue_length",
+    description = "Read and write operations waiting to complete on the instance store volume when its statistics were last read (volume_queue_length).",
+    metadata = { storage = "instance_store", unit = "operations", acq_group = "drivehealth_instance_store" }
+)]
+pub static DRIVE_INSTANCE_STORE_QUEUE_LENGTH: GaugeGroup = GaugeGroup::new(MAX_DRIVES);
