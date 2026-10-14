@@ -294,19 +294,19 @@ fn with_kernel_btf<T>(f: impl FnOnce(&KernelBtf) -> T) -> Option<T> {
 struct KernelBtf {
     vmlinux: BtfIndex,
     /// The modules listed under `/sys/kernel/btf` at the last refresh, in
-    /// listing order, less any whose BTF did not parse.
-    modules: Vec<(std::ffi::OsString, BtfIndex)>,
+    /// listing order; `None` for one whose BTF did not parse.
+    modules: Vec<(std::ffi::OsString, Option<BtfIndex>)>,
 }
 
 impl KernelBtf {
-    /// Lists the module BTF in `dir`, keeps the index of each module still
+    /// Lists the module BTF in `dir`, keeps the entry of each module still
     /// listed, and indexes each module not listed at the last refresh. A
-    /// module that unloads and loads again is therefore read again, and one
-    /// whose BTF did not parse is tried again on the next refresh. vmlinux
-    /// is parsed again, as the base of their split BTF, only when there is a
-    /// module to index.
+    /// module that a refresh found unlisted is read again when it reappears;
+    /// one unloaded and loaded again between two refreshes keeps its earlier
+    /// entry. vmlinux is parsed again, as the base of their split BTF, only
+    /// when there is a module to index.
     fn refresh(&mut self, vmlinux: &Path, dir: &Path) {
-        let mut previous: HashMap<std::ffi::OsString, BtfIndex> =
+        let mut previous: HashMap<std::ffi::OsString, Option<BtfIndex>> =
             std::mem::take(&mut self.modules).into_iter().collect();
         let mut base: Option<Option<RawBtf>> = None;
 
@@ -323,9 +323,8 @@ impl KernelBtf {
             let Some(base) = base.get_or_insert_with(|| RawBtf::parse(vmlinux, None)) else {
                 continue;
             };
-            if let Some(btf) = RawBtf::parse(&path, Some(base)) {
-                self.modules.push((name.to_owned(), BtfIndex::build(&btf)));
-            }
+            let index = RawBtf::parse(&path, Some(base)).map(|btf| BtfIndex::build(&btf));
+            self.modules.push((name.to_owned(), index));
         }
     }
 
@@ -333,7 +332,12 @@ impl KernelBtf {
     /// module. vmlinux comes first because a name it defines is the one
     /// libbpf resolves.
     fn find<T>(&self, get: impl Fn(&BtfIndex) -> Option<T>) -> Option<T> {
-        get(&self.vmlinux).or_else(|| self.modules.iter().find_map(|(_, index)| get(index)))
+        get(&self.vmlinux).or_else(|| {
+            self.modules
+                .iter()
+                .filter_map(|(_, index)| index.as_ref())
+                .find_map(get)
+        })
     }
 }
 
@@ -399,9 +403,10 @@ impl<V: Copy> NameMap<V> {
 }
 
 /// What the queries above read from one BTF object, read in a single pass
-/// over its types. `btf__find_by_name_kind` scans from type id 1 on every
-/// call, and on a module's split BTF that scan includes all of vmlinux; with
-/// the object read once into these maps, a query is a binary search.
+/// over its types. `btf__find_by_name_kind` scans linearly from type id 1
+/// unless the BTF is sorted by name, and on a module's split BTF it searches
+/// vmlinux first; with the object read once into these maps, a query is a
+/// binary search.
 ///
 /// When a name occurs more than once (static functions in different
 /// translation units), the entry is the one with the lowest type id, which is
@@ -641,17 +646,22 @@ mod btf_tests {
     /// returns the lowest type id.
     #[test]
     fn a_name_map_keeps_the_first_entry_of_each_name() {
+        // Enough entries that an unstable sort would reorder the
+        // duplicates; std sorts short slices by insertion, which is stable.
         let mut map = NameMap::new();
-        map.push("b", 1);
-        map.push("a", 2);
-        map.push("b", 3);
-        map.push("ab", 4);
+        for i in 0..64 {
+            map.push(if i % 2 == 0 { "dup" } else { "other" }, i);
+            map.push(&format!("n{i:02}"), 100 + i);
+        }
+        map.push("a", 200);
         let map = map.finish();
 
-        assert_eq!(map.len(), 3);
-        assert_eq!(map.get("a"), Some(2));
-        assert_eq!(map.get("ab"), Some(4));
-        assert_eq!(map.get("b"), Some(1));
+        assert_eq!(map.len(), 67);
+        assert_eq!(map.get("dup"), Some(0));
+        assert_eq!(map.get("other"), Some(1));
+        assert_eq!(map.get("n00"), Some(100));
+        assert_eq!(map.get("n63"), Some(163));
+        assert_eq!(map.get("a"), Some(200));
         assert_eq!(map.get("c"), None);
         assert_eq!(map.get(""), None);
     }
@@ -668,14 +678,16 @@ mod btf_tests {
         }
     }
 
-    /// vmlinux answers before any module, and modules answer in order.
+    /// vmlinux answers before any module, modules answer in order, and a
+    /// module whose BTF did not parse answers nothing.
     #[test]
     fn find_prefers_vmlinux_then_modules_in_order() {
         let btf = KernelBtf {
             vmlinux: index(&[("shared", 2)]),
             modules: vec![
-                ("a".into(), index(&[("shared", 7), ("in_both", 3)])),
-                ("b".into(), index(&[("in_both", 5), ("in_b", 6)])),
+                ("a".into(), Some(index(&[("shared", 7), ("in_both", 3)]))),
+                ("unparsed".into(), None),
+                ("b".into(), Some(index(&[("in_both", 5), ("in_b", 6)]))),
             ],
         };
         let arg_count = |name: &str| btf.find(|i| i.funcs.get(name)).flatten();
@@ -804,9 +816,15 @@ mod btf_tests {
         };
 
         check(&vmlinux, &btf.vmlinux, 97);
-        for (name, index) in &btf.modules {
-            let raw = RawBtf::parse(&Path::new("/sys/kernel/btf").join(name), Some(&vmlinux))
-                .expect("module BTF parses");
+        for path in module_btf_paths(Path::new("/sys/kernel/btf")) {
+            let name = path.file_name().unwrap();
+            let raw = RawBtf::parse(&path, Some(&vmlinux)).expect("module BTF parses");
+            let index = btf
+                .modules
+                .iter()
+                .find(|(n, _)| n == name)
+                .and_then(|(_, index)| index.as_ref())
+                .unwrap_or_else(|| panic!("module {} not indexed", path.display()));
             check(&raw, index, 13);
         }
 
