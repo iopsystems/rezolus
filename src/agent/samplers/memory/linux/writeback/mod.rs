@@ -21,7 +21,7 @@
 //! `balance_dirty_pages` has had two argument lists (see mod.bpf.c). The
 //! sampler reads the tracepoint's argument count from BTF and loads the
 //! program written for it; a kernel whose count matches neither, or that has
-//! no BTF to ask, gets no throttle hook and reports degraded, since a
+//! no BTF to ask, gets no throttle hook and reports it unsupported, since a
 //! positional read of the wrong argument would be wrong without any error.
 //! See docs/journal/2026-09-28-filesystem-telemetry-gaps.md, capability C1.
 
@@ -69,6 +69,55 @@ const BALANCE_PROGRAMS: &[(u32, &str, &str)] = &[
 ];
 const BALANCE_LABEL: &str = "writeback throttling";
 
+/// Which programs to load, from the kernel's BTF: `has_tracepoint` says
+/// whether BTF describes a tracepoint (selecting its `tp_btf` twin over the
+/// `raw_tp` one), and `balance_arity` is the argument count BTF gives for
+/// `balance_dirty_pages`. The throttle hook is reported unavailable when that
+/// count is unknown or matches no program, since reading an argument by
+/// position on another argument list reads the wrong one.
+fn select_programs(
+    has_tracepoint: impl Fn(&str) -> bool,
+    balance_arity: Option<u32>,
+) -> crate::agent::bpf::ProgramSelection {
+    let mut selection = crate::agent::bpf::ProgramSelection::default();
+
+    for (tracepoint, btf, raw, label) in HOOKS {
+        let (keep, drop) = if has_tracepoint(tracepoint) {
+            (btf, raw)
+        } else {
+            (raw, btf)
+        };
+        selection.disabled.push(drop);
+        selection.required.push((keep, label));
+    }
+
+    let btf_target = has_tracepoint(BALANCE_TRACEPOINT);
+    let selected = BALANCE_PROGRAMS
+        .iter()
+        .any(|(n, _, _)| balance_arity == Some(*n));
+    let reason = match balance_arity {
+        Some(_) => {
+            "balance_dirty_pages passes neither the 12 nor the 8 arguments the programs read"
+        }
+        None => "no BTF describes balance_dirty_pages, so its argument count is unknown",
+    };
+
+    for (n, btf, raw) in BALANCE_PROGRAMS {
+        let (active, twin) = if btf_target { (btf, raw) } else { (raw, btf) };
+        selection.disabled.push(twin);
+        if balance_arity == Some(*n) {
+            selection.required.push((active, BALANCE_LABEL));
+        } else if selected {
+            // Written for the other argument list.
+            selection.disabled.push(active);
+        } else {
+            selection.unavailable.push((active, BALANCE_LABEL, reason));
+        }
+    }
+
+    selection
+}
+
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
@@ -90,50 +139,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &WRITEBACK_RUNS_FOREIGN_FLUSH,
     ];
 
-    let mut disabled: Vec<&'static str> = Vec::new();
-    let mut required: Vec<(&'static str, &'static str)> = Vec::new();
-
-    for (tracepoint, btf, raw, label) in HOOKS {
-        if kernel_btf_has_tracepoints(&[tracepoint]) {
-            disabled.push(raw);
-            required.push((btf, label));
-        } else {
-            disabled.push(btf);
-            required.push((raw, label));
-        }
-    }
-
-    // One arity's twin stays enabled; every other balance program is disabled.
-    // With no BTF there is no way to learn the arity, so every one is disabled
-    // and the sampler runs without its throttle metrics rather than reading a
-    // positional argument that may be the wrong one.
     let arity = kernel_btf_tracepoint_arg_count(BALANCE_TRACEPOINT);
-    let btf_target = kernel_btf_has_tracepoints(&[BALANCE_TRACEPOINT]);
-    let mut balance_selected = false;
-
-    for (n, btf, raw) in BALANCE_PROGRAMS {
-        if arity == Some(*n) {
-            let (keep, drop) = if btf_target { (btf, raw) } else { (raw, btf) };
-            disabled.push(drop);
-            required.push((keep, BALANCE_LABEL));
-            balance_selected = true;
-        } else {
-            disabled.push(btf);
-            disabled.push(raw);
-        }
-    }
-
-    match arity {
-        Some(n) if balance_selected => debug!("{NAME} {BALANCE_TRACEPOINT} has {n} arguments"),
-        Some(n) => warn!(
-            "{NAME}: {BALANCE_TRACEPOINT} passes {n} arguments, which no program here is written \
-             for; throttle metrics are disabled on this kernel"
-        ),
-        None => warn!(
-            "{NAME}: no BTF describes {BALANCE_TRACEPOINT}, so its argument list is unknown; \
-             throttle metrics are disabled on this kernel"
-        ),
-    }
+    debug!("{NAME} {BALANCE_TRACEPOINT} arguments: {arity:?}");
+    let selection = select_programs(|tp| kernel_btf_has_tracepoints(&[tp]), arity);
 
     let tick = match jiffy_ns() {
         Some(ns) => ns,
@@ -163,8 +171,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &THROTTLE_LATENCIES_ACQ,
     )
     .map("jiffy_ns", vec![tick])
-    .disabled_programs(&disabled)
-    .required_programs(&required)
+    .disabled_programs(&selection.disabled)
+    .required_programs(&selection.required)
+    .unavailable_programs(&selection.unavailable)
     .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -224,5 +233,61 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), total);
         assert_eq!(total, 2 * HOOKS.len() + 2 * BALANCE_PROGRAMS.len());
+    }
+
+    fn all_programs() -> Vec<&'static str> {
+        HOOKS
+            .iter()
+            .flat_map(|(_, btf, raw, _)| [*btf, *raw])
+            .chain(
+                BALANCE_PROGRAMS
+                    .iter()
+                    .flat_map(|(_, btf, raw)| [*btf, *raw]),
+            )
+            .collect()
+    }
+
+    /// Every program is disabled, required or unavailable, and exactly one
+    /// of those, on every combination of BTF and arity.
+    #[test]
+    fn every_program_is_selected_once() {
+        for btf in [true, false] {
+            for arity in [Some(12), Some(8), Some(10), None] {
+                let s = select_programs(|_| btf, arity);
+                for prog in all_programs() {
+                    let n = s.disabled.iter().filter(|p| **p == prog).count()
+                        + usize::from(s.requires(prog))
+                        + usize::from(s.lacks(prog));
+                    assert_eq!(
+                        n, 1,
+                        "{prog} selected {n} times (btf {btf}, arity {arity:?})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A known arity loads its program in the attach type BTF allows; an
+    /// unknown one loads no balance program and reports the throttle hook
+    /// unavailable, so the sampler does not read healthy without it.
+    #[test]
+    fn the_balance_program_follows_the_arity() {
+        let s = select_programs(|_| true, Some(12));
+        assert!(s.requires("balance_dirty_pages_12_btf"));
+        assert!(s.unavailable.is_empty());
+
+        let s = select_programs(|_| false, Some(8));
+        assert!(s.requires("balance_dirty_pages_8_raw"));
+        assert!(s.unavailable.is_empty());
+
+        for (btf, arity) in [(true, Some(10)), (false, None), (true, None)] {
+            let s = select_programs(|_| btf, arity);
+            assert!(!s.required.iter().any(|(_, label)| *label == BALANCE_LABEL));
+            assert_eq!(s.unavailable.len(), BALANCE_PROGRAMS.len());
+            assert!(s
+                .unavailable
+                .iter()
+                .all(|(_, label, _)| *label == BALANCE_LABEL));
+        }
     }
 }

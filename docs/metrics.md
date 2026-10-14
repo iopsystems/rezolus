@@ -1114,8 +1114,8 @@ The sleep is a raw argument in jiffies, converted with the measured tick, so
 the histogram has one-jiffy resolution. That tracepoint has had
 two argument lists across kernel versions, and the sampler picks the program
 written for the one BTF reports; a kernel with neither, or without BTF, runs
-without the throttle metrics and reports degraded rather than reading the
-wrong argument.
+without the throttle metrics and reports the sampler unsupported, naming
+writeback throttling, rather than reading the wrong argument.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
