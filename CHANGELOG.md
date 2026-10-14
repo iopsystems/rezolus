@@ -851,6 +851,10 @@
 
 ### Fixed
 
+- `xfs_log`, `memory_pagecache` and `ext4_ops` report unsupported, naming each
+  hook left out, where the kernel cannot run it; they read healthy before.
+  (#1465)
+
 - Samplers with fentry programs use their kprobe twins, or turn the hook off,
   where fentry cannot attach: aarch64 before 6.4, and x86_64 before 6.6 for
   functions of more than 6 arguments. (#1463)
