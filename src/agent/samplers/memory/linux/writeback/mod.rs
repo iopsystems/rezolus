@@ -96,10 +96,8 @@ fn select_programs(
         .iter()
         .any(|(n, _, _)| balance_arity == Some(*n));
     let reason = match balance_arity {
-        Some(_) => {
-            "balance_dirty_pages passes neither the 12 nor the 8 arguments the programs read"
-        }
-        None => "no BTF describes balance_dirty_pages, so its argument count is unknown",
+        Some(_) => "balance_dirty_pages passes an argument count no program here is written for",
+        None => "BTF gives no argument count for balance_dirty_pages",
     };
 
     for (n, btf, raw) in BALANCE_PROGRAMS {
@@ -140,7 +138,15 @@ fn init(config: Arc<Config>) -> SamplerResult {
     ];
 
     let arity = kernel_btf_tracepoint_arg_count(BALANCE_TRACEPOINT);
-    debug!("{NAME} {BALANCE_TRACEPOINT} arguments: {arity:?}");
+    match arity {
+        Some(n) if BALANCE_PROGRAMS.iter().any(|(m, _, _)| *m == n) => {
+            debug!("{NAME} {BALANCE_TRACEPOINT} has {n} arguments")
+        }
+        Some(n) => info!(
+            "{NAME}: {BALANCE_TRACEPOINT} passes {n} arguments, which no program here is written for"
+        ),
+        None => debug!("{NAME}: BTF gives no argument count for {BALANCE_TRACEPOINT}"),
+    }
     let selection = select_programs(|tp| kernel_btf_has_tracepoints(&[tp]), arity);
 
     let tick = match jiffy_ns() {
@@ -267,9 +273,25 @@ mod tests {
         }
     }
 
+    /// Each fixed hook and the balance hook take the twin their own
+    /// tracepoint's BTF entry selects, not another's.
+    #[test]
+    fn each_twin_follows_its_own_tracepoint() {
+        let s = select_programs(|tp| tp != BALANCE_TRACEPOINT, Some(12));
+        assert!(s.requires("writeback_start_btf"));
+        assert!(s.requires("writeback_pages_written_btf"));
+        assert!(s.requires("balance_dirty_pages_12_raw"));
+
+        let s = select_programs(|tp| tp == BALANCE_TRACEPOINT, Some(8));
+        assert!(s.requires("writeback_start_raw"));
+        assert!(s.requires("writeback_pages_written_raw"));
+        assert!(s.requires("balance_dirty_pages_8_btf"));
+    }
+
     /// A known arity loads its program in the attach type BTF allows; an
     /// unknown one loads no balance program and reports the throttle hook
-    /// unavailable, so the sampler does not read healthy without it.
+    /// unavailable, naming the programs of the attach type in use and why,
+    /// so the sampler does not read healthy without it.
     #[test]
     fn the_balance_program_follows_the_arity() {
         let s = select_programs(|_| true, Some(12));
@@ -280,14 +302,26 @@ mod tests {
         assert!(s.requires("balance_dirty_pages_8_raw"));
         assert!(s.unavailable.is_empty());
 
-        for (btf, arity) in [(true, Some(10)), (false, None), (true, None)] {
-            let s = select_programs(|_| btf, arity);
-            assert!(!s.required.iter().any(|(_, label)| *label == BALANCE_LABEL));
+        let s = select_programs(|_| true, Some(10));
+        assert!(s.lacks("balance_dirty_pages_12_btf"));
+        assert!(s.lacks("balance_dirty_pages_8_btf"));
+        assert!(s
+            .unavailable
+            .iter()
+            .all(|(_, label, reason)| *label == BALANCE_LABEL
+                && reason.contains("argument count no program")));
+
+        for btf in [true, false] {
+            let s = select_programs(|_| btf, None);
+            let suffix = if btf { "_btf" } else { "_raw" };
             assert_eq!(s.unavailable.len(), BALANCE_PROGRAMS.len());
             assert!(s
                 .unavailable
                 .iter()
-                .all(|(_, label, _)| *label == BALANCE_LABEL));
+                .all(|(p, label, reason)| p.ends_with(suffix)
+                    && *label == BALANCE_LABEL
+                    && reason.starts_with("BTF gives no argument count")));
+            assert!(!s.required.iter().any(|(_, label)| *label == BALANCE_LABEL));
         }
     }
 }

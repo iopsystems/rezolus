@@ -1130,7 +1130,7 @@ bare-metal probe-cost bench for anything at request rate).
   126–261 µs on a 56-vCPU guest.
 - **`balance_dirty_pages` arity** — By design. 12 arguments on every kernel
   seen; the 8-argument form is written but untested until a kernel with it
-  is on the rack. `kernel_btf_tracepoint_arg_count` picks; unknown disables.
+  is on the rack. `kernel_btf_tracepoint_arg_count` picks; an unknown count reports the hook unsupported.
 - **`ext4_alloc` with metadata reads** — DONE (see the ext4 entry's phase 2
   results). Was: adds an allocated-extent-length histogram, preallocation discard
   counts, and `ext4_load_inode` / bitmap-load counters for synchronous

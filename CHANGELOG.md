@@ -709,7 +709,7 @@
   `writeback_pages_written`. `balance_dirty_pages` has had two argument
   lists, so the sampler reads the tracepoint's argument count from BTF
   (`kernel_btf_tracepoint_arg_count`) and loads the matching program, or
-  disables the hook and reports degraded when neither matches. The viewer's
+  reports the throttle hook unsupported when neither matches. The viewer's
   Memory section shows throttle latency, throttle rate, runs by reason and
   pages written when the recording has them.
 
