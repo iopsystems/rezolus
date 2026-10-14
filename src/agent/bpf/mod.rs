@@ -294,7 +294,8 @@ fn with_kernel_btf<T>(f: impl FnOnce(&KernelBtf) -> T) -> Option<T> {
 struct KernelBtf {
     vmlinux: BtfIndex,
     /// The modules listed under `/sys/kernel/btf` at the last refresh, in
-    /// listing order; `None` for one whose BTF did not parse.
+    /// listing order, less any skipped because vmlinux did not parse; `None`
+    /// for one whose BTF did not parse.
     modules: Vec<(std::ffi::OsString, Option<BtfIndex>)>,
 }
 
@@ -304,7 +305,8 @@ impl KernelBtf {
     /// module that a refresh found unlisted is read again when it reappears;
     /// one unloaded and loaded again between two refreshes keeps its earlier
     /// entry. vmlinux is parsed again, as the base of their split BTF, only
-    /// when there is a module to index.
+    /// when there is a module to index; when it does not parse, those
+    /// modules are left out and tried again at the next refresh.
     fn refresh(&mut self, vmlinux: &Path, dir: &Path) {
         let mut previous: HashMap<std::ffi::OsString, Option<BtfIndex>> =
             std::mem::take(&mut self.modules).into_iter().collect();
@@ -857,8 +859,9 @@ mod btf_tests {
     }
 
     /// A module whose BTF appears after the first query is indexed by the
-    /// next refresh, one that disappears is dropped, and one that appears
-    /// again is indexed again. Uses links to the running kernel's module BTF
+    /// next refresh, one that disappears is dropped, one that appears again
+    /// is indexed again, and one whose BTF does not parse is not parsed again
+    /// while it stays listed. Uses links to the running kernel's module BTF
     /// in a scratch directory; skipped where there is none.
     #[test]
     fn refresh_follows_modules_that_load_and_unload() {
@@ -898,6 +901,20 @@ mod btf_tests {
         std::os::unix::fs::symlink(&module, dir.join(&name)).unwrap();
         btf.refresh(vmlinux_path, &dir);
         assert_eq!(listed(&btf), vec![name.clone()]);
+
+        // A module whose BTF does not parse is recorded as such and not
+        // parsed again while it stays listed, even once the file would parse.
+        std::fs::remove_file(dir.join(&name)).unwrap();
+        btf.refresh(vmlinux_path, &dir);
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        std::os::unix::fs::symlink(&manifest, dir.join(&name)).unwrap();
+        btf.refresh(vmlinux_path, &dir);
+        btf.refresh(vmlinux_path, &dir);
+        assert!(matches!(btf.modules.as_slice(), [(n, None)] if *n == name));
+        std::fs::remove_file(dir.join(&name)).unwrap();
+        std::os::unix::fs::symlink(&module, dir.join(&name)).unwrap();
+        btf.refresh(vmlinux_path, &dir);
+        assert!(matches!(btf.modules.as_slice(), [(n, None)] if *n == name));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
