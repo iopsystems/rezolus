@@ -121,15 +121,9 @@ pub fn render_samplers(samplers: &[SamplerStatus]) -> (String, bool) {
             (_, Some(SamplerHealth::Unsupported)) => {
                 unsupported += 1;
                 let d = s
-                    .programs
+                    .unsupported_labels()
                     .iter()
-                    .filter(|p| p.verdict == ProbeVerdict::Unsupported)
-                    .map(|p| {
-                        format!(
-                            "{} unavailable (no kernel support)",
-                            p.label.as_deref().unwrap_or(&p.name)
-                        )
-                    })
+                    .map(|label| format!("{label} unavailable (no kernel support)"))
                     .collect::<Vec<_>>()
                     .join(", ");
                 lines.push_str(&format!("  {:<22} {:<12} {}\n", s.name, "unsupported", d));
@@ -414,5 +408,36 @@ mod tests {
         assert!(!problem);
         assert!(text.contains("0 healthy, 1 unsupported, 0 degraded, 0 failed"));
         assert!(text.contains("CPU time by category"));
+    }
+
+    /// A hook's entry and exit programs share a label, which is named once.
+    #[test]
+    fn a_shared_label_is_named_once() {
+        let samplers = vec![SamplerStatus {
+            name: "xfs_log".into(),
+            state: SamplerState::Active,
+            health: Some(SamplerHealth::Unsupported),
+            programs: vec![
+                prog(
+                    ProbeVerdict::Ok,
+                    Some("log space wait latency"),
+                    "xfs_log_grant_wake",
+                ),
+                prog(
+                    ProbeVerdict::Unsupported,
+                    Some("log force latency"),
+                    "xfs_log_force_fentry",
+                ),
+                prog(
+                    ProbeVerdict::Unsupported,
+                    Some("log force latency"),
+                    "xfs_log_force_fexit",
+                ),
+            ],
+        }];
+        let (text, problem) = render_samplers(&samplers);
+        assert!(!problem);
+        assert_eq!(text.matches("log force latency").count(), 1, "{text}");
+        assert!(!text.contains("log space wait latency"));
     }
 }

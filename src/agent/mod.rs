@@ -362,15 +362,9 @@ fn log_sampler_health_summary() {
             (_, Some(SamplerHealth::Unsupported)) => {
                 unsupported += 1;
                 let probes: Vec<String> = s
-                    .programs
+                    .unsupported_labels()
                     .iter()
-                    .filter(|p| p.verdict == ProbeVerdict::Unsupported)
-                    .map(|p| {
-                        format!(
-                            "{} (no kernel support)",
-                            p.label.as_deref().unwrap_or(&p.name)
-                        )
-                    })
+                    .map(|label| format!("{label} (no kernel support)"))
                     .collect();
                 info!("sampler {}: unsupported — {}", s.name, probes.join(", "));
             }

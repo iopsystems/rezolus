@@ -33,10 +33,11 @@
 //! for them cannot load the rest either. So the floor is 5.12. `ext4_rename2`
 //! has taken six arguments since 5.12 (a namespace argument first); the
 //! sampler confirms that from BTF and disables the rename pair on any other
-//! count rather than read the wrong slot. On a kernel whose BTF lacks
-//! `ext4_file_write_iter` or `ext4_rename2` the corresponding programs are
-//! disabled: that operation's histogram stays empty and its counters read 0,
-//! not absent. See docs/journal/2026-09-28-filesystem-telemetry-gaps.md
+//! count rather than read the wrong slot. Where fentry cannot attach to
+//! `ext4_file_write_iter` or `ext4_rename2` (`kernel_can_fentry`: not in BTF,
+//! or aarch64 before 6.4) the corresponding programs are not loaded and are
+//! listed in the sampler's status as unsupported: that operation's histogram
+//! stays empty and its counters read 0, not absent. See docs/journal/2026-09-28-filesystem-telemetry-gaps.md
 //! (C5, C6).
 
 const NAME: &str = "ext4_ops";
@@ -106,12 +107,14 @@ fn handle_cgroup_info(data: &[u8]) -> i32 {
 }
 
 /// Which programs to load for the write and rename pairs, from the kernel's
-/// BTF: the names to disable and the (program, capability) pairs required.
+/// BTF: the (program, capability) pairs required and the (program,
+/// capability, reason) triples this kernel cannot run. No program here has a
+/// twin, so none is merely disabled.
 fn select_programs(
     has_write_iter: bool,
     rename_arity: Option<u32>,
-) -> (Vec<&'static str>, Vec<(&'static str, &'static str)>) {
-    let mut disabled = Vec::new();
+) -> crate::agent::bpf::ProgramSelection {
+    let mut unavailable = Vec::new();
     let mut required = vec![
         ("ext4_sync_file_enter", "fsync latency"),
         ("ext4_sync_file_exit", "fsync latency"),
@@ -123,8 +126,9 @@ fn select_programs(
         required.push(("ext4_file_write_iter_fentry", "write latency"));
         required.push(("ext4_file_write_iter_fexit", "write latency"));
     } else {
-        disabled.push("ext4_file_write_iter_fentry");
-        disabled.push("ext4_file_write_iter_fexit");
+        const REASON: &str = "fentry cannot attach to ext4_file_write_iter on this kernel";
+        unavailable.push(("ext4_file_write_iter_fentry", "write latency", REASON));
+        unavailable.push(("ext4_file_write_iter_fexit", "write latency", REASON));
     }
 
     // The program reads six arguments and the return value by position; on
@@ -133,11 +137,19 @@ fn select_programs(
         required.push(("ext4_rename2_fentry", "rename latency"));
         required.push(("ext4_rename2_fexit", "rename latency"));
     } else {
-        disabled.push("ext4_rename2_fentry");
-        disabled.push("ext4_rename2_fexit");
+        let reason = match rename_arity {
+            Some(_) => "ext4_rename2 does not take the 6 arguments the program reads",
+            None => "fentry cannot attach to ext4_rename2 on this kernel",
+        };
+        unavailable.push(("ext4_rename2_fentry", "rename latency", reason));
+        unavailable.push(("ext4_rename2_fexit", "rename latency", reason));
     }
 
-    (disabled, required)
+    crate::agent::bpf::ProgramSelection {
+        disabled: Vec::new(),
+        required,
+        unavailable,
+    }
 }
 
 /// Kernel modules this sampler needs loaded; see `samplers::deferred`.
@@ -212,7 +224,7 @@ fn init_now(config: Arc<Config>) -> SamplerResult {
         ),
     }
 
-    let (disabled, required) = select_programs(has_write_iter, rename_arity);
+    let selection = select_programs(has_write_iter, rename_arity);
 
     // Order MUST match the C_* indices in mod.bpf.c: ops, time, errors (each
     // fsync, unlink, write, rename), then write bytes.
@@ -256,8 +268,8 @@ fn init_now(config: Arc<Config>) -> SamplerResult {
     .histogram("unlink_latency", &EXT4_OP_LATENCY_UNLINK, &LATENCIES_ACQ)
     .histogram("write_latency", &EXT4_OP_LATENCY_WRITE, &LATENCIES_ACQ)
     .histogram("rename_latency", &EXT4_OP_LATENCY_RENAME, &LATENCIES_ACQ)
-    .disabled_programs(&disabled)
-    .required_programs(&required)
+    .required_programs(&selection.required)
+    .unavailable_programs(&selection.unavailable)
     // The switch is read-only data the verifier folds at load (see
     // `cgroup_attribution` in mod.bpf.c); the cgroup maps and their series
     // exist only when it is on.
@@ -398,35 +410,37 @@ mod tests {
     /// by position.
     #[test]
     fn rename_programs_are_selected_by_arity() {
-        let (disabled, required) = select_programs(true, Some(6));
-        assert!(required.iter().any(|(p, _)| *p == "ext4_rename2_fexit"));
-        assert!(!disabled.contains(&"ext4_rename2_fentry"));
-        assert!(!disabled.contains(&"ext4_file_write_iter_fexit"));
+        let s = select_programs(true, Some(6));
+        assert!(s.requires("ext4_rename2_fexit"));
+        assert!(s.requires("ext4_file_write_iter_fexit"));
+        assert!(s.unavailable.is_empty());
 
         for arity in [None, Some(4), Some(5), Some(7)] {
-            let (disabled, required) = select_programs(false, arity);
-            assert!(disabled.contains(&"ext4_rename2_fentry"));
-            assert!(disabled.contains(&"ext4_rename2_fexit"));
-            assert!(disabled.contains(&"ext4_file_write_iter_fentry"));
-            assert!(!required.iter().any(|(p, _)| p.contains("rename")));
-            assert!(!required.iter().any(|(p, _)| p.contains("write_iter")));
+            let s = select_programs(false, arity);
+            for prog in [
+                "ext4_rename2_fentry",
+                "ext4_rename2_fexit",
+                "ext4_file_write_iter_fentry",
+                "ext4_file_write_iter_fexit",
+            ] {
+                assert!(s.lacks(prog), "{prog} not reported unavailable");
+            }
+            assert!(!s.required.iter().any(|(p, _)| p.contains("rename")));
+            assert!(!s.required.iter().any(|(p, _)| p.contains("write_iter")));
         }
     }
 
-    /// No program is both disabled and required, and the tracepoint pairs
+    /// No program is both required and unavailable, and the tracepoint pairs
     /// are always required.
     #[test]
-    fn disabled_and_required_are_disjoint() {
+    fn required_and_unavailable_are_disjoint() {
         for (write, arity) in [(true, Some(6)), (false, Some(5)), (true, None)] {
-            let (disabled, required) = select_programs(write, arity);
-            for (prog, _) in &required {
-                assert!(
-                    !disabled.contains(prog),
-                    "{prog} both disabled and required"
-                );
+            let s = select_programs(write, arity);
+            for (prog, _) in &s.required {
+                assert!(!s.lacks(prog), "{prog} both required and unavailable");
             }
-            assert!(required.iter().any(|(p, _)| *p == "ext4_sync_file_exit"));
-            assert!(required.iter().any(|(p, _)| *p == "ext4_unlink_exit"));
+            assert!(s.requires("ext4_sync_file_exit"));
+            assert!(s.requires("ext4_unlink_exit"));
         }
     }
 }

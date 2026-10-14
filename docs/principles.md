@@ -133,7 +133,10 @@ the target in BTF and a trampoline that can attach to it: aarch64 needs ftrace
 direct calls (6.4+), and x86_64 trampolines take at most 6 arguments before
 6.6. Select `fentry` twins with `kernel_can_fentry` (or `unused_twins` for a
 list of hooks), never on `kernel_has_btf` alone, and give each a `kprobe`
-twin where losing the hook matters.
+twin where losing the hook matters. A hook with no twin that this kernel
+cannot run goes to `BpfBuilder::unavailable_programs`, which reports it in the
+sampler's status as unsupported; `disabled_programs` is for a program whose
+twin does its work or that config turned off.
 
 **How to apply.**
 - New samplers default to the highest-preference attach the target supports.

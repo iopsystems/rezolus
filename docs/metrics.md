@@ -596,8 +596,10 @@ sampler needs 5.12 or later. The sampler probes both at init (the helper with
 libbpf's probe, the tracepoints in BTF) and on an older kernel `rezolus
 status` shows it unsupported rather than failed. `ext4_rename2` has taken six arguments since 5.12; the sampler
 confirms that from BTF and disables the rename pair on any other count. If
-BTF lacks `ext4_file_write_iter` or `ext4_rename2`, that operation's
-histogram stays empty and its counters read 0 while the rest run.
+fentry cannot attach to `ext4_file_write_iter` or `ext4_rename2` (not in BTF,
+or aarch64 before 6.4), that operation's histogram stays empty and its
+counters read 0 while the rest run, and `rezolus status` shows the sampler
+unsupported and names the operation.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
@@ -792,7 +794,8 @@ kernel, or a host with no XFS, `rezolus status` shows the sampler unsupported
 rather than failed. A kernel without `xfs_log_cil_wait` in BTF reads 0 for the
 CIL count. On aarch64 without ftrace direct calls (before 6.4) fentry cannot
 attach to the force functions: the force series read 0 and the log-space and
-CIL series are recorded.
+CIL series are recorded. Each hook left out is named in `rezolus status`, which
+shows the sampler unsupported.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
@@ -984,7 +987,8 @@ kernels before 5.15, which lack `bpf_task_pt_regs`). Evictions are the
 delete tracepoint; faults are `fentry` on `filemap_fault`. On aarch64 without
 ftrace direct calls (before 6.4) fentry cannot attach: reads, read bytes and
 faults read 0, so the hit ratio below is undefined there, and fills and
-evictions are recorded.
+evictions are recorded. `rezolus status` then shows the sampler unsupported
+and names the hooks left out.
 
 **The hit ratio.** `pagecache_pages_added{reason="read"} × 4096 /
 pagecache_read_bytes` is the fraction of bytes read that came from the
