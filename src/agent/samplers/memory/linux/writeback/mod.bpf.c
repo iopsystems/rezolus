@@ -20,8 +20,8 @@
 // A tp_btf/raw_tp program reads arguments by position, so a program for one
 // arity reads the wrong argument on the other with no error. There is one
 // program per arity below and mod.rs selects on the argument count BTF
-// reports (kernel_btf_tracepoint_arg_count); an unknown count disables the
-// hook rather than guessing.
+// reports (kernel_btf_tracepoint_arg_count); an unknown count loads no program
+// and reports the hook unsupported rather than guessing.
 
 #include <vmlinux.h>
 #include "../../../agent/bpf/helpers.h"

@@ -121,11 +121,11 @@ pub fn render_samplers(samplers: &[SamplerStatus]) -> (String, bool) {
             (_, Some(SamplerHealth::Unsupported)) => {
                 unsupported += 1;
                 let d = s
-                    .unsupported_labels()
+                    .unsupported_hooks()
                     .iter()
-                    .map(|label| format!("{label} unavailable (no kernel support)"))
+                    .map(|(label, reason)| format!("{label} unavailable: {reason}"))
                     .collect::<Vec<_>>()
-                    .join(", ");
+                    .join("; ");
                 lines.push_str(&format!("  {:<22} {:<12} {}\n", s.name, "unsupported", d));
             }
             (_, Some(SamplerHealth::Healthy)) | (SamplerState::Active, None) => healthy += 1,
@@ -439,5 +439,38 @@ mod tests {
         assert!(!problem);
         assert_eq!(text.matches("log force latency").count(), 1, "{text}");
         assert!(!text.contains("log space wait latency"));
+    }
+
+    /// Each unavailable hook is shown with the reason its program carries, so
+    /// a kernel without the function reads differently from one whose
+    /// signature no program is written for.
+    #[test]
+    fn an_unavailable_hook_is_shown_with_its_reason() {
+        let mut a = prog(
+            ProbeVerdict::Unsupported,
+            Some("rename latency"),
+            "ext4_rename2_fentry",
+        );
+        a.error = Some("ext4_rename2 does not take the 6 arguments the program reads".into());
+        let mut b = prog(
+            ProbeVerdict::Unsupported,
+            Some("write latency"),
+            "ext4_file_write_iter_fentry",
+        );
+        b.error = None;
+        let samplers = vec![SamplerStatus {
+            name: "ext4_ops".into(),
+            state: SamplerState::Active,
+            health: Some(SamplerHealth::Unsupported),
+            programs: vec![a, b],
+        }];
+        let (text, _) = render_samplers(&samplers);
+        assert!(
+            text.contains(
+                "rename latency unavailable: ext4_rename2 does not take the 6 arguments the program reads; \
+                 write latency unavailable: no kernel support"
+            ),
+            "{text}"
+        );
     }
 }

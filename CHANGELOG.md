@@ -713,7 +713,7 @@
   `writeback_pages_written`. `balance_dirty_pages` has had two argument
   lists, so the sampler reads the tracepoint's argument count from BTF
   (`kernel_btf_tracepoint_arg_count`) and loads the matching program, or
-  disables the hook and reports degraded when neither matches. The viewer's
+  reports the throttle hook unsupported when neither matches. The viewer's
   Memory section shows throttle latency, throttle rate, runs by reason and
   pages written when the recording has them.
 
@@ -854,6 +854,13 @@
   configured one, so `listen = "127.0.0.1:0"` reports the port it got.
 
 ### Fixed
+
+- `memory_writeback` reports unsupported, naming writeback throttling, when
+  BTF gives `balance_dirty_pages` an argument count it has no program for;
+  it read healthy before. (#1468)
+
+- `rezolus status` and the startup summary give each unsupported hook's
+  reason instead of "(no kernel support)". (#1468)
 
 - Sampler init reads kernel BTF once instead of on every query, which took
   about 1.1 to 1.4 s of agent startup on Debian 12 and 13. (#1466)

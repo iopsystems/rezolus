@@ -330,18 +330,20 @@ pub fn note_perf_unavailable(name: &'static str, reason: &str) {
 }
 
 impl SamplerStatus {
-    /// The capability labels (or program names, where unlabelled) of this
-    /// sampler's unsupported programs, each once, in program order. An entry
-    /// and an exit program commonly share a label.
-    pub fn unsupported_labels(&self) -> Vec<&str> {
-        let mut labels: Vec<&str> = Vec::new();
+    /// The capability label (or program name, where unlabelled) of each of
+    /// this sampler's unsupported programs, with the reason recorded for it,
+    /// each label once, in program order. An entry and an exit program
+    /// commonly share a label and a reason; the first program's reason is
+    /// given.
+    pub fn unsupported_hooks(&self) -> Vec<(&str, &str)> {
+        let mut hooks: Vec<(&str, &str)> = Vec::new();
         for p in &self.programs {
             let label = p.label.as_deref().unwrap_or(&p.name);
-            if p.verdict == ProbeVerdict::Unsupported && !labels.contains(&label) {
-                labels.push(label);
+            if p.verdict == ProbeVerdict::Unsupported && !hooks.iter().any(|(l, _)| *l == label) {
+                hooks.push((label, p.error.as_deref().unwrap_or("no kernel support")));
             }
         }
-        labels
+        hooks
     }
 }
 

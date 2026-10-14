@@ -249,8 +249,8 @@ pub fn kernel_btf_has_helper(name: &str) -> bool {
 /// written for one arity reads the wrong argument on a kernel with the other
 /// without any error. A sampler that hooks such a tracepoint keeps one program
 /// per known arity and selects on this at init; an unknown arity disables the
-/// hook rather than guessing. `kernel_btf_has_tracepoints` is the existence
-/// check this refines.
+/// hook and reports it unsupported. `kernel_btf_has_tracepoints` is the
+/// existence check this refines.
 pub fn kernel_btf_tracepoint_arg_count(name: &str) -> Option<u32> {
     with_kernel_btf(|btf| btf.find(|index| index.tracepoints.get(name)))?.flatten()
 }

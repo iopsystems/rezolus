@@ -301,7 +301,7 @@ impl CpuPerfCounters {
                         crate::agent::sampler_status::note_perf_unavailable(
                             self.name,
                             "hardware counters were never scheduled onto the PMU \
-                             (time_running = 0); no free counter, or no usable PMU",
+                             (time_running = 0): no free counter, or no usable PMU",
                         );
                     }
                 }
@@ -310,7 +310,7 @@ impl CpuPerfCounters {
                         c.reported = true;
                         crate::agent::sampler_status::note_perf_unavailable(
                             self.name,
-                            "hardware counters stopped advancing while still enabled; \
+                            "hardware counters stopped advancing while still enabled: \
                              the counter was descheduled and its series has gone flat",
                         );
                     }
