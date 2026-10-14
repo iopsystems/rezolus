@@ -913,7 +913,8 @@ where
                     error: Some(reason.to_string()),
                     intent: Some(crate::agent::sampler_status::ProbeIntent::Required),
                     label: Some(label.to_string()),
-                    expected: false,
+                    // As for a required probe that failed with ENOENT.
+                    expected: true,
                     verdict: crate::agent::sampler_status::ProbeVerdict::Unsupported,
                 });
             }
@@ -1563,8 +1564,9 @@ where
     /// the sampler's health reads unsupported rather than healthy while the
     /// series it fed read 0.
     ///
-    /// Use [`Self::disabled_programs`] for a program whose twin does the same
-    /// work, and this for a program nothing replaces.
+    /// Use [`Self::disabled_programs`] for a program whose twin does its work
+    /// or that config turned off, and this for a capability this kernel
+    /// cannot provide.
     pub fn unavailable_programs(
         mut self,
         items: &[(&'static str, &'static str, &'static str)],

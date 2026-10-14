@@ -120,15 +120,8 @@ pub fn render_samplers(samplers: &[SamplerStatus]) -> (String, bool) {
             }
             (_, Some(SamplerHealth::Unsupported)) => {
                 unsupported += 1;
-                // An entry and exit program share a label; name it once.
-                let mut labels: Vec<&str> = Vec::new();
-                for p in &s.programs {
-                    let label = p.label.as_deref().unwrap_or(&p.name);
-                    if p.verdict == ProbeVerdict::Unsupported && !labels.contains(&label) {
-                        labels.push(label);
-                    }
-                }
-                let d = labels
+                let d = s
+                    .unsupported_labels()
                     .iter()
                     .map(|label| format!("{label} unavailable (no kernel support)"))
                     .collect::<Vec<_>>()

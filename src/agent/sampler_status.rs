@@ -329,6 +329,22 @@ pub fn note_perf_unavailable(name: &'static str, reason: &str) {
     entry.health = Some(rollup_health(true, &verdicts));
 }
 
+impl SamplerStatus {
+    /// The capability labels (or program names, where unlabelled) of this
+    /// sampler's unsupported programs, each once, in program order. An entry
+    /// and an exit program commonly share a label.
+    pub fn unsupported_labels(&self) -> Vec<&str> {
+        let mut labels: Vec<&str> = Vec::new();
+        for p in &self.programs {
+            let label = p.label.as_deref().unwrap_or(&p.name);
+            if p.verdict == ProbeVerdict::Unsupported && !labels.contains(&label) {
+                labels.push(label);
+            }
+        }
+        labels
+    }
+}
+
 /// Snapshot of all sampler statuses, sorted by name (BTreeMap order).
 pub fn snapshot() -> Vec<SamplerStatus> {
     registry().lock().unwrap().values().cloned().collect()

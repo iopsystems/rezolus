@@ -799,8 +799,8 @@ is a kprobe on 5.8–6.5 x86_64; on aarch64 fentry needs ftrace direct calls
 other fentry samplers use the same check since #1462. Those with kprobe twins
 (`cpu_usage`, `cpu_bandwidth`, `tcp_connect_latency`, `tcp_receive`,
 `tcp_traffic`) fall back to them. The fentry-only ones (`xfs_log`, `ext4_ops`,
-`memory_pagecache`) disable the hook, log it at info and keep their
-tracepoints; `xfs_log` and `memory_pagecache` still report unsupported when
+`memory_pagecache`) disable the hook, log it at info, report it in `/status`
+as an unsupported program, and keep their tracepoints; `xfs_log` and `memory_pagecache` still report unsupported when
 their function is missing from BTF altogether, as before.
 
 **Correction: flushing is not where fsync waits.** The phase 1 design, the

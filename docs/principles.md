@@ -136,7 +136,7 @@ list of hooks), never on `kernel_has_btf` alone, and give each a `kprobe`
 twin where losing the hook matters. A hook with no twin that this kernel
 cannot run goes to `BpfBuilder::unavailable_programs`, which reports it in the
 sampler's status as unsupported; `disabled_programs` is for a program whose
-twin does its work.
+twin does its work or that config turned off.
 
 **How to apply.**
 - New samplers default to the highest-preference attach the target supports.
