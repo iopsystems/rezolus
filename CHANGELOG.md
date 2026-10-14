@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Security
+
+- rustls 0.23.46, for RUSTSEC-2026-0346 through 0349. (#1467)
+
 ### Removed
 
 - **`record` writes `.dendro` only.** The output must end in `.dendro`
