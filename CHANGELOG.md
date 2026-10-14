@@ -855,6 +855,9 @@
 
 ### Fixed
 
+- Sampler init reads kernel BTF once instead of on every query, which took
+  about 1.1 to 1.4 s of agent startup on Debian 12 and 13. (#1466)
+
 - `xfs_log`, `memory_pagecache` and `ext4_ops` report unsupported, naming each
   hook left out, where the kernel cannot run it; they read healthy before.
   (#1465)
