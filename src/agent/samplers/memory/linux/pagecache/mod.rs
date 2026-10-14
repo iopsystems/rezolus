@@ -28,8 +28,9 @@
 //! is 5.12+ and `generic_file_buffered_read` serves before it, selected from
 //! BTF; a kernel with neither reports the sampler unsupported. Where fentry
 //! cannot attach to them (`kernel_can_fentry`: aarch64 without ftrace direct
-//! calls, before 6.4) the read and fault series read 0 and the fill and
-//! eviction tracepoints are still recorded. Classifying a
+//! calls, before 6.4) the read and fault series read 0, the fill and
+//! eviction tracepoints are still recorded, and the hooks left out are listed
+//! in the sampler's status as unsupported. Classifying a
 //! fill needs `bpf_task_pt_regs` (5.15+): before it the plain twin loads and
 //! every fill is `reason="other"`. Folio sizes come from the folio order,
 //! wherever the running kernel keeps it (`_flags_1` from 6.6,
@@ -116,21 +117,27 @@ fn syscall_lut() -> Vec<u64> {
         .collect()
 }
 
-/// Which programs to load, from the kernel's BTF and helpers: the names to
-/// disable and the (program, capability) pairs required.
+/// Which programs to load, from the kernel's BTF and helpers: the twins to
+/// disable, the (program, capability) pairs required, and the (program,
+/// capability, reason) triples this kernel cannot run.
 fn select_programs(
     has_fault: bool,
     has_filemap_read: bool,
     has_buffered_read: bool,
     has_task_pt_regs: bool,
-) -> (Vec<&'static str>, Vec<(&'static str, &'static str)>) {
+) -> crate::agent::bpf::ProgramSelection {
     let mut disabled = Vec::new();
+    let mut unavailable = Vec::new();
     let mut required = vec![("filemap_delete", "pages evicted")];
 
     if has_fault {
         required.push(("filemap_fault_fentry", "mmap faults"));
     } else {
-        disabled.push("filemap_fault_fentry");
+        unavailable.push((
+            "filemap_fault_fentry",
+            "mmap faults",
+            "fentry cannot attach to filemap_fault on this kernel",
+        ));
     }
 
     // One read entry point per kernel: filemap_read from 5.12,
@@ -142,8 +149,14 @@ fn select_programs(
         required.push(("generic_file_buffered_read_fentry", "read calls and bytes"));
         disabled.push("filemap_read_fentry");
     } else {
-        disabled.push("filemap_read_fentry");
-        disabled.push("generic_file_buffered_read_fentry");
+        const REASON: &str = "fentry can attach to neither filemap_read nor \
+                              generic_file_buffered_read on this kernel";
+        unavailable.push(("filemap_read_fentry", "read calls and bytes", REASON));
+        unavailable.push((
+            "generic_file_buffered_read_fentry",
+            "read calls and bytes",
+            REASON,
+        ));
     }
 
     // The classified fill program calls bpf_task_pt_regs (5.15); the plain
@@ -156,7 +169,11 @@ fn select_programs(
         disabled.push("filemap_add_classified");
     }
 
-    (disabled, required)
+    crate::agent::bpf::ProgramSelection {
+        disabled,
+        required,
+        unavailable,
+    }
 }
 
 fn init(config: Arc<Config>) -> SamplerResult {
@@ -205,7 +222,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         );
     }
 
-    let (disabled, required) = select_programs(
+    let selection = select_programs(
         has_fault,
         has_filemap_read,
         has_buffered_read,
@@ -243,8 +260,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &FS_IDENTITY,
     )
     .map("syscall_lut", syscall_lut())
-    .disabled_programs(&disabled)
-    .required_programs(&required)
+    .disabled_programs(&selection.disabled)
+    .required_programs(&selection.required)
+    .unavailable_programs(&selection.unavailable)
     // The switch is read-only data the verifier folds at load; the cgroup
     // maps and their series exist only when it is on.
     .pre_load(move |open| {
@@ -360,47 +378,60 @@ mod tests {
     /// read and fault programs wherever fentry can attach.
     #[test]
     fn programs_are_selected_by_kernel_capability() {
-        let (disabled, required) = select_programs(true, true, false, true);
-        assert!(required.iter().any(|(p, _)| *p == "filemap_read_fentry"));
-        assert!(required.iter().any(|(p, _)| *p == "filemap_add_classified"));
-        assert!(disabled.contains(&"generic_file_buffered_read_fentry"));
-        assert!(disabled.contains(&"filemap_add_plain"));
+        let s = select_programs(true, true, false, true);
+        assert!(s.requires("filemap_read_fentry"));
+        assert!(s.requires("filemap_add_classified"));
+        assert!(s.disabled.contains(&"generic_file_buffered_read_fentry"));
+        assert!(s.disabled.contains(&"filemap_add_plain"));
+        assert!(s.unavailable.is_empty());
 
-        let (disabled, required) = select_programs(true, false, true, false);
-        assert!(required
-            .iter()
-            .any(|(p, _)| *p == "generic_file_buffered_read_fentry"));
-        assert!(required.iter().any(|(p, _)| *p == "filemap_add_plain"));
-        assert!(disabled.contains(&"filemap_read_fentry"));
-        assert!(disabled.contains(&"filemap_add_classified"));
-
-        for (a, b, c) in [
-            (true, false, true),
-            (false, true, false),
-            (false, false, true),
-        ] {
-            let (disabled, required) = select_programs(true, a, b, c);
-            for (prog, _) in &required {
-                assert!(
-                    !disabled.contains(prog),
-                    "{prog} both disabled and required"
-                );
-            }
-            assert!(required.iter().any(|(p, _)| *p == "filemap_delete"));
-            assert!(required.iter().any(|(p, _)| *p == "filemap_fault_fentry"));
-        }
+        let s = select_programs(true, false, true, false);
+        assert!(s.requires("generic_file_buffered_read_fentry"));
+        assert!(s.requires("filemap_add_plain"));
+        assert!(s.disabled.contains(&"filemap_read_fentry"));
+        assert!(s.disabled.contains(&"filemap_add_classified"));
+        assert!(s.unavailable.is_empty());
 
         // Where fentry cannot attach (aarch64 before 6.4), the read and fault
-        // programs are disabled and the add and delete tracepoints still load.
-        let (disabled, required) = select_programs(false, false, false, true);
+        // programs are reported unavailable and the add and delete
+        // tracepoints still load.
+        let s = select_programs(false, false, false, true);
         for prog in [
             "filemap_fault_fentry",
             "filemap_read_fentry",
             "generic_file_buffered_read_fentry",
         ] {
-            assert!(disabled.contains(&prog), "{prog} not disabled");
+            assert!(s.lacks(prog), "{prog} not reported unavailable");
         }
-        assert!(required.iter().any(|(p, _)| *p == "filemap_delete"));
-        assert!(required.iter().any(|(p, _)| *p == "filemap_add_classified"));
+        assert!(s.requires("filemap_delete"));
+        assert!(s.requires("filemap_add_classified"));
+    }
+
+    /// Every program is in exactly one of the three lists, and the eviction
+    /// program is always required.
+    #[test]
+    fn every_program_is_selected_once() {
+        let all = [
+            "filemap_delete",
+            "filemap_fault_fentry",
+            "filemap_read_fentry",
+            "generic_file_buffered_read_fentry",
+            "filemap_add_classified",
+            "filemap_add_plain",
+        ];
+        for fault in [true, false] {
+            for (read, buffered) in [(true, false), (false, true), (false, false)] {
+                for pt_regs in [true, false] {
+                    let s = select_programs(fault, read, buffered, pt_regs);
+                    for prog in all {
+                        let n = s.disabled.iter().filter(|p| **p == prog).count()
+                            + s.required.iter().filter(|(p, _)| *p == prog).count()
+                            + s.unavailable.iter().filter(|(p, _, _)| *p == prog).count();
+                        assert_eq!(n, 1, "{prog} selected {n} times");
+                    }
+                    assert!(s.requires("filemap_delete"));
+                }
+            }
+        }
     }
 }

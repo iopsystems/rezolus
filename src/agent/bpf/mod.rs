@@ -11,6 +11,32 @@ pub use builder::{BpfProgStats, PerfEvent};
 use std::path::Path;
 use std::sync::OnceLock;
 
+/// The programs a sampler loads, from what the kernel can run: the twins to
+/// leave unloaded ([`BpfBuilder::disabled_programs`]), the (program,
+/// capability) pairs required ([`BpfBuilder::required_programs`]), and the
+/// (program, capability, reason) triples nothing replaces
+/// ([`BpfBuilder::unavailable_programs`]).
+#[derive(Debug, Default)]
+pub struct ProgramSelection {
+    pub disabled: Vec<&'static str>,
+    pub required: Vec<(&'static str, &'static str)>,
+    pub unavailable: Vec<(&'static str, &'static str, &'static str)>,
+}
+
+impl ProgramSelection {
+    /// Whether `program` is required.
+    #[cfg(test)]
+    pub fn requires(&self, program: &str) -> bool {
+        self.required.iter().any(|(p, _)| *p == program)
+    }
+
+    /// Whether `program` is reported as unavailable.
+    #[cfg(test)]
+    pub fn lacks(&self, program: &str) -> bool {
+        self.unavailable.iter().any(|(p, _, _)| *p == program)
+    }
+}
+
 use crate::agent::samplers::Sampler;
 use crate::agent::timing::AcquisitionGroup;
 use crate::*;

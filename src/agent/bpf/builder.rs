@@ -545,6 +545,10 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     /// drop the unused variant when a sampler ships both a `tp_btf` and a
     /// `raw_tp` version of a hook.
     disabled_programs: Option<HashSet<&'static str>>,
+    /// Programs not loaded because this kernel cannot run them, each with its
+    /// capability label and the reason. Unlike `disabled_programs`, no twin
+    /// takes over, so each is reported as an unsupported program.
+    unavailable_programs: Vec<(&'static str, &'static str, &'static str)>,
     /// Optional per-program intent overrides. Programs absent from this map
     /// default to `ProbeIntent::Required`. Used to mark per-driver probes.
     program_intents: HashMap<&'static str, crate::agent::sampler_status::ProbeIntent>,
@@ -589,6 +593,7 @@ where
             btf_path: config.general().btf_path().map(|s| s.to_string()),
             enabled_programs: None,
             disabled_programs: None,
+            unavailable_programs: Vec::new(),
             program_intents: HashMap::new(),
             program_labels: HashMap::new(),
             pre_load: Vec::new(),
@@ -710,6 +715,23 @@ where
                         );
                     }
                 }
+            }
+
+            for (name, _, reason) in &self.unavailable_programs {
+                let mut found = false;
+                for mut prog in open_skel.open_object_mut().progs_mut() {
+                    if prog.name().to_string_lossy() == *name {
+                        debug!("{} not loading program {name}: {reason}", self.name);
+                        prog.set_autoload(false);
+                        found = true;
+                    }
+                }
+                debug_assert!(
+                    found,
+                    "{}: unavailable_programs names '{name}', which is not a program in this \
+                     skeleton",
+                    self.name,
+                );
             }
 
             // Histogram maps are declared with HISTOGRAM_SLICES slices of
@@ -882,6 +904,17 @@ where
                     label,
                     expected,
                     verdict,
+                });
+            }
+            for (name, label, reason) in &self.unavailable_programs {
+                prog_status.push(crate::agent::sampler_status::ProgramStatus {
+                    name: name.to_string(),
+                    attached: false,
+                    error: Some(reason.to_string()),
+                    intent: Some(crate::agent::sampler_status::ProbeIntent::Required),
+                    label: Some(label.to_string()),
+                    expected: false,
+                    verdict: crate::agent::sampler_status::ProbeVerdict::Unsupported,
                 });
             }
             // Guard against typos in declared probe names: every program named
@@ -1521,6 +1554,22 @@ where
     /// ```
     pub fn disabled_programs(mut self, names: &[&'static str]) -> Self {
         self.disabled_programs = Some(names.iter().copied().collect());
+        self
+    }
+
+    /// Specify BPF programs this kernel cannot run, as `(program, capability
+    /// label, reason)`. Each is left unloaded, like [`Self::disabled_programs`],
+    /// and is reported in the sampler's status as an unsupported program, so
+    /// the sampler's health reads unsupported rather than healthy while the
+    /// series it fed read 0.
+    ///
+    /// Use [`Self::disabled_programs`] for a program whose twin does the same
+    /// work, and this for a program nothing replaces.
+    pub fn unavailable_programs(
+        mut self,
+        items: &[(&'static str, &'static str, &'static str)],
+    ) -> Self {
+        self.unavailable_programs.extend_from_slice(items);
         self
     }
 

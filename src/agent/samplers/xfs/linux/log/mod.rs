@@ -35,7 +35,8 @@
 //! `xfs_log_cil_wait` that counter reads 0, not absent. Where fentry cannot
 //! attach to the force functions (`kernel_can_fentry`: aarch64 without ftrace
 //! direct calls, before 6.4) the force series read 0 and the log-space and
-//! CIL series are still recorded. See
+//! CIL series are still recorded. Each hook left out is listed in the
+//! sampler's status as unsupported, so `rezolus status` reports it. See
 //! docs/journal/2026-09-29-xfs-samplers.md (step 2).
 
 const NAME: &str = "xfs_log";
@@ -87,8 +88,9 @@ fn handle_cgroup_info(data: &[u8]) -> i32 {
     process_cgroup_info::<bpf::types::cgroup_info>(data, &CGROUP_IDENTITY)
 }
 
-/// Which programs to load, from the kernel's BTF: the names to disable and
-/// the (program, capability) pairs required. The log-space pair is always
+/// Which programs to load, from the kernel's BTF: the twins to disable, the
+/// (program, capability) pairs required, and the (program, capability,
+/// reason) triples this kernel cannot run. The log-space pair is always
 /// required; the whole-log force pair only where fentry can attach to
 /// `xfs_log_force` (`has_force`); the fsync path's force is one of two
 /// functions by kernel version, and the CIL wait is optional.
@@ -97,8 +99,9 @@ fn select_programs(
     has_force_seq: bool,
     has_force_lsn: bool,
     has_cil_wait: bool,
-) -> (Vec<&'static str>, Vec<(&'static str, &'static str)>) {
+) -> crate::agent::bpf::ProgramSelection {
     let mut disabled = Vec::new();
+    let mut unavailable = Vec::new();
     let mut required = vec![
         ("xfs_log_grant_sleep", "log space wait latency"),
         ("xfs_log_grant_wake", "log space wait latency"),
@@ -108,8 +111,9 @@ fn select_programs(
         required.push(("xfs_log_force_fentry", "log force latency"));
         required.push(("xfs_log_force_fexit", "log force latency"));
     } else {
-        disabled.push("xfs_log_force_fentry");
-        disabled.push("xfs_log_force_fexit");
+        const REASON: &str = "fentry cannot attach to xfs_log_force on this kernel";
+        unavailable.push(("xfs_log_force_fentry", "log force latency", REASON));
+        unavailable.push(("xfs_log_force_fexit", "log force latency", REASON));
     }
 
     // The two are the same function under two names across kernel versions;
@@ -125,19 +129,33 @@ fn select_programs(
         disabled.push("xfs_log_force_seq_fentry");
         disabled.push("xfs_log_force_seq_fexit");
     } else {
-        disabled.push("xfs_log_force_seq_fentry");
-        disabled.push("xfs_log_force_seq_fexit");
-        disabled.push("xfs_log_force_lsn_fentry");
-        disabled.push("xfs_log_force_lsn_fexit");
+        const REASON: &str =
+            "fentry can attach to neither xfs_log_force_seq nor xfs_log_force_lsn on this kernel";
+        for prog in [
+            "xfs_log_force_seq_fentry",
+            "xfs_log_force_seq_fexit",
+            "xfs_log_force_lsn_fentry",
+            "xfs_log_force_lsn_fexit",
+        ] {
+            unavailable.push((prog, "fsync log force latency", REASON));
+        }
     }
 
     if has_cil_wait {
         required.push(("xfs_log_cil_wait", "CIL wait count"));
     } else {
-        disabled.push("xfs_log_cil_wait");
+        unavailable.push((
+            "xfs_log_cil_wait",
+            "CIL wait count",
+            "the kernel's BTF has no xfs_log_cil_wait tracepoint",
+        ));
     }
 
-    (disabled, required)
+    crate::agent::bpf::ProgramSelection {
+        disabled,
+        required,
+        unavailable,
+    }
 }
 
 /// Kernel modules this sampler needs loaded; see `samplers::deferred`. xfs
@@ -207,8 +225,7 @@ fn init_now(config: Arc<Config>) -> SamplerResult {
         info!("{NAME}: the kernel's BTF has no xfs_log_cil_wait; the CIL wait count reads 0");
     }
 
-    let (disabled, required) =
-        select_programs(has_force, has_force_seq, has_force_lsn, has_cil_wait);
+    let selection = select_programs(has_force, has_force_seq, has_force_lsn, has_cil_wait);
 
     // Order MUST match the C_* indices in mod.bpf.c: waits (space, force,
     // cil), then time (space, force).
@@ -242,8 +259,9 @@ fn init_now(config: Arc<Config>) -> SamplerResult {
     // distinguished by `wait` — see stats.rs.
     .histogram("space_latency", &XFS_LOG_WAIT_LATENCY_SPACE, &LATENCIES_ACQ)
     .histogram("force_latency", &XFS_LOG_WAIT_LATENCY_FORCE, &LATENCIES_ACQ)
-    .disabled_programs(&disabled)
-    .required_programs(&required)
+    .disabled_programs(&selection.disabled)
+    .required_programs(&selection.required)
+    .unavailable_programs(&selection.unavailable)
     // The switch is read-only data the verifier folds at load (see
     // `cgroup_attribution` in mod.bpf.c); the cgroup maps and their series
     // exist only when it is on.
@@ -349,63 +367,76 @@ mod tests {
     /// the kernel has, and none when it has neither.
     #[test]
     fn the_fsync_force_pair_follows_the_kernels_function_name() {
-        let (disabled, required) = select_programs(true, true, false, true);
-        assert!(required
-            .iter()
-            .any(|(p, _)| *p == "xfs_log_force_seq_fexit"));
-        assert!(disabled.contains(&"xfs_log_force_lsn_fentry"));
-        assert!(!disabled.contains(&"xfs_log_cil_wait"));
+        let s = select_programs(true, true, false, true);
+        assert!(s.requires("xfs_log_force_seq_fexit"));
+        assert!(s.disabled.contains(&"xfs_log_force_lsn_fentry"));
+        assert!(s.requires("xfs_log_cil_wait"));
+        assert!(s.unavailable.is_empty());
 
-        let (disabled, required) = select_programs(true, false, true, false);
-        assert!(required
-            .iter()
-            .any(|(p, _)| *p == "xfs_log_force_lsn_fexit"));
-        assert!(disabled.contains(&"xfs_log_force_seq_fentry"));
-        assert!(disabled.contains(&"xfs_log_cil_wait"));
+        let s = select_programs(true, false, true, false);
+        assert!(s.requires("xfs_log_force_lsn_fexit"));
+        assert!(s.disabled.contains(&"xfs_log_force_seq_fentry"));
+        assert!(s.lacks("xfs_log_cil_wait"));
 
-        let (disabled, required) = select_programs(true, false, false, false);
-        assert!(disabled.contains(&"xfs_log_force_seq_fentry"));
-        assert!(disabled.contains(&"xfs_log_force_lsn_fentry"));
-        assert!(!required.iter().any(|(p, _)| p.contains("force_seq")));
-        assert!(!required.iter().any(|(p, _)| p.contains("force_lsn")));
+        let s = select_programs(true, false, false, false);
+        for prog in [
+            "xfs_log_force_seq_fentry",
+            "xfs_log_force_seq_fexit",
+            "xfs_log_force_lsn_fentry",
+            "xfs_log_force_lsn_fexit",
+        ] {
+            assert!(s.lacks(prog), "{prog} not reported unavailable");
+        }
+        assert!(!s.required.iter().any(|(p, _)| p.contains("force_seq")));
+        assert!(!s.required.iter().any(|(p, _)| p.contains("force_lsn")));
     }
 
-    /// No program is both disabled and required, and the grant pair and the
-    /// whole-log force pair are always required.
+    /// Every program is in exactly one of the three lists, and the grant
+    /// pair is always required.
     #[test]
-    fn disabled_and_required_are_disjoint() {
-        for (seq, lsn, cil) in [
-            (true, false, true),
-            (false, true, false),
-            (false, false, true),
-        ] {
-            let (disabled, required) = select_programs(true, seq, lsn, cil);
-            for (prog, _) in &required {
-                assert!(
-                    !disabled.contains(prog),
-                    "{prog} both disabled and required"
-                );
+    fn every_program_is_selected_once() {
+        let all = [
+            "xfs_log_grant_sleep",
+            "xfs_log_grant_wake",
+            "xfs_log_force_fentry",
+            "xfs_log_force_fexit",
+            "xfs_log_force_seq_fentry",
+            "xfs_log_force_seq_fexit",
+            "xfs_log_force_lsn_fentry",
+            "xfs_log_force_lsn_fexit",
+            "xfs_log_cil_wait",
+        ];
+        for force in [true, false] {
+            for (seq, lsn) in [(true, false), (false, true), (false, false)] {
+                for cil in [true, false] {
+                    let s = select_programs(force, seq, lsn, cil);
+                    for prog in all {
+                        let n = s.disabled.iter().filter(|p| **p == prog).count()
+                            + s.required.iter().filter(|(p, _)| *p == prog).count()
+                            + s.unavailable.iter().filter(|(p, _, _)| *p == prog).count();
+                        assert_eq!(n, 1, "{prog} selected {n} times");
+                    }
+                    assert!(s.requires("xfs_log_grant_wake"));
+                }
             }
-            assert!(required.iter().any(|(p, _)| *p == "xfs_log_grant_wake"));
-            assert!(required.iter().any(|(p, _)| *p == "xfs_log_force_fexit"));
         }
     }
 
     /// Where fentry cannot attach (aarch64 before 6.4), every force program
-    /// is disabled and the grant and CIL tracepoints still load.
+    /// is reported unavailable and the grant and CIL tracepoints still load.
     #[test]
     fn without_fentry_the_tracepoints_still_load() {
-        let (disabled, required) = select_programs(false, false, false, true);
+        let s = select_programs(false, false, false, true);
         for prog in [
             "xfs_log_force_fentry",
             "xfs_log_force_fexit",
             "xfs_log_force_seq_fentry",
             "xfs_log_force_lsn_fexit",
         ] {
-            assert!(disabled.contains(&prog), "{prog} not disabled");
+            assert!(s.lacks(prog), "{prog} not reported unavailable");
         }
-        assert!(!required.iter().any(|(p, _)| p.contains("force")));
-        assert!(required.iter().any(|(p, _)| *p == "xfs_log_grant_sleep"));
-        assert!(required.iter().any(|(p, _)| *p == "xfs_log_cil_wait"));
+        assert!(!s.required.iter().any(|(p, _)| p.contains("force")));
+        assert!(s.requires("xfs_log_grant_sleep"));
+        assert!(s.requires("xfs_log_cil_wait"));
     }
 }
