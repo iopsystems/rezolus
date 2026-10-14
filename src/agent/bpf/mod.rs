@@ -8,6 +8,7 @@ mod sync_primitive;
 pub use builder::Builder as BpfBuilder;
 pub use builder::{BpfProgStats, PerfEvent};
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -172,20 +173,7 @@ fn release_version(release: &str) -> Option<(u32, u32)> {
 /// arguments and, for `fexit`, the return value by position, and a program
 /// written for one arity reads the wrong slot on the other without an error.
 pub fn kernel_btf_func_arg_count(name: &str) -> Option<u32> {
-    if !kernel_has_btf() {
-        return None;
-    }
-
-    let vmlinux = RawBtf::parse(Path::new("/sys/kernel/btf/vmlinux"), None)?;
-
-    if let Some(n) = vmlinux.func_arg_count(name) {
-        return Some(n);
-    }
-
-    module_btf_paths(Path::new("/sys/kernel/btf"))
-        .iter()
-        .filter_map(|path| RawBtf::parse(path, Some(&vmlinux)))
-        .find_map(|btf| btf.func_arg_count(name))
+    with_kernel_btf(|btf| btf.find(|index| index.funcs.get(name)))?.flatten()
 }
 
 /// Returns true if the running kernel's BTF — vmlinux **or any loaded
@@ -204,36 +192,24 @@ pub fn kernel_btf_func_arg_count(name: &str) -> Option<u32> {
 /// back to the `raw_tp` twin, whose attach failure on a kernel without the
 /// tracepoint at all is an ENOENT the builder tolerates.
 ///
-/// Not cached: callers ask once per hook at sampler init. Returns false when
-/// there is no kernel BTF to consult.
+/// Returns false when there is no kernel BTF to consult.
 pub fn kernel_btf_has_tracepoints(names: &[&str]) -> bool {
-    if !kernel_has_btf() {
-        return false;
-    }
+    with_kernel_btf(|btf| {
+        let mut all = true;
 
-    let Some(vmlinux) = RawBtf::parse(Path::new("/sys/kernel/btf/vmlinux"), None) else {
-        return false;
-    };
-
-    // Declared after `vmlinux` so it drops first: a split BTF refers to its
-    // base for the whole of its life.
-    let modules: Vec<RawBtf> = module_btf_paths(Path::new("/sys/kernel/btf"))
-        .iter()
-        .filter_map(|path| RawBtf::parse(path, Some(&vmlinux)))
-        .collect();
-
-    let mut all = true;
-
-    for name in names {
-        let typedef = format!("btf_trace_{name}");
-
-        if !vmlinux.has_typedef(&typedef) && !modules.iter().any(|m| m.has_typedef(&typedef)) {
-            debug!("kernel BTF (vmlinux and modules) has no tracepoint `{name}`");
-            all = false;
+        for name in names {
+            if btf
+                .find(|index| index.tracepoints.contains(name).then_some(()))
+                .is_none()
+            {
+                debug!("kernel BTF (vmlinux and modules) has no tracepoint `{name}`");
+                all = false;
+            }
         }
-    }
 
-    all
+        all
+    })
+    .unwrap_or(false)
 }
 
 /// Whether the running kernel defines the BPF helper `name` (for example
@@ -255,21 +231,261 @@ pub fn kernel_btf_has_tracepoints(names: &[&str]) -> bool {
 /// Returns false when there is no kernel BTF to consult.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn kernel_btf_has_helper(name: &str) -> bool {
-    if !kernel_has_btf() {
-        return false;
-    }
-
-    let Some(vmlinux) = RawBtf::parse(Path::new("/sys/kernel/btf/vmlinux"), None) else {
-        return false;
-    };
-
-    let found = vmlinux.has_typedef(&format!("btf_{name}"));
+    let found = with_kernel_btf(|btf| btf.vmlinux.helpers.contains(name)).unwrap_or(false);
 
     if !found {
         debug!("kernel BTF has no BPF helper `{name}`");
     }
 
     found
+}
+
+/// The number of arguments tracepoint `name` passes to a `tp_btf`/`raw_tp`
+/// program on the running kernel, from vmlinux or module BTF, or `None` when
+/// no BTF describes it.
+///
+/// A tracepoint's `TP_PROTO` can change between kernel versions, and a
+/// `tp_btf`/`raw_tp` program reads its arguments by position, so a program
+/// written for one arity reads the wrong argument on a kernel with the other
+/// without any error. A sampler that hooks such a tracepoint keeps one program
+/// per known arity and selects on this at init; an unknown arity disables the
+/// hook and reports it unsupported. `kernel_btf_has_tracepoints` is the
+/// existence check this refines.
+pub fn kernel_btf_tracepoint_arg_count(name: &str) -> Option<u32> {
+    with_kernel_btf(|btf| btf.find(|index| index.tracepoints.get(name)))?.flatten()
+}
+
+/// The kernel BTF index the queries above share, built on first use.
+static KERNEL_BTF: std::sync::Mutex<Option<KernelBtf>> = std::sync::Mutex::new(None);
+
+/// Runs `f` on the kernel's BTF index, first indexing vmlinux if this is the
+/// first query and any module BTF that appeared since the last one. `None`
+/// when the kernel has no BTF or vmlinux's does not parse.
+///
+/// Module BTF is listed again on every call because a module can load after
+/// the agent starts: a sampler that waits for its module
+/// (`samplers::deferred`) initialises once the module has loaded and asks
+/// about functions and tracepoints the module defines.
+fn with_kernel_btf<T>(f: impl FnOnce(&KernelBtf) -> T) -> Option<T> {
+    if !kernel_has_btf() {
+        return None;
+    }
+
+    let mut guard = KERNEL_BTF.lock().unwrap_or_else(|e| e.into_inner());
+
+    if guard.is_none() {
+        let vmlinux = RawBtf::parse(Path::new("/sys/kernel/btf/vmlinux"), None)?;
+        *guard = Some(KernelBtf {
+            vmlinux: BtfIndex::build(&vmlinux),
+            modules: Vec::new(),
+        });
+    }
+
+    let btf = guard.as_mut()?;
+    btf.refresh(
+        Path::new("/sys/kernel/btf/vmlinux"),
+        Path::new("/sys/kernel/btf"),
+    );
+
+    Some(f(btf))
+}
+
+/// The indexed BTF of vmlinux and of each loaded module.
+struct KernelBtf {
+    vmlinux: BtfIndex,
+    /// The modules listed under `/sys/kernel/btf` at the last refresh, in
+    /// listing order, less any skipped because vmlinux did not parse; `None`
+    /// for one whose BTF did not parse.
+    modules: Vec<(std::ffi::OsString, Option<BtfIndex>)>,
+}
+
+impl KernelBtf {
+    /// Lists the module BTF in `dir`, keeps the entry of each module still
+    /// listed, and indexes each module not listed at the last refresh. A
+    /// module that a refresh found unlisted is read again when it reappears;
+    /// one unloaded and loaded again between two refreshes keeps its earlier
+    /// entry. vmlinux is parsed again, as the base of their split BTF, only
+    /// when there is a module to index; when it does not parse, those
+    /// modules are left out and tried again at the next refresh.
+    fn refresh(&mut self, vmlinux: &Path, dir: &Path) {
+        let mut previous: HashMap<std::ffi::OsString, Option<BtfIndex>> =
+            std::mem::take(&mut self.modules).into_iter().collect();
+        let mut base: Option<Option<RawBtf>> = None;
+
+        for path in module_btf_paths(dir) {
+            let Some(name) = path.file_name() else {
+                continue;
+            };
+
+            if let Some(index) = previous.remove(name) {
+                self.modules.push((name.to_owned(), index));
+                continue;
+            }
+
+            let Some(base) = base.get_or_insert_with(|| RawBtf::parse(vmlinux, None)) else {
+                continue;
+            };
+            let index = RawBtf::parse(&path, Some(base)).map(|btf| BtfIndex::build(&btf));
+            self.modules.push((name.to_owned(), index));
+        }
+    }
+
+    /// The first answer `get` gives, from vmlinux and then from each loaded
+    /// module. vmlinux comes first because a name it defines is the one
+    /// libbpf resolves.
+    fn find<T>(&self, get: impl Fn(&BtfIndex) -> Option<T>) -> Option<T> {
+        get(&self.vmlinux).or_else(|| {
+            self.modules
+                .iter()
+                .filter_map(|(_, index)| index.as_ref())
+                .find_map(get)
+        })
+    }
+}
+
+/// Names mapped to values, stored as one string of names and a vector of
+/// entries sorted by name, so an index of tens of thousands of names is two
+/// allocations.
+struct NameMap<V> {
+    names: String,
+    /// (offset into `names`, length, value).
+    entries: Vec<(u32, u32, V)>,
+}
+
+impl<V: Copy> NameMap<V> {
+    fn new() -> Self {
+        Self {
+            names: String::new(),
+            entries: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, name: &str, value: V) {
+        let offset = self.names.len() as u32;
+        self.names.push_str(name);
+        self.entries.push((offset, name.len() as u32, value));
+    }
+
+    /// Sorts the entries by name. Of several entries with one name, the one
+    /// pushed first is kept.
+    fn finish(mut self) -> Self {
+        let names = &self.names;
+        let name =
+            |&(offset, len, _): &(u32, u32, V)| &names[offset as usize..(offset + len) as usize];
+
+        // A stable sort keeps entries with one name in push order, and
+        // `dedup_by` keeps the first of each run.
+        self.entries.sort_by(|a, b| name(a).cmp(name(b)));
+        self.entries.dedup_by(|a, b| name(a) == name(b));
+        self.entries.shrink_to_fit();
+        self.names.shrink_to_fit();
+        self
+    }
+
+    fn name(&self, &(offset, len, _): &(u32, u32, V)) -> &str {
+        &self.names[offset as usize..(offset + len) as usize]
+    }
+
+    fn get(&self, name: &str) -> Option<V> {
+        let i = self
+            .entries
+            .binary_search_by(|entry| self.name(entry).cmp(name))
+            .ok()?;
+        Some(self.entries[i].2)
+    }
+
+    fn contains(&self, name: &str) -> bool {
+        self.get(name).is_some()
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+/// What the queries above read from one BTF object, read in a single pass
+/// over its types. `btf__find_by_name_kind` scans linearly from type id 1
+/// unless the BTF is sorted by name, and on a module's split BTF it searches
+/// vmlinux first; with the object read once into these maps, a query is a
+/// binary search.
+///
+/// When a name occurs more than once (static functions in different
+/// translation units), the entry is the one with the lowest type id, which is
+/// the one `btf__find_by_name_kind` returns.
+struct BtfIndex {
+    /// Function name to parameter count; `None` when the function's type is
+    /// not a well-formed prototype.
+    funcs: NameMap<Option<u32>>,
+    /// Tracepoint name (its `btf_trace_<name>` typedef, prefix removed) to
+    /// the number of arguments it passes; `None` when the typedef is not
+    /// shaped as a tracepoint's.
+    tracepoints: NameMap<Option<u32>>,
+    /// Names `<name>` for which the BTF has a typedef `btf_<name>`, which
+    /// `BPF_CALL_<n>` emits for each BPF helper. Tracepoint typedefs are left
+    /// out, and so is module BTF: [`kernel_btf_has_helper`] reads vmlinux's
+    /// only.
+    helpers: NameMap<()>,
+}
+
+impl BtfIndex {
+    /// Indexes the types `btf` itself defines: all of them for vmlinux, and
+    /// for a module's split BTF only those after its base's, since the
+    /// base's are in the vmlinux index.
+    fn build(btf: &RawBtf) -> Self {
+        let mut funcs = NameMap::new();
+        let mut tracepoints = NameMap::new();
+        let mut helpers = NameMap::new();
+
+        // SAFETY: `btf.0` is a live BTF object, as is its base when it has
+        // one; the ids passed to `btf__type_by_id` are below its type count,
+        // and the name pointers are read before `btf` is freed.
+        unsafe {
+            let ptr = btf.0.as_ptr();
+            let base = libbpf_sys::btf__base_btf(ptr);
+            let first = if base.is_null() {
+                1
+            } else {
+                libbpf_sys::btf__type_cnt(base)
+            };
+
+            for id in first..libbpf_sys::btf__type_cnt(ptr) {
+                let ty = libbpf_sys::btf__type_by_id(ptr, id);
+                if ty.is_null() {
+                    continue;
+                }
+
+                let kind = btf_kind(&*ty);
+                if kind != libbpf_sys::BTF_KIND_FUNC && kind != libbpf_sys::BTF_KIND_TYPEDEF {
+                    continue;
+                }
+
+                let name = libbpf_sys::btf__name_by_offset(ptr, (*ty).name_off);
+                if name.is_null() {
+                    continue;
+                }
+                let Ok(name) = std::ffi::CStr::from_ptr(name).to_str() else {
+                    continue;
+                };
+
+                if kind == libbpf_sys::BTF_KIND_FUNC {
+                    funcs.push(name, btf.func_arg_count_of(id));
+                } else if let Some(tracepoint) = name.strip_prefix("btf_trace_") {
+                    tracepoints.push(tracepoint, btf.tracepoint_arg_count_of(id));
+                } else if let Some(helper) = name.strip_prefix("btf_") {
+                    if base.is_null() {
+                        helpers.push(helper, ());
+                    }
+                }
+            }
+        }
+
+        Self {
+            funcs: funcs.finish(),
+            tracepoints: tracepoints.finish(),
+            helpers: helpers.finish(),
+        }
+    }
 }
 
 /// The module BTF files under `dir` (`/sys/kernel/btf/<module>`, one per
@@ -315,47 +531,43 @@ impl RawBtf {
         std::ptr::NonNull::new(ptr).map(Self)
     }
 
-    /// Whether this BTF declares a typedef of that name. For a module's
-    /// split BTF the search covers its base too, so a hit may come from
-    /// vmlinux; callers check vmlinux first, so the answer is the same.
-    fn has_typedef(&self, name: &str) -> bool {
-        self.find(name, libbpf_sys::BTF_KIND_TYPEDEF) >= 0
-    }
-
-    /// Whether this BTF declares a function of that name (base included, as
-    /// for [`has_typedef`](Self::has_typedef)).
+    /// The id of the type named `name` of `kind` in this BTF, base included,
+    /// or `None`. The tests check [`BtfIndex`] against this.
     #[cfg(test)]
-    fn has_func(&self, name: &str) -> bool {
-        self.find(name, libbpf_sys::BTF_KIND_FUNC) >= 0
-    }
-
-    /// The id of the type named `name` of `kind` in this BTF, or negative.
-    /// `btf__find_by_name_kind` walks from id 1, so on a split BTF it walks
-    /// the base's types as well; a miss therefore costs a walk of vmlinux per
-    /// module, paid once at sampler init.
-    fn find(&self, name: &str, kind: u32) -> i32 {
-        let Ok(cname) = std::ffi::CString::new(name) else {
-            return -1;
-        };
+    fn find(&self, name: &str, kind: u32) -> Option<u32> {
+        let cname = std::ffi::CString::new(name).ok()?;
 
         // SAFETY: `self.0` is a live BTF object and `cname` a valid C string.
-        unsafe { libbpf_sys::btf__find_by_name_kind(self.0.as_ptr(), cname.as_ptr(), kind) }
+        let id =
+            unsafe { libbpf_sys::btf__find_by_name_kind(self.0.as_ptr(), cname.as_ptr(), kind) };
+        u32::try_from(id).ok()
     }
 
-    /// The number of parameters function `name` takes, from its BTF: a
-    /// `FUNC` refers to a `FUNC_PROTO` whose vlen is the parameter count.
-    /// `None` if this BTF has no such function.
+    /// [`func_arg_count_of`](Self::func_arg_count_of) for the function named
+    /// `name`, found by libbpf.
+    #[cfg(test)]
     fn func_arg_count(&self, name: &str) -> Option<u32> {
-        let id = self.find(name, libbpf_sys::BTF_KIND_FUNC);
-        if id < 0 {
-            return None;
-        }
+        self.func_arg_count_of(self.find(name, libbpf_sys::BTF_KIND_FUNC)?)
+    }
 
-        // SAFETY: `self.0` is a live BTF object; every id passed to
-        // `btf__type_by_id` came from that object, and the returned pointer is
-        // read before the object is freed.
+    /// [`tracepoint_arg_count_of`](Self::tracepoint_arg_count_of) for the
+    /// tracepoint named `name`, found by libbpf.
+    #[cfg(test)]
+    fn tracepoint_arg_count(&self, name: &str) -> Option<u32> {
+        self.tracepoint_arg_count_of(
+            self.find(&format!("btf_trace_{name}"), libbpf_sys::BTF_KIND_TYPEDEF)?,
+        )
+    }
+
+    /// The number of parameters of the function with type id `id`, from its
+    /// BTF: a `FUNC` refers to a `FUNC_PROTO` whose vlen is the parameter
+    /// count. `None` if `id` is not a `FUNC` with such a prototype.
+    fn func_arg_count_of(&self, id: u32) -> Option<u32> {
+        // SAFETY: `self.0` is a live BTF object, `btf__type_by_id` returns null
+        // for an id it does not have, and the returned pointer is read before
+        // the object is freed.
         unsafe {
-            let func = libbpf_sys::btf__type_by_id(self.0.as_ptr(), id as u32);
+            let func = libbpf_sys::btf__type_by_id(self.0.as_ptr(), id);
             if func.is_null() || btf_kind(&*func) != libbpf_sys::BTF_KIND_FUNC {
                 return None;
             }
@@ -368,33 +580,20 @@ impl RawBtf {
         }
     }
 
-    /// The number of arguments the tracepoint `name` passes to a `tp_btf` or
-    /// `raw_tp` program, from its `btf_trace_<name>` typedef: the typedef
-    /// names a pointer to a function prototype whose first parameter is the
-    /// tracepoint's `void *` context and whose remaining parameters are the
-    /// `TP_PROTO` arguments, in order. `None` if this BTF has no such
-    /// typedef or it is not shaped that way.
-    fn tracepoint_arg_count(&self, name: &str) -> Option<u32> {
-        let Ok(cname) = std::ffi::CString::new(format!("btf_trace_{name}")) else {
-            return None;
-        };
-
-        // SAFETY: `self.0` is a live BTF object; every id passed to
-        // `btf__type_by_id` came from that object, and the returned pointer is
-        // read before the object is freed.
+    /// The number of arguments a tracepoint passes to a `tp_btf` or `raw_tp`
+    /// program, from its `btf_trace_<name>` typedef with type id `id`: the
+    /// typedef names a pointer to a function prototype whose first parameter
+    /// is the tracepoint's `void *` context and whose remaining parameters
+    /// are the `TP_PROTO` arguments, in order. `None` if the typedef is not
+    /// shaped that way.
+    fn tracepoint_arg_count_of(&self, id: u32) -> Option<u32> {
+        // SAFETY: `self.0` is a live BTF object, `btf__type_by_id` returns null
+        // for an id it does not have, and the returned pointers are read
+        // before the object is freed.
         unsafe {
-            let id = libbpf_sys::btf__find_by_name_kind(
-                self.0.as_ptr(),
-                cname.as_ptr(),
-                libbpf_sys::BTF_KIND_TYPEDEF,
-            );
-            if id < 0 {
-                return None;
-            }
-
             // typedef -> ptr -> func_proto; `type` on the first two is the
             // referenced type id, and vlen on the last is the parameter count.
-            let mut ty = libbpf_sys::btf__type_by_id(self.0.as_ptr(), id as u32);
+            let mut ty = libbpf_sys::btf__type_by_id(self.0.as_ptr(), id);
             for expected in [libbpf_sys::BTF_KIND_TYPEDEF, libbpf_sys::BTF_KIND_PTR] {
                 if ty.is_null() || btf_kind(&*ty) != expected {
                     return None;
@@ -417,34 +616,6 @@ fn btf_kind(ty: &libbpf_sys::btf_type) -> u32 {
     (ty.info >> 24) & 0x1f
 }
 
-/// The number of arguments tracepoint `name` passes to a `tp_btf`/`raw_tp`
-/// program on the running kernel, from vmlinux or module BTF, or `None` when
-/// no BTF describes it.
-///
-/// A tracepoint's `TP_PROTO` can change between kernel versions, and a
-/// `tp_btf`/`raw_tp` program reads its arguments by position, so a program
-/// written for one arity reads the wrong argument on a kernel with the other
-/// without any error. A sampler that hooks such a tracepoint keeps one program
-/// per known arity and selects on this at init; an unknown arity disables the
-/// hook rather than guessing. `kernel_btf_has_tracepoints` is the existence
-/// check this refines.
-pub fn kernel_btf_tracepoint_arg_count(name: &str) -> Option<u32> {
-    if !kernel_has_btf() {
-        return None;
-    }
-
-    let vmlinux = RawBtf::parse(Path::new("/sys/kernel/btf/vmlinux"), None)?;
-
-    if let Some(n) = vmlinux.tracepoint_arg_count(name) {
-        return Some(n);
-    }
-
-    module_btf_paths(Path::new("/sys/kernel/btf"))
-        .iter()
-        .filter_map(|path| RawBtf::parse(path, Some(&vmlinux)))
-        .find_map(|btf| btf.tracepoint_arg_count(name))
-}
-
 impl Drop for RawBtf {
     fn drop(&mut self) {
         // SAFETY: `self.0` came from `btf__parse`/`btf__parse_split` and is
@@ -455,7 +626,8 @@ impl Drop for RawBtf {
 
 #[cfg(test)]
 mod btf_tests {
-    use super::{module_btf_paths, RawBtf};
+    use super::{btf_kind, module_btf_paths, BtfIndex, KernelBtf, NameMap, RawBtf};
+    use std::collections::HashMap;
     use std::path::Path;
 
     /// A kernel without module BTF has no `/sys/kernel/btf/<module>` files;
@@ -472,6 +644,62 @@ mod btf_tests {
         assert!(RawBtf::parse(&manifest, None).is_none());
     }
 
+    /// Of two entries with one name the first pushed is kept, as libbpf
+    /// returns the lowest type id.
+    #[test]
+    fn a_name_map_keeps_the_first_entry_of_each_name() {
+        // Enough entries that an unstable sort would reorder the
+        // duplicates; std sorts short slices by insertion, which is stable.
+        let mut map = NameMap::new();
+        for i in 0..64 {
+            map.push(if i % 2 == 0 { "dup" } else { "other" }, i);
+            map.push(&format!("n{i:02}"), 100 + i);
+        }
+        map.push("a", 200);
+        let map = map.finish();
+
+        assert_eq!(map.len(), 67);
+        assert_eq!(map.get("dup"), Some(0));
+        assert_eq!(map.get("other"), Some(1));
+        assert_eq!(map.get("n00"), Some(100));
+        assert_eq!(map.get("n63"), Some(163));
+        assert_eq!(map.get("a"), Some(200));
+        assert_eq!(map.get("c"), None);
+        assert_eq!(map.get(""), None);
+    }
+
+    fn index(funcs: &[(&str, u32)]) -> BtfIndex {
+        let mut map = NameMap::new();
+        for (name, n) in funcs {
+            map.push(name, Some(*n));
+        }
+        BtfIndex {
+            funcs: map.finish(),
+            tracepoints: NameMap::new(),
+            helpers: NameMap::new(),
+        }
+    }
+
+    /// vmlinux answers before any module, modules answer in order, and a
+    /// module whose BTF did not parse answers nothing.
+    #[test]
+    fn find_prefers_vmlinux_then_modules_in_order() {
+        let btf = KernelBtf {
+            vmlinux: index(&[("shared", 2)]),
+            modules: vec![
+                ("a".into(), Some(index(&[("shared", 7), ("in_both", 3)]))),
+                ("unparsed".into(), None),
+                ("b".into(), Some(index(&[("in_both", 5), ("in_b", 6)]))),
+            ],
+        };
+        let arg_count = |name: &str| btf.find(|i| i.funcs.get(name)).flatten();
+
+        assert_eq!(arg_count("shared"), Some(2));
+        assert_eq!(arg_count("in_both"), Some(3));
+        assert_eq!(arg_count("in_b"), Some(6));
+        assert_eq!(arg_count("absent"), None);
+    }
+
     /// On a kernel with its own BTF, vmlinux declares the scheduler's
     /// tracepoints, and a module's split BTF parses against it. Skipped
     /// where there is no kernel BTF.
@@ -482,21 +710,23 @@ mod btf_tests {
             return;
         }
         let vmlinux = RawBtf::parse(vmlinux_path, None).expect("vmlinux BTF parses");
-        assert!(vmlinux.has_typedef("btf_trace_sched_switch"));
-        assert!(!vmlinux.has_typedef("btf_trace_no_such_tracepoint"));
+        let index = BtfIndex::build(&vmlinux);
         // sched_switch has passed 3 (through 5.13) or 4 arguments (5.14+,
         // `prev_state` added); any other count means the walk is wrong.
-        let n = vmlinux
-            .tracepoint_arg_count("sched_switch")
+        let n = index
+            .tracepoints
+            .get("sched_switch")
+            .flatten()
             .expect("sched_switch is a tracepoint");
         assert!((3..=4).contains(&n), "sched_switch has {n} arguments");
-        assert_eq!(vmlinux.tracepoint_arg_count("no_such_tracepoint"), None);
+        assert!(!index.tracepoints.contains("no_such_tracepoint"));
         // vfs_fsync_range(struct file *, loff_t, loff_t, int) on every kernel
         // since 2.6; the count is the FUNC_PROTO's vlen, not vlen - 1 as for a
         // tracepoint's typedef (no leading context pointer).
-        assert!(vmlinux.has_func("vfs_fsync_range"));
-        assert_eq!(vmlinux.func_arg_count("vfs_fsync_range"), Some(4));
-        assert_eq!(vmlinux.func_arg_count("no_such_function"), None);
+        assert_eq!(index.funcs.get("vfs_fsync_range"), Some(Some(4)));
+        assert!(!index.funcs.contains("no_such_function"));
+        // BPF_CALL_2(bpf_map_lookup_elem, ...) has been in every kernel with BPF.
+        assert!(index.helpers.contains("bpf_map_lookup_elem"));
         for path in module_btf_paths(Path::new("/sys/kernel/btf")) {
             assert!(
                 RawBtf::parse(&path, Some(&vmlinux)).is_some(),
@@ -504,6 +734,189 @@ mod btf_tests {
                 path.display()
             );
         }
+    }
+
+    /// The functions and `btf_trace_*` typedefs `raw` defines itself (for
+    /// split BTF, after its base), as (id, kind, name), in id order.
+    fn own_types(raw: &RawBtf) -> Vec<(u32, u32, String)> {
+        let mut out = Vec::new();
+
+        // SAFETY: `raw.0` is a live BTF object, as is its base when it has
+        // one; every id is below its type count. libbpf checked every name
+        // offset when it parsed the object (`btf_sanity_check`), so
+        // `btf__name_by_offset` does not return null for them, and each name
+        // is copied before `raw` is freed.
+        unsafe {
+            let ptr = raw.0.as_ptr();
+            let base = libbpf_sys::btf__base_btf(ptr);
+            let first = if base.is_null() {
+                1
+            } else {
+                libbpf_sys::btf__type_cnt(base)
+            };
+            for id in first..libbpf_sys::btf__type_cnt(ptr) {
+                let ty = libbpf_sys::btf__type_by_id(ptr, id);
+                let kind = btf_kind(&*ty);
+                let name =
+                    std::ffi::CStr::from_ptr(libbpf_sys::btf__name_by_offset(ptr, (*ty).name_off))
+                        .to_string_lossy()
+                        .into_owned();
+                if kind == libbpf_sys::BTF_KIND_FUNC
+                    || (kind == libbpf_sys::BTF_KIND_TYPEDEF && name.starts_with("btf_trace_"))
+                {
+                    out.push((id, kind, name));
+                }
+            }
+        }
+
+        out
+    }
+
+    /// Every function and tracepoint that vmlinux and each module define is
+    /// in that object's index, and for a sample of them, and for every
+    /// function name vmlinux defines twice with different arities, the
+    /// answer `KernelBtf::find` gives equals libbpf's (`btf__find_by_name_kind`,
+    /// which on split BTF searches vmlinux first, as `find` does). Skipped
+    /// where there is no kernel BTF.
+    #[test]
+    fn the_index_agrees_with_libbpf_lookups() {
+        let vmlinux_path = Path::new("/sys/kernel/btf/vmlinux");
+        if !vmlinux_path.exists() {
+            return;
+        }
+        let vmlinux = RawBtf::parse(vmlinux_path, None).expect("vmlinux BTF parses");
+        let mut btf = KernelBtf {
+            vmlinux: BtfIndex::build(&vmlinux),
+            modules: Vec::new(),
+        };
+        btf.refresh(vmlinux_path, Path::new("/sys/kernel/btf"));
+
+        let check = |raw: &RawBtf, index: &BtfIndex, step: u32| {
+            for (id, kind, name) in own_types(raw) {
+                if kind == libbpf_sys::BTF_KIND_FUNC {
+                    assert!(index.funcs.contains(&name), "function {name} not indexed");
+                    if id % step == 0 {
+                        let indexed = btf.find(|i| i.funcs.get(&name)).flatten();
+                        assert_eq!(indexed, raw.func_arg_count(&name), "function {name}");
+                    }
+                } else {
+                    let tracepoint = &name["btf_trace_".len()..];
+                    assert!(
+                        index.tracepoints.contains(tracepoint),
+                        "tracepoint {tracepoint} not indexed"
+                    );
+                    if id % step == 0 {
+                        let indexed = btf.find(|i| i.tracepoints.get(tracepoint)).flatten();
+                        assert_eq!(
+                            indexed,
+                            raw.tracepoint_arg_count(tracepoint),
+                            "tracepoint {tracepoint}"
+                        );
+                    }
+                }
+            }
+        };
+
+        check(&vmlinux, &btf.vmlinux, 97);
+        for path in module_btf_paths(Path::new("/sys/kernel/btf")) {
+            let name = path.file_name().unwrap();
+            let raw = RawBtf::parse(&path, Some(&vmlinux)).expect("module BTF parses");
+            let index = btf
+                .modules
+                .iter()
+                .find(|(n, _)| n == name)
+                .and_then(|(_, index)| index.as_ref())
+                .unwrap_or_else(|| panic!("module {} not indexed", path.display()));
+            check(&raw, index, 13);
+        }
+
+        // Function names vmlinux defines more than once with different
+        // arities (static functions in different translation units), where
+        // the index must keep the one libbpf finds: the lowest id.
+        let mut first: HashMap<String, Option<u32>> = HashMap::new();
+        let mut ambiguous = Vec::new();
+        for (id, kind, name) in own_types(&vmlinux) {
+            if kind != libbpf_sys::BTF_KIND_FUNC {
+                continue;
+            }
+            let n = vmlinux.func_arg_count_of(id);
+            match first.get(&name) {
+                Some(m) if *m != n => ambiguous.push(name),
+                Some(_) => {}
+                None => {
+                    first.insert(name, n);
+                }
+            }
+        }
+        eprintln!("{} ambiguous vmlinux function names", ambiguous.len());
+        for name in &ambiguous {
+            assert_eq!(
+                btf.vmlinux.funcs.get(name).flatten(),
+                vmlinux.func_arg_count(name),
+                "function {name}"
+            );
+        }
+    }
+
+    /// A module whose BTF appears after the first query is indexed by the
+    /// next refresh, one that disappears is dropped, one that appears again
+    /// is indexed again, and one whose BTF does not parse is not parsed again
+    /// while it stays listed. Uses links to the running kernel's module BTF
+    /// in a scratch directory; skipped where there is none.
+    #[test]
+    fn refresh_follows_modules_that_load_and_unload() {
+        let vmlinux_path = Path::new("/sys/kernel/btf/vmlinux");
+        let Some(module) = module_btf_paths(Path::new("/sys/kernel/btf"))
+            .into_iter()
+            .next()
+        else {
+            return;
+        };
+        let vmlinux = RawBtf::parse(vmlinux_path, None).expect("vmlinux BTF parses");
+        let name = module.file_name().unwrap().to_owned();
+
+        let dir = std::env::temp_dir().join(format!("rezolus-btf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut btf = KernelBtf {
+            vmlinux: BtfIndex::build(&vmlinux),
+            modules: Vec::new(),
+        };
+        let listed = |btf: &KernelBtf| -> Vec<std::ffi::OsString> {
+            btf.modules.iter().map(|(name, _)| name.clone()).collect()
+        };
+
+        btf.refresh(vmlinux_path, &dir);
+        assert!(listed(&btf).is_empty());
+
+        std::os::unix::fs::symlink(&module, dir.join(&name)).unwrap();
+        btf.refresh(vmlinux_path, &dir);
+        assert_eq!(listed(&btf), vec![name.clone()]);
+
+        std::fs::remove_file(dir.join(&name)).unwrap();
+        btf.refresh(vmlinux_path, &dir);
+        assert!(listed(&btf).is_empty());
+
+        std::os::unix::fs::symlink(&module, dir.join(&name)).unwrap();
+        btf.refresh(vmlinux_path, &dir);
+        assert_eq!(listed(&btf), vec![name.clone()]);
+
+        // A module whose BTF does not parse is recorded as such and not
+        // parsed again while it stays listed, even once the file would parse.
+        std::fs::remove_file(dir.join(&name)).unwrap();
+        btf.refresh(vmlinux_path, &dir);
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        std::os::unix::fs::symlink(&manifest, dir.join(&name)).unwrap();
+        btf.refresh(vmlinux_path, &dir);
+        btf.refresh(vmlinux_path, &dir);
+        assert!(matches!(btf.modules.as_slice(), [(n, None)] if *n == name));
+        std::fs::remove_file(dir.join(&name)).unwrap();
+        std::os::unix::fs::symlink(&module, dir.join(&name)).unwrap();
+        btf.refresh(vmlinux_path, &dir);
+        assert!(matches!(btf.modules.as_slice(), [(n, None)] if *n == name));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

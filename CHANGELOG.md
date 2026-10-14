@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Security
+
+- rustls 0.23.46, for RUSTSEC-2026-0346 through 0349. (#1467)
+
 ### Removed
 
 - **`record` writes `.dendro` only.** The output must end in `.dendro`
@@ -857,6 +861,9 @@
 
 - `rezolus status` and the startup summary give each unsupported hook's
   reason instead of "(no kernel support)". (#1468)
+
+- Sampler init reads kernel BTF once instead of on every query, which took
+  about 1.1 to 1.4 s of agent startup on Debian 12 and 13. (#1466)
 
 - `xfs_log`, `memory_pagecache` and `ext4_ops` report unsupported, naming each
   hook left out, where the kernel cannot run it; they read healthy before.
