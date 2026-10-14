@@ -55,6 +55,8 @@
 
 ### Changed
 
+- rustls 0.23.46, for RUSTSEC-2026-0346 through 0349. (#PRNUM)
+
 - `ext4_journal` times commit phases, handle start and checkpoints in
   nanoseconds instead of jbd2's jiffies; `phase="wait"` and
   `phase="request_delay"` are removed, `ext4_journal_handle_start_latency` is
