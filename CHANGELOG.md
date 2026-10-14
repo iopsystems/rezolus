@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Security
+
+- rustls 0.23.46, for RUSTSEC-2026-0346 through 0349. (#1467)
+
 ### Removed
 
 - **`record` writes `.dendro` only.** The output must end in `.dendro`
@@ -54,8 +58,6 @@
   last focal release; `install.sh` still installs it there, with a warning.
 
 ### Changed
-
-- rustls 0.23.46, for RUSTSEC-2026-0346 through 0349. (#1467)
 
 - `ext4_journal` times commit phases, handle start and checkpoints in
   nanoseconds instead of jbd2's jiffies; `phase="wait"` and
