@@ -96,7 +96,7 @@ fn select_programs(
         .iter()
         .any(|(n, _, _)| balance_arity == Some(*n));
     let reason = match balance_arity {
-        Some(_) => "balance_dirty_pages passes an argument count no program here is written for",
+        Some(_) => "balance_dirty_pages passes an argument count rezolus has no program for",
         None => "BTF gives no argument count for balance_dirty_pages",
     };
 
@@ -140,10 +140,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
     let arity = kernel_btf_tracepoint_arg_count(BALANCE_TRACEPOINT);
     match arity {
         Some(n) if BALANCE_PROGRAMS.iter().any(|(m, _, _)| *m == n) => {
-            debug!("{NAME} {BALANCE_TRACEPOINT} has {n} arguments")
+            debug!("{NAME}: {BALANCE_TRACEPOINT} has {n} arguments")
         }
         Some(n) => info!(
-            "{NAME}: {BALANCE_TRACEPOINT} passes {n} arguments, which no program here is written for"
+            "{NAME}: {BALANCE_TRACEPOINT} passes {n} arguments; rezolus has no program for that count"
         ),
         None => debug!("{NAME}: BTF gives no argument count for {BALANCE_TRACEPOINT}"),
     }
@@ -309,7 +309,7 @@ mod tests {
             .unavailable
             .iter()
             .all(|(_, label, reason)| *label == BALANCE_LABEL
-                && reason.contains("argument count no program")));
+                && reason.contains("argument count rezolus has no program")));
 
         for btf in [true, false] {
             let s = select_programs(|_| btf, None);
