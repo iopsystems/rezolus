@@ -84,8 +84,8 @@ cleanup:
 // fentry/kprobe twins share trace_connect()/handle_tcp_rcv_state_process(); only
 // the attach mechanism differs. fentry is the cheaper dispatch (see
 // docs/journal/2026-09-04-fentry-vs-kprobe-dispatch.md) but needs BTF, so the
-// kprobe twins are the CO-RE-only fallback and one set is disabled at load time
-// on kernel_has_btf() (see disabled_programs in mod.rs).
+// kprobe twins are the fallback; per target, one is disabled at load time on
+// kernel_can_fentry() (see disabled_programs in mod.rs).
 
 SEC("fentry/tcp_v4_connect")
 int BPF_PROG(tcp_v4_connect_fentry, struct sock* sk) {

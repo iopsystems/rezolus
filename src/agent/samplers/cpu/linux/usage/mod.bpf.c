@@ -364,8 +364,8 @@ static __noinline int handle_new_task(struct task_struct* task, u32 pid, u64 sta
 // fentry/kprobe twins share this handler; only the attach mechanism differs.
 // fentry is the cheaper dispatch (see
 // docs/journal/2026-09-04-fentry-vs-kprobe-dispatch.md) but needs BTF, so the
-// kprobe twin is the CO-RE-only fallback and one is disabled at load time on
-// kernel_has_btf() (see disabled_programs/required_programs in mod.rs). Only
+// kprobe twin is the fallback and one is disabled at load time on
+// kernel_can_fentry() (see disabled_programs/required_programs in mod.rs). Only
 // `task` is used -- the kernel bumps task->utime/stime before calling
 // cpuacct_account_field, so we read those rather than the passed index/delta.
 // `btf` is a compile-time constant: true in the fentry program, whose `task`

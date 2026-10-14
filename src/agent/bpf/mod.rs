@@ -24,67 +24,27 @@ pub fn kernel_has_btf() -> bool {
     *HAS_BTF.get_or_init(|| Path::new("/sys/kernel/btf/vmlinux").exists())
 }
 
-/// Returns true if the running kernel's BTF describes every one of `names` as a
-/// function — i.e. an `fentry`/`fexit` program may name it as an attach target.
+/// Whether an `fentry`/`fexit` program can attach to kernel function `name` on
+/// the running kernel: BTF describes it, the architecture can attach a
+/// trampoline to a kernel function, and the function's argument count is
+/// within the trampoline's limit. Callers pick the kprobe twin, or disable the
+/// hook, when this is false.
 ///
-/// [`kernel_has_btf`] answers a different, weaker question: "is there a vmlinux
-/// BTF at all". A trampoline program additionally needs ITS OWN target in that
-/// BTF, and libbpf resolves `attach_btf_id` at LOAD time — so a missing target
-/// is a load failure, which [`BpfBuilder`] treats as fatal for the whole
-/// skeleton (`set_failed`, and `rezolus status` then exits non-zero). A kprobe's
-/// equivalent miss is an ENOENT at ATTACH, which is tolerated and reported as
-/// unsupported.
-///
-/// That difference matters for any hook sitting behind a kernel config option:
-/// `cpu_bandwidth`'s three targets are all inside `CONFIG_CFS_BANDWIDTH`, so
-/// choosing its trampoline twins on `kernel_has_btf()` alone would turn "this
-/// kernel does not implement CFS bandwidth control" into a failed sampler.
-/// Selecting on this function instead falls back to the kprobe twins, which miss
-/// gracefully.
+/// [`kernel_has_btf`] answers a weaker question: "is there a vmlinux BTF at
+/// all". libbpf resolves a trampoline program's `attach_btf_id` at LOAD time,
+/// so a target missing from BTF is a load failure, which [`BpfBuilder`] treats
+/// as fatal for the whole skeleton (`set_failed`, and `rezolus status` then
+/// exits non-zero). A target that is in BTF but beyond the trampoline's reach
+/// loads and fails at attach with `ENOTSUPP`, a failed required program. A
+/// kprobe's miss is an ENOENT at attach, which is tolerated and reported as
+/// unsupported. That matters for a hook behind a kernel config option:
+/// `cpu_bandwidth`'s three targets are all inside `CONFIG_CFS_BANDWIDTH`.
 ///
 /// Module BTF counts too: libbpf resolves an `fentry`/`fexit` target against
-/// every loaded module's BTF (kernels 5.11+), so a function that lives in
-/// `ext4.ko` is attachable when `/sys/kernel/btf/ext4` describes it.
+/// every loaded module's BTF (kernels 5.11+), so a function in `ext4.ko` is
+/// attachable when `/sys/kernel/btf/ext4` describes it.
 ///
-/// Not cached: callers ask once, at sampler init, and each call parses the
-/// kernel's BTF. Returns false when there is no kernel BTF to consult.
-pub fn kernel_btf_has_funcs(names: &[&str]) -> bool {
-    if !kernel_has_btf() {
-        return false;
-    }
-
-    let Some(vmlinux) = RawBtf::parse(Path::new("/sys/kernel/btf/vmlinux"), None) else {
-        return false;
-    };
-
-    // Declared after `vmlinux` so it drops first: a split BTF refers to its
-    // base for the whole of its life.
-    let modules: Vec<RawBtf> = module_btf_paths(Path::new("/sys/kernel/btf"))
-        .iter()
-        .filter_map(|path| RawBtf::parse(path, Some(&vmlinux)))
-        .collect();
-
-    // Every name is checked, not just up to the first miss: when a sampler is
-    // about to fall back, the useful debug output names all of what is absent.
-    let mut all = true;
-
-    for name in names {
-        if !vmlinux.has_func(name) && !modules.iter().any(|m| m.has_func(name)) {
-            debug!("kernel BTF (vmlinux and modules) has no function `{name}`");
-            all = false;
-        }
-    }
-
-    all
-}
-
-/// Whether an `fentry` program can attach to kernel function `name` on the
-/// running kernel: BTF describes it, the architecture can attach a trampoline
-/// to a kernel function, and the function's argument count is within the
-/// trampoline's limit. Where any of these fails, a trampoline program loads
-/// and then fails at attach with `ENOTSUPP`, which the builder reports as a
-/// required program that failed, so callers pick the kprobe twin instead.
-/// The count is BTF's parameter count; a struct passed by value takes more
+/// The argument count is BTF's parameter count; a struct passed by value takes more
 /// than one register and is not accounted for.
 ///
 /// - x86_64: up to 6 arguments before 6.6, 12 from 6.6.
@@ -108,6 +68,39 @@ pub fn kernel_can_fentry(name: &str) -> bool {
     let config = std::fs::read_to_string(format!("/boot/config-{}", release.trim())).ok();
 
     can_fentry(std::env::consts::ARCH, &release, config.as_deref(), args)
+}
+
+/// [`kernel_can_fentry`] for every one of `names`: for a sampler whose fentry
+/// twins are chosen together.
+pub fn kernel_can_fentry_all(names: &[&str]) -> bool {
+    let mut all = true;
+
+    // Every name is checked, not just up to the first miss, so the debug log
+    // names each function that sends the sampler to its kprobes.
+    for name in names {
+        if !kernel_can_fentry(name) {
+            debug!("fentry cannot attach to `{name}` on this kernel");
+            all = false;
+        }
+    }
+
+    all
+}
+
+/// For hooks given as `(function, fentry program, kprobe program)`, the twin
+/// of each to disable: the kprobe where [`kernel_can_fentry`] holds for the
+/// function, else the fentry program.
+pub fn unused_twins(hooks: &[(&str, &'static str, &'static str)]) -> Vec<&'static str> {
+    hooks
+        .iter()
+        .map(|(function, fentry, kprobe)| {
+            if kernel_can_fentry(function) {
+                *kprobe
+            } else {
+                *fentry
+            }
+        })
+        .collect()
 }
 
 fn can_fentry(arch: &str, release: &str, config: Option<&str>, args: u32) -> bool {
@@ -174,13 +167,13 @@ pub fn kernel_btf_func_arg_count(name: &str) -> Option<u32> {
 /// its `btf_trace_<name>` typedef, so a `tp_btf` program may name it as an
 /// attach target.
 ///
-/// [`kernel_btf_has_funcs`] answers the same question for `fentry`/`fexit`
+/// [`kernel_can_fentry`] answers the same question for `fentry`/`fexit`
 /// targets. Module BTF matters for both: on a kernel with `CONFIG_EXT4_FS=m`
 /// (stock Debian amd64, for one), `btf_trace_jbd2_run_stats` is in
 /// `/sys/kernel/btf/jbd2`, not in vmlinux, and libbpf does resolve `tp_btf`
 /// targets against module BTF (kernels 5.11+). Selecting the `tp_btf`
 /// twin on [`kernel_has_btf`] alone would make that kernel a load failure,
-/// fatal for the whole skeleton (see [`kernel_btf_has_funcs`] for why load-time
+/// fatal for the whole skeleton (see [`kernel_can_fentry`] for why load-time
 /// misses matter more than attach-time ones). Selecting on this function falls
 /// back to the `raw_tp` twin, whose attach failure on a kernel without the
 /// tracepoint at all is an ENOENT the builder tolerates.
@@ -305,6 +298,7 @@ impl RawBtf {
 
     /// Whether this BTF declares a function of that name (base included, as
     /// for [`has_typedef`](Self::has_typedef)).
+    #[cfg(test)]
     fn has_func(&self, name: &str) -> bool {
         self.find(name, libbpf_sys::BTF_KIND_FUNC) >= 0
     }

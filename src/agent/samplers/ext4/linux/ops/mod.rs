@@ -188,19 +188,28 @@ fn init_now(config: Arc<Config>) -> SamplerResult {
         .into());
     }
 
-    let has_write_iter = kernel_btf_has_funcs(&["ext4_file_write_iter"]);
+    // `kernel_can_fentry`: the function is in BTF and the trampoline can
+    // attach to it on this kernel (aarch64 needs ftrace direct calls, 6.4+).
+    let has_write_iter = kernel_can_fentry("ext4_file_write_iter");
     if !has_write_iter {
-        info!("{NAME}: the kernel's BTF has no ext4_file_write_iter; the write series read 0");
+        info!(
+            "{NAME}: fentry cannot attach to ext4_file_write_iter on this kernel; the write \
+             series read 0"
+        );
     }
 
-    let rename_arity = kernel_btf_func_arg_count("ext4_rename2");
+    let rename_arity = Some("ext4_rename2")
+        .filter(|function| kernel_can_fentry(function))
+        .and_then(kernel_btf_func_arg_count);
     match rename_arity {
         Some(6) => {}
         Some(n) => info!(
             "{NAME}: ext4_rename2 takes {n} arguments, not the 6 the program reads; the rename \
              series read 0"
         ),
-        None => info!("{NAME}: the kernel's BTF has no ext4_rename2; the rename series read 0"),
+        None => info!(
+            "{NAME}: fentry cannot attach to ext4_rename2 on this kernel; the rename series read 0"
+        ),
     }
 
     let (disabled, required) = select_programs(has_write_iter, rename_arity);

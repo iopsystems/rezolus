@@ -95,8 +95,8 @@ static int probe_ip(bool receiving, struct sock* sk, size_t size) {
 // fentry is the cheaper dispatch (measured ~56% less than kprobe on a modern
 // KPROBES_ON_FTRACE kernel -- see
 // docs/journal/2026-09-04-fentry-vs-kprobe-dispatch.md), but it needs BTF, so
-// the kprobe twin is kept as the CO-RE-only fallback and one is disabled at load
-// time based on kernel_has_btf() (see disabled_programs in mod.rs).
+// the kprobe twin is kept as the fallback; per target, one is disabled at load
+// time on kernel_can_fentry() (see disabled_programs in mod.rs).
 
 SEC("fentry/tcp_sendmsg")
 int BPF_PROG(tcp_sendmsg_fentry, struct sock* sk, struct msghdr* msg, size_t size) {

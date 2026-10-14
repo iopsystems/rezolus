@@ -115,8 +115,9 @@ keep large structs off the BPF stack.
 Use `kprobe` only when the target is `notrace`/inlined or no tracepoint
 exists.
 
-*Why `fentry` over `kprobe`:* same compatibility envelope (CO-RE already
-requires BTF, principle 2), substantially lower per-call overhead, and
+*Why `fentry` over `kprobe`:* nearly the same compatibility envelope (CO-RE
+already requires BTF, principle 2; the exceptions are in the BTF caveat),
+substantially lower per-call overhead, and
 `fexit` exposes entry args + return value in one program — often eliminating
 the side-maps that `kprobe`+`kretprobe` or `kprobe`+exit-tracepoint pairs
 need today.
@@ -125,8 +126,14 @@ need today.
 (external BTF file, no `/sys/kernel/btf/vmlinux`) it collapses to `raw_tp` >
 `tracepoint` > `kprobe`; `tp_btf` and `fentry`/`fexit` are unavailable. Hooks
 that prefer `tp_btf` should ship a `raw_tp` twin sharing one `__always_inline`
-body, selected at runtime via `kernel_has_btf` and
-`BpfBuilder::disabled_programs` (see `cpu/migrations`, `scheduler/runqueue`).
+body, selected at runtime via `kernel_has_btf` (or `kernel_btf_has_tracepoints`
+for a module's tracepoint) and `BpfBuilder::disabled_programs` (see
+`cpu/migrations`, `scheduler/runqueue`). `fentry`/`fexit` additionally needs
+the target in BTF and a trampoline that can attach to it: aarch64 needs ftrace
+direct calls (6.4+), and x86_64 trampolines take at most 6 arguments before
+6.6. Select `fentry` twins with `kernel_can_fentry` (or `unused_twins` for a
+list of hooks), never on `kernel_has_btf` alone, and give each a `kprobe`
+twin where losing the hook matters.
 
 **How to apply.**
 - New samplers default to the highest-preference attach the target supports.
@@ -838,7 +845,11 @@ See docs/journal/2026-10-03-one-program-per-hook.md.
 
 ### `fentry` migration (principle 4)
 
-No compatibility cost — CO-RE already requires BTF (principle 2):
+CO-RE already requires BTF (principle 2), so on x86_64 the cost is the
+argument limit only; on aarch64 before 6.4 fentry cannot attach (see the BTF
+caveat in principle 4), so each needs a kprobe twin, selected with
+`kernel_can_fentry`, where the hook matters there (`tlb_finish_mmu` is
+aarch64-only):
 
 - TCP: `tcp_sendmsg`, `tcp_retransmit_skb`, `tcp_rcv_state_process`,
   `tcp_rcv_established`, `tcp_cleanup_rbuf`.

@@ -851,6 +851,10 @@
 
 ### Fixed
 
+- Samplers with fentry programs use their kprobe twins, or turn the hook off,
+  where fentry cannot attach: aarch64 before 6.4, and x86_64 before 6.6 for
+  functions of more than 6 arguments. (#1463)
+
 - `cpu_l3` reports unsupported on a machine without L3 cache perf counters,
   such as a VM without a PMU, so `rezolus status` no longer exits 1 there;
   any other open error is still a failure, now with its errno. (#1457)

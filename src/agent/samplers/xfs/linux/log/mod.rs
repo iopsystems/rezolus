@@ -32,7 +32,10 @@
 //! kernel needs module BTF (5.11). The floor is 5.12. The fsync path's force
 //! is `xfs_log_force_seq` from 5.13 and `xfs_log_force_lsn` before; the
 //! sampler loads whichever the kernel's BTF has. On a kernel whose BTF lacks
-//! `xfs_log_cil_wait` that counter reads 0, not absent. See
+//! `xfs_log_cil_wait` that counter reads 0, not absent. Where fentry cannot
+//! attach to the force functions (`kernel_can_fentry`: aarch64 without ftrace
+//! direct calls, before 6.4) the force series read 0 and the log-space and
+//! CIL series are still recorded. See
 //! docs/journal/2026-09-29-xfs-samplers.md (step 2).
 
 const NAME: &str = "xfs_log";
@@ -85,10 +88,12 @@ fn handle_cgroup_info(data: &[u8]) -> i32 {
 }
 
 /// Which programs to load, from the kernel's BTF: the names to disable and
-/// the (program, capability) pairs required. The log-space pair and the
-/// whole-log force pair are always required; the fsync path's force is one
-/// of two functions by kernel version, and the CIL wait is optional.
+/// the (program, capability) pairs required. The log-space pair is always
+/// required; the whole-log force pair only where fentry can attach to
+/// `xfs_log_force` (`has_force`); the fsync path's force is one of two
+/// functions by kernel version, and the CIL wait is optional.
 fn select_programs(
+    has_force: bool,
     has_force_seq: bool,
     has_force_lsn: bool,
     has_cil_wait: bool,
@@ -97,9 +102,15 @@ fn select_programs(
     let mut required = vec![
         ("xfs_log_grant_sleep", "log space wait latency"),
         ("xfs_log_grant_wake", "log space wait latency"),
-        ("xfs_log_force_fentry", "log force latency"),
-        ("xfs_log_force_fexit", "log force latency"),
     ];
+
+    if has_force {
+        required.push(("xfs_log_force_fentry", "log force latency"));
+        required.push(("xfs_log_force_fexit", "log force latency"));
+    } else {
+        disabled.push("xfs_log_force_fentry");
+        disabled.push("xfs_log_force_fexit");
+    }
 
     // The two are the same function under two names across kernel versions;
     // a kernel has one of them. Prefer _seq if BTF somehow had both.
@@ -166,18 +177,27 @@ fn init_now(config: Arc<Config>) -> SamplerResult {
         .into());
     }
 
-    if !kernel_btf_has_funcs(&["xfs_log_force"]) {
+    if kernel_btf_func_arg_count("xfs_log_force").is_none() {
         return Err(crate::agent::sampler_status::Unsupported(
             "the kernel's BTF has no xfs_log_force to attach to".to_string(),
         )
         .into());
     }
 
-    let has_force_seq = kernel_btf_has_funcs(&["xfs_log_force_seq"]);
-    let has_force_lsn = !has_force_seq && kernel_btf_has_funcs(&["xfs_log_force_lsn"]);
+    // `kernel_can_fentry`: the function is in BTF and the trampoline can
+    // attach to it on this kernel (aarch64 needs ftrace direct calls, 6.4+).
+    // Where it cannot, the force hooks are left out and the grant and CIL
+    // tracepoints still run.
+    let has_force = kernel_can_fentry("xfs_log_force");
+    if !has_force {
+        info!("{NAME}: fentry cannot attach to xfs_log_force on this kernel; log forces are not timed");
+    }
+
+    let has_force_seq = kernel_can_fentry("xfs_log_force_seq");
+    let has_force_lsn = !has_force_seq && kernel_can_fentry("xfs_log_force_lsn");
     if !has_force_seq && !has_force_lsn {
         info!(
-            "{NAME}: the kernel's BTF has neither xfs_log_force_seq nor xfs_log_force_lsn; \
+            "{NAME}: fentry can attach to neither xfs_log_force_seq nor xfs_log_force_lsn; \
              forces from the fsync path are not timed"
         );
     }
@@ -187,7 +207,8 @@ fn init_now(config: Arc<Config>) -> SamplerResult {
         info!("{NAME}: the kernel's BTF has no xfs_log_cil_wait; the CIL wait count reads 0");
     }
 
-    let (disabled, required) = select_programs(has_force_seq, has_force_lsn, has_cil_wait);
+    let (disabled, required) =
+        select_programs(has_force, has_force_seq, has_force_lsn, has_cil_wait);
 
     // Order MUST match the C_* indices in mod.bpf.c: waits (space, force,
     // cil), then time (space, force).
@@ -328,21 +349,21 @@ mod tests {
     /// the kernel has, and none when it has neither.
     #[test]
     fn the_fsync_force_pair_follows_the_kernels_function_name() {
-        let (disabled, required) = select_programs(true, false, true);
+        let (disabled, required) = select_programs(true, true, false, true);
         assert!(required
             .iter()
             .any(|(p, _)| *p == "xfs_log_force_seq_fexit"));
         assert!(disabled.contains(&"xfs_log_force_lsn_fentry"));
         assert!(!disabled.contains(&"xfs_log_cil_wait"));
 
-        let (disabled, required) = select_programs(false, true, false);
+        let (disabled, required) = select_programs(true, false, true, false);
         assert!(required
             .iter()
             .any(|(p, _)| *p == "xfs_log_force_lsn_fexit"));
         assert!(disabled.contains(&"xfs_log_force_seq_fentry"));
         assert!(disabled.contains(&"xfs_log_cil_wait"));
 
-        let (disabled, required) = select_programs(false, false, false);
+        let (disabled, required) = select_programs(true, false, false, false);
         assert!(disabled.contains(&"xfs_log_force_seq_fentry"));
         assert!(disabled.contains(&"xfs_log_force_lsn_fentry"));
         assert!(!required.iter().any(|(p, _)| p.contains("force_seq")));
@@ -358,7 +379,7 @@ mod tests {
             (false, true, false),
             (false, false, true),
         ] {
-            let (disabled, required) = select_programs(seq, lsn, cil);
+            let (disabled, required) = select_programs(true, seq, lsn, cil);
             for (prog, _) in &required {
                 assert!(
                     !disabled.contains(prog),
@@ -368,5 +389,23 @@ mod tests {
             assert!(required.iter().any(|(p, _)| *p == "xfs_log_grant_wake"));
             assert!(required.iter().any(|(p, _)| *p == "xfs_log_force_fexit"));
         }
+    }
+
+    /// Where fentry cannot attach (aarch64 before 6.4), every force program
+    /// is disabled and the grant and CIL tracepoints still load.
+    #[test]
+    fn without_fentry_the_tracepoints_still_load() {
+        let (disabled, required) = select_programs(false, false, false, true);
+        for prog in [
+            "xfs_log_force_fentry",
+            "xfs_log_force_fexit",
+            "xfs_log_force_seq_fentry",
+            "xfs_log_force_lsn_fexit",
+        ] {
+            assert!(disabled.contains(&prog), "{prog} not disabled");
+        }
+        assert!(!required.iter().any(|(p, _)| p.contains("force")));
+        assert!(required.iter().any(|(p, _)| *p == "xfs_log_grant_sleep"));
+        assert!(required.iter().any(|(p, _)| *p == "xfs_log_cil_wait"));
     }
 }

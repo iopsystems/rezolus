@@ -51,12 +51,16 @@ fn init(config: Arc<Config>) -> SamplerResult {
     // doc comment.
     .histogram("rx_size", &TCP_RX_SIZE, &SIZES_ACQ)
     .histogram("tx_size", &TCP_TX_SIZE, &SIZES_ACQ)
-    // Prefer fentry (cheaper dispatch); fall back to kprobe without BTF.
-    .disabled_programs(if kernel_has_btf() {
-        &["tcp_sendmsg_kprobe", "tcp_cleanup_rbuf_kprobe"]
-    } else {
-        &["tcp_sendmsg_fentry", "tcp_cleanup_rbuf_fentry"]
-    })
+    // Per target, prefer fentry (cheaper dispatch); fall back to its kprobe
+    // where fentry cannot attach (`kernel_can_fentry`).
+    .disabled_programs(&unused_twins(&[
+        ("tcp_sendmsg", "tcp_sendmsg_fentry", "tcp_sendmsg_kprobe"),
+        (
+            "tcp_cleanup_rbuf",
+            "tcp_cleanup_rbuf_fentry",
+            "tcp_cleanup_rbuf_kprobe",
+        ),
+    ]))
     .build()?;
 
     Ok(Some(Box::new(bpf)))

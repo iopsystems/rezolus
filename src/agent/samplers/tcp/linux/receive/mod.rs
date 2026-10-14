@@ -36,8 +36,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
     )
     .histogram("srtt", &TCP_SRTT, &SRTT_ACQ)
     .histogram("jitter", &TCP_JITTER, &JITTER_ACQ)
-    // Prefer fentry (cheaper dispatch); fall back to kprobe without BTF.
-    .disabled_programs(if kernel_has_btf() {
+    // Prefer fentry (cheaper dispatch); fall back to kprobe where fentry
+    // cannot attach to the target (`kernel_can_fentry`).
+    .disabled_programs(if kernel_can_fentry("tcp_rcv_established") {
         &["tcp_rcv_kprobe"]
     } else {
         &["tcp_rcv_fentry"]
