@@ -851,6 +851,13 @@
 
 ### Fixed
 
+- `memory_writeback` reports unsupported, naming writeback throttling, when
+  BTF gives `balance_dirty_pages` an argument count it has no program for;
+  it read healthy before. (#1468)
+
+- `rezolus status` and the startup summary give each unsupported hook's
+  reason instead of "(no kernel support)". (#1468)
+
 - `xfs_log`, `memory_pagecache` and `ext4_ops` report unsupported, naming each
   hook left out, where the kernel cannot run it; they read healthy before.
   (#1465)
