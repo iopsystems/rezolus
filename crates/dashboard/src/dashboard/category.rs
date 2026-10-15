@@ -125,8 +125,10 @@ pub fn generate(
             None => group.default_subgroup(),
         };
 
-        let baseline_query = kpi.effective_query(&baseline_kpi.query);
-        let experiment_query = kpi.effective_query(&experiment_kpi.query);
+        // The raw queries, as a service section emits: the viewer wraps a
+        // histogram plot's query itself (`buildEffectiveQuery`).
+        let baseline_query = baseline_kpi.query.clone();
+        let experiment_query = experiment_kpi.query.clone();
         if kpi.full_width {
             sg.plot_promql_full(opts, baseline_query.clone());
         } else {

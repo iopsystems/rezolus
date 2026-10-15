@@ -1,6 +1,8 @@
 //! Bridges `PlotDef`s to `MetricsSource::query_range` and shapes results
 //! into chart-ready series.
 
+use std::collections::{BTreeSet, HashMap, HashSet};
+
 use metriken_query::{MetricsSource, QueryResult};
 
 use metriken_storage::is_internal_label;
@@ -70,10 +72,13 @@ pub fn load_chart(data: &dyn MetricsSource, def: &PlotDef, window: TimeWindow) -
     };
     match data.query_range(&query, start, end, step) {
         Ok(QueryResult::Matrix { result }) => {
+            let metrics: Vec<&Labels> = result.iter().map(|s| &s.metric).collect();
+            let labels = series_labels(&metrics);
             let series: Vec<Series> = result
                 .into_iter()
-                .map(|s| Series {
-                    label: series_label(&s.metric),
+                .zip(labels)
+                .map(|(s, label)| Series {
+                    label,
                     points: s.values,
                 })
                 .filter(|s| !s.points.is_empty())
@@ -89,21 +94,79 @@ pub fn load_chart(data: &dyn MetricsSource, def: &PlotDef, window: TimeWindow) -
     }
 }
 
-/// Choose a display label for a matrix series from its metric labels.
-/// Prefers a `percentile`/`quantile` label, then any distinguishing label,
-/// else empty.
-fn series_label(metric: &std::collections::HashMap<String, String>) -> String {
-    if let Some(q) = metric.get("percentile").or_else(|| metric.get("quantile")) {
-        if let Ok(v) = q.parse::<f64>() {
-            return percentile_label(if v > 1.0 { v / 100.0 } else { v });
-        }
-        return q.clone();
-    }
-    // Fall back to the first visible label's value, if any. Internal labels
-    // sort first, so "not `__name__`" would pick `__incarnation__` here.
+type Labels = HashMap<String, String>;
+
+/// Display labels for the series of one matrix result, in order, by the
+/// rules of the browser viewer (`data.js` with `seriesNamer` from
+/// `assets/lib/labels.js`):
+/// - a `percentile`/`quantile` label names its series `p99`-style;
+/// - a series with both `id` and `vendor` is `<vendor> <id>`;
+/// - otherwise a series is named by the visible labels whose values differ
+///   between the result's series: the value of the one key, or `key=value`
+///   pairs when there are several;
+/// - when no visible label differs, by its first visible label in key order
+///   (the browser takes the first in the order the server sends, which is
+///   unspecified);
+/// - a series none of these name is `Series <n>`, numbered from 1 (the
+///   browser keeps an empty label value as the name).
+fn series_labels(metrics: &[&Labels]) -> Vec<String> {
+    let keys = varying_label_keys(metrics);
+    metrics
+        .iter()
+        .enumerate()
+        .map(|(n, m)| {
+            if let Some(q) = m.get("percentile").or_else(|| m.get("quantile")) {
+                return match q.parse::<f64>() {
+                    Ok(v) => percentile_label(if v > 1.0 { v / 100.0 } else { v }),
+                    Err(_) => q.clone(),
+                };
+            }
+            if let (Some(id), Some(vendor)) = (m.get("id"), m.get("vendor")) {
+                return format!("{vendor} {id}");
+            }
+            let name = match keys.as_slice() {
+                [] => first_visible_label_value(m),
+                [k] => m.get(k).cloned().unwrap_or_default(),
+                _ => keys
+                    .iter()
+                    .filter_map(|k| m.get(k).map(|v| format!("{k}={v}")))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            };
+            if name.is_empty() {
+                format!("Series {}", n + 1)
+            } else {
+                name
+            }
+        })
+        .collect()
+}
+
+/// The visible label keys whose values differ between `metrics`, sorted.
+/// A key a series lacks counts as a value of its own. A label every series
+/// shares with one value, such as a recording's `host` or `source`, is not
+/// among them.
+fn varying_label_keys(metrics: &[&Labels]) -> Vec<String> {
+    let keys: BTreeSet<&String> = metrics
+        .iter()
+        .flat_map(|m| m.keys())
+        .filter(|k| !is_internal_label(k))
+        .collect();
+    keys.into_iter()
+        .filter(|k| {
+            let values: HashSet<Option<&String>> = metrics.iter().map(|m| m.get(*k)).collect();
+            values.len() > 1
+        })
+        .cloned()
+        .collect()
+}
+
+/// The value of the first visible label in key order, or empty.
+fn first_visible_label_value(metric: &Labels) -> String {
     metric
         .iter()
-        .find(|(k, _)| !is_internal_label(k))
+        .filter(|(k, _)| !is_internal_label(k))
+        .min_by_key(|(k, _)| *k)
         .map(|(_, v)| v.clone())
         .unwrap_or_default()
 }
@@ -190,6 +253,77 @@ mod tests {
     #[test]
     fn heatmap_has_no_query() {
         assert!(build_query(&def(PlotKind::HeatmapUnsupported, vec![])).is_none());
+    }
+
+    fn labels(pairs: &[(&str, &str)]) -> Labels {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn series_are_named_by_the_label_that_differs() {
+        // `host` sorts before `id`, and `host` and `source` are shared by
+        // every series; the name must come from `id`.
+        let a = labels(&[
+            ("__name__", "cpu"),
+            ("host", "h"),
+            ("source", "r"),
+            ("id", "0"),
+        ]);
+        let b = labels(&[
+            ("__name__", "cpu"),
+            ("host", "h"),
+            ("source", "r"),
+            ("id", "1"),
+        ]);
+        assert_eq!(series_labels(&[&a, &b]), vec!["0", "1"]);
+    }
+
+    #[test]
+    fn several_differing_labels_name_as_pairs() {
+        let a = labels(&[("host", "h"), ("id", "0"), ("state", "user")]);
+        let b = labels(&[("host", "h"), ("id", "1"), ("state", "system")]);
+        assert_eq!(
+            series_labels(&[&a, &b]),
+            vec!["id=0, state=user", "id=1, state=system"]
+        );
+    }
+
+    #[test]
+    fn a_missing_label_counts_as_differing() {
+        let a = labels(&[("host", "h"), ("op", "read")]);
+        let b = labels(&[("host", "h")]);
+        assert_eq!(series_labels(&[&a, &b]), vec!["read", "Series 2"]);
+    }
+
+    #[test]
+    fn a_device_is_named_by_vendor_and_id() {
+        let a = labels(&[("id", "0"), ("vendor", "nvidia")]);
+        let b = labels(&[("id", "0"), ("vendor", "intel")]);
+        assert_eq!(series_labels(&[&a, &b]), vec!["nvidia 0", "intel 0"]);
+    }
+
+    #[test]
+    fn a_single_series_takes_its_first_visible_label_in_key_order() {
+        let a = labels(&[
+            ("__incarnation__", "1"),
+            ("source", "r"),
+            ("zone", "z"),
+            ("node", "n"),
+            ("rack", "k"),
+            ("host", "h"),
+            ("pod", "p"),
+        ]);
+        assert_eq!(series_labels(&[&a]), vec!["h"]);
+    }
+
+    #[test]
+    fn percentile_label_wins() {
+        let a = labels(&[("host", "h"), ("percentile", "99")]);
+        let b = labels(&[("host", "h"), ("percentile", "50")]);
+        assert_eq!(series_labels(&[&a, &b]), vec!["p99", "p50"]);
     }
 
     #[test]

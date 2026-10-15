@@ -39,6 +39,8 @@ mod proxy_allow;
 
 mod ab_extract;
 mod actions;
+#[cfg(test)]
+mod dashboard_queries_test;
 mod follow;
 mod live;
 pub(crate) mod metadata;

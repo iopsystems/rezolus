@@ -717,19 +717,28 @@ const PROMQL_KEYWORDS = new Set([
 ]);
 
 // Inject a label selector into all metric references in a PromQL query.
-// Handles three forms:
+// Handles four forms:
 //   metric{existing}  → metric{existing,label="value"}
+//   {__name__="m"}    → {__name__="m",label="value"}  (a name that is not
+//                       a PromQL identifier, such as `redis/commands`)
 //   metric[5m]        → metric{label="value"}[5m]
 //   metric            → metric{label="value"}   (bare, in expressions)
 const injectLabel = (query, labelName, labelValue, op = '=') => {
     if (!labelName || !labelValue) return query;
     const selector = `${labelName}${op}"${labelValue}"`;
 
-    // Single-pass regex that matches either:
+    // Single-pass regex that matches one of:
     //   (1) identifier{...}  — metric with existing label selector
     //   (2) identifier       — bare identifier (metric, keyword, or other)
-    // We handle both in one pass to avoid offset issues.
-    return query.replace(/\b([a-z_]\w*)(\{[^}]*\})?/gi, (match, name, braces, offset) => {
+    //   (3) {...}            — a selector with no name
+    // One pass handles all three, to avoid offset issues.
+    return query.replace(/\b([a-z_]\w*)(\{[^}]*\})?|\{([^}]*)\}/gi, (match, name, braces, nameless, offset) => {
+        // A selector with no name: `{__name__="m", ...}`. Braces inside a
+        // string literal (`label_replace(.., "{$1}", ..)`) are no selector.
+        if (name === undefined) {
+            const quotes = (query.substring(0, offset).match(/"/g) || []).length;
+            return quotes % 2 ? match : `{${nameless},${selector}}`;
+        }
         if (PROMQL_KEYWORDS.has(name)) return match;
 
         // Skip if starts with digit (not a valid metric name)
