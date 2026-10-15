@@ -90,6 +90,39 @@ struct {
     __type(value, u32);
 } instructions SEC(".maps");
 
+// Stored in `cycles_prev`/`instructions_prev` after a failed read: the next
+// successful read on that CPU sets a baseline and credits nothing, rather than
+// crediting the whole outage to whichever cgroup is switching out then.
+#define NO_BASELINE (~0ULL)
+
+// Read one counter of this CPU's perf event group. Returns false when the read
+// failed: -ENOENT for a CPU with no event in the array (outside the sampler's
+// PMU grant, or its group did not open) and -EBUSY for a pinned event that is
+// not on the PMU now. Do not use `bpf_perf_event_read` here: it returns those
+// errors in the same u64 as the count, and they would be credited as counts.
+static __always_inline bool read_counter(void* map, u64* value) {
+    struct bpf_perf_event_value v = {};
+
+    if (bpf_perf_event_read_value(map, BPF_F_CURRENT_CPU, &v, sizeof(v)) != 0) {
+        return false;
+    }
+
+    *value = v.counter;
+    return true;
+}
+
+// Credit the counter's advance since this CPU's last switch to `cgroup_id`.
+// The count is the kernel's 64-bit `perf_event` count, which already folds the
+// hardware counter's narrower width, so the u64 difference is the delta.
+static __always_inline void credit(void* prev_map, u32 prev_idx, u64 now, void* counters,
+                                   u32 cgroup_id) {
+    u64* prev = bpf_map_lookup_elem(prev_map, &prev_idx);
+
+    if (prev && *prev != NO_BASELINE) {
+        cgroup_add(counters, cgroup_id, now - *prev);
+    }
+}
+
 // attach a tracepoint on sched_switch for per-cgroup accounting
 
 // `btf` is a compile-time constant: true in the tp_btf program, whose task
@@ -100,12 +133,11 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
      */
     struct task_struct* prev = (struct task_struct*)ctx[1];
 
-    u64 *elem, delta_c, delta_i;
-
     u32 prev_idx = bpf_get_smp_processor_id() * 8;
 
-    u64 c = bpf_perf_event_read(&cycles, BPF_F_CURRENT_CPU);
-    u64 i = bpf_perf_event_read(&instructions, BPF_F_CURRENT_CPU);
+    u64 c = 0, i = 0;
+    bool c_ok = read_counter(&cycles, &c);
+    bool i_ok = read_counter(&instructions, &i);
 
     u32 cgroup_id = 0;
     u64 serial_nr = 0;
@@ -124,26 +156,21 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
                 cgroup_zero(&cgroup_instructions, cgroup_id);
             }
 
-            // update cgroup cycles
-
-            elem = bpf_map_lookup_elem(&cycles_prev, &prev_idx);
-
-            if (elem) {
-                delta_c = c - *elem;
-
-                cgroup_add(&cgroup_cycles, cgroup_id, delta_c);
+            if (c_ok) {
+                credit(&cycles_prev, prev_idx, c, &cgroup_cycles, cgroup_id);
             }
 
-            // update cgroup instructions
-
-            elem = bpf_map_lookup_elem(&instructions_prev, &prev_idx);
-
-            if (elem) {
-                delta_i = i - *elem;
-
-                cgroup_add(&cgroup_instructions, cgroup_id, delta_i);
+            if (i_ok) {
+                credit(&instructions_prev, prev_idx, i, &cgroup_instructions, cgroup_id);
             }
         }
+    }
+
+    if (!c_ok) {
+        c = NO_BASELINE;
+    }
+    if (!i_ok) {
+        i = NO_BASELINE;
     }
 
     bpf_map_update_elem(&cycles_prev, &prev_idx, &c, BPF_ANY);
