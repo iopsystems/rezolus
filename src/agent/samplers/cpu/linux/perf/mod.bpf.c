@@ -97,9 +97,11 @@ struct {
 
 // Read one counter of this CPU's perf event group. Returns false when the read
 // failed: -ENOENT for a CPU with no event in the array (outside the sampler's
-// PMU grant, or its group did not open) and -EBUSY for a pinned event that is
-// not on the PMU now. Do not use `bpf_perf_event_read` here: it returns those
-// errors in the same u64 as the count, and they would be credited as counts.
+// PMU grant, or its group did not open) and -EBUSY when the group is not on the
+// PMU now. Only the leader, `cycles`, is pinned, so only its read fails then;
+// `instructions` returns its last count without error. Do not use
+// `bpf_perf_event_read` here: it returns those errors in the same u64 as the
+// count, and they would be credited as counts.
 static __always_inline bool read_counter(void* map, u64* value) {
     struct bpf_perf_event_value v = {};
 
