@@ -202,18 +202,20 @@ const TCP_MIB: &[(&str, &str, &[MibChart])] = &[
                 "tcp-retransmits-lost",
                 "tcp_retransmits_lost",
             ),
-            counter(
+            counter_by(
                 "D-SACKs Received",
                 "tcp-dsacks-received",
                 "tcp_dsacks_received",
+                "kind",
             ),
             counter_by("D-SACKs Sent", "tcp-dsacks-sent", "tcp_dsacks_sent", "kind"),
         ],
     ),
     (
         "Delayed ACKs & Autocorking",
-        "A delayed ACK fires when no outgoing segment carried the ACK in time; on \
-         request/response traffic that wait lands on the request. Duplicate data segments are \
+        "A delayed-ACK firing means this host held an ACK for the delayed-ACK timeout (40 ms \
+         minimum) because nothing outgoing carried it; a peer sending with Nagle, or limited by \
+         its congestion or receive window, may be waiting for it. Duplicate data segments are \
          the peer retransmitting data already received, which the kernel reads as a late ACK. \
          Autocorking holds back small sends while earlier data is still queued in the qdisc \
          or device.",
@@ -259,8 +261,9 @@ const TCP_MIB: &[(&str, &str, &[MibChart])] = &[
     (
         "Receive Memory",
         "Receive-side memory work and drops. Pruning and collapsing run when a socket cannot \
-         be charged memory for an incoming segment; a prune failure or a receive-buffer drop \
-         discards a segment the peer has to retransmit.",
+         be charged memory for an incoming segment. A prune failure is usually followed by a \
+         receive-buffer drop, which discards a segment the peer has to retransmit, so the two \
+         overlap; a prune failure on an empty receive queue queues the segment anyway.",
         &[
             counter("Prune Attempts", "tcp-prune-attempts", "tcp_prune_attempts"),
             counter("Prune Failures", "tcp-prune-failures", "tcp_prune_failures"),
@@ -295,7 +298,7 @@ const TCP_MIB: &[(&str, &str, &[MibChart])] = &[
     ),
     (
         "Connections",
-        "Connection state changes, failures and errors, host-wide.",
+        "Connection state changes, failures and errors in the agent's network namespace.",
         &[
             MibChart {
                 title: "Established Connections",

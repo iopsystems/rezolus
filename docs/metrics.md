@@ -1409,34 +1409,34 @@ the agent's network namespace and include IPv4 and IPv6 together.
 |--------|-------------|----------|
 | `tcp_delayed_acks` | Delayed-ACK timer firings that sent an ACK (`DelayedACKs`), including firings first deferred because the socket was owned by the application | |
 | `tcp_delayed_ack_deferrals` | Delayed-ACK timer firings that found the socket owned by the application and deferred the ACK until it was released (`DelayedACKLocked`) | |
-| `tcp_duplicate_data_segments` | Data segments received that start below the next expected sequence number (`DelayedACKLost`); the kernel takes each as a late or lost ACK and switches to immediate ACKs | |
+| `tcp_duplicate_data_segments` | Data segments received that are entirely duplicate (`DelayedACKLost`): ending at or below the next expected sequence number, or starting below it and failing the sequence or PAWS check. The kernel takes each as a late or lost ACK and switches to immediate ACKs. An accepted partial overlap is not counted; it gets a D-SACK (`tcp_dsacks_sent{kind="old"}`) |  |
 | `tcp_rto_expirations` | Retransmission timer expirations plus SYN-ACK timeouts on pending connection requests (`TCPTimeouts`); not counted while the peer advertises a zero window | |
 | `tcp_loss_probes` | Tail loss probes sent (`TCPLossProbes`) | |
-| `tcp_loss_probe_recoveries` | Losses repaired by a tail loss probe instead of an RTO (`TCPLossProbeRecovery`) | |
-| `tcp_loss_retransmits` | Segments marked lost and retransmitted from the retransmit queue: `fast` during fast recovery, `slow_start` in the loss state after an RTO (`TCPFastRetrans`, `TCPSlowStartRetrans`) | `kind={fast,slow_start}` |
+| `tcp_loss_probe_recoveries` | Losses repaired by a tail loss probe that retransmitted the last segment, instead of an RTO (`TCPLossProbeRecovery`); probes that sent new data are not counted |  |
+| `tcp_loss_retransmits` | Segments marked lost and retransmitted from the retransmit queue: `fast` during fast recovery, `slow_start` in the loss state entered on an RTO or a path MTU reduction (`TCPFastRetrans`, `TCPSlowStartRetrans`) | `kind={fast,slow_start}` |
 | `tcp_retransmits_lost` | Retransmitted segments detected lost again (`TCPLostRetransmit`) | |
 | `tcp_spurious_rtos` | RTOs that F-RTO found spurious and undid (`TCPSpuriousRTOs`) | |
 | `tcp_fast_recoveries` | Entries into fast recovery, by whether the connection uses SACK (`TCPSackRecovery`, `TCPRenoRecovery`) | `kind={sack,reno}` |
-| `tcp_dsacks_received` | ACKs received carrying a D-SACK below the cumulative ACK: the peer got a segment twice (`TCPDSACKRecv`) | |
+| `tcp_dsacks_received` | ACKs received whose first SACK block is a D-SACK: below the cumulative ACK (`old`), or above it inside the second SACK block (`out_of_order`). The peer received a segment twice (`TCPDSACKRecv`, `TCPDSACKOfoRecv`) | `kind={old,out_of_order}` |
 | `tcp_dsacks_sent` | D-SACKs sent for duplicate data below the next expected sequence number, or already held out of order (`TCPDSACKOldSent`, `TCPDSACKOfoSent`) | `kind={old,out_of_order}` |
-| `tcp_zero_window_transitions` | Segments sent advertising a zero window after a non-zero one (`closed`), or a non-zero window after a zero one (`reopened`) (`TCPToZeroWindowAdv`, `TCPFromZeroWindowAdv`) | `kind={closed,reopened}` |
+| `tcp_zero_window_transitions` | Segments sent advertising a zero window after a non-zero one (`closed`), or a non-zero window after a zero one (`reopened`) (`TCPToZeroWindowAdv`, `TCPFromZeroWindowAdv`). A zero window advertised because the socket could not be charged memory for received data is not counted | `kind={closed,reopened}` |
 | `tcp_zero_window_withheld` | Window selections that computed zero but advertised the current window, because an offered window is not shrunk (`TCPWantZeroWindowAdv`) | |
 | `tcp_zero_window_drops` | Data segments dropped because the receive window was zero (`TCPZeroWindowDrop`) | |
 | `tcp_prune_attempts` | Runs of the receive-queue pruner on a socket that could not be charged memory for an incoming segment (`PruneCalled`) | |
-| `tcp_prune_failures` | Prune runs that could not bring receive memory under the buffer limit, so the incoming segment was dropped (`RcvPruned`) | |
-| `tcp_out_of_order_prunes` | Prune runs that discarded out-of-order data (`OfoPruned`) | |
+| `tcp_prune_failures` | Prune runs that could not bring receive memory under the buffer limit (`RcvPruned`). Usually followed by a drop counted in `tcp_rcvbuf_drops`; an in-order segment arriving at an empty receive queue is queued anyway |  |
+| `tcp_out_of_order_prunes` | Times out-of-order data was discarded to free receive memory, once per pass that removed something, including passes from the retry loop after a prune (`OfoPruned`); can exceed `tcp_prune_attempts` |  |
 | `tcp_collapsed_buffers` | Socket buffers freed by copying queued data into fewer, fuller buffers (`TCPRcvCollapsed`) | |
-| `tcp_backlog_drops` | Segments dropped because the socket was owned by the application and its backlog was over its limit (`TCPBacklogDrop`) | |
+| `tcp_backlog_drops` | Segments dropped because the socket was owned by the application and its backlog plus receive memory exceeded twice the receive buffer plus half the send buffer plus 64 KiB, or the segment came from pfmemalloc reserves (`TCPBacklogDrop`) |  |
 | `tcp_rcvbuf_drops` | Segments dropped because the socket could not be charged the memory to queue them: in order with a non-empty receive queue, or out of order (`TCPRcvQDrop`, `TCPOFODrop`) | `kind={in_order,out_of_order}` |
-| `tcp_out_of_order_queued` | Segments placed in the out-of-order queue (`TCPOFOQueue`) | |
-| `tcp_memory_pressure_entries` | Times TCP as a whole entered memory pressure (`tcp_mem`) (`TCPMemoryPressures`) | |
+| `tcp_out_of_order_queued` | Segments placed in the out-of-order queue, including segments then discarded because the queue already held their data (`TCPOFOQueue`) |  |
+| `tcp_memory_pressure_entries` | Times TCP entered memory pressure: total memory over the `tcp_mem` pressure threshold, or an skb or page allocation for sending failed (`TCPMemoryPressures`). The state is host-wide; the count lands in the namespace of the socket that triggered it |  |
 | `tcp_autocorks` | Times a send held back a small segment while earlier data from the socket was still in the qdisc or device (`TCPAutoCorking`) | |
 | `tcp_listen_overflows` | SYNs and handshake-completing ACKs dropped because the accept queue was full (`ListenOverflows`) | |
 | `tcp_listen_drops` | Connection requests and handshake-completing ACKs a listener dropped for any reason, most overflows included (`ListenDrops`) | |
-| `tcp_aborts` | Connections aborted: data arriving after close or a zero-timeout `SO_LINGER` close, retries or probes running out, or orphans killed under memory pressure (`TCPAbortOnData`, `TCPAbortOnTimeout`, `TCPAbortOnMemory`) | `reason={data,timeout,memory}` |
+| `tcp_aborts` | Connections aborted, by reason: data after close, a zero-timeout `SO_LINGER` close, or an orphan with negative `TCP_LINGER2` having its FIN acknowledged (`data`); retries, probes or `TCP_USER_TIMEOUT` running out (`timeout`); orphans killed over `tcp_max_orphans` or the `tcp_mem` hard limit (`memory`); close with unread data (`close`); close in FIN-WAIT-2 with negative `TCP_LINGER2` (`linger`) (`TCPAbortOnData`, `TCPAbortOnTimeout`, `TCPAbortOnMemory`, `TCPAbortOnClose`, `TCPAbortOnLinger`) | `reason={data,timeout,memory,close,linger}` |
 | `tcp_open_failures` | Connection attempts that failed: SYN-SENT or SYN-RECV to CLOSED, and pending passive opens reset (`AttemptFails`) | |
 | `tcp_established_resets` | Connections moved to CLOSED directly from ESTABLISHED or CLOSE-WAIT (`EstabResets`) | |
-| `tcp_input_errors` | Segments received in error (`InErrs`) | |
+| `tcp_input_errors` | Segments received in error (`InErrs`): a bad checksum, a data offset below the 20-byte minimum, a segment shorter than its header on the established fast path, or an unexpected SYN on an established connection |  |
 | `tcp_checksum_errors` | Segments received with a bad checksum, also in `tcp_input_errors` (`InCsumErrors`) | |
 | `tcp_resets_sent` | Segments sent with RST (`OutRsts`) | |
 | `tcp_segments_retransmitted` | Segments retransmitted, in TSO/GSO segments, including tail loss probes and SYN-ACK retransmissions (`RetransSegs`) | |
@@ -1449,7 +1449,8 @@ SYN-ACKs. `tcp_retransmit` adds, on entry to `tcp_retransmit_skb`, the
 caller's upper bound on the segments to retransmit in that call, which can
 exceed the number retransmitted and is counted even when the call returns
 before retransmitting; tail loss probes and SYN-ACKs do not go through that
-function.
+function. The probe also counts every network namespace on the host, while
+`RetransSegs` covers only the agent's.
 
 ### tcp_packet_latency
 

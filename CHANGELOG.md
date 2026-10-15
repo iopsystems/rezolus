@@ -636,7 +636,7 @@
   data received; RTO expirations, tail loss probes and their recoveries,
   lost-segment retransmits by fast recovery or slow start, spurious RTOs,
   fast recoveries by SACK or Reno, retransmits lost again, D-SACKs received
-  and sent, and `tcp_segments_retransmitted`; zero-window transitions,
+  and sent by kind, and `tcp_segments_retransmitted`; zero-window transitions,
   withheld zero windows and zero-window drops; receive-queue prunes, prune
   failures, out-of-order prunes, collapsed buffers, backlog drops,
   receive-buffer drops, out-of-order queueing and TCP memory-pressure

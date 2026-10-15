@@ -63,7 +63,8 @@ const NETSTAT_COUNTERS: &[(&str, &LazyCounter)] = &[
     ("TCPSpuriousRTOs", &TCP_SPURIOUS_RTOS),
     ("TCPSackRecovery", &TCP_FAST_RECOVERIES_SACK),
     ("TCPRenoRecovery", &TCP_FAST_RECOVERIES_RENO),
-    ("TCPDSACKRecv", &TCP_DSACKS_RECEIVED),
+    ("TCPDSACKRecv", &TCP_DSACKS_RECEIVED_OLD),
+    ("TCPDSACKOfoRecv", &TCP_DSACKS_RECEIVED_OUT_OF_ORDER),
     ("TCPDSACKOldSent", &TCP_DSACKS_SENT_OLD),
     ("TCPDSACKOfoSent", &TCP_DSACKS_SENT_OUT_OF_ORDER),
     // receive window
@@ -90,6 +91,8 @@ const NETSTAT_COUNTERS: &[(&str, &LazyCounter)] = &[
     ("TCPAbortOnData", &TCP_ABORTS_DATA),
     ("TCPAbortOnTimeout", &TCP_ABORTS_TIMEOUT),
     ("TCPAbortOnMemory", &TCP_ABORTS_MEMORY),
+    ("TCPAbortOnClose", &TCP_ABORTS_CLOSE),
+    ("TCPAbortOnLinger", &TCP_ABORTS_LINGER),
 ];
 
 /// `/proc/net/snmp`, `Tcp` section: one column to one counter.
@@ -274,8 +277,8 @@ impl std::fmt::Display for ParseError {
 }
 
 /// Set every metric whose column appears in `section`'s pair of lines in
-/// `data`. Columns the text lacks, and values that do not parse as the
-/// metric's type, leave their metric untouched. A missing section or a
+/// `data`. Columns the text lacks, and values that do not parse as an
+/// unsigned 64-bit integer, leave their metric untouched. A missing section or a
 /// header/value length mismatch sets nothing and returns an error.
 fn parse(data: &str, section: &Section) -> Result<(), ParseError> {
     let mut lines = data.lines().filter_map(|line| {
@@ -302,8 +305,15 @@ fn parse(data: &str, section: &Section) -> Result<(), ParseError> {
                 counter.set(v);
             }
         } else if let Some(gauge) = section.gauges.get(name) {
-            if let Ok(v) = value.parse::<i64>() {
-                gauge.set(v);
+            // The kernel prints these with %lu: a sum over per-CPU
+            // counters that can be transiently negative (CurrEstab read
+            // while one CPU has counted an increment and another the
+            // matching decrement) prints as a value near 2^64. Reading it
+            // back as two's complement gives that negative value; leaving
+            // the gauge unset would pair the previous value with this
+            // read's window.
+            if let Ok(v) = value.parse::<u64>() {
+                gauge.set(v as i64);
             }
         }
     }
@@ -322,7 +332,7 @@ mod tests {
     /// shortened `MPTcpExt`. Every mapped column has its own value; the rest
     /// are filler.
     const NETSTAT: &str = "TcpExt: SyncookiesSent SyncookiesRecv SyncookiesFailed EmbryonicRsts PruneCalled RcvPruned OfoPruned OutOfWindowIcmps LockDroppedIcmps ArpFilter TW TWRecycled TWKilled PAWSActive PAWSEstab DelayedACKs DelayedACKLocked DelayedACKLost ListenOverflows ListenDrops TCPHPHits TCPPureAcks TCPHPAcks TCPRenoRecovery TCPSackRecovery TCPSACKReneging TCPSACKReorder TCPRenoReorder TCPTSReorder TCPFullUndo TCPPartialUndo TCPDSACKUndo TCPLossUndo TCPLostRetransmit TCPRenoFailures TCPSackFailures TCPLossFailures TCPFastRetrans TCPSlowStartRetrans TCPTimeouts TCPLossProbes TCPLossProbeRecovery TCPRenoRecoveryFail TCPSackRecoveryFail TCPRcvCollapsed TCPBacklogCoalesce TCPDSACKOldSent TCPDSACKOfoSent TCPDSACKRecv TCPDSACKOfoRecv TCPAbortOnData TCPAbortOnClose TCPAbortOnMemory TCPAbortOnTimeout TCPAbortOnLinger TCPAbortFailed TCPMemoryPressures TCPMemoryPressuresChrono TCPSACKDiscard TCPDSACKIgnoredOld TCPDSACKIgnoredNoUndo TCPSpuriousRTOs TCPMD5NotFound TCPMD5Unexpected TCPMD5Failure TCPSackShifted TCPSackMerged TCPSackShiftFallback TCPBacklogDrop PFMemallocDrop TCPMinTTLDrop TCPDeferAcceptDrop IPReversePathFilter TCPTimeWaitOverflow TCPReqQFullDoCookies TCPReqQFullDrop TCPRetransFail TCPRcvCoalesce TCPOFOQueue TCPOFODrop TCPOFOMerge TCPChallengeACK TCPSYNChallenge TCPFastOpenActive TCPFastOpenActiveFail TCPFastOpenPassive TCPFastOpenPassiveFail TCPFastOpenListenOverflow TCPFastOpenCookieReqd TCPFastOpenBlackhole TCPSpuriousRtxHostQueues BusyPollRxPackets TCPAutoCorking TCPFromZeroWindowAdv TCPToZeroWindowAdv TCPWantZeroWindowAdv TCPSynRetrans TCPOrigDataSent TCPHystartTrainDetect TCPHystartTrainCwnd TCPHystartDelayDetect TCPHystartDelayCwnd TCPACKSkippedSynRecv TCPACKSkippedPAWS TCPACKSkippedSeq TCPACKSkippedFinWait2 TCPACKSkippedTimeWait TCPACKSkippedChallenge TCPWinProbe TCPKeepAlive TCPMTUPFail TCPMTUPSuccess TCPDelivered TCPDeliveredCE TCPAckCompressed TCPZeroWindowDrop TCPRcvQDrop TCPWqueueTooBig TCPFastOpenPassiveAltKey TcpTimeoutRehash TcpDuplicateDataRehash TCPDSACKRecvSegs TCPDSACKIgnoredDubious TCPMigrateReqSuccess TCPMigrateReqFailure TCPPLBRehash TCPAORequired TCPAOBad TCPAOKeyNotFound TCPAOGood TCPAODroppedIcmps
-TcpExt: 3 7922 15841 23760 388 2 41 55436 63355 71274 79193 87112 95031 2950 10869 4818263 1290 20417 1203 1210 58383 66302 74221 3 12006 97978 5897 13816 21735 29654 37573 45492 53411 2071 69249 77168 85087 45512 311 8803 66120 1734 32601 40520 9150 56358 20188 133 10032 88034 5604 3872 1 88 27629 35548 4 51386 59305 67224 75143 97 90981 98900 6819 14738 22657 30576 6 46414 54333 62252 70171 78090 86009 93928 1847 9766 230981 15 33523 41442 49361 57280 65199 73118 81037 88956 96875 4794 12713 20632 771204 417 418 5521 60227 68146 76065 83984 91903 99822 7741 15660 23579 31498 39417 47336 55255 63174 71093 79012 86931 94850 2769 12 9 26526 34445 42364 50283 58202 66121 74040 81959 89878 97797 5716 13635 21554 29473
+TcpExt: 0 7922 15841 23760 388 2 41 55436 63355 71274 79193 87112 95031 2950 10869 4818263 1290 20417 1203 1210 58383 66302 74221 3 12006 97978 5897 13816 21735 29654 37573 45492 53411 2071 69249 77168 85087 45512 311 8803 66120 1734 32601 40520 9150 56358 20188 133 10032 64 5604 2118 1 88 7 35548 4 51386 59305 67224 75143 97 90981 98900 6819 14738 22657 30576 6 46414 54333 62252 70171 78090 86009 93928 1847 9766 230981 15 33523 41442 49361 57280 65199 73118 81037 88956 96875 4794 12713 20632 771204 417 418 5521 60227 68146 76065 83984 91903 99822 7741 15660 23579 31498 39417 47336 55255 63174 71093 79012 86931 94850 2769 12 9 26526 34445 42364 50283 58202 66121 74040 81959 89878 97797 5716 13635 21554 29473
 IpExt: InNoRoutes InTruncatedPkts InMcastPkts OutMcastPkts InBcastPkts OutBcastPkts InOctets OutOctets InMcastOctets OutMcastOctets InBcastOctets OutBcastOctets InCsumErrors InNoECTPkts InECT1Pkts InECT0Pkts InCEPkts ReasmOverlaps
 IpExt: 5 7924 15843 23762 31681 39600 47519 55438 63357 71276 79195 87114 95033 2952 10871 18790 26709 34628
 MPTcpExt: MPCapableSYNRX MPCapableSYNTX MPCapableSYNACKRX MPCapableACKRX MPCapableFallbackACK MPCapableFallbackSYNACK
@@ -363,7 +373,8 @@ UdpLite: 0 0 0 0 0 0 0 0 0
         assert_eq!(TCP_SPURIOUS_RTOS.value(), 97);
         assert_eq!(TCP_FAST_RECOVERIES_SACK.value(), 12006);
         assert_eq!(TCP_FAST_RECOVERIES_RENO.value(), 3);
-        assert_eq!(TCP_DSACKS_RECEIVED.value(), 10032);
+        assert_eq!(TCP_DSACKS_RECEIVED_OLD.value(), 10032);
+        assert_eq!(TCP_DSACKS_RECEIVED_OUT_OF_ORDER.value(), 64);
         assert_eq!(TCP_DSACKS_SENT_OLD.value(), 20188);
         assert_eq!(TCP_DSACKS_SENT_OUT_OF_ORDER.value(), 133);
         assert_eq!(TCP_ZERO_WINDOW_CLOSED.value(), 418);
@@ -385,6 +396,8 @@ UdpLite: 0 0 0 0 0 0 0 0 0
         assert_eq!(TCP_ABORTS_DATA.value(), 5604);
         assert_eq!(TCP_ABORTS_TIMEOUT.value(), 88);
         assert_eq!(TCP_ABORTS_MEMORY.value(), 1);
+        assert_eq!(TCP_ABORTS_CLOSE.value(), 2118);
+        assert_eq!(TCP_ABORTS_LINGER.value(), 7);
     }
 
     #[test]
@@ -542,16 +555,102 @@ UdpLite: 0 0 0 0 0 0 0 0 0
     static F: LazyCounter = LazyCounter::new(Counter::default);
     static H: LazyGauge = LazyGauge::new(Gauge::default);
 
-    /// A value that does not parse as its metric's type leaves that metric
-    /// untouched and does not stop the others.
+    /// A value that does not parse as an unsigned 64-bit integer leaves its
+    /// metric untouched and does not stop the others.
     #[test]
     fn unparseable_value_leaves_its_metric_untouched() {
-        static COUNTERS: &[(&str, &LazyCounter)] = &[("Zeta", &F)];
+        static COUNTERS: &[(&str, &LazyCounter)] = &[("Zeta", &F), ("Theta", &T)];
         static GAUGES: &[(&str, &LazyGauge)] = &[("Eta", &H)];
         let section = Section::new("Test", COUNTERS, GAUGES);
         F.set(3);
-        assert_eq!(parse("Test: Zeta Eta\nTest: -1 -2\n", &section), Ok(()));
+        H.set(4);
+        assert_eq!(
+            parse(
+                "Test: Zeta Eta Theta\nTest: -1 x 18446744073709551616\n",
+                &section
+            ),
+            Ok(())
+        );
         assert_eq!(F.value(), 3);
-        assert_eq!(H.value(), -2);
+        assert_eq!(H.value(), 4);
+        assert_eq!(T.value(), 0, "a value above u64::MAX is not wrapped");
+    }
+
+    static T: LazyCounter = LazyCounter::new(Counter::default);
+    static W: LazyGauge = LazyGauge::new(Gauge::default);
+
+    /// A gauge printed with %lu whose per-CPU sum is transiently negative
+    /// (2^64 - 1 for -1) reads back as that negative value, so the read sets
+    /// the gauge rather than leaving a stale value under a fresh window.
+    #[test]
+    fn wrapped_gauge_reads_as_negative() {
+        static GAUGES: &[(&str, &LazyGauge)] = &[("CurrEstab", &W)];
+        let section = Section::new("Tcp", &[], GAUGES);
+        W.set(12);
+        assert_eq!(
+            parse("Tcp: CurrEstab\nTcp: 18446744073709551615\n", &section),
+            Ok(())
+        );
+        assert_eq!(W.value(), -1);
+        assert_eq!(parse("Tcp: CurrEstab\nTcp: 1873\n", &section), Ok(()));
+        assert_eq!(W.value(), 1873);
+    }
+
+    static S: LazyCounter = LazyCounter::new(Counter::default);
+
+    /// `Source::refresh` brackets each read with its acquisition group over a
+    /// real file: a good read sets values and stamps a window, a section
+    /// whose header and value lines disagree sets nothing and leaves the
+    /// window where it was (warning once), a later good read stamps again,
+    /// and a read error leaves the window unstamped.
+    #[tokio::test]
+    async fn source_refresh_stamps_only_a_good_read() {
+        static COUNTERS: &[(&str, &LazyCounter)] = &[("X", &S)];
+        static GOOD: AcquisitionGroup = AcquisitionGroup::new("tcp_mib", "test_good");
+        static BAD: AcquisitionGroup = AcquisitionGroup::new("tcp_mib", "test_bad");
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("netstat");
+        std::fs::write(&path, "TcpExt: X\nTcpExt: 10\n").unwrap();
+        let leaked: &'static str = Box::leak(path.to_str().unwrap().to_owned().into_boxed_str());
+        let mut buf = String::new();
+
+        let mut src = Source::open(leaked, Section::new("TcpExt", COUNTERS, &[]), &GOOD).unwrap();
+        assert_eq!(GOOD.window(), None);
+        src.refresh(&mut buf).await.unwrap();
+        assert_eq!(S.value(), 10);
+        let first = GOOD.window().expect("a good read stamps a window");
+
+        // The file grew and moved the column: the read starts from the top.
+        std::fs::write(&path, "TcpExt: Y X\nTcpExt: 0 11\n").unwrap();
+        src.refresh(&mut buf).await.unwrap();
+        assert_eq!(S.value(), 11);
+        let second = GOOD.window().unwrap();
+        assert_ne!(second, first, "a second good read stamps a new window");
+
+        std::fs::write(&path, "TcpExt: X\nTcpExt: 12 13\n").unwrap();
+        src.refresh(&mut buf).await.unwrap();
+        src.refresh(&mut buf).await.unwrap();
+        assert_eq!(S.value(), 11, "a mismatched section sets nothing");
+        assert_eq!(GOOD.window(), Some(second), "and does not stamp");
+        assert!(src.warned);
+
+        std::fs::write(&path, "TcpExt: X\nTcpExt: 14\n").unwrap();
+        src.refresh(&mut buf).await.unwrap();
+        assert_eq!(S.value(), 14);
+        let third = GOOD.window().unwrap();
+        assert!(
+            third.begin_ns > second.begin_ns,
+            "a recovered read stamps again"
+        );
+
+        // A directory opens but cannot be read: the read error returns
+        // before `finish()`.
+        let dir_path: &'static str =
+            Box::leak(dir.path().to_str().unwrap().to_owned().into_boxed_str());
+        let mut src = Source::open(dir_path, Section::new("TcpExt", COUNTERS, &[]), &BAD).unwrap();
+        assert!(src.refresh(&mut buf).await.is_err());
+        assert_eq!(BAD.window(), None, "a failed read does not stamp");
+        assert_eq!(S.value(), 14);
     }
 }
