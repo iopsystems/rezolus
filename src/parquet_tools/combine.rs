@@ -1097,8 +1097,9 @@ fn build_merged_schema(inputs: &[InputFile]) -> (usize, SchemaRef) {
             if name != "timestamp" && name != "duration" {
                 let prefixed_name = format!("{}::{}", prefix, name);
                 let mut meta = field.metadata().clone();
-                meta.entry("source".to_string())
-                    .or_insert_with(|| input.source.clone());
+                if !meta.contains_key("source") {
+                    meta.insert("source", input.source.clone());
+                }
                 meta.insert(label_key.clone(), label_value.clone());
                 let new_field = Field::new(
                     prefixed_name,

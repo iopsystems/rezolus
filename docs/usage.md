@@ -481,8 +481,9 @@ the two are never drawn on one chart.
 
 A viewer URL reproduces the view it was copied from. The section lives in
 the hash (`#/overview`, `#/cpu`, `#/cgroups`, `#/service/<name>`; a chart
-expanded from its toolbar is `#/<section>/chart/<id>`); the time range, time
-mode, selectors and compare anchors live in the query string, **before** the
+expanded from its toolbar is `#/<section>/chart/<id>`); the time range, an
+expanded chart's samples view, selectors and compare anchors live in the
+query string, **before** the
 hash, so a link pasted to a colleague opens at the same window with the same
 filters. Parameters placed after the hash (`#/cpu?from=...`) are not read.
 The viewer rewrites the query string as you zoom or change a selector, so
@@ -494,14 +495,14 @@ apply then.
 
 ```text
 http://127.0.0.1:4200/?from=2026-09-28T14:03:11.250Z&to=2026-09-28T14:05:40Z#/cpu
-https://rezolus.com/viewer/?capture=demo.parquet&from=2026-05-10T00:36:00Z&to=2026-05-10T00:37:00Z&time=raw#/scheduler
+https://rezolus.com/viewer/?capture=demo.parquet&from=2026-05-10T00:36:00Z&to=2026-05-10T00:37:00Z&time=raw#/scheduler/chart/<id>
 http://127.0.0.1:4200/?node=web-01&cgroup=/system.slice&cgroup=/user.slice#/cgroups
 ```
 
 | Parameter | Value | Notes |
 | --- | --- | --- |
 | `from`, `to` | RFC 3339 UTC (`2026-09-28T14:03:11.250Z`) or Unix seconds (`1759068191.25`, fractions allowed) | Both required, `to` after `from`; clamped to the recording; ignored in live mode |
-| `time` | `raw` | Rate points at their real sample timestamps. Absent means Aligned (grid). Ignored in compare mode |
+| `time` | `raw` | Opens an expanded chart (`#/<section>/chart/<id>`) with SHOW SAMPLES on: a point at each sample's own timestamp. Absent means the step grid. A section drops it |
 | `node` | node name | Multi-node recordings; must exist in the recording |
 | `gpu` | `vendor:id`, repeatable (`gpu=nvidia:0&gpu=nvidia:1`) | Filters the GPU section; a bare id when the sampler set no vendor |
 | `cgroup` | cgroup name, repeatable | Selected cgroups on the cgroups section, one key per name |
@@ -515,9 +516,11 @@ keys the URL does not name keep their remembered values, and the address
 bar is then rewritten to include them (a remembered compare anchor, for
 one), so a copied link carries the effective view. Granularity, pinned
 percentiles and the heatmap toggle are not carried. A value the recording
-cannot satisfy (a node it does not have, a range outside it, `time=raw` in
-compare mode, `from`/`to` in live mode) is dropped with a warning in the
-browser console and the link is rewritten without it. A granularity change
+cannot satisfy (a node it does not have, a range outside it, `from`/`to` in
+live mode, a cgroup it does not have on the cgroups section) is dropped
+with a warning in the browser console and the link is rewritten without
+it. An expanded cgroup chart does not check its `cgroup` keys: a cgroup the
+recording lacks draws nothing. A granularity change
 resets the window and drops `from`/`to`. Loading a different file resets
 the view and clears these keys; on the static site a link therefore needs
 its `capture=`, since a file dropped onto the page starts fresh. Everything
@@ -599,7 +602,7 @@ embeds, so the recording carries what it is judged against. A complete file:
     {
       "role": "throughput",
       "title": "Request rate",
-      "query": "sum(rate(http_requests_total[10s]))",
+      "query": "sum(irate(http_requests_total[10s]))",
       "type": "delta_counter",
       "unit_system": "rate",
       "check": {"below": 100, "severity": "warn"}
@@ -753,7 +756,7 @@ Code the first time it opens in that directory.
 ```bash
 rezolus mcp                                                  # stdio server
 rezolus mcp detect-anomalies run.rez                 # anomaly detection
-rezolus mcp query run.rez "sum(rate(cpu_cycles[1m]))"
+rezolus mcp query run.rez "sum(irate(cpu_cycles[1m]))"
 ```
 
 `extract-features` distills a whole recording into one deterministic, versioned
@@ -814,7 +817,7 @@ an event.
 - `viewer_link` builds a link that opens a running viewer at a `section` (or
   one `chart_id`) with the view state set: `from`/`to`, `time`, `node`,
   `gpu`, `cgroup`, `instance`, `family` and compare `anchors`, the same keys
-  as "Linking to a view". A service section is `service/<name>`. It opens
+  as "Linking to a view". `time: "raw"` requires `chart_id`. A service section is `service/<name>`. It opens
   nothing and reads no recording. The reply carries the hash fragment and
   the query string; with `viewer_url` in the call, or `rezolus mcp
   --viewer-url http://127.0.0.1:4200`, it carries a full URL to hand to the
@@ -865,7 +868,7 @@ Then pass `--recording key=value` (repeatable, ANDed) to any of the six
 subcommands to analyze that one recording:
 
 ```bash
-rezolus mcp query ab.rez "sum(rate(cpu_cycles[1m]))" --recording source=valkey
+rezolus mcp query ab.rez "sum(irate(cpu_cycles[1m]))" --recording source=valkey
 ```
 
 A selector must name exactly one recording: matching none or several is an

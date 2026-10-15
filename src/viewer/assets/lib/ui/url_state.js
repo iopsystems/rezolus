@@ -81,8 +81,9 @@ const parseInstantSec = (s) => {
 const formatInstantSec = (sec) =>
     Number.isFinite(sec) ? new Date(Math.round(sec * 1000)).toISOString() : null;
 
-// `raw` is the only value written; `grid` is the default and is absent. Read
-// accepts the label alias too, since "Aligned" is what the control says.
+// `raw` is the only value written, by an expanded chart's samples view;
+// `grid` is the default and is absent. Read also accepts `aligned`, so links
+// written with that spelling parse.
 const parseTimeMode = (s) => {
     if (s === 'raw') return 'raw';
     if (s === 'grid' || s === 'aligned') return 'grid';

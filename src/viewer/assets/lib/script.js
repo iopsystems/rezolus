@@ -126,8 +126,8 @@ const uploadParquet = async (file) => {
         await ViewerApi.uploadParquet(file);
         clearViewerCaches();
         clearMetadataCache();
-        // The previous file's window, time mode and selections, and the URL
-        // keys that carried them, mean nothing for this file.
+        // The previous file's window and selections, and the URL keys that
+        // carried them, mean nothing for this file.
         resetLinkedViewState();
         chartsState.resetAll();
         await fetchBackendState();

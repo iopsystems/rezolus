@@ -73,6 +73,14 @@ export const seedSelectedCgroups = (names) => {
     );
 };
 
+// The selection as the pattern the selector substitutes for
+// `__SELECTED_CGROUPS__`, or null when nothing is selected. A page that does
+// not mount the selector (an expanded chart) reads the selection from here.
+export const selectedCgroupPattern = () => {
+    const selected = Array.from(persistedSelectedCgroups);
+    return selected.length > 1 ? '(' + selected.join('|') + ')' : selected[0] || null;
+};
+
 export const CgroupSelector = {
     oninit(vnode) {
         vnode.state.selectedCgroups = new Set(persistedSelectedCgroups);

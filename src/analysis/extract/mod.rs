@@ -1,7 +1,7 @@
 //! Extraction: turn a recording into a deterministic [`OverviewRecord`].
 //!
 //! v1 emits one aggregated entry per metric *name* (counters as
-//! `sum(rate(m[1m]))`, gauges as `sum(m)`, histograms as three quantile
+//! `sum(irate(m[1m]))`, gauges as `sum(m)`, histograms as three quantile
 //! entries `m:p50`/`m:p90`/`m:p99`), so emitted names are unique and
 //! `EvidenceRef.metric` is unambiguous. Per-entry cost is one engine query,
 //! plus a second uncertainty query for counters. Correlation evaluates up to
@@ -270,7 +270,7 @@ pub(crate) fn subsystem_of(
 
 /// Query templates matching the MCP exhaustive mode.
 fn counter_query(name: &str) -> String {
-    format!("sum(rate({name}[1m]))")
+    format!("sum(irate({name}[1m]))")
 }
 fn gauge_query(name: &str) -> String {
     format!("sum({name})")
@@ -734,7 +734,7 @@ mod tests {
         MetricAnalysis {
             name: name.to_string(),
             metric_type: "counter".to_string(),
-            query: format!("sum(rate({name}[1m]))"),
+            query: format!("sum(irate({name}[1m]))"),
             subsystem: "cpu_usage".to_string(),
             status: crate::analysis::record::AnalysisStatus::Analyzed,
             stats: Stats {

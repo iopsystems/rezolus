@@ -145,11 +145,8 @@ mod tests {
             let schema = Arc::new(Schema::new(vec![
                 Field::new("timestamp", DataType::UInt64, false),
                 Field::new("duration", DataType::UInt64, false),
-                Field::new("queue_depth", DataType::Int64, false).with_metadata(
-                    [("metric_type".to_string(), "gauge".to_string())]
-                        .into_iter()
-                        .collect(),
-                ),
+                Field::new("queue_depth", DataType::Int64, false)
+                    .with_metadata([("metric_type", "gauge")]),
             ]));
             let batch = RecordBatch::try_new(
                 schema.clone(),

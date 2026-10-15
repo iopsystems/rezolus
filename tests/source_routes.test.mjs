@@ -93,7 +93,7 @@ test('source chart route reconstructs the chart from the catalog', async () => {
 
         const plots = scv.attrs.data.groups[0].subgroups[0].plots;
         assert.equal(plots[0].opts.id, 'source-metric-hub_heartbeat');
-        assert.equal(plots[0].promql_query, 'rate(hub_heartbeat[5m])');
+        assert.equal(plots[0].promql_query, 'irate(hub_heartbeat[5m])');
         assert.ok(plots[0].data, 'plot should be populated by the query');
     } finally {
         restore();

@@ -188,7 +188,7 @@ pub fn command() -> Command {
                           \"query\": \"request_latency_seconds\", \"type\": \"histogram\",\n         \
                           \"check\": {\"above\": 0.25, \"quantile\": 0.99, \"for\": \"10s\"}},\n        \
                          {\"role\": \"throughput\", \"title\": \"Request rate\",\n         \
-                          \"query\": \"sum(rate(http_requests_total[10s]))\", \"type\": \"delta_counter\",\n         \
+                          \"query\": \"sum(irate(http_requests_total[10s]))\", \"type\": \"delta_counter\",\n         \
                           \"check\": {\"below\": 100, \"severity\": \"warn\"}}\n      \
                        ]\n    \
                      }\n\n\

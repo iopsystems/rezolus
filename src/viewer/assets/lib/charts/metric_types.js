@@ -1,7 +1,7 @@
 /** Default percentile quantiles used across the viewer. */
 export const DEFAULT_PERCENTILES = [0.5, 0.9, 0.99, 0.999, 0.9999];
 
-/** Default rate window for counter metrics (PromQL rate() function). */
+/** Range of the default counter query, `irate(name[range])`. */
 export const DEFAULT_RATE_WINDOW = '5m';
 
 /**
@@ -162,7 +162,7 @@ export function buildDefaultQuery(metricInfo) {
         return buildHistogramQuery(name, 'percentiles', DEFAULT_PERCENTILES);
     }
     if (metric_type === 'counter') {
-        return `rate(${name}[${DEFAULT_RATE_WINDOW}])`;
+        return `irate(${name}[${DEFAULT_RATE_WINDOW}])`;
     }
     return name; // gauge
 }

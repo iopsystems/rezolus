@@ -20,7 +20,8 @@ the file if you were not given one; `rezolus record -o out.dendro` writes one.
    the list of recordings with the `recording` selector that picks each.
 2. **`describe_metrics`** before any query. Metric names, types and labels
    come from the recording, not from memory. A counter is queried with
-   `rate(name[1m])`, a gauge directly, a histogram with
+   `irate(name[1m])` (the per-step rate; `rate(name[5m])` is the average
+   over five minutes), a gauge directly, a histogram with
    `histogram_quantile(0.99, name)`.
 3. **`extract_features`** for the overview: per-metric stats, noise class,
    anomalies, regime shifts, uncertainty, correlations, resource rankings.
@@ -34,11 +35,12 @@ Rules that hold on every recording:
 
 - A missing metric is not zero. A sampler that was off or a kernel without
   the hook leaves the metric absent; say so rather than reading it as idle.
-- `rate()` values carry an uncertainty band `[lo, hi]` from the acquisition
-  window: in `query` JSON it is the `bands` (and `intervals`) list aligned
-  with `values`. A difference inside the band is not a difference. A
-  recording with no acquisition windows (for example a parquet combined into
-  a `.rez`) has no band, which says nothing about its precision.
+- `irate()` and `rate()` values carry an uncertainty band `[lo, hi]` from the
+  acquisition window: in `query` JSON it is the `bands` (and `intervals`)
+  list aligned with `values`. A difference inside the band is not a
+  difference. A recording with no acquisition windows (for example a
+  parquet combined into a `.rez`) has no band, which says nothing about its
+  precision.
 - Correlation does not establish causation. Report it as co-movement.
 - On a multi-recording `.rez`, pass the `recording` selector
   (e.g. `{"source": "redis"}`) to every call. Matching none or several is

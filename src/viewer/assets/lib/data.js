@@ -1,7 +1,7 @@
 import { ViewerApi } from './viewer_api.js';
 import { resolveStyle, buildHistogramQuery, isHistogramPlot } from './charts/metric_types.js';
 import { collectGroupPlots } from './features/group_utils.js';
-import { firstVisibleLabelValue } from './labels.js';
+import { firstVisibleLabelValue, seriesNamer } from './labels.js';
 
 // Capture-id constants. Typos become grep-able; use these in place of
 // raw 'baseline' / 'experiment' string literals.
@@ -78,13 +78,6 @@ let _stepOverride = null;
 const setStepOverride = (step) => { _stepOverride = step; };
 const getStepOverride = () => _stepOverride;
 
-// Rate time-alignment mode (the "Time mode" control): 'grid' (default,
-// grid-aligned per-step rate with bounds, A/B-comparable) or 'raw' (points at
-// real sample timestamps, un-aligned — jitter/cadence). Compare mode forces
-// 'grid' since Raw is un-alignable across recordings.
-let _rateMode = 'grid';
-const setRateMode = (mode) => { _rateMode = mode === 'raw' ? 'raw' : 'grid'; };
-const getRateMode = () => _rateMode;
 
 // Default { start, end, step } for an overview range query: the WHOLE
 // recording at its NATIVE sampling interval. Decimation for display is
@@ -163,18 +156,18 @@ export const defaultRangeFor = (meta) => {
     return { start, end, step };
 };
 
-// Counter rate/irate no longer need query rewriting for coarse granularity: the
-// engine computes a per-step grid rate (rate ≡ irate; the [range] window is
-// inert) using the `step` we pass, so a coarser step yields a coarser, smoothed
-// interval for free. Histograms still take a stride parameter (see
+// Counter irate needs no query rewriting for coarse granularity: the engine
+// computes it per step from the `step` we pass, so a coarser step yields a
+// coarser, smoothed rate. rate(x[range]) is the average over its range at each
+// step. Histograms still take a stride parameter (see
 // buildHistogramQuery / histogram_heatmap); gauges are sampled at step points.
 
 const defaultGetMetadata = () => ViewerApi.getMetadata();
-const defaultQueryRange = (query, start, end, step, captureId = 'baseline', signal = undefined, rateMode = getRateMode()) =>
+const defaultQueryRange = (query, start, end, step, captureId = 'baseline', signal = undefined, rateMode = 'grid') =>
     ViewerApi.queryRange(query, start, end, step, captureId, signal, rateMode);
 
 // Per-capture queries drive A/B compare, which is only meaningful on a shared
-// grid — force 'grid' regardless of the current mode (Raw is un-alignable).
+// grid.
 export const queryRangeForCapture = (captureId, query, start, end, step) =>
     defaultQueryRange(query, start, end, step, captureId, undefined, 'grid');
 
@@ -357,10 +350,10 @@ export const heatmapStep = (meta, start, end, budget = displayBudget()) => {
     return stepAtLeast(native, Math.max(width, step));
 };
 
-// A heatmap of a rate is fetched at the coarse step, where the engine's value
-// is the average rate over each step. A heatmap of a gauge is fetched in
-// display mode and drawn from bucket medians, because a gauge at a coarse
-// step is one sample, not an average.
+// A heatmap of a rate is fetched at the coarse step, where an irate is the
+// average rate over each step (a rate(x[r]) is the average over r). A
+// heatmap of a gauge is fetched in display mode and drawn from bucket
+// medians, because a gauge at a coarse step is one sample, not an average.
 const RATE_FN = /\b(?:i?rate)\s*\(/;
 export const isRateQuery = (query) => RATE_FN.test(query);
 
@@ -441,10 +434,6 @@ const plotUsesDisplay = (plot) => {
     return plot.opts?.subtype === 'percentiles';
 };
 
-// A short series label from its distinguishing labels (the first visible
-// one; internal labels such as `__name__` and `__incarnation__` never name a
-// series).
-const displaySeriesName = (metric, i) => firstVisibleLabelValue(metric) ?? `Series ${i + 1}`;
 
 // Fetch + decode the display-mode boxplot response. Uses defaultRangeFor so
 // it honors the zoom range override (drill-down) with the same point budget.
@@ -535,7 +524,7 @@ const fetchDisplaySeries = async (query, meta, signal) => {
     const budget = displayBudget();
     const cached = tileLookup(query, start, end, step, budget);
     if (cached) return cached; // covered at sufficient resolution — no network
-    const res = await ViewerApi.queryRangeDisplay(query, start, end, step, { points: budget, signal, rateMode: getRateMode() });
+    const res = await ViewerApi.queryRangeDisplay(query, start, end, step, { points: budget, signal });
     if (!res.buffer) {
         throw new Error(res.json?.error || 'display query returned a non-series result');
     }
@@ -612,8 +601,9 @@ const applyDisplayToPlot = (plot, decoded) => {
     // and (eventually) whether the line render draws collapsed identity bands.
     plot.boxplotDecimated = series.some((s) => s.decimated);
     plot.series_metrics = series.map((s) => s.metric || {});
+    const nameOf = seriesNamer(series.map((s) => s.metric || {}));
     plot.series_names = series.length > 1
-        ? series.map((s, i) => displaySeriesName(s.metric, i))
+        ? series.map((s, i) => nameOf(s.metric || {}) ?? `Series ${i + 1}`)
         : [];
     // Measurement-uncertainty bands from the aggregated uncLo/uncHi columns —
     // the median-of-interval-edges band computed server-side during decimation
@@ -1034,17 +1024,13 @@ const applyResultToPlot = (plot, result) => {
                 const seriesIntervals = [];
                 let timestamps = null;
 
-                // A GPU is identified by (vendor, id): every vendor's sampler
-                // numbers its devices from 0, so a host with an NVIDIA card and
-                // an Intel iGPU has two GPUs both labelled id="0". Naming a
-                // series by whichever label iterates first would render both as
-                // "0" — two indistinguishable lines.
-                //
-                // The vendor is only worth showing when the result actually
-                // spans vendors; on a single-vendor host "intel GPU 0" is noise
-                // where "GPU 0" says the same thing. Decided over the whole
-                // result set, so every line in one chart is named consistently.
+                // A series with both `id` and `vendor` is named `<vendor> <id>`:
+                // every vendor's sampler numbers its devices from 0, so a host
+                // with an NVIDIA card and an Intel iGPU has two GPUs labelled
+                // id="0". Any other series is named by the labels that differ
+                // between the result's series (seriesNamer).
 
+                const nameOf = seriesNamer(result.data.result.map((item) => item.metric || {}));
                 result.data.result.forEach((item, idx) => {
                     if (item.values && Array.isArray(item.values)) {
                         let seriesName = 'Series ' + (idx + 1);
@@ -1053,7 +1039,7 @@ const applyResultToPlot = (plot, result) => {
                             if (id !== undefined && vendor !== undefined) {
                                 seriesName = `${vendor} ${id}`;
                             } else {
-                                seriesName = firstVisibleLabelValue(item.metric) ?? seriesName;
+                                seriesName = nameOf(item.metric) ?? seriesName;
                             }
                         }
 
@@ -1130,14 +1116,16 @@ const createDataApi = ({
         return metadataResponse.data;
     };
 
-    const executePromQLRangeQuery = async (query, metadata, signal) => {
+    // `rateMode` 'raw' places each point at a sample's own timestamp (the
+    // single-chart view's samples toggle); the default is the step grid.
+    const executePromQLRangeQuery = async (query, metadata, signal, rateMode = 'grid') => {
         const meta = metadata || cachedMetadata || await fetchMetadata();
 
         // Whole recording at native step; echarts LTTB decimates for
         // display. See defaultRangeFor for why we don't decimate via step.
         const { start, end, step } = defaultRangeFor(meta);
 
-        return queryRange(query, start, end, step, 'baseline', signal);
+        return queryRange(query, start, end, step, 'baseline', signal, rateMode);
     };
 
     // A per-entity heatmap over the current range, as a matrix result with
@@ -1212,8 +1200,8 @@ const createDataApi = ({
                 stepActive ? stepOverride : undefined,
             );
         }
-        // Counter rate/irate need no rewrite — the engine's per-step grid rate
-        // uses the `step` we pass (a coarse step → a coarse, smoothed interval).
+        // A counter's irate needs no rewrite: the engine computes it per step
+        // from the `step` we pass. rate(x[r]) averages over r at any step.
         if (q.includes('__SELECTED_CGROUPS__')) {
             if (activeCgroupPattern) {
                 q = substituteCgroupPattern(q, activeCgroupPattern);
@@ -1600,8 +1588,6 @@ export {
     createDataApi,
     setStepOverride,
     getStepOverride,
-    setRateMode,
-    getRateMode,
     setSelectedNode,
     getSelectedNode,
     setSelectedGpus,

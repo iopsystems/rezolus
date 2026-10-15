@@ -3,13 +3,13 @@
 
 import { ChartsState, Chart } from './charts/chart.js';
 import { QueryExplorer, SingleChartView } from './features/explorers.js';
-import { CgroupSelector, seedSelectedCgroups } from './features/cgroup_selector.js';
+import { CgroupSelector, seedSelectedCgroups, selectedCgroupPattern } from './features/cgroup_selector.js';
 import { GpuSelector } from './features/gpu_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
 import { collectGroupPlots } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setRateMode, getRateMode, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, clampRangeToExtent, sameExtent, nativeInterval, stepAtLeast, CAPTURE_BASELINE, CAPTURE_EXPERIMENT, listCaptures, captureMetadata, clearCaptureMemo } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, clampRangeToExtent, sameExtent, nativeInterval, stepAtLeast, CAPTURE_BASELINE, CAPTURE_EXPERIMENT, listCaptures, captureMetadata, clearCaptureMemo } from './data.js';
 
 // Opt line-ish charts into display (boxplot decimation) mode: they fetch the
 // decimated boxplot binary instead of the full native-resolution JSON matrix.
@@ -82,7 +82,6 @@ let heatmapLoading = false;
 const heatmapDataCache = new Map();
 const chartsState = new ChartsState();
 let currentGranularity = null;
-let currentTimeMode = 'grid';
 const sectionCacheState = createSectionCacheState();
 // Cache limit: overview (pinned) + active route + one look-ahead. Keeps
 // memory bounded on the static-site WASM viewer where each section body
@@ -410,7 +409,9 @@ const applyMultiNodeInfo = (experimentFileMetadata = null) => {
     }
 };
 
-const loadSection = async (section) => {
+// `cgroupPattern` replaces the selector's pattern for this load: an expanded
+// chart passes the link's selection, since it mounts no selector.
+const loadSection = async (section, { cgroupPattern = activeCgroupPattern } = {}) => {
     if (sectionResponseCache[section]) return sectionResponseCache[section];
 
     const data = await ViewerApi.getSection(section);
@@ -466,7 +467,7 @@ const loadSection = async (section) => {
         }
     }
 
-    const processedData = await processDashboardData(data, activeCgroupPattern, `/${section}`);
+    const processedData = await processDashboardData(data, cgroupPattern, `/${section}`);
     const cached = cacheSectionResponse(section, processedData);
 
     // A link range still waiting for the recording's extent: clamp it now
@@ -614,8 +615,8 @@ const clampLinkRange = (link, full) => {
 let _pendingLinkClamp = null;
 
 // Forget everything a link or a session put in the view: the range
-// override and its cached extent, the time mode, the GPU and cgroup
-// selections, and the URL keys that carried them. Both shells call this
+// override and its cached extent, the GPU and cgroup selections, and the
+// URL keys that carried them. Both shells call this
 // when a different file is loaded, before the new file is read, so the
 // previous file's window is never applied to the new one. The node and
 // instance selections are re-derived from the new file's metadata by
@@ -624,8 +625,6 @@ const resetLinkedViewState = () => {
     _baselineRange = null;
     _pendingLinkClamp = null;
     setRangeOverride(null);
-    currentTimeMode = 'grid';
-    setRateMode('grid');
     selectedGpus = [];
     setSelectedGpus([]);
     seedSelectedCgroups([]);
@@ -809,36 +808,6 @@ const changeGranularity = async (step) => {
     } catch (_) { /* keep existing view on error */ }
 };
 
-const changeTimeMode = async (mode) => {
-    currentTimeMode = mode === 'raw' ? 'raw' : 'grid';
-    setRateMode(currentTimeMode);
-    writeViewState({ time: currentTimeMode });
-
-    const currentRoute = m.route.get();
-    const section = currentRoute ? currentRoute.replace(/^\//, '') : '';
-
-    // Every cached rate/irate series is stale against the new time mode. The
-    // display tile cache is keyed by query text (not mode), so it MUST be
-    // cleared here or already-loaded charts keep serving the old mode's tiles.
-    clearDisplayTiles();
-    clearSectionResponses(sectionCacheState);
-    heatmapDataCache.clear();
-    // Reset the zoom COMPLETELY: the visual dataZoom AND the query-range
-    // override. Resetting only the visual (setZoom) left `_rangeOverride`
-    // pinned, so charts could desync — some refetched the stale zoom window
-    // while others returned to full range. Both must clear together.
-    commitRangeOverride(null);
-    chartsState.setZoom(null, { source: null });
-    chartsState.globalZoom = null;
-
-    const target = !section || CLIENT_ONLY_SECTIONS.has(section) ? 'overview' : section;
-    try {
-        const data = await loadSection(target);
-        if (data?.sections) preloadSections(data.sections);
-        m.redraw();
-    } catch (_) { /* keep existing view on error */ }
-};
-
 const toggleGlobalHeatmap = async (sectionRoute, groups) => {
     heatmapEnabled = !heatmapEnabled;
     const cached = heatmapDataCache.get(sectionRoute);
@@ -873,8 +842,6 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     onUploadParquet,
     granularity: currentGranularity,
     onGranularityChange: changeGranularity,
-    timeMode: currentTimeMode,
-    onTimeModeChange: changeTimeMode,
     nodeList,
     selectedNode,
     nodeVersions,
@@ -1196,20 +1163,11 @@ const initDashboard = (config = {}) => {
     }
 
     // View state carried by the link (ui/url_state.js). A key in the URL
-    // wins over localStorage for that key only. Order matters: time mode
-    // first (a mode change clears the range), then the selectors (each is
-    // validated when its list arrives, below and in loadSection), then the
-    // range, then the compare anchors once the compare state is known.
+    // wins over localStorage for that key only. Order matters: the selectors
+    // first (each is validated when its list arrives, below and in
+    // loadSection), then the range, then the compare anchors once the
+    // compare state is known. `time` is read by the single-chart view.
     const linkState = readViewState();
-    if (linkState.time && !compareMode) {
-        // Set directly, not through changeTimeMode, which reloads and clears
-        // the range.
-        currentTimeMode = linkState.time;
-        setRateMode(currentTimeMode);
-    } else if (linkState.time === 'raw' && compareMode) {
-        console.warn('[time] compare mode uses aligned time; ignoring time=raw');
-        writeViewState({ time: null });
-    }
     // applyMultiNodeInfo keeps a prior selection when the node exists in
     // the union, so seeding it here is the validation.
     if (linkState.node) selectedNode = linkState.node;
@@ -1424,6 +1382,8 @@ const initDashboard = (config = {}) => {
                                     data,
                                     chartId: decodeURIComponent(params.chartId),
                                     applyResultToPlot,
+                                    sectionRoute: `/${sectionKey}`,
+                                    activeCgroupPattern: activeCgroupPattern ?? selectedCgroupPattern(),
                                 }),
                             ]),
                         ]);
@@ -1433,7 +1393,9 @@ const initDashboard = (config = {}) => {
                 // Resolve synchronously regardless of cache state — see
                 // the matching comment in '/:section' below for rationale.
                 if (!sectionResponseCache[sectionKey]) {
-                    loadSection(sectionKey)
+                    loadSection(sectionKey, {
+                        cgroupPattern: activeCgroupPattern ?? selectedCgroupPattern(),
+                    })
                         .then(() => m.redraw())
                         .catch(() => {});
                 }
@@ -1491,6 +1453,8 @@ const initDashboard = (config = {}) => {
         },
         '/:section': {
             onmatch(params, requestedPath) {
+                // `time=raw` is a single chart's mode; a section is on the grid.
+                writeViewState({ time: null });
                 if (m.route.get() === requestedPath) {
                     return new Promise(function () {});
                 }

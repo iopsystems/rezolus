@@ -193,7 +193,7 @@ least 10 seconds of data. Then query a specific hypothesis using the metric
 names, types, and labels returned by `describe-metrics`:
 
 ```bash
-rezolus mcp query run.rez 'sum(rate(cpu_cycles[1m]))'
+rezolus mcp query run.rez 'sum(irate(cpu_cycles[1m]))'
 ```
 
 For a multi-recording archive, first run `describe-recording` without a selector

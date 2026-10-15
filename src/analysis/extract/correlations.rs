@@ -150,7 +150,7 @@ mod tests {
     fn cand(name: &str, salience: usize, subsystem: &str) -> Candidate {
         Candidate {
             name: name.to_string(),
-            query: format!("sum(rate({name}[1m]))"),
+            query: format!("sum(irate({name}[1m]))"),
             subsystem: subsystem.to_string(),
             salience,
         }

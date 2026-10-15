@@ -197,8 +197,8 @@ async function loadFile(file) {
         splashProgress = -1;
         m.redraw();
         // Before the new file is read: loadParquet re-runs initDashboard,
-        // which reads the URL, so the previous file's window, time mode
-        // and selections (and the keys carrying them) must be gone first.
+        // which reads the URL, so the previous file's window and selections
+        // (and the keys carrying them) must be gone first.
         resetLinkedViewState();
         await loadParquet(data, display);
         // Drop any URL params that pinned the previous capture so a

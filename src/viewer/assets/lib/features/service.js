@@ -2,6 +2,7 @@
 // Used by both the binary viewer and the static site viewer.
 
 import { renderSectionNotes } from '../sections/section_notes.js';
+import { writeViewState } from '../ui/url_state.js';
 
 /**
  * Render service section content (metadata table, KPI groups, unavailable list).
@@ -201,6 +202,7 @@ const createServiceRoutes = (deps) => {
                                     data: viewData,
                                     chartId: decodeURIComponent(params.chartId),
                                     applyResultToPlot,
+                                    sectionRoute,
                                 }),
                             ]),
                         ]);
@@ -220,6 +222,8 @@ const createServiceRoutes = (deps) => {
         },
         '/service/:serviceName': {
             onmatch(params, requestedPath) {
+                // `time=raw` is a single chart's mode; a section is on the grid.
+                writeViewState({ time: null });
                 if (m.route.get() === requestedPath) {
                     return new Promise(function () {});
                 }

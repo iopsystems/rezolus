@@ -375,7 +375,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     energy.describe("Energy consumption rate derived from the accumulating GPU energy counter.");
     energy.plot_promql_full(
         PlotOpts::counter("Energy Rate (W)", "energy-rate", Unit::Count).with_axis_label("Watts"),
-        "sum(rate(gpu_energy_consumption[5m])) / 1000".to_string(),
+        "sum(irate(gpu_energy_consumption[5m])) / 1000".to_string(),
     );
 
     view.group(power);
@@ -456,22 +456,22 @@ fn amd_pmu(view: &mut View) {
     busy.plot_promql(
         PlotOpts::gauge("Active Workgroup Processors", "amd-active-wgp", Unit::Count)
             .with_axis_label("WGPs"),
-        "sum(rate(gpmu_busy_cycles[5m])) / sum(rate(gpmu_clock[5m]))".to_string(),
+        "sum(irate(gpmu_busy_cycles[5m])) / sum(irate(gpmu_clock[5m]))".to_string(),
     );
     busy.plot_promql(
         PlotOpts::counter("VALU Instructions/s", "amd-valu-rate", Unit::Count)
             .with_axis_label("instr/s"),
-        "sum(rate(gpmu_valu_instructions[5m]))".to_string(),
+        "sum(irate(gpmu_valu_instructions[5m]))".to_string(),
     );
     busy.plot_promql(
         PlotOpts::counter("SALU Instructions/s", "amd-salu-rate", Unit::Count)
             .with_axis_label("instr/s"),
-        "sum(rate(gpmu_salu_instructions[5m]))".to_string(),
+        "sum(irate(gpmu_salu_instructions[5m]))".to_string(),
     );
     busy.plot_promql(
         PlotOpts::counter("LDS Instructions/s", "amd-lds-rate", Unit::Count)
             .with_axis_label("instr/s"),
-        "sum(rate(gpmu_lds_instructions[5m]))".to_string(),
+        "sum(irate(gpmu_lds_instructions[5m]))".to_string(),
     );
     // Estimated total instructions/s = VALU + SALU + LDS issue rates.
     busy.plot_promql(
@@ -481,14 +481,14 @@ fn amd_pmu(view: &mut View) {
             Unit::Count,
         )
         .with_axis_label("instr/s"),
-        "sum(rate(gpmu_valu_instructions[5m])) + sum(rate(gpmu_salu_instructions[5m])) \
-         + sum(rate(gpmu_lds_instructions[5m]))"
+        "sum(irate(gpmu_valu_instructions[5m])) + sum(irate(gpmu_salu_instructions[5m])) \
+         + sum(irate(gpmu_lds_instructions[5m]))"
             .to_string(),
     );
     busy.plot_promql(
         PlotOpts::counter("Total Busy Cycles/s", "amd-total-busy-cycles", Unit::Count)
             .with_axis_label("cycles/s"),
-        "sum(rate(gpmu_busy_cycles[5m]))".to_string(),
+        "sum(irate(gpmu_busy_cycles[5m]))".to_string(),
     );
     // Estimated IPC = estimated total instructions / total busy cycles.
     busy.plot_promql(
@@ -498,13 +498,13 @@ fn amd_pmu(view: &mut View) {
             Unit::Count,
         )
         .with_axis_label("instr/cycle"),
-        "(sum(rate(gpmu_valu_instructions[5m])) + sum(rate(gpmu_salu_instructions[5m])) \
-         + sum(rate(gpmu_lds_instructions[5m]))) / sum(rate(gpmu_busy_cycles[5m]))"
+        "(sum(irate(gpmu_valu_instructions[5m])) + sum(irate(gpmu_salu_instructions[5m])) \
+         + sum(irate(gpmu_lds_instructions[5m]))) / sum(irate(gpmu_busy_cycles[5m]))"
             .to_string(),
     );
     busy.plot_promql(
         PlotOpts::counter("Waves/s", "amd-waves-rate", Unit::Count).with_axis_label("waves/s"),
-        "sum(rate(gpmu_waves[5m]))".to_string(),
+        "sum(irate(gpmu_waves[5m]))".to_string(),
     );
     // Estimated instructions per wave = estimated total instructions / waves.
     busy.plot_promql(
@@ -514,14 +514,14 @@ fn amd_pmu(view: &mut View) {
             Unit::Count,
         )
         .with_axis_label("instr/wave"),
-        "(sum(rate(gpmu_valu_instructions[5m])) + sum(rate(gpmu_salu_instructions[5m])) \
-         + sum(rate(gpmu_lds_instructions[5m]))) / sum(rate(gpmu_waves[5m]))"
+        "(sum(irate(gpmu_valu_instructions[5m])) + sum(irate(gpmu_salu_instructions[5m])) \
+         + sum(irate(gpmu_lds_instructions[5m]))) / sum(irate(gpmu_waves[5m]))"
             .to_string(),
     );
     busy.plot_promql(
         PlotOpts::gauge("Cycles Per Wave", "amd-cycles-per-wave", Unit::Count)
             .with_axis_label("cycles/wave"),
-        "sum(rate(gpmu_busy_cycles[5m])) / sum(rate(gpmu_waves[5m]))".to_string(),
+        "sum(irate(gpmu_busy_cycles[5m])) / sum(irate(gpmu_waves[5m]))".to_string(),
     );
     // Average resident waves per active WGP cycle = rate(SQ_WAVE_CYCLES) /
     // rate(SQ_BUSY_CYCLES). Both are per-WGP wave-cycle counters, so the ratio
@@ -535,7 +535,7 @@ fn amd_pmu(view: &mut View) {
             Unit::Count,
         )
         .with_axis_label("waves/active cycle"),
-        "sum(rate(gpmu_wave_cycles[5m])) / sum(rate(gpmu_busy_cycles[5m]))".to_string(),
+        "sum(irate(gpmu_wave_cycles[5m])) / sum(irate(gpmu_busy_cycles[5m]))".to_string(),
     );
     // Average resident waves per GPU = rate(SQ_WAVE_CYCLES) /
     // rate(GRBM_GUI_ACTIVE). Normalizes wave-cycles by GPU-active cycles instead
@@ -543,7 +543,7 @@ fn amd_pmu(view: &mut View) {
     busy.plot_promql(
         PlotOpts::gauge("Average Waves Per GPU", "amd-waves-per-gpu", Unit::Count)
             .with_axis_label("waves/active cycle"),
-        "sum(rate(gpmu_wave_cycles[5m])) / sum(rate(gpmu_active_clock[5m]))".to_string(),
+        "sum(irate(gpmu_wave_cycles[5m])) / sum(irate(gpmu_active_clock[5m]))".to_string(),
     );
 
     // ----- Caches -----
@@ -558,11 +558,11 @@ fn amd_pmu(view: &mut View) {
             Unit::Percentage,
         )
         .percentage_range(),
-        "sum(rate(gpmu_icache_hits[5m])) / sum(rate(gpmu_icache_requests[5m]))".to_string(),
+        "sum(irate(gpmu_icache_hits[5m])) / sum(irate(gpmu_icache_requests[5m]))".to_string(),
     );
     caches.plot_promql(
         PlotOpts::gauge("L2 Cache Hit %", "amd-l2-hit", Unit::Percentage).percentage_range(),
-        "sum(rate(gpmu_l2_hits[5m])) / (sum(rate(gpmu_l2_hits[5m])) + sum(rate(gpmu_l2_misses[5m])))"
+        "sum(irate(gpmu_l2_hits[5m])) / (sum(irate(gpmu_l2_hits[5m])) + sum(irate(gpmu_l2_misses[5m])))"
             .to_string(),
     );
 
@@ -580,7 +580,7 @@ fn amd_pmu(view: &mut View) {
             "amd-mem-read-bw",
             Unit::Datarate,
         ),
-        "sum(rate(gpmu_vram_read_requests[5m])) * 128".to_string(),
+        "sum(irate(gpmu_vram_read_requests[5m])) * 128".to_string(),
     );
     bw.plot_promql(
         PlotOpts::counter(
@@ -588,17 +588,17 @@ fn amd_pmu(view: &mut View) {
             "amd-mem-write-bw",
             Unit::Datarate,
         ),
-        "sum(rate(gpmu_vram_write_requests[5m])) * 64".to_string(),
+        "sum(irate(gpmu_vram_write_requests[5m])) * 64".to_string(),
     );
     bw.plot_promql(
         PlotOpts::counter("VRAM Read Requests", "amd-vram-read-req", Unit::Count)
             .with_axis_label("requests/s"),
-        "sum(rate(gpmu_vram_read_requests[5m]))".to_string(),
+        "sum(irate(gpmu_vram_read_requests[5m]))".to_string(),
     );
     bw.plot_promql(
         PlotOpts::counter("VRAM Write Requests", "amd-vram-write-req", Unit::Count)
             .with_axis_label("requests/s"),
-        "sum(rate(gpmu_vram_write_requests[5m]))".to_string(),
+        "sum(irate(gpmu_vram_write_requests[5m]))".to_string(),
     );
 
     view.group(pmu);
@@ -670,7 +670,7 @@ fn intel_pmu(view: &mut View, data: &dyn MetricsSource) {
     // integrated GPU (no compute engine) shows no empty compute section.
     for (class_name, title) in ENGINE_CLASSES {
         let query_all = format!(
-            "sum(rate(gpu_engine_busy_time{{engine_class=\"{class_name}\", \
+            "sum(irate(gpu_engine_busy_time{{engine_class=\"{class_name}\", \
              vendor=\"intel\"}}[5m])) / 1000000000"
         );
 
@@ -708,7 +708,7 @@ fn intel_pmu(view: &mut View, data: &dyn MetricsSource) {
             .with_row_label("GPU")
             .with_style("heatmap"),
             format!(
-                "sum by (id, vendor) (rate(gpu_engine_busy_time{{engine_class=\"{class_name}\", \
+                "sum by (id, vendor) (irate(gpu_engine_busy_time{{engine_class=\"{class_name}\", \
                  vendor=\"intel\"}}[5m])) / 1000000000"
             ),
         );
@@ -725,12 +725,12 @@ fn intel_pmu(view: &mut View, data: &dyn MetricsSource) {
     );
     freq.plot_promql(
         PlotOpts::gauge("Actual", "intel-freq-actual", Unit::Frequency),
-        "sum by (id, vendor) (rate(gpu_frequency_sample{frequency=\"actual\", vendor=\"intel\"}[5m])) * 1000000"
+        "sum by (id, vendor) (irate(gpu_frequency_sample{frequency=\"actual\", vendor=\"intel\"}[5m])) * 1000000"
             .to_string(),
     );
     freq.plot_promql(
         PlotOpts::gauge("Requested", "intel-freq-requested", Unit::Frequency),
-        "sum by (id, vendor) (rate(gpu_frequency_sample{frequency=\"requested\", vendor=\"intel\"}[5m])) * 1000000"
+        "sum by (id, vendor) (irate(gpu_frequency_sample{frequency=\"requested\", vendor=\"intel\"}[5m])) * 1000000"
             .to_string(),
     );
 
