@@ -416,6 +416,9 @@ impl CategoryKpi {
     /// produce given the supplied raw query. Mirrors `Kpi::effective_query`
     /// — histogram_quantiles wrapping, histogram_heatmap for buckets,
     /// passthrough for everything else.
+    ///
+    /// Not for a plot's query: the viewer wraps a histogram plot's query
+    /// itself, so a plot carries the raw query.
     pub fn effective_query(&self, raw_query: &str) -> String {
         if self.metric_type == "histogram" {
             let subtype = self.subtype.as_deref().unwrap_or("percentiles");

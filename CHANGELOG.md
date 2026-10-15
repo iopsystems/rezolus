@@ -889,6 +889,29 @@
 
 ### Fixed
 
+- A Save as Report trimmed to charts that include a histogram's Rate chart
+  (`sum(histogram_irate(..))`: runqueue, off-CPU and running time, TCP
+  packet latency, Block IO queue wait) but none of its percentile charts
+  dropped that histogram's column, and the saved Rate chart was empty:
+  metriken-query before 0.37.1 could not read the metrics of that query.
+
+- The valkey template's five KPIs never drew: PromQL read
+  `redis/total_commands_processed` as a division. They name their metrics
+  as `{__name__="redis/total_commands_processed", source="valkey"}`, which
+  metriken-query reads from 0.37.1, and the viewer's instance picker adds
+  its matcher to that form.
+
+- The inference-library category section's histogram KPIs (time to first
+  token and the other latency charts) never drew: the section wrapped the
+  query in `histogram_quantiles(..)` and the viewer wrapped it again, which
+  does not parse. The section sends the raw query, as a service section
+  does.
+
+- The TUI names a chart's series as the browser viewer does: by the labels
+  that differ between them, a device as `<vendor> <id>`, and a series with
+  no such label as `Series <n>`. A recording's `host` or `source` no
+  longer stands in for the CPU or operation that tells two series apart.
+
 - `memory_writeback` reports unsupported, naming writeback throttling, when
   BTF gives `balance_dirty_pages` an argument count it has no program for;
   it read healthy before. (#1468)
