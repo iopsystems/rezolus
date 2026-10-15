@@ -71,6 +71,18 @@
 
 ### Changed
 
+- **metriken-query 0.38.** An instant query of a histogram function
+  (`/api/v1/query`, the static viewer's `query()`) reads back three of the
+  histogram's row intervals, not 300 s: on a 9.6 h, 1 s recording an
+  instant `histogram_mean` takes tens of milliseconds where it took about a
+  second. A series with no observations in the last three row intervals has
+  no value at the instant, where 0.37 answered with the last tick that had
+  observations, up to 300 s earlier (on the bench recording,
+  `tcp_connect_latency` at most instants). An instant `histogram_count by
+  (op) (x)` now answers; on 0.37 it returned no series. A strided call
+  (`histogram_count(x, 60)`) still reads back 300 s. The dashboards issue
+  range queries and are unaffected.
+
 - **metriken-query 0.37, metriken-storage 0.3, metriken-exposition 0.23,
   metriken-recorder 0.2, dendro 0.5, arrow and parquet 60, ratatui 0.30.**
   In metriken-query 0.37, `rate(x[range])` is the average rate over
