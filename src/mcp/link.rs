@@ -42,7 +42,9 @@ pub(crate) struct LinkSpec {
     pub chart_id: Option<String>,
     /// Both or neither, in Unix seconds, `to > from`.
     pub range: Option<(f64, f64)>,
-    /// `true` writes `time=raw`; grid is the default and is absent.
+    /// `true` writes `time=raw`, which opens the chart (`chart_id`, required
+    /// with it) with a point at each sample's own timestamp. Grid is the
+    /// default and is absent.
     pub raw_time: bool,
     pub node: Option<String>,
     /// `vendor:id`, or a bare id.
@@ -308,6 +310,9 @@ impl LinkSpec {
             Some("raw") => true,
             Some(other) => return Err(format!("time must be \"raw\" or \"grid\", not {other:?}")),
         };
+        if raw_time && chart_id.is_none() {
+            return Err("time \"raw\" opens one chart: give chart_id".into());
+        }
 
         let gpu = str_list(args, "gpu")?;
         for g in &gpu {
@@ -454,31 +459,31 @@ pub(crate) mod tests {
 
     #[test]
     fn a_base_is_validated_and_joined_by_its_shape() {
-        let spec = LinkSpec::from_args(&json!({"section": "cpu", "time": "raw"})).unwrap();
+        let spec = LinkSpec::from_args(&json!({"section": "cpu", "node": "n"})).unwrap();
         let url = |b: &str| spec.link(Some(&validate_base(b).unwrap())).url.unwrap();
         assert_eq!(
             url("http://127.0.0.1:4200"),
-            "http://127.0.0.1:4200/?time=raw#/cpu"
+            "http://127.0.0.1:4200/?node=n#/cpu"
         );
         assert_eq!(
             url("http://127.0.0.1:4200/"),
-            "http://127.0.0.1:4200/?time=raw#/cpu"
+            "http://127.0.0.1:4200/?node=n#/cpu"
         );
-        assert_eq!(url("https://h/viewer/"), "https://h/viewer/?time=raw#/cpu");
+        assert_eq!(url("https://h/viewer/"), "https://h/viewer/?node=n#/cpu");
         assert_eq!(
             url("https://iopsystems.github.io/rezolus/viewer/?capture=demo"),
-            "https://iopsystems.github.io/rezolus/viewer/?capture=demo&time=raw#/cpu"
+            "https://iopsystems.github.io/rezolus/viewer/?capture=demo&node=n#/cpu"
         );
         assert_eq!(
             url("http://h/index.html"),
-            "http://h/index.html?time=raw#/cpu"
+            "http://h/index.html?node=n#/cpu"
         );
         assert_eq!(
             url("http://h/index.html?"),
-            "http://h/index.html?time=raw#/cpu"
+            "http://h/index.html?node=n#/cpu"
         );
-        assert_eq!(url("https://h/v1.2/"), "https://h/v1.2/?time=raw#/cpu");
-        assert_eq!(url("http://x"), "http://x/?time=raw#/cpu");
+        assert_eq!(url("https://h/v1.2/"), "https://h/v1.2/?node=n#/cpu");
+        assert_eq!(url("http://x"), "http://x/?node=n#/cpu");
         let bare = LinkSpec::from_args(&json!({"section": "cpu"})).unwrap();
         let b = |s: &str| bare.link(Some(&validate_base(s).unwrap())).url.unwrap();
         assert_eq!(
@@ -538,6 +543,7 @@ pub(crate) mod tests {
                 .contains("digit-only")
         );
         assert!(bad(json!({"section": "cpu", "time": "fast"})).contains("time"));
+        assert!(bad(json!({"section": "cpu", "time": "raw"})).contains("chart_id"));
         assert!(bad(json!({"section": "cpu", "gpu": ["nvidia:"]})).contains("no id"));
         assert!(bad(json!({"section": "cpu", "family": "median"})).contains("family"));
         assert!(bad(json!({"section": "cpu", "family": "sigma:0"})).contains("positive"));

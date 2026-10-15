@@ -375,11 +375,11 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     );
     locality.plot_promql(
         PlotOpts::counter("Local Rate", "numa-local-rate", Unit::Rate),
-        "rate(memory_numa_local[5m])".to_string(),
+        "irate(memory_numa_local[5m])".to_string(),
     );
     locality.plot_promql(
         PlotOpts::counter("Remote Rate", "numa-remote-rate", Unit::Rate),
-        "rate(memory_numa_other[5m])".to_string(),
+        "irate(memory_numa_other[5m])".to_string(),
     );
 
     let policy = numa.subgroup("Memory Policy");
@@ -391,15 +391,15 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     );
     policy.plot_promql(
         PlotOpts::counter("Hit Rate", "numa-hit-rate", Unit::Rate),
-        "rate(memory_numa_hit[5m])".to_string(),
+        "irate(memory_numa_hit[5m])".to_string(),
     );
     policy.plot_promql(
         PlotOpts::counter("Miss Rate", "numa-miss-rate", Unit::Rate),
-        "rate(memory_numa_miss[5m])".to_string(),
+        "irate(memory_numa_miss[5m])".to_string(),
     );
     policy.plot_promql(
         PlotOpts::counter("Interleave Rate", "numa-interleave-rate", Unit::Rate),
-        "rate(memory_numa_interleave[5m])".to_string(),
+        "irate(memory_numa_interleave[5m])".to_string(),
     );
 
     view.group(numa);
@@ -443,12 +443,12 @@ mod tests {
     #[test]
     fn numa_locality_pairs_local_with_other_and_policy_has_its_own_plots() {
         let j = json(&generate(&store_with(&["memory_total"]), vec![]));
-        assert!(j.contains("rate(memory_numa_local[5m])"));
-        assert!(j.contains("rate(memory_numa_other[5m])"));
+        assert!(j.contains("irate(memory_numa_local[5m])"));
+        assert!(j.contains("irate(memory_numa_other[5m])"));
         assert!(!j.contains("memory_numa_foreign"));
-        assert!(j.contains("rate(memory_numa_hit[5m])"));
-        assert!(j.contains("rate(memory_numa_miss[5m])"));
-        assert!(j.contains("rate(memory_numa_interleave[5m])"));
+        assert!(j.contains("irate(memory_numa_hit[5m])"));
+        assert!(j.contains("irate(memory_numa_miss[5m])"));
+        assert!(j.contains("irate(memory_numa_interleave[5m])"));
     }
 
     #[test]

@@ -114,17 +114,19 @@ pub fn format_metrics_description(data: &dyn MetricsSource) -> String {
         "Use the 'rezolus mcp query <file> <query>' command to execute these queries.\n\n",
     );
 
-    output.push_str("Counter queries (use rate() for per-second rates):\n");
-    output.push_str("  rate(cpu_cycles[1m])              - CPU cycles per second for each core\n");
-    output
-        .push_str("  sum(rate(cpu_cycles[1m]))         - Total CPU cycles/sec across all cores\n");
-    output.push_str("  rate(cpu_instructions[1m])        - Instructions retired per second\n");
-    output.push_str("  sum(rate(blockio_bytes[1m]))      - Total block I/O bytes per second\n");
     output.push_str(
-        "  rate(syscall{op=\"read\"}[1m])     - Read syscalls per second (filtered by label)\n",
+        "Counter queries (irate() is the per-second rate; rate(x[r]) averages over r):\n",
+    );
+    output.push_str("  irate(cpu_cycles[1m])             - CPU cycles per second for each core\n");
+    output
+        .push_str("  sum(irate(cpu_cycles[1m]))        - Total CPU cycles/sec across all cores\n");
+    output.push_str("  irate(cpu_instructions[1m])       - Instructions retired per second\n");
+    output.push_str("  sum(irate(blockio_bytes[1m]))     - Total block I/O bytes per second\n");
+    output.push_str(
+        "  irate(syscall{op=\"read\"}[1m])    - Read syscalls per second (filtered by label)\n",
     );
     output.push_str(
-        "  sum by (op) (rate(blockio_operations[1m])) - Block I/O ops/sec grouped by operation\n\n",
+        "  sum by (op) (irate(blockio_operations[1m])) - Block I/O ops/sec grouped by operation\n\n",
     );
 
     output.push_str("Gauge queries (instant values):\n");
@@ -148,7 +150,7 @@ pub fn format_metrics_description(data: &dyn MetricsSource) -> String {
     output.push_str("  sum by (label) (metric)            - Aggregate by label\n\n");
 
     output.push_str(
-        "Note: Counter metrics track cumulative values, so use rate() to get per-second rates.\n",
+        "Note: Counter metrics track cumulative values, so use irate() to get per-second rates.\n",
     );
     output
         .push_str("      Gauges can be queried directly as they represent point-in-time values.\n");

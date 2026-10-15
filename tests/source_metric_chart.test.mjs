@@ -17,7 +17,7 @@ test('chart id convention is source-metric-<name>', () => {
     assert.equal(sourceMetricChartId('hub_heartbeat'), 'source-metric-hub_heartbeat');
 });
 
-test('counter spec: rate() query, stable id, carried metadata', () => {
+test('counter spec: irate() query, stable id, carried metadata', () => {
     const spec = specForSourceMetric({
         name: 'hub_heartbeat',
         metric_type: 'counter',
@@ -27,7 +27,7 @@ test('counter spec: rate() query, stable id, carried metadata', () => {
     assert.equal(spec.opts.type, 'counter');
     assert.equal(spec.opts.title, 'hub_heartbeat');
     assert.equal(spec.opts.description, 'beats');
-    assert.equal(spec.promql_query, 'rate(hub_heartbeat[5m])');
+    assert.equal(spec.promql_query, 'irate(hub_heartbeat[5m])');
 });
 
 test('gauge spec: raw query, empty description default', () => {

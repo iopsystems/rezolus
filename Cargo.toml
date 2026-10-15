@@ -16,9 +16,9 @@ libc = "0.2.186"
 libloading = "0.8"
 log = "0.4.29"
 metriken = "0.11.3"
-metriken-exposition = "0.22.1"
-metriken-query = { version = "0.36.1", default-features = false }
-metriken-storage = { version = "0.2.3", default-features = false }
+metriken-exposition = "0.23.0"
+metriken-query = { version = "0.37.0", default-features = false }
+metriken-storage = { version = "0.3.0", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
@@ -45,7 +45,7 @@ dashboard = { path = "crates/dashboard" }
 # `FrameReader` skip frame kinds it does not know. 0.3.1 adds
 # `last_caller_row_at_or_before`, which the reader for dendro archives uses
 # to find the identity index's `Full` to replay from.
-dendro = { version = "0.4.2", default-features = false }
+dendro = { version = "0.5.0", default-features = false }
 rez = { path = "crates/rez" }
 report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
@@ -70,7 +70,7 @@ path = "src/main.rs"
 allan = "0.3.0"
 anyhow.workspace = true
 archspec = "0.1.3"
-arrow = "58.2.0"
+arrow = "60.0.0"
 async-trait = "0.1.89"
 axum = "0.8.9"
 backtrace = "0.3.76"
@@ -109,7 +109,7 @@ metriken-query = { workspace = true, features = ["ingest"] }
 # tick that commits every source into one `.dendro`: `record`, hindsight and
 # the live viewer over the library (metriken's
 # docs/journal/2026-10-12-metriken-recorder.md).
-metriken-recorder = "0.1.1"
+metriken-recorder = "0.2.0"
 # The archive writer `record -o out.dendro` writes through (`write`), and the
 # msgpack-to-parquet conversion behind `recording convert` and the recorder's
 # parquet output (`convert`).
@@ -118,7 +118,7 @@ notify = "8.2.0"
 open = "5.3.4"
 ouroboros = "0.18.5"
 parking_lot = "0.12.5"
-parquet = { version = "58.2.0", default-features = false, features = [
+parquet = { version = "60.0.0", default-features = false, features = [
     "arrow",
     "simdutf8",
     "zstd",
@@ -128,7 +128,7 @@ parquet = { version = "58.2.0", default-features = false, features = [
 ] }
 prometheus-parse = "0.2.5"
 plain = "0.2.3"
-ratatui = "0.29"
+ratatui = "0.30"
 rayon = "1.12"
 regex = "1"
 reqwest = { version = "0.13.3", default-features = false, features = [

@@ -21,7 +21,7 @@ export const sourceMetricChartId = (name) => `source-metric-${name}`;
  * (buildEffectiveQuery) wraps histograms itself; passing an already-wrapped
  * `histogram_quantiles(...)` would double-wrap and return no data.
  * Counters/gauges are not re-wrapped, so they carry their buildDefaultQuery
- * form (rate(...) / raw).
+ * form (irate(...) / raw).
  */
 export const specForSourceMetric = (info) => {
     const opts = {

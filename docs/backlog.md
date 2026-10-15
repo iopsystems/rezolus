@@ -221,9 +221,9 @@ Source: [display-mode decimation](journal/2026-07-13-viewer-display-decimation.m
   observation — needs its own visual voice). Open: view-toggle scope
   (per-chart + sticky global default is the leaning). End-state: unsnapped
   timestamps contract the measurement view into an exception surface —
-  *partially landed* via #1023 (Aligned/Raw Time modes, metriken-query
-  0.16.0); new open question is the measurement view's relationship to that
-  Time-mode control (see the entry's 2026-07-25 update).
+  *partially landed* via #1023 (raw-mode queries, metriken-query 0.16.0);
+  new open question is the measurement view's relationship to the expanded
+  chart's SHOW SAMPLES view (see the entry's 2026-07-25 update).
 
 ## Viewer — performance / live mode
 
@@ -1660,7 +1660,8 @@ Related ideas with no entry yet:
   pin-sync fan-out rejected in #828 and does not reopen that decision.
 - **One reference page for time semantics** — Idea. Null propagation in
   compare, cross-cadence evaluation at the slow sampler's rows, the
-  acquisition band, Aligned/Raw time modes and decimation are each correct
+  acquisition band, the grid and the expanded chart's samples view, and
+  decimation are each correct
   and each documented in a different journal entry or in `CLAUDE.md`. A
   single page under `docs/` that states the rules, plus an `llms.txt` index,
   so an agent or a new reader gets them without the archaeology.
@@ -1831,15 +1832,14 @@ effort); promote one to a journal entry when it's picked up.
   0.188 for 12 samplers), and this class is far narrower than the one closed —
   so it is a deliberate trade to revisit with numbers, not an oversight.
 - **`RezReader::open_with_pool` has no production caller** — Open, observed
-  while fixing #1109. The viewer opens recordings individually, and `mcp` now
-  does too, because flattening a multi-recording archive gives every sampler
-  two owners and makes `route` refuse every query. The flattening entry point
-  is now exercised only by the cross-recording regression tests that pin that
-  refusal. *Fix:* either delete it and rewrite those tests against
+  while fixing #1109. The viewer and `mcp` open recordings individually. A
+  query over the flattened view is answered from every recording, each series
+  under its recording's labels, and composing it is refused; the reader's
+  tests pin both. *Fix:* either delete it and rewrite those tests against
   `open_recordings`, or keep it and say in one place that flattening is a
-  test-only shape. *Why:* a `pub` constructor with no caller is the kind of
-  thing a future consumer reaches for by name and then inherits the refusal
-  from — the reason `mcp` had to grow an explicit guard at all.
+  test-only shape. *Why:* a consumer that reaches for it by name gets every
+  recording mixed into one analysis, which `mcp` refuses without
+  `--recording`.
 - **A failed `.rez` creation can leave a file that blocks the retry** — **DONE**.
   Both remaining windows closed: `RezDb::create` removes what it claimed if
   anything after the claim fails, and `RezArchive::create` removes it if the

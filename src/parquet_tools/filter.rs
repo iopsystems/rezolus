@@ -603,7 +603,7 @@ mod tests {
                 Field::new(*name, DataType::UInt64, false).with_metadata(
                     meta.iter()
                         .map(|(k, v)| (k.to_string(), v.to_string()))
-                        .collect(),
+                        .collect::<HashMap<_, _>>(),
                 )
             })
             .collect();

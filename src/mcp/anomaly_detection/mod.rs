@@ -135,7 +135,7 @@ fn validate_and_fix_query(query: &str) -> Result<String, Box<dyn std::error::Err
                 "Query '{}' appears to be a bare range vector selector.\n\
                 \n\
                 Range vectors must be used with a function.\n\
-                For counters, use: rate({})\n\
+                For counters, use: irate({})\n\
                 For gauges, use: avg_over_time({})\n\
                 \n\
                 Range vectors alone cannot be graphed or analyzed.",
@@ -277,7 +277,7 @@ fn auto_construct_query(
     };
 
     if data.has_counter(metric_name) {
-        Ok(format!("sum(rate({}[1m]))", query))
+        Ok(format!("sum(irate({}[1m]))", query))
     } else if data.has_gauge(metric_name) {
         Ok(format!("sum({})", query))
     } else if data.has_histogram(metric_name) {
@@ -614,7 +614,7 @@ fn extract_time_series(
                     fixed
                 )
             } else {
-                "\n\nFor counter metrics, use: rate(metric_name[1m]) or irate(metric_name[1m])\nFor gauge metrics that need smoothing, use: avg_over_time(metric_name[1m])".to_string()
+                "\n\nFor counter metrics, use: irate(metric_name[1m]), or rate(metric_name[5m]) for the average over 5m\nFor gauge metrics that need smoothing, use: avg_over_time(metric_name[1m])".to_string()
             };
 
             if result.is_empty() {

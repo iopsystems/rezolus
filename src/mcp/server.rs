@@ -185,7 +185,7 @@ fn read_tools() -> Vec<Value> {
                     },
                     "query": {
                         "type": "string",
-                        "description": "PromQL query that produces a SINGLE time series. For COUNTERS (monotonically increasing), use rate() to get per-second rates, e.g., 'sum(rate(cpu_usage[1m]))'. For GAUGES (point-in-time values), query directly, e.g., 'sum(memory_available)'. For HISTOGRAMS, use histogram_quantile(), e.g., 'histogram_quantile(0.99, scheduler_runqueue_latency)'. ALWAYS use sum() or other aggregation to collapse multiple series into one. DO NOT use label selectors like {state=\"busy\"} unless you've confirmed those labels exist in describe_metrics output."
+                        "description": "PromQL query that produces a SINGLE time series. For COUNTERS (monotonically increasing), use irate() to get per-second rates, e.g., 'sum(irate(cpu_usage[1m]))'. For GAUGES (point-in-time values), query directly, e.g., 'sum(memory_available)'. For HISTOGRAMS, use histogram_quantile(), e.g., 'histogram_quantile(0.99, scheduler_runqueue_latency)'. ALWAYS use sum() or other aggregation to collapse multiple series into one. DO NOT use label selectors like {state=\"busy\"} unless you've confirmed those labels exist in describe_metrics output."
                     }
                 },
                 "required": ["parquet_file", "query"]
@@ -193,7 +193,7 @@ fn read_tools() -> Vec<Value> {
         },
         {
             "name": "query",
-            "description": "Execute a PromQL query and return results as JSON in the Prometheus format (resultType vector/matrix/scalar and result). Metric names come from describe_metrics. rate() values carry an uncertainty band from the acquisition window.",
+            "description": "Execute a PromQL query and return results as JSON in the Prometheus format (resultType vector/matrix/scalar and result). Metric names come from describe_metrics. irate() and rate() values carry an uncertainty band from the acquisition window.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -208,7 +208,7 @@ fn read_tools() -> Vec<Value> {
                     },
                     "query": {
                         "type": "string",
-                        "description": "PromQL query expression. For COUNTERS use rate(metric[1m]), for GAUGES query directly, for HISTOGRAMS use histogram_quantile(0.99, metric). Use sum(), avg(), etc. to aggregate multiple series."
+                        "description": "PromQL query expression. For COUNTERS use irate(metric[1m]), for GAUGES query directly, for HISTOGRAMS use histogram_quantile(0.99, metric). Use sum(), avg(), etc. to aggregate multiple series."
                     }
                 },
                 "required": ["parquet_file", "query"]
@@ -314,7 +314,7 @@ fn additive_tools() -> Vec<Value> {
                     "chart_id": {"type": "string", "description": "One chart's id within the section, to open that chart expanded."},
                     "from": {"type": ["string", "number"], "description": "Range start: RFC 3339 or Unix seconds as a number. Give from and to together."},
                     "to": {"type": ["string", "number"], "description": "Range end, after from."},
-                    "time": {"type": "string", "enum": ["grid", "raw"], "description": "Rate time mode; grid is the default and is omitted."},
+                    "time": {"type": "string", "enum": ["grid", "raw"], "description": "raw opens the chart named by chart_id, which it requires, with a point at each sample's own timestamp. grid is the default and is omitted."},
                     "node": {"type": "string", "description": "Node to select in a multi-node recording."},
                     "gpu": {"type": "array", "items": {"type": "string"}, "description": "GPUs to select, each vendor:id or a bare id."},
                     "cgroup": {"type": "array", "items": {"type": "string"}, "description": "cgroup names to select."},
@@ -1998,7 +1998,7 @@ mod tests {
             "description": "p99 spike",
             "kind": "finding",
             "duration": "30s",
-            "details": "sum(rate(x[1m])) doubled",
+            "details": "sum(irate(x[1m])) doubled",
         });
         let out: Value = serde_json::from_str(&server.add_event(&args).await.unwrap()).unwrap();
         let id = out["id"].as_str().unwrap().to_string();
@@ -2260,7 +2260,7 @@ mod tests {
             "kpis": [{
                 "role": "q",
                 "title": "absent",
-                "query": "sum(rate(no_such_metric[1m]))",
+                "query": "sum(irate(no_such_metric[1m]))",
                 "type": "gauge",
                 "check": {"above": 1.0}
             }]
@@ -2383,11 +2383,11 @@ mod tests {
         let plain = Server::new();
         let out: Value = serde_json::from_str(
             &plain
-                .viewer_link(&json!({"section": "cpu", "from": 1778373348.25, "to": 1778373529, "time": "raw"}))
+                .viewer_link(&json!({"section": "cpu", "chart_id": "busy-pct", "from": 1778373348.25, "to": 1778373529, "time": "raw"}))
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(out["fragment"], "#/cpu");
+        assert_eq!(out["fragment"], "#/cpu/chart/busy-pct");
         assert_eq!(
             out["query"],
             "?from=2026-05-10T00%3A35%3A48.250Z&to=2026-05-10T00%3A38%3A49.000Z&time=raw"

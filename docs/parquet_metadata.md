@@ -279,13 +279,12 @@ Same fallback when the field is absent. See `nominalMsFor` in
 `src/viewer/assets/lib/charts/jitter.js`.
 
 **Raw vs. grid-snapped timestamps.** Jitter is only observable on the raw
-`timestamp` column. In the viewer's default **Aligned (Grid)** time mode
-(#1023, `docs/rate-time-mode-design.md`), query results are evaluated on a
-step grid phase-fixed to step boundaries, so anything read through a query —
-including a hypothetical synthesized inter-sample-delta metric — is
-structurally flat and cannot express jitter. The **Raw** time mode returns
-points at the true un-snapped acquisition timestamps (honest cadence), but
-the jitter chart predates it and still bypasses the query path, reading raw
+`timestamp` column. The viewer's charts are evaluated on a step grid
+phase-fixed to step boundaries (`docs/rate-time-mode-design.md`), so anything
+read through a query — including a hypothetical synthesized inter-sample-delta
+metric — is structurally flat and cannot express jitter. An expanded chart's
+SHOW SAMPLES (`rate_mode=raw`) returns points at the acquisition timestamps,
+but the jitter chart bypasses the query path, reading raw
 timestamps directly via `MetricsSource::sample_timestamps()` (served as
 `/api/v1/timestamps`) — the direct path works in every mode and without a
 rate query. Note also that **`.parquet` combine** quantizes timestamps to the

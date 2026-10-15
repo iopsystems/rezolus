@@ -38,11 +38,10 @@ fn wrap(readers: metriken_storage::LabeledRecordings) -> LabeledRecordings {
 impl RezReader {
     /// Open an archive at `path`, flattening every recording into one view.
     ///
-    /// **No production caller.** The viewer opens recordings individually,
-    /// and so does `mcp` since flattening a multi-recording archive gives
-    /// every sampler two owners and makes routing refuse every query. Kept
-    /// because the flattening behaviour, and the refusal it produces, is
-    /// what the cross-recording regression tests pin.
+    /// No production caller: the viewer and `mcp` open recordings
+    /// individually. A query over the flattened view is answered from every
+    /// recording, each series under its recording's labels; the tests below
+    /// pin that, and that composing such a view is refused.
     #[allow(dead_code)]
     pub fn open_with_pool(
         path: &Path,
@@ -771,8 +770,7 @@ mod tests {
         }
     }
 
-    /// The composition counterpart to the query refusal below: a flattened
-    /// multi-recording reader must not be composable either.
+    /// A flattened multi-recording reader is not composable.
     ///
     /// Every recording carries the same sampler names, so composing a
     /// flattened reader hands the builder several children holding the SAME
@@ -841,17 +839,12 @@ mod tests {
         }
     }
 
-    /// C1 regression: `RezReader::open_with_pool` — NOT `open_recordings` —
-    /// is the path a multi-recording archive actually takes in production
-    /// (`parquet combine a.rez b.rez` builds a 2-recording A/B archive, and
-    /// `rezolus mcp query`/the viewer open via `open_with_pool`). Before the
-    /// fix, `route()` grouped owners by SAMPLER alone, so a metric present
-    /// in every recording's `cpu_usage` table (e.g. `cpu_cycles`) looked
-    /// exactly like two group tables of one recording, got unioned, and
-    /// `UnionSource`'s first-wins silently answered from ONE recording
-    /// where the reader used to refuse loudly. This pins the refusal.
+    /// Over a flattened 2-recording archive (`recording combine a.rez b.rez`
+    /// builds one), a metric present in every recording's `cpu_usage` table
+    /// is answered from all of them, each series under its recording's
+    /// labels, never from one recording alone.
     #[test]
-    fn multi_recording_same_sampler_query_errors_instead_of_silently_dropping_one_recording() {
+    fn multi_recording_same_sampler_query_answers_from_every_recording() {
         let (_d, p) = two_sampler_rez();
         let (m, rb) = crate::rez::read_archive_bytes(&p).unwrap();
         let rec0 = m.recordings.into_iter().next().unwrap();
@@ -879,24 +872,35 @@ mod tests {
         // The flattening path — NOT open_recordings.
         let reader = RezReader::open_with_pool(&out, pool).unwrap();
 
-        // `cpu_cycles` lives in the `cpu_usage` table, present in BOTH
-        // recordings — this must refuse, not quietly answer from one side.
-        let err = reader
-            .query_range("rate(cpu_cycles[2s])", 0.0, 10.0, 1.0)
-            .unwrap_err();
-        let msg = format!("{err:?}");
-        assert!(
-            msg.contains("cpu_usage"),
-            "the error must name the sampler that spans recordings: {msg}"
+        // `cpu_cycles` lives in the `cpu_usage` table of both recordings,
+        // which hold the same rows.
+        let QueryResult::Matrix { result } = reader
+            .query_range("sum by (arm) (irate(cpu_cycles[2s]))", 0.0, 10.0, 1.0)
+            .unwrap()
+        else {
+            panic!("expected a matrix");
+        };
+        let mut arms: Vec<(&str, &Vec<(f64, f64)>)> = result
+            .iter()
+            .map(|s| (s.metric["arm"].as_str(), &s.values))
+            .collect();
+        arms.sort_by_key(|(arm, _)| *arm);
+        assert_eq!(
+            arms.iter().map(|(arm, _)| *arm).collect::<Vec<_>>(),
+            ["arm0", "arm1"]
         );
+        assert!(!arms[0].1.is_empty());
+        assert_eq!(arms[0].1, arms[1].1, "both recordings hold the same rows");
 
-        // Sanity: a single-recording archive of the SAME data must not
-        // error — proves the refusal above is about the recording span,
-        // not some other regression in the fixture.
+        // A single-recording archive of the same data gives that series.
         let single = RezReader::open_with_pool(&p, BufferPool::new(64 * 1024 * 1024)).unwrap();
-        assert!(single
-            .query_range("rate(cpu_cycles[2s])", 0.0, 10.0, 1.0)
-            .is_ok());
+        let QueryResult::Matrix { result } = single
+            .query_range("sum(irate(cpu_cycles[2s]))", 0.0, 10.0, 1.0)
+            .unwrap()
+        else {
+            panic!("expected a matrix");
+        };
+        assert_eq!(&result[0].values, arms[0].1);
     }
 
     /// The whole point of the splice design: a segmented table must answer

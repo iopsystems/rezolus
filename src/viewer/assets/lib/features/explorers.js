@@ -1,8 +1,9 @@
 import { ChartsState, Chart } from '../charts/chart.js';
-import { executePromQLRangeQuery, fetchHeatmapForPlot, getSelectedNode, injectLabel } from '../data.js';
+import { executePromQLRangeQuery, fetchHeatmapForPlot, getSelectedNode, injectLabel, buildEffectiveQuery } from '../data.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec } from '../charts/metric_types.js';
 import { collectGroupPlots } from './group_utils.js';
-import { visibleLabels } from '../labels.js';
+import { readViewState, writeViewState } from '../ui/url_state.js';
+import { visibleLabels, varyingLabelKeys } from '../labels.js';
 
 const UNIT_OPTIONS = [
     { value: '', label: 'Auto (none)' },
@@ -38,15 +39,20 @@ const buildFormatOverride = (unit) => {
     return fmt;
 };
 
-/** Build a human-readable series label from a PromQL metric map. */
-const buildSeriesLabel = (metric, fallbackIdx) => {
+/**
+ * Build a human-readable series label from a PromQL metric map: `id` first,
+ * then the other labels in `keys` (the labels that differ between the
+ * result's series), or every visible label when `keys` is empty.
+ */
+const buildSeriesLabel = (metric, fallbackIdx, keys = []) => {
     if (!metric) return 'Series ' + (fallbackIdx + 1);
+    const shown = keys.length > 0 ? new Set(keys) : null;
 
     const labels = [];
-    if (metric.id !== undefined) labels.push(`id=${metric.id}`);
+    if (metric.id !== undefined && (!shown || shown.has('id'))) labels.push(`id=${metric.id}`);
 
     const other = visibleLabels(metric)
-        .filter(([k]) => k !== 'id')
+        .filter(([k]) => k !== 'id' && (!shown || shown.has(k)))
         .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([k, v]) => `${k}=${v}`);
     labels.push(...other);
@@ -56,6 +62,7 @@ const buildSeriesLabel = (metric, fallbackIdx) => {
 
 /** Transform multi-series PromQL result into { allData, seriesNames } or null. */
 const buildMultiSeriesData = (resultData) => {
+    const keys = varyingLabelKeys(resultData.map((item) => item.metric || {}));
     const seriesNames = [];
     const allData = [];
     let timestamps = null;
@@ -64,7 +71,7 @@ const buildMultiSeriesData = (resultData) => {
         const item = resultData[i];
         if (!item.values || !Array.isArray(item.values)) continue;
 
-        seriesNames.push(buildSeriesLabel(item.metric, i));
+        seriesNames.push(buildSeriesLabel(item.metric, i, keys));
 
         if (!timestamps) {
             timestamps = item.values.map(([ts]) => ts);
@@ -229,7 +236,7 @@ export const QueryExplorer = {
                 m('h2', 'PromQL Query Explorer'),
                 m('div.query-input-wrapper', [
                     m('textarea.query-input', {
-                        placeholder: 'Enter a PromQL query (e.g., sum(rate(syscall[5m])) or rate(network_bytes{direction="transmit"}[5m]))',
+                        placeholder: 'Enter a PromQL query (e.g., sum(irate(syscall[5m])) or irate(network_bytes{direction="transmit"}[5m]))',
                         value: st.query,
                         oninput: (e) => { st.query = e.target.value; },
                         onkeydown: (e) => {
@@ -297,7 +304,13 @@ export const QueryExplorer = {
 
 // Expanded view for a single chart — opened in a new tab from the "Expand" link.
 // Shows one chart at full width with an editable PromQL query input below it.
-// Attrs: { data, chartId, applyResultToPlot: (plot, result) => void }
+// SHOW SAMPLES runs the query in raw mode: a point at each sample's own
+// timestamp instead of on the step grid, for reading a series' cadence and
+// jitter. The link's `time=raw` opens the view that way.
+// Attrs: { data, chartId, applyResultToPlot: (plot, result) => void,
+//          sectionRoute, activeCgroupPattern }. The last two give the chart's
+// own query the section's cgroup, node, GPU and instance selections, as
+// processDashboardData does.
 export const SingleChartView = {
     oninit(vnode) {
         vnode.state.singleChartsState = new ChartsState();
@@ -311,9 +324,12 @@ export const SingleChartView = {
         vnode.state.heatmapMode = false;
         vnode.state.heatmapData = null;
         vnode.state.heatmapLoading = false;
+        vnode.state.samples = readViewState().time === 'raw';
+        vnode.state.samplesLoaded = false;
     },
 
     onremove(vnode) {
+        vnode.state.removed = true;
         vnode.state.singleChartsState.clear();
     },
 
@@ -327,7 +343,9 @@ export const SingleChartView = {
             for (const group of data.groups || []) {
                 for (const plot of collectGroupPlots(group)) {
                     if (plot.opts.id === chartId) {
-                        vnode.state.plot = plot;
+                        // A copy: a rerun draws into it, not into the
+                        // section's cached plot, which stays on the grid.
+                        vnode.state.plot = { ...plot, opts: { ...plot.opts } };
                         vnode.state.query = plot.promql_query || '';
                         vnode.state.title = plot.opts.title || '';
                         vnode.state.description = plot.opts.description || '';
@@ -350,22 +368,43 @@ export const SingleChartView = {
             opts: { ...plot.opts, title: st.title, description: st.description, format: formatOverride || plot.opts.format },
         };
 
+        // The query runs with the section's cgroup, node, GPU and instance
+        // selections applied, as the section's charts do. A histogram chart's
+        // query runs as typed, with the node selection.
+        const effectiveQuery = () => {
+            if (!isHistogramPlot(plot)) {
+                return buildEffectiveQuery({ ...plot, promql_query: st.query }, {
+                    sectionRoute: vnode.attrs.sectionRoute || null,
+                    activeCgroupPattern: vnode.attrs.activeCgroupPattern || null,
+                    serviceName: data.metadata?.service_name || null,
+                });
+            }
+            const node = getSelectedNode();
+            return node ? injectLabel(st.query, 'node', node) : st.query;
+        };
+
+        // Resolves to whether the query ran and its result was drawn.
         const executeQuery = async () => {
-            if (!st.query.trim()) return;
+            if (!st.query.trim()) return false;
             st.loading = true;
             st.error = null;
+            let ok = false;
 
             try {
-                let q = st.query;
-                const node = getSelectedNode();
-                if (node) q = injectLabel(q, 'node', node);
-                const response = await executePromQLRangeQuery(q);
-
-                if (response.status === 'success' && response.data && response.data.result) {
-                    applyResultToPlot(plot, response);
-                    st.singleChartsState.clear();
+                const q = effectiveQuery();
+                if (q == null) {
+                    st.error = 'This chart needs a cgroup selection';
                 } else {
-                    st.error = response.error || 'Query returned no data';
+                    const response = await executePromQLRangeQuery(
+                        q, undefined, undefined, st.samples ? 'raw' : 'grid');
+                    if (st.removed) return false;
+                    if (response.status === 'success' && response.data && response.data.result) {
+                        applyResultToPlot(plot, response);
+                        st.singleChartsState.clear();
+                        ok = true;
+                    } else {
+                        st.error = response.error || 'Query returned no data';
+                    }
                 }
             } catch (e) {
                 st.error = e.message || 'Query failed';
@@ -373,6 +412,7 @@ export const SingleChartView = {
 
             st.loading = false;
             m.redraw();
+            return ok;
         };
 
         const applyFields = () => {
@@ -383,6 +423,33 @@ export const SingleChartView = {
         };
 
         const isHistogram = isHistogramPlot(plot);
+        const canShowSamples = !isHistogram && plot.promql_query != null;
+
+        // The section's cached data is on the grid; a view opened with
+        // samples on runs its query once in raw mode.
+        // A switch whose query fails leaves the chart, and the mode, as they
+        // were; a view opened with samples on whose query fails shows the
+        // section's grid data, so it is in grid mode.
+        const setSamples = async (on) => {
+            const was = st.samples;
+            st.samples = on;
+            st.samplesLoaded = true;
+            const ok = await executeQuery();
+            // The view is gone (the route changed while the query ran): the
+            // URL belongs to the new route.
+            if (st.removed) return;
+            if (!ok) st.samples = on === was ? false : was;
+            writeViewState({ time: st.samples ? 'raw' : null });
+        };
+
+        if (canShowSamples && st.samples && !st.samplesLoaded) {
+            setSamples(true);
+        } else if (!canShowSamples && st.samples) {
+            st.samples = false;
+            writeViewState({ time: null });
+        }
+
+        const toggleSamples = () => setSamples(!st.samples);
 
         const toggleHeatmap = async () => {
             if (st.heatmapMode) {
@@ -420,6 +487,13 @@ export const SingleChartView = {
                     hasSelection && m('button.section-action-btn', {
                         onclick: () => { st.singleChartsState.resetAll(); m.redraw(); },
                     }, 'RESET SELECTION'),
+                    canShowSamples && m('button.section-action-btn', {
+                        onclick: toggleSamples,
+                        disabled: st.loading,
+                        title: st.samples
+                            ? 'Show points on the step grid'
+                            : 'Show a point at each sample\'s own timestamp',
+                    }, st.samples ? 'SHOW ALIGNED' : 'SHOW SAMPLES'),
                     isHistogram && m('button.section-action-btn', {
                         onclick: toggleHeatmap,
                         disabled: st.heatmapLoading,
@@ -431,6 +505,11 @@ export const SingleChartView = {
                     m(Chart, { spec: chartSpec, chartsState: st.singleChartsState, interval: data.interval }),
                 ]),
             ]),
+            canShowSamples && st.samples && m('p.chart-description',
+                'Each point is at a sample\'s own timestamp. Where the query combines series, '
+                + 'each contributes its latest sample, held no longer than the gap to its previous '
+                + 'sample and at most two steps or twice the longest sampling interval of the '
+                + 'metrics the query reads, whichever is longer.'),
             m('div.single-chart-fields', [
                 fieldRow('Title', st.title, (e) => { st.title = e.target.value; }, applyFields),
                 fieldRow('Description', st.description, (e) => { st.description = e.target.value; }, applyFields),

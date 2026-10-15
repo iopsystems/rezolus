@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import {
-    createDataApi, setDisplayMode, setRateMode, setStepOverride,
+    createDataApi, setDisplayMode, setStepOverride,
 } from '../src/viewer/assets/lib/data.js';
 
 const meta = { minTime: 0, maxTime: 34_677, interval: 1 };
@@ -37,20 +37,15 @@ const section = (query) => {
 test('a rate heatmap is fetched at the heatmap step in grid mode, at column starts', async () => {
     setDisplayMode(true);
     setStepOverride(null);
-    setRateMode('raw');
-    try {
-        const calls = [];
-        const { data, plot } = section('sum by (id) (irate(cpu_usage[5m])) / 1000000000');
-        await api(calls).processDashboardData(data, null, '/cpu');
-        assert.strictEqual(calls.length, 1);
-        // In node the chart width is 500 px, so 125 buckets: 277 s rounds to
-        // 300 s.
-        assert.strictEqual(calls[0].step, 300);
-        assert.strictEqual(calls[0].rateMode, 'grid');
-        assert.deepStrictEqual(plot.time_data, [0, 300]);
-    } finally {
-        setRateMode('grid');
-    }
+    const calls = [];
+    const { data, plot } = section('sum by (id) (irate(cpu_usage[5m])) / 1000000000');
+    await api(calls).processDashboardData(data, null, '/cpu');
+    assert.strictEqual(calls.length, 1);
+    // In node the chart width is 500 px, so 125 buckets: 277 s rounds to
+    // 300 s.
+    assert.strictEqual(calls[0].step, 300);
+    assert.strictEqual(calls[0].rateMode, 'grid');
+    assert.deepStrictEqual(plot.time_data, [0, 300]);
 });
 
 test('a line averaging over by (id) is not fetched as a heatmap', async () => {

@@ -192,15 +192,12 @@ pub(crate) fn open_source_with_pool_labeled(
     // Open the recordings ONCE and build the reader from the one that was
     // selected.
     //
-    // `open_with_pool` would flatten them into one view instead, and two
-    // recordings of the same agent then give every sampler two owners, so the
-    // reader refuses each query as cross-recording — deliberately, since
-    // silently answering from one arm is the worse failure. But the analysis
-    // tools fold a per-metric query error into `NoData`, so that refusal
-    // surfaces as "analyzed 41 metrics, found anomalies in 0": a clean-looking
-    // wrong answer, on the shape `record --endpoint a --endpoint b -o out.dendro`
-    // produces. So the choice is made here, where both the
-    // selection and any failure to select reach the caller.
+    // `open_with_pool` would flatten them into one view instead, which
+    // answers each query from every recording. The analysis tools would then
+    // fold two arms' series into one record (`sum(irate(x[1m]))` adds both),
+    // on the shape `record --endpoint a --endpoint b -o out.dendro` produces.
+    // So the recording is chosen here, where both the selection and any
+    // failure to select reach the caller.
     //
     // Selecting via a second open cost a measured 2x on every invocation —
     // neither container's probe is catalog-only (v3 reads a segment per table,
@@ -824,7 +821,7 @@ fn run_exhaustive_detection(reader: Arc<dyn MetricsSource>) {
         derived_metrics.push((
             "cpu_frequency_ratio".to_string(),
             "derived",
-            Some("sum(rate(cpu_aperf[1m])) / sum(rate(cpu_mperf[1m]))".to_string()),
+            Some("sum(irate(cpu_aperf[1m])) / sum(irate(cpu_mperf[1m]))".to_string()),
         ));
     }
 
@@ -833,7 +830,7 @@ fn run_exhaustive_detection(reader: Arc<dyn MetricsSource>) {
         derived_metrics.push((
             "cpu_instructions_per_cycle".to_string(),
             "derived",
-            Some("sum(rate(cpu_instructions[1m])) / sum(rate(cpu_cycles[1m]))".to_string()),
+            Some("sum(irate(cpu_instructions[1m])) / sum(irate(cpu_cycles[1m]))".to_string()),
         ));
     }
 
@@ -842,7 +839,7 @@ fn run_exhaustive_detection(reader: Arc<dyn MetricsSource>) {
         derived_metrics.push((
             "cgroup_cpu_frequency_ratio".to_string(),
             "derived",
-            Some("sum(rate(cgroup_cpu_aperf[1m])) / sum(rate(cgroup_cpu_mperf[1m]))".to_string()),
+            Some("sum(irate(cgroup_cpu_aperf[1m])) / sum(irate(cgroup_cpu_mperf[1m]))".to_string()),
         ));
     }
 
@@ -851,7 +848,7 @@ fn run_exhaustive_detection(reader: Arc<dyn MetricsSource>) {
             "cgroup_cpu_instructions_per_cycle".to_string(),
             "derived",
             Some(
-                "sum(rate(cgroup_cpu_instructions[1m])) / sum(rate(cgroup_cpu_cycles[1m]))"
+                "sum(irate(cgroup_cpu_instructions[1m])) / sum(irate(cgroup_cpu_cycles[1m]))"
                     .to_string(),
             ),
         ));
@@ -874,7 +871,7 @@ fn run_exhaustive_detection(reader: Arc<dyn MetricsSource>) {
             q.clone()
         } else {
             match &**metric_type {
-                "counter" => format!("sum(rate({}[1m]))", metric_name),
+                "counter" => format!("sum(irate({}[1m]))", metric_name),
                 "gauge" => format!("sum({})", metric_name),
                 "histogram_p50" => format!("histogram_quantile(0.50, {})", metric_name),
                 "histogram_p90" => format!("histogram_quantile(0.90, {})", metric_name),
@@ -1421,7 +1418,7 @@ pub fn command() -> Command {
              # One-shot: list the metrics in a recording\n    \
              rezolus mcp describe-metrics file.parquet\n\n    \
              # One-shot: run a PromQL query\n    \
-             rezolus mcp query file.parquet \"sum(rate(cpu_cycles[1m]))\"\n\n    \
+             rezolus mcp query file.parquet \"sum(irate(cpu_cycles[1m]))\"\n\n    \
              # Register with Claude Code (user scope) and install the skill\n    \
              rezolus mcp install",
         )
@@ -1562,7 +1559,7 @@ pub fn command() -> Command {
                 .arg(
                     clap::Arg::new("QUERY")
                         .help(
-                            "Optional PromQL query or metric name (e.g., 'cpu_usage' or 'sum(rate(cpu_cycles[1m]))')\n\
+                            "Optional PromQL query or metric name (e.g., 'cpu_usage' or 'sum(irate(cpu_cycles[1m]))')\n\
                              If omitted, analyzes all metrics in the recording",
                         )
                         .required(false)
@@ -1586,7 +1583,7 @@ pub fn command() -> Command {
                      to show.\n\n\
                      EXAMPLES:\n    \
                      # Total cycles per second across all CPUs\n    \
-                     rezolus mcp query out.rez 'sum(rate(cpu_cycles[1m]))'\n\n    \
+                     rezolus mcp query out.rez 'sum(irate(cpu_cycles[1m]))'\n\n    \
                      # A ratio: both operands' bands are combined\n    \
                      rezolus mcp query out.rez 'sum(irate(cpu_usage[1m])) / cpu_cores'"
                 )
@@ -1599,7 +1596,7 @@ pub fn command() -> Command {
                 )
                 .arg(
                     clap::Arg::new("QUERY")
-                        .help("PromQL query (e.g., 'sum(rate(cpu_cycles[1m]))')")
+                        .help("PromQL query (e.g., 'sum(irate(cpu_cycles[1m]))')")
                         .required(true)
                         .index(2),
                 )
@@ -1922,14 +1919,13 @@ mod tests {
         archive.join().unwrap();
     }
 
-    /// A multi-recording archive must be refused HERE, with a message, rather
-    /// than opening into a reader that answers nothing.
+    /// A multi-recording archive with no selector is refused here, with a
+    /// message, rather than opened into one view of every recording.
     ///
-    /// `record --endpoint a --endpoint b -o out.dendro` produces this shape. Flattening the recordings gives every sampler two owners,
-    /// so the reader refuses each query as cross-recording — which is the
-    /// right call, but `extract-features` and `detect-anomalies` fold a
-    /// per-metric query error into `NoData`, so the run would report
-    /// "analyzed N metrics, found anomalies in 0" and look clean.
+    /// `record --endpoint a --endpoint b -o out.dendro` produces this shape.
+    /// Flattened, every query is answered from both recordings, so
+    /// `extract-features` and `detect-anomalies` would report one record
+    /// mixing both arms.
     ///
     /// Companion to `no_selector_on_a_multi_recording_archive_lists_them`,
     /// which pins the listing itself; this one pins the count and the

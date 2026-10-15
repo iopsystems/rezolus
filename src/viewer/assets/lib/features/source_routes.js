@@ -13,6 +13,7 @@
 // specForChartId re-derives the same spec the MetricBrowser rendered.
 
 import { specForChartId } from '../charts/source_metric.js';
+import { writeViewState } from '../ui/url_state.js';
 import { TIMESTAMP_JITTER_CHART_ID, jitterSpec } from '../charts/jitter.js';
 
 export function createSourceRoutes(deps) {
@@ -111,7 +112,7 @@ export function createSourceRoutes(deps) {
                             m('main.single-chart-main', [
                                 st.error
                                     ? m('div.single-chart-view', m('p', st.error))
-                                    : m(SingleChartView, { data, chartId, applyResultToPlot }),
+                                    : m(SingleChartView, { data, chartId, applyResultToPlot, sectionRoute }),
                             ]),
                         ]);
                     },
@@ -121,6 +122,8 @@ export function createSourceRoutes(deps) {
 
         '/source/:sourceName': {
             onmatch(params, requestedPath) {
+                // `time=raw` is a single chart's mode; a section is on the grid.
+                writeViewState({ time: null });
                 if (m.route.get() === requestedPath) {
                     return new Promise(function () {});
                 }

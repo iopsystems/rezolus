@@ -24,7 +24,7 @@ const PRIMARY_QUERIES = [
     'sum by (name) (cgroup_cpu_usage)',
     'group by (name) (cgroup_cpu_usage)',
     'cgroup_cpu_usage',
-    'sum by (name) (rate(cgroup_cpu_usage[1m]))',
+    'sum by (name) (irate(cgroup_cpu_usage[1m]))',
 ];
 
 /** Extract cgroup names from a PromQL query result's metric labels. */

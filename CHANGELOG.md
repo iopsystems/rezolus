@@ -3,9 +3,21 @@
 ### Security
 
 - rustls 0.23.46, for RUSTSEC-2026-0346 through 0349. (#1467)
+- No `thrift` (GHSA-2f9f-gq7v-9h6m), through parquet 60, and no `lru` 0.12
+  (GHSA-rhfx-m35p-ff5j), through metriken-query 0.37, metriken-storage 0.3
+  and ratatui 0.30.
 
 ### Removed
 
+- **The viewer's Time selector (Aligned/Raw) is gone.** Every dashboard
+  chart is on the step grid. Raw mode is a per-chart view: the expanded
+  chart (the open-in-new-tab link) has SHOW SAMPLES, which reruns its query
+  with a point at each sample's own timestamp, and a link's `time=raw`
+  opens an expanded chart that way; the MCP `viewer_link` tool requires
+  `chart_id` with `time: "raw"`. On a dashboard, Raw mode drew a query that
+  combines series with each series held at its latest sample, so a ratio of
+  two samplers looked as exact as one series; on the grid every series is
+  read at the same instants.
 - **`record` writes `.dendro` only.** The output must end in `.dendro`
   (`rezolus.dendro` without `-o`). `-o` ending in `.rez`, `.parquet`, `.raw`
   or anything else, `--format` other than `dendro`, and `--separate` are
@@ -59,6 +71,28 @@
 
 ### Changed
 
+- **metriken-query 0.37, metriken-storage 0.3, metriken-exposition 0.23,
+  metriken-recorder 0.2, dendro 0.5, arrow and parquet 60, ratatui 0.30.**
+  In metriken-query 0.37, `rate(x[range])` is the average rate over
+  `[t - range, t]`; it was the per-step rate, the same as `irate`. The
+  dashboards, the MCP tools' generated queries and examples,
+  `extract-features` and the viewer's default counter query use `irate`,
+  which is the per-step rate as before. Queries you wrote with `rate(x[r])`
+  (KPIs embedded in a recording, `--queries` files, saved selections) now
+  return the average over `r`, so a `recording check` can pass a spike
+  shorter than `r` that it failed before; use `irate` for the per-step rate.
+
+  Every series read from a `.rez` or `.dendro` carries its recording's
+  labels (`source`, `host` and any `record --label`), a single recording's
+  included, and a series' own value of one of those keys moves to
+  `exported_<key>`; `mcp query` prints them. A chart's legend, the Query
+  Explorer's included, names each series by the labels that differ between
+  its series, so a label they all share, as a recording's labels do within
+  one recording, is left out. A query over several recordings flattened
+  into one view is answered from every recording, each series under its
+  recording's labels; it was refused. The MCP tools still refuse a
+  multi-recording archive without `--recording`, so an analysis never mixes
+  two arms.
 - `ext4_journal` times commit phases, handle start and checkpoints in
   nanoseconds instead of jbd2's jiffies; `phase="wait"` and
   `phase="request_delay"` are removed, `ext4_journal_handle_start_latency` is
