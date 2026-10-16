@@ -1338,12 +1338,15 @@ Source: [XFS telemetry](journal/2026-09-29-xfs-samplers.md), Results — step
 the CI guest while profiling `ext4_ops` and `xfs_log`.
 
 - **`cpu_perf`'s `sched_switch` program costs 20.5 µs per run on a KVM
-  guest** — Open. rezolus 5.20.0 (the image's agent; the program is
-  unchanged on `main`): 8,235,630 runs, 169 s of program time over a 247 s
-  `perf bench sched pipe`, 0.68 of a core at 33 K switches/s, against 114 ns
-  and 665 ns for the other two programs on the same tracepoint. The two
-  `bpf_perf_event_read` calls in `cpu/linux/perf/mod.bpf.c` read the
-  virtualized PMU through the hypervisor. Confirmed from inside the guest
+  guest** — Open. Measured on rezolus 5.20.0, the image's agent. `main`
+  reads the same two counters per switch with `bpf_perf_event_read_value`,
+  which calls the same `perf_event_read_local` and also computes the enabled
+  and running times. The 5.20.0 program made 8,235,630 runs, 169 s of
+  program time over a 247 s `perf bench sched pipe`, 0.68 of a core at 33 K
+  switches/s, against 114 ns and 665 ns for the other two
+  programs on the same tracepoint. The two counter reads in
+  `cpu/linux/perf/mod.bpf.c` read the virtualized PMU through the
+  hypervisor. Confirmed from inside the guest
   (systemslab `01a0edd1-f053-716d-7604-c6261d862311`, KVM on a Threadripper
   3970X, `perfctr_core` exposed, the AMD PMU driver loaded): a user-space
   `rdpmc` costs 1.05–11.3 µs per read and the `read(2)` path 1.7–12.7 µs,
