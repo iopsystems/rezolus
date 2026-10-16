@@ -36,7 +36,7 @@
   `reserved_pmu_counters` grant, or where the group failed to open) the
   first switch lowered one cgroup's counter by 2. Counters are now read with
   `bpf_perf_event_read_value`; a failed read credits nothing, and the next
-  good read sets a new baseline. Backported from 6.0 (#1477).
+  good read sets a new baseline. Backported from 6.0 (#1477) in #1480.
 
 ## [5.28.0] - 2026-10-13
 
