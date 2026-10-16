@@ -22,7 +22,7 @@
   `tcp_established_connections` as a gauge. Columns are matched by name, so
   a column the kernel does not print leaves its metric absent. Enabled by
   default, like `memory_vmstat`. The viewer's Network section plots each
-  metric under TCP when the recording has it. Backported from 6.0 (#1472).
+  metric under TCP when the recording has it. Backported from 6.0 (#1472) in #1478.
 
 ## [5.28.0] - 2026-10-13
 
