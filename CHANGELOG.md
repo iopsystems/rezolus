@@ -3,7 +3,7 @@
 ### Security
 
 - rustls 0.23.46, for RUSTSEC-2026-0346 through 0349. Backported from 6.0
-  (#1467).
+  (#1467) in #1479.
 
 ## [5.28.0] - 2026-10-13
 
