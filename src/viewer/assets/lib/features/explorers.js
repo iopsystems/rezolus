@@ -343,6 +343,9 @@ export const SingleChartView = {
             for (const group of data.groups || []) {
                 for (const plot of collectGroupPlots(group)) {
                     if (plot.opts.id === chartId) {
+                        // The section's query for it is still in flight:
+                        // copy it once that lands.
+                        if (plot.pending) return m('div.chart-loading', 'Loading\u2026');
                         // A copy: a rerun draws into it, not into the
                         // section's cached plot, which stays on the grid.
                         vnode.state.plot = { ...plot, opts: { ...plot.opts } };
