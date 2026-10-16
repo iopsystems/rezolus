@@ -1,6 +1,13 @@
 use crate::MetricsSource;
 use crate::plot::*;
 
+/// The caches whose object counts `memory_slabinfo` follows, as a PromQL
+/// alternation. The Kernel subgroup draws these one line each and sums the
+/// rest: with every cache published a host has a few hundred, and the query
+/// engine has no `topk` to pick the largest.
+const METADATA_CACHES: &str = "dentry|inode_cache|ext4_inode_cache|ext4_extent_status|\
+                               jbd2_journal_head|buffer_head|xfs_inode|radix_tree_node";
+
 pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
@@ -119,7 +126,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         cache.describe(
             "File-backed memory by LRU list: inactive is reclaimed first, active last. A working \
              set that fits shows a stable active list; Shmem and Mapped are the parts of the \
-             cache that are tmpfs or mmap'd into processes.",
+             cache that are tmpfs or mmap'd into processes. tmpfs Used splits the tmpfs part \
+             by mount.",
         );
         cache.plot_promql(
             PlotOpts::gauge("Active (file)", "active-file", Unit::Bytes),
@@ -137,6 +145,25 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             PlotOpts::gauge("Mapped", "mapped", Unit::Bytes),
             "memory_mapped".to_string(),
         );
+        if has_metric(data, "filesystem_tmpfs_used") {
+            cache.plot_promql(
+                PlotOpts::gauge("tmpfs Used", "tmpfs-used", Unit::Bytes),
+                "sum by (mount) (filesystem_tmpfs_used)".to_string(),
+            );
+            cache.plot_promql(
+                PlotOpts::gauge("tmpfs Used %", "tmpfs-used-pct", Unit::Percentage)
+                    .percentage_range(),
+                "sum by (mount) (filesystem_tmpfs_used) / sum by (mount) (filesystem_tmpfs_size)"
+                    .to_string(),
+            );
+            cache.plot_promql(
+                PlotOpts::gauge("tmpfs Inodes Used %", "tmpfs-inodes-pct", Unit::Percentage)
+                    .percentage_range(),
+                "sum by (mount) (filesystem_tmpfs_inodes_used) / \
+                 sum by (mount) (filesystem_tmpfs_inodes_total)"
+                    .to_string(),
+            );
+        }
 
         let anon = usage.subgroup("Anonymous");
         anon.describe(
@@ -203,7 +230,11 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         kernel.describe(
             "Kernel allocations. Reclaimable slab is mostly the dentry and inode caches, which \
              the kernel drops under pressure at the cost of re-reading metadata from disk; \
-             unreclaimable slab, kernel stacks and page tables are not recoverable.",
+             unreclaimable slab, kernel stacks and page tables are not recoverable. Metadata \
+             Slab Caches draws the filesystem metadata caches one line each; Other Slab \
+             Caches is every other cache summed. The query engine has no topk, so to find \
+             which cache grew, break slab cache bytes down by cache in the metric \
+             explorer.",
         );
         kernel.plot_promql(
             PlotOpts::gauge("Slab (reclaimable)", "slab-reclaimable", Unit::Bytes),
@@ -223,8 +254,12 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
         if has_metric(data, "memory_slab_cache_bytes") {
             kernel.plot_promql(
-                PlotOpts::gauge("Slab Caches", "slab-caches", Unit::Bytes),
-                "sum by (cache) (memory_slab_cache_bytes)".to_string(),
+                PlotOpts::gauge("Metadata Slab Caches", "slab-caches", Unit::Bytes),
+                format!("sum by (cache) (memory_slab_cache_bytes{{cache=~\"{METADATA_CACHES}\"}})"),
+            );
+            kernel.plot_promql(
+                PlotOpts::gauge("Other Slab Caches", "slab-caches-other", Unit::Bytes),
+                format!("sum(memory_slab_cache_bytes{{cache!~\"{METADATA_CACHES}\"}})"),
             );
             kernel.plot_promql(
                 PlotOpts::gauge(
@@ -477,6 +512,8 @@ mod tests {
         );
         let j = json(&view);
         assert!(j.contains("\"memory_dirty\""));
+        // No filesystem sampler in this recording: no tmpfs plot.
+        assert!(!j.contains("filesystem_tmpfs_used"));
         assert!(j.contains("memory_active{kind=\"file\"}"));
         assert!(j.contains("memory_slab{kind=\"reclaimable\"}"));
         assert!(j.contains("memory_swap_total - memory_swap_free"));
@@ -521,10 +558,36 @@ mod tests {
             vec![],
         );
         let j = json(&with);
-        assert!(j.contains("sum by (cache) (memory_slab_cache_bytes)"));
+        assert!(j.contains(&format!(
+            "sum by (cache) (memory_slab_cache_bytes{{cache=~\"{METADATA_CACHES}\"}})"
+        )));
+        assert!(j.contains(&format!(
+            "sum(memory_slab_cache_bytes{{cache!~\"{METADATA_CACHES}\"}})"
+        )));
+        assert!(
+            !j.contains("sum by (cache) (memory_slab_cache_bytes)"),
+            "no plot draws every cache"
+        );
         assert!(j.contains("sum by (cache) (memory_slab_cache_objects{state=\"active\"})"));
         let without = generate(&store_with(&["memory_total", "memory_slab"]), vec![]);
         assert!(!json(&without).contains("memory_slab_cache"));
+    }
+
+    #[test]
+    fn tmpfs_use_by_mount_appears_beside_shmem_when_the_recording_has_it() {
+        let view = generate(
+            &store_with(&["memory_total", "memory_active", "filesystem_tmpfs_used"]),
+            vec![],
+        );
+        let j = json(&view);
+        assert!(j.contains("sum by (mount) (filesystem_tmpfs_used)"));
+        assert!(j.contains(
+            "sum by (mount) (filesystem_tmpfs_used) / sum by (mount) (filesystem_tmpfs_size)"
+        ));
+        assert!(j.contains(
+            "sum by (mount) (filesystem_tmpfs_inodes_used) / \
+             sum by (mount) (filesystem_tmpfs_inodes_total)"
+        ));
     }
 
     #[test]

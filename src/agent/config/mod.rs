@@ -346,6 +346,18 @@ impl Config {
             .unwrap_or(false)
     }
 
+    /// Whether `name` publishes every slab cache (`caches = "all"`, the
+    /// default) rather than the fixed set (`caches = "fixed"`). Read from the
+    /// sampler's own section only; `Sampler::check` has already refused any
+    /// other value. Consumed by `memory_slabinfo`.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn all_caches(&self, name: &str) -> bool {
+        self.samplers
+            .get(name)
+            .and_then(|v| v.caches())
+            .is_none_or(|caches| caches == "all")
+    }
+
     pub fn enabled(&self, name: &str) -> bool {
         // Opt-in-only samplers are never turned on by the `[defaults]` fallback:
         // they require explicit `enabled = true` in their own section. These are
@@ -552,6 +564,11 @@ mod tests {
                 "{name}: interval"
             );
             assert_eq!(
+                packaged.all_caches(name),
+                bare.all_caches(name),
+                "{name}: caches"
+            );
+            assert_eq!(
                 packaged.gpu_perf_level(name),
                 bare.gpu_perf_level(name),
                 "{name}: gpu_perf_level"
@@ -570,6 +587,33 @@ mod tests {
             !c.cgroup_attribution_or("cpu_perf", true),
             "defaults win over the sampler's own"
         );
+    }
+
+    #[test]
+    fn every_slab_cache_is_published_unless_the_fixed_set_is_asked_for() {
+        assert!(config("").all_caches("memory_slabinfo"), "all by default");
+        let c = config("[samplers.memory_slabinfo]\ncaches = \"fixed\"\n");
+        assert!(!c.all_caches("memory_slabinfo"));
+        let c = config("[samplers.memory_slabinfo]\ncaches = \"all\"\n");
+        assert!(c.all_caches("memory_slabinfo"));
+    }
+
+    #[test]
+    fn caches_is_refused_outside_the_slabinfo_section_and_for_unknown_values() {
+        let c = config("[defaults]\ncaches = \"fixed\"\n");
+        assert!(c.defaults.check_caches("default").is_err());
+        let c = config("[samplers.memory_meminfo]\ncaches = \"fixed\"\n");
+        assert!(c.samplers["memory_meminfo"]
+            .check_caches("memory_meminfo")
+            .is_err());
+        let c = config("[samplers.memory_slabinfo]\ncaches = \"some\"\n");
+        assert!(c.samplers["memory_slabinfo"]
+            .check_caches("memory_slabinfo")
+            .is_err());
+        let c = config("[samplers.memory_slabinfo]\ncaches = \"fixed\"\n");
+        assert!(c.samplers["memory_slabinfo"]
+            .check_caches("memory_slabinfo")
+            .is_ok());
     }
 
     #[test]

@@ -265,7 +265,9 @@ enabled = false
 
 # Filesystem space, inode usage and read-only state; see docs/metrics.md#filesystem.
 # Rescans mounts at `interval` (default 60s); later sweeps run off the scrape cycle.
-# Excludes network filesystems, FUSE, autofs and pseudo-filesystems.
+# Excludes network filesystems, FUSE, autofs and pseudo-filesystems. tmpfs
+# mounts are read into their own filesystem_tmpfs_* series (bytes and inodes
+# used per mount, at most 64 mounts): where tmpfs files sit, by mount.
 [samplers.filesystem]
 # interval = "60s"
 
@@ -347,11 +349,15 @@ enabled = false
 # Memory NUMA metrics from /proc/vmstat
 [samplers.memory_vmstat]
 
-# Sizes of the dentry, inode (VFS, ext4, XFS), extent-status, journal-head,
-# buffer-head and page-cache-index slab caches from /proc/slabinfo, read at
-# `interval` (default 60s) off the scrape cycle. See docs/metrics.md#memory_slabinfo.
+# Bytes held by every slab cache, labeled by cache name, and object counts for
+# the dentry, inode (VFS, ext4, XFS), extent-status, journal-head, buffer-head
+# and page-cache-index caches, from /proc/slabinfo, read at `interval` (default
+# 60s) off the scrape cycle. `caches = "fixed"` publishes bytes for those eight
+# caches only, instead of every cache (a few hundred series, at most 1024). See
+# docs/metrics.md#memory_slabinfo.
 [samplers.memory_slabinfo]
 # interval = "60s"
+# caches = "all"
 
 # BPF sampler on the page cache: buffered read calls and bytes (one fentry on
 # filemap_read), pages filled by reason (read, write, fault, other), pages

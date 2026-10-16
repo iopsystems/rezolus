@@ -1,6 +1,7 @@
 //! Parse and classify `/proc/self/mountinfo` without resolving mount paths.
 //!
-//! See the parent module for the sampler's local-only policy. Visibility
+//! See the parent module for the sampler's local-only policy and its tmpfs
+//! exception. Visibility
 //! filtering retains the full table, including excluded filesystem types:
 //! an excluded mount can cover a local one. Device deduplication runs after
 //! filtering, so a covered alias does not displace an uncovered one.
@@ -91,6 +92,13 @@ impl MountEntry {
             return false;
         }
         self.source.starts_with("/dev/") || LOCAL_FSTYPES_WITHOUT_DEV_SOURCE.contains(&fstype)
+    }
+
+    /// A tmpfs mount, which the sampler reads into its own `filesystem_tmpfs_*`
+    /// families. `statvfs` on tmpfs is answered from the superblock's counters
+    /// and cannot block. `ramfs` is not one: it reports no usage at all.
+    pub fn is_tmpfs(&self) -> bool {
+        self.fstype == "tmpfs"
     }
 
     /// A path lookup through this mount can wait on a server, a userspace
@@ -231,12 +239,22 @@ pub struct Selection {
 
 /// One entry per device, choosing its shortest path among visible mounts;
 /// sorted by mount point for deterministic initial slot assignment.
+#[cfg(test)]
 pub fn select_local(text: &str) -> Selection {
+    select(text, MountEntry::is_local)
+}
+
+/// Local filesystems plus visible tmpfs mounts, which the sampler reads into
+/// their own families. A tmpfs mount is selected by the same rules: one entry
+/// per device, skipped when its path passes through a blocking mount.
+pub fn select_sampled(text: &str) -> Selection {
+    select(text, |m| m.is_local() || m.is_tmpfs())
+}
+
+fn select(text: &str, keep: impl Fn(&MountEntry) -> bool) -> Selection {
     // Classify before resolving: a container host carries thousands of overlay
-    // mounts, and only local candidates need a path walk.
-    let resolved = visible(&parse_mountinfo(text), MountEntry::is_local, |m| {
-        !m.lookup_can_block()
-    });
+    // mounts, and only candidates need a path walk.
+    let resolved = visible(&parse_mountinfo(text), keep, |m| !m.lookup_can_block());
     let mut by_device: HashMap<String, MountEntry> = HashMap::new();
     for entry in resolved.mounts {
         match by_device.get(&entry.device) {
@@ -701,6 +719,59 @@ mod tests {
             .collect();
         assert_eq!(points, vec!["/", "/scratch"]);
         assert!(selection.skipped.is_empty(), "{:?}", selection.skipped);
+    }
+
+    /// tmpfs mounts as a Debian host and a container runtime leave them: the
+    /// host's own, a per-user runtime directory, a systemd credentials mount,
+    /// and a container's `/dev/shm`. Only `select_sampled` takes them; ramfs
+    /// and devtmpfs stay out of both, and a tmpfs under an NFS share is
+    /// skipped like a local filesystem there.
+    const TMPFS_TABLE: &str = "\
+22 1 259:2 / / rw,relatime shared:1 - ext4 /dev/nvme0n1p2 rw,errors=remount-ro
+23 22 0:5 / /dev rw,nosuid,relatime shared:2 - devtmpfs udev rw,size=131916644k,nr_inodes=32979161,mode=755,inode64
+24 23 0:25 / /dev/shm rw,nosuid,nodev shared:4 - tmpfs tmpfs rw,inode64
+25 22 0:26 / /run rw,nosuid,nodev,noexec,relatime shared:5 - tmpfs tmpfs rw,size=26389620k,mode=755,inode64
+26 25 0:27 / /run/lock rw,nosuid,nodev,noexec,relatime shared:6 - tmpfs tmpfs rw,size=5120k,inode64
+27 22 0:28 / /tmp rw,nosuid,nodev shared:7 - tmpfs tmpfs rw,nr_inodes=1048576,inode64
+28 25 0:52 / /run/user/1000 rw,nosuid,nodev,relatime shared:300 - tmpfs tmpfs rw,size=26389616k,nr_inodes=6597404,mode=700,uid=1000,gid=1000,inode64
+29 25 0:41 / /run/credentials/systemd-journald.service ro,nosuid,nodev,noexec,relatime,nosymfollow shared:20 - tmpfs tmpfs rw,size=1024k,nr_inodes=1024,mode=700,inode64,noswap
+30 22 0:60 / /var/lib/docker/containers/3f2a/mounts/shm rw,nosuid,nodev,noexec,relatime shared:400 - tmpfs shm rw,size=65536k,inode64
+31 25 0:42 / /run/ramfs rw,relatime shared:21 - ramfs ramfs rw
+32 22 0:40 / /home rw,relatime shared:30 - nfs4 nas:/home rw
+33 32 0:61 / /home/scratch rw,relatime shared:31 - tmpfs tmpfs rw,size=1048576k";
+
+    #[test]
+    fn tmpfs_mounts_are_sampled_apart_from_local_filesystems() {
+        let point = |m: &MountEntry| m.mount_point.clone();
+        let local: Vec<String> = select_local(TMPFS_TABLE).mounts.iter().map(point).collect();
+        assert_eq!(local, vec!["/"]);
+
+        let sampled = select_sampled(TMPFS_TABLE);
+        let tmpfs: Vec<String> = sampled
+            .mounts
+            .iter()
+            .filter(|m| m.is_tmpfs())
+            .map(point)
+            .collect();
+        assert_eq!(
+            tmpfs,
+            vec![
+                "/dev/shm",
+                "/run",
+                "/run/credentials/systemd-journald.service",
+                "/run/lock",
+                "/run/user/1000",
+                "/tmp",
+                "/var/lib/docker/containers/3f2a/mounts/shm",
+            ]
+        );
+        assert!(sampled.mounts.iter().any(|m| m.mount_point == "/"));
+        assert!(
+            !sampled.mounts.iter().any(|m| m.fstype == "ramfs"),
+            "ramfs reports no usage"
+        );
+        assert_eq!(sampled.skipped.len(), 1);
+        assert_eq!(sampled.skipped[0].mount_point, "/home/scratch");
     }
 
     /// `/data` is a string prefix of `/database`, not a directory above it.

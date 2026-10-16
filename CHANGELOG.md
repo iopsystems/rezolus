@@ -71,6 +71,28 @@
 
 ### Changed
 
+- **`memory_slabinfo` publishes `memory_slab_cache_bytes` for every slab
+  cache**, labeled by `cache`, so slab growth that `memory_slab` shows is
+  attributable to a cache by name (`kmalloc-*`, ZFS, KVM, VFIO or any other).
+  Caches that appear or go between sweeps, as modules load and unload, take
+  and release series, and a cache that is no longer listed reads absent in
+  bytes and object counts alike (both used to keep their last value). At
+  most 1024 caches are published. `caches = "fixed"` in
+  `[samplers.memory_slabinfo]` keeps bytes to the previous eight caches;
+  `caches` anywhere else, `[defaults]` included, is refused at startup.
+  `memory_slab_cache_objects` still covers the eight filesystem metadata
+  caches only. The bytes are an upper bound per cache: the kernel reports
+  pages per slab at the preferred order, and slabs allocated at the fallback
+  order under memory pressure hold fewer. The Memory dashboard draws the eight
+  metadata caches one line each and sums the rest into one line.
+
+- **Both `memory_slab_cache_*` metrics changed label sets.** They are now
+  slot-keyed groups, so each series carries the slot `id` label beside `cache`
+  (and `state`), and recordings carry the internal `__uid__`, which the
+  Prometheus exporter strips. A Prometheus server sees a new series for every
+  cache across the upgrade, and a cache whose module unloads and loads again
+  can come back on a different `id`.
+
 - **metriken-query 0.39.** A strided histogram call
   (`histogram_heatmap(x, 60)`, `histogram_quantiles([..], x, 60)`,
   `histogram_count(x, 60)`) lays its windows at multiples of the stride,
@@ -659,6 +681,21 @@
   absent and the path is folded out of the loaded program.
 
 ### Added
+
+- `filesystem` sampler: tmpfs usage per mount. Every visible tmpfs mount is
+  read on the same sweep into `filesystem_tmpfs_used`,
+  `filesystem_tmpfs_size`, `filesystem_tmpfs_inodes_used` and
+  `filesystem_tmpfs_inodes_total`, labeled `mount`, `fstype` and `devnum`, so
+  a recording shows which of `/tmp`, `/dev/shm`, `/run` or another mount holds
+  tmpfs files. Used bytes include pages swapped out; `memory_shmem` counts
+  only the resident ones, and also holds SysV shared memory, shared anonymous
+  mappings, memfd files and GPU driver buffers, which no mount shows. They are
+  separate from
+  `filesystem_total` and its siblings, which keep their local-disk meaning. At
+  most 64 tmpfs mounts are sampled, apart from the 256 local filesystems;
+  over the cap the shallowest paths are placed first. A tmpfs with no size
+  limit has its byte series absent. ramfs is not read. The Memory dashboard's
+  Page Cache subgroup plots tmpfs use by mount.
 
 - `tcp_mib` sampler: TCP counters the kernel keeps as SNMP MIBs, from the
   `TcpExt` section of `/proc/net/netstat` and the `Tcp` section of

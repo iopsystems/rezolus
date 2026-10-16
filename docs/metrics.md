@@ -630,14 +630,16 @@ subvolumes) is reported once, under its shortest mount point.
 **Local only.** Block-backed filesystems with a `/dev` source, plus `zfs`, are
 sampled. Network filesystems (`nfs`, `nfs4`, `cifs`, `smb3`, `ceph`,
 `glusterfs`, ...), every FUSE filesystem, autofs triggers and the kernel's
-pseudo-filesystems (`tmpfs`, `overlay`, `proc`, `sysfs`, squashfs images, ...)
-are never touched. Neither is a local filesystem that another mount covers — an
-NFS share mounted over `/data`, or over a directory above it — since its path
+pseudo-filesystems (`overlay`, `proc`, `sysfs`, squashfs images, ...) are never
+touched. tmpfs is the one exception, read into its own metrics (below).
+Neither is a local filesystem that another mount covers — an NFS share
+mounted over `/data`, or over a directory above it — since its path
 now leads to the mount on top — nor one whose path passes through a network,
 FUSE or autofs mount, since looking the path up walks that mount. An agent in a
 chroot whose mount table omits the mount holding its root samples nothing, since
-that mount's type is unknown. Each skipped filesystem is logged as a warning,
-with the reason, when the reasons change. A `statvfs` on a `hard` network mount
+that mount's type is unknown. Each skipped filesystem is logged with the
+reason: as a warning when skipping starts, at debug when another is skipped
+while some already are, and at info when every candidate resolves again. A `statvfs` on a `hard` network mount
 blocks until the server answers, with no timeout the agent can set, and one on
 an autofs trigger starts a mount attempt; local filesystems answer from kernel
 state without a network round trip (ext4 and XFS from superblock counters,
@@ -695,6 +697,52 @@ applications wrote it is the filesystem's term of write amplification. Both are
 sysfs text reads on the 60 s off-cycle sweep, the same principle 15 exception
 the sweep itself received, and they work on kernels the ext4 BPF samplers
 cannot run on.
+
+**tmpfs.** A tmpfs mount holds its files in memory, and meminfo counts the
+resident pages in `memory_shmem` without saying where. The same sweep reads
+every visible tmpfs mount with the same `statvfs`, answered from the mount's
+own counters, and publishes its use and limits as `filesystem_tmpfs_*`,
+labeled `mount`, `fstype` and `devnum`. They are kept out of
+`filesystem_total` and its siblings because a tmpfs size is a limit on memory, by default half of RAM, and not capacity on a
+device: two default tmpfs mounts on a 251 GB host would add 251 GB to a sum of
+disk capacity. `filesystem_tmpfs_used` counts a mount's pages whether resident
+or swapped out (`shmem_statfs` reports allocated blocks), while `Shmem` drops a
+page when it goes to swap, so used is resident plus swapped and only the
+resident part is in `memory_shmem`. `memory_shmem` minus
+`sum(filesystem_tmpfs_used)` is what Shmem holds outside the visible tmpfs
+mounts: SysV shared memory, shared anonymous mappings, memfd files and GPU
+driver (DRM/GEM) buffers, which live on kernel-internal mounts that no mount
+table lists, plus tmpfs mounts in other mount namespaces or
+over the cap. POSIX shared memory (`shm_open`) is files in `/dev/shm` and is
+counted there. When tmpfs pages are swapped out the difference can be
+negative. A
+tmpfs mounted with `size=0` has no limit and reports no usage, so its byte
+series are absent, and likewise its inode series with `nr_inodes=0`. ramfs is
+not read: `statvfs` on it reports nothing. hugetlbfs pages are in
+`memory_hugetlb`.
+
+tmpfs mounts appear and go with logins (`/run/user/<uid>`), services (systemd's
+`/run/credentials/<unit>` mounts) and containers (one `/dev/shm` per Docker
+container, one per pod volume under Kubernetes), and each is its own series.
+They are capped at 64, apart from the 256 local filesystems, so they never take
+a local filesystem's place. Over the cap, the mounts with the fewest path
+components are placed first, so `/tmp`, `/dev/shm` and `/run` come before a
+container's mounts, and a mount once placed keeps its series until it is
+unmounted. The first mount left out is logged as a warning, changes in the
+number at debug, and fitting again at info, so a host whose containers churn
+does not warn every sweep. A tmpfs mount whose path passes through a network,
+FUSE or autofs mount is skipped like a local filesystem there.
+
+Each sweep logs at debug level `filesystem: sweep published <n>/<m>
+filesystem(s) (<l> local, <t> tmpfs selected; <l> local, <t> tmpfs over the
+cap) in <us> us (read <us> us, parse <us> us, statvfs+publish <us> us)`.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `filesystem_tmpfs_used` | Bytes of files in the tmpfs mount, resident or swapped out; the resident part is in `memory_shmem`; absent with no size limit | `mount`, `fstype`, `devnum` |
+| `filesystem_tmpfs_size` | The mount's size limit in bytes (`size=`); a limit only, not memory held | `mount`, `fstype`, `devnum` |
+| `filesystem_tmpfs_inodes_used` | Files, directories and links on the mount; absent with no inode limit | `mount`, `fstype`, `devnum` |
+| `filesystem_tmpfs_inodes_total` | The mount's inode limit (`nr_inodes=`) | `mount`, `fstype`, `devnum` |
 
 ## XFS
 
@@ -1027,32 +1075,84 @@ written after the programs attach, so fills in the agent's first instant are
 
 ### memory_slabinfo
 
-Sizes of a fixed set of slab caches from `/proc/slabinfo`, read at most once
-per `interval` (60 s by default) off the scrape cycle, since the file is
-root-only, lists every cache on the machine and is generated under the slab
-lock. The question it answers is whether the metadata caches fit: a
+Sizes of slab caches from `/proc/slabinfo`, read at most once per `interval`
+(60 s by default) off the scrape cycle, since the file is root-only, lists every
+cache on the machine and is generated under the slab lock.
+
+`memory_slab_cache_bytes` is published for every cache the file lists, labeled
+by `cache`. When `memory_slab` (meminfo's `SReclaimable` and `SUnreclaim`)
+grows, this says which cache grew: a `kmalloc-*` size class, a ZFS, KVM or
+VFIO cache, or any other. A cache that appears when a module loads gets its
+series then, and one that goes away when its module unloads reads absent. A
+cache that comes back can take a different slot, so its `id` label can change.
+`caches = "fixed"` in `[samplers.memory_slabinfo]` publishes bytes for the
+followed caches below only. At most 1024 caches are published; over that, the
+followed caches come first and the rest are taken largest first, among the
+slots free at that sweep: a slot once held is kept until its cache goes, so a
+followed cache that first appears while every slot is held is not published.
+A name listed twice is published once, at its larger line. The first
+cache left out is logged as a warning, changes in the count at debug, and
+fitting again at info. A kernel lists a few hundred caches, so the cap only
+bounds what an unusual kernel could produce.
+
+A cache's bytes are its slabs times pages per slab times the page size, free
+objects included. The file gives pages per slab at the cache's preferred
+order; under memory pressure SLUB allocates slabs at a smaller fallback order,
+and those hold fewer pages, so the bytes are an upper bound per cache, exact
+while no slab of the cache used the fallback.
+
+`memory_slabinfo` also answers whether the filesystem metadata caches fit: a
 filesystem with tens of millions of files whose inode cache is evicted pays a
 synchronous inode-table read on `stat` and on every atime update
 (`ext4_inode_loads`), and `ext4_inode_cache` here is the cause on the same
 axis. `vm.vfs_cache_pressure` trades this memory against the page cache.
 
-Caches followed: `dentry`, `inode_cache`, `ext4_inode_cache`,
-`ext4_extent_status`, `jbd2_journal_head`, `buffer_head`, `xfs_inode`,
-`radix_tree_node` (the page-cache index). A cache the running kernel does not
-have leaves its gauges absent, and so does one SLUB has merged into a
-same-sized pool, which the file lists under one name only: caches without a
-constructor are candidates, and `ext4_extent_status` is merged on the Debian 13
-6.12 kernel. The inode and dentry caches have constructors and are never
-merged. Booting with `slab_nomerge` lists every cache under its own name.
+Caches whose object counts are followed: `dentry`, `inode_cache`,
+`ext4_inode_cache`, `ext4_extent_status`, `jbd2_journal_head`, `buffer_head`,
+`xfs_inode`, `radix_tree_node` (the page-cache index). Their object counts read
+absent while the file does not list them, as their bytes do. A cache the
+running kernel does not have has no series, and neither does one SLUB has
+merged into a same-sized pool, which the file lists under one name only with
+the pool's totals: caches without a constructor or a usercopy region are
+candidates, and `ext4_extent_status` is merged on the Debian 13 6.12 kernel.
+The inode and dentry caches have constructors and are never merged. A merged
+pool's member names are the entries in `/sys/kernel/slab/` that link to one
+directory. Booting with `slab_nomerge` lists every cache under its own name.
 
-Measured on a 56-vCPU guest with a 196-line `/proc/slabinfo`: the sweep reads
-the file in 366–409 µs and parses it in 51–63 µs, once per interval on the
-blocking pool; the scrape-path `refresh()` is 0 µs except for the dispatch.
+Not every slab allocation is in a cache. On SLUB, and on SLAB from 6.1, a
+`kmalloc` larger than two pages (`kmalloc-8k` with 4 KiB pages) goes to the
+page allocator, and since Linux 5.4 those pages are counted in `SUnreclaim`.
+A `CONFIG_SLAB` kernel before 6.1 keeps kmalloc caches up to 4 MiB with 4 KiB
+pages (2^(MAX_ORDER + PAGE_SHIFT − 1), at most 32 MiB), so there the
+difference below is about zero. With every cache published, `memory_slab`
+minus the sum of `memory_slab_cache_bytes` approximates the memory in large
+`kmalloc` allocations; since the cache bytes are an upper bound, the difference can
+understate it. OpenZFS's SPL creates caches of objects up to
+`spl_kmem_cache_slab_limit` (`SPL_MAX_KMEM_ORDER_NR_PAGES` pages: 4 under
+SLUB, so 16 KiB with 4 KiB pages) as Linux slab caches, which are listed here
+under their ZFS names. Caches of larger objects, such as the larger
+`zio_buf_*`, `zio_data_buf_*` and `zio_buf_comb_*` (one cache for data and
+metadata when the two would be identical), are SPL's own on `vmalloc`, are in
+neither this file nor `memory_slab`, and only `/proc/spl/kmem/slab` lists
+them. ARC data in scatter ABDs, the default, comes from the page allocator and
+is in neither file.
+
+Measured on a 56-vCPU guest with a 196-line `/proc/slabinfo`, when only the
+fixed caches were published: the sweep reads the file in 366–409 µs and parses
+it in 51–63 µs, once per interval on the blocking pool; the scrape-path
+`refresh()` is 0 µs except for the dispatch. Publishing every cache, measured on
+a 16-vCPU arm64 VM (Docker Desktop, kernel 7.0.14) with 216 caches in a release
+build: read 106–108 µs, parse and publish 79–87 µs per sweep, the mean of 200
+sweeps in each of three runs (`slabinfo::tests::sweep_phase_timing`). On a
+32-core x86 host (kernel 6.12.90) with 267 caches, from the sweep's debug line
+at a 10 s interval over two minutes: read 1525–1559 µs (28884 bytes), parse
+and publish 294–306 µs. The read's cost does not depend on `caches`; parse
+and publish does.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `memory_slab_cache_objects` | Objects in the cache: `active` are in use, `total` are allocated to the cache's slabs whether in use or free | `cache={...}`, `state={active,total}` |
-| `memory_slab_cache_bytes` | Memory the cache holds: slabs times pages per slab times the page size | `cache={...}` |
+| `memory_slab_cache_bytes` | Memory the cache holds: slabs times pages per slab times the page size, free objects in those slabs included; an upper bound (see above). Every cache by default; the followed caches only with `caches = "fixed"` | `cache`, `id` |
+| `memory_slab_cache_objects` | Objects in a followed cache: `active` are in use, `total` are allocated to the cache's slabs whether in use or free | `cache`, `state={active,total}`, `id` |
 
 ### memory_vmstat
 

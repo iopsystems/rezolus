@@ -216,6 +216,47 @@ pub trait Sampler: Send + Sync {
 
 pub type SamplerResult = anyhow::Result<Option<Box<dyn Sampler>>>;
 
+/// How a sampler logs a count of entities it could not place under a cap, or
+/// skipped, as the count moves between sweeps. On a host whose population
+/// churns (containers, pods) the count moves every sweep, so only the start
+/// and the end of the condition are warnings or info; the moves between are
+/// debug.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) enum CountChange {
+    /// From zero to some: warn.
+    Began(usize),
+    /// From some to a different some: debug.
+    Moved(usize),
+    /// From some to zero: info.
+    Ended,
+}
+
+/// The change from `last` to `now`, if any.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn count_change(last: usize, now: usize) -> Option<CountChange> {
+    match (last, now) {
+        (a, b) if a == b => None,
+        (0, n) => Some(CountChange::Began(n)),
+        (_, 0) => Some(CountChange::Ended),
+        (_, n) => Some(CountChange::Moved(n)),
+    }
+}
+
+#[cfg(test)]
+mod count_change_tests {
+    use super::{count_change, CountChange};
+
+    #[test]
+    fn only_the_start_and_end_of_a_condition_are_loud() {
+        assert_eq!(count_change(0, 0), None);
+        assert_eq!(count_change(0, 3), Some(CountChange::Began(3)));
+        assert_eq!(count_change(3, 3), None);
+        assert_eq!(count_change(3, 5), Some(CountChange::Moved(5)));
+        assert_eq!(count_change(5, 0), Some(CountChange::Ended));
+    }
+}
+
 #[cfg(test)]
 mod attribution_tests {
     use super::{attribute_sampler, is_module_prefix};
