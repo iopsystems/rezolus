@@ -1409,7 +1409,7 @@ the agent's network namespace and include IPv4 and IPv6 together.
 |--------|-------------|----------|
 | `tcp_delayed_acks` | Delayed-ACK timer firings that sent an ACK (`DelayedACKs`), including firings first deferred because the socket was owned by the application | |
 | `tcp_delayed_ack_deferrals` | Delayed-ACK timer firings that found the socket owned by the application and deferred the ACK until it was released (`DelayedACKLocked`) | |
-| `tcp_duplicate_data_segments` | Data segments received that are entirely duplicate (`DelayedACKLost`): ending at or below the next expected sequence number, or starting below it and failing the sequence or PAWS check. The kernel takes each as a late or lost ACK and switches to immediate ACKs. An accepted partial overlap is not counted; it gets a D-SACK (`tcp_dsacks_sent{kind="old"}`) |  |
+| `tcp_duplicate_data_segments` | Data segments received that are entirely duplicate (`DelayedACKLost`): ending at or below the next expected sequence number, or starting below it and failing the sequence or PAWS check. On each one the kernel switches the connection to immediate ACKs (quick-ACK mode). An accepted partial overlap is not counted; it gets a D-SACK (`tcp_dsacks_sent{kind="old"}`) |  |
 | `tcp_rto_expirations` | Retransmission timer expirations plus SYN-ACK timeouts on pending connection requests (`TCPTimeouts`); not counted while the peer advertises a zero window | |
 | `tcp_loss_probes` | Tail loss probes sent (`TCPLossProbes`) | |
 | `tcp_loss_probe_recoveries` | Losses repaired by a tail loss probe that retransmitted the last segment, instead of an RTO (`TCPLossProbeRecovery`); probes that sent new data are not counted |  |

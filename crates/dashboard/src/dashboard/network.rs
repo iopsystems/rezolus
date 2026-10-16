@@ -216,7 +216,8 @@ const TCP_MIB: &[(&str, &str, &[MibChart])] = &[
         "A delayed-ACK firing means this host held an ACK for the delayed-ACK timeout (40 ms \
          minimum) because nothing outgoing carried it; a peer sending with Nagle, or limited by \
          its congestion or receive window, may be waiting for it. Duplicate data segments are \
-         the peer retransmitting data already received, which the kernel reads as a late ACK. \
+         the peer retransmitting data already received; on each one the kernel switches the \
+         connection to immediate ACKs. \
          Autocorking holds back small sends while earlier data is still queued in the qdisc \
          or device.",
         &[
