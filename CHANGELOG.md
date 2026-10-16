@@ -24,6 +24,20 @@
   default, like `memory_vmstat`. The viewer's Network section plots each
   metric under TCP when the recording has it. Backported from 6.0 (#1472) in #1478.
 
+### Fixed
+
+- `cpu_perf`: `cgroup_cpu_cycles` and `cgroup_cpu_instructions` no longer
+  credit a failed counter read as a count. The `sched_switch` program read
+  the counters with `bpf_perf_event_read`, which returns a negative errno
+  in the same u64 as the count. When the counter group was off the PMU
+  (`-EBUSY`), the next switch credited minus the counter's count since the
+  agent opened it to one cgroup, so that cgroup's series went backwards or
+  wrapped to near 2^64. On a CPU with no counter open (outside a partial
+  `reserved_pmu_counters` grant, or where the group failed to open) the
+  first switch lowered one cgroup's counter by 2. Counters are now read with
+  `bpf_perf_event_read_value`; a failed read credits nothing, and the next
+  good read sets a new baseline. Backported from 6.0 (#1477) in #1480.
+
 ## [5.28.0] - 2026-10-13
 
 ### Added
