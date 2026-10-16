@@ -6,6 +6,7 @@ import {
     stepAtLeast,
     setStepOverride,
 } from '../src/viewer/assets/lib/data.js';
+import { insertGapNulls } from '../src/viewer/assets/lib/charts/util/utils.js';
 import { granularityOptions } from '../src/viewer/assets/lib/ui/controls.js';
 
 // A recording made at `--interval 100ms` has ten samples per second. The
@@ -87,6 +88,47 @@ test('a step override coarser than the cadence still strides a sub-second record
             opts: { type: 'histogram', subtype: 'buckets' },
         });
         assert.equal(calls[0].query, 'histogram_heatmap(latency, 1)');
+    } finally {
+        setStepOverride(null);
+    }
+});
+
+test('a step override that is not a multiple of the cadence strides at the next multiple', async () => {
+    const minTime = 1_700_000_000;
+    const calls = [];
+    // 15s over 10s rows would give windows of one and two rows in turn.
+    const api = makeApi(calls, { minTime, maxTime: minTime + 3600, interval: 10 });
+
+    setStepOverride(15);
+    try {
+        const plot = { promql_query: 'latency', opts: { type: 'histogram', subtype: 'buckets' } };
+        await api.fetchHeatmapForPlot(plot);
+        assert.equal(calls[0].query, 'histogram_heatmap(latency, 20)');
+        await api.fetchQuantileSpectrumForPlot(plot, [0.5]);
+        assert.match(calls[1].query, /^histogram_quantiles\(\[[^\]]*\], latency, 20\)$/);
+    } finally {
+        setStepOverride(null);
+    }
+    // With no metadata cached the cadence is taken as one second.
+    const q = api.buildEffectiveQuery(
+        { promql_query: 'latency', opts: { type: 'histogram', subtype: 'percentiles', percentiles: [0.5] } },
+        { stepOverride: 2.5 },
+    );
+    assert.match(q, /latency, 3\)/);
+});
+
+test('points a rounded stride apart are not gaps', () => {
+    // A 250ms step on a 200ms recording strides at 400ms, more than 1.5x the
+    // step itself.
+    setStepOverride(0.25);
+    try {
+        const t0 = 1_700_000_000_000;
+        const points = Array.from({ length: 6 }, (_, i) => [t0 + i * 400, i]);
+        const out = insertGapNulls(points, 0.2);
+        assert.equal(out.filter(([, v]) => v === null).length, 0);
+        // A missing point is still a gap.
+        const gappy = points.filter((_, i) => i !== 3);
+        assert.equal(insertGapNulls(gappy, 0.2).filter(([, v]) => v === null).length, 1);
     } finally {
         setStepOverride(null);
     }
