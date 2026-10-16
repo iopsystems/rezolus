@@ -56,7 +56,7 @@ pub static TCP_DELAYED_ACK_DEFERRALS: LazyCounter = LazyCounter::new(Counter::de
 
 #[metric(
     name = "tcp_duplicate_data_segments",
-    description = "Data segments received that are entirely duplicate (DelayedACKLost): segments ending at or below the next expected sequence number, plus data segments starting below it that fail the sequence or PAWS check. On each one the kernel switches the connection to immediate ACKs (quick-ACK mode). An accepted segment that only partly overlaps received data is not counted; it gets a D-SACK (tcp_dsacks_sent with kind=old)",
+    description = "Duplicate data segments received (DelayedACKLost): segments ending at or below the next expected sequence number, plus data segments starting below it that fail the sequence or PAWS check. On each one the kernel sends its next ACKs immediately, up to 16 (quick-ACK mode). An accepted segment that only partly overlaps received data is not counted; it gets a D-SACK (tcp_dsacks_sent with kind=old)",
     metadata = { unit = "segments", acq_group = "tcp_mib_netstat_read" }
 )]
 pub static TCP_DUPLICATE_DATA_SEGMENTS: LazyCounter = LazyCounter::new(Counter::default);
