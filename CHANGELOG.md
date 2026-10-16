@@ -71,6 +71,28 @@
 
 ### Changed
 
+- **metriken-query 0.39.** A strided histogram call
+  (`histogram_heatmap(x, 60)`, `histogram_quantiles([..], x, 60)`,
+  `histogram_count(x, 60)`) lays its windows at multiples of the stride,
+  `(k·60 s, (k+1)·60 s]`, where 0.38 laid them from the first row read;
+  each point is still stamped at the last row of its window. A heatmap of a
+  whole recording starts with a partial column unless the recording starts
+  on a multiple of the stride. A strided instant query counts the one
+  stride ending at the instant, where `histogram_count`, `_quantiles` and
+  the rest read back 300 s (a heatmap counted one row). A stride under
+  1 ns, or NaN, is a parse error. Histogram functions are faster: on the
+  9.6 h bench recording a heatmap of all 16 `syscall_latency` series at a
+  60 s stride takes 0.25 s (release build, warm).
+
+- **The viewer rounds a manual step override up to a whole multiple of the
+  recording's interval for histogram strides**, as it already did for the
+  automatic stride. A stride that is not a multiple gives windows whose row
+  counts alternate: the 15 s step on a 10 s recording drew heatmap columns
+  of one and two rows in turn, with gaps between them. It now strides at
+  20 s. A chart's gap detection uses the rounded step too, so points one
+  stride apart stay joined; with such a step, a counter or gauge line no
+  longer breaks at a single missing point.
+
 - **`rezolus view`'s cache budget defaults to an eighth of the memory
   available**: physical memory, or a Linux cgroup's limit when lower (as in
   a container), clamped to 500 MB–8 GB. It was a fixed 500 MB.
@@ -88,8 +110,8 @@
   observations, up to 300 s earlier (on the bench recording,
   `tcp_connect_latency` at most instants). An instant `histogram_count by
   (op) (x)` now answers; on 0.37 it returned no series. A strided call
-  (`histogram_count(x, 60)`) still reads back 300 s. The dashboards issue
-  range queries and are unaffected.
+  (`histogram_count(x, 60)`) read back 300 s until metriken-query 0.39. The
+  dashboards issue range queries and are unaffected.
 
 - **metriken-query 0.37, metriken-storage 0.3, metriken-exposition 0.23,
   metriken-recorder 0.2, dendro 0.5, arrow and parquet 60, ratatui 0.30.**
