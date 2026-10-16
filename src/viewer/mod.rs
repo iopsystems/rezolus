@@ -279,7 +279,9 @@ pub fn command() -> Command {
                     "Row-group buffer cache size in megabytes. Larger values \
                      speed up repeated queries against the same data (typical \
                      dashboard workload); smaller values reduce peak RSS. \
-                     Overrides REZOLUS_CACHE_MB. Default: 500.",
+                     Overrides REZOLUS_CACHE_MB. Default: an eighth of the \
+                     memory available (physical, or a Linux cgroup's limit \
+                     when lower), clamped to 500-8192.",
                 )
                 .value_parser(value_parser!(usize))
                 .action(clap::ArgAction::Set),
@@ -311,7 +313,7 @@ pub struct Config {
     listen: SocketAddr,
     templates_dir: Option<PathBuf>,
     proxy_allow: proxy_allow::Allowlist,
-    /// Buffer pool budget in bytes. Defaults to `DEFAULT_CACHE_SIZE_BYTES`.
+    /// Buffer pool budget in bytes. Defaults to `default_cache_size_bytes()`.
     cache_size_bytes: usize,
     /// Queries run at once. Defaults to `state::default_query_concurrency`.
     query_concurrency: usize,
@@ -392,7 +394,7 @@ impl TryFrom<ArgMatches> for Config {
             )
         };
 
-        // Resolve cache size: CLI flag > env var > compile-time default.
+        // Resolve cache size: CLI flag > env var > default_cache_size_bytes().
         let cache_size_bytes = args
             .get_one::<usize>("CACHE_SIZE_MB")
             .copied()
@@ -402,7 +404,7 @@ impl TryFrom<ArgMatches> for Config {
                     .and_then(|s| s.parse::<usize>().ok())
             })
             .map(|mb| mb * 1024 * 1024)
-            .unwrap_or(state::DEFAULT_CACHE_SIZE_BYTES);
+            .unwrap_or_else(state::default_cache_size_bytes);
 
         // Queries at once: CLI flag > env var > half the CPUs.
         let query_concurrency = args
