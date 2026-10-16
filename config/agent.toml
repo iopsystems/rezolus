@@ -409,6 +409,13 @@ enabled = false
 # establishing connections.
 [samplers.tcp_connect_latency]
 
+# TCP counters from the kernel's SNMP MIBs in /proc/net/netstat (TcpExt) and
+# /proc/net/snmp (Tcp): delayed ACKs, RTOs and loss recovery, zero-window
+# advertisements and drops, receive-memory pruning and drops, listen-queue
+# overflows, aborts, resets and established connections. One read of each file
+# per refresh. See docs/metrics.md#tcp_mib.
+[samplers.tcp_mib]
+
 # BPF sampler that probes TCP receive path to measure latency from a packet
 # being received until application reads from the socket.
 [samplers.tcp_packet_latency]

@@ -7,6 +7,10 @@ mod stats {
         include!("./linux/connect_latency/stats.rs");
     }
 
+    mod mib {
+        include!("./linux/mib/stats.rs");
+    }
+
     mod packet_latency {
         include!("./linux/packet_latency/stats.rs");
     }

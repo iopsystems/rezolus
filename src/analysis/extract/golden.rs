@@ -487,6 +487,7 @@ mod tests {
         "syscall_counts",
         "syscall_latency",
         "tcp_connect_latency",
+        "tcp_mib",
         "tcp_packet_latency",
         "tcp_receive",
         "tcp_retransmit",

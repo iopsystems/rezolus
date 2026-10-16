@@ -118,9 +118,250 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         "tcp_packet_latency".to_string(),
     );
 
+    tcp_mib(data, &mut tcp);
+
     view.group(tcp);
 
     view
+}
+
+/// One chart of a `tcp_mib` counter or gauge.
+struct MibChart {
+    title: &'static str,
+    id: &'static str,
+    metric: &'static str,
+    /// The label the chart is split by, for a metric with one.
+    by: Option<&'static str>,
+    gauge: bool,
+}
+
+const fn counter(title: &'static str, id: &'static str, metric: &'static str) -> MibChart {
+    MibChart {
+        title,
+        id,
+        metric,
+        by: None,
+        gauge: false,
+    }
+}
+
+const fn counter_by(
+    title: &'static str,
+    id: &'static str,
+    metric: &'static str,
+    by: &'static str,
+) -> MibChart {
+    MibChart {
+        title,
+        id,
+        metric,
+        by: Some(by),
+        gauge: false,
+    }
+}
+
+/// The `tcp_mib` subgroups: name, description, charts.
+const TCP_MIB: &[(&str, &str, &[MibChart])] = &[
+    (
+        "Retransmission & Loss Recovery",
+        "Retransmission timeouts stall a connection for at least the minimum RTO (200 ms by \
+         default); tail loss probes and fast recovery repair loss without waiting for one. \
+         D-SACKs received are retransmissions the peer did not need.",
+        &[
+            counter(
+                "RTO Expirations",
+                "tcp-rto-expirations",
+                "tcp_rto_expirations",
+            ),
+            counter(
+                "Segments Retransmitted",
+                "tcp-segments-retransmitted",
+                "tcp_segments_retransmitted",
+            ),
+            counter_by(
+                "Lost Segments Retransmitted",
+                "tcp-loss-retransmits",
+                "tcp_loss_retransmits",
+                "kind",
+            ),
+            counter("Tail Loss Probes", "tcp-loss-probes", "tcp_loss_probes"),
+            counter(
+                "Loss Probe Recoveries",
+                "tcp-loss-probe-recoveries",
+                "tcp_loss_probe_recoveries",
+            ),
+            counter_by(
+                "Fast Recoveries",
+                "tcp-fast-recoveries",
+                "tcp_fast_recoveries",
+                "kind",
+            ),
+            counter("Spurious RTOs", "tcp-spurious-rtos", "tcp_spurious_rtos"),
+            counter(
+                "Retransmits Lost Again",
+                "tcp-retransmits-lost",
+                "tcp_retransmits_lost",
+            ),
+            counter_by(
+                "D-SACKs Received",
+                "tcp-dsacks-received",
+                "tcp_dsacks_received",
+                "kind",
+            ),
+            counter_by("D-SACKs Sent", "tcp-dsacks-sent", "tcp_dsacks_sent", "kind"),
+        ],
+    ),
+    (
+        "Delayed ACKs & Autocorking",
+        "A delayed-ACK firing means this host held an ACK for the delayed-ACK timeout (40 ms \
+         minimum) because nothing outgoing carried it; a peer sending with Nagle, or limited by \
+         its congestion or receive window, may be waiting for it. Duplicate data segments are \
+         usually the peer retransmitting data already received; on each one the kernel sends \
+         its next ACKs immediately, up to 16. \
+         Autocorking holds back small sends while earlier data is still queued in the qdisc \
+         or device.",
+        &[
+            counter("Delayed ACKs", "tcp-delayed-acks", "tcp_delayed_acks"),
+            counter(
+                "Delayed ACKs Deferred",
+                "tcp-delayed-ack-deferrals",
+                "tcp_delayed_ack_deferrals",
+            ),
+            counter(
+                "Duplicate Data Segments",
+                "tcp-duplicate-data-segments",
+                "tcp_duplicate_data_segments",
+            ),
+            counter("Autocorks", "tcp-autocorks", "tcp_autocorks"),
+        ],
+    ),
+    (
+        "Receive Window",
+        "A receiver advertises a zero window when the application is not reading fast enough \
+         to keep its receive buffer from filling; the sender then stops until the window \
+         reopens.",
+        &[
+            counter_by(
+                "Zero Window Transitions",
+                "tcp-zero-window-transitions",
+                "tcp_zero_window_transitions",
+                "kind",
+            ),
+            counter(
+                "Zero Window Withheld",
+                "tcp-zero-window-withheld",
+                "tcp_zero_window_withheld",
+            ),
+            counter(
+                "Zero Window Drops",
+                "tcp-zero-window-drops",
+                "tcp_zero_window_drops",
+            ),
+        ],
+    ),
+    (
+        "Receive Memory",
+        "Receive-side memory work and drops. Pruning and collapsing run when a socket cannot \
+         be charged memory for an incoming segment. A prune failure is usually followed by a \
+         receive-buffer drop, which discards a segment the peer has to retransmit, so the two \
+         overlap; a prune failure on an empty receive queue queues the segment anyway.",
+        &[
+            counter("Prune Attempts", "tcp-prune-attempts", "tcp_prune_attempts"),
+            counter("Prune Failures", "tcp-prune-failures", "tcp_prune_failures"),
+            counter(
+                "Out-of-Order Prunes",
+                "tcp-out-of-order-prunes",
+                "tcp_out_of_order_prunes",
+            ),
+            counter(
+                "Collapsed Buffers",
+                "tcp-collapsed-buffers",
+                "tcp_collapsed_buffers",
+            ),
+            counter_by(
+                "Receive Buffer Drops",
+                "tcp-rcvbuf-drops",
+                "tcp_rcvbuf_drops",
+                "kind",
+            ),
+            counter("Backlog Drops", "tcp-backlog-drops", "tcp_backlog_drops"),
+            counter(
+                "Out-of-Order Queued",
+                "tcp-out-of-order-queued",
+                "tcp_out_of_order_queued",
+            ),
+            counter(
+                "Memory Pressure Entries",
+                "tcp-memory-pressure-entries",
+                "tcp_memory_pressure_entries",
+            ),
+        ],
+    ),
+    (
+        "Connections",
+        "Connection state changes, failures and errors in the agent's network namespace.",
+        &[
+            MibChart {
+                title: "Established Connections",
+                id: "tcp-established-connections",
+                metric: "tcp_established_connections",
+                by: None,
+                gauge: true,
+            },
+            counter("Open Failures", "tcp-open-failures", "tcp_open_failures"),
+            counter(
+                "Established Resets",
+                "tcp-established-resets",
+                "tcp_established_resets",
+            ),
+            counter("Resets Sent", "tcp-resets-sent", "tcp_resets_sent"),
+            counter_by("Aborts", "tcp-aborts", "tcp_aborts", "reason"),
+            counter(
+                "Listen Overflows",
+                "tcp-listen-overflows",
+                "tcp_listen_overflows",
+            ),
+            counter("Listen Drops", "tcp-listen-drops", "tcp_listen_drops"),
+            counter("Input Errors", "tcp-input-errors", "tcp_input_errors"),
+            counter(
+                "Checksum Errors",
+                "tcp-checksum-errors",
+                "tcp_checksum_errors",
+            ),
+        ],
+    ),
+];
+
+/// The `tcp_mib` subgroups, each chart only when the recording carries its
+/// metric and each subgroup only when it has a chart: a recording made
+/// without the sampler, or on a kernel that lacks a column, gets no empty
+/// panels.
+fn tcp_mib(data: &dyn MetricsSource, tcp: &mut Group) {
+    for (name, description, charts) in TCP_MIB {
+        let present: Vec<&MibChart> = charts
+            .iter()
+            .filter(|c| has_metric(data, c.metric))
+            .collect();
+        if present.is_empty() {
+            continue;
+        }
+        let subgroup = tcp.subgroup(*name);
+        subgroup.describe(*description);
+        for c in present {
+            if c.gauge {
+                subgroup.plot_promql(
+                    PlotOpts::gauge(c.title, c.id, Unit::Count),
+                    format!("sum({})", c.metric),
+                );
+            } else {
+                let query = match c.by {
+                    Some(label) => format!("sum by ({label}) (irate({}[5m]))", c.metric),
+                    None => format!("sum(irate({}[5m]))", c.metric),
+                };
+                subgroup.plot_promql(PlotOpts::counter(c.title, c.id, Unit::Rate), query);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -187,6 +428,64 @@ mod tests {
             host < iface,
             "host panels must precede the per-interface panels (host@{host}, iface@{iface})"
         );
+    }
+
+    /// A recording without the `tcp_mib` sampler gets none of its panels.
+    #[test]
+    fn tcp_mib_panels_are_absent_without_the_sampler() {
+        let json = json_of(&generate(&store_with(&["network_bytes"]), vec![]));
+        for (name, _, charts) in TCP_MIB {
+            assert!(!json.contains(&format!("\"{name}\"")), "{name} in {json}");
+            for c in *charts {
+                assert!(!json.contains(c.metric), "{} in {json}", c.metric);
+            }
+        }
+    }
+
+    /// Each `tcp_mib` chart is plotted when its metric is present, a labeled
+    /// metric is split by its label, and a metric the recording lacks is not
+    /// plotted even when others in its subgroup are.
+    #[test]
+    fn tcp_mib_panels_follow_the_metrics_present() {
+        let json = json_of(&generate(
+            &store_with(&[
+                "tcp_rto_expirations",
+                "tcp_fast_recoveries",
+                "tcp_delayed_acks",
+            ]),
+            vec![],
+        ));
+        assert!(
+            json.contains("sum(irate(tcp_rto_expirations[5m]))"),
+            "{json}"
+        );
+        assert!(
+            json.contains("sum by (kind) (irate(tcp_fast_recoveries[5m]))"),
+            "{json}"
+        );
+        assert!(json.contains("sum(irate(tcp_delayed_acks[5m]))"), "{json}");
+        assert!(
+            json.contains("\"Retransmission & Loss Recovery\""),
+            "{json}"
+        );
+        assert!(!json.contains("tcp_loss_probes"), "{json}");
+        assert!(!json.contains("\"Receive Window\""), "{json}");
+        assert!(!json.contains("\"Connections\""), "{json}");
+    }
+
+    /// Every chart id in the `tcp_mib` table is unique, and every metric is
+    /// charted once.
+    #[test]
+    fn tcp_mib_chart_ids_and_metrics_are_unique() {
+        let charts: Vec<&MibChart> = TCP_MIB.iter().flat_map(|(_, _, c)| c.iter()).collect();
+        let mut ids: Vec<&str> = charts.iter().map(|c| c.id).collect();
+        let mut metrics: Vec<&str> = charts.iter().map(|c| c.metric).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        metrics.sort_unstable();
+        metrics.dedup();
+        assert_eq!(ids.len(), charts.len());
+        assert_eq!(metrics.len(), charts.len());
     }
 
     #[test]

@@ -5,6 +5,25 @@
 - rustls 0.23.46, for RUSTSEC-2026-0346 through 0349. Backported from 6.0
   (#1467) in #1479.
 
+### Added
+
+- `tcp_mib` sampler: TCP counters the kernel keeps as SNMP MIBs, from the
+  `TcpExt` section of `/proc/net/netstat` and the `Tcp` section of
+  `/proc/net/snmp`. Delayed-ACK timer firings and deferrals, and duplicate
+  data received; RTO expirations, tail loss probes and their recoveries,
+  lost-segment retransmits by fast recovery or slow start, spurious RTOs,
+  fast recoveries by SACK or Reno, retransmits lost again, D-SACKs received
+  and sent by kind, and `tcp_segments_retransmitted`; zero-window transitions,
+  withheld zero windows and zero-window drops; receive-queue prunes, prune
+  failures, out-of-order prunes, collapsed buffers, backlog drops,
+  receive-buffer drops, out-of-order queueing and TCP memory-pressure
+  entries; autocorking; listen overflows and drops; aborts by reason; open
+  failures, established resets, resets sent, input and checksum errors; and
+  `tcp_established_connections` as a gauge. Columns are matched by name, so
+  a column the kernel does not print leaves its metric absent. Enabled by
+  default, like `memory_vmstat`. The viewer's Network section plots each
+  metric under TCP when the recording has it. Backported from 6.0 (#1472) in #1478.
+
 ## [5.28.0] - 2026-10-13
 
 ### Added
