@@ -773,10 +773,12 @@ export function createGroupComponent(getState) {
             // the group title + subgroup headers when the whole cluster is
             // empty (e.g. a section querying metrics that don't exist on
             // the host, like GPU on a CPU-only box).
-            const plotHasData = (plot) =>
-                Array.isArray(plot.data) && plot.data.some((series) =>
+            // A plot whose query is still in flight (`pending`) counts, so
+            // its card holds its place while the query runs.
+            const plotHasData = (plot) => plot.pending === true
+                || (Array.isArray(plot.data) && plot.data.some((series) =>
                     Array.isArray(series) && series.length > 0
-                );
+                ));
             const subgroupHasData = (sg) => (sg.plots || []).some(plotHasData);
             const groupHasData = subgroups.some(subgroupHasData);
 
@@ -786,7 +788,9 @@ export function createGroupComponent(getState) {
             // Picks the compare wrapper when in compare mode AND the spec has
             // a promql_query (service-template charts without one fall through
             // to the single-capture path even in compare mode).
-            const chartBody = (renderSpec, sourceSpec) => (compareMode && sourceSpec.promql_query)
+            const chartBody = (renderSpec, sourceSpec) => sourceSpec.pending
+                ? m('div.chart-loading.chart-pending', 'Loading\u2026')
+                : (compareMode && sourceSpec.promql_query)
                 ? m(CompareChartWrapper, {
                     spec: renderSpec,
                     chartsState,
@@ -808,6 +812,7 @@ export function createGroupComponent(getState) {
                 : m(Chart, { spec: renderSpec, chartsState, interval });
 
             const renderChart = (spec) => {
+                if (spec.pending === 'hidden') return null;
                 const isHistogramChart = isHistogramPlot(spec);
                 // In compare mode, every chart takes the full chart-grid
                 // row. Single line overlays benefit from the wider x-axis

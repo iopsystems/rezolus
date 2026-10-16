@@ -1058,6 +1058,12 @@
 .chart-error {
     color: var(--danger-fg);
 }
+/* A chart whose query is in flight holds the height of the chart it
+   becomes, so the page does not move when the chart draws. */
+.chart-pending {
+    height: 270px;
+    box-sizing: border-box;
+}
 
 /* ==========================================================================
    Compare mode — header badge
