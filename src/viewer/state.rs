@@ -22,15 +22,126 @@ use super::capture_registry::{CaptureId, CaptureRegistry};
 use super::proxy_allow;
 use ::dashboard::{self, TemplateRegistry};
 
-/// Default buffer pool budget for the server-side viewer: 500 MB.
+/// The least the server-side viewer's buffer pool budget defaults to, and the
+/// default where available memory is not known: 500 MB.
+pub const MIN_DEFAULT_CACHE_SIZE_BYTES: usize = 500 * 1024 * 1024;
+
+/// The most the server-side viewer's buffer pool budget defaults to: 8 GB.
+pub const MAX_DEFAULT_CACHE_SIZE_BYTES: usize = 8 * 1024 * 1024 * 1024;
+
+/// Default buffer pool budget for the server-side viewer: an eighth of the
+/// memory available to the process (physical memory, or a Linux cgroup's
+/// limit when lower), clamped to [`MIN_DEFAULT_CACHE_SIZE_BYTES`] to
+/// [`MAX_DEFAULT_CACHE_SIZE_BYTES`]. The row-group cache holds at most the
+/// budget. Each table's segment cache holds at most the budget or that
+/// table's segment bytes, whichever is smaller, so together they hold at
+/// most the archive's segment bytes.
 ///
-/// All `ParquetReader`s share this budget via an LRU-evicted row-group
-/// cache. First-query latency is unchanged; subsequent queries against
-/// the same row groups (the common dashboard workload) are served from
-/// the in-memory cache.
+/// All readers share this budget via an LRU-evicted cache of decoded row
+/// groups. The budget is a ceiling: the pool holds only the row groups
+/// queries decode. First-query latency is unchanged; a query over row groups
+/// already decoded (the common dashboard workload) is served from the cache.
+/// A budget smaller than a query's row groups gives no reuse at all: every
+/// repeat decodes them again.
 ///
 /// Tune with `REZOLUS_CACHE_MB` (env) or the `--cache-size-mb` flag.
-pub const DEFAULT_CACHE_SIZE_BYTES: usize = 500 * 1024 * 1024;
+pub fn default_cache_size_bytes() -> usize {
+    let available = match (physical_memory_bytes(), cgroup_memory_limit()) {
+        (Some(p), Some(c)) => Some(p.min(c)),
+        (p, c) => p.or(c),
+    };
+    cache_size_for(available)
+}
+
+/// The default budget for a host with `physical` bytes of memory, if known.
+fn cache_size_for(physical: Option<usize>) -> usize {
+    physical
+        .map(|bytes| (bytes / 8).clamp(MIN_DEFAULT_CACHE_SIZE_BYTES, MAX_DEFAULT_CACHE_SIZE_BYTES))
+        .unwrap_or(MIN_DEFAULT_CACHE_SIZE_BYTES)
+}
+
+/// Physical memory in bytes, where the platform reports it.
+#[cfg(unix)]
+fn physical_memory_bytes() -> Option<usize> {
+    // SAFETY: `sysconf` reads a configuration value and has no
+    // preconditions; a negative result is an error and is refused below.
+    let (pages, page_size) = unsafe {
+        (
+            libc::sysconf(libc::_SC_PHYS_PAGES),
+            libc::sysconf(libc::_SC_PAGESIZE),
+        )
+    };
+    let pages = usize::try_from(pages).ok()?;
+    let page_size = usize::try_from(page_size).ok()?;
+    pages.checked_mul(page_size).filter(|bytes| *bytes > 0)
+}
+
+#[cfg(not(unix))]
+fn physical_memory_bytes() -> Option<usize> {
+    None
+}
+
+/// The memory limit of the Linux cgroup the process runs in, if one is set
+/// anywhere from its cgroup up to the root. A container's limit is lower than
+/// the host's physical memory, which `sysconf` reports.
+#[cfg(target_os = "linux")]
+fn cgroup_memory_limit() -> Option<usize> {
+    cgroup_limit_from(|path| std::fs::read_to_string(path).ok())
+}
+
+/// The cgroup memory limit, reading files through `read`: the tightest of
+/// cgroup v2's `memory.max` and, where the memory controller is on the v1
+/// hierarchy (v1 or hybrid hosts), v1's `memory.limit_in_bytes`, each from
+/// this process's cgroup up to its hierarchy's root.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn cgroup_limit_from(read: impl Fn(&std::path::Path) -> Option<String>) -> Option<usize> {
+    use std::path::{Path, PathBuf};
+    // The tightest limit in `file` from `root/rel` up to `root`. A level with
+    // no limit ("max" on v2) does not parse and is skipped; v1's "no limit"
+    // is a value near i64::MAX, which the minimum with physical memory
+    // discards.
+    let walk = |root: &Path, rel: &str, file: &str| {
+        let mut dir: PathBuf = root.join(rel.trim_start_matches('/'));
+        let mut limit: Option<usize> = None;
+        loop {
+            if let Some(v) = read(&dir.join(file)).and_then(|s| s.trim().parse::<usize>().ok()) {
+                limit = Some(limit.map_or(v, |l| l.min(v)));
+            }
+            if dir == root || !dir.pop() {
+                break;
+            }
+        }
+        limit
+    };
+    let membership = read(Path::new("/proc/self/cgroup"))?;
+    let v2 = membership
+        .lines()
+        .find_map(|l| l.strip_prefix("0::"))
+        .and_then(|rel| walk(Path::new("/sys/fs/cgroup"), rel, "memory.max"));
+    let v1 = membership
+        .lines()
+        .find_map(|l| {
+            let mut fields = l.splitn(3, ':');
+            let (_, controllers, rel) = (fields.next()?, fields.next()?, fields.next()?);
+            controllers.split(',').any(|c| c == "memory").then_some(rel)
+        })
+        .and_then(|rel| {
+            walk(
+                Path::new("/sys/fs/cgroup/memory"),
+                rel,
+                "memory.limit_in_bytes",
+            )
+        });
+    match (v2, v1) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn cgroup_memory_limit() -> Option<usize> {
+    None
+}
 
 /// Caches the navigation list (via the owned `DashboardContext`) and
 /// memoizes per-section JSON bodies. `/api/v1/sections` reads the nav
@@ -168,7 +279,7 @@ pub struct AppState {
     /// Shared LRU row-group cache for all `ParquetReader`s in this process.
     ///
     /// Readers opened with `Arc::clone(&state.pool)` share the same budget.
-    /// The default is `DEFAULT_CACHE_SIZE_BYTES`; set `REZOLUS_CACHE_MB` or
+    /// The default is `default_cache_size_bytes()`; set `REZOLUS_CACHE_MB` or
     /// pass `--cache-size-mb` to override.
     pub pool: Arc<BufferPool>,
     /// One permit per request that may read a recording at once: a query, a
@@ -191,7 +302,7 @@ pub fn default_query_concurrency() -> usize {
 impl AppState {
     #[cfg(test)]
     pub fn new(data: Arc<dyn MetricsSource>, templates: TemplateRegistry) -> Self {
-        Self::with_pool(data, templates, BufferPool::new(DEFAULT_CACHE_SIZE_BYTES))
+        Self::with_pool(data, templates, BufferPool::new(default_cache_size_bytes()))
     }
 
     pub fn with_pool(
@@ -453,5 +564,103 @@ mod report_marker_tests {
         let state = AppState::new(store, TemplateRegistry::empty());
         *state.trimmed_report_marker.write() = Some("trimmed".to_string());
         assert!(state.is_trimmed_report());
+    }
+}
+
+#[cfg(test)]
+mod cache_size_tests {
+    use super::*;
+
+    const GB: usize = 1024 * 1024 * 1024;
+
+    #[test]
+    fn the_default_budget_is_an_eighth_of_memory_within_its_bounds() {
+        assert_eq!(cache_size_for(Some(16 * GB)), 2 * GB);
+        assert_eq!(cache_size_for(Some(2 * GB)), MIN_DEFAULT_CACHE_SIZE_BYTES);
+        assert_eq!(
+            cache_size_for(Some(1024 * GB)),
+            MAX_DEFAULT_CACHE_SIZE_BYTES
+        );
+        assert_eq!(cache_size_for(None), MIN_DEFAULT_CACHE_SIZE_BYTES);
+    }
+
+    fn files(entries: &[(&str, &str)]) -> impl Fn(&std::path::Path) -> Option<String> {
+        let map: std::collections::HashMap<std::path::PathBuf, String> = entries
+            .iter()
+            .map(|(p, c)| (std::path::PathBuf::from(p), c.to_string()))
+            .collect();
+        move |path| map.get(path).cloned()
+    }
+
+    #[test]
+    fn a_cgroup_v2_limit_is_the_tightest_up_to_the_root() {
+        let read = files(&[
+            ("/proc/self/cgroup", "0::/system.slice/view.service\n"),
+            (
+                "/sys/fs/cgroup/system.slice/view.service/memory.max",
+                "max\n",
+            ),
+            ("/sys/fs/cgroup/system.slice/memory.max", "4294967296\n"),
+            ("/sys/fs/cgroup/memory.max", "8589934592\n"),
+        ]);
+        assert_eq!(cgroup_limit_from(read), Some(4 * GB));
+        let unlimited = files(&[
+            ("/proc/self/cgroup", "0::/\n"),
+            ("/sys/fs/cgroup/memory.max", "max\n"),
+        ]);
+        assert_eq!(cgroup_limit_from(unlimited), None);
+    }
+
+    #[test]
+    fn a_cgroup_v1_limit_is_read() {
+        let read = files(&[
+            ("/proc/self/cgroup", "12:memory:/docker/abc\n"),
+            (
+                "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+                "2147483648\n",
+            ),
+        ]);
+        assert_eq!(cgroup_limit_from(read), Some(2 * GB));
+        assert_eq!(cgroup_limit_from(files(&[])), None);
+        // On a host, the process's own v1 cgroup sets the limit; the root
+        // reads as unlimited.
+        let nested = files(&[
+            ("/proc/self/cgroup", "4:memory:/system.slice/view.service\n"),
+            (
+                "/sys/fs/cgroup/memory/system.slice/view.service/memory.limit_in_bytes",
+                "1073741824\n",
+            ),
+            (
+                "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+                "9223372036854771712\n",
+            ),
+        ]);
+        assert_eq!(cgroup_limit_from(nested), Some(GB));
+    }
+
+    /// A hybrid host lists a `0::` line beside the v1 controllers, and its
+    /// unified hierarchy has no memory controller: the v1 limit is read.
+    #[test]
+    fn a_hybrid_host_reads_the_v1_limit() {
+        let read = files(&[
+            (
+                "/proc/self/cgroup",
+                "12:memory:/docker/abc\n0::/system.slice/containerd.service\n",
+            ),
+            (
+                "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+                "2147483648\n",
+            ),
+        ]);
+        assert_eq!(cgroup_limit_from(read), Some(2 * GB));
+    }
+
+    #[test]
+    fn physical_memory_is_known_here() {
+        // CI builds on Linux and macOS, both unix; elsewhere the reading is
+        // `None` and the default is the floor.
+        if cfg!(unix) {
+            assert!(physical_memory_bytes().is_some_and(|b| b >= 256 * 1024 * 1024));
+        }
     }
 }

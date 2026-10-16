@@ -71,6 +71,14 @@
 
 ### Changed
 
+- **`rezolus view`'s cache budget defaults to an eighth of the memory
+  available**: physical memory, or a Linux cgroup's limit when lower (as in
+  a container), clamped to 500 MB–8 GB. It was a fixed 500 MB.
+  `--cache-size-mb` and `REZOLUS_CACHE_MB` still set it. A budget smaller
+  than a query's row groups gives no reuse: a heatmap of all 16 syscall
+  classes over a 9.6 h recording took 2.9 s on every repeat at 500 MB and
+  0.37 s at 2 GB (release build).
+
 - **metriken-query 0.38.** An instant query of a histogram function
   (`/api/v1/query`, the static viewer's `query()`) reads back three of the
   histogram's row intervals, not 300 s: on a 9.6 h, 1 s recording an
