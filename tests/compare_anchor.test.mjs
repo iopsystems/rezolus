@@ -87,14 +87,43 @@ test('diff views shift the experiment index by the anchor difference in steps', 
     // Set the context the way renderCompareChart does for the module.
     renderCompareChart({ spec: { opts: { style: 'line' } }, captures: [cap(CAPTURE_BASELINE, S), cap(CAPTURE_EXPERIMENT, S + 10)], anchors: {}, captureContext: ctx, captureLabels: {} });
     // Default anchors (recording start): both first samples sit at +0s; no shift.
-    assert.deepEqual(diffTimeShift(CAPTURE_BASELINE, CAPTURE_EXPERIMENT, {}, aTime, bTime), { k: 0, ok: true });
+    assert.deepEqual(diffTimeShift(CAPTURE_BASELINE, CAPTURE_EXPERIMENT, {}, aTime, bTime), { k: 0, ok: true, offset: 0 });
     // Event anchors 1 s and 3 s into their recordings: experiment column c+2 pairs with baseline column c.
     const kind = { baseline: { kind: 'run_start' }, experiment: { kind: 'run_start' } };
-    assert.deepEqual(diffTimeShift(CAPTURE_BASELINE, CAPTURE_EXPERIMENT, kind, aTime, bTime), { k: 2, ok: true });
+    assert.deepEqual(diffTimeShift(CAPTURE_BASELINE, CAPTURE_EXPERIMENT, kind, aTime, bTime), { k: 2, ok: true, offset: 0 });
     // A half-step difference has no cell pairing.
     assert.equal(diffTimeShift(CAPTURE_BASELINE, CAPTURE_EXPERIMENT, { baseline: 0, experiment: 500 }, aTime, bTime).ok, false);
     // No data on one side: nothing to pair, nothing to refuse.
-    assert.deepEqual(diffTimeShift(CAPTURE_BASELINE, CAPTURE_EXPERIMENT, kind, aTime, []), { k: 0, ok: true });
+    assert.deepEqual(diffTimeShift(CAPTURE_BASELINE, CAPTURE_EXPERIMENT, kind, aTime, []), { k: 0, ok: true, offset: 0 });
+});
+
+test('strided windows at different phases pair with the nearest column', () => {
+    const ctx = new CaptureContext();
+    // Two recordings starting 0.3 s and 0.7 s past a whole second: 60 s
+    // windows close at multiples of 60, 39.7 s and 19.3 s into them.
+    const startA = 1_700_000_000.3;
+    const startB = 1_700_005_000.7;
+    ctx.set(CAPTURE_BASELINE, { startSec: startA, events: [] });
+    ctx.set(CAPTURE_EXPERIMENT, { startSec: startB, events: [] });
+    renderCompareChart({ spec: { opts: { style: 'line' } }, captures: [cap(CAPTURE_BASELINE, startA), cap(CAPTURE_EXPERIMENT, startB)], anchors: {}, captureContext: ctx, captureLabels: {} });
+    const aTime = [1_700_000_040, 1_700_000_100, 1_700_000_160];
+    const bTime = [1_700_005_020, 1_700_005_080, 1_700_005_140];
+    assert.equal(diffTimeShift(CAPTURE_BASELINE, CAPTURE_EXPERIMENT, {}, aTime, bTime).ok, false);
+    const nearest = diffTimeShift(CAPTURE_BASELINE, CAPTURE_EXPERIMENT, {}, aTime, bTime, { nearest: true });
+    assert.equal(nearest.ok, true);
+    assert.equal(nearest.k, 0);
+    assert.ok(Math.abs(nearest.offset - 20.4) < 1e-6, String(nearest.offset));
+});
+
+test('a sub-second step stamped from nanoseconds still pairs', () => {
+    const ctx = new CaptureContext();
+    ctx.set(CAPTURE_BASELINE, { startSec: S, events: [] });
+    ctx.set(CAPTURE_EXPERIMENT, { startSec: S + 10, events: [] });
+    renderCompareChart({ spec: { opts: { style: 'line' } }, captures: [cap(CAPTURE_BASELINE, S), cap(CAPTURE_EXPERIMENT, S + 10)], anchors: {}, captureContext: ctx, captureLabels: {} });
+    // 0.25 s windows whose stamps carry the error of ns as f64 seconds.
+    const aTime = [S + 0.2499998, S + 0.5000002, S + 0.7499998];
+    const bTime = [S + 10.2500002, S + 10.4999998, S + 10.7500002];
+    assert.equal(diffTimeShift(CAPTURE_BASELINE, CAPTURE_EXPERIMENT, {}, aTime, bTime).ok, true);
 });
 
 test('a family baseline draws one band plus its mean, and the experiment over it', () => {

@@ -476,6 +476,9 @@ const bootstrap = async () => {
                     start,
                     end,
                     step: stepAtLeast(nativeInterval(data), (end - start) / 500),
+                    // The experiment's own cadence: its stride floor and
+                    // the native step of its display query.
+                    interval: nativeInterval(data),
                 };
             }
         }
