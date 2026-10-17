@@ -726,36 +726,37 @@
   the metric catalog) and expands it against a recording into the same
   `View` JSON the section generators produce. Parsing reads `schema` first
   and refuses a schema above 1 before anything else. It then refuses, in
-  every branch whether or not a catalog would expand it: an unknown field
-  or enumerated value, an array where an object belongs, a repeated key,
-  an unknown or malformed `${..}` name, a catalog label value outside a
-  double-quoted string in a query (or after a `\` or in a `#` comment),
-  a let that uses another let, an undeclared parameter, more than 64
-  sections, a malformed or duplicate route, an array or object of more
-  than 4096 entries, a string over 16 KiB or holding a control character,
-  a name or predicate label name over 64 bytes, and a `distinct_gt` `int`
-  label that is not one of its `by` labels (of which there are at most
-  16). Parsing is linear in the document's size, which it does not limit,
-  so a caller reading untrusted templates caps it first. Each section's
-  expansion is bounded on its own: 20,000 nodes; 4 MiB of output counted
-  in memory (strings, checked before each piece is appended, plus copied
-  metadata, the group, subgroup and plot structs, and the copies
-  `histogram_rate_mean` makes; a control character from the catalog
-  counts as its six-byte JSON escape); and 16 Mi units of fuel, one per
-  iteration of every loop plus one per byte scanned, compared or copied
-  and 64 per call into the metric source. Each metric is read from the
-  source once per section expansion. `distinct_gt` counts tuples by a
-  128-bit hash, so two tuples whose hashes collide would count as one.
-  On a 9.6-hour recording with a warm reader, the slowest construction
-  found takes 0.35 s to reach the fuel limit; a cold archive's first read
-  of a metric is outside the fuel count. A `TemplateError` has a kind: an
-  invalid document, a limit, or an unset parameter.
-  `dashboard::rezolus_template::json()` is the Rezolus agent's template,
-  one file per section under `crates/dashboard/sections/rezolus/`, about
-  106 KB compact. All sixteen sections are converted; a test renders each
-  from the template and from its generator on thirteen metric catalogs,
-  and on a catalog of every named metric with each removed in turn, and
-  requires identical output. Nothing renders from the template yet.
+  every branch whether or not a catalog would expand it: an unknown field or
+  enumerated value, an array where an object belongs, a repeated key, an
+  unknown or malformed `${..}` name, a catalog label value outside a
+  double-quoted string in a query (or after a `\` or in a `#` comment), a
+  let that uses another let, an undeclared parameter, more than 64 sections,
+  a malformed or duplicate route, an array or object of more than 4096
+  entries, a string over 16 KiB or holding a control character, a name or a
+  predicate label name over 64 bytes as written, and a `distinct_gt` `int`
+  label that is not one of its `by` labels (of which there are at most 16).
+  Parsing is linear in the document's size, which it does not limit, so a
+  caller reading untrusted templates caps it first. Each section's expansion
+  is bounded on its own: 20,000 nodes; 4 MiB of output counted in memory
+  (strings, checked before each piece is appended, plus copied metadata, the
+  group, subgroup and plot structs, and the copies `histogram_rate_mean`
+  makes; a control character from the catalog counts as its six-byte JSON
+  escape); and 16 Mi units of fuel, one per iteration of every loop plus one
+  per byte scanned, compared or copied and 64 per call into the metric
+  source; a map lookup charges its key's bytes once per level of the map.
+  Each metric is read from the source once per section expansion.
+  `distinct_gt` counts tuples by a 128-bit hash, so two tuples whose hashes
+  collide would count as one. On a 9.6-hour recording with a warm reader,
+  the slowest construction found takes 0.34 s to reach the fuel limit, about
+  22 s for a document of 64 such sections; a cold archive's first read of a
+  metric is outside the fuel count. A `TemplateError` has a kind: an invalid
+  document, a limit, or an unset parameter.
+  `dashboard::rezolus_template::json()` is the Rezolus agent's template, one
+  file per section under `crates/dashboard/sections/rezolus/`, about 106 KB
+  compact. All sixteen sections are converted; a test renders each from the
+  template and from its generator on thirteen metric catalogs, and on a
+  catalog of every named metric with each removed in turn, and requires
+  identical output. Nothing renders from the template yet.
 
 - `filesystem` sampler: tmpfs usage per mount. Every visible tmpfs mount is
   read on the same sweep into `filesystem_tmpfs_used`,

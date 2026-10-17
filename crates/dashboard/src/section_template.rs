@@ -197,32 +197,35 @@
 //! The invariant the fuel counter rests on: every loop in expansion
 //! charges at least one unit per iteration, and every string it copies,
 //! scans or compares charges at least its length once. A map lookup
-//! compares its key a few times (once per level of the map) and is charged
-//! once; a sort is charged per level of comparisons. A comment at each
-//! loop in the code names its charge.
+//! charges the key's bytes once per level of the map; a sort is charged
+//! per level of comparisons. A comment at each loop in the code names its
+//! charge.
 //!
 //! Measured on a 9.6-hour, 1.3 GB recording of a 16-CPU host opened as an
-//! archive (series of 6 to 9 labels, 125 to 200 bytes each), after the
-//! reader has read each metric once: the slowest construction found that
-//! runs to the fuel limit (a `distinct_gt` with `each` over 4096 metric
-//! names, on each of 8100 repeat passes) takes 0.35 s, so a document of
-//! [`MAX_SECTIONS`] such sections takes about 22 s to expand in full. The
-//! first read of a metric from a cold archive is outside the fuel count
-//! and is paid once per process: 2.6 s for `task_cpu_usage` on that
-//! recording. The Rezolus template's sixteen sections take 83 ms together
-//! on that recording when cold and 0.3 ms when warm.
+//! archive (series of 5 to 11 labels, 112 to 211 bytes each; most of
+//! `task_cpu_usage`'s carry 10), after the reader has read each metric
+//! once: the slowest construction found that runs to the fuel limit (a
+//! `distinct_gt` with `each` over 4096 metric names, on each of 8100
+//! repeat passes) takes 0.34 s, so a document of [`MAX_SECTIONS`] such
+//! sections takes about 22 s to expand in full. The first read of a
+//! metric from a cold archive is outside the fuel count and is paid once
+//! per process: 2.5 s for `task_cpu_usage` on that recording. The Rezolus
+//! template's sixteen sections take 54 ms together on that recording when
+//! cold and 0.4 ms when warm.
 //!
 //! The Rezolus template's headroom: on that recording its largest section
-//! spends 43,581 units (`/cgroups`; `/cpu` 39,771). Estimated by scaling
-//! the recording's CPU count, `/cpu` grows by about 270 units per CPU and
-//! `/scheduler` by about 134, so `/cpu` would reach the limit near 62,000
-//! CPUs; `/cgroups`, `/softirq`, `/syscall` and `/network` do not grow
-//! with CPU count. (On the bench test catalog widened from 16 to 1024
-//! CPUs, measured: `/cpu` grows by 44 units per CPU and `/scheduler` by
-//! 12; that catalog has two CPU states where a host has more.) On the test catalog of every metric the generators name,
-//! widened to 256 devices of every kind with ten labels per series, the
-//! largest section is `/network` at 2.3 million units (about 9 million at
-//! 1024 devices).
+//! spends 45,926 units (`/cgroups`; `/cpu` 42,855). Measured by
+//! duplicating the recording's per-CPU series with new ids up to 4096
+//! CPUs, `/cpu` grows by 332 to 375 units per CPU and `/scheduler` by 165
+//! to 186 (a little more per CPU as the label maps' lookups deepen), so
+//! `/cpu` would reach the limit near 40,000 CPUs; no other section grows
+//! with CPU count. The bench test catalog grows by 44 and 12 units per
+//! CPU, because its series do not carry the recording's five provenance
+//! labels (`endpoint`, `exported_source`, `host`, `sampler`, `source`,
+//! about 110 bytes per series). On the test catalog of every metric the
+//! generators name, widened to 256 devices of every kind with ten labels
+//! per series, the largest section is `/network` at 2.3 million units
+//! (about 9 million at 1024 devices).
 //!
 //! A section that would exceed any of these is refused with an error of
 //! kind [`TemplateErrorKind::Limit`]; the other sections are unaffected.
@@ -1301,6 +1304,7 @@ impl SectionTemplate {
         let mut view = View::new(data, sections);
         for (key, meta) in &body.metadata {
             if let Some(value) = scope.meta(meta)? {
+                scope.spend_hash_lookup(key.len())?;
                 view.metadata.insert(key.clone(), value);
             }
         }
@@ -1611,7 +1615,8 @@ impl<'a> Names<'a> {
                 if *each && (by.len() != 1 || !int.is_empty()) {
                     return err("distinct_gt with `each` takes one `by` label and no `int`");
                 }
-                by.iter().chain(int).try_for_each(|l| check_label_name(l))?;
+                // `int` labels are `by` labels, checked above.
+                by.iter().try_for_each(|l| check_label_name(l))?;
                 metrics
                     .iter()
                     .chain(by)
@@ -1960,6 +1965,19 @@ impl<'a> Scope<'a> {
         Budget::spend(&self.budget.bytes, len, self.budget.limits.bytes, "bytes")
     }
 
+    /// A lookup or insert of a `key`-byte key in an ordered map or set of
+    /// `len` entries: one unit, plus the key's bytes once per level of the
+    /// map, since each level compares it.
+    fn spend_lookup(&self, key: usize, len: usize) -> Result<(), TemplateError> {
+        self.spend_fuel(1 + key.saturating_mul(levels(len)))
+    }
+
+    /// A lookup or insert of a `key`-byte key in a hash map or set: one
+    /// unit, plus the key's bytes twice, hashed and compared.
+    fn spend_hash_lookup(&self, key: usize) -> Result<(), TemplateError> {
+        self.spend_fuel(1 + 2 * key)
+    }
+
     fn spend_fuel(&self, n: usize) -> Result<(), TemplateError> {
         Budget::spend(
             &self.budget.fuel,
@@ -1969,12 +1987,12 @@ impl<'a> Scope<'a> {
         )
     }
 
-    /// `metric`'s series of `kind`, from the memo. The lookup costs one
-    /// unit plus the name's bytes; the first read of a metric and kind
-    /// costs [`SOURCE_CALL_FUEL`] plus one unit per series and its label
-    /// bytes, which the memo then holds.
+    /// `metric`'s series of `kind`, from the memo. The lookup costs a hash
+    /// lookup; the first read of a metric and kind costs
+    /// [`SOURCE_CALL_FUEL`] plus one unit per series and its label bytes,
+    /// which the memo then holds.
     fn series_of(&self, metric: &str, kind: SeriesKind) -> Result<Rc<Vec<Labels>>, TemplateError> {
-        self.spend_fuel(1 + metric.len())?;
+        self.spend_hash_lookup(metric.len())?;
         let memo = &self.budget.memo;
         if let Some(Some(cached)) = memo
             .series
@@ -2025,12 +2043,13 @@ impl<'a> Scope<'a> {
     /// [`MetricsSource::label_values`] gives them.
     fn label_values(&self, metric: &str, label: &str) -> Result<BTreeSet<String>, TemplateError> {
         let mut out = BTreeSet::new();
-        // Loop: one unit per series plus the label's bytes (the lookup
-        // compares them), plus the bytes of each value copied.
+        // Loop: per series, the lookup of `label` in its labels, and for a
+        // value, its insert into `out` and its bytes copied.
         for part in self.series(metric, true)? {
-            self.spend_fuel(part.len().saturating_mul(1 + label.len()))?;
             for labels in part.iter() {
+                self.spend_lookup(label.len(), labels.len())?;
                 if let Some(v) = labels.get(label) {
+                    self.spend_lookup(v.len(), out.len())?;
                     self.spend_fuel(v.len())?;
                     out.insert(v.clone());
                 }
@@ -2064,7 +2083,7 @@ impl<'a> Scope<'a> {
                 Rc::clone(memo.counter_names.get_or_init(|| names))
             }
         };
-        self.spend_fuel(1 + metric.len())?;
+        self.spend_hash_lookup(metric.len())?;
         Ok(names.contains(metric))
     }
 
@@ -2099,6 +2118,9 @@ impl<'a> Scope<'a> {
                 }
                 LetDef::Pred(pred) => {
                     let holds = base.holds(pred)?;
+                    // The insert, and the name copied.
+                    self.spend_lookup(name.len(), self.preds.len())?;
+                    self.spend_fuel(name.len())?;
                     self.preds.insert(name.clone(), holds);
                 }
             }
@@ -2106,13 +2128,16 @@ impl<'a> Scope<'a> {
         Ok(())
     }
 
-    /// Bind `name` to `text`, charging the name's bytes. A name bound
-    /// before (by an earlier pass) keeps its key and takes the new value.
+    /// Bind `name` to `text`, charging the lookup and, for a new name, the
+    /// insert and the name's bytes copied. A name bound before (by an
+    /// earlier pass) keeps its key and takes the new value.
     fn bind(&mut self, name: &str, text: String, from_catalog: bool) -> Result<(), TemplateError> {
-        self.spend_fuel(1 + name.len())?;
+        self.spend_lookup(name.len(), self.values.len())?;
         match self.values.get_mut(name) {
             Some(bound) => *bound = Bound { text, from_catalog },
             None => {
+                self.spend_lookup(name.len(), self.values.len())?;
+                self.spend_fuel(name.len())?;
                 self.values
                     .insert(name.to_string(), Bound { text, from_catalog });
             }
@@ -2134,7 +2159,11 @@ impl<'a> Scope<'a> {
             }) => {
                 let values = self.label_values(&self.subst(metric)?, &self.subst(label)?)?;
                 match value {
-                    Some(v) => values.contains(&self.subst(v)?),
+                    Some(v) => {
+                        let v = self.subst(v)?;
+                        self.spend_lookup(v.len(), values.len())?;
+                        values.contains(&v)
+                    }
                     None => !values.is_empty(),
                 }
             }
@@ -2170,24 +2199,24 @@ impl<'a> Scope<'a> {
                     // which at 128 bits does not happen in practice.
                     let mut seen: HashSet<u128> = HashSet::new();
                     // Which `by` labels are `int` labels, found once rather
-                    // than per series: each search compares label names.
-                    // Loop: one unit per label plus its bytes.
-                    let by_cost: usize = by.iter().map(|k| 1 + k.len()).sum();
-                    self.spend_fuel(by_cost.saturating_mul(1 + int.len()))?;
+                    // than per series. Loop: a lookup in `int` per label.
+                    for k in &by {
+                        self.spend_lookup(k.len(), int.len())?;
+                    }
                     let is_int: Vec<bool> = by.iter().map(|k| int.contains(k)).collect();
                     // Loop: what `subst` and `series` charge, per metric.
                     for metric in metrics {
                         // Loop: one unit per series; each tuple adds, per
-                        // `by` label, one unit plus the label's bytes (the
-                        // lookup compares them) and the bytes of the value
-                        // hashed.
+                        // `by` label, the lookup in the series' labels and
+                        // the bytes of the value hashed.
                         for part in self.series(&self.subst(metric)?, false)? {
-                            self.spend_fuel(part.len().saturating_mul(1 + by_cost))?;
+                            self.spend_fuel(part.len())?;
                             'series: for labels in part.iter() {
                                 let mut low = std::hash::DefaultHasher::new();
                                 let mut high = std::hash::DefaultHasher::new();
                                 1u8.hash(&mut high);
                                 for (key, is_int) in by.iter().zip(&is_int) {
+                                    self.spend_lookup(key.len(), labels.len())?;
                                     let value = labels.get(key);
                                     self.spend_fuel(value.map_or(0, String::len))?;
                                     let normal: Option<std::borrow::Cow<str>> = if *is_int {
@@ -2229,11 +2258,17 @@ impl<'a> Scope<'a> {
                 true
             }
             Pred::Not(p) => !self.holds(p)?,
-            Pred::Var(name) => match self.preds.get(name) {
-                Some(holds) => *holds,
-                None => return err(format!("unknown predicate {:?}", ex(name))),
-            },
-            Pred::Param(name) => self.params.contains_key(name),
+            Pred::Var(name) => {
+                self.spend_lookup(name.len(), self.preds.len())?;
+                match self.preds.get(name) {
+                    Some(holds) => *holds,
+                    None => return err(format!("unknown predicate {:?}", ex(name))),
+                }
+            }
+            Pred::Param(name) => {
+                self.spend_lookup(name.len(), self.params.len())?;
+                self.params.contains_key(name)
+            }
         })
     }
 
@@ -2278,18 +2313,22 @@ impl<'a> Scope<'a> {
                 return err(format!("unclosed `${{` in {:?}", ex(text)));
             };
             let name = &after[..end];
+            self.spend_lookup(name.len(), self.values.len())?;
             if let Some(bound) = self.values.get(name) {
                 let escape = bound.from_catalog && dest == Dest::Promql;
                 push(&mut out, &bound.text, escape)?;
-            } else if let Some(value) = self.params.get(name) {
-                push(&mut out, value, false)?;
             } else {
-                // `check` refused every name that is not a binding or a
-                // declared parameter, so this is a parameter left unset.
-                return Err(TemplateError::new(
-                    TemplateErrorKind::UnsetParam,
-                    format!("parameter {:?} in {:?} is not set", ex(name), ex(text)),
-                ));
+                self.spend_lookup(name.len(), self.params.len())?;
+                let Some(value) = self.params.get(name) else {
+                    // `check` refused every name that is not a binding or
+                    // a declared parameter, so this is a parameter left
+                    // unset.
+                    return Err(TemplateError::new(
+                        TemplateErrorKind::UnsetParam,
+                        format!("parameter {:?} in {:?} is not set", ex(name), ex(text)),
+                    ));
+                };
+                push(&mut out, value, false)?;
             }
             rest = &after[end + 1..];
         }
@@ -2337,11 +2376,16 @@ impl<'a> Scope<'a> {
             for part in self.series(metric, false)? {
                 self.spend_fuel(part.len())?;
                 for labels in part.iter() {
+                    self.spend_lookup("id".len(), labels.len())?;
                     let Some(id) = labels.get("id").and_then(|v| v.parse::<i64>().ok()) else {
                         continue;
                     };
+                    self.spend_lookup("vendor".len(), labels.len())?;
                     let vendor = labels.get("vendor").cloned();
-                    self.spend_fuel(vendor.as_ref().map_or(0, String::len))?;
+                    let vendor_len = vendor.as_ref().map_or(0, String::len);
+                    // The vendor copied, and its insert into `seen`.
+                    self.spend_fuel(vendor_len)?;
+                    self.spend_lookup(vendor_len + 8, seen.len())?;
                     seen.insert((vendor, id));
                 }
             }
@@ -2350,6 +2394,8 @@ impl<'a> Scope<'a> {
             return Ok(None);
         }
         let mut ids: Vec<i64> = seen.iter().map(|(_, id)| *id).collect();
+        // The sort: one unit per id per comparison level.
+        self.spend_fuel(ids.len().saturating_mul(levels(ids.len())))?;
         ids.sort_unstable();
         ids.dedup();
         let gpus: Vec<Value> = seen
@@ -2373,6 +2419,7 @@ impl<'a> Scope<'a> {
         // Loop: each entry's copy, its key and in-memory bytes.
         for (key, value) in &def.metadata {
             self.spend_bytes(key.len() + json_size(value))?;
+            self.spend_hash_lookup(key.len())?;
             group.metadata.insert(key.clone(), value.clone());
         }
         walk(&def.subgroups, self, &mut |sub, scope| {
@@ -2646,6 +2693,12 @@ fn walk<T>(
     Ok(())
 }
 
+/// The levels of an ordered map or a sort over `len` entries: the bit
+/// length of `len`, at least 1.
+fn levels(len: usize) -> usize {
+    (usize::BITS - len.leading_zeros()).max(1) as usize
+}
+
 /// A `label_values` repeat's values, in its order.
 fn label_values_sorted(lv: &LabelValues, scope: &Scope<'_>) -> Result<Vec<String>, TemplateError> {
     let mut values: Vec<String> = scope
@@ -2657,7 +2710,7 @@ fn label_values_sorted(lv: &LabelValues, scope: &Scope<'_>) -> Result<Vec<String
     // that also parses each value per comparison.
     let n = values.len();
     let bytes: usize = values.iter().map(String::len).sum();
-    let levels = usize::BITS as usize - n.leading_zeros() as usize;
+    let levels = levels(n);
     let passes = match lv.sort {
         LabelSort::Str => 1,
         LabelSort::Int => 2,
@@ -4014,7 +4067,7 @@ mod tests {
         let any = |n: usize| when(json!({ "any": vec![json!({ "present": "x" }); n] }));
         assert_eq!(
             spent(&any(50), &empty).fuel.get() - spent(&any(0), &empty).fuel.get(),
-            50 * (1 + 2 + 3 * 2) + 3 * (64 + 1)
+            50 * (1 + 2 + 3 * 3) + 3 * (64 + 1)
         );
     }
 
@@ -5126,24 +5179,29 @@ mod tests {
                 json!([{ "repeat": { "var": "vv", "in": { "values": values } }, "body": [] }]),
             )
         };
-        // Strings: node 1 + value 1 + bind (1 + "vv") = 5 per pass.
+        // Strings: node 1 + value 1 + the binding's lookup in a map of at
+        // most one entry (1 + "vv") = 5 per pass; the first pass also
+        // inserts the name (1 + "vv") and copies it (2).
         assert_eq!(
             fuel(&rep(json!(vec!["x"; 100]))) - fuel(&rep(json!([]))),
-            100 * 5
+            100 * 5 + 3 + 2
         );
         // Objects of one field: node 1, then per field node 1 + value 1 +
-        // bind (1 + "vv.f") = 8 per pass, and the field's name formatted
-        // once per repeat (2 + "vv" + "f").
+        // lookup (1 + "vv.f") = 8 per pass; the first pass inserts and
+        // copies the name (5 + 4); the field's name is formatted once per
+        // repeat (2 + "vv" + "f").
         assert_eq!(
             fuel(&rep(json!(vec![json!({ "f": "x" }); 100]))) - fuel(&rep(json!([]))),
-            100 * 8 + 5
+            100 * 8 + 5 + 4 + 5
         );
-        // A let: 1, its text scanned (at least 1), the binding (1 + 3).
+        // A let: 1, its text scanned (1), a lookup and an insert in a map
+        // of `i` entries (each 1 + 3 bytes per level), and the name copied.
         let lets: serde_json::Map<String, Value> =
             (0..100).map(|i| (format!("l{i:02}"), json!(""))).collect();
+        let want: usize = (0..100).map(|i| 1 + 1 + 2 * (1 + 3 * levels(i)) + 3).sum();
         assert_eq!(
             fuel(&plots(Value::Object(lets), json!([]))) - fuel(&plots(json!({}), json!([]))),
-            100 * 6
+            want
         );
     }
 
@@ -5164,14 +5222,26 @@ mod tests {
             sort: LabelSort::Int,
         };
         label_values_sorted(&lv, &Scope::new(&data, &params, &sorted)).unwrap();
-        // Beyond the read: `m` and `id` scanned and copied (6), one unit
-        // plus the label's two bytes per series walked (300), the values
-        // copied ("0" to "99", 190 bytes), and the sort (two passes of 7
-        // levels over 100 values and their 190 bytes).
+        // Beyond the read: `m` and `id` scanned and copied (6), the lookup
+        // of `id` in each series' one label (100 × 3), each value's insert
+        // into a set of `i` values and its bytes copied ("0" to "99", 190),
+        // and the sort (two passes of 7 levels over 100 values and their
+        // 190 bytes).
+        let inserts: usize = (0..100usize)
+            .map(|i| 1 + i.to_string().len() * levels(i))
+            .sum();
         assert_eq!(
             sorted.fuel.get() - read.fuel.get(),
-            6 + 100 * 3 + 190 + 2 * 7 * (100 + 190)
+            6 + 100 * 3 + inserts + 190 + 2 * 7 * (100 + 190)
         );
+        // A string sort is one pass.
+        let str_sorted = Budget::default();
+        let lv = LabelValues {
+            sort: LabelSort::Str,
+            ..lv
+        };
+        label_values_sorted(&lv, &Scope::new(&data, &params, &str_sorted)).unwrap();
+        assert_eq!(sorted.fuel.get() - str_sorted.fuel.get(), 7 * (100 + 190));
     }
 
     /// Each group, subgroup and plot is charged its struct's size in bytes.
@@ -5315,8 +5385,8 @@ mod tests {
         };
         let fuel = |k: usize| spent(&n(k), &data).fuel.get();
         // Each further `has_counter`: one unit, `m` scanned and copied, and
-        // the lookup (one plus `m`).
-        assert_eq!(fuel(3) - fuel(2), 1 + 2 + 2);
+        // a hash lookup (one plus `m` hashed and compared).
+        assert_eq!(fuel(3) - fuel(2), 1 + 2 + 3);
     }
 
     /// The GPU selector's charges: a unit for an empty probe, one per
@@ -5331,15 +5401,17 @@ mod tests {
         let fuel = |t: &str, data: &Catalog| spent(t, data).fuel.get();
         let empty = Catalog::default();
         assert_eq!(fuel(&meta(json!([])), &empty) - fuel(&none, &empty), 1);
-        // Ten series without an `id`: read (1 + "k" + "x" each) and walked.
+        // Ten series without an `id`: read (1 + "k" + "x" each), walked (1)
+        // and looked up for `id` in their one label (1 + 2).
         let ten: Vec<&[(&str, &str)]> = vec![&[("k", "x")]; 10];
         let with = Catalog::default().counter("m", &ten);
         assert_eq!(
             fuel(&meta(json!(["m"])), &with) - fuel(&meta(json!(["m"])), &empty),
-            10 * 3 + 10
+            10 * 3 + 10 * (1 + 3)
         );
-        // Ten series of one GPU: a vendor three bytes longer is read and
-        // copied ten times, and the selector stays absent (one GPU).
+        // Ten series of one GPU: a vendor three bytes longer is read,
+        // copied and compared on its insert into a set of at most one entry
+        // ten times, and the selector stays absent (one GPU).
         let short: Vec<&[(&str, &str)]> = vec![&[("id", "0"), ("vendor", "v")]; 10];
         let long: Vec<&[(&str, &str)]> = vec![&[("id", "0"), ("vendor", "vvvv")]; 10];
         let (short, long) = (
@@ -5348,7 +5420,7 @@ mod tests {
         );
         assert_eq!(
             fuel(&meta(json!(["m"])), &long) - fuel(&meta(json!(["m"])), &short),
-            10 * 3 * 2
+            10 * 3 * 3
         );
     }
 
@@ -5387,7 +5459,7 @@ mod tests {
         // the lookup (one plus `m`).
         assert_eq!(
             spent(&n(1), &many).fuel.get() - spent(&n(0), &many).fuel.get(),
-            1 + 2 + 64 + 100 * 5 + 2
+            1 + 2 + 64 + 100 * 5 + 3
         );
         // Label names in predicates are at most 64 bytes.
         let long = "l".repeat(MAX_NAME_BYTES + 1);
@@ -5411,5 +5483,204 @@ mod tests {
         assert_refused(&plots(json!({}), json!([gauge("a\u{1f}")])), "U+001F");
         assert!(SectionTemplate::parse(&plots(json!({}), json!([gauge("a ")]))).is_ok());
         assert_eq!(piece_cost("\u{1f}", false), 6);
+    }
+
+    /// A `var` costs a lookup in the map of predicate lets: one unit plus
+    /// its name's bytes per level, on top of the predicate's own unit.
+    #[test]
+    fn var_lookups_are_charged_per_level() {
+        let lets: serde_json::Map<String, Value> = (0..100)
+            .map(|i| (format!("p{i:02}"), json!({ "pred": { "present": "x" } })))
+            .collect();
+        let all = |k: usize| {
+            let vars: Vec<Value> = (0..k)
+                .map(|i| json!({ "var": format!("p{i:02}") }))
+                .collect();
+            plots(
+                Value::Object(lets.clone()),
+                json!([{ "when": { "any": vars }, "then": [] }]),
+            )
+        };
+        let fuel = |t: &str| spent(t, &Catalog::default()).fuel.get();
+        assert_eq!(
+            fuel(&all(100)) - fuel(&all(0)),
+            100 * (1 + 1 + 3 * levels(100))
+        );
+        assert_eq!(levels(100), 7);
+        assert_eq!((levels(0), levels(1), levels(2), levels(4)), (1, 1, 2, 3));
+    }
+
+    /// `int` labels are found once per `distinct_gt`, each a lookup in the
+    /// `int` set.
+    #[test]
+    fn int_labels_are_charged_once() {
+        let data =
+            Catalog::default().counter("m", &[&[("a", "1"), ("b", "1"), ("c", "1"), ("d", "1")]]);
+        let t = |int: Value| {
+            plots(
+                json!({}),
+                json!([{ "when": { "distinct_gt": { "metrics": ["m"], "by": ["a", "b", "c", "d"], "int": int, "n": 9 } },
+                         "then": [] }]),
+            )
+        };
+        let fuel = |t: &str| spent(t, &data).fuel.get();
+        // Four `int` labels scanned and copied (4 × 2), and each `by` label's
+        // lookup reads its byte three times in a set of four, not once.
+        assert_eq!(
+            fuel(&t(json!(["a", "b", "c", "d"]))) - fuel(&t(json!([]))),
+            8 + 4 * 2
+        );
+    }
+
+    /// A label name of exactly 64 bytes is accepted.
+    #[test]
+    fn a_64_byte_label_name_is_accepted() {
+        let label = "l".repeat(MAX_NAME_BYTES);
+        let t = plots(
+            json!({}),
+            json!([{ "when": { "has_label": { "metric": "m", "label": label } }, "then": [] }]),
+        );
+        assert!(SectionTemplate::parse(&t).is_ok());
+    }
+
+    /// Expand `/t` of `template` with `params` and return its fuel.
+    fn fuel_with(template: &str, data: &Catalog, params: &[(&str, &str)]) -> usize {
+        let t = SectionTemplate::parse(template).unwrap_or_else(|e| panic!("{e}"));
+        let SectionDef::Section(body) = &t.sections[0] else {
+            panic!("not a section");
+        };
+        let params: BTreeMap<String, String> = params
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let budget = Budget::default();
+        t.expand_body(data, body, Vec::new(), &params, &budget)
+            .unwrap_or_else(|e| panic!("{e}"));
+        budget.fuel.get()
+    }
+
+    /// Every lookup in expansion's own maps is charged per level: the
+    /// bindings and parameters a reference looks in, `param`, a pred let's
+    /// insert, a `has_label` value, and the metadata maps.
+    #[test]
+    fn map_lookups_are_charged() {
+        let empty = Catalog::default();
+        let title = |refs: &str| {
+            plots(
+                json!({ "e": "" }),
+                json!([{ "kind": "gauge", "title": format!("t{refs}"), "id": "i", "unit": "count", "query": "q" }]),
+            )
+        };
+        // `${e}`: one unit, four bytes scanned, a lookup in a map of one
+        // binding (1 + 1).
+        assert_eq!(
+            fuel_with(&title(&"${e}".repeat(10)), &empty, &[]) - fuel_with(&title(""), &empty, &[]),
+            10 * (1 + 4 + 2)
+        );
+        // `${throughput}` set to `x`: one unit, 13 bytes scanned, a missed
+        // lookup in the bindings (1 + 10 × 1) and one in the parameters
+        // (1 + 10 × 1), and the byte of output.
+        let p = [("throughput", "x")];
+        assert_eq!(
+            fuel_with(&title(&"${throughput}".repeat(10)), &empty, &p)
+                - fuel_with(&title(""), &empty, &p),
+            10 * (1 + 13 + 11 + 11 + 1)
+        );
+        // `param`: the predicate's unit and its lookup (1 + 10 × 1).
+        let param = |k: usize| {
+            plots(
+                json!({}),
+                json!([{ "when": { "any": vec![json!({ "param": "throughput" }); k] }, "then": [] }]),
+            )
+        };
+        assert_eq!(
+            fuel_with(&param(10), &empty, &[]) - fuel_with(&param(0), &empty, &[]),
+            10 * 12
+        );
+        // A pred let's insert: three more bytes of name cost three bytes
+        // per level of the map, and three more copied.
+        let lets = |suffix: &str| {
+            let lets: serde_json::Map<String, Value> = (0..100)
+                .map(|i| {
+                    (
+                        format!("p{i:02}{suffix}"),
+                        json!({ "pred": { "present": "x" } }),
+                    )
+                })
+                .collect();
+            plots(Value::Object(lets), json!([]))
+        };
+        let want: usize = (0..100).map(|i| 3 * levels(i) + 3).sum();
+        assert_eq!(
+            fuel_with(&lets("xxx"), &empty, &[]) - fuel_with(&lets(""), &empty, &[]),
+            want
+        );
+        // A `has_label` value: two more bytes, scanned and copied (4), and
+        // compared once per level of a set of four values (2 × 3).
+        let data = Catalog::default().counter(
+            "m",
+            &[&[("k", "a")], &[("k", "b")], &[("k", "c")], &[("k", "d")]],
+        );
+        let has = |v: &str| {
+            plots(
+                json!({}),
+                json!([{ "when": { "has_label": { "metric": "m", "label": "k", "value": v } }, "then": [] }]),
+            )
+        };
+        assert_eq!(
+            fuel_with(&has("abc"), &data, &[]) - fuel_with(&has("a"), &data, &[]),
+            4 + 2 * 3
+        );
+        // Metadata keys: three more bytes hashed and compared (6), and for a
+        // group's, copied into the view (3).
+        let group = |k: &str| {
+            section(
+                json!({}),
+                json!([{ "name": "G", "id": "g", "metadata": { k: 1 }, "subgroups": [{ "plots": [gauge("a")] }] }]),
+            )
+        };
+        assert_eq!(
+            fuel_with(&group("kkkk"), &empty, &[]) - fuel_with(&group("k"), &empty, &[]),
+            6 + 3
+        );
+        let view = |k: &str| {
+            doc(json!([{ "name": "T", "route": "/t", "metadata": { k: { "value": 1 } } }]))
+        };
+        assert_eq!(
+            fuel_with(&view("kkkk"), &empty, &[]) - fuel_with(&view("k"), &empty, &[]),
+            6
+        );
+    }
+
+    /// The GPU selector's whole charge on four GPUs of one vendor.
+    #[test]
+    fn the_gpu_selector_charge_is_exact() {
+        let data = Catalog::default().counter(
+            "m",
+            &[
+                &[("id", "0"), ("vendor", "v")],
+                &[("id", "1"), ("vendor", "v")],
+                &[("id", "2"), ("vendor", "v")],
+                &[("id", "3"), ("vendor", "v")],
+            ],
+        );
+        let params = BTreeMap::new();
+        let budget = Budget::default();
+        let scope = Scope::new(&data, &params, &budget);
+        assert!(scope.gpu_selector(&["m".to_string()]).unwrap().is_some());
+        // The probe's unit; the counter and gauge lookups (3 each) and
+        // reads (64 + 1, plus 4 × 11 for the counters); the walk (4); per
+        // series the `id` and `vendor` lookups in two labels (5 and 13) and
+        // the vendor copied (1); the inserts into `seen` (9 bytes per
+        // level of a set of 0, 1, 2 and 3 entries); and the sort of four
+        // ids (4 × 3).
+        let want = 1
+            + (3 + 64 + 1 + 4 * 11)
+            + (3 + 64 + 1)
+            + 4
+            + 4 * (5 + 13 + 1)
+            + (0..4).map(|i| 1 + 9 * levels(i)).sum::<usize>()
+            + 4 * 3;
+        assert_eq!(budget.fuel.get(), want);
     }
 }
