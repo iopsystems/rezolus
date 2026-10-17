@@ -1,4 +1,4 @@
-import { getStepOverride, stepAtLeast } from '../../data.js';
+import { getStepOverride } from '../../data.js';
 
 /**
  * Insert a null data point at each gap in the time series so ECharts
@@ -15,10 +15,9 @@ export function insertGapNulls(zippedData, intervalSec) {
     // Items may be plain arrays or echarts object-form { value: [...], ... }
     const ts = (item) => Array.isArray(item) ? item[0] : item.value[0];
     // When a coarser step is selected, data points are spaced at the step
-    // interval rather than the base sampling interval. A histogram stride is
-    // the step rounded up to a whole multiple of the interval, so the
-    // rounded step is the spacing that does not break the line.
-    const effectiveSec = stepAtLeast(intervalSec, getStepOverride() || 0);
+    // interval rather than the base sampling interval.  Use the effective
+    // interval so legitimate step-spaced gaps don't break the line.
+    const effectiveSec = Math.max(intervalSec, getStepOverride() || 0);
     const thresholdMs = effectiveSec * 1500; // 1.5x interval in ms
     const result = [zippedData[0]];
     for (let i = 1; i < zippedData.length; i++) {
