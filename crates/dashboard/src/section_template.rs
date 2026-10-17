@@ -76,7 +76,8 @@
 //!   (the default) sorts them as strings; `int` puts those that parse as
 //!   integers first, in numeric order with ties (`"01"` and `"1"`) in
 //!   string order, and the rest after them as strings. A repeat variable
-//!   cannot reuse a name already in scope.
+//!   cannot reuse a name already in scope. An empty `values` list binds
+//!   nothing, so `parse` refuses a body that uses its variable.
 //!
 //! A plot list also takes:
 //!
@@ -138,28 +139,45 @@
 //! escape for a literal `${`.
 //!
 //! A value bound by `label_values` comes from the catalog. In a `query`,
-//! `query_total`, or a `rate_mean`'s `selector` or `rate`, a reference to
-//! one must sit inside a double-quoted string (`{k="${v}"}`), and `parse`
-//! refuses one anywhere else; there its `\`, `"` and newlines are escaped
-//! as in a PromQL string literal. In other fields, and for every other
-//! binding and parameter, the value is inserted as given.
+//! `query_total`, or a `rate_mean`'s `selector` or `rate` (a PromQL
+//! field), a reference to one must sit inside a double-quoted string
+//! (`{k="${v}"}`). `parse` refuses one bare, in a single-quoted or
+//! backtick string, or in a `#` comment, and refuses any `${` that follows
+//! a `\` in a PromQL field. Inside the double-quoted string, the value's
+//! `\`, `"`, newlines and carriage returns are escaped as in a PromQL
+//! string literal. In a regex matcher (`=~"${v}"`, `!~"${v}"`) the value is
+//! still read as a regex, so a value such as `.*` matches every series; a
+//! template that wants an exact match uses `=`. In other fields, and for
+//! every other binding and parameter, the value is inserted as given.
 //!
 //! # Limits
 //!
-//! Expanding one section, its lets included:
+//! The limits below apply to each section's expansion on its own, so a
+//! document of [`MAX_SECTIONS`] sections can produce that many times as
+//! much. Expanding one section, its lets included:
 //!
 //! - visits at most [`MAX_NODES`] nodes, counting elements, `when` and
-//!   `repeat` nodes, and repeat passes;
-//! - produces at most [`MAX_TEXT_BYTES`] bytes of strings, metadata and
-//!   percentiles, checked before each piece of a string is appended;
+//!   `repeat` nodes, repeat passes, and each field a pass over objects
+//!   binds;
+//! - produces at most [`MAX_TEXT_BYTES`] bytes: the length of each string
+//!   it builds, checked before each piece is appended, plus the in-memory
+//!   size of the metadata and percentiles it copies (each JSON value
+//!   counts as `size_of::<Value>()` plus its strings and keys);
 //! - does at most [`MAX_WORK`] units of catalog work: one per predicate
-//!   evaluated, plus one per series that a predicate, a `label_values`
-//!   repeat or the GPU selector reads, and one per counter name a
-//!   `has_counter` scans.
+//!   evaluated; one per series (at least one per metric) that a predicate,
+//!   a `label_values` repeat or the GPU selector reads, times the number
+//!   of `by` labels for a `distinct_gt` that counts tuples; and one per
+//!   counter name a `has_counter` scans.
 //!
-//! A section that would exceed any of these is refused with an error; the
-//! other sections are unaffected. `parse` reports the first problem it
-//! finds, not all of them.
+//! A section that would exceed any of these is refused with an error of
+//! kind [`TemplateErrorKind::Limit`]; the other sections are unaffected.
+//!
+//! [`SectionTemplate::parse`] has no limit on the size of the document,
+//! and the time and memory it takes grow with it. A caller that reads a
+//! template from an untrusted source caps the document's size before
+//! parsing it; the Rezolus template is about 106 KB compact, so a viewer
+//! reading templates from a stream handshake can refuse a document over
+//! 1 MiB. `parse` reports the first problem it finds, not all of them.
 //!
 //! # Versioning
 //!
@@ -186,17 +204,19 @@ pub const MAX_SCHEMA: u32 = 1;
 /// The most nodes one section's expansion visits.
 pub const MAX_NODES: usize = 20_000;
 
-/// The most bytes of strings and metadata one section's expansion produces.
+/// The most bytes of strings, metadata and percentiles one section's
+/// expansion produces; see the module docs for how each is counted.
 pub const MAX_TEXT_BYTES: usize = 4 << 20;
 
-/// The most catalog work one section's expansion does: one unit per
-/// predicate evaluated plus one per series a predicate, `label_values`
-/// repeat or computed metadata reads (and per counter name `has_counter`
-/// scans).
+/// The most catalog work one section's expansion does; see the module
+/// docs for what each unit is.
 pub const MAX_WORK: usize = 2_000_000;
 
 /// The most sections a document holds.
 pub const MAX_SECTIONS: usize = 64;
+
+/// The most `by` labels a `distinct_gt` names.
+pub const MAX_BY_LABELS: usize = 16;
 
 /// The longest section name or route, in bytes.
 pub const MAX_SECTION_NAME_BYTES: usize = 64;
@@ -749,20 +769,68 @@ impl<'de> Deserialize<'de> for RepeatValue {
     }
 }
 
-/// Why a template was refused.
+/// What kind of problem a [`TemplateError`] reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TemplateErrorKind {
+    /// [`SectionTemplate::parse`] refused the document.
+    Invalid,
+    /// Expanding a section passed one of the limits in the module docs.
+    Limit,
+    /// A string being expanded uses a declared parameter the viewer did
+    /// not set.
+    UnsetParam,
+}
+
+/// Why a template was refused, or a section could not be expanded.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TemplateError(pub String);
+pub struct TemplateError {
+    kind: TemplateErrorKind,
+    message: String,
+}
+
+impl TemplateError {
+    fn new(kind: TemplateErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+
+    /// What kind of problem this is.
+    pub fn kind(&self) -> TemplateErrorKind {
+        self.kind
+    }
+
+    /// The message, as [`Display`](std::fmt::Display) prints it.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// The same error, with `prefix: ` before its message.
+    fn context(self, prefix: impl std::fmt::Display) -> Self {
+        Self {
+            kind: self.kind,
+            message: format!("{prefix}: {}", self.message),
+        }
+    }
+}
 
 impl std::fmt::Display for TemplateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.message)
     }
 }
 
 impl std::error::Error for TemplateError {}
 
 fn err<T>(msg: impl Into<String>) -> Result<T, TemplateError> {
-    Err(TemplateError(msg.into()))
+    Err(TemplateError::new(TemplateErrorKind::Invalid, msg))
+}
+
+/// A [`TemplateError`] of kind [`TemplateErrorKind::Invalid`].
+fn invalid(msg: impl Into<String>) -> TemplateError {
+    TemplateError::new(TemplateErrorKind::Invalid, msg)
 }
 
 /// How a section is named in an error: its index and route.
@@ -782,7 +850,7 @@ impl SectionTemplate {
     /// every `when` and the body of every `repeat`.
     pub fn parse(json: &str) -> Result<Self, TemplateError> {
         let UniqueKeys(value) = serde_json::from_str(json)
-            .map_err(|e| TemplateError(format!("not a section template: {e}")))?;
+            .map_err(|e| invalid(format!("not a section template: {e}")))?;
         if !value.is_object() {
             return err(format!(
                 "not a section template: expected an object, found {}",
@@ -794,7 +862,7 @@ impl SectionTemplate {
         let schema = match value.get("schema") {
             None => return err("not a section template: no `schema`"),
             Some(schema) => schema.as_u64().ok_or_else(|| {
-                TemplateError(format!(
+                invalid(format!(
                     "section template schema {schema} is not an integer"
                 ))
             })?,
@@ -805,7 +873,7 @@ impl SectionTemplate {
             ));
         }
         let doc: Document = read::<_, serde_json::Error>(value)
-            .map_err(|e| TemplateError(format!("not a section template: {e}")))?;
+            .map_err(|e| invalid(format!("not a section template: {e}")))?;
         if doc.sections.len() > MAX_SECTIONS {
             return err(format!(
                 "{} sections: at most {MAX_SECTIONS}",
@@ -815,8 +883,8 @@ impl SectionTemplate {
         let mut sections = Vec::with_capacity(doc.sections.len());
         for (index, value) in doc.sections.into_iter().enumerate() {
             let label = section_label(index, &value);
-            let section = SectionDef::deserialize(value)
-                .map_err(|e| TemplateError(format!("{label}: {e}")))?;
+            let section =
+                SectionDef::deserialize(value).map_err(|e| invalid(format!("{label}: {e}")))?;
             sections.push(section);
         }
         let mut params = BTreeSet::new();
@@ -893,7 +961,7 @@ impl SectionTemplate {
                     return self
                         .expand_body(data, body, sections, params, &Budget::default())
                         .map(Some)
-                        .map_err(|e| TemplateError(format!("{route}: {e}")));
+                        .map_err(|e| e.context(route));
                 }
                 _ => {}
             }
@@ -935,7 +1003,7 @@ impl SectionTemplate {
                 SectionDef::Builtin => "/query",
                 SectionDef::Section(body) => {
                     check_section_name(&body.name, &body.route)
-                        .map_err(|e| TemplateError(format!("section {index}: {e}")))?;
+                        .map_err(|e| e.context(format!("section {index}")))?;
                     &body.route
                 }
             };
@@ -946,7 +1014,7 @@ impl SectionTemplate {
         let mut names = Names::new(&self.params);
         names
             .lets(&self.lets)
-            .map_err(|e| TemplateError(format!("document let: {e}")))?;
+            .map_err(|e| e.context("document let"))?;
         for (index, section) in self.sections.iter().enumerate() {
             let SectionDef::Section(body) = section else {
                 continue;
@@ -955,7 +1023,7 @@ impl SectionTemplate {
             names
                 .lets(&body.lets)
                 .and_then(|()| names.section(body))
-                .map_err(|e| TemplateError(format!("section {index} ({:?}): {e}", body.route)))?;
+                .map_err(|e| e.context(format!("section {index} ({:?})", body.route)))?;
         }
         Ok(())
     }
@@ -1069,7 +1137,7 @@ impl<'a> Names<'a> {
                     .try_for_each(|m| params_only.text(m)),
                 LetDef::Pred(pred) => params_only.pred(pred),
             };
-            checked.map_err(|e| TemplateError(format!("let {name:?}: {e}")))?;
+            checked.map_err(|e| e.context(format!("let {name:?}")))?;
         }
         for (name, def) in lets {
             let kind = match def {
@@ -1118,6 +1186,12 @@ impl<'a> Names<'a> {
             Double,
             Single,
             Backtick,
+            Comment,
+        }
+        if text.contains("\\${") {
+            return err(format!(
+                "{text:?} has a `${{` after a `\\`, which a PromQL field does not allow"
+            ));
         }
         let mut state = In::Bare;
         let mut i = 0;
@@ -1139,6 +1213,8 @@ impl<'a> Names<'a> {
                 (In::Bare, '"') => In::Double,
                 (In::Bare, '\'') => In::Single,
                 (In::Bare, '`') => In::Backtick,
+                (In::Bare, '#') => In::Comment,
+                (In::Comment, '\n' | '\r') => In::Bare,
                 (s @ (In::Double | In::Single), '\\') => {
                     // The escaped character, whatever it is.
                     i += text[i..].chars().next().map_or(0, char::len_utf8);
@@ -1177,8 +1253,11 @@ impl<'a> Names<'a> {
                 if *each && (by.len() != 1 || !int.is_empty()) {
                     return err("distinct_gt with `each` takes one `by` label and no `int`");
                 }
-                if by.is_empty() {
-                    return err("distinct_gt needs a `by` label");
+                if by.is_empty() || by.len() > MAX_BY_LABELS {
+                    return err(format!(
+                        "distinct_gt names 1 to {MAX_BY_LABELS} `by` labels, not {}",
+                        by.len()
+                    ));
                 }
                 metrics
                     .iter()
@@ -1388,7 +1467,10 @@ impl Budget {
         let total = cell.get().saturating_add(n);
         cell.set(total);
         if total > max {
-            return err(format!("expands to more than {max} {what}"));
+            return Err(TemplateError::new(
+                TemplateErrorKind::Limit,
+                format!("expands to more than {max} {what}"),
+            ));
         }
         Ok(())
     }
@@ -1396,7 +1478,10 @@ impl Budget {
     /// Whether `n` more bytes fit, without spending them.
     fn bytes_fit(&self, n: usize) -> Result<(), TemplateError> {
         if self.bytes.get().saturating_add(n) > MAX_TEXT_BYTES {
-            return err(format!("expands to more than {MAX_TEXT_BYTES} bytes"));
+            return Err(TemplateError::new(
+                TemplateErrorKind::Limit,
+                format!("expands to more than {MAX_TEXT_BYTES} bytes"),
+            ));
         }
         Ok(())
     }
@@ -1457,7 +1542,7 @@ impl<'a> Scope<'a> {
         if histograms {
             out.extend(self.data.histogram_labels(metric));
         }
-        self.spend_work(out.len())?;
+        self.spend_work(out.len().max(1))?;
         Ok(out)
     }
 
@@ -1563,7 +1648,10 @@ impl<'a> Scope<'a> {
                 } else {
                     let mut seen: BTreeSet<Vec<Option<String>>> = BTreeSet::new();
                     for metric in metrics {
-                        for labels in self.series(&self.subst(metric)?, false)? {
+                        let series = self.series(&self.subst(metric)?, false)?;
+                        // A tuple costs a lookup per `by` label.
+                        self.spend_work(series.len().saturating_mul(by.len().saturating_sub(1)))?;
+                        for labels in series {
                             let mut tuple = Vec::with_capacity(by.len());
                             let mut keep = true;
                             for key in &by {
@@ -1655,7 +1743,12 @@ impl<'a> Scope<'a> {
             } else if let Some(value) = self.params.get(name) {
                 push(&mut out, value, false)?;
             } else {
-                return err(format!("unknown or unset name {name:?} in {text:?}"));
+                // `check` refused every name that is not a binding or a
+                // declared parameter, so this is a parameter left unset.
+                return Err(TemplateError::new(
+                    TemplateErrorKind::UnsetParam,
+                    format!("parameter {name:?} in {text:?} is not set"),
+                ));
             }
             rest = &after[end + 1..];
         }
@@ -1855,6 +1948,7 @@ fn push_promql_escaped(out: &mut String, text: &str) {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
             '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
             c => out.push(c),
         }
     }
@@ -1865,18 +1959,20 @@ fn promql_escaped_len(text: &str) -> usize {
     text.len()
         + text
             .chars()
-            .filter(|c| matches!(c, '\\' | '"' | '\n'))
+            .filter(|c| matches!(c, '\\' | '"' | '\n' | '\r'))
             .count()
 }
 
-/// An estimate of `value`'s size as JSON, for the byte budget.
+/// `value`'s size in memory, for the byte budget: each value's own
+/// `size_of::<Value>()` plus the bytes of its strings and keys.
 fn json_size(value: &Value) -> usize {
-    match value {
-        Value::Null | Value::Bool(_) | Value::Number(_) => 8,
-        Value::String(s) => s.len() + 2,
-        Value::Array(items) => items.iter().map(json_size).sum::<usize>() + 2,
-        Value::Object(map) => map.iter().map(|(k, v)| k.len() + 3 + json_size(v)).sum(),
-    }
+    std::mem::size_of::<Value>()
+        + match value {
+            Value::String(s) => s.len(),
+            Value::Array(items) => items.iter().map(json_size).sum(),
+            Value::Object(map) => map.iter().map(|(k, v)| k.len() + json_size(v)).sum(),
+            Value::Null | Value::Bool(_) | Value::Number(_) => 0,
+        }
 }
 
 type Visit<'v, T> = dyn FnMut(&T, &mut Scope<'_>) -> Result<(), TemplateError> + 'v;
@@ -1901,25 +1997,44 @@ fn walk<T>(
                 };
                 walk(branch, scope, visit)?;
             }
+            // A pass's bindings are not removed after it: `check` refuses a
+            // reference to a repeat variable outside its body and a
+            // variable that shadows another name, so a stale binding is
+            // never read, and the next pass or repeat that binds the name
+            // overwrites it.
             Item::Repeat(node) => {
                 let var = &node.repeat.var;
-                let (values, from_catalog) = repeat_values(&node.repeat.over, scope)?;
-                for value in values {
-                    scope.spend_node()?;
-                    // A pass's bindings are not removed after it: `check`
-                    // refuses a reference to a repeat variable outside its
-                    // body and a variable that shadows another name, so a
-                    // stale binding is never read, and the next pass or
-                    // repeat that binds the name overwrites it.
-                    match value {
-                        RepeatValue::Text(text) => scope.bind(var, text, from_catalog),
-                        RepeatValue::Fields(fields) => {
-                            for (field, text) in fields {
-                                scope.bind(&format!("{var}.{field}"), text, from_catalog);
+                match &node.repeat.over {
+                    RepeatOver::Values(values) => {
+                        // `check` refused values with differing fields, so
+                        // the first value's names serve every pass.
+                        let names: Vec<String> = match values.first() {
+                            Some(RepeatValue::Fields(fields)) => {
+                                fields.keys().map(|f| format!("{var}.{f}")).collect()
                             }
+                            _ => Vec::new(),
+                        };
+                        for value in values {
+                            scope.spend_node()?;
+                            match value {
+                                RepeatValue::Text(text) => scope.bind(var, text.clone(), false),
+                                RepeatValue::Fields(fields) => {
+                                    for (name, text) in names.iter().zip(fields.values()) {
+                                        scope.spend_node()?;
+                                        scope.bind(name, text.clone(), false);
+                                    }
+                                }
+                            }
+                            walk(&node.body, scope, visit)?;
                         }
                     }
-                    walk(&node.body, scope, visit)?;
+                    RepeatOver::LabelValues(lv) => {
+                        for text in label_values_sorted(lv, scope)? {
+                            scope.spend_node()?;
+                            scope.bind(var, text, true);
+                            walk(&node.body, scope, visit)?;
+                        }
+                    }
                 }
             }
         }
@@ -1927,22 +2042,14 @@ fn walk<T>(
     Ok(())
 }
 
-/// A repeat's values, and whether they came from the catalog.
-fn repeat_values(
-    over: &RepeatOver,
-    scope: &Scope<'_>,
-) -> Result<(Vec<RepeatValue>, bool), TemplateError> {
-    Ok(match over {
-        RepeatOver::Values(values) => (values.clone(), false),
-        RepeatOver::LabelValues(lv) => {
-            let mut values: Vec<String> = scope
-                .label_values(&scope.subst(&lv.metric)?, &scope.subst(&lv.label)?)?
-                .into_iter()
-                .collect();
-            sort_label_values(&mut values, lv.sort);
-            (values.into_iter().map(RepeatValue::Text).collect(), true)
-        }
-    })
+/// A `label_values` repeat's values, in its order.
+fn label_values_sorted(lv: &LabelValues, scope: &Scope<'_>) -> Result<Vec<String>, TemplateError> {
+    let mut values: Vec<String> = scope
+        .label_values(&scope.subst(&lv.metric)?, &scope.subst(&lv.label)?)?
+        .into_iter()
+        .collect();
+    sort_label_values(&mut values, lv.sort);
+    Ok(values)
 }
 
 /// Sort label values as `sort` says. `int` is a stable sort of the
@@ -2036,7 +2143,9 @@ mod tests {
     }
 
     fn parse_err(template: &str) -> String {
-        SectionTemplate::parse(template).unwrap_err().0
+        let e = SectionTemplate::parse(template).unwrap_err();
+        assert_eq!(e.kind(), TemplateErrorKind::Invalid, "{e}");
+        e.message().to_string()
     }
 
     fn assert_refused(template: &str, needle: &str) {
@@ -2443,7 +2552,8 @@ mod tests {
             .expand(&Catalog::default(), "/t", Vec::new(), &params)
             .err()
             .unwrap();
-        assert!(e.0.contains("unset name \"throughput\""), "{e}");
+        assert!(e.message().contains("parameter \"throughput\""), "{e}");
+        assert_eq!(e.kind(), TemplateErrorKind::UnsetParam);
         params.insert("throughput".to_string(), "x".to_string());
         assert!(
             t.expand(&Catalog::default(), "/t", Vec::new(), &params)
@@ -2821,7 +2931,7 @@ mod tests {
             ),
             (
                 json!({ "when": { "distinct_gt": { "metrics": ["a"], "by": [], "n": 1 } }, "then": [] }),
-                "needs a `by` label",
+                "1 to 16 `by` labels, not 0",
             ),
             (
                 json!({ "when": { "has_label": { "metric": "${q}", "label": "l" } }, "then": [] }),
@@ -2957,7 +3067,10 @@ mod tests {
             .expand(&Catalog::default(), "/t", Vec::new(), &BTreeMap::new())
             .err()
             .unwrap();
-        assert_eq!(e.0, format!("/t: expands to more than {MAX_NODES} nodes"));
+        assert_eq!(
+            e.message(),
+            format!("/t: expands to more than {MAX_NODES} nodes")
+        );
 
         // A catalog with more label values than the budget.
         let ids: Vec<String> = (0..MAX_NODES).map(|i| i.to_string()).collect();
@@ -2974,7 +3087,7 @@ mod tests {
             .expand(&data, "/t", Vec::new(), &BTreeMap::new())
             .err()
             .unwrap();
-        assert!(e.0.contains("nodes"), "{e}");
+        assert!(e.message().contains("nodes"), "{e}");
     }
 
     #[test]
@@ -2991,7 +3104,7 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!(
-            e.0,
+            e.message(),
             format!("/t: expands to more than {MAX_TEXT_BYTES} bytes")
         );
     }
@@ -3027,13 +3140,16 @@ mod tests {
         budget
     }
 
+    /// The message of the limit `/t` of `template` passes on `data`.
     fn expand_err(template: &str, data: &Catalog, params: &[(&str, &str)]) -> String {
         let t = SectionTemplate::parse(template).unwrap_or_else(|e| panic!("{e}"));
         let params = params
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        t.expand(data, "/t", Vec::new(), &params).err().unwrap().0
+        let e = t.expand(data, "/t", Vec::new(), &params).err().unwrap();
+        assert_eq!(e.kind(), TemplateErrorKind::Limit, "{e}");
+        e.message().to_string()
     }
 
     /// The largest allocation this test binary's threads request while
@@ -3132,8 +3248,13 @@ mod tests {
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect();
-            let (e, peak) =
-                peak_alloc(|| t.expand(&data, "/t", Vec::new(), &params).err().unwrap().0);
+            let (e, peak) = peak_alloc(|| {
+                t.expand(&data, "/t", Vec::new(), &params)
+                    .err()
+                    .unwrap()
+                    .message()
+                    .to_string()
+            });
             assert_eq!(
                 e,
                 format!("/t: expands to more than {MAX_TEXT_BYTES} bytes")
@@ -3154,7 +3275,8 @@ mod tests {
             t.expand(&data, "/t", Vec::new(), &BTreeMap::new())
                 .err()
                 .unwrap()
-                .0
+                .message()
+                .to_string()
         });
         assert_eq!(
             e,
@@ -3203,7 +3325,7 @@ mod tests {
                     json!({ "f": { "first_present": { "list": ["x", "m"], "default": "d" } } }),
                     json!([]),
                 ),
-                6,
+                1 + 6,
             ),
             (
                 plots(
@@ -3640,5 +3762,163 @@ mod tests {
         let t = json!({ "schema": 1, "params": ["b", "a"], "sections": [] }).to_string();
         let t = SectionTemplate::parse(&t).unwrap();
         assert_eq!(t.params().collect::<Vec<_>>(), ["a", "b"]);
+    }
+
+    #[test]
+    fn json_size_counts_each_value_in_memory() {
+        let v = std::mem::size_of::<Value>();
+        assert_eq!(json_size(&json!({})), v);
+        assert_eq!(json_size(&json!([])), v);
+        assert_eq!(json_size(&json!(null)), v);
+        assert_eq!(json_size(&json!([{}, 1])), 3 * v);
+        assert_eq!(json_size(&json!({ "ab": "cd" })), 2 * v + 4);
+    }
+
+    /// Group metadata is charged in every group it is copied into, key
+    /// bytes included: empty objects in many groups pass the byte limit.
+    #[test]
+    fn group_metadata_is_charged_per_copy() {
+        let meta = |key: &str| {
+            section(
+                json!({}),
+                json!([{ "name": "G", "id": "g", "metadata": { key: {} },
+                         "subgroups": [{ "plots": [gauge("a")] }] }]),
+            )
+        };
+        let bytes = |t: &str| spent(t, &Catalog::default()).bytes.get();
+        let long = "k".repeat(1000);
+        assert!(bytes(&meta(&long)) >= bytes(&meta("k")) + 999);
+        let empties: serde_json::Map<String, Value> =
+            (0..1000).map(|i| (format!("k{i}"), json!({}))).collect();
+        let passes: Vec<String> = (0..1000).map(|i| i.to_string()).collect();
+        let t = section(
+            json!({}),
+            json!([{ "repeat": { "var": "r", "in": { "values": passes } }, "body": [
+                { "name": "G", "id": "g${r}", "metadata": empties,
+                  "subgroups": [{ "plots": [gauge("a")] }] },
+            ] }]),
+        );
+        assert_eq!(
+            expand_err(&t, &Catalog::default(), &[]),
+            format!("/t: expands to more than {MAX_TEXT_BYTES} bytes")
+        );
+    }
+
+    /// Each field a pass over objects binds is a node.
+    #[test]
+    fn repeat_fields_are_charged_as_nodes() {
+        let fields: serde_json::Map<String, Value> =
+            (0..10).map(|i| (format!("f{i}"), json!("x"))).collect();
+        let t = plots(
+            json!({}),
+            json!([{ "repeat": { "var": "o", "in": { "values": [fields.clone(), fields] } },
+                     "body": [] }]),
+        );
+        // The group and subgroup, the repeat node, two passes, ten fields
+        // each.
+        assert_eq!(spent(&t, &Catalog::default()).nodes.get(), 2 + 1 + 2 + 20);
+        let fields: serde_json::Map<String, Value> =
+            (0..300).map(|i| (format!("f{i}"), json!("x"))).collect();
+        let values = vec![Value::Object(fields); 100];
+        let t = plots(
+            json!({}),
+            json!([{ "repeat": { "var": "o", "in": { "values": values } }, "body": [] }]),
+        );
+        assert_eq!(
+            expand_err(&t, &Catalog::default(), &[]),
+            format!("/t: expands to more than {MAX_NODES} nodes")
+        );
+    }
+
+    /// Counting tuples costs a lookup per series per `by` label, and `by`
+    /// names at most 16 labels.
+    #[test]
+    fn distinct_gt_is_charged_per_label() {
+        let data = Catalog::default()
+            .counter("m", &[&[("a", "0")], &[("a", "1")], &[("a", "2")]])
+            .gauge("m", &[&[("a", "0")], &[("a", "1")]]);
+        let t = plots(
+            json!({}),
+            json!([{ "when": { "distinct_gt": { "metrics": ["m"], "by": ["a", "b", "c"], "n": 99 } },
+                     "then": [] }]),
+        );
+        assert_eq!(spent(&t, &data).work.get(), 1 + 5 * 3);
+        let by: Vec<String> = (0..=MAX_BY_LABELS).map(|i| format!("l{i}")).collect();
+        assert_refused(
+            &plots(
+                json!({}),
+                json!([{ "when": { "distinct_gt": { "metrics": ["m"], "by": by, "n": 1 } }, "then": [] }]),
+            ),
+            "1 to 16 `by` labels, not 17",
+        );
+        assert_eq!(MAX_BY_LABELS, 16);
+    }
+
+    #[test]
+    fn the_section_limit_is_64() {
+        assert_eq!(MAX_SECTIONS, 64);
+    }
+
+    /// The scanner's other states: a backslash before `${`, a backtick
+    /// string holding a `"`, and a `#` comment.
+    #[test]
+    fn catalog_values_cannot_leave_the_string_another_way() {
+        let rep = |q: &str| {
+            plots(
+                json!({}),
+                json!([{ "repeat": { "var": "v", "in": { "label_values": { "metric": "m", "label": "k" } } },
+                         "body": [{ "kind": "gauge", "title": "t", "id": "i", "unit": "count", "query": q }] }]),
+            )
+        };
+        for q in [r#"m{k="\${v}"}"#, r"m{k='\${v}'}", r"\${v}"] {
+            assert_refused(&rep(q), "after a `\\`");
+        }
+        assert_refused(
+            &plots(
+                json!({}),
+                json!([{ "kind": "gauge", "title": "t", "id": "i", "unit": "count",
+                                        "query": r"x\${throughput}" }]),
+            ),
+            "after a `\\`",
+        );
+        for q in [
+            r#"m{k=`"${v}"`}"#,
+            r#"sum(m) # "${v}""#,
+            "sum(m) # x\n# \"${v}\"",
+        ] {
+            assert_refused(&rep(q), "goes only inside a double-quoted string");
+        }
+        for q in [
+            "sum(m) # x\n + m{k=\"${v}\"}",
+            "sum(m) # x\r + m{k=\"${v}\"}",
+            r#"m{j=`a"b`, k="${v}"}"#,
+            r##"m{j="#", k="${v}"}"##,
+        ] {
+            assert!(SectionTemplate::parse(&rep(q)).is_ok(), "{q:?}");
+        }
+        // A carriage return in a label value is escaped.
+        let data = Catalog::default().gauge("m", &[&[("k", "a\rb")]]);
+        let view = expand(&rep(r#"m{k="${v}"}"#), &data);
+        assert_eq!(
+            view["groups"][0]["subgroups"][0]["plots"][0]["promql_query"],
+            "m{k=\"a\\rb\"}"
+        );
+    }
+
+    #[test]
+    fn errors_have_a_kind() {
+        let e = SectionTemplate::parse("{}").unwrap_err();
+        assert_eq!(e.kind(), TemplateErrorKind::Invalid);
+        assert_eq!(e.to_string(), e.message());
+    }
+
+    /// The byte budget's escaped length is the escaped string's length.
+    #[test]
+    fn promql_escaped_len_matches_the_escape() {
+        let text = "a\\b\"c\nd\re";
+        let mut out = String::new();
+        push_promql_escaped(&mut out, text);
+        assert_eq!(out, "a\\\\b\\\"c\\nd\\re");
+        assert_eq!(promql_escaped_len(text), out.len());
     }
 }
