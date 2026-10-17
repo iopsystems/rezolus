@@ -27,9 +27,12 @@
 //! - `params` names the viewer parameters the template reads. A parameter
 //!   the viewer sets that is not declared here is not visible to the
 //!   template.
-//! - `sections` lists the sections in navigation order. `{"builtin":
-//!   "query"}` places the query explorer at `/query`. No two sections share
-//!   a route.
+//! - `sections` lists at most [`MAX_SECTIONS`] sections in navigation
+//!   order. `{"builtin": "query"}` places the query explorer at `/query`.
+//!   A section's `name` is 1 to [`MAX_SECTION_NAME_BYTES`] bytes. Its
+//!   `route` is `/` and then segments of `a-z`, `0-9`, `_` and `-`
+//!   separated by single `/`, at most [`MAX_SECTION_NAME_BYTES`] bytes. No
+//!   two sections share a route.
 //! - A section's `metadata` maps each key of the view's metadata to
 //!   `{"value": V}`, the JSON value `V`, or `{"computed": "gpu_selector",
 //!   "probe": [..]}`, the GPU selector over the probe metrics, present when
@@ -37,6 +40,10 @@
 //! - A group is `{"name", "id", "metadata", "subgroups"}`, where `metadata`
 //!   is a map of JSON values copied as given. A subgroup is `{"name",
 //!   "description", "plots"}`, both strings optional.
+//!
+//! Every node and every struct in this description is a JSON object; an
+//! array in its place is refused. No object anywhere in the document,
+//! metadata values included, may repeat a key.
 //!
 //! # Lets
 //!
@@ -110,8 +117,9 @@
 //! `unit` and a `subtype`, `percentiles` or `buckets`), or `latency`
 //! ([`PlotOpts::histogram_latency`], which takes neither). `unit` is one of
 //! `count`, `rate`, `time`, `bytes`, `datarate`, `bitrate`, `percentage`,
-//! `frequency`, `power`. `width` is absent or `full`. `percentage_range`
-//! and `range` cannot both be given. The other fields (`unit_system`,
+//! `frequency`, `power`. `width` is absent or `full`. `range` is `[min,
+//! max]` with `min` below `max`, and cannot be given with
+//! `percentage_range`. The other fields (`unit_system`,
 //! `description`, `percentiles`, `axis_label`, `row_label`, `style`,
 //! `log_scale`, `query_total`) map to the [`PlotOpts`] option of that name.
 //!
@@ -129,18 +137,29 @@
 //! with their section, whether or not the section uses them. There is no
 //! escape for a literal `${`.
 //!
-//! A value bound by `label_values` comes from the catalog. Where it lands
-//! in a `query`, `query_total`, or a `rate_mean`'s `selector` or `rate`,
-//! its `\`, `"` and newlines are escaped as in a PromQL string literal, so
-//! it belongs inside a quoted label matcher there. Other bindings and
-//! parameters are inserted as given.
+//! A value bound by `label_values` comes from the catalog. In a `query`,
+//! `query_total`, or a `rate_mean`'s `selector` or `rate`, a reference to
+//! one must sit inside a double-quoted string (`{k="${v}"}`), and `parse`
+//! refuses one anywhere else; there its `\`, `"` and newlines are escaped
+//! as in a PromQL string literal. In other fields, and for every other
+//! binding and parameter, the value is inserted as given.
 //!
 //! # Limits
 //!
-//! Expanding one section visits at most [`MAX_NODES`] nodes (elements,
-//! `when` nodes and repeat passes) and produces at most [`MAX_TEXT_BYTES`]
-//! bytes of strings and metadata. A section that would exceed either is
-//! refused with an error; the other sections are unaffected.
+//! Expanding one section, its lets included:
+//!
+//! - visits at most [`MAX_NODES`] nodes, counting elements, `when` and
+//!   `repeat` nodes, and repeat passes;
+//! - produces at most [`MAX_TEXT_BYTES`] bytes of strings, metadata and
+//!   percentiles, checked before each piece of a string is appended;
+//! - does at most [`MAX_WORK`] units of catalog work: one per predicate
+//!   evaluated, plus one per series that a predicate, a `label_values`
+//!   repeat or the GPU selector reads, and one per counter name a
+//!   `has_counter` scans.
+//!
+//! A section that would exceed any of these is refused with an error; the
+//! other sections are unaffected. `parse` reports the first problem it
+//! finds, not all of them.
 //!
 //! # Versioning
 //!
@@ -170,6 +189,18 @@ pub const MAX_NODES: usize = 20_000;
 /// The most bytes of strings and metadata one section's expansion produces.
 pub const MAX_TEXT_BYTES: usize = 4 << 20;
 
+/// The most catalog work one section's expansion does: one unit per
+/// predicate evaluated plus one per series a predicate, `label_values`
+/// repeat or computed metadata reads (and per counter name `has_counter`
+/// scans).
+pub const MAX_WORK: usize = 2_000_000;
+
+/// The most sections a document holds.
+pub const MAX_SECTIONS: usize = 64;
+
+/// The longest section name or route, in bytes.
+pub const MAX_SECTION_NAME_BYTES: usize = 64;
+
 /// A parsed and checked section template document.
 #[derive(Debug, Clone)]
 pub struct SectionTemplate {
@@ -178,13 +209,6 @@ pub struct SectionTemplate {
     params: BTreeSet<String>,
     lets: BTreeMap<String, LetDef>,
     sections: Vec<SectionDef>,
-}
-
-/// The first pass: `schema` alone, so a newer document is refused as newer
-/// rather than for a field this expander does not know.
-#[derive(Deserialize)]
-struct Header {
-    schema: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -245,6 +269,7 @@ enum LetDef {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FirstPresentLet {
+    #[serde(deserialize_with = "object")]
     first_present: FirstPresent,
 }
 
@@ -292,26 +317,36 @@ enum Computed {
 enum Pred {
     Present(String),
     HasCounter(String),
-    HasLabel {
-        metric: String,
-        label: String,
-        #[serde(default)]
-        value: Option<String>,
-    },
-    DistinctGt {
-        metrics: Vec<String>,
-        by: Vec<String>,
-        n: usize,
-        #[serde(default)]
-        each: bool,
-        #[serde(default)]
-        int: Vec<String>,
-    },
+    #[serde(deserialize_with = "object")]
+    HasLabel(HasLabel),
+    #[serde(deserialize_with = "object")]
+    DistinctGt(DistinctGt),
     Any(Vec<Pred>),
     All(Vec<Pred>),
     Not(Box<Pred>),
     Var(String),
     Param(String),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HasLabel {
+    metric: String,
+    label: String,
+    #[serde(default)]
+    value: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DistinctGt {
+    metrics: Vec<String>,
+    by: Vec<String>,
+    n: usize,
+    #[serde(default)]
+    each: bool,
+    #[serde(default)]
+    int: Vec<String>,
 }
 
 /// An element of a list, or a node that expands into elements.
@@ -334,6 +369,7 @@ struct WhenNode<T> {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, bound = "T: DeserializeOwned")]
 struct RepeatNode<T> {
+    #[serde(deserialize_with = "object")]
     repeat: Repeat,
     body: Vec<Item<T>>,
 }
@@ -350,12 +386,17 @@ struct Repeat {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 enum RepeatOver {
     Values(Vec<RepeatValue>),
-    LabelValues {
-        metric: String,
-        label: String,
-        #[serde(default)]
-        sort: LabelSort,
-    },
+    #[serde(deserialize_with = "object")]
+    LabelValues(LabelValues),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LabelValues {
+    metric: String,
+    label: String,
+    #[serde(default)]
+    sort: LabelSort,
 }
 
 #[derive(Debug, Clone)]
@@ -404,6 +445,7 @@ enum PlotItem {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SplitNode {
+    #[serde(deserialize_with = "object")]
     split: Box<SplitDef>,
 }
 
@@ -411,12 +453,14 @@ struct SplitNode {
 #[serde(deny_unknown_fields)]
 struct SplitDef {
     when: Pred,
+    #[serde(deserialize_with = "two_plots")]
     plots: [PlotDef; 2],
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RateMeanNode {
+    #[serde(deserialize_with = "object")]
     rate_mean: RateMeanDef,
 }
 
@@ -500,13 +544,111 @@ enum Width {
 // fields. An untagged enum would try each variant in turn, accept a
 // misspelled field into whichever variant ignores it, and report a real
 // error only as "did not match any variant".
+//
+// Every struct is read through `read` or `object`, which refuse anything
+// but a JSON object: serde's derived struct impls also accept a JSON array
+// of the fields in order, which would let `["gauge", "T", "id", ...]` be a
+// plot.
 
 fn has_key(value: &Value, key: &str) -> bool {
     value.get(key).is_some()
 }
 
 fn read<T: DeserializeOwned, E: serde::de::Error>(value: Value) -> Result<T, E> {
+    if !value.is_object() {
+        return Err(E::custom(format!(
+            "expected an object, found {}",
+            kind_of(&value)
+        )));
+    }
     T::deserialize(value).map_err(E::custom)
+}
+
+fn kind_of(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
+    }
+}
+
+/// `deserialize_with` for a struct-typed field: [`read`].
+fn object<'de, D: Deserializer<'de>, T: DeserializeOwned>(d: D) -> Result<T, D::Error> {
+    read(Value::deserialize(d)?)
+}
+
+/// A split's two plots, each an object.
+fn two_plots<'de, D: Deserializer<'de>>(d: D) -> Result<[PlotDef; 2], D::Error> {
+    let values = Vec::<Value>::deserialize(d)?;
+    let [a, b]: [Value; 2] = values.try_into().map_err(|v: Vec<Value>| {
+        D::Error::custom(format!("a split has 2 plots, not {}", v.len()))
+    })?;
+    Ok([read(a)?, read(b)?])
+}
+
+/// A JSON value whose objects have no repeated key. `serde_json::Value`
+/// keeps the last of a repeated key and drops the others silently.
+struct UniqueKeys(Value);
+
+impl<'de> Deserialize<'de> for UniqueKeys {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Visit;
+        impl<'de> serde::de::Visitor<'de> for Visit {
+            type Value = UniqueKeys;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a JSON value")
+            }
+            fn visit_bool<E>(self, v: bool) -> Result<UniqueKeys, E> {
+                Ok(UniqueKeys(Value::Bool(v)))
+            }
+            fn visit_i64<E>(self, v: i64) -> Result<UniqueKeys, E> {
+                Ok(UniqueKeys(Value::from(v)))
+            }
+            fn visit_u64<E>(self, v: u64) -> Result<UniqueKeys, E> {
+                Ok(UniqueKeys(Value::from(v)))
+            }
+            fn visit_f64<E>(self, v: f64) -> Result<UniqueKeys, E> {
+                Ok(UniqueKeys(Value::from(v)))
+            }
+            fn visit_str<E>(self, v: &str) -> Result<UniqueKeys, E> {
+                Ok(UniqueKeys(Value::String(v.to_string())))
+            }
+            fn visit_string<E>(self, v: String) -> Result<UniqueKeys, E> {
+                Ok(UniqueKeys(Value::String(v)))
+            }
+            fn visit_unit<E>(self) -> Result<UniqueKeys, E> {
+                Ok(UniqueKeys(Value::Null))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<UniqueKeys, A::Error> {
+                let mut out = Vec::new();
+                while let Some(UniqueKeys(v)) = seq.next_element()? {
+                    out.push(v);
+                }
+                Ok(UniqueKeys(Value::Array(out)))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<UniqueKeys, A::Error> {
+                let mut out = serde_json::Map::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    let UniqueKeys(value) = map.next_value()?;
+                    if out.contains_key(&key) {
+                        return Err(A::Error::custom(format!("key {key:?} is repeated")));
+                    }
+                    out.insert(key, value);
+                }
+                Ok(UniqueKeys(Value::Object(out)))
+            }
+        }
+        d.deserialize_any(Visit)
+    }
 }
 
 impl<'de> Deserialize<'de> for SectionDef {
@@ -639,12 +781,22 @@ impl SectionTemplate {
     /// the names, enumerated values and `${..}` syntax in both branches of
     /// every `when` and the body of every `repeat`.
     pub fn parse(json: &str) -> Result<Self, TemplateError> {
-        let header: Header = serde_json::from_str(json)
+        let UniqueKeys(value) = serde_json::from_str(json)
             .map_err(|e| TemplateError(format!("not a section template: {e}")))?;
-        let schema = match header.schema {
+        if !value.is_object() {
+            return err(format!(
+                "not a section template: expected an object, found {}",
+                kind_of(&value)
+            ));
+        }
+        // `schema` alone first, so a newer document is refused as newer
+        // rather than for a field this expander does not know.
+        let schema = match value.get("schema") {
             None => return err("not a section template: no `schema`"),
-            Some(value) => value.as_u64().ok_or_else(|| {
-                TemplateError(format!("section template schema {value} is not an integer"))
+            Some(schema) => schema.as_u64().ok_or_else(|| {
+                TemplateError(format!(
+                    "section template schema {schema} is not an integer"
+                ))
             })?,
         };
         if schema == 0 || schema > u64::from(MAX_SCHEMA) {
@@ -652,8 +804,14 @@ impl SectionTemplate {
                 "section template schema {schema} is not one this viewer expands (1 to {MAX_SCHEMA})"
             ));
         }
-        let doc: Document = serde_json::from_str(json)
+        let doc: Document = read::<_, serde_json::Error>(value)
             .map_err(|e| TemplateError(format!("not a section template: {e}")))?;
+        if doc.sections.len() > MAX_SECTIONS {
+            return err(format!(
+                "{} sections: at most {MAX_SECTIONS}",
+                doc.sections.len()
+            ));
+        }
         let mut sections = Vec::with_capacity(doc.sections.len());
         for (index, value) in doc.sections.into_iter().enumerate() {
             let label = section_label(index, &value);
@@ -684,6 +842,11 @@ impl SectionTemplate {
     /// The document's schema.
     pub fn schema(&self) -> u32 {
         self.schema
+    }
+
+    /// The parameters the document declares, in name order.
+    pub fn params(&self) -> impl Iterator<Item = &str> {
+        self.params.iter().map(String::as_str)
     }
 
     /// The document's `revision`, if it gave one.
@@ -725,13 +888,10 @@ impl SectionTemplate {
                     return Ok(Some(View::new(data, sections)));
                 }
                 SectionDef::Section(body) if body.route == route => {
-                    let params: BTreeMap<String, String> = params
-                        .iter()
-                        .filter(|(name, _)| self.params.contains(*name))
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
+                    // An undeclared parameter in `params` is never read:
+                    // `check` refused every reference to one.
                     return self
-                        .expand_body(data, body, sections, &params)
+                        .expand_body(data, body, sections, params, &Budget::default())
                         .map(Some)
                         .map_err(|e| TemplateError(format!("{route}: {e}")));
                 }
@@ -747,14 +907,14 @@ impl SectionTemplate {
         body: &SectionBody,
         sections: Vec<Section>,
         params: &BTreeMap<String, String>,
+        budget: &Budget,
     ) -> Result<View, TemplateError> {
-        let mut scope = Scope::new(data, params);
+        let mut scope = Scope::new(data, params, budget);
         scope.bind_lets(&self.lets)?;
         scope.bind_lets(&body.lets)?;
         let mut view = View::new(data, sections);
         for (key, meta) in &body.metadata {
             if let Some(value) = scope.meta(meta)? {
-                scope.spend_bytes(json_size(&value))?;
                 view.metadata.insert(key.clone(), value);
             }
         }
@@ -770,10 +930,14 @@ impl SectionTemplate {
     /// Everything [`parse`](Self::parse) checks past the shape of the JSON.
     fn check(&self) -> Result<(), TemplateError> {
         let mut routes = BTreeSet::new();
-        for section in &self.sections {
+        for (index, section) in self.sections.iter().enumerate() {
             let route = match section {
                 SectionDef::Builtin => "/query",
-                SectionDef::Section(body) => &body.route,
+                SectionDef::Section(body) => {
+                    check_section_name(&body.name, &body.route)
+                        .map_err(|e| TemplateError(format!("section {index}: {e}")))?;
+                    &body.route
+                }
             };
             if !routes.insert(route) {
                 return err(format!("two sections have route {route:?}"));
@@ -795,6 +959,31 @@ impl SectionTemplate {
         }
         Ok(())
     }
+}
+
+/// A section's name is 1 to [`MAX_SECTION_NAME_BYTES`] bytes. Its route is
+/// `/` and then 1 or more segments of `a-z`, `0-9`, `_` and `-` separated
+/// by single `/`, at most [`MAX_SECTION_NAME_BYTES`] bytes in all.
+fn check_section_name(name: &str, route: &str) -> Result<(), TemplateError> {
+    if name.is_empty() || name.len() > MAX_SECTION_NAME_BYTES {
+        return err(format!(
+            "section name {name:?} is not 1 to {MAX_SECTION_NAME_BYTES} bytes"
+        ));
+    }
+    let segments_ok = route.strip_prefix('/').is_some_and(|rest| {
+        rest.split('/').all(|seg| {
+            !seg.is_empty()
+                && seg
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+        })
+    });
+    if !segments_ok || route.len() > MAX_SECTION_NAME_BYTES {
+        return err(format!(
+            "route {route:?} is not `/` and segments of a-z, 0-9, `_` and `-`, at most {MAX_SECTION_NAME_BYTES} bytes"
+        ));
+    }
+    Ok(())
 }
 
 /// `name` is a let, parameter, repeat variable or field name: ASCII
@@ -831,10 +1020,15 @@ fn references(text: &str) -> Result<Vec<&str>, TemplateError> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NameKind {
-    /// A string let or a repeat binding: usable as `${name}`.
+    /// A string let, parameter or `values` binding: usable as `${name}`.
     Text,
+    /// A `label_values` binding: usable as `${name}`, and in a PromQL
+    /// field only inside a double-quoted string.
+    Catalog,
     /// A `pred` let: usable as `{"var": name}`.
     Pred,
+    /// A repeat over objects: its fields are usable as `${name.field}`.
+    Record,
 }
 
 /// The names in scope at a point in a template, for [`SectionTemplate::check`].
@@ -853,12 +1047,7 @@ impl<'a> Names<'a> {
     }
 
     fn in_scope(&self, name: &str) -> bool {
-        self.params.contains(name)
-            || self.names.contains_key(name)
-            || self
-                .names
-                .keys()
-                .any(|k| k.split_once('.').is_some_and(|(var, _)| var == name))
+        self.params.contains(name) || self.names.contains_key(name)
     }
 
     /// Check each let with only the parameters in scope, then add the lets.
@@ -895,10 +1084,15 @@ impl<'a> Names<'a> {
     fn text(&self, text: &str) -> Result<(), TemplateError> {
         for name in references(text)? {
             match self.names.get(name) {
-                Some(NameKind::Text) => {}
+                Some(NameKind::Text | NameKind::Catalog) => {}
                 Some(NameKind::Pred) => {
                     return err(format!(
                         "`${{{name}}}` in {text:?} names a predicate; use {{\"var\": {name:?}}}"
+                    ));
+                }
+                Some(NameKind::Record) => {
+                    return err(format!(
+                        "`${{{name}}}` in {text:?} names a repeat over objects; use `${{{name}.field}}`"
                     ));
                 }
                 None if self.params.contains(name) => {}
@@ -912,25 +1106,74 @@ impl<'a> Names<'a> {
         text.as_deref().map_or(Ok(()), |t| self.text(t))
     }
 
+    /// [`text`](Self::text) for a PromQL field, where a catalog value must
+    /// sit inside a double-quoted string: there it is escaped, and anywhere
+    /// else (a single-quoted or backtick string, or bare) a label value
+    /// could end the string or the matcher it is in.
+    fn promql(&self, text: &str) -> Result<(), TemplateError> {
+        self.text(text)?;
+        #[derive(PartialEq)]
+        enum In {
+            Bare,
+            Double,
+            Single,
+            Backtick,
+        }
+        let mut state = In::Bare;
+        let mut i = 0;
+        while let Some(c) = text[i..].chars().next() {
+            if text[i..].starts_with("${") {
+                // `text` has checked that every `${` is closed.
+                let end = i + 2 + text[i + 2..].find('}').unwrap_or(0);
+                let name = &text[i + 2..end];
+                if self.names.get(name) == Some(&NameKind::Catalog) && state != In::Double {
+                    return err(format!(
+                        "`${{{name}}}` in {text:?} is a label value, and goes only inside a double-quoted string there"
+                    ));
+                }
+                i = end + 1;
+                continue;
+            }
+            i += c.len_utf8();
+            state = match (state, c) {
+                (In::Bare, '"') => In::Double,
+                (In::Bare, '\'') => In::Single,
+                (In::Bare, '`') => In::Backtick,
+                (s @ (In::Double | In::Single), '\\') => {
+                    // The escaped character, whatever it is.
+                    i += text[i..].chars().next().map_or(0, char::len_utf8);
+                    s
+                }
+                (In::Double, '"') | (In::Single, '\'') | (In::Backtick, '`') => In::Bare,
+                (s, _) => s,
+            };
+        }
+        Ok(())
+    }
+
+    fn promql_opt(&self, text: &Option<String>) -> Result<(), TemplateError> {
+        text.as_deref().map_or(Ok(()), |t| self.promql(t))
+    }
+
     fn pred(&self, pred: &Pred) -> Result<(), TemplateError> {
         match pred {
             Pred::Present(metric) | Pred::HasCounter(metric) => self.text(metric),
-            Pred::HasLabel {
+            Pred::HasLabel(HasLabel {
                 metric,
                 label,
                 value,
-            } => {
+            }) => {
                 self.text(metric)?;
                 self.text(label)?;
                 self.text_opt(value)
             }
-            Pred::DistinctGt {
+            Pred::DistinctGt(DistinctGt {
                 metrics,
                 by,
                 each,
                 int,
                 ..
-            } => {
+            }) => {
                 if *each && (by.len() != 1 || !int.is_empty()) {
                     return err("distinct_gt with `each` takes one `by` label and no `int`");
                 }
@@ -947,7 +1190,9 @@ impl<'a> Names<'a> {
             Pred::Not(p) => self.pred(p),
             Pred::Var(name) => match self.names.get(name) {
                 Some(NameKind::Pred) => Ok(()),
-                Some(NameKind::Text) => err(format!("{{\"var\": {name:?}}} names a value")),
+                Some(NameKind::Text | NameKind::Catalog | NameKind::Record) => {
+                    err(format!("{{\"var\": {name:?}}} names a value"))
+                }
                 None => err(format!("unknown predicate {name:?}")),
             },
             Pred::Param(name) if self.params.contains(name) => Ok(()),
@@ -1002,10 +1247,11 @@ impl<'a> Names<'a> {
             ));
         }
         let bound = match &repeat.over {
-            RepeatOver::LabelValues { metric, label, .. } => {
-                self.text(metric)?;
-                self.text(label)?;
-                vec![var.clone()]
+            RepeatOver::LabelValues(lv) => {
+                self.text(&lv.metric)?;
+                self.text(&lv.label)?;
+                self.names.insert(var.clone(), NameKind::Catalog);
+                return Ok(vec![var.clone()]);
             }
             RepeatOver::Values(values) => match values.first() {
                 None => Vec::new(),
@@ -1033,14 +1279,21 @@ impl<'a> Names<'a> {
                         }
                         bound.push(format!("{var}.{field}"));
                     }
-                    bound
+                    self.names.insert(var.clone(), NameKind::Record);
+                    bound.push(var.clone());
+                    return self.bind_text(bound);
                 }
             },
         };
-        for name in &bound {
-            self.names.insert(name.clone(), NameKind::Text);
+        self.bind_text(bound)
+    }
+
+    /// Bind each of `names` as text; returns them.
+    fn bind_text(&mut self, names: Vec<String>) -> Result<Vec<String>, TemplateError> {
+        for name in &names {
+            self.names.entry(name.clone()).or_insert(NameKind::Text);
         }
-        Ok(bound)
+        Ok(names)
     }
 
     fn group(&mut self, group: &GroupDef) -> Result<(), TemplateError> {
@@ -1064,8 +1317,8 @@ impl<'a> Names<'a> {
             PlotItem::RateMean(rm) => {
                 self.text(&rm.title)?;
                 self.text(&rm.id)?;
-                self.text(&rm.selector)?;
-                self.text_opt(&rm.rate)
+                self.promql(&rm.selector)?;
+                self.promql_opt(&rm.rate)
             }
         }
     }
@@ -1092,16 +1345,21 @@ impl<'a> Names<'a> {
         if def.percentage_range && def.range.is_some() {
             return fail("`percentage_range` and `range` cannot both be given");
         }
-        for text in [&def.title, &def.id, &def.query] {
-            self.text(text)?;
+        if let Some([min, max]) = def.range
+            && min >= max
+        {
+            return fail("`range` is [min, max] with min below max");
         }
+        self.text(&def.title)?;
+        self.text(&def.id)?;
+        self.promql(&def.query)?;
+        self.promql_opt(&def.query_total)?;
         for text in [
             &def.unit_system,
             &def.description,
             &def.axis_label,
             &def.row_label,
             &def.style,
-            &def.query_total,
         ] {
             self.text_opt(text)?;
         }
@@ -1117,6 +1375,35 @@ struct Bound {
     from_catalog: bool,
 }
 
+/// What one section's expansion has spent of each limit.
+#[derive(Default)]
+struct Budget {
+    nodes: Cell<usize>,
+    bytes: Cell<usize>,
+    work: Cell<usize>,
+}
+
+impl Budget {
+    fn spend(cell: &Cell<usize>, n: usize, max: usize, what: &str) -> Result<(), TemplateError> {
+        let total = cell.get().saturating_add(n);
+        cell.set(total);
+        if total > max {
+            return err(format!("expands to more than {max} {what}"));
+        }
+        Ok(())
+    }
+
+    /// Whether `n` more bytes fit, without spending them.
+    fn bytes_fit(&self, n: usize) -> Result<(), TemplateError> {
+        if self.bytes.get().saturating_add(n) > MAX_TEXT_BYTES {
+            return err(format!("expands to more than {MAX_TEXT_BYTES} bytes"));
+        }
+        Ok(())
+    }
+}
+
+type Labels = BTreeMap<String, String>;
+
 /// What strings and predicates are evaluated in: the catalog, the viewer
 /// parameters, `let` values and repeat bindings, and the expansion budget.
 struct Scope<'a> {
@@ -1124,8 +1411,7 @@ struct Scope<'a> {
     params: &'a BTreeMap<String, String>,
     values: BTreeMap<String, Bound>,
     preds: BTreeMap<String, bool>,
-    nodes: Cell<usize>,
-    bytes: Cell<usize>,
+    budget: &'a Budget,
 }
 
 /// Where a substituted string lands, which decides whether a catalog value
@@ -1137,38 +1423,63 @@ enum Dest {
 }
 
 impl<'a> Scope<'a> {
-    fn new(data: &'a dyn MetricsSource, params: &'a BTreeMap<String, String>) -> Self {
+    fn new(
+        data: &'a dyn MetricsSource,
+        params: &'a BTreeMap<String, String>,
+        budget: &'a Budget,
+    ) -> Self {
         Self {
             data,
             params,
             values: BTreeMap::new(),
             preds: BTreeMap::new(),
-            nodes: Cell::new(0),
-            bytes: Cell::new(0),
+            budget,
         }
     }
 
     fn spend_node(&self) -> Result<(), TemplateError> {
-        let n = self.nodes.get() + 1;
-        self.nodes.set(n);
-        if n > MAX_NODES {
-            return err(format!("expands to more than {MAX_NODES} nodes"));
-        }
-        Ok(())
+        Budget::spend(&self.budget.nodes, 1, MAX_NODES, "nodes")
     }
 
     fn spend_bytes(&self, len: usize) -> Result<(), TemplateError> {
-        let n = self.bytes.get().saturating_add(len);
-        self.bytes.set(n);
-        if n > MAX_TEXT_BYTES {
-            return err(format!("expands to more than {MAX_TEXT_BYTES} bytes"));
-        }
-        Ok(())
+        Budget::spend(&self.budget.bytes, len, MAX_TEXT_BYTES, "bytes")
     }
 
-    /// Bind each let, evaluated in a scope holding only the parameters.
+    fn spend_work(&self, n: usize) -> Result<(), TemplateError> {
+        Budget::spend(&self.budget.work, n, MAX_WORK, "units of catalog work")
+    }
+
+    /// `metric`'s counter and gauge series, and its histogram series when
+    /// `histograms`, charged to the work budget one unit per series.
+    fn series(&self, metric: &str, histograms: bool) -> Result<Vec<Labels>, TemplateError> {
+        let mut out = self.data.counter_labels(metric);
+        out.extend(self.data.gauge_labels(metric));
+        if histograms {
+            out.extend(self.data.histogram_labels(metric));
+        }
+        self.spend_work(out.len())?;
+        Ok(out)
+    }
+
+    /// The values of `label` on `metric`'s series of every type, as
+    /// [`MetricsSource::label_values`] gives them.
+    fn label_values(&self, metric: &str, label: &str) -> Result<BTreeSet<String>, TemplateError> {
+        Ok(self
+            .series(metric, true)?
+            .into_iter()
+            .filter_map(|mut labels| labels.remove(label))
+            .collect())
+    }
+
+    /// [`has_metric`], charged.
+    fn present(&self, metric: &str) -> Result<bool, TemplateError> {
+        Ok(!self.series(metric, true)?.is_empty())
+    }
+
+    /// Bind each let, evaluated in a scope holding only the parameters and
+    /// spending this scope's budget.
     fn bind_lets(&mut self, lets: &BTreeMap<String, LetDef>) -> Result<(), TemplateError> {
-        let base = Scope::new(self.data, self.params);
+        let base = Scope::new(self.data, self.params, self.budget);
         for (name, def) in lets {
             match def {
                 LetDef::Text(text) => {
@@ -1179,7 +1490,7 @@ impl<'a> Scope<'a> {
                     let mut chosen = None;
                     for metric in &fp.list {
                         let metric = base.subst(metric)?;
-                        if has_metric(self.data, &metric) {
+                        if base.present(&metric)? {
                             chosen = Some(metric);
                             break;
                         }
@@ -1204,37 +1515,47 @@ impl<'a> Scope<'a> {
             .insert(name.to_string(), Bound { text, from_catalog });
     }
 
+    /// Whether `pred` holds: one unit of work, plus one per series read.
     fn holds(&self, pred: &Pred) -> Result<bool, TemplateError> {
-        let data = self.data;
+        self.spend_work(1)?;
         Ok(match pred {
-            Pred::Present(metric) => has_metric(data, &self.subst(metric)?),
-            Pred::HasCounter(metric) => data.has_counter(&self.subst(metric)?),
-            Pred::HasLabel {
+            Pred::Present(metric) => self.present(&self.subst(metric)?)?,
+            Pred::HasCounter(metric) => {
+                let metric = self.subst(metric)?;
+                let names = self.data.counter_names();
+                self.spend_work(names.len())?;
+                names.contains(&metric)
+            }
+            Pred::HasLabel(HasLabel {
                 metric,
                 label,
                 value,
-            } => {
-                let values = data.label_values(&self.subst(metric)?, &self.subst(label)?);
+            }) => {
+                let values = self.label_values(&self.subst(metric)?, &self.subst(label)?)?;
                 match value {
                     Some(v) => values.contains(&self.subst(v)?),
                     None => !values.is_empty(),
                 }
             }
-            Pred::DistinctGt {
+            Pred::DistinctGt(DistinctGt {
                 metrics,
                 by,
                 n,
                 each,
                 int,
-            } => {
+            }) => {
                 let by: Vec<String> = by.iter().map(|b| self.subst(b)).collect::<Result<_, _>>()?;
                 let int: BTreeSet<String> = int
                     .iter()
                     .map(|i| self.subst(i))
                     .collect::<Result<_, _>>()?;
                 if *each {
+                    // `check` refused `each` without exactly one `by` label.
+                    let Some(key) = by.first() else {
+                        return err("distinct_gt with `each` needs a `by` label");
+                    };
                     for metric in metrics {
-                        if metric_unique_label_count(data, &self.subst(metric)?, &by[0]) > *n {
+                        if self.label_values(&self.subst(metric)?, key)?.len() > *n {
                             return Ok(true);
                         }
                     }
@@ -1242,12 +1563,7 @@ impl<'a> Scope<'a> {
                 } else {
                     let mut seen: BTreeSet<Vec<Option<String>>> = BTreeSet::new();
                     for metric in metrics {
-                        let metric = self.subst(metric)?;
-                        for labels in data
-                            .counter_labels(&metric)
-                            .into_iter()
-                            .chain(data.gauge_labels(&metric))
-                        {
+                        for labels in self.series(&self.subst(metric)?, false)? {
                             let mut tuple = Vec::with_capacity(by.len());
                             let mut keep = true;
                             for key in &by {
@@ -1306,31 +1622,44 @@ impl<'a> Scope<'a> {
     }
 
     /// `text` with every `${name}` and `${name.field}` replaced, counted
-    /// against the byte budget.
+    /// against the byte budget. Each piece is checked against the budget
+    /// before it is appended, so a string that would exceed it is refused
+    /// before it is built.
     fn subst_to(&self, text: &str, dest: Dest) -> Result<String, TemplateError> {
-        let mut out = String::with_capacity(text.len());
+        let mut out = String::new();
         let mut rest = text;
+        let push = |out: &mut String, piece: &str, escape: bool| -> Result<(), TemplateError> {
+            let len = if escape {
+                promql_escaped_len(piece)
+            } else {
+                piece.len()
+            };
+            self.budget.bytes_fit(out.len().saturating_add(len))?;
+            if escape {
+                push_promql_escaped(out, piece);
+            } else {
+                out.push_str(piece);
+            }
+            Ok(())
+        };
         while let Some(start) = rest.find("${") {
-            out.push_str(&rest[..start]);
+            push(&mut out, &rest[..start], false)?;
             let after = &rest[start + 2..];
             let Some(end) = after.find('}') else {
                 return err(format!("unclosed `${{` in {text:?}"));
             };
             let name = &after[..end];
             if let Some(bound) = self.values.get(name) {
-                if bound.from_catalog && dest == Dest::Promql {
-                    push_promql_escaped(&mut out, &bound.text);
-                } else {
-                    out.push_str(&bound.text);
-                }
+                let escape = bound.from_catalog && dest == Dest::Promql;
+                push(&mut out, &bound.text, escape)?;
             } else if let Some(value) = self.params.get(name) {
-                out.push_str(value);
+                push(&mut out, value, false)?;
             } else {
                 return err(format!("unknown or unset name {name:?} in {text:?}"));
             }
             rest = &after[end + 1..];
         }
-        out.push_str(rest);
+        push(&mut out, rest, false)?;
         self.spend_bytes(out.len())?;
         Ok(out)
     }
@@ -1341,15 +1670,53 @@ impl<'a> Scope<'a> {
 
     fn meta(&self, meta: &MetaDef) -> Result<Option<Value>, TemplateError> {
         match meta {
-            MetaDef::Static(value) => Ok(Some(value.clone())),
+            MetaDef::Static(value) => {
+                self.spend_bytes(json_size(value))?;
+                Ok(Some(value.clone()))
+            }
             MetaDef::GpuSelector(probe) => {
                 let probe: Vec<String> = probe
                     .iter()
                     .map(|m| self.subst(m))
                     .collect::<Result<_, _>>()?;
-                Ok(gpu_selector(self.data, &probe))
+                let selector = self.gpu_selector(&probe)?;
+                if let Some(value) = &selector {
+                    self.spend_bytes(json_size(value))?;
+                }
+                Ok(selector)
             }
         }
+    }
+
+    /// The GPU selector's metadata: the distinct `(vendor, id)` pairs among
+    /// the probe metrics' counter and gauge series, when there is more than
+    /// one.
+    fn gpu_selector(&self, probe: &[String]) -> Result<Option<Value>, TemplateError> {
+        let mut seen: BTreeSet<(Option<String>, i64)> = BTreeSet::new();
+        for metric in probe {
+            for labels in self.series(metric, false)? {
+                let Some(id) = labels.get("id").and_then(|v| v.parse::<i64>().ok()) else {
+                    continue;
+                };
+                seen.insert((labels.get("vendor").cloned(), id));
+            }
+        }
+        if seen.len() <= 1 {
+            return Ok(None);
+        }
+        let mut ids: Vec<i64> = seen.iter().map(|(_, id)| *id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        let gpus: Vec<Value> = seen
+            .iter()
+            .map(|(vendor, id)| match vendor {
+                Some(v) => serde_json::json!({ "id": id, "vendor": v }),
+                None => serde_json::json!({ "id": id }),
+            })
+            .collect();
+        Ok(Some(
+            serde_json::json!({ "enabled": true, "ids": ids, "gpus": gpus }),
+        ))
     }
 
     fn group(&mut self, def: &GroupDef) -> Result<Option<Group>, TemplateError> {
@@ -1493,6 +1860,15 @@ fn push_promql_escaped(out: &mut String, text: &str) {
     }
 }
 
+/// The length of `text` once [`push_promql_escaped`] has escaped it.
+fn promql_escaped_len(text: &str) -> usize {
+    text.len()
+        + text
+            .chars()
+            .filter(|c| matches!(c, '\\' | '"' | '\n'))
+            .count()
+}
+
 /// An estimate of `value`'s size as JSON, for the byte budget.
 fn json_size(value: &Value) -> usize {
     match value {
@@ -1530,7 +1906,11 @@ fn walk<T>(
                 let (values, from_catalog) = repeat_values(&node.repeat.over, scope)?;
                 for value in values {
                     scope.spend_node()?;
-                    let saved = scope.values.clone();
+                    // A pass's bindings are not removed after it: `check`
+                    // refuses a reference to a repeat variable outside its
+                    // body and a variable that shadows another name, so a
+                    // stale binding is never read, and the next pass or
+                    // repeat that binds the name overwrites it.
                     match value {
                         RepeatValue::Text(text) => scope.bind(var, text, from_catalog),
                         RepeatValue::Fields(fields) => {
@@ -1539,9 +1919,7 @@ fn walk<T>(
                             }
                         }
                     }
-                    let result = walk(&node.body, scope, visit);
-                    scope.values = saved;
-                    result?;
+                    walk(&node.body, scope, visit)?;
                 }
             }
         }
@@ -1556,17 +1934,12 @@ fn repeat_values(
 ) -> Result<(Vec<RepeatValue>, bool), TemplateError> {
     Ok(match over {
         RepeatOver::Values(values) => (values.clone(), false),
-        RepeatOver::LabelValues {
-            metric,
-            label,
-            sort,
-        } => {
+        RepeatOver::LabelValues(lv) => {
             let mut values: Vec<String> = scope
-                .data
-                .label_values(&scope.subst(metric)?, &scope.subst(label)?)
+                .label_values(&scope.subst(&lv.metric)?, &scope.subst(&lv.label)?)?
                 .into_iter()
                 .collect();
-            sort_label_values(&mut values, *sort);
+            sort_label_values(&mut values, lv.sort);
             (values.into_iter().map(RepeatValue::Text).collect(), true)
         }
     })
@@ -1583,38 +1956,6 @@ fn sort_label_values(values: &mut [String], sort: LabelSort) {
             Err(_) => (1, 0),
         });
     }
-}
-
-/// The GPU selector's metadata: the distinct `(vendor, id)` pairs among the
-/// probe metrics' counter and gauge series, when there is more than one.
-fn gpu_selector(data: &dyn MetricsSource, probe: &[String]) -> Option<Value> {
-    let mut seen: BTreeSet<(Option<String>, i64)> = BTreeSet::new();
-    for metric in probe {
-        for labels in data
-            .counter_labels(metric)
-            .into_iter()
-            .chain(data.gauge_labels(metric))
-        {
-            let Some(id) = labels.get("id").and_then(|v| v.parse::<i64>().ok()) else {
-                continue;
-            };
-            seen.insert((labels.get("vendor").cloned(), id));
-        }
-    }
-    if seen.len() <= 1 {
-        return None;
-    }
-    let mut ids: Vec<i64> = seen.iter().map(|(_, id)| *id).collect();
-    ids.sort_unstable();
-    ids.dedup();
-    let gpus: Vec<Value> = seen
-        .iter()
-        .map(|(vendor, id)| match vendor {
-            Some(v) => serde_json::json!({ "id": id, "vendor": v }),
-            None => serde_json::json!({ "id": id }),
-        })
-        .collect();
-    Some(serde_json::json!({ "enabled": true, "ids": ids, "gpus": gpus }))
 }
 
 #[cfg(test)]
@@ -1644,6 +1985,12 @@ mod tests {
 
     fn gauge(id: &str) -> Value {
         json!({ "kind": "gauge", "title": id, "id": id, "unit": "count", "query": id })
+    }
+
+    /// A plot per `label_values` value `${v}` of `id` on `m`.
+    fn per_value() -> Value {
+        json!({ "kind": "gauge", "title": "${v}", "id": "${v}", "unit": "count",
+                "query": "m{id=\"${v}\"}" })
     }
 
     fn expand_with(template: &str, data: &Catalog, params: &[(&str, &str)]) -> Value {
@@ -2173,7 +2520,7 @@ mod tests {
             plots(
                 json!({}),
                 json!([{ "repeat": { "var": "v", "in": { "label_values":
-                    { "metric": "m", "label": "id", "sort": sort } } }, "body": [gauge("${v}")] }]),
+                    { "metric": "m", "label": "id", "sort": sort } } }, "body": [per_value()] }]),
             )
         };
         assert_eq!(
@@ -2187,7 +2534,7 @@ mod tests {
         let default = plots(
             json!({}),
             json!([{ "repeat": { "var": "v", "in": { "label_values":
-                { "metric": "m", "label": "id" } } }, "body": [gauge("${v}")] }]),
+                { "metric": "m", "label": "id" } } }, "body": [per_value()] }]),
         );
         assert_eq!(
             ids(&expand(&default, &data)),
@@ -2659,16 +3006,639 @@ mod tests {
             let SectionDef::Section(body) = section else {
                 continue;
             };
-            let params = BTreeMap::new();
-            let mut scope = Scope::new(&data, &params);
-            scope.bind_lets(&t.lets).unwrap();
-            scope.bind_lets(&body.lets).unwrap();
-            walk(&body.groups, &mut scope, &mut |def, scope| {
-                scope.group(def).map(|_| ())
-            })
-            .unwrap();
-            assert!(scope.nodes.get() < MAX_NODES / 10, "{}", body.route);
-            assert!(scope.bytes.get() < MAX_TEXT_BYTES / 10, "{}", body.route);
+            let budget = Budget::default();
+            t.expand_body(&data, body, Vec::new(), &BTreeMap::new(), &budget)
+                .unwrap();
+            assert!(budget.nodes.get() < MAX_NODES / 10, "{}", body.route);
+            assert!(budget.bytes.get() < MAX_TEXT_BYTES / 10, "{}", body.route);
+            assert!(budget.work.get() < MAX_WORK / 10, "{}", body.route);
         }
+    }
+
+    /// Expand `/t` of `template` and return what it spent.
+    fn spent(template: &str, data: &Catalog) -> Budget {
+        let t = SectionTemplate::parse(template).unwrap_or_else(|e| panic!("{e}"));
+        let SectionDef::Section(body) = &t.sections[0] else {
+            panic!("not a section");
+        };
+        let budget = Budget::default();
+        t.expand_body(data, body, Vec::new(), &BTreeMap::new(), &budget)
+            .unwrap_or_else(|e| panic!("{e}"));
+        budget
+    }
+
+    fn expand_err(template: &str, data: &Catalog, params: &[(&str, &str)]) -> String {
+        let t = SectionTemplate::parse(template).unwrap_or_else(|e| panic!("{e}"));
+        let params = params
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        t.expand(data, "/t", Vec::new(), &params).err().unwrap().0
+    }
+
+    /// The largest allocation this test binary's threads request while
+    /// [`peak_alloc`] is measuring them.
+    struct PeakAlloc;
+
+    thread_local! {
+        static MEASURING: Cell<bool> = const { Cell::new(false) };
+        static PEAK: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn note(size: usize) {
+        let _ = MEASURING.try_with(|on| {
+            if on.get() {
+                let _ = PEAK.try_with(|p| p.set(p.get().max(size)));
+            }
+        });
+    }
+
+    // SAFETY: every call forwards to `System` with the caller's arguments;
+    // `note` only reads and writes two const-initialized thread-locals.
+    unsafe impl std::alloc::GlobalAlloc for PeakAlloc {
+        unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+            note(layout.size());
+            unsafe { std::alloc::System.alloc(layout) }
+        }
+        unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
+            note(layout.size());
+            unsafe { std::alloc::System.alloc_zeroed(layout) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+            unsafe { std::alloc::System.dealloc(ptr, layout) }
+        }
+        unsafe fn realloc(
+            &self,
+            ptr: *mut u8,
+            layout: std::alloc::Layout,
+            new_size: usize,
+        ) -> *mut u8 {
+            note(new_size);
+            unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    #[global_allocator]
+    static ALLOC: PeakAlloc = PeakAlloc;
+
+    /// `f`'s result and the largest single allocation it made on this thread.
+    fn peak_alloc<R>(f: impl FnOnce() -> R) -> (R, usize) {
+        PEAK.with(|p| p.set(0));
+        MEASURING.with(|on| on.set(true));
+        let out = f();
+        MEASURING.with(|on| on.set(false));
+        (out, PEAK.with(Cell::get))
+    }
+
+    /// A string that would be far over the byte budget is refused before
+    /// it is built, whatever its pieces are bound from: a let, a parameter,
+    /// a `values` field or a catalog value. Each would be about 2 GB; no
+    /// allocation during the refused expansion reaches 4 times the budget.
+    #[test]
+    fn a_string_over_the_byte_budget_is_refused_before_it_is_built() {
+        let big = "x".repeat(100_000);
+        let refs = |name: &str| format!("${{{name}}}").repeat(20_000);
+        let title_plot = |name: &str| json!({ "kind": "gauge", "title": refs(name), "id": "i", "unit": "count", "query": "q" });
+        let data = Catalog::default().gauge("m", &[&[("k", big.as_str())]]);
+        let cases = [
+            (
+                plots(json!({ "big": big }), json!([title_plot("big")])),
+                vec![],
+            ),
+            (
+                plots(json!({}), json!([title_plot("throughput")])),
+                vec![("throughput", big.as_str())],
+            ),
+            (
+                plots(
+                    json!({}),
+                    json!([{ "repeat": { "var": "o", "in": { "values": [{ "f": big }] } },
+                             "body": [title_plot("o.f")] }]),
+                ),
+                vec![],
+            ),
+            (
+                plots(
+                    json!({}),
+                    json!([{ "repeat": { "var": "v", "in": { "label_values": { "metric": "m", "label": "k" } } },
+                             "body": [title_plot("v")] }]),
+                ),
+                vec![],
+            ),
+        ];
+        for (template, params) in cases {
+            let t = SectionTemplate::parse(&template).unwrap();
+            let params = params
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            let (e, peak) =
+                peak_alloc(|| t.expand(&data, "/t", Vec::new(), &params).err().unwrap().0);
+            assert_eq!(
+                e,
+                format!("/t: expands to more than {MAX_TEXT_BYTES} bytes")
+            );
+            assert!(peak < 4 * MAX_TEXT_BYTES, "allocated {peak} bytes at once");
+        }
+        // An escaped catalog value is charged at its escaped length.
+        let quotes = "\"".repeat(MAX_TEXT_BYTES / 2 + 1);
+        let data = Catalog::default().gauge("m", &[&[("k", quotes.as_str())]]);
+        let t = plots(
+            json!({}),
+            json!([{ "repeat": { "var": "v", "in": { "label_values": { "metric": "m", "label": "k" } } },
+                     "body": [{ "kind": "gauge", "title": "t", "id": "i", "unit": "count",
+                                "query": "m{k=\"${v}\"}" }] }]),
+        );
+        let t = SectionTemplate::parse(&t).unwrap();
+        let (e, peak) = peak_alloc(|| {
+            t.expand(&data, "/t", Vec::new(), &BTreeMap::new())
+                .err()
+                .unwrap()
+                .0
+        });
+        assert_eq!(
+            e,
+            format!("/t: expands to more than {MAX_TEXT_BYTES} bytes")
+        );
+        // The label value itself is copied at half the budget; the escaped
+        // copy, at the whole budget, is never started.
+        assert!(peak < MAX_TEXT_BYTES, "allocated {peak} bytes at once");
+    }
+
+    /// The work each predicate, repeat and computed value is charged: one
+    /// per predicate, one per series (or counter name) it reads.
+    #[test]
+    fn catalog_work_is_charged_per_series() {
+        // 3 counter, 2 gauge and 1 histogram series of `m`; 2 counter names.
+        let data = Catalog::default()
+            .counter("m", &[&[("id", "0")], &[("id", "1")], &[("id", "2")]])
+            .counter("other", &[&[]])
+            .gauge("m", &[&[("id", "0")], &[("id", "1")]])
+            .histogram("m", &[&[("id", "0")]]);
+        let when = |pred: Value| plots(json!({}), json!([{ "when": pred, "then": [] }]));
+        let cases = [
+            (when(json!({ "present": "m" })), 1 + 6),
+            (when(json!({ "has_counter": "m" })), 1 + 2),
+            (
+                when(json!({ "has_label": { "metric": "m", "label": "id" } })),
+                1 + 6,
+            ),
+            (
+                when(json!({ "distinct_gt": { "metrics": ["m", "m"], "by": ["id"], "n": 99 } })),
+                1 + 5 + 5,
+            ),
+            (
+                when(
+                    json!({ "distinct_gt": { "metrics": ["m", "m"], "by": ["id"], "n": 99, "each": true } }),
+                ),
+                1 + 6 + 6,
+            ),
+            (when(json!({ "not": { "all": [{ "any": [] }] } })), 3),
+            (
+                plots(json!({ "p": { "pred": { "present": "m" } } }), json!([])),
+                1 + 6,
+            ),
+            (
+                plots(
+                    json!({ "f": { "first_present": { "list": ["x", "m"], "default": "d" } } }),
+                    json!([]),
+                ),
+                6,
+            ),
+            (
+                plots(
+                    json!({}),
+                    json!([{ "repeat": { "var": "v", "in": { "label_values": { "metric": "m", "label": "id" } } },
+                             "body": [] }]),
+                ),
+                6,
+            ),
+            (
+                doc(json!([{ "name": "T", "route": "/t", "metadata": {
+                    "s": { "computed": "gpu_selector", "probe": ["m", "m"] } } }])),
+                5 + 5,
+            ),
+            (
+                plots(
+                    json!({}),
+                    json!([{ "split": { "when": { "present": "m" }, "plots": [gauge("a"), gauge("b")] } }]),
+                ),
+                1 + 6,
+            ),
+        ];
+        for (template, work) in cases {
+            assert_eq!(spent(&template, &data).work.get(), work, "{template}");
+        }
+    }
+
+    /// The reviewer's case: a 5000-series metric listed 200 times in a
+    /// `distinct_gt`, evaluated on each of 20 repeat passes, is 20 million
+    /// series reads. It is refused at the work limit.
+    #[test]
+    fn expansion_is_bounded_by_catalog_work() {
+        let ids: Vec<String> = (0..5000).map(|i| i.to_string()).collect();
+        let series: Vec<Vec<(&str, &str)>> = ids.iter().map(|i| vec![("id", i.as_str())]).collect();
+        let series: Vec<&[(&str, &str)]> = series.iter().map(Vec::as_slice).collect();
+        let data = Catalog::default().counter("m", &series);
+        let passes: Vec<String> = (0..20).map(|i| i.to_string()).collect();
+        let t = plots(
+            json!({}),
+            json!([{ "repeat": { "var": "r", "in": { "values": passes } }, "body": [
+                { "when": { "distinct_gt": { "metrics": vec!["m"; 200], "by": ["id"], "n": 1_000_000 } },
+                  "then": [] },
+            ] }]),
+        );
+        let start = std::time::Instant::now();
+        let e = expand_err(&t, &data, &[]);
+        assert_eq!(
+            e,
+            format!("/t: expands to more than {MAX_WORK} units of catalog work")
+        );
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    /// Strings, lets, section and group metadata, the GPU selector and
+    /// percentiles are each charged to the byte budget.
+    #[test]
+    fn bytes_are_charged_for_each_kind_of_output() {
+        let data = Catalog::default().gauge(
+            "gpu",
+            &[
+                &[("id", "0"), ("vendor", "a")],
+                &[("id", "1"), ("vendor", "a")],
+            ],
+        );
+        let k = "x".repeat(1000);
+        let with_group_meta = |v: &str| {
+            section(
+                json!({}),
+                json!([{ "name": "G", "id": "g", "metadata": { "m": v },
+                         "subgroups": [{ "plots": [gauge("a")] }] }]),
+            )
+        };
+        let with_section_meta =
+            |meta: Value| doc(json!([{ "name": "T", "route": "/t", "metadata": { "m": meta } }]));
+        let with_percentiles = |n: usize| {
+            plots(
+                json!({}),
+                json!([{ "kind": "histogram", "title": "h", "id": "h", "unit": "time",
+                         "subtype": "percentiles", "query": "q", "percentiles": vec![0.5; n] }]),
+            )
+        };
+        let with_let = |v: &str| plots(json!({ "l": v }), json!([]));
+        let bytes = |t: &str| spent(t, &data).bytes.get();
+        assert!(bytes(&with_group_meta(&k)) >= bytes(&with_group_meta("")) + 1000);
+        assert!(
+            bytes(&with_section_meta(json!({ "value": k })))
+                >= bytes(&with_section_meta(json!({ "value": "" }))) + 1000
+        );
+        assert!(
+            bytes(&with_section_meta(
+                json!({ "computed": "gpu_selector", "probe": ["gpu"] })
+            )) > bytes(&with_section_meta(
+                json!({ "computed": "gpu_selector", "probe": ["none"] })
+            ))
+        );
+        assert!(bytes(&with_percentiles(1000)) >= bytes(&with_percentiles(0)) + 8000);
+        assert!(bytes(&with_let(&k)) >= bytes(&with_let("")) + 1000);
+    }
+
+    /// Serde's derived impls read a struct from a JSON array of its fields
+    /// in order; every struct position refuses one.
+    #[test]
+    fn arrays_in_place_of_objects_are_refused() {
+        let plot = json!(["gauge", "Title", "pid", "count", null, "q"]);
+        let cases = [
+            (
+                plots(json!({}), json!([plot])),
+                "expected an object, found an array",
+            ),
+            (
+                section(json!({}), json!([["G", "g", {}, []]])),
+                "expected an object",
+            ),
+            (
+                section(
+                    json!({}),
+                    json!([{ "name": "G", "id": "g", "subgroups": [["S", null, []]] }]),
+                ),
+                "expected an object",
+            ),
+            (doc(json!([["T", "/t"]])), "expected an object"),
+            (
+                plots(
+                    json!({}),
+                    json!([{ "when": { "has_label": ["m", "l", null] }, "then": [] }]),
+                ),
+                "expected an object",
+            ),
+            (
+                plots(
+                    json!({}),
+                    json!([{ "when": { "distinct_gt": [["m"], ["id"], 1, false, []] }, "then": [] }]),
+                ),
+                "expected an object",
+            ),
+            (
+                plots(
+                    json!({}),
+                    json!([{ "repeat": ["v", { "values": [] }], "body": [] }]),
+                ),
+                "expected an object",
+            ),
+            (
+                plots(
+                    json!({}),
+                    json!([{ "repeat": { "var": "v", "in": { "label_values": ["m", "l", "str"] } }, "body": [] }]),
+                ),
+                "expected an object",
+            ),
+            (
+                plots(
+                    json!({}),
+                    json!([{ "split": [{ "present": "a" }, [gauge("a"), gauge("b")]] }]),
+                ),
+                "expected an object",
+            ),
+            (
+                plots(
+                    json!({}),
+                    json!([{ "split": { "when": { "present": "a" }, "plots": [plot, gauge("b")] } }]),
+                ),
+                "expected an object",
+            ),
+            (
+                plots(
+                    json!({}),
+                    json!([{ "split": { "when": { "present": "a" }, "plots": [gauge("b")] } }]),
+                ),
+                "a split has 2 plots, not 1",
+            ),
+            (
+                plots(
+                    json!({}),
+                    json!([{ "rate_mean": ["t", "i", "s", null, "time"] }]),
+                ),
+                "expected an object",
+            ),
+            (
+                plots(json!({ "f": { "first_present": [["m"], "d"] } }), json!([])),
+                "expected an object",
+            ),
+            (
+                doc(
+                    json!([{ "name": "T", "route": "/t", "metadata": { "k": ["gpu_selector", []] } }]),
+                ),
+                "section metadata is",
+            ),
+            (
+                r#"[1, [], []]"#.to_string(),
+                "expected an object, found an array",
+            ),
+        ];
+        for (template, needle) in cases {
+            assert_refused(&template, needle);
+        }
+    }
+
+    #[test]
+    fn repeated_keys_are_refused() {
+        let cases = [
+            r#"{"schema": 1, "schema": 1, "sections": []}"#,
+            r#"{"schema": 1, "let": {"a": "x", "a": "y"}, "sections": []}"#,
+            r#"{"schema": 1, "sections": [{"name": "T", "route": "/t", "route": "/u"}]}"#,
+            r#"{"schema": 1, "sections": [{"name": "T", "route": "/t", "metadata": {"m": {"value": {"k": 1, "k": 2}}}}]}"#,
+            r#"{"schema": 1, "sections": [{"name": "T", "route": "/t", "groups": [{"name": "G", "id": "g", "metadata": {"s": 1, "s": 2}}]}]}"#,
+        ];
+        for template in cases {
+            assert_refused(template, "is repeated");
+        }
+    }
+
+    #[test]
+    fn sections_are_capped_and_routes_checked() {
+        let many: Vec<Value> = (0..=MAX_SECTIONS)
+            .map(|i| json!({ "name": "S", "route": format!("/s{i}") }))
+            .collect();
+        assert_refused(&doc(json!(many)), &format!("at most {MAX_SECTIONS}"));
+        let fine: Vec<Value> = (0..MAX_SECTIONS - 1)
+            .map(|i| json!({ "name": "S", "route": format!("/s{i}") }))
+            .chain([json!({ "builtin": "query" })])
+            .collect();
+        assert!(SectionTemplate::parse(&doc(json!(fine))).is_ok());
+        let long = format!("/{}", "a".repeat(MAX_SECTION_NAME_BYTES));
+        for route in [
+            "",
+            "x",
+            "/",
+            "/a//b",
+            "/a/",
+            "/A",
+            "/a/../b",
+            "/a.b",
+            "//a",
+            long.as_str(),
+        ] {
+            assert_refused(
+                &doc(json!([{ "name": "S", "route": route }])),
+                &format!("route {route:?} is not"),
+            );
+        }
+        for route in ["/hw_sensors", "/a-b/c_1", "/0"] {
+            assert!(SectionTemplate::parse(&doc(json!([{ "name": "S", "route": route }]))).is_ok());
+        }
+        let long_name = "n".repeat(MAX_SECTION_NAME_BYTES + 1);
+        for name in ["", long_name.as_str()] {
+            assert_refused(
+                &doc(json!([{ "name": name, "route": "/a" }])),
+                "section name",
+            );
+        }
+    }
+
+    /// A catalog value in a PromQL field goes only inside a double-quoted
+    /// string, where it is escaped.
+    #[test]
+    fn catalog_values_in_promql_fields_must_be_double_quoted() {
+        let rep = |plot: Value| {
+            plots(
+                json!({}),
+                json!([{ "repeat": { "var": "v", "in": { "label_values": { "metric": "m", "label": "k" } } },
+                         "body": [plot] }]),
+            )
+        };
+        let query = |q: &str| json!({ "kind": "gauge", "title": "t", "id": "i", "unit": "count", "query": q });
+        let refused = [
+            query("m{k='${v}'}"),
+            query("m{k=`${v}`}"),
+            query("${v}"),
+            query(r#"m{k="a"} + ${v}"#),
+            query(r#"m{k="a\"b"} + ${v}"#),
+            json!({ "kind": "gauge", "title": "t", "id": "i", "unit": "count", "query": "q",
+                    "query_total": "m{k='${v}'}" }),
+            json!({ "rate_mean": { "title": "t", "id": "i", "selector": "h{k='${v}'}", "mean_unit": "time" } }),
+            json!({ "rate_mean": { "title": "t", "id": "i", "selector": "h", "rate": "c{k='${v}'}", "mean_unit": "time" } }),
+        ];
+        for plot in refused {
+            assert_refused(&rep(plot), "goes only inside a double-quoted string");
+        }
+        let accepted = [
+            query(r#"m{k="${v}"}"#),
+            query(r#"m{k="pre-${v}-post"}"#),
+            query(r#"m{k="a\"${v}"}"#),
+            query(r#"m{j='x"y', k="${v}"}"#),
+            json!({ "kind": "gauge", "title": "'${v}' ${v}", "id": "${v}", "unit": "count", "query": "q" }),
+        ];
+        for plot in accepted {
+            assert!(SectionTemplate::parse(&rep(plot.clone())).is_ok(), "{plot}");
+        }
+        // A newline in a label value is escaped too.
+        let data = Catalog::default().gauge("m", &[&[("k", "a\nb")]]);
+        let view = expand(&rep(query(r#"m{k="${v}"}"#)), &data);
+        assert_eq!(
+            view["groups"][0]["subgroups"][0]["plots"][0]["promql_query"],
+            "m{k=\"a\\nb\"}"
+        );
+    }
+
+    /// Every string field is checked for its names, in every position.
+    #[test]
+    fn every_string_field_is_checked() {
+        let bad = "${nope}";
+        let mut plot_fields = Vec::new();
+        for field in [
+            "title",
+            "id",
+            "query",
+            "unit_system",
+            "description",
+            "axis_label",
+            "row_label",
+            "style",
+            "query_total",
+        ] {
+            let mut p = gauge("p");
+            p[field] = json!(bad);
+            plot_fields.push(p);
+        }
+        let mut items: Vec<Value> = plot_fields.clone();
+        items.push(json!({ "split": { "when": { "present": "a" }, "plots": [gauge("a"), plot_fields[0].clone()] } }));
+        items.push(
+            json!({ "split": { "when": { "present": bad }, "plots": [gauge("a"), gauge("b")] } }),
+        );
+        for field in ["title", "id", "selector", "rate"] {
+            let mut rm = json!({ "title": "t", "id": "i", "selector": "s", "rate": "r", "mean_unit": "time" });
+            rm[field] = json!(bad);
+            items.push(json!({ "rate_mean": rm }));
+        }
+        for pred in [
+            json!({ "present": bad }),
+            json!({ "has_counter": bad }),
+            json!({ "has_label": { "metric": bad, "label": "l" } }),
+            json!({ "has_label": { "metric": "m", "label": bad } }),
+            json!({ "has_label": { "metric": "m", "label": "l", "value": bad } }),
+            json!({ "distinct_gt": { "metrics": [bad], "by": ["id"], "n": 1 } }),
+            json!({ "distinct_gt": { "metrics": ["m"], "by": [bad], "n": 1 } }),
+            json!({ "distinct_gt": { "metrics": ["m"], "by": ["id"], "int": [bad], "n": 1 } }),
+            json!({ "not": { "any": [{ "all": [{ "present": bad }] }] } }),
+        ] {
+            items.push(json!({ "when": pred, "then": [] }));
+        }
+        items.push(json!({ "repeat": { "var": "v", "in": { "label_values": { "metric": bad, "label": "l" } } }, "body": [] }));
+        items.push(json!({ "repeat": { "var": "v", "in": { "label_values": { "metric": "m", "label": bad } } }, "body": [] }));
+        for item in items {
+            assert_refused(
+                &plots(json!({}), json!([item.clone()])),
+                "unknown name `${nope}`",
+            );
+        }
+        let subgroups = [
+            json!({ "name": bad, "plots": [] }),
+            json!({ "description": bad, "plots": [] }),
+        ];
+        for sub in subgroups {
+            assert_refused(
+                &section(
+                    json!({}),
+                    json!([{ "name": "G", "id": "g", "subgroups": [sub] }]),
+                ),
+                "unknown name",
+            );
+        }
+        for (name, id) in [(bad, "g"), ("G", bad)] {
+            assert_refused(
+                &section(json!({}), json!([{ "name": name, "id": id }])),
+                "unknown name",
+            );
+        }
+        for lets in [
+            json!({ "l": bad }),
+            json!({ "l": { "first_present": { "list": [bad], "default": "d" } } }),
+            json!({ "l": { "first_present": { "list": [], "default": bad } } }),
+            json!({ "l": { "pred": { "present": bad } } }),
+        ] {
+            assert_refused(&plots(lets, json!([])), "unknown name");
+        }
+        assert_refused(
+            &doc(json!([{ "name": "T", "route": "/t", "metadata": {
+                "s": { "computed": "gpu_selector", "probe": [bad] } } }])),
+            "unknown name",
+        );
+        // A repeat over objects is used through its fields.
+        assert_refused(
+            &plots(
+                json!({}),
+                json!([{ "repeat": { "var": "o", "in": { "values": [{ "f": "1" }] } }, "body": [gauge("${o}")] }]),
+            ),
+            "names a repeat over objects",
+        );
+    }
+
+    #[test]
+    fn names_must_be_names() {
+        for param in ["a b", "1x", "", "a.b"] {
+            let t = json!({ "schema": 1, "params": [param], "sections": [] }).to_string();
+            assert_refused(&t, "is not a name");
+        }
+        assert_refused(&plots(json!({ "a-b": "x" }), json!([])), "is not a name");
+        for var in ["a-b", "a.b", "1"] {
+            assert_refused(
+                &plots(
+                    json!({}),
+                    json!([{ "repeat": { "var": var, "in": { "values": [] } }, "body": [] }]),
+                ),
+                "is not a name",
+            );
+        }
+        assert_refused(
+            &plots(
+                json!({}),
+                json!([{ "repeat": { "var": "o", "in": { "values": [{ "a-b": "1" }] } }, "body": [] }]),
+            ),
+            "is not a name",
+        );
+        assert_refused(
+            &plots(
+                json!({}),
+                json!([{ "when": { "distinct_gt": { "metrics": ["a"], "by": ["id"], "int": ["id"], "n": 1, "each": true } }, "then": [] }]),
+            ),
+            "takes one `by` label and no `int`",
+        );
+    }
+
+    #[test]
+    fn range_is_min_below_max() {
+        for range in [[5.0, 1.0], [1.0, 1.0]] {
+            let mut p = gauge("p");
+            p["range"] = json!(range);
+            assert_refused(&plots(json!({}), json!([p])), "min below max");
+        }
+    }
+
+    #[test]
+    fn params_lists_the_declared_parameters() {
+        let t = json!({ "schema": 1, "params": ["b", "a"], "sections": [] }).to_string();
+        let t = SectionTemplate::parse(&t).unwrap();
+        assert_eq!(t.params().collect::<Vec<_>>(), ["a", "b"]);
     }
 }

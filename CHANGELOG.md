@@ -725,18 +725,21 @@
   with `when`, `repeat`, `split` and `rate_mean` nodes over predicates on
   the metric catalog) and expands it against a recording into the same
   `View` JSON the section generators produce. Parsing reads `schema` first
-  and refuses a schema above 1 before anything else; it then refuses an
-  unknown field or enumerated value anywhere, an unknown or malformed
-  `${..}` name, a let that uses another let, an undeclared parameter, and
-  a duplicate route, in every branch whether or not a catalog would
-  expand it. Expanding one section is bounded at 20,000 nodes and 4 MiB of
-  strings. `dashboard::rezolus_template::json()` is the Rezolus agent's
-  template, one file per section under `crates/dashboard/sections/rezolus/`,
-  about 106 KB compact. All sixteen sections are converted; a test renders
-  each from the template and from its generator on thirteen metric
-  catalogs, and on a catalog of every named metric with each removed in
-  turn, and requires identical output. Nothing renders from the template
-  yet.
+  and refuses a schema above 1 before anything else. It then refuses, in
+  every branch whether or not a catalog would expand it: an unknown field
+  or enumerated value, an array where an object belongs, a repeated key,
+  an unknown or malformed `${..}` name, a catalog label value outside a
+  double-quoted string in a query, a let that uses another let, an
+  undeclared parameter, more than 64 sections, a malformed or duplicate
+  route. Expanding one section is bounded at 20,000 nodes, 4 MiB of
+  strings (checked before each piece is appended) and 2,000,000 units of
+  catalog work (one per predicate, series and counter name read).
+  `dashboard::rezolus_template::json()` is the Rezolus agent's template,
+  one file per section under `crates/dashboard/sections/rezolus/`, about
+  106 KB compact. All sixteen sections are converted; a test renders each
+  from the template and from its generator on thirteen metric catalogs,
+  and on a catalog of every named metric with each removed in turn, and
+  requires identical output. Nothing renders from the template yet.
 
 - `filesystem` sampler: tmpfs usage per mount. Every visible tmpfs mount is
   read on the same sweep into `filesystem_tmpfs_used`,
