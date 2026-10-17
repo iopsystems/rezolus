@@ -50,6 +50,7 @@ mod routes;
 mod state;
 mod tui;
 
+use ::dashboard::source_templates::TemplatePreference;
 use capture_registry::CaptureId;
 use state::AppState;
 
@@ -115,7 +116,9 @@ pub fn command() -> Command {
              the address (e.g. to reach it from another host).\n\n\
              The --templates/--category flags (service-extension dashboards) and the --proxy-*\n\
              flags (in-browser 'load from URL' fetching) are advanced; the input forms above\n\
-             need none of them.\n\n\
+             need none of them. A recording that carries a source's KPI template in its\n\
+             metadata renders it ahead of the built-in one; --registry-templates renders the\n\
+             built-in (or --templates DIR) template instead.\n\n\
              TERMINAL UI:\n    \
              Pass --tui to render in the terminal instead of a web browser: a live overview\n    \
              plus a drill-down browser of the same dashboard sections (CPU, network,\n    \
@@ -188,6 +191,19 @@ pub fn command() -> Command {
                 .help("Directory containing service extension template JSON files")
                 .value_parser(value_parser!(PathBuf))
                 .action(clap::ArgAction::Set),
+        )
+        .arg(
+            clap::Arg::new("REGISTRY_TEMPLATES")
+                .long("registry-templates")
+                .help(
+                    "Render each source's KPI sections from the viewer's template registry \
+                     (the built-in templates, or --templates DIR) instead of the template \
+                     the recording carries in its metadata (`service_queries`, as written \
+                     by `rezolus recording annotate` or by the producer). By \
+                     default the recording's template wins. A source the registry does \
+                     not know keeps its own template either way.",
+                )
+                .action(clap::ArgAction::SetTrue),
         )
         .arg(
             clap::Arg::new("CATEGORY")
@@ -312,6 +328,9 @@ pub struct Config {
     verbose: u8,
     listen: SocketAddr,
     templates_dir: Option<PathBuf>,
+    /// Whose KPI template renders when a recording carries one and the
+    /// registry knows the source too (`--registry-templates`).
+    template_preference: TemplatePreference,
     proxy_allow: proxy_allow::Allowlist,
     /// Buffer pool budget in bytes. Defaults to `default_cache_size_bytes()`.
     cache_size_bytes: usize,
@@ -429,6 +448,11 @@ impl TryFrom<ArgMatches> for Config {
                 .get_one::<SocketAddr>("LISTEN")
                 .unwrap_or(&"127.0.0.1:0".to_socket_addrs().unwrap().next().unwrap()),
             templates_dir: args.get_one::<PathBuf>("templates").cloned(),
+            template_preference: if args.get_flag("REGISTRY_TEMPLATES") {
+                TemplatePreference::Registry
+            } else {
+                TemplatePreference::Archive
+            },
             proxy_allow,
             cache_size_bytes,
             query_concurrency,
@@ -492,7 +516,13 @@ pub fn run(config: Config) {
                 );
                 std::process::exit(1);
             }
-            init_live_mode(&rt, url, &registry, Arc::clone(&pool))
+            init_live_mode(
+                &rt,
+                url,
+                &registry,
+                config.template_preference,
+                Arc::clone(&pool),
+            )
         }
         Source::Empty => {
             if config.selects_a_recording() {
@@ -505,7 +535,12 @@ pub fn run(config: Config) {
             info!("No input file — starting in upload-only mode");
             let empty_store: std::sync::Arc<dyn metriken_query::MetricsSource> =
                 std::sync::Arc::new(metriken_query::MemoryStore::builder().build());
-            AppState::with_pool(empty_store, registry.clone(), Arc::clone(&pool))
+            AppState::with_pool(
+                empty_store,
+                registry.clone(),
+                config.template_preference,
+                Arc::clone(&pool),
+            )
         }
     };
 
@@ -638,7 +673,8 @@ fn init_file_mode(
         ),
     );
 
-    let mut service_exts = metadata::extract_service_extension_metadata(path, registry);
+    let mut service_exts =
+        metadata::extract_service_extension_metadata(path, registry, config.template_preference);
     metadata::validate_service_extensions(reader.as_ref(), &mut service_exts);
 
     info!("Computing file checksum...");
@@ -652,6 +688,7 @@ fn init_file_mode(
     let state = AppState::with_pool(
         reader as std::sync::Arc<dyn metriken_query::MetricsSource>,
         registry.clone(),
+        config.template_preference,
         Arc::clone(&pool),
     );
     *state.parquet_path.write() = Some(path.to_path_buf());
@@ -965,6 +1002,7 @@ fn init_file_mode_rez(
     let state = AppState::with_pool(
         source(capture_registry::BASELINE_ID, &b_labels, b_reader),
         registry.clone(),
+        config.template_preference,
         Arc::clone(&pool),
     );
     *state.parquet_path.write() = Some(path.to_path_buf());
@@ -1073,12 +1111,18 @@ fn init_file_mode_combined_ab(
         .with_filename(display_filename.clone()),
     );
 
-    let mut baseline_service_exts =
-        metadata::extract_service_extension_metadata(&extracted.baseline_path, registry);
+    let mut baseline_service_exts = metadata::extract_service_extension_metadata(
+        &extracted.baseline_path,
+        registry,
+        config.template_preference,
+    );
     metadata::validate_service_extensions(baseline_reader.as_ref(), &mut baseline_service_exts);
     log_service_exts(&baseline_service_exts, "baseline");
-    let mut experiment_service_exts =
-        metadata::extract_service_extension_metadata(&extracted.experiment_path, registry);
+    let mut experiment_service_exts = metadata::extract_service_extension_metadata(
+        &extracted.experiment_path,
+        registry,
+        config.template_preference,
+    );
     metadata::validate_service_extensions(experiment_reader.as_ref(), &mut experiment_service_exts);
     log_service_exts(&experiment_service_exts, "experiment");
 
@@ -1094,12 +1138,15 @@ fn init_file_mode_combined_ab(
     let state = AppState::with_pool(
         baseline_reader as std::sync::Arc<dyn metriken_query::MetricsSource>,
         registry.clone(),
+        config.template_preference,
         Arc::clone(&pool),
     );
     // Point parquet_path at the *extracted* baseline parquet (not the
-    // tar itself) so `regenerate_dashboards` and other parquet-aware
-    // consumers can read its metadata. Same for the experiment side via
-    // cli_experiment_path.
+    // tar itself): `regenerate_dashboards` takes the file size and the
+    // filename stem from it, and Save as Report re-reads it. The experiment
+    // side's path goes in cli_experiment_path, which Save as Report also
+    // reads and detach clears. Templates come from each capture's own
+    // metadata, not from these paths.
     *state.parquet_path.write() = Some(extracted.baseline_path.clone());
     *state.cli_experiment_path.write() = Some(extracted.experiment_path.clone());
     state
@@ -1191,8 +1238,11 @@ fn validate_category_at_startup(
         eprintln!("--category {cat_name:?} requires both a baseline and an experiment capture");
         std::process::exit(1);
     });
-    let mut experiment_exts =
-        metadata::extract_service_extension_metadata(experiment_path, registry);
+    let mut experiment_exts = metadata::extract_service_extension_metadata(
+        experiment_path,
+        registry,
+        config.template_preference,
+    );
     if let Ok(exp_reader) =
         metriken_query::ParquetReader::open_with_pool(experiment_path, Arc::clone(&pool))
     {
@@ -1248,7 +1298,8 @@ fn attach_cli_experiment(
     *state.cli_experiment_path.write() = Some(exp_path.to_path_buf());
     info!("Attached experiment capture: {}", exp_path.display());
 
-    let mut exp_exts = metadata::extract_service_extension_metadata(exp_path, registry);
+    let mut exp_exts =
+        metadata::extract_service_extension_metadata(exp_path, registry, state.template_preference);
     if let Some(exp_data) = state.captures.get(CaptureId::Experiment) {
         metadata::validate_service_extensions(exp_data.as_ref(), &mut exp_exts);
     }
@@ -1275,6 +1326,7 @@ fn init_live_mode(
     rt: &tokio::runtime::Runtime,
     url: &Url,
     registry: &TemplateRegistry,
+    template_preference: TemplatePreference,
     pool: Arc<metriken_storage::BufferPool>,
 ) -> AppState {
     info!("Connecting to live agent at {url}...");
@@ -1304,7 +1356,12 @@ fn init_live_mode(
         version = info.version
     );
 
-    let state = AppState::with_pool(session.reader(), registry.clone(), pool);
+    let state = AppState::with_pool(
+        session.reader(),
+        registry.clone(),
+        template_preference,
+        pool,
+    );
     let context = dashboard::dashboard::build_dashboard_context(None, &[], None, &[]);
     *state.sections.write() = state::LazySectionStore::new(context);
     state.install_live(session);
@@ -1463,6 +1520,234 @@ mod tests {
         assert_eq!(
             fm["events"]["events"][0]["description"], "rollout",
             "events must be nested (as parsed JSON) under the `events` key of file_metadata"
+        );
+    }
+
+    /// A one-recording `.dendro` whose source is `source`, with `extra` added
+    /// to its source metadata. Built as a `.rez` and converted, which carries
+    /// the recording's metadata into the dendro source's.
+    fn dendro_with_metadata(
+        dir: &std::path::Path,
+        source: &str,
+        extra: &[(&str, &str)],
+    ) -> std::path::PathBuf {
+        use crate::recorder::rez_sqlite::RezDb;
+        let rez_path = dir.join("rec.rez");
+        crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
+            &rez_path,
+            &[(source, "web-01")],
+        );
+        {
+            let db = RezDb::open(&rez_path).unwrap();
+            let recs = db.read_recordings().unwrap();
+            let mut md = recs[0].meta.metadata.clone();
+            for (k, v) in extra {
+                md.insert(k.to_string(), v.to_string());
+            }
+            db.update_recording_metadata(recs[0].id, &md).unwrap();
+        }
+        let dendro_path = dir.join("rec.dendro");
+        rez::to_dendro::convert_v3_to_dendro(&rez_path, &dendro_path).unwrap();
+        dendro_path
+    }
+
+    /// A one-KPI template whose KPI title names where it came from.
+    fn titled_template(service: &str, title: &str) -> String {
+        serde_json::json!({
+            "service_name": service,
+            "kpis": [{"role": "throughput", "title": title, "query": "up", "type": "gauge"}],
+        })
+        .to_string()
+    }
+
+    /// The (source, first KPI title) pairs and section routes the viewer built
+    /// for `path` with the CLI flags `flags`, against a registry that knows
+    /// two services, `known` and `other`.
+    fn served_templates(
+        path: &std::path::Path,
+        flags: &[&str],
+    ) -> (Vec<(String, String)>, Vec<String>) {
+        let mut argv = vec!["view", path.to_str().unwrap()];
+        argv.extend_from_slice(flags);
+        let config = super::Config::try_from(super::command().get_matches_from(argv)).unwrap();
+        let registry = ::dashboard::TemplateRegistry::from_templates(
+            ["known", "other"]
+                .iter()
+                .map(|s| serde_json::from_str(&titled_template(s, "from the registry")).unwrap())
+                .collect(),
+        );
+        let pool = metriken_storage::BufferPool::new(8 * 1024 * 1024);
+        let state = super::init_file_mode(&config, path, &registry, pool);
+        let sections = state.sections.read();
+        let exts = sections
+            .context()
+            .service_exts
+            .iter()
+            .map(|(s, e)| (s.clone(), e.kpis[0].title.clone()))
+            .collect();
+        let routes = sections
+            .sections()
+            .iter()
+            .map(|s| s.route.clone())
+            .collect();
+        (exts, routes)
+    }
+
+    /// A dendro source carrying a template for a service the registry does
+    /// not know renders that template's section.
+    #[test]
+    fn a_dendro_sources_own_template_renders_for_an_unknown_service() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dendro_with_metadata(
+            dir.path(),
+            "acme",
+            &[("service_queries", &titled_template("acme", "carried"))],
+        );
+        let (exts, routes) = served_templates(&path, &[]);
+        assert_eq!(exts, [("acme".to_string(), "carried".to_string())]);
+        assert!(
+            routes.iter().any(|r| r == "/service/acme"),
+            "the carried template's section is listed: {routes:?}"
+        );
+    }
+
+    /// For a service the registry knows, the archive's template wins, and
+    /// `--registry-templates` renders the registry's instead.
+    #[test]
+    fn the_archives_template_wins_unless_the_registry_is_preferred() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dendro_with_metadata(
+            dir.path(),
+            "known",
+            &[("service_queries", &titled_template("known", "carried"))],
+        );
+        let (exts, _) = served_templates(&path, &[]);
+        assert_eq!(exts, [("known".to_string(), "carried".to_string())]);
+        let (exts, _) = served_templates(&path, &["--registry-templates"]);
+        assert_eq!(
+            exts,
+            [("known".to_string(), "from the registry".to_string())]
+        );
+    }
+
+    /// A template in the metadata that does not parse falls back to the
+    /// registry's for that source rather than failing the load.
+    #[test]
+    fn a_malformed_carried_template_falls_back_to_the_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dendro_with_metadata(
+            dir.path(),
+            "known",
+            &[("service_queries", r#"{"service_name": 7}"#)],
+        );
+        let (exts, _) = served_templates(&path, &[]);
+        assert_eq!(
+            exts,
+            [("known".to_string(), "from the registry".to_string())]
+        );
+    }
+
+    /// A recording whose `source` is a JSON array (the shape a combined
+    /// parquet's footer has, here in a dendro source's metadata) with a
+    /// template annotated at the top level: the template renders under its
+    /// own `service_name`, replacing that source's registry entry, and the
+    /// other sources keep the registry's. No section is named after the
+    /// array.
+    #[test]
+    fn a_top_level_template_on_a_combined_source_is_keyed_by_its_service_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let psm = serde_json::json!({
+            "known": {"0": {"version": "1"}},
+            "other": {"0": {"version": "1"}},
+            "rezolus": {"0": {"version": "6"}},
+        })
+        .to_string();
+        let path = dendro_with_metadata(
+            dir.path(),
+            "combined",
+            &[
+                ("source", r#"["known","other","rezolus"]"#),
+                ("per_source_metadata", &psm),
+                ("service_queries", &titled_template("known", "carried")),
+            ],
+        );
+        let (exts, routes) = served_templates(&path, &[]);
+        assert_eq!(
+            exts,
+            [
+                ("known".to_string(), "carried".to_string()),
+                ("other".to_string(), "from the registry".to_string()),
+            ]
+        );
+        assert!(
+            !routes.iter().any(|r| r.contains('[')),
+            "no section is named after the source array: {routes:?}"
+        );
+        let (exts, _) = served_templates(&path, &["--registry-templates"]);
+        assert_eq!(
+            exts,
+            [
+                ("known".to_string(), "from the registry".to_string()),
+                ("other".to_string(), "from the registry".to_string()),
+            ]
+        );
+    }
+
+    /// A `.rez` simple capture (a source with no template and no Rezolus
+    /// metrics) is classified from its recording's metadata, so its section
+    /// is named by its `source`, as the same capture's parquet and the WASM
+    /// viewer name it, rather than by the archive's filename.
+    #[test]
+    fn a_rez_simple_capture_is_named_by_its_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("simple_capture.rez");
+        crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
+            &path,
+            &[("127.0.0.1-18651", "web-01")],
+        );
+        let (exts, routes) = served_templates(&path, &[]);
+        assert!(exts.is_empty(), "{exts:?}");
+        assert!(
+            routes.iter().any(|r| r == "/source/127.0.0.1-18651"),
+            "{routes:?}"
+        );
+        assert!(
+            !routes.iter().any(|r| r == "/source/simple_capture"),
+            "{routes:?}"
+        );
+    }
+
+    /// Each recording of a two-recording archive renders the template its own
+    /// metadata carries: the experiment's is read from its recording, not
+    /// from a parquet path the archive does not have.
+    #[test]
+    fn each_recording_of_an_archive_renders_its_own_template() {
+        use crate::recorder::rez_sqlite::RezDb;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
+            &path,
+            &[("alpha", "web-01"), ("beta", "web-01")],
+        );
+        {
+            let db = RezDb::open(&path).unwrap();
+            for rec in db.read_recordings().unwrap() {
+                let source = rec.meta.labels["source"].clone();
+                let mut md = rec.meta.metadata.clone();
+                md.insert(
+                    "service_queries".to_string(),
+                    titled_template(&source, &format!("{source}'s own")),
+                );
+                db.update_recording_metadata(rec.id, &md).unwrap();
+            }
+        }
+        let (exts, _) = served_templates(&path, &[]);
+        assert_eq!(
+            exts,
+            [
+                ("alpha".to_string(), "alpha's own".to_string()),
+                ("beta".to_string(), "beta's own".to_string()),
+            ]
         );
     }
 

@@ -6,6 +6,7 @@ pub mod metric_catalog;
 mod plot;
 mod service_extension;
 pub mod source_kind;
+pub mod source_templates;
 
 pub use events::{Event, Events};
 // Re-export for callers that use &dyn MetricsSource through the dashboard crate.
