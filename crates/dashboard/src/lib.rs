@@ -4,6 +4,10 @@ pub mod display_wire;
 pub mod events;
 pub mod metric_catalog;
 mod plot;
+pub mod rezolus_template;
+pub mod section_template;
+#[cfg(test)]
+mod section_template_tests;
 mod service_extension;
 pub mod source_kind;
 

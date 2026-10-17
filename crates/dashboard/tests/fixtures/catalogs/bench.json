@@ -1,0 +1,12356 @@
+{
+"counter": {
+"blockio_bytes": [
+{
+"op": "discard"
+},
+{
+"op": "flush"
+},
+{
+"op": "read"
+},
+{
+"op": "write"
+}
+],
+"blockio_errors": [
+{
+"error": "io",
+"op": "discard"
+},
+{
+"error": "io",
+"op": "flush"
+},
+{
+"error": "io",
+"op": "read"
+},
+{
+"error": "io",
+"op": "write"
+},
+{
+"error": "nospc",
+"op": "discard"
+},
+{
+"error": "nospc",
+"op": "flush"
+},
+{
+"error": "nospc",
+"op": "read"
+},
+{
+"error": "nospc",
+"op": "write"
+},
+{
+"error": "other",
+"op": "discard"
+},
+{
+"error": "other",
+"op": "flush"
+},
+{
+"error": "other",
+"op": "read"
+},
+{
+"error": "other",
+"op": "write"
+},
+{
+"error": "protection",
+"op": "discard"
+},
+{
+"error": "protection",
+"op": "flush"
+},
+{
+"error": "protection",
+"op": "read"
+},
+{
+"error": "protection",
+"op": "write"
+},
+{
+"error": "target",
+"op": "discard"
+},
+{
+"error": "target",
+"op": "flush"
+},
+{
+"error": "target",
+"op": "read"
+},
+{
+"error": "target",
+"op": "write"
+},
+{
+"error": "timeout",
+"op": "discard"
+},
+{
+"error": "timeout",
+"op": "flush"
+},
+{
+"error": "timeout",
+"op": "read"
+},
+{
+"error": "timeout",
+"op": "write"
+},
+{
+"error": "unsupported",
+"op": "discard"
+},
+{
+"error": "unsupported",
+"op": "flush"
+},
+{
+"error": "unsupported",
+"op": "read"
+},
+{
+"error": "unsupported",
+"op": "write"
+}
+],
+"blockio_operations": [
+{
+"op": "discard"
+},
+{
+"op": "flush"
+},
+{
+"op": "read"
+},
+{
+"op": "write"
+}
+],
+"blockio_requeues": [
+{
+"op": "discard"
+},
+{
+"op": "flush"
+},
+{
+"op": "read"
+},
+{
+"op": "write"
+}
+],
+"cgroup_cpu_bandwidth_periods": [
+{
+"id": "10",
+"name": "/sys-fs-fuse-connections.mount"
+},
+{
+"id": "11",
+"name": "/user.slice/user-1000.slice"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice"
+},
+{
+"id": "16",
+"name": "/user.slice/user-1000.slice/session-337.scope"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice"
+},
+{
+"id": "19",
+"name": "/system.slice/system-getty.slice"
+},
+{
+"id": "2",
+"name": "/init.scope"
+},
+{
+"id": "20",
+"name": "/system.slice/system-serial-getty.slice"
+},
+{
+"id": "21",
+"name": "/system.slice/system-sshd-keygen.slice"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service"
+},
+{
+"id": "25",
+"name": "/system.slice/boot.mount"
+},
+{
+"id": "26",
+"name": "/system.slice/boot-efi.mount"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service"
+},
+{
+"id": "28",
+"name": "/system.slice/cockpit.socket"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service"
+},
+{
+"id": "3",
+"name": "/system.slice"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "41",
+"name": "/system.slice/systemd-hostnamed.service"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope"
+},
+{
+"id": "5",
+"name": "/user.slice"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope"
+},
+{
+"id": "6",
+"name": "/dev-hugepages.mount"
+},
+{
+"id": "7",
+"name": "/dev-mqueue.mount"
+},
+{
+"id": "8",
+"name": "/sys-kernel-debug.mount"
+},
+{
+"id": "9",
+"name": "/sys-kernel-tracing.mount"
+}
+],
+"cgroup_cpu_bandwidth_throttled_periods": [
+{
+"id": "10",
+"name": "/sys-fs-fuse-connections.mount"
+},
+{
+"id": "11",
+"name": "/user.slice/user-1000.slice"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice"
+},
+{
+"id": "16",
+"name": "/user.slice/user-1000.slice/session-337.scope"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice"
+},
+{
+"id": "19",
+"name": "/system.slice/system-getty.slice"
+},
+{
+"id": "2",
+"name": "/init.scope"
+},
+{
+"id": "20",
+"name": "/system.slice/system-serial-getty.slice"
+},
+{
+"id": "21",
+"name": "/system.slice/system-sshd-keygen.slice"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service"
+},
+{
+"id": "25",
+"name": "/system.slice/boot.mount"
+},
+{
+"id": "26",
+"name": "/system.slice/boot-efi.mount"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service"
+},
+{
+"id": "28",
+"name": "/system.slice/cockpit.socket"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service"
+},
+{
+"id": "3",
+"name": "/system.slice"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "41",
+"name": "/system.slice/systemd-hostnamed.service"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope"
+},
+{
+"id": "5",
+"name": "/user.slice"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope"
+},
+{
+"id": "6",
+"name": "/dev-hugepages.mount"
+},
+{
+"id": "7",
+"name": "/dev-mqueue.mount"
+},
+{
+"id": "8",
+"name": "/sys-kernel-debug.mount"
+},
+{
+"id": "9",
+"name": "/sys-kernel-tracing.mount"
+}
+],
+"cgroup_cpu_bandwidth_throttled_time": [
+{
+"id": "10",
+"name": "/sys-fs-fuse-connections.mount"
+},
+{
+"id": "11",
+"name": "/user.slice/user-1000.slice"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice"
+},
+{
+"id": "19",
+"name": "/system.slice/system-getty.slice"
+},
+{
+"id": "2",
+"name": "/init.scope"
+},
+{
+"id": "20",
+"name": "/system.slice/system-serial-getty.slice"
+},
+{
+"id": "21",
+"name": "/system.slice/system-sshd-keygen.slice"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service"
+},
+{
+"id": "25",
+"name": "/system.slice/boot.mount"
+},
+{
+"id": "26",
+"name": "/system.slice/boot-efi.mount"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service"
+},
+{
+"id": "28",
+"name": "/system.slice/cockpit.socket"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service"
+},
+{
+"id": "3",
+"name": "/system.slice"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope"
+},
+{
+"id": "5",
+"name": "/user.slice"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope"
+},
+{
+"id": "6",
+"name": "/dev-hugepages.mount"
+},
+{
+"id": "7",
+"name": "/dev-mqueue.mount"
+},
+{
+"id": "8",
+"name": "/sys-kernel-debug.mount"
+},
+{
+"id": "9",
+"name": "/sys-kernel-tracing.mount"
+}
+],
+"cgroup_cpu_migrations": [
+{
+"id": "1",
+"name": "/"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice"
+},
+{
+"id": "16",
+"name": "/user.slice/user-1000.slice/session-337.scope"
+},
+{
+"id": "2",
+"name": "/init.scope"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service"
+},
+{
+"id": "3",
+"name": "/system.slice"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "41",
+"name": "/system.slice/systemd-hostnamed.service"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service"
+},
+{
+"id": "43",
+"name": ".../user-993.slice/user@993.service/app.slice"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2093.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2106.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2084.scope"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2097.scope"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2055.scope"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2058.scope"
+},
+{
+"id": "5",
+"name": "/user.slice"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope"
+},
+{
+"id": "55",
+"name": "/user.slice/user-993.slice/session-c1096.scope"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope"
+}
+],
+"cgroup_cpu_throttled": [
+{
+"id": "10",
+"name": "/sys-fs-fuse-connections.mount"
+},
+{
+"id": "11",
+"name": "/user.slice/user-1000.slice"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice"
+},
+{
+"id": "19",
+"name": "/system.slice/system-getty.slice"
+},
+{
+"id": "2",
+"name": "/init.scope"
+},
+{
+"id": "20",
+"name": "/system.slice/system-serial-getty.slice"
+},
+{
+"id": "21",
+"name": "/system.slice/system-sshd-keygen.slice"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service"
+},
+{
+"id": "25",
+"name": "/system.slice/boot.mount"
+},
+{
+"id": "26",
+"name": "/system.slice/boot-efi.mount"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service"
+},
+{
+"id": "28",
+"name": "/system.slice/cockpit.socket"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service"
+},
+{
+"id": "3",
+"name": "/system.slice"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope"
+},
+{
+"id": "5",
+"name": "/user.slice"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope"
+},
+{
+"id": "6",
+"name": "/dev-hugepages.mount"
+},
+{
+"id": "7",
+"name": "/dev-mqueue.mount"
+},
+{
+"id": "8",
+"name": "/sys-kernel-debug.mount"
+},
+{
+"id": "9",
+"name": "/sys-kernel-tracing.mount"
+}
+],
+"cgroup_cpu_throttled_time": [
+{
+"id": "10",
+"name": "/sys-fs-fuse-connections.mount"
+},
+{
+"id": "11",
+"name": "/user.slice/user-1000.slice"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice"
+},
+{
+"id": "16",
+"name": "/user.slice/user-1000.slice/session-337.scope"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice"
+},
+{
+"id": "19",
+"name": "/system.slice/system-getty.slice"
+},
+{
+"id": "2",
+"name": "/init.scope"
+},
+{
+"id": "20",
+"name": "/system.slice/system-serial-getty.slice"
+},
+{
+"id": "21",
+"name": "/system.slice/system-sshd-keygen.slice"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service"
+},
+{
+"id": "25",
+"name": "/system.slice/boot.mount"
+},
+{
+"id": "26",
+"name": "/system.slice/boot-efi.mount"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service"
+},
+{
+"id": "28",
+"name": "/system.slice/cockpit.socket"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service"
+},
+{
+"id": "3",
+"name": "/system.slice"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "41",
+"name": "/system.slice/systemd-hostnamed.service"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope"
+},
+{
+"id": "5",
+"name": "/user.slice"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope"
+},
+{
+"id": "6",
+"name": "/dev-hugepages.mount"
+},
+{
+"id": "7",
+"name": "/dev-mqueue.mount"
+},
+{
+"id": "8",
+"name": "/sys-kernel-debug.mount"
+},
+{
+"id": "9",
+"name": "/sys-kernel-tracing.mount"
+}
+],
+"cgroup_cpu_tlb_flush": [
+{
+"id": "1",
+"name": "/",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "1",
+"name": "/",
+"reason": "local_shootdown"
+},
+{
+"id": "1",
+"name": "/",
+"reason": "remote_send_ipi"
+},
+{
+"id": "1",
+"name": "/",
+"reason": "remote_shootdown"
+},
+{
+"id": "1",
+"name": "/",
+"reason": "task_switch"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"reason": "local_shootdown"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"reason": "task_switch"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"reason": "local_shootdown"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"reason": "remote_send_ipi"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"reason": "remote_shootdown"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"reason": "task_switch"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"reason": "local_shootdown"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"reason": "task_switch"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"reason": "local_shootdown"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"reason": "remote_send_ipi"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"reason": "remote_shootdown"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"reason": "task_switch"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"reason": "local_shootdown"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"reason": "remote_send_ipi"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"reason": "remote_shootdown"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"reason": "task_switch"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"reason": "local_shootdown"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"reason": "task_switch"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"reason": "local_shootdown"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"reason": "task_switch"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"reason": "local_shootdown"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"reason": "task_switch"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"reason": "local_shootdown"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"reason": "remote_send_ipi"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"reason": "remote_shootdown"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"reason": "task_switch"
+},
+{
+"id": "16",
+"name": "/user.slice/user-1000.slice/session-337.scope",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "16",
+"name": "/user.slice/user-1000.slice/session-337.scope",
+"reason": "local_shootdown"
+},
+{
+"id": "16",
+"name": "/user.slice/user-1000.slice/session-337.scope",
+"reason": "remote_send_ipi"
+},
+{
+"id": "16",
+"name": "/user.slice/user-1000.slice/session-337.scope",
+"reason": "remote_shootdown"
+},
+{
+"id": "16",
+"name": "/user.slice/user-1000.slice/session-337.scope",
+"reason": "task_switch"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"reason": "local_shootdown"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"reason": "remote_send_ipi"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"reason": "remote_shootdown"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"reason": "task_switch"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"reason": "local_shootdown"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"reason": "remote_send_ipi"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"reason": "remote_shootdown"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"reason": "task_switch"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"reason": "local_shootdown"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"reason": "task_switch"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"reason": "local_shootdown"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"reason": "task_switch"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"reason": "local_shootdown"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"reason": "task_switch"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"reason": "local_shootdown"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"reason": "task_switch"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"reason": "local_shootdown"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"reason": "task_switch"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"reason": "local_shootdown"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"reason": "remote_send_ipi"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"reason": "remote_shootdown"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"reason": "task_switch"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"reason": "local_shootdown"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"reason": "task_switch"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"reason": "local_shootdown"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"reason": "task_switch"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"reason": "local_shootdown"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"reason": "task_switch"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"reason": "local_shootdown"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"reason": "task_switch"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"reason": "local_shootdown"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"reason": "task_switch"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"reason": "local_shootdown"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"reason": "task_switch"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"reason": "local_shootdown"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"reason": "task_switch"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"reason": "local_shootdown"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"reason": "task_switch"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"reason": "local_shootdown"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"reason": "task_switch"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"reason": "local_shootdown"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"reason": "task_switch"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"reason": "local_shootdown"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"reason": "task_switch"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"reason": "local_shootdown"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"reason": "remote_send_ipi"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"reason": "remote_shootdown"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"reason": "task_switch"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"reason": "local_shootdown"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"reason": "task_switch"
+},
+{
+"id": "41",
+"name": "/system.slice/systemd-hostnamed.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "41",
+"name": "/system.slice/systemd-hostnamed.service",
+"reason": "local_shootdown"
+},
+{
+"id": "41",
+"name": "/system.slice/systemd-hostnamed.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "41",
+"name": "/system.slice/systemd-hostnamed.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "41",
+"name": "/system.slice/systemd-hostnamed.service",
+"reason": "task_switch"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"reason": "local_shootdown"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"reason": "task_switch"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"reason": "local_shootdown"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"reason": "remote_send_ipi"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"reason": "remote_shootdown"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"reason": "task_switch"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"reason": "local_shootdown"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"reason": "task_switch"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"reason": "local_shootdown"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"reason": "task_switch"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"reason": "local_shootdown"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"reason": "remote_send_ipi"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"reason": "remote_shootdown"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"reason": "task_switch"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"reason": "local_shootdown"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"reason": "remote_send_ipi"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"reason": "remote_shootdown"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"reason": "task_switch"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"reason": "local_shootdown"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"reason": "remote_send_ipi"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"reason": "remote_shootdown"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"reason": "task_switch"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"reason": "local_shootdown"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"reason": "remote_send_ipi"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"reason": "remote_shootdown"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"reason": "task_switch"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"reason": "local_shootdown"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"reason": "remote_send_ipi"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"reason": "remote_shootdown"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"reason": "task_switch"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"reason": "local_shootdown"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"reason": "remote_send_ipi"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"reason": "remote_shootdown"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"reason": "task_switch"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"reason": "local_shootdown"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"reason": "remote_send_ipi"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"reason": "remote_shootdown"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"reason": "task_switch"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"reason": "local_shootdown"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"reason": "remote_send_ipi"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"reason": "remote_shootdown"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"reason": "task_switch"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"reason": "local_shootdown"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"reason": "remote_send_ipi"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"reason": "remote_shootdown"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"reason": "task_switch"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"reason": "local_shootdown"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"reason": "remote_send_ipi"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"reason": "remote_shootdown"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"reason": "task_switch"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"reason": "local_shootdown"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"reason": "task_switch"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"reason": "local_shootdown"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"reason": "remote_send_ipi"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"reason": "remote_shootdown"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"reason": "task_switch"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"reason": "local_shootdown"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"reason": "remote_send_ipi"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"reason": "remote_shootdown"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"reason": "task_switch"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"reason": "local_shootdown"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"reason": "remote_send_ipi"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"reason": "remote_shootdown"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"reason": "task_switch"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"reason": "local_shootdown"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"reason": "remote_send_ipi"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"reason": "remote_shootdown"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"reason": "task_switch"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"reason": "local_shootdown"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"reason": "remote_send_ipi"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"reason": "remote_shootdown"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"reason": "task_switch"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"reason": "local_shootdown"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"reason": "remote_send_ipi"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"reason": "remote_shootdown"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"reason": "task_switch"
+}
+],
+"cgroup_cpu_usage": [
+{
+"id": "1",
+"name": "/",
+"state": "system"
+},
+{
+"id": "1",
+"name": "/",
+"state": "user"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"state": "system"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"state": "user"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"state": "system"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"state": "user"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"state": "system"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"state": "user"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"state": "system"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"state": "user"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"state": "system"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"state": "user"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"state": "system"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"state": "user"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"state": "system"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"state": "user"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"state": "system"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"state": "user"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"state": "system"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"state": "user"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"state": "system"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"state": "user"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"state": "system"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"state": "user"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"state": "system"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"state": "user"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"state": "system"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"state": "user"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"state": "system"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"state": "user"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"state": "system"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"state": "user"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"state": "system"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"state": "user"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"state": "system"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"state": "user"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"state": "system"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"state": "user"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"state": "system"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"state": "user"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"state": "system"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"state": "user"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"state": "system"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"state": "user"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"state": "system"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"state": "user"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"state": "system"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"state": "user"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"state": "system"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"state": "user"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"state": "system"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"state": "user"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"state": "system"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"state": "user"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"state": "system"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"state": "user"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"state": "system"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"state": "user"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"state": "system"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"state": "user"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"state": "system"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"state": "user"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"state": "system"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"state": "user"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"state": "system"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"state": "user"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"state": "system"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"state": "user"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"state": "system"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"state": "user"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"state": "system"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"state": "user"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"state": "system"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"state": "user"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope",
+"state": "system"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope",
+"state": "user"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"state": "system"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"state": "user"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"state": "system"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"state": "user"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"state": "system"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"state": "user"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"state": "system"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"state": "user"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"state": "system"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"state": "user"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"state": "system"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"state": "user"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"state": "system"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"state": "user"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"state": "system"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"state": "user"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"state": "system"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"state": "user"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"state": "system"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"state": "user"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"state": "system"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"state": "user"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"state": "system"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"state": "user"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"state": "system"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"state": "user"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"state": "system"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"state": "user"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"state": "system"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"state": "user"
+}
+],
+"cgroup_cpu_usage_exited_tasks": [
+{
+"id": "1",
+"name": "/"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice"
+},
+{
+"id": "16",
+"name": "/user.slice/user-1000.slice/session-337.scope"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice"
+},
+{
+"id": "2",
+"name": "/init.scope"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service"
+},
+{
+"id": "3",
+"name": "/system.slice"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "41",
+"name": "/system.slice/systemd-hostnamed.service"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope"
+},
+{
+"id": "5",
+"name": "/user.slice"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope"
+}
+],
+"cgroup_scheduler_context_switch": [
+{
+"id": "1",
+"kind": "involuntary",
+"name": "/"
+},
+{
+"id": "1",
+"kind": "voluntary",
+"name": "/"
+},
+{
+"id": "11",
+"kind": "involuntary",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "11",
+"kind": "voluntary",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "12",
+"kind": "involuntary",
+"name": ".../user-1000.slice/user@1000.service/init.scope"
+},
+{
+"id": "12",
+"kind": "voluntary",
+"name": ".../user-1000.slice/user@1000.service/init.scope"
+},
+{
+"id": "13",
+"kind": "involuntary",
+"name": "/user.slice/user-1000.slice/user@1000.service"
+},
+{
+"id": "13",
+"kind": "voluntary",
+"name": "/user.slice/user-1000.slice/user@1000.service"
+},
+{
+"id": "14",
+"kind": "involuntary",
+"name": ".../user-1000.slice/user@1000.service/app.slice"
+},
+{
+"id": "14",
+"kind": "voluntary",
+"name": ".../user-1000.slice/user@1000.service/app.slice"
+},
+{
+"id": "15",
+"kind": "involuntary",
+"name": "/user.slice/user-1000.slice/session-195.scope"
+},
+{
+"id": "15",
+"kind": "voluntary",
+"name": "/user.slice/user-1000.slice/session-195.scope"
+},
+{
+"id": "16",
+"kind": "involuntary",
+"name": "/system.slice/NetworkManager-dispatcher.service"
+},
+{
+"id": "16",
+"kind": "involuntary",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "16",
+"kind": "involuntary",
+"name": "/system.slice/fwupd-refresh.service"
+},
+{
+"id": "16",
+"kind": "involuntary",
+"name": "/user.slice/user-0.slice"
+},
+{
+"id": "16",
+"kind": "voluntary",
+"name": "/system.slice/NetworkManager-dispatcher.service"
+},
+{
+"id": "16",
+"kind": "voluntary",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "16",
+"kind": "voluntary",
+"name": "/system.slice/fwupd-refresh.service"
+},
+{
+"id": "16",
+"kind": "voluntary",
+"name": "/user.slice/user-0.slice"
+},
+{
+"id": "17",
+"kind": "involuntary",
+"name": "/system.slice/system-modprobe.slice"
+},
+{
+"id": "17",
+"kind": "voluntary",
+"name": "/system.slice/system-modprobe.slice"
+},
+{
+"id": "2",
+"kind": "involuntary",
+"name": "/init.scope"
+},
+{
+"id": "2",
+"kind": "voluntary",
+"name": "/init.scope"
+},
+{
+"id": "22",
+"kind": "involuntary",
+"name": "/system.slice/systemd-journald.service"
+},
+{
+"id": "22",
+"kind": "voluntary",
+"name": "/system.slice/systemd-journald.service"
+},
+{
+"id": "23",
+"kind": "involuntary",
+"name": "/system.slice/systemd-userdbd.service"
+},
+{
+"id": "23",
+"kind": "voluntary",
+"name": "/system.slice/systemd-userdbd.service"
+},
+{
+"id": "24",
+"kind": "involuntary",
+"name": "/system.slice/systemd-udevd.service"
+},
+{
+"id": "24",
+"kind": "voluntary",
+"name": "/system.slice/systemd-udevd.service"
+},
+{
+"id": "27",
+"kind": "involuntary",
+"name": "/system.slice/auditd.service"
+},
+{
+"id": "27",
+"kind": "voluntary",
+"name": "/system.slice/auditd.service"
+},
+{
+"id": "29",
+"kind": "involuntary",
+"name": "/system.slice/dbus-broker.service"
+},
+{
+"id": "29",
+"kind": "voluntary",
+"name": "/system.slice/dbus-broker.service"
+},
+{
+"id": "3",
+"kind": "involuntary",
+"name": "/system.slice"
+},
+{
+"id": "3",
+"kind": "voluntary",
+"name": "/system.slice"
+},
+{
+"id": "30",
+"kind": "involuntary",
+"name": "/system.slice/chronyd.service"
+},
+{
+"id": "30",
+"kind": "voluntary",
+"name": "/system.slice/chronyd.service"
+},
+{
+"id": "31",
+"kind": "involuntary",
+"name": "/system.slice/irqbalance.service"
+},
+{
+"id": "31",
+"kind": "voluntary",
+"name": "/system.slice/irqbalance.service"
+},
+{
+"id": "32",
+"kind": "involuntary",
+"name": "/system.slice/rngd.service"
+},
+{
+"id": "32",
+"kind": "voluntary",
+"name": "/system.slice/rngd.service"
+},
+{
+"id": "33",
+"kind": "involuntary",
+"name": "/system.slice/systemd-logind.service"
+},
+{
+"id": "33",
+"kind": "voluntary",
+"name": "/system.slice/systemd-logind.service"
+},
+{
+"id": "34",
+"kind": "involuntary",
+"name": "/system.slice/NetworkManager.service"
+},
+{
+"id": "34",
+"kind": "voluntary",
+"name": "/system.slice/NetworkManager.service"
+},
+{
+"id": "35",
+"kind": "involuntary",
+"name": "/system.slice/gssproxy.service"
+},
+{
+"id": "35",
+"kind": "voluntary",
+"name": "/system.slice/gssproxy.service"
+},
+{
+"id": "36",
+"kind": "involuntary",
+"name": "/system.slice/rsyslog.service"
+},
+{
+"id": "36",
+"kind": "voluntary",
+"name": "/system.slice/rsyslog.service"
+},
+{
+"id": "37",
+"kind": "involuntary",
+"name": "/system.slice/sshd.service"
+},
+{
+"id": "37",
+"kind": "voluntary",
+"name": "/system.slice/sshd.service"
+},
+{
+"id": "38",
+"kind": "involuntary",
+"name": "/system.slice/crond.service"
+},
+{
+"id": "38",
+"kind": "voluntary",
+"name": "/system.slice/crond.service"
+},
+{
+"id": "39",
+"kind": "involuntary",
+"name": "/system.slice/rezolus.service"
+},
+{
+"id": "39",
+"kind": "voluntary",
+"name": "/system.slice/rezolus.service"
+},
+{
+"id": "40",
+"kind": "involuntary",
+"name": "/system.slice/rezolus-exporter.service"
+},
+{
+"id": "40",
+"kind": "voluntary",
+"name": "/system.slice/rezolus-exporter.service"
+},
+{
+"id": "41",
+"kind": "involuntary",
+"name": ".../user-0.slice/user@0.service/init.scope"
+},
+{
+"id": "41",
+"kind": "involuntary",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "41",
+"kind": "voluntary",
+"name": ".../user-0.slice/user@0.service/init.scope"
+},
+{
+"id": "41",
+"kind": "voluntary",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "42",
+"kind": "involuntary",
+"name": "/user.slice/user-0.slice/user@0.service"
+},
+{
+"id": "42",
+"kind": "voluntary",
+"name": "/user.slice/user-0.slice/user@0.service"
+},
+{
+"id": "43",
+"kind": "involuntary",
+"name": ".../user-0.slice/user@0.service/app.slice"
+},
+{
+"id": "43",
+"kind": "voluntary",
+"name": ".../user-0.slice/user@0.service/app.slice"
+},
+{
+"id": "44",
+"kind": "involuntary",
+"name": "/system.slice/systemslab-agent.service"
+},
+{
+"id": "44",
+"kind": "voluntary",
+"name": "/system.slice/systemslab-agent.service"
+},
+{
+"id": "45",
+"kind": "involuntary",
+"name": "/system.slice/fwupd.service"
+},
+{
+"id": "45",
+"kind": "voluntary",
+"name": "/system.slice/fwupd.service"
+},
+{
+"id": "46",
+"kind": "involuntary",
+"name": "/user.slice/user-0.slice/session-c2096.scope"
+},
+{
+"id": "46",
+"kind": "involuntary",
+"name": "/user.slice/user-0.slice/session-c2110.scope"
+},
+{
+"id": "46",
+"kind": "involuntary",
+"name": "/user.slice/user-0.slice/session-c2112.scope"
+},
+{
+"id": "46",
+"kind": "voluntary",
+"name": "/user.slice/user-0.slice/session-c2096.scope"
+},
+{
+"id": "46",
+"kind": "voluntary",
+"name": "/user.slice/user-0.slice/session-c2110.scope"
+},
+{
+"id": "46",
+"kind": "voluntary",
+"name": "/user.slice/user-0.slice/session-c2112.scope"
+},
+{
+"id": "47",
+"kind": "involuntary",
+"name": "/user.slice/user-0.slice/session-c2094.scope"
+},
+{
+"id": "47",
+"kind": "involuntary",
+"name": "/user.slice/user-0.slice/session-c2108.scope"
+},
+{
+"id": "47",
+"kind": "voluntary",
+"name": "/user.slice/user-0.slice/session-c2094.scope"
+},
+{
+"id": "47",
+"kind": "voluntary",
+"name": "/user.slice/user-0.slice/session-c2108.scope"
+},
+{
+"id": "48",
+"kind": "involuntary",
+"name": "/user.slice/user-0.slice/session-c2095.scope"
+},
+{
+"id": "48",
+"kind": "involuntary",
+"name": "/user.slice/user-0.slice/session-c2109.scope"
+},
+{
+"id": "48",
+"kind": "voluntary",
+"name": "/user.slice/user-0.slice/session-c2095.scope"
+},
+{
+"id": "48",
+"kind": "voluntary",
+"name": "/user.slice/user-0.slice/session-c2109.scope"
+},
+{
+"id": "49",
+"kind": "involuntary",
+"name": "/user.slice/user-0.slice/session-c2087.scope"
+},
+{
+"id": "49",
+"kind": "involuntary",
+"name": "/user.slice/user-0.slice/session-c2107.scope"
+},
+{
+"id": "49",
+"kind": "voluntary",
+"name": "/user.slice/user-0.slice/session-c2087.scope"
+},
+{
+"id": "49",
+"kind": "voluntary",
+"name": "/user.slice/user-0.slice/session-c2107.scope"
+},
+{
+"id": "5",
+"kind": "involuntary",
+"name": "/user.slice"
+},
+{
+"id": "5",
+"kind": "voluntary",
+"name": "/user.slice"
+},
+{
+"id": "50",
+"kind": "involuntary",
+"name": "/system.slice/udisks2.service"
+},
+{
+"id": "50",
+"kind": "voluntary",
+"name": "/system.slice/udisks2.service"
+},
+{
+"id": "51",
+"kind": "involuntary",
+"name": "/system.slice/polkit.service"
+},
+{
+"id": "51",
+"kind": "voluntary",
+"name": "/system.slice/polkit.service"
+},
+{
+"id": "52",
+"kind": "involuntary",
+"name": ".../user-1000.slice/user@1000.service/background.slice"
+},
+{
+"id": "52",
+"kind": "voluntary",
+"name": ".../user-1000.slice/user@1000.service/background.slice"
+},
+{
+"id": "53",
+"kind": "involuntary",
+"name": ".../user-993.slice/user@993.service/app.slice"
+},
+{
+"id": "53",
+"kind": "voluntary",
+"name": ".../user-993.slice/user@993.service/app.slice"
+},
+{
+"id": "54",
+"kind": "involuntary",
+"name": "/user.slice/user-993.slice/session-c1720.scope"
+},
+{
+"id": "54",
+"kind": "voluntary",
+"name": "/user.slice/user-993.slice/session-c1720.scope"
+},
+{
+"id": "55",
+"kind": "involuntary",
+"name": "/user.slice/user-0.slice/session-c1098.scope"
+},
+{
+"id": "55",
+"kind": "voluntary",
+"name": "/user.slice/user-0.slice/session-c1098.scope"
+},
+{
+"id": "56",
+"kind": "involuntary",
+"name": "/user.slice/user-993.slice/session-c1097.scope"
+},
+{
+"id": "56",
+"kind": "voluntary",
+"name": "/user.slice/user-993.slice/session-c1097.scope"
+}
+],
+"cgroup_scheduler_offcpu": [
+{
+"id": "1",
+"name": "/",
+"state": "offcpu"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"state": "offcpu"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"state": "offcpu"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"state": "offcpu"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"state": "offcpu"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"state": "offcpu"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"state": "offcpu"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"state": "offcpu"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"state": "offcpu"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"state": "offcpu"
+},
+{
+"id": "16",
+"name": "/user.slice/user-1000.slice/session-337.scope",
+"state": "offcpu"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"state": "offcpu"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"state": "offcpu"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"state": "offcpu"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"state": "offcpu"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"state": "offcpu"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"state": "offcpu"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"state": "offcpu"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"state": "offcpu"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"state": "offcpu"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"state": "offcpu"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"state": "offcpu"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"state": "offcpu"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"state": "offcpu"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"state": "offcpu"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"state": "offcpu"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"state": "offcpu"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"state": "offcpu"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"state": "offcpu"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"state": "offcpu"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"state": "offcpu"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"state": "offcpu"
+},
+{
+"id": "41",
+"name": "/system.slice/systemd-hostnamed.service",
+"state": "offcpu"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"state": "offcpu"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"state": "offcpu"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"state": "offcpu"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"state": "offcpu"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"state": "offcpu"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"state": "offcpu"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"state": "offcpu"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"state": "offcpu"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"state": "offcpu"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"state": "offcpu"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"state": "offcpu"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"state": "offcpu"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"state": "offcpu"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"state": "offcpu"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"state": "offcpu"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"state": "offcpu"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"state": "offcpu"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"state": "offcpu"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"state": "offcpu"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"state": "offcpu"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"state": "offcpu"
+}
+],
+"cgroup_scheduler_runqueue_wait": [
+{
+"id": "1",
+"name": "/",
+"state": "wait"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"state": "wait"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"state": "wait"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"state": "wait"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"state": "wait"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"state": "wait"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"state": "wait"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"state": "wait"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"state": "wait"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"state": "wait"
+},
+{
+"id": "16",
+"name": "/user.slice/user-1000.slice/session-337.scope",
+"state": "wait"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"state": "wait"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"state": "wait"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"state": "wait"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"state": "wait"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"state": "wait"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"state": "wait"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"state": "wait"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"state": "wait"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"state": "wait"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"state": "wait"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"state": "wait"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"state": "wait"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"state": "wait"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"state": "wait"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"state": "wait"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"state": "wait"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"state": "wait"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"state": "wait"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"state": "wait"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"state": "wait"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"state": "wait"
+},
+{
+"id": "41",
+"name": "/system.slice/systemd-hostnamed.service",
+"state": "wait"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"state": "wait"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"state": "wait"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"state": "wait"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"state": "wait"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"state": "wait"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"state": "wait"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"state": "wait"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"state": "wait"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"state": "wait"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"state": "wait"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"state": "wait"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"state": "wait"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"state": "wait"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"state": "wait"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"state": "wait"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"state": "wait"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"state": "wait"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"state": "wait"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"state": "wait"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"state": "wait"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"state": "wait"
+}
+],
+"cgroup_syscall": [
+{
+"id": "1",
+"name": "/",
+"op": "event"
+},
+{
+"id": "1",
+"name": "/",
+"op": "filesystem"
+},
+{
+"id": "1",
+"name": "/",
+"op": "ipc"
+},
+{
+"id": "1",
+"name": "/",
+"op": "lock"
+},
+{
+"id": "1",
+"name": "/",
+"op": "memory"
+},
+{
+"id": "1",
+"name": "/",
+"op": "other"
+},
+{
+"id": "1",
+"name": "/",
+"op": "poll"
+},
+{
+"id": "1",
+"name": "/",
+"op": "process"
+},
+{
+"id": "1",
+"name": "/",
+"op": "query"
+},
+{
+"id": "1",
+"name": "/",
+"op": "read"
+},
+{
+"id": "1",
+"name": "/",
+"op": "sleep"
+},
+{
+"id": "1",
+"name": "/",
+"op": "socket"
+},
+{
+"id": "1",
+"name": "/",
+"op": "time"
+},
+{
+"id": "1",
+"name": "/",
+"op": "timer"
+},
+{
+"id": "1",
+"name": "/",
+"op": "write"
+},
+{
+"id": "1",
+"name": "/",
+"op": "yield"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"op": "event"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"op": "filesystem"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"op": "ipc"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"op": "lock"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"op": "memory"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"op": "other"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"op": "poll"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"op": "process"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"op": "query"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"op": "read"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"op": "sleep"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"op": "socket"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"op": "time"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"op": "timer"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"op": "write"
+},
+{
+"id": "11",
+"name": "/system.slice/dnf-makecache.service",
+"op": "yield"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"op": "event"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"op": "filesystem"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"op": "ipc"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"op": "lock"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"op": "memory"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"op": "other"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"op": "poll"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"op": "process"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"op": "query"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"op": "read"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"op": "sleep"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"op": "socket"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"op": "time"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"op": "timer"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"op": "write"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope",
+"op": "yield"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"op": "event"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"op": "filesystem"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"op": "ipc"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"op": "lock"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"op": "memory"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"op": "other"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"op": "poll"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"op": "process"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"op": "query"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"op": "read"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"op": "sleep"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"op": "socket"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"op": "time"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"op": "timer"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"op": "write"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service",
+"op": "yield"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"op": "event"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"op": "filesystem"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"op": "ipc"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"op": "lock"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"op": "memory"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"op": "other"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"op": "poll"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"op": "process"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"op": "query"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"op": "read"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"op": "sleep"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"op": "socket"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"op": "time"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"op": "timer"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"op": "write"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice",
+"op": "yield"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"op": "event"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"op": "filesystem"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"op": "ipc"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"op": "lock"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"op": "memory"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"op": "other"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"op": "poll"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"op": "process"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"op": "query"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"op": "read"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"op": "sleep"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"op": "socket"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"op": "time"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"op": "timer"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"op": "write"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope",
+"op": "yield"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"op": "event"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"op": "filesystem"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"op": "ipc"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"op": "lock"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"op": "memory"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"op": "other"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"op": "poll"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"op": "process"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"op": "query"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"op": "read"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"op": "sleep"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"op": "socket"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"op": "time"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"op": "timer"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"op": "write"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service",
+"op": "yield"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"op": "event"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"op": "filesystem"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"op": "ipc"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"op": "lock"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"op": "memory"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"op": "other"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"op": "poll"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"op": "process"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"op": "query"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"op": "read"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"op": "sleep"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"op": "socket"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"op": "time"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"op": "timer"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"op": "write"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service",
+"op": "yield"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"op": "event"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"op": "filesystem"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"op": "ipc"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"op": "lock"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"op": "memory"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"op": "other"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"op": "poll"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"op": "process"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"op": "query"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"op": "read"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"op": "sleep"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"op": "socket"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"op": "time"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"op": "timer"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"op": "write"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service",
+"op": "yield"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"op": "event"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"op": "filesystem"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"op": "ipc"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"op": "lock"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"op": "memory"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"op": "other"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"op": "poll"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"op": "process"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"op": "query"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"op": "read"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"op": "sleep"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"op": "socket"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"op": "time"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"op": "timer"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"op": "write"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice",
+"op": "yield"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"op": "event"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"op": "filesystem"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"op": "ipc"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"op": "lock"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"op": "memory"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"op": "other"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"op": "poll"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"op": "process"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"op": "query"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"op": "read"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"op": "sleep"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"op": "socket"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"op": "time"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"op": "timer"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"op": "write"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice",
+"op": "yield"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"op": "event"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"op": "filesystem"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"op": "ipc"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"op": "lock"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"op": "memory"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"op": "other"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"op": "poll"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"op": "process"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"op": "query"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"op": "read"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"op": "sleep"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"op": "socket"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"op": "time"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"op": "timer"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"op": "write"
+},
+{
+"id": "2",
+"name": "/init.scope",
+"op": "yield"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"op": "event"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"op": "filesystem"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"op": "ipc"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"op": "lock"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"op": "memory"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"op": "other"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"op": "poll"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"op": "process"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"op": "query"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"op": "read"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"op": "sleep"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"op": "socket"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"op": "time"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"op": "timer"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"op": "write"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service",
+"op": "yield"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"op": "event"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"op": "filesystem"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"op": "ipc"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"op": "lock"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"op": "memory"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"op": "other"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"op": "poll"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"op": "process"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"op": "query"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"op": "read"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"op": "sleep"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"op": "socket"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"op": "time"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"op": "timer"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"op": "write"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service",
+"op": "yield"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"op": "event"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"op": "filesystem"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"op": "ipc"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"op": "lock"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"op": "memory"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"op": "other"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"op": "poll"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"op": "process"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"op": "query"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"op": "read"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"op": "sleep"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"op": "socket"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"op": "time"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"op": "timer"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"op": "write"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service",
+"op": "yield"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"op": "event"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"op": "filesystem"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"op": "ipc"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"op": "lock"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"op": "memory"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"op": "other"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"op": "poll"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"op": "process"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"op": "query"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"op": "read"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"op": "sleep"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"op": "socket"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"op": "time"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"op": "timer"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"op": "write"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service",
+"op": "yield"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"op": "event"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"op": "filesystem"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"op": "ipc"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"op": "lock"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"op": "memory"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"op": "other"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"op": "poll"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"op": "process"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"op": "query"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"op": "read"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"op": "sleep"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"op": "socket"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"op": "time"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"op": "timer"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"op": "write"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service",
+"op": "yield"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"op": "event"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"op": "filesystem"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"op": "ipc"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"op": "lock"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"op": "memory"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"op": "other"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"op": "poll"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"op": "process"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"op": "query"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"op": "read"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"op": "sleep"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"op": "socket"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"op": "time"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"op": "timer"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"op": "write"
+},
+{
+"id": "3",
+"name": "/system.slice",
+"op": "yield"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"op": "event"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"op": "filesystem"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"op": "ipc"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"op": "lock"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"op": "memory"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"op": "other"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"op": "poll"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"op": "process"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"op": "query"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"op": "read"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"op": "sleep"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"op": "socket"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"op": "time"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"op": "timer"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"op": "write"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service",
+"op": "yield"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"op": "event"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"op": "filesystem"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"op": "ipc"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"op": "lock"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"op": "memory"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"op": "other"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"op": "poll"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"op": "process"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"op": "query"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"op": "read"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"op": "sleep"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"op": "socket"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"op": "time"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"op": "timer"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"op": "write"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service",
+"op": "yield"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"op": "event"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"op": "filesystem"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"op": "ipc"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"op": "lock"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"op": "memory"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"op": "other"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"op": "poll"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"op": "process"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"op": "query"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"op": "read"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"op": "sleep"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"op": "socket"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"op": "time"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"op": "timer"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"op": "write"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service",
+"op": "yield"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"op": "event"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"op": "filesystem"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"op": "ipc"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"op": "lock"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"op": "memory"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"op": "other"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"op": "poll"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"op": "process"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"op": "query"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"op": "read"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"op": "sleep"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"op": "socket"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"op": "time"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"op": "timer"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"op": "write"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service",
+"op": "yield"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"op": "event"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"op": "filesystem"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"op": "ipc"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"op": "lock"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"op": "memory"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"op": "other"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"op": "poll"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"op": "process"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"op": "query"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"op": "read"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"op": "sleep"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"op": "socket"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"op": "time"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"op": "timer"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"op": "write"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service",
+"op": "yield"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"op": "event"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"op": "filesystem"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"op": "ipc"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"op": "lock"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"op": "memory"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"op": "other"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"op": "poll"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"op": "process"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"op": "query"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"op": "read"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"op": "sleep"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"op": "socket"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"op": "time"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"op": "timer"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"op": "write"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service",
+"op": "yield"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"op": "event"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"op": "filesystem"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"op": "ipc"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"op": "lock"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"op": "memory"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"op": "other"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"op": "poll"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"op": "process"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"op": "query"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"op": "read"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"op": "sleep"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"op": "socket"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"op": "time"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"op": "timer"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"op": "write"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service",
+"op": "yield"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"op": "event"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"op": "filesystem"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"op": "ipc"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"op": "lock"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"op": "memory"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"op": "other"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"op": "poll"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"op": "process"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"op": "query"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"op": "read"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"op": "sleep"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"op": "socket"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"op": "time"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"op": "timer"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"op": "write"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service",
+"op": "yield"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"op": "event"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"op": "filesystem"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"op": "ipc"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"op": "lock"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"op": "memory"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"op": "other"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"op": "poll"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"op": "process"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"op": "query"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"op": "read"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"op": "sleep"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"op": "socket"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"op": "time"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"op": "timer"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"op": "write"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service",
+"op": "yield"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"op": "event"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"op": "filesystem"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"op": "ipc"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"op": "lock"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"op": "memory"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"op": "other"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"op": "poll"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"op": "process"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"op": "query"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"op": "read"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"op": "sleep"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"op": "socket"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"op": "time"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"op": "timer"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"op": "write"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service",
+"op": "yield"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"op": "event"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"op": "filesystem"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"op": "ipc"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"op": "lock"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"op": "memory"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"op": "other"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"op": "poll"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"op": "process"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"op": "query"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"op": "read"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"op": "sleep"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"op": "socket"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"op": "time"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"op": "timer"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"op": "write"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service",
+"op": "yield"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"op": "event"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"op": "filesystem"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"op": "ipc"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"op": "lock"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"op": "memory"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"op": "other"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"op": "poll"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"op": "process"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"op": "query"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"op": "read"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"op": "sleep"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"op": "socket"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"op": "time"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"op": "timer"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"op": "write"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope",
+"op": "yield"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"op": "event"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"op": "filesystem"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"op": "ipc"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"op": "lock"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"op": "memory"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"op": "other"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"op": "poll"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"op": "process"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"op": "query"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"op": "read"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"op": "sleep"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"op": "socket"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"op": "time"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"op": "timer"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"op": "write"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service",
+"op": "yield"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"op": "event"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"op": "filesystem"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"op": "ipc"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"op": "lock"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"op": "memory"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"op": "other"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"op": "poll"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"op": "process"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"op": "query"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"op": "read"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"op": "sleep"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"op": "socket"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"op": "time"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"op": "timer"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"op": "write"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service",
+"op": "yield"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"op": "event"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"op": "filesystem"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"op": "ipc"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"op": "lock"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"op": "memory"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"op": "other"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"op": "poll"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"op": "process"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"op": "query"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"op": "read"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"op": "sleep"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"op": "socket"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"op": "time"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"op": "timer"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"op": "write"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice",
+"op": "yield"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"op": "event"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"op": "filesystem"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"op": "ipc"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"op": "lock"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"op": "memory"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"op": "other"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"op": "poll"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"op": "process"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"op": "query"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"op": "read"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"op": "sleep"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"op": "socket"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"op": "time"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"op": "timer"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"op": "write"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service",
+"op": "yield"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"op": "event"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"op": "filesystem"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"op": "ipc"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"op": "lock"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"op": "memory"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"op": "other"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"op": "poll"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"op": "process"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"op": "query"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"op": "read"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"op": "sleep"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"op": "socket"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"op": "time"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"op": "timer"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"op": "write"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service",
+"op": "yield"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"op": "event"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"op": "filesystem"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"op": "ipc"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"op": "lock"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"op": "memory"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"op": "other"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"op": "poll"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"op": "process"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"op": "query"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"op": "read"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"op": "sleep"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"op": "socket"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"op": "time"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"op": "timer"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"op": "write"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope",
+"op": "yield"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"op": "event"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"op": "filesystem"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"op": "ipc"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"op": "lock"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"op": "memory"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"op": "other"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"op": "poll"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"op": "process"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"op": "query"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"op": "read"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"op": "sleep"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"op": "socket"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"op": "time"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"op": "timer"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"op": "write"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope",
+"op": "yield"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope",
+"op": "event"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope",
+"op": "filesystem"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope",
+"op": "ipc"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope",
+"op": "lock"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope",
+"op": "memory"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope",
+"op": "other"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope",
+"op": "poll"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope",
+"op": "process"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope",
+"op": "query"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope",
+"op": "read"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope",
+"op": "sleep"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope",
+"op": "socket"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope",
+"op": "time"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope",
+"op": "timer"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope",
+"op": "write"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope",
+"op": "yield"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"op": "event"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"op": "filesystem"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"op": "ipc"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"op": "lock"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"op": "memory"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"op": "other"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"op": "poll"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"op": "process"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"op": "query"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"op": "read"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"op": "sleep"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"op": "socket"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"op": "time"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"op": "timer"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"op": "write"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope",
+"op": "yield"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"op": "event"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"op": "filesystem"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"op": "ipc"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"op": "lock"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"op": "memory"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"op": "other"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"op": "poll"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"op": "process"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"op": "query"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"op": "read"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"op": "sleep"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"op": "socket"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"op": "time"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"op": "timer"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"op": "write"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope",
+"op": "yield"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"op": "event"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"op": "filesystem"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"op": "ipc"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"op": "lock"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"op": "memory"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"op": "other"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"op": "poll"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"op": "process"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"op": "query"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"op": "read"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"op": "sleep"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"op": "socket"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"op": "time"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"op": "timer"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"op": "write"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope",
+"op": "yield"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"op": "event"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"op": "filesystem"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"op": "ipc"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"op": "lock"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"op": "memory"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"op": "other"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"op": "poll"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"op": "process"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"op": "query"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"op": "read"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"op": "sleep"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"op": "socket"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"op": "time"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"op": "timer"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"op": "write"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope",
+"op": "yield"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"op": "event"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"op": "filesystem"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"op": "ipc"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"op": "lock"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"op": "memory"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"op": "other"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"op": "poll"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"op": "process"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"op": "query"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"op": "read"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"op": "sleep"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"op": "socket"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"op": "time"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"op": "timer"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"op": "write"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope",
+"op": "yield"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"op": "event"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"op": "filesystem"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"op": "ipc"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"op": "lock"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"op": "memory"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"op": "other"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"op": "poll"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"op": "process"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"op": "query"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"op": "read"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"op": "sleep"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"op": "socket"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"op": "time"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"op": "timer"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"op": "write"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope",
+"op": "yield"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"op": "event"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"op": "filesystem"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"op": "ipc"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"op": "lock"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"op": "memory"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"op": "other"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"op": "poll"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"op": "process"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"op": "query"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"op": "read"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"op": "sleep"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"op": "socket"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"op": "time"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"op": "timer"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"op": "write"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope",
+"op": "yield"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"op": "event"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"op": "filesystem"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"op": "ipc"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"op": "lock"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"op": "memory"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"op": "other"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"op": "poll"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"op": "process"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"op": "query"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"op": "read"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"op": "sleep"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"op": "socket"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"op": "time"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"op": "timer"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"op": "write"
+},
+{
+"id": "5",
+"name": "/user.slice",
+"op": "yield"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"op": "event"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"op": "filesystem"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"op": "ipc"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"op": "lock"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"op": "memory"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"op": "other"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"op": "poll"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"op": "process"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"op": "query"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"op": "read"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"op": "sleep"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"op": "socket"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"op": "time"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"op": "timer"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"op": "write"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service",
+"op": "yield"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"op": "event"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"op": "filesystem"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"op": "ipc"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"op": "lock"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"op": "memory"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"op": "other"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"op": "poll"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"op": "process"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"op": "query"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"op": "read"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"op": "sleep"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"op": "socket"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"op": "time"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"op": "timer"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"op": "write"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service",
+"op": "yield"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"op": "event"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"op": "filesystem"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"op": "ipc"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"op": "lock"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"op": "memory"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"op": "other"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"op": "poll"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"op": "process"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"op": "query"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"op": "read"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"op": "sleep"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"op": "socket"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"op": "time"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"op": "timer"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"op": "write"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice",
+"op": "yield"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"op": "event"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"op": "filesystem"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"op": "ipc"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"op": "lock"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"op": "memory"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"op": "other"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"op": "poll"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"op": "process"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"op": "query"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"op": "read"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"op": "sleep"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"op": "socket"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"op": "time"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"op": "timer"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"op": "write"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice",
+"op": "yield"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"op": "event"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"op": "filesystem"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"op": "ipc"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"op": "lock"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"op": "memory"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"op": "other"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"op": "poll"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"op": "process"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"op": "query"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"op": "read"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"op": "sleep"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"op": "socket"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"op": "time"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"op": "timer"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"op": "write"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope",
+"op": "yield"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"op": "event"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"op": "filesystem"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"op": "ipc"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"op": "lock"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"op": "memory"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"op": "other"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"op": "poll"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"op": "process"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"op": "query"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"op": "read"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"op": "sleep"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"op": "socket"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"op": "time"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"op": "timer"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"op": "write"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope",
+"op": "yield"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"op": "event"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"op": "filesystem"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"op": "ipc"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"op": "lock"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"op": "memory"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"op": "other"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"op": "poll"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"op": "process"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"op": "query"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"op": "read"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"op": "sleep"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"op": "socket"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"op": "time"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"op": "timer"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"op": "write"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope",
+"op": "yield"
+}
+],
+"cpu_aperf": [
+{
+"id": "0"
+},
+{
+"id": "1"
+},
+{
+"id": "10"
+},
+{
+"id": "11"
+},
+{
+"id": "12"
+},
+{
+"id": "13"
+},
+{
+"id": "14"
+},
+{
+"id": "15"
+},
+{
+"id": "2"
+},
+{
+"id": "3"
+},
+{
+"id": "4"
+},
+{
+"id": "5"
+},
+{
+"id": "6"
+},
+{
+"id": "7"
+},
+{
+"id": "8"
+},
+{
+"id": "9"
+}
+],
+"cpu_migrations": [
+{
+"direction": "from",
+"id": "0"
+},
+{
+"direction": "from",
+"id": "1"
+},
+{
+"direction": "from",
+"id": "10"
+},
+{
+"direction": "from",
+"id": "11"
+},
+{
+"direction": "from",
+"id": "12"
+},
+{
+"direction": "from",
+"id": "13"
+},
+{
+"direction": "from",
+"id": "14"
+},
+{
+"direction": "from",
+"id": "15"
+},
+{
+"direction": "from",
+"id": "2"
+},
+{
+"direction": "from",
+"id": "3"
+},
+{
+"direction": "from",
+"id": "4"
+},
+{
+"direction": "from",
+"id": "5"
+},
+{
+"direction": "from",
+"id": "6"
+},
+{
+"direction": "from",
+"id": "7"
+},
+{
+"direction": "from",
+"id": "8"
+},
+{
+"direction": "from",
+"id": "9"
+},
+{
+"direction": "to",
+"id": "0"
+},
+{
+"direction": "to",
+"id": "1"
+},
+{
+"direction": "to",
+"id": "10"
+},
+{
+"direction": "to",
+"id": "11"
+},
+{
+"direction": "to",
+"id": "12"
+},
+{
+"direction": "to",
+"id": "13"
+},
+{
+"direction": "to",
+"id": "14"
+},
+{
+"direction": "to",
+"id": "15"
+},
+{
+"direction": "to",
+"id": "2"
+},
+{
+"direction": "to",
+"id": "3"
+},
+{
+"direction": "to",
+"id": "4"
+},
+{
+"direction": "to",
+"id": "5"
+},
+{
+"direction": "to",
+"id": "6"
+},
+{
+"direction": "to",
+"id": "7"
+},
+{
+"direction": "to",
+"id": "8"
+},
+{
+"direction": "to",
+"id": "9"
+}
+],
+"cpu_mperf": [
+{
+"id": "0"
+},
+{
+"id": "1"
+},
+{
+"id": "10"
+},
+{
+"id": "11"
+},
+{
+"id": "12"
+},
+{
+"id": "13"
+},
+{
+"id": "14"
+},
+{
+"id": "15"
+},
+{
+"id": "2"
+},
+{
+"id": "3"
+},
+{
+"id": "4"
+},
+{
+"id": "5"
+},
+{
+"id": "6"
+},
+{
+"id": "7"
+},
+{
+"id": "8"
+},
+{
+"id": "9"
+}
+],
+"cpu_tlb_flush": [
+{
+"id": "0",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "0",
+"reason": "local_shootdown"
+},
+{
+"id": "0",
+"reason": "remote_send_ipi"
+},
+{
+"id": "0",
+"reason": "remote_shootdown"
+},
+{
+"id": "0",
+"reason": "task_switch"
+},
+{
+"id": "0",
+"reason": "unknown"
+},
+{
+"id": "1",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "1",
+"reason": "local_shootdown"
+},
+{
+"id": "1",
+"reason": "remote_send_ipi"
+},
+{
+"id": "1",
+"reason": "remote_shootdown"
+},
+{
+"id": "1",
+"reason": "task_switch"
+},
+{
+"id": "1",
+"reason": "unknown"
+},
+{
+"id": "10",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "10",
+"reason": "local_shootdown"
+},
+{
+"id": "10",
+"reason": "remote_send_ipi"
+},
+{
+"id": "10",
+"reason": "remote_shootdown"
+},
+{
+"id": "10",
+"reason": "task_switch"
+},
+{
+"id": "10",
+"reason": "unknown"
+},
+{
+"id": "11",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "11",
+"reason": "local_shootdown"
+},
+{
+"id": "11",
+"reason": "remote_send_ipi"
+},
+{
+"id": "11",
+"reason": "remote_shootdown"
+},
+{
+"id": "11",
+"reason": "task_switch"
+},
+{
+"id": "11",
+"reason": "unknown"
+},
+{
+"id": "12",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "12",
+"reason": "local_shootdown"
+},
+{
+"id": "12",
+"reason": "remote_send_ipi"
+},
+{
+"id": "12",
+"reason": "remote_shootdown"
+},
+{
+"id": "12",
+"reason": "task_switch"
+},
+{
+"id": "12",
+"reason": "unknown"
+},
+{
+"id": "13",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "13",
+"reason": "local_shootdown"
+},
+{
+"id": "13",
+"reason": "remote_send_ipi"
+},
+{
+"id": "13",
+"reason": "remote_shootdown"
+},
+{
+"id": "13",
+"reason": "task_switch"
+},
+{
+"id": "13",
+"reason": "unknown"
+},
+{
+"id": "14",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "14",
+"reason": "local_shootdown"
+},
+{
+"id": "14",
+"reason": "remote_send_ipi"
+},
+{
+"id": "14",
+"reason": "remote_shootdown"
+},
+{
+"id": "14",
+"reason": "task_switch"
+},
+{
+"id": "14",
+"reason": "unknown"
+},
+{
+"id": "15",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "15",
+"reason": "local_shootdown"
+},
+{
+"id": "15",
+"reason": "remote_send_ipi"
+},
+{
+"id": "15",
+"reason": "remote_shootdown"
+},
+{
+"id": "15",
+"reason": "task_switch"
+},
+{
+"id": "15",
+"reason": "unknown"
+},
+{
+"id": "2",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "2",
+"reason": "local_shootdown"
+},
+{
+"id": "2",
+"reason": "remote_send_ipi"
+},
+{
+"id": "2",
+"reason": "remote_shootdown"
+},
+{
+"id": "2",
+"reason": "task_switch"
+},
+{
+"id": "2",
+"reason": "unknown"
+},
+{
+"id": "3",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "3",
+"reason": "local_shootdown"
+},
+{
+"id": "3",
+"reason": "remote_send_ipi"
+},
+{
+"id": "3",
+"reason": "remote_shootdown"
+},
+{
+"id": "3",
+"reason": "task_switch"
+},
+{
+"id": "3",
+"reason": "unknown"
+},
+{
+"id": "4",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "4",
+"reason": "local_shootdown"
+},
+{
+"id": "4",
+"reason": "remote_send_ipi"
+},
+{
+"id": "4",
+"reason": "remote_shootdown"
+},
+{
+"id": "4",
+"reason": "task_switch"
+},
+{
+"id": "4",
+"reason": "unknown"
+},
+{
+"id": "5",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "5",
+"reason": "local_shootdown"
+},
+{
+"id": "5",
+"reason": "remote_send_ipi"
+},
+{
+"id": "5",
+"reason": "remote_shootdown"
+},
+{
+"id": "5",
+"reason": "task_switch"
+},
+{
+"id": "5",
+"reason": "unknown"
+},
+{
+"id": "6",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "6",
+"reason": "local_shootdown"
+},
+{
+"id": "6",
+"reason": "remote_send_ipi"
+},
+{
+"id": "6",
+"reason": "remote_shootdown"
+},
+{
+"id": "6",
+"reason": "task_switch"
+},
+{
+"id": "6",
+"reason": "unknown"
+},
+{
+"id": "7",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "7",
+"reason": "local_shootdown"
+},
+{
+"id": "7",
+"reason": "remote_send_ipi"
+},
+{
+"id": "7",
+"reason": "remote_shootdown"
+},
+{
+"id": "7",
+"reason": "task_switch"
+},
+{
+"id": "7",
+"reason": "unknown"
+},
+{
+"id": "8",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "8",
+"reason": "local_shootdown"
+},
+{
+"id": "8",
+"reason": "remote_send_ipi"
+},
+{
+"id": "8",
+"reason": "remote_shootdown"
+},
+{
+"id": "8",
+"reason": "task_switch"
+},
+{
+"id": "8",
+"reason": "unknown"
+},
+{
+"id": "9",
+"reason": "local_mm_shootdown"
+},
+{
+"id": "9",
+"reason": "local_shootdown"
+},
+{
+"id": "9",
+"reason": "remote_send_ipi"
+},
+{
+"id": "9",
+"reason": "remote_shootdown"
+},
+{
+"id": "9",
+"reason": "task_switch"
+},
+{
+"id": "9",
+"reason": "unknown"
+}
+],
+"cpu_tsc": [
+{
+"id": "0"
+},
+{
+"id": "1"
+},
+{
+"id": "10"
+},
+{
+"id": "11"
+},
+{
+"id": "12"
+},
+{
+"id": "13"
+},
+{
+"id": "14"
+},
+{
+"id": "15"
+},
+{
+"id": "2"
+},
+{
+"id": "3"
+},
+{
+"id": "4"
+},
+{
+"id": "5"
+},
+{
+"id": "6"
+},
+{
+"id": "7"
+},
+{
+"id": "8"
+},
+{
+"id": "9"
+}
+],
+"cpu_usage": [
+{
+"id": "0",
+"state": "system"
+},
+{
+"id": "0",
+"state": "user"
+},
+{
+"id": "1",
+"state": "system"
+},
+{
+"id": "1",
+"state": "user"
+},
+{
+"id": "10",
+"state": "system"
+},
+{
+"id": "10",
+"state": "user"
+},
+{
+"id": "11",
+"state": "system"
+},
+{
+"id": "11",
+"state": "user"
+},
+{
+"id": "12",
+"state": "system"
+},
+{
+"id": "12",
+"state": "user"
+},
+{
+"id": "13",
+"state": "system"
+},
+{
+"id": "13",
+"state": "user"
+},
+{
+"id": "14",
+"state": "system"
+},
+{
+"id": "14",
+"state": "user"
+},
+{
+"id": "15",
+"state": "system"
+},
+{
+"id": "15",
+"state": "user"
+},
+{
+"id": "2",
+"state": "system"
+},
+{
+"id": "2",
+"state": "user"
+},
+{
+"id": "3",
+"state": "system"
+},
+{
+"id": "3",
+"state": "user"
+},
+{
+"id": "4",
+"state": "system"
+},
+{
+"id": "4",
+"state": "user"
+},
+{
+"id": "5",
+"state": "system"
+},
+{
+"id": "5",
+"state": "user"
+},
+{
+"id": "6",
+"state": "system"
+},
+{
+"id": "6",
+"state": "user"
+},
+{
+"id": "7",
+"state": "system"
+},
+{
+"id": "7",
+"state": "user"
+},
+{
+"id": "8",
+"state": "system"
+},
+{
+"id": "8",
+"state": "user"
+},
+{
+"id": "9",
+"state": "system"
+},
+{
+"id": "9",
+"state": "user"
+}
+],
+"cpu_usage_exited_tasks": [
+{
+"id": "0"
+},
+{
+"id": "1"
+},
+{
+"id": "10"
+},
+{
+"id": "11"
+},
+{
+"id": "12"
+},
+{
+"id": "13"
+},
+{
+"id": "14"
+},
+{
+"id": "15"
+},
+{
+"id": "2"
+},
+{
+"id": "3"
+},
+{
+"id": "4"
+},
+{
+"id": "5"
+},
+{
+"id": "6"
+},
+{
+"id": "7"
+},
+{
+"id": "8"
+},
+{
+"id": "9"
+}
+],
+"drive_temperature_critical_time": [
+{
+"device": "nvme0",
+"id": "0",
+"model": "Amazon Elastic Block Store",
+"serial": "vol0377f2d5932743826",
+"type": "nvme"
+},
+{
+"device": "nvme1",
+"id": "1",
+"model": "Amazon EC2 NVMe Instance Storage",
+"serial": "AWS64DA1180465A69983",
+"type": "nvme"
+}
+],
+"drive_temperature_warning_time": [
+{
+"device": "nvme0",
+"id": "0",
+"model": "Amazon Elastic Block Store",
+"serial": "vol0377f2d5932743826",
+"type": "nvme"
+},
+{
+"device": "nvme1",
+"id": "1",
+"model": "Amazon EC2 NVMe Instance Storage",
+"serial": "AWS64DA1180465A69983",
+"type": "nvme"
+}
+],
+"drive_thermal_throttle_time": [
+{
+"device": "nvme0",
+"id": "0",
+"level": "1",
+"model": "Amazon Elastic Block Store",
+"serial": "vol0377f2d5932743826",
+"type": "nvme"
+},
+{
+"device": "nvme0",
+"id": "0",
+"level": "2",
+"model": "Amazon Elastic Block Store",
+"serial": "vol0377f2d5932743826",
+"type": "nvme"
+},
+{
+"device": "nvme1",
+"id": "1",
+"level": "1",
+"model": "Amazon EC2 NVMe Instance Storage",
+"serial": "AWS64DA1180465A69983",
+"type": "nvme"
+},
+{
+"device": "nvme1",
+"id": "1",
+"level": "2",
+"model": "Amazon EC2 NVMe Instance Storage",
+"serial": "AWS64DA1180465A69983",
+"type": "nvme"
+}
+],
+"drive_thermal_throttle_transitions": [
+{
+"device": "nvme0",
+"id": "0",
+"level": "1",
+"model": "Amazon Elastic Block Store",
+"serial": "vol0377f2d5932743826",
+"type": "nvme"
+},
+{
+"device": "nvme0",
+"id": "0",
+"level": "2",
+"model": "Amazon Elastic Block Store",
+"serial": "vol0377f2d5932743826",
+"type": "nvme"
+},
+{
+"device": "nvme1",
+"id": "1",
+"level": "1",
+"model": "Amazon EC2 NVMe Instance Storage",
+"serial": "AWS64DA1180465A69983",
+"type": "nvme"
+},
+{
+"device": "nvme1",
+"id": "1",
+"level": "2",
+"model": "Amazon EC2 NVMe Instance Storage",
+"serial": "AWS64DA1180465A69983",
+"type": "nvme"
+}
+],
+"memory_numa_foreign": [
+{}
+],
+"memory_numa_hit": [
+{}
+],
+"memory_numa_interleave": [
+{}
+],
+"memory_numa_local": [
+{}
+],
+"memory_numa_miss": [
+{}
+],
+"memory_numa_other": [
+{}
+],
+"network_bytes": [
+{
+"direction": "receive"
+},
+{
+"direction": "transmit"
+}
+],
+"network_drop": [
+{}
+],
+"network_ena_bandwidth_allowance_exceeded": [
+{
+"direction": "receive"
+},
+{
+"direction": "transmit"
+}
+],
+"network_ena_conntrack_allowance_exceeded": [
+{}
+],
+"network_ena_linklocal_allowance_exceeded": [
+{}
+],
+"network_ena_pps_allowance_exceeded": [
+{}
+],
+"network_packets": [
+{
+"direction": "receive"
+},
+{
+"direction": "transmit"
+}
+],
+"network_transmit_busy": [
+{}
+],
+"network_transmit_complete": [
+{}
+],
+"network_transmit_timeout": [
+{}
+],
+"rezolus_blockio_operations": [
+{
+"op": "read"
+},
+{
+"op": "write"
+}
+],
+"rezolus_context_switch": [
+{
+"kind": "involuntary"
+},
+{
+"kind": "voluntary"
+}
+],
+"rezolus_cpu_usage": [
+{
+"state": "system"
+},
+{
+"state": "user"
+}
+],
+"rezolus_memory_page_faults": [
+{}
+],
+"rezolus_memory_page_reclaims": [
+{}
+],
+"scheduler_context_switch": [
+{
+"id": "0",
+"kind": "involuntary"
+},
+{
+"id": "0",
+"kind": "voluntary"
+},
+{
+"id": "1",
+"kind": "involuntary"
+},
+{
+"id": "1",
+"kind": "voluntary"
+},
+{
+"id": "10",
+"kind": "involuntary"
+},
+{
+"id": "10",
+"kind": "voluntary"
+},
+{
+"id": "11",
+"kind": "involuntary"
+},
+{
+"id": "11",
+"kind": "voluntary"
+},
+{
+"id": "12",
+"kind": "involuntary"
+},
+{
+"id": "12",
+"kind": "voluntary"
+},
+{
+"id": "13",
+"kind": "involuntary"
+},
+{
+"id": "13",
+"kind": "voluntary"
+},
+{
+"id": "14",
+"kind": "involuntary"
+},
+{
+"id": "14",
+"kind": "voluntary"
+},
+{
+"id": "15",
+"kind": "involuntary"
+},
+{
+"id": "15",
+"kind": "voluntary"
+},
+{
+"id": "2",
+"kind": "involuntary"
+},
+{
+"id": "2",
+"kind": "voluntary"
+},
+{
+"id": "3",
+"kind": "involuntary"
+},
+{
+"id": "3",
+"kind": "voluntary"
+},
+{
+"id": "4",
+"kind": "involuntary"
+},
+{
+"id": "4",
+"kind": "voluntary"
+},
+{
+"id": "5",
+"kind": "involuntary"
+},
+{
+"id": "5",
+"kind": "voluntary"
+},
+{
+"id": "6",
+"kind": "involuntary"
+},
+{
+"id": "6",
+"kind": "voluntary"
+},
+{
+"id": "7",
+"kind": "involuntary"
+},
+{
+"id": "7",
+"kind": "voluntary"
+},
+{
+"id": "8",
+"kind": "involuntary"
+},
+{
+"id": "8",
+"kind": "voluntary"
+},
+{
+"id": "9",
+"kind": "involuntary"
+},
+{
+"id": "9",
+"kind": "voluntary"
+}
+],
+"scheduler_discarded_samples": [
+{
+"id": "0"
+},
+{
+"id": "1"
+},
+{
+"id": "10"
+},
+{
+"id": "11"
+},
+{
+"id": "12"
+},
+{
+"id": "13"
+},
+{
+"id": "14"
+},
+{
+"id": "15"
+},
+{
+"id": "2"
+},
+{
+"id": "3"
+},
+{
+"id": "4"
+},
+{
+"id": "5"
+},
+{
+"id": "6"
+},
+{
+"id": "7"
+},
+{
+"id": "8"
+},
+{
+"id": "9"
+}
+],
+"scheduler_runqueue_wait": [
+{
+"id": "0"
+},
+{
+"id": "1"
+},
+{
+"id": "10"
+},
+{
+"id": "11"
+},
+{
+"id": "12"
+},
+{
+"id": "13"
+},
+{
+"id": "14"
+},
+{
+"id": "15"
+},
+{
+"id": "2"
+},
+{
+"id": "3"
+},
+{
+"id": "4"
+},
+{
+"id": "5"
+},
+{
+"id": "6"
+},
+{
+"id": "7"
+},
+{
+"id": "8"
+},
+{
+"id": "9"
+}
+],
+"softirq": [
+{
+"id": "0",
+"kind": "block"
+},
+{
+"id": "0",
+"kind": "hi"
+},
+{
+"id": "0",
+"kind": "hrtimer"
+},
+{
+"id": "0",
+"kind": "irq_poll"
+},
+{
+"id": "0",
+"kind": "net_rx"
+},
+{
+"id": "0",
+"kind": "net_tx"
+},
+{
+"id": "0",
+"kind": "rcu"
+},
+{
+"id": "0",
+"kind": "sched"
+},
+{
+"id": "0",
+"kind": "tasklet"
+},
+{
+"id": "0",
+"kind": "timer"
+},
+{
+"id": "1",
+"kind": "block"
+},
+{
+"id": "1",
+"kind": "hi"
+},
+{
+"id": "1",
+"kind": "hrtimer"
+},
+{
+"id": "1",
+"kind": "irq_poll"
+},
+{
+"id": "1",
+"kind": "net_rx"
+},
+{
+"id": "1",
+"kind": "net_tx"
+},
+{
+"id": "1",
+"kind": "rcu"
+},
+{
+"id": "1",
+"kind": "sched"
+},
+{
+"id": "1",
+"kind": "tasklet"
+},
+{
+"id": "1",
+"kind": "timer"
+},
+{
+"id": "10",
+"kind": "block"
+},
+{
+"id": "10",
+"kind": "hi"
+},
+{
+"id": "10",
+"kind": "hrtimer"
+},
+{
+"id": "10",
+"kind": "irq_poll"
+},
+{
+"id": "10",
+"kind": "net_rx"
+},
+{
+"id": "10",
+"kind": "net_tx"
+},
+{
+"id": "10",
+"kind": "rcu"
+},
+{
+"id": "10",
+"kind": "sched"
+},
+{
+"id": "10",
+"kind": "tasklet"
+},
+{
+"id": "10",
+"kind": "timer"
+},
+{
+"id": "11",
+"kind": "block"
+},
+{
+"id": "11",
+"kind": "hi"
+},
+{
+"id": "11",
+"kind": "hrtimer"
+},
+{
+"id": "11",
+"kind": "irq_poll"
+},
+{
+"id": "11",
+"kind": "net_rx"
+},
+{
+"id": "11",
+"kind": "net_tx"
+},
+{
+"id": "11",
+"kind": "rcu"
+},
+{
+"id": "11",
+"kind": "sched"
+},
+{
+"id": "11",
+"kind": "tasklet"
+},
+{
+"id": "11",
+"kind": "timer"
+},
+{
+"id": "12",
+"kind": "block"
+},
+{
+"id": "12",
+"kind": "hi"
+},
+{
+"id": "12",
+"kind": "hrtimer"
+},
+{
+"id": "12",
+"kind": "irq_poll"
+},
+{
+"id": "12",
+"kind": "net_rx"
+},
+{
+"id": "12",
+"kind": "net_tx"
+},
+{
+"id": "12",
+"kind": "rcu"
+},
+{
+"id": "12",
+"kind": "sched"
+},
+{
+"id": "12",
+"kind": "tasklet"
+},
+{
+"id": "12",
+"kind": "timer"
+},
+{
+"id": "13",
+"kind": "block"
+},
+{
+"id": "13",
+"kind": "hi"
+},
+{
+"id": "13",
+"kind": "hrtimer"
+},
+{
+"id": "13",
+"kind": "irq_poll"
+},
+{
+"id": "13",
+"kind": "net_rx"
+},
+{
+"id": "13",
+"kind": "net_tx"
+},
+{
+"id": "13",
+"kind": "rcu"
+},
+{
+"id": "13",
+"kind": "sched"
+},
+{
+"id": "13",
+"kind": "tasklet"
+},
+{
+"id": "13",
+"kind": "timer"
+},
+{
+"id": "14",
+"kind": "block"
+},
+{
+"id": "14",
+"kind": "hi"
+},
+{
+"id": "14",
+"kind": "hrtimer"
+},
+{
+"id": "14",
+"kind": "irq_poll"
+},
+{
+"id": "14",
+"kind": "net_rx"
+},
+{
+"id": "14",
+"kind": "net_tx"
+},
+{
+"id": "14",
+"kind": "rcu"
+},
+{
+"id": "14",
+"kind": "sched"
+},
+{
+"id": "14",
+"kind": "tasklet"
+},
+{
+"id": "14",
+"kind": "timer"
+},
+{
+"id": "15",
+"kind": "block"
+},
+{
+"id": "15",
+"kind": "hi"
+},
+{
+"id": "15",
+"kind": "hrtimer"
+},
+{
+"id": "15",
+"kind": "irq_poll"
+},
+{
+"id": "15",
+"kind": "net_rx"
+},
+{
+"id": "15",
+"kind": "net_tx"
+},
+{
+"id": "15",
+"kind": "rcu"
+},
+{
+"id": "15",
+"kind": "sched"
+},
+{
+"id": "15",
+"kind": "tasklet"
+},
+{
+"id": "15",
+"kind": "timer"
+},
+{
+"id": "2",
+"kind": "block"
+},
+{
+"id": "2",
+"kind": "hi"
+},
+{
+"id": "2",
+"kind": "hrtimer"
+},
+{
+"id": "2",
+"kind": "irq_poll"
+},
+{
+"id": "2",
+"kind": "net_rx"
+},
+{
+"id": "2",
+"kind": "net_tx"
+},
+{
+"id": "2",
+"kind": "rcu"
+},
+{
+"id": "2",
+"kind": "sched"
+},
+{
+"id": "2",
+"kind": "tasklet"
+},
+{
+"id": "2",
+"kind": "timer"
+},
+{
+"id": "3",
+"kind": "block"
+},
+{
+"id": "3",
+"kind": "hi"
+},
+{
+"id": "3",
+"kind": "hrtimer"
+},
+{
+"id": "3",
+"kind": "irq_poll"
+},
+{
+"id": "3",
+"kind": "net_rx"
+},
+{
+"id": "3",
+"kind": "net_tx"
+},
+{
+"id": "3",
+"kind": "rcu"
+},
+{
+"id": "3",
+"kind": "sched"
+},
+{
+"id": "3",
+"kind": "tasklet"
+},
+{
+"id": "3",
+"kind": "timer"
+},
+{
+"id": "4",
+"kind": "block"
+},
+{
+"id": "4",
+"kind": "hi"
+},
+{
+"id": "4",
+"kind": "hrtimer"
+},
+{
+"id": "4",
+"kind": "irq_poll"
+},
+{
+"id": "4",
+"kind": "net_rx"
+},
+{
+"id": "4",
+"kind": "net_tx"
+},
+{
+"id": "4",
+"kind": "rcu"
+},
+{
+"id": "4",
+"kind": "sched"
+},
+{
+"id": "4",
+"kind": "tasklet"
+},
+{
+"id": "4",
+"kind": "timer"
+},
+{
+"id": "5",
+"kind": "block"
+},
+{
+"id": "5",
+"kind": "hi"
+},
+{
+"id": "5",
+"kind": "hrtimer"
+},
+{
+"id": "5",
+"kind": "irq_poll"
+},
+{
+"id": "5",
+"kind": "net_rx"
+},
+{
+"id": "5",
+"kind": "net_tx"
+},
+{
+"id": "5",
+"kind": "rcu"
+},
+{
+"id": "5",
+"kind": "sched"
+},
+{
+"id": "5",
+"kind": "tasklet"
+},
+{
+"id": "5",
+"kind": "timer"
+},
+{
+"id": "6",
+"kind": "block"
+},
+{
+"id": "6",
+"kind": "hi"
+},
+{
+"id": "6",
+"kind": "hrtimer"
+},
+{
+"id": "6",
+"kind": "irq_poll"
+},
+{
+"id": "6",
+"kind": "net_rx"
+},
+{
+"id": "6",
+"kind": "net_tx"
+},
+{
+"id": "6",
+"kind": "rcu"
+},
+{
+"id": "6",
+"kind": "sched"
+},
+{
+"id": "6",
+"kind": "tasklet"
+},
+{
+"id": "6",
+"kind": "timer"
+},
+{
+"id": "7",
+"kind": "block"
+},
+{
+"id": "7",
+"kind": "hi"
+},
+{
+"id": "7",
+"kind": "hrtimer"
+},
+{
+"id": "7",
+"kind": "irq_poll"
+},
+{
+"id": "7",
+"kind": "net_rx"
+},
+{
+"id": "7",
+"kind": "net_tx"
+},
+{
+"id": "7",
+"kind": "rcu"
+},
+{
+"id": "7",
+"kind": "sched"
+},
+{
+"id": "7",
+"kind": "tasklet"
+},
+{
+"id": "7",
+"kind": "timer"
+},
+{
+"id": "8",
+"kind": "block"
+},
+{
+"id": "8",
+"kind": "hi"
+},
+{
+"id": "8",
+"kind": "hrtimer"
+},
+{
+"id": "8",
+"kind": "irq_poll"
+},
+{
+"id": "8",
+"kind": "net_rx"
+},
+{
+"id": "8",
+"kind": "net_tx"
+},
+{
+"id": "8",
+"kind": "rcu"
+},
+{
+"id": "8",
+"kind": "sched"
+},
+{
+"id": "8",
+"kind": "tasklet"
+},
+{
+"id": "8",
+"kind": "timer"
+},
+{
+"id": "9",
+"kind": "block"
+},
+{
+"id": "9",
+"kind": "hi"
+},
+{
+"id": "9",
+"kind": "hrtimer"
+},
+{
+"id": "9",
+"kind": "irq_poll"
+},
+{
+"id": "9",
+"kind": "net_rx"
+},
+{
+"id": "9",
+"kind": "net_tx"
+},
+{
+"id": "9",
+"kind": "rcu"
+},
+{
+"id": "9",
+"kind": "sched"
+},
+{
+"id": "9",
+"kind": "tasklet"
+},
+{
+"id": "9",
+"kind": "timer"
+}
+],
+"softirq_time": [
+{
+"id": "0",
+"kind": "block"
+},
+{
+"id": "0",
+"kind": "hi"
+},
+{
+"id": "0",
+"kind": "hrtimer"
+},
+{
+"id": "0",
+"kind": "irq_poll"
+},
+{
+"id": "0",
+"kind": "net_rx"
+},
+{
+"id": "0",
+"kind": "net_tx"
+},
+{
+"id": "0",
+"kind": "rcu"
+},
+{
+"id": "0",
+"kind": "sched"
+},
+{
+"id": "0",
+"kind": "tasklet"
+},
+{
+"id": "0",
+"kind": "timer"
+},
+{
+"id": "1",
+"kind": "block"
+},
+{
+"id": "1",
+"kind": "hi"
+},
+{
+"id": "1",
+"kind": "hrtimer"
+},
+{
+"id": "1",
+"kind": "irq_poll"
+},
+{
+"id": "1",
+"kind": "net_rx"
+},
+{
+"id": "1",
+"kind": "net_tx"
+},
+{
+"id": "1",
+"kind": "rcu"
+},
+{
+"id": "1",
+"kind": "sched"
+},
+{
+"id": "1",
+"kind": "tasklet"
+},
+{
+"id": "1",
+"kind": "timer"
+},
+{
+"id": "10",
+"kind": "block"
+},
+{
+"id": "10",
+"kind": "hi"
+},
+{
+"id": "10",
+"kind": "hrtimer"
+},
+{
+"id": "10",
+"kind": "irq_poll"
+},
+{
+"id": "10",
+"kind": "net_rx"
+},
+{
+"id": "10",
+"kind": "net_tx"
+},
+{
+"id": "10",
+"kind": "rcu"
+},
+{
+"id": "10",
+"kind": "sched"
+},
+{
+"id": "10",
+"kind": "tasklet"
+},
+{
+"id": "10",
+"kind": "timer"
+},
+{
+"id": "11",
+"kind": "block"
+},
+{
+"id": "11",
+"kind": "hi"
+},
+{
+"id": "11",
+"kind": "hrtimer"
+},
+{
+"id": "11",
+"kind": "irq_poll"
+},
+{
+"id": "11",
+"kind": "net_rx"
+},
+{
+"id": "11",
+"kind": "net_tx"
+},
+{
+"id": "11",
+"kind": "rcu"
+},
+{
+"id": "11",
+"kind": "sched"
+},
+{
+"id": "11",
+"kind": "tasklet"
+},
+{
+"id": "11",
+"kind": "timer"
+},
+{
+"id": "12",
+"kind": "block"
+},
+{
+"id": "12",
+"kind": "hi"
+},
+{
+"id": "12",
+"kind": "hrtimer"
+},
+{
+"id": "12",
+"kind": "irq_poll"
+},
+{
+"id": "12",
+"kind": "net_rx"
+},
+{
+"id": "12",
+"kind": "net_tx"
+},
+{
+"id": "12",
+"kind": "rcu"
+},
+{
+"id": "12",
+"kind": "sched"
+},
+{
+"id": "12",
+"kind": "tasklet"
+},
+{
+"id": "12",
+"kind": "timer"
+},
+{
+"id": "13",
+"kind": "block"
+},
+{
+"id": "13",
+"kind": "hi"
+},
+{
+"id": "13",
+"kind": "hrtimer"
+},
+{
+"id": "13",
+"kind": "irq_poll"
+},
+{
+"id": "13",
+"kind": "net_rx"
+},
+{
+"id": "13",
+"kind": "net_tx"
+},
+{
+"id": "13",
+"kind": "rcu"
+},
+{
+"id": "13",
+"kind": "sched"
+},
+{
+"id": "13",
+"kind": "tasklet"
+},
+{
+"id": "13",
+"kind": "timer"
+},
+{
+"id": "14",
+"kind": "block"
+},
+{
+"id": "14",
+"kind": "hi"
+},
+{
+"id": "14",
+"kind": "hrtimer"
+},
+{
+"id": "14",
+"kind": "irq_poll"
+},
+{
+"id": "14",
+"kind": "net_rx"
+},
+{
+"id": "14",
+"kind": "net_tx"
+},
+{
+"id": "14",
+"kind": "rcu"
+},
+{
+"id": "14",
+"kind": "sched"
+},
+{
+"id": "14",
+"kind": "tasklet"
+},
+{
+"id": "14",
+"kind": "timer"
+},
+{
+"id": "15",
+"kind": "block"
+},
+{
+"id": "15",
+"kind": "hi"
+},
+{
+"id": "15",
+"kind": "hrtimer"
+},
+{
+"id": "15",
+"kind": "irq_poll"
+},
+{
+"id": "15",
+"kind": "net_rx"
+},
+{
+"id": "15",
+"kind": "net_tx"
+},
+{
+"id": "15",
+"kind": "rcu"
+},
+{
+"id": "15",
+"kind": "sched"
+},
+{
+"id": "15",
+"kind": "tasklet"
+},
+{
+"id": "15",
+"kind": "timer"
+},
+{
+"id": "2",
+"kind": "block"
+},
+{
+"id": "2",
+"kind": "hi"
+},
+{
+"id": "2",
+"kind": "hrtimer"
+},
+{
+"id": "2",
+"kind": "irq_poll"
+},
+{
+"id": "2",
+"kind": "net_rx"
+},
+{
+"id": "2",
+"kind": "net_tx"
+},
+{
+"id": "2",
+"kind": "rcu"
+},
+{
+"id": "2",
+"kind": "sched"
+},
+{
+"id": "2",
+"kind": "tasklet"
+},
+{
+"id": "2",
+"kind": "timer"
+},
+{
+"id": "3",
+"kind": "block"
+},
+{
+"id": "3",
+"kind": "hi"
+},
+{
+"id": "3",
+"kind": "hrtimer"
+},
+{
+"id": "3",
+"kind": "irq_poll"
+},
+{
+"id": "3",
+"kind": "net_rx"
+},
+{
+"id": "3",
+"kind": "net_tx"
+},
+{
+"id": "3",
+"kind": "rcu"
+},
+{
+"id": "3",
+"kind": "sched"
+},
+{
+"id": "3",
+"kind": "tasklet"
+},
+{
+"id": "3",
+"kind": "timer"
+},
+{
+"id": "4",
+"kind": "block"
+},
+{
+"id": "4",
+"kind": "hi"
+},
+{
+"id": "4",
+"kind": "hrtimer"
+},
+{
+"id": "4",
+"kind": "irq_poll"
+},
+{
+"id": "4",
+"kind": "net_rx"
+},
+{
+"id": "4",
+"kind": "net_tx"
+},
+{
+"id": "4",
+"kind": "rcu"
+},
+{
+"id": "4",
+"kind": "sched"
+},
+{
+"id": "4",
+"kind": "tasklet"
+},
+{
+"id": "4",
+"kind": "timer"
+},
+{
+"id": "5",
+"kind": "block"
+},
+{
+"id": "5",
+"kind": "hi"
+},
+{
+"id": "5",
+"kind": "hrtimer"
+},
+{
+"id": "5",
+"kind": "irq_poll"
+},
+{
+"id": "5",
+"kind": "net_rx"
+},
+{
+"id": "5",
+"kind": "net_tx"
+},
+{
+"id": "5",
+"kind": "rcu"
+},
+{
+"id": "5",
+"kind": "sched"
+},
+{
+"id": "5",
+"kind": "tasklet"
+},
+{
+"id": "5",
+"kind": "timer"
+},
+{
+"id": "6",
+"kind": "block"
+},
+{
+"id": "6",
+"kind": "hi"
+},
+{
+"id": "6",
+"kind": "hrtimer"
+},
+{
+"id": "6",
+"kind": "irq_poll"
+},
+{
+"id": "6",
+"kind": "net_rx"
+},
+{
+"id": "6",
+"kind": "net_tx"
+},
+{
+"id": "6",
+"kind": "rcu"
+},
+{
+"id": "6",
+"kind": "sched"
+},
+{
+"id": "6",
+"kind": "tasklet"
+},
+{
+"id": "6",
+"kind": "timer"
+},
+{
+"id": "7",
+"kind": "block"
+},
+{
+"id": "7",
+"kind": "hi"
+},
+{
+"id": "7",
+"kind": "hrtimer"
+},
+{
+"id": "7",
+"kind": "irq_poll"
+},
+{
+"id": "7",
+"kind": "net_rx"
+},
+{
+"id": "7",
+"kind": "net_tx"
+},
+{
+"id": "7",
+"kind": "rcu"
+},
+{
+"id": "7",
+"kind": "sched"
+},
+{
+"id": "7",
+"kind": "tasklet"
+},
+{
+"id": "7",
+"kind": "timer"
+},
+{
+"id": "8",
+"kind": "block"
+},
+{
+"id": "8",
+"kind": "hi"
+},
+{
+"id": "8",
+"kind": "hrtimer"
+},
+{
+"id": "8",
+"kind": "irq_poll"
+},
+{
+"id": "8",
+"kind": "net_rx"
+},
+{
+"id": "8",
+"kind": "net_tx"
+},
+{
+"id": "8",
+"kind": "rcu"
+},
+{
+"id": "8",
+"kind": "sched"
+},
+{
+"id": "8",
+"kind": "tasklet"
+},
+{
+"id": "8",
+"kind": "timer"
+},
+{
+"id": "9",
+"kind": "block"
+},
+{
+"id": "9",
+"kind": "hi"
+},
+{
+"id": "9",
+"kind": "hrtimer"
+},
+{
+"id": "9",
+"kind": "irq_poll"
+},
+{
+"id": "9",
+"kind": "net_rx"
+},
+{
+"id": "9",
+"kind": "net_tx"
+},
+{
+"id": "9",
+"kind": "rcu"
+},
+{
+"id": "9",
+"kind": "sched"
+},
+{
+"id": "9",
+"kind": "tasklet"
+},
+{
+"id": "9",
+"kind": "timer"
+}
+],
+"syscall": [
+{
+"op": "event"
+},
+{
+"op": "filesystem"
+},
+{
+"op": "ipc"
+},
+{
+"op": "lock"
+},
+{
+"op": "memory"
+},
+{
+"op": "other"
+},
+{
+"op": "poll"
+},
+{
+"op": "process"
+},
+{
+"op": "query"
+},
+{
+"op": "read"
+},
+{
+"op": "sleep"
+},
+{
+"op": "socket"
+},
+{
+"op": "time"
+},
+{
+"op": "timer"
+},
+{
+"op": "write"
+},
+{
+"op": "yield"
+}
+],
+"tcp_bytes": [
+{
+"direction": "receive"
+},
+{
+"direction": "transmit"
+}
+],
+"tcp_packets": [
+{
+"direction": "receive"
+},
+{
+"direction": "transmit"
+}
+],
+"tcp_retransmit": [
+{}
+]
+},
+"gauge": {
+"cgroup_cpu_bandwidth_period_duration": [
+{
+"id": "10",
+"name": "/sys-fs-fuse-connections.mount"
+},
+{
+"id": "11",
+"name": "/user.slice/user-1000.slice"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice"
+},
+{
+"id": "19",
+"name": "/system.slice/system-getty.slice"
+},
+{
+"id": "2",
+"name": "/init.scope"
+},
+{
+"id": "20",
+"name": "/system.slice/system-serial-getty.slice"
+},
+{
+"id": "21",
+"name": "/system.slice/system-sshd-keygen.slice"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service"
+},
+{
+"id": "25",
+"name": "/system.slice/boot.mount"
+},
+{
+"id": "26",
+"name": "/system.slice/boot-efi.mount"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service"
+},
+{
+"id": "28",
+"name": "/system.slice/cockpit.socket"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service"
+},
+{
+"id": "3",
+"name": "/system.slice"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope"
+},
+{
+"id": "5",
+"name": "/user.slice"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope"
+},
+{
+"id": "6",
+"name": "/dev-hugepages.mount"
+},
+{
+"id": "7",
+"name": "/dev-mqueue.mount"
+},
+{
+"id": "8",
+"name": "/sys-kernel-debug.mount"
+},
+{
+"id": "9",
+"name": "/sys-kernel-tracing.mount"
+}
+],
+"cgroup_cpu_bandwidth_quota": [
+{
+"id": "10",
+"name": "/sys-fs-fuse-connections.mount"
+},
+{
+"id": "11",
+"name": "/user.slice/user-1000.slice"
+},
+{
+"id": "12",
+"name": ".../user-1000.slice/user@1000.service/init.scope"
+},
+{
+"id": "13",
+"name": "/user.slice/user-1000.slice/user@1000.service"
+},
+{
+"id": "14",
+"name": ".../user-1000.slice/user@1000.service/app.slice"
+},
+{
+"id": "15",
+"name": "/user.slice/user-1000.slice/session-195.scope"
+},
+{
+"id": "16",
+"name": "/system.slice/NetworkManager-dispatcher.service"
+},
+{
+"id": "16",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "16",
+"name": "/system.slice/fwupd-refresh.service"
+},
+{
+"id": "16",
+"name": "/user.slice/user-0.slice"
+},
+{
+"id": "17",
+"name": "/system.slice/system-modprobe.slice"
+},
+{
+"id": "19",
+"name": "/system.slice/system-getty.slice"
+},
+{
+"id": "2",
+"name": "/init.scope"
+},
+{
+"id": "20",
+"name": "/system.slice/system-serial-getty.slice"
+},
+{
+"id": "21",
+"name": "/system.slice/system-sshd-keygen.slice"
+},
+{
+"id": "22",
+"name": "/system.slice/systemd-journald.service"
+},
+{
+"id": "23",
+"name": "/system.slice/systemd-userdbd.service"
+},
+{
+"id": "24",
+"name": "/system.slice/systemd-udevd.service"
+},
+{
+"id": "25",
+"name": "/system.slice/boot.mount"
+},
+{
+"id": "26",
+"name": "/system.slice/boot-efi.mount"
+},
+{
+"id": "27",
+"name": "/system.slice/auditd.service"
+},
+{
+"id": "28",
+"name": "/system.slice/cockpit.socket"
+},
+{
+"id": "29",
+"name": "/system.slice/dbus-broker.service"
+},
+{
+"id": "3",
+"name": "/system.slice"
+},
+{
+"id": "30",
+"name": "/system.slice/chronyd.service"
+},
+{
+"id": "31",
+"name": "/system.slice/irqbalance.service"
+},
+{
+"id": "32",
+"name": "/system.slice/rngd.service"
+},
+{
+"id": "33",
+"name": "/system.slice/systemd-logind.service"
+},
+{
+"id": "34",
+"name": "/system.slice/NetworkManager.service"
+},
+{
+"id": "35",
+"name": "/system.slice/gssproxy.service"
+},
+{
+"id": "36",
+"name": "/system.slice/rsyslog.service"
+},
+{
+"id": "37",
+"name": "/system.slice/sshd.service"
+},
+{
+"id": "38",
+"name": "/system.slice/crond.service"
+},
+{
+"id": "39",
+"name": "/system.slice/rezolus.service"
+},
+{
+"id": "40",
+"name": "/system.slice/rezolus-exporter.service"
+},
+{
+"id": "41",
+"name": ".../user-0.slice/user@0.service/init.scope"
+},
+{
+"id": "41",
+"name": "/system.slice/dnf-makecache.service"
+},
+{
+"id": "42",
+"name": "/user.slice/user-0.slice/user@0.service"
+},
+{
+"id": "43",
+"name": ".../user-0.slice/user@0.service/app.slice"
+},
+{
+"id": "44",
+"name": "/system.slice/systemslab-agent.service"
+},
+{
+"id": "45",
+"name": "/system.slice/fwupd.service"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2096.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2110.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2111.scope"
+},
+{
+"id": "46",
+"name": "/user.slice/user-0.slice/session-c2112.scope"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2094.scope"
+},
+{
+"id": "47",
+"name": "/user.slice/user-0.slice/session-c2108.scope"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2095.scope"
+},
+{
+"id": "48",
+"name": "/user.slice/user-0.slice/session-c2109.scope"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2087.scope"
+},
+{
+"id": "49",
+"name": "/user.slice/user-0.slice/session-c2107.scope"
+},
+{
+"id": "5",
+"name": "/user.slice"
+},
+{
+"id": "50",
+"name": "/system.slice/udisks2.service"
+},
+{
+"id": "51",
+"name": "/system.slice/polkit.service"
+},
+{
+"id": "52",
+"name": ".../user-1000.slice/user@1000.service/background.slice"
+},
+{
+"id": "53",
+"name": ".../user-993.slice/user@993.service/app.slice"
+},
+{
+"id": "54",
+"name": "/user.slice/user-993.slice/session-c1720.scope"
+},
+{
+"id": "55",
+"name": "/user.slice/user-0.slice/session-c1098.scope"
+},
+{
+"id": "56",
+"name": "/user.slice/user-993.slice/session-c1097.scope"
+},
+{
+"id": "6",
+"name": "/dev-hugepages.mount"
+},
+{
+"id": "7",
+"name": "/dev-mqueue.mount"
+},
+{
+"id": "8",
+"name": "/sys-kernel-debug.mount"
+},
+{
+"id": "9",
+"name": "/sys-kernel-tracing.mount"
+}
+],
+"cpu_cores": [
+{}
+],
+"drive_temperature": [
+{
+"device": "nvme0",
+"id": "0",
+"model": "Amazon Elastic Block Store",
+"serial": "vol0377f2d5932743826",
+"type": "nvme"
+},
+{
+"device": "nvme1",
+"id": "1",
+"model": "Amazon EC2 NVMe Instance Storage",
+"serial": "AWS64DA1180465A69983",
+"type": "nvme"
+}
+],
+"memory_available": [
+{}
+],
+"memory_buffers": [
+{}
+],
+"memory_cached": [
+{}
+],
+"memory_free": [
+{}
+],
+"memory_total": [
+{}
+],
+"rezolus_memory_usage_resident_set_size": [
+{}
+]
+},
+"histogram": {
+"blockio_device_latency": [
+{
+"op": "discard"
+},
+{
+"op": "flush"
+},
+{
+"op": "read"
+},
+{
+"op": "write"
+}
+],
+"blockio_queue_latency": [
+{
+"op": "discard"
+},
+{
+"op": "flush"
+},
+{
+"op": "read"
+},
+{
+"op": "write"
+}
+],
+"blockio_size": [
+{
+"op": "discard"
+},
+{
+"op": "flush"
+},
+{
+"op": "read"
+},
+{
+"op": "write"
+}
+],
+"blockio_total_latency": [
+{
+"op": "discard"
+},
+{
+"op": "flush"
+},
+{
+"op": "read"
+},
+{
+"op": "write"
+}
+],
+"scheduler_offcpu": [
+{}
+],
+"scheduler_running": [
+{}
+],
+"scheduler_runqueue_latency": [
+{}
+],
+"syscall_latency": [
+{
+"op": "event"
+},
+{
+"op": "filesystem"
+},
+{
+"op": "ipc"
+},
+{
+"op": "lock"
+},
+{
+"op": "memory"
+},
+{
+"op": "other"
+},
+{
+"op": "poll"
+},
+{
+"op": "process"
+},
+{
+"op": "query"
+},
+{
+"op": "read"
+},
+{
+"op": "sleep"
+},
+{
+"op": "socket"
+},
+{
+"op": "time"
+},
+{
+"op": "timer"
+},
+{
+"op": "write"
+},
+{
+"op": "yield"
+}
+],
+"tcp_connect_latency": [
+{}
+],
+"tcp_jitter": [
+{}
+],
+"tcp_packet_latency": [
+{}
+],
+"tcp_size": [
+{
+"direction": "receive"
+},
+{
+"direction": "transmit"
+}
+],
+"tcp_srtt": [
+{}
+]
+}
+}

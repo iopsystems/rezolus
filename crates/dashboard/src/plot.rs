@@ -198,6 +198,14 @@ impl Group {
         self.subgroups.is_empty()
     }
 
+    /// Remove the most recently opened subgroup if it holds no plots. A
+    /// section template omits a subgroup its predicates left empty.
+    pub fn drop_last_subgroup_if_empty(&mut self) {
+        if self.subgroups.last().is_some_and(|sg| sg.plots.is_empty()) {
+            self.subgroups.pop();
+        }
+    }
+
     /// Open a named subgroup. Returns a mutable reference so the
     /// caller can chain plot calls on it.
     pub fn subgroup<T: Into<String>>(&mut self, name: T) -> &mut SubGroup {
