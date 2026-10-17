@@ -731,14 +731,18 @@
   an unknown or malformed `${..}` name, a catalog label value outside a
   double-quoted string in a query (or after a `\` or in a `#` comment),
   a let that uses another let, an undeclared parameter, more than 64
-  sections, and a malformed or duplicate route. Each section's expansion
-  is bounded on its own: 20,000 nodes, 4 MiB of strings and copied
-  metadata (strings checked before each piece is appended, metadata at
-  its in-memory size) and 2,000,000 units of catalog work (one per
-  predicate, series and counter name read). `parse` has no limit on the
-  document's size, so a caller reading untrusted templates caps it
-  first. A `TemplateError` has a kind: an invalid document, a limit, or
-  an unset parameter.
+  sections, a malformed or duplicate route, an array or object of more
+  than 4096 entries, a string over 16 KiB, a name over 64 bytes, and a
+  `distinct_gt` `int` label that is not one of its `by` labels (of which
+  there are at most 16). Parsing is linear in the document's size, which
+  it does not limit, so a caller reading untrusted templates caps it
+  first. Each section's expansion is bounded on its own: 20,000 nodes;
+  4 MiB of output (strings, checked before each piece is appended, plus
+  copied metadata and the group, subgroup and plot structs at their
+  in-memory size); and 64 Mi units of fuel, one per iteration of every
+  loop plus one per byte scanned or copied, including each series and
+  label read from the catalog. A `TemplateError` has a kind: an invalid
+  document, a limit, or an unset parameter.
   `dashboard::rezolus_template::json()` is the Rezolus agent's template,
   one file per section under `crates/dashboard/sections/rezolus/`, about
   106 KB compact. All sixteen sections are converted; a test renders each

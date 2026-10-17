@@ -152,32 +152,42 @@
 //!
 //! # Limits
 //!
+//! [`SectionTemplate::parse`] refuses a document with an array or object
+//! of more than [`MAX_ENTRIES`] entries, a string or key over
+//! [`MAX_STRING_BYTES`], a name over [`MAX_NAME_BYTES`], more than
+//! [`MAX_SECTIONS`] sections, or a `distinct_gt` with more than
+//! [`MAX_BY_LABELS`] `by` labels. It reads the document in time and memory
+//! linear in its size, but has no limit on that size: a caller reading
+//! templates from an untrusted source caps the document first. The
+//! Rezolus template is about 106 KB compact, so a viewer reading templates
+//! from a stream handshake can refuse a document over 1 MiB.
+//!
 //! The limits below apply to each section's expansion on its own, so a
-//! document of [`MAX_SECTIONS`] sections can produce that many times as
-//! much. Expanding one section, its lets included:
+//! document of [`MAX_SECTIONS`] sections can cost that many times as much.
+//! Expanding one section, its lets included:
 //!
 //! - visits at most [`MAX_NODES`] nodes, counting elements, `when` and
 //!   `repeat` nodes, repeat passes, and each field a pass over objects
 //!   binds;
-//! - produces at most [`MAX_TEXT_BYTES`] bytes: the length of each string
-//!   it builds, checked before each piece is appended, plus the in-memory
-//!   size of the metadata and percentiles it copies (each JSON value
-//!   counts as `size_of::<Value>()` plus its strings and keys);
-//! - does at most [`MAX_WORK`] units of catalog work: one per predicate
-//!   evaluated; one per series (at least one per metric) that a predicate,
-//!   a `label_values` repeat or the GPU selector reads, times the number
-//!   of `by` labels for a `distinct_gt` that counts tuples; and one per
-//!   counter name a `has_counter` scans.
+//! - produces at most [`MAX_TEXT_BYTES`] bytes of output: the length of
+//!   each string it builds, checked before each piece is appended; the
+//!   in-memory size of the metadata and percentiles it copies (each JSON
+//!   value counts as `size_of::<Value>()` plus its strings and keys); and
+//!   the size of each group, subgroup and plot struct it creates;
+//! - spends at most [`MAX_FUEL`] units of fuel, which count the input it
+//!   processes: one unit per iteration of every loop (a node, a predicate,
+//!   a reference, a series, a counter name, a binding), plus one per byte
+//!   it scans or copies (template text, label keys and values, bound
+//!   values and names, output).
+//!
+//! The invariant the fuel counter rests on: every loop in expansion
+//! charges at least one unit per iteration, and every copy charges its
+//! bytes. A comment at each loop in the code names its charge.
 //!
 //! A section that would exceed any of these is refused with an error of
 //! kind [`TemplateErrorKind::Limit`]; the other sections are unaffected.
-//!
-//! [`SectionTemplate::parse`] has no limit on the size of the document,
-//! and the time and memory it takes grow with it. A caller that reads a
-//! template from an untrusted source caps the document's size before
-//! parsing it; the Rezolus template is about 106 KB compact, so a viewer
-//! reading templates from a stream handshake can refuse a document over
-//! 1 MiB. `parse` reports the first problem it finds, not all of them.
+//! `parse` reports the first problem it finds, not all of them, and an
+//! error quotes at most 200 characters of the text it names.
 //!
 //! # Versioning
 //!
@@ -204,13 +214,13 @@ pub const MAX_SCHEMA: u32 = 1;
 /// The most nodes one section's expansion visits.
 pub const MAX_NODES: usize = 20_000;
 
-/// The most bytes of strings, metadata and percentiles one section's
-/// expansion produces; see the module docs for how each is counted.
+/// The most bytes of output one section's expansion produces; see the
+/// module docs for how each is counted.
 pub const MAX_TEXT_BYTES: usize = 4 << 20;
 
-/// The most catalog work one section's expansion does; see the module
-/// docs for what each unit is.
-pub const MAX_WORK: usize = 2_000_000;
+/// The most fuel one section's expansion spends; see the module docs for
+/// what each unit is.
+pub const MAX_FUEL: usize = 64 << 20;
 
 /// The most sections a document holds.
 pub const MAX_SECTIONS: usize = 64;
@@ -220,6 +230,15 @@ pub const MAX_BY_LABELS: usize = 16;
 
 /// The longest section name or route, in bytes.
 pub const MAX_SECTION_NAME_BYTES: usize = 64;
+
+/// The most entries in any JSON array or object of a document.
+pub const MAX_ENTRIES: usize = 4096;
+
+/// The longest string (or object key) in a document, in bytes.
+pub const MAX_STRING_BYTES: usize = 16 << 10;
+
+/// The longest let, parameter, repeat variable or field name, in bytes.
+pub const MAX_NAME_BYTES: usize = 64;
 
 /// A parsed and checked section template document.
 #[derive(Debug, Clone)]
@@ -231,18 +250,11 @@ pub struct SectionTemplate {
     sections: Vec<SectionDef>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Document {
-    #[allow(dead_code)]
-    schema: u32,
-    #[serde(default)]
     revision: Option<String>,
-    #[serde(default)]
     params: Vec<String>,
-    #[serde(default, rename = "let")]
     lets: BTreeMap<String, LetDef>,
-    /// Parsed one at a time, so an error names the section.
+    /// Read one at a time, so an error names the section.
     sections: Vec<Value>,
 }
 
@@ -254,28 +266,17 @@ enum SectionDef {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BuiltinDef {
-    #[allow(dead_code)]
-    builtin: Builtin,
-}
-
-#[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Builtin {
     Query,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 struct SectionBody {
     name: String,
     route: String,
-    #[serde(default, rename = "let")]
     lets: BTreeMap<String, LetDef>,
-    #[serde(default)]
     metadata: BTreeMap<String, MetaDef>,
-    #[serde(default)]
     groups: Vec<Item<GroupDef>>,
 }
 
@@ -286,13 +287,6 @@ enum LetDef {
     Pred(Pred),
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FirstPresentLet {
-    #[serde(deserialize_with = "object")]
-    first_present: FirstPresent,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FirstPresent {
@@ -300,29 +294,10 @@ struct FirstPresent {
     default: String,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PredLet {
-    pred: Pred,
-}
-
 #[derive(Debug, Clone)]
 enum MetaDef {
     Static(Value),
     GpuSelector(Vec<String>),
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StaticMeta {
-    value: Value,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ComputedMeta {
-    computed: Computed,
-    probe: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -377,19 +352,15 @@ enum Item<T> {
     Leaf(T),
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, bound = "T: DeserializeOwned")]
+#[derive(Debug, Clone)]
 struct WhenNode<T> {
     when: Pred,
     then: Vec<Item<T>>,
-    #[serde(default, rename = "else")]
     otherwise: Vec<Item<T>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields, bound = "T: DeserializeOwned")]
+#[derive(Debug, Clone)]
 struct RepeatNode<T> {
-    #[serde(deserialize_with = "object")]
     repeat: Repeat,
     body: Vec<Item<T>>,
 }
@@ -433,25 +404,18 @@ enum LabelSort {
     Int,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 struct GroupDef {
     name: String,
     id: String,
-    #[serde(default)]
     metadata: BTreeMap<String, Value>,
-    #[serde(default)]
     subgroups: Vec<Item<SubGroupDef>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 struct SubGroupDef {
-    #[serde(default)]
     name: Option<String>,
-    #[serde(default)]
     description: Option<String>,
-    #[serde(default)]
     plots: Vec<Item<PlotItem>>,
 }
 
@@ -462,26 +426,12 @@ enum PlotItem {
     Plot(Box<PlotDef>),
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SplitNode {
-    #[serde(deserialize_with = "object")]
-    split: Box<SplitDef>,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SplitDef {
     when: Pred,
     #[serde(deserialize_with = "two_plots")]
     plots: [PlotDef; 2],
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RateMeanNode {
-    #[serde(deserialize_with = "object")]
-    rate_mean: RateMeanDef,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -559,30 +509,25 @@ enum Width {
     Full,
 }
 
-// The nodes below are told apart by the key that names them (`when`,
-// `repeat`, `split`, ...), then read as a struct that refuses unknown
-// fields. An untagged enum would try each variant in turn, accept a
-// misspelled field into whichever variant ignores it, and report a real
-// error only as "did not match any variant".
+// Reading the document.
 //
-// Every struct is read through `read` or `object`, which refuse anything
-// but a JSON object: serde's derived struct impls also accept a JSON array
-// of the fields in order, which would let `["gauge", "T", "id", ...]` be a
-// plot.
-
-fn has_key(value: &Value, key: &str) -> bool {
-    value.get(key).is_some()
-}
-
-fn read<T: DeserializeOwned, E: serde::de::Error>(value: Value) -> Result<T, E> {
-    if !value.is_object() {
-        return Err(E::custom(format!(
-            "expected an object, found {}",
-            kind_of(&value)
-        )));
-    }
-    T::deserialize(value).map_err(E::custom)
-}
+// The JSON text is parsed once, by `UniqueKeys`, into a `Value` that has
+// no repeated key, no array or object over `MAX_ENTRIES` entries and no
+// string over `MAX_STRING_BYTES`. The nodes that hold other nodes (a
+// section, group, subgroup, `when`, `repeat`, plot item, let and
+// metadata entry) are then read from that `Value` by `FromJson`, which
+// moves each part out of its parent; so parsing is linear in the
+// document. A serde impl that read a `Value` and then deserialized from
+// it would copy each subtree once per level above it.
+//
+// Nodes are told apart by the key that names them (`when`, `repeat`,
+// `split`, ...), and every field not consumed is an error. The leaves (a
+// plot, predicate, repeat head, split, `rate_mean`, `first_present`) are
+// read through their serde impls with `deny_unknown_fields`, from an
+// owned `Value`, which moves rather than copies. `leaf`, `object` and
+// `two_plots` refuse anything but a JSON object for each struct: serde's
+// derived struct impls also accept a JSON array of the fields in order,
+// which would let `["gauge", "T", "id", ...]` be a plot.
 
 fn kind_of(value: &Value) -> &'static str {
     match value {
@@ -593,6 +538,33 @@ fn kind_of(value: &Value) -> &'static str {
         Value::Array(_) => "an array",
         Value::Object(_) => "an object",
     }
+}
+
+/// `text` for an error message: Debug-quoted, cut after 200 characters.
+struct Ex<'a>(&'a str);
+
+fn ex(text: &str) -> Ex<'_> {
+    Ex(text)
+}
+
+impl std::fmt::Debug for Ex<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        const KEEP: usize = 200;
+        match self.0.char_indices().nth(KEEP) {
+            None => write!(f, "{:?}", self.0),
+            Some((cut, _)) => write!(f, "{:?}... ({} bytes)", &self.0[..cut], self.0.len()),
+        }
+    }
+}
+
+fn read<T: DeserializeOwned, E: serde::de::Error>(value: Value) -> Result<T, E> {
+    if !value.is_object() {
+        return Err(E::custom(format!(
+            "expected an object, found {}",
+            kind_of(&value)
+        )));
+    }
+    T::deserialize(value).map_err(E::custom)
 }
 
 /// `deserialize_with` for a struct-typed field: [`read`].
@@ -609,9 +581,20 @@ fn two_plots<'de, D: Deserializer<'de>>(d: D) -> Result<[PlotDef; 2], D::Error> 
     Ok([read(a)?, read(b)?])
 }
 
-/// A JSON value whose objects have no repeated key. `serde_json::Value`
-/// keeps the last of a repeated key and drops the others silently.
+/// A JSON value within the parse-time caps, whose objects have no
+/// repeated key. `serde_json::Value` keeps the last of a repeated key and
+/// drops the others silently.
 struct UniqueKeys(Value);
+
+fn check_string<E: serde::de::Error>(s: &str) -> Result<(), E> {
+    if s.len() > MAX_STRING_BYTES {
+        return Err(E::custom(format!(
+            "a string of {} bytes: at most {MAX_STRING_BYTES}",
+            s.len()
+        )));
+    }
+    Ok(())
+}
 
 impl<'de> Deserialize<'de> for UniqueKeys {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -633,10 +616,12 @@ impl<'de> Deserialize<'de> for UniqueKeys {
             fn visit_f64<E>(self, v: f64) -> Result<UniqueKeys, E> {
                 Ok(UniqueKeys(Value::from(v)))
             }
-            fn visit_str<E>(self, v: &str) -> Result<UniqueKeys, E> {
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<UniqueKeys, E> {
+                check_string(v)?;
                 Ok(UniqueKeys(Value::String(v.to_string())))
             }
-            fn visit_string<E>(self, v: String) -> Result<UniqueKeys, E> {
+            fn visit_string<E: serde::de::Error>(self, v: String) -> Result<UniqueKeys, E> {
+                check_string(&v)?;
                 Ok(UniqueKeys(Value::String(v)))
             }
             fn visit_unit<E>(self) -> Result<UniqueKeys, E> {
@@ -648,6 +633,11 @@ impl<'de> Deserialize<'de> for UniqueKeys {
             ) -> Result<UniqueKeys, A::Error> {
                 let mut out = Vec::new();
                 while let Some(UniqueKeys(v)) = seq.next_element()? {
+                    if out.len() == MAX_ENTRIES {
+                        return Err(A::Error::custom(format!(
+                            "an array of more than {MAX_ENTRIES} entries"
+                        )));
+                    }
                     out.push(v);
                 }
                 Ok(UniqueKeys(Value::Array(out)))
@@ -658,9 +648,15 @@ impl<'de> Deserialize<'de> for UniqueKeys {
             ) -> Result<UniqueKeys, A::Error> {
                 let mut out = serde_json::Map::new();
                 while let Some(key) = map.next_key::<String>()? {
+                    check_string(&key)?;
                     let UniqueKeys(value) = map.next_value()?;
                     if out.contains_key(&key) {
-                        return Err(A::Error::custom(format!("key {key:?} is repeated")));
+                        return Err(A::Error::custom(format!("key {:?} is repeated", ex(&key))));
+                    }
+                    if out.len() == MAX_ENTRIES {
+                        return Err(A::Error::custom(format!(
+                            "an object of more than {MAX_ENTRIES} entries"
+                        )));
                     }
                     out.insert(key, value);
                 }
@@ -671,77 +667,337 @@ impl<'de> Deserialize<'de> for UniqueKeys {
     }
 }
 
-impl<'de> Deserialize<'de> for SectionDef {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let value = Value::deserialize(d)?;
-        if has_key(&value, "builtin") {
-            read::<BuiltinDef, _>(value)?;
-            Ok(Self::Builtin)
-        } else {
-            Ok(Self::Section(read(value)?))
+/// Why a part of the document could not be read: the message, and where.
+struct JsonErr {
+    /// Innermost first: field names and list indices.
+    path: Vec<Seg>,
+    msg: String,
+}
+
+enum Seg {
+    Key(String),
+    Index(usize),
+}
+
+impl JsonErr {
+    fn new(msg: impl Into<String>) -> Self {
+        Self {
+            path: Vec::new(),
+            msg: msg.into(),
         }
+    }
+
+    fn at(mut self, seg: Seg) -> Self {
+        self.path.push(seg);
+        self
     }
 }
 
-impl<'de> Deserialize<'de> for LetDef {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let value = Value::deserialize(d)?;
-        if let Value::String(text) = value {
-            Ok(Self::Text(text))
-        } else if has_key(&value, "first_present") {
-            Ok(Self::FirstPresent(
-                read::<FirstPresentLet, _>(value)?.first_present,
-            ))
-        } else if has_key(&value, "pred") {
-            Ok(Self::Pred(read::<PredLet, _>(value)?.pred))
-        } else {
-            Err(D::Error::custom(
-                "a let is a string, {\"first_present\": ..} or {\"pred\": ..}",
-            ))
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for MetaDef {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let value = Value::deserialize(d)?;
-        if has_key(&value, "computed") {
-            let ComputedMeta { computed, probe } = read(value)?;
-            match computed {
-                Computed::GpuSelector => Ok(Self::GpuSelector(probe)),
+impl std::fmt::Display for JsonErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut path = String::new();
+        for seg in self.path.iter().rev() {
+            match seg {
+                Seg::Key(k) => {
+                    if !path.is_empty() {
+                        path.push('.');
+                    }
+                    path.push_str(k);
+                }
+                Seg::Index(i) => path.push_str(&format!("[{i}]")),
             }
-        } else if has_key(&value, "value") {
-            Ok(Self::Static(read::<StaticMeta, _>(value)?.value))
+        }
+        if path.is_empty() {
+            f.write_str(&self.msg)
         } else {
-            Err(D::Error::custom(
+            write!(f, "{path}: {}", self.msg)
+        }
+    }
+}
+
+type Json<T> = Result<T, JsonErr>;
+
+/// Read from an owned JSON value, moving its parts.
+trait FromJson: Sized {
+    fn from_json(value: Value) -> Json<Self>;
+}
+
+/// A value read through its serde impl: an enumerated value or a number.
+fn serde_value<T: DeserializeOwned>(value: Value) -> Json<T> {
+    T::deserialize(value).map_err(|e| JsonErr::new(e.to_string()))
+}
+
+/// A leaf struct read through its serde impl, refusing a non-object.
+fn leaf<T: DeserializeOwned>(value: Value) -> Json<T> {
+    read::<T, serde_json::Error>(value).map_err(|e| JsonErr::new(e.to_string()))
+}
+
+macro_rules! leaf_from_json {
+    ($($t:ty),*) => {
+        $(impl FromJson for $t {
+            fn from_json(value: Value) -> Json<Self> {
+                leaf(value)
+            }
+        })*
+    };
+}
+
+leaf_from_json!(Pred, Repeat, FirstPresent, SplitDef, RateMeanDef, PlotDef);
+
+impl FromJson for Value {
+    fn from_json(value: Value) -> Json<Self> {
+        Ok(value)
+    }
+}
+
+impl FromJson for String {
+    fn from_json(value: Value) -> Json<Self> {
+        match value {
+            Value::String(s) => Ok(s),
+            other => Err(JsonErr::new(format!(
+                "expected a string, found {}",
+                kind_of(&other)
+            ))),
+        }
+    }
+}
+
+impl<T: FromJson> FromJson for Vec<T> {
+    fn from_json(value: Value) -> Json<Self> {
+        let Value::Array(items) = value else {
+            return Err(JsonErr::new(format!(
+                "expected an array, found {}",
+                kind_of(&value)
+            )));
+        };
+        items
+            .into_iter()
+            .enumerate()
+            .map(|(i, v)| T::from_json(v).map_err(|e| e.at(Seg::Index(i))))
+            .collect()
+    }
+}
+
+impl<T: FromJson> FromJson for BTreeMap<String, T> {
+    fn from_json(value: Value) -> Json<Self> {
+        let Value::Object(map) = value else {
+            return Err(JsonErr::new(format!(
+                "expected an object, found {}",
+                kind_of(&value)
+            )));
+        };
+        map.into_iter()
+            .map(|(k, v)| match T::from_json(v) {
+                Ok(t) => Ok((k, t)),
+                Err(e) => Err(e.at(Seg::Key(format!("{:?}", ex(&k))))),
+            })
+            .collect()
+    }
+}
+
+/// An object being read: each field is taken out of it, and what is left
+/// at the end is an unknown field.
+struct Obj(serde_json::Map<String, Value>);
+
+impl Obj {
+    fn new(value: Value) -> Json<Self> {
+        match value {
+            Value::Object(map) => Ok(Self(map)),
+            other => Err(JsonErr::new(format!(
+                "expected an object, found {}",
+                kind_of(&other)
+            ))),
+        }
+    }
+
+    fn has(&self, key: &str) -> bool {
+        self.0.contains_key(key)
+    }
+
+    fn take<T>(&mut self, key: &str, read: impl FnOnce(Value) -> Json<T>) -> Json<Option<T>> {
+        match self.0.remove(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => read(v)
+                .map(Some)
+                .map_err(|e| e.at(Seg::Key(key.to_string()))),
+        }
+    }
+
+    fn opt<T: FromJson>(&mut self, key: &str) -> Json<Option<T>> {
+        self.take(key, T::from_json)
+    }
+
+    fn req<T: FromJson>(&mut self, key: &str) -> Json<T> {
+        self.opt(key)?
+            .ok_or_else(|| JsonErr::new(format!("missing field `{key}`")))
+    }
+
+    fn or_default<T: FromJson + Default>(&mut self, key: &str) -> Json<T> {
+        Ok(self.opt(key)?.unwrap_or_default())
+    }
+
+    /// Refuse a field not taken; `fields` are the ones this object takes.
+    fn done(self, fields: &[&str]) -> Json<()> {
+        match self.0.keys().next() {
+            None => Ok(()),
+            Some(k) => Err(JsonErr::new(format!(
+                "unknown field `{}`, expected one of `{}`",
+                ex(k).0.chars().take(200).collect::<String>(),
+                fields.join("`, `")
+            ))),
+        }
+    }
+}
+
+impl FromJson for Document {
+    fn from_json(value: Value) -> Json<Self> {
+        let mut o = Obj::new(value)?;
+        // `parse` has read and checked `schema`.
+        o.0.remove("schema");
+        let doc = Self {
+            revision: o.opt("revision")?,
+            params: o.or_default("params")?,
+            lets: o.or_default("let")?,
+            sections: o.req("sections")?,
+        };
+        o.done(&["schema", "revision", "params", "let", "sections"])?;
+        Ok(doc)
+    }
+}
+
+impl FromJson for SectionDef {
+    fn from_json(value: Value) -> Json<Self> {
+        let mut o = Obj::new(value)?;
+        if o.has("builtin") {
+            let Builtin::Query = o
+                .take("builtin", serde_value::<Builtin>)?
+                .ok_or_else(|| JsonErr::new("`builtin` is null"))?;
+            o.done(&["builtin"])?;
+            return Ok(Self::Builtin);
+        }
+        let body = SectionBody {
+            name: o.req("name")?,
+            route: o.req("route")?,
+            lets: o.or_default("let")?,
+            metadata: o.or_default("metadata")?,
+            groups: o.or_default("groups")?,
+        };
+        o.done(&["name", "route", "let", "metadata", "groups"])?;
+        Ok(Self::Section(Box::new(body)))
+    }
+}
+
+impl FromJson for LetDef {
+    fn from_json(value: Value) -> Json<Self> {
+        if let Value::String(text) = value {
+            return Ok(Self::Text(text));
+        }
+        let mut o = Obj::new(value)?;
+        let def = if o.has("first_present") {
+            let fp = o.req("first_present")?;
+            o.done(&["first_present"])?;
+            Self::FirstPresent(fp)
+        } else if o.has("pred") {
+            let pred = o.req("pred")?;
+            o.done(&["pred"])?;
+            Self::Pred(pred)
+        } else {
+            return Err(JsonErr::new(
+                "a let is a string, {\"first_present\": ..} or {\"pred\": ..}",
+            ));
+        };
+        Ok(def)
+    }
+}
+
+impl FromJson for MetaDef {
+    fn from_json(value: Value) -> Json<Self> {
+        let mut o = Obj::new(value).map_err(|_| {
+            JsonErr::new("section metadata is {\"value\": ..} or {\"computed\": ..}")
+        })?;
+        if o.has("computed") {
+            let Computed::GpuSelector = o
+                .take("computed", serde_value::<Computed>)?
+                .ok_or_else(|| JsonErr::new("`computed` is null"))?;
+            let probe = o.req("probe")?;
+            o.done(&["computed", "probe"])?;
+            Ok(Self::GpuSelector(probe))
+        } else if o.has("value") {
+            let value = o.0.remove("value").unwrap_or(Value::Null);
+            o.done(&["value"])?;
+            Ok(Self::Static(value))
+        } else {
+            Err(JsonErr::new(
                 "section metadata is {\"value\": ..} or {\"computed\": ..}",
             ))
         }
     }
 }
 
-impl<'de, T: DeserializeOwned> Deserialize<'de> for Item<T> {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let value = Value::deserialize(d)?;
-        if has_key(&value, "when") {
-            Ok(Self::When(read(value)?))
-        } else if has_key(&value, "repeat") {
-            Ok(Self::Repeat(read(value)?))
+impl<T: FromJson> FromJson for Item<T> {
+    fn from_json(value: Value) -> Json<Self> {
+        let mut o = Obj::new(value)?;
+        if o.has("when") {
+            let node = WhenNode {
+                when: o.req("when")?,
+                then: o.req("then")?,
+                otherwise: o.or_default("else")?,
+            };
+            o.done(&["when", "then", "else"])?;
+            Ok(Self::When(node))
+        } else if o.has("repeat") {
+            let node = RepeatNode {
+                repeat: o.req("repeat")?,
+                body: o.req("body")?,
+            };
+            o.done(&["repeat", "body"])?;
+            Ok(Self::Repeat(node))
         } else {
-            Ok(Self::Leaf(read(value)?))
+            Ok(Self::Leaf(T::from_json(Value::Object(o.0))?))
         }
     }
 }
 
-impl<'de> Deserialize<'de> for PlotItem {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let value = Value::deserialize(d)?;
-        if has_key(&value, "split") {
-            Ok(Self::Split(read::<SplitNode, _>(value)?.split))
-        } else if has_key(&value, "rate_mean") {
-            Ok(Self::RateMean(read::<RateMeanNode, _>(value)?.rate_mean))
+impl FromJson for GroupDef {
+    fn from_json(value: Value) -> Json<Self> {
+        let mut o = Obj::new(value)?;
+        let group = Self {
+            name: o.req("name")?,
+            id: o.req("id")?,
+            metadata: o.or_default("metadata")?,
+            subgroups: o.or_default("subgroups")?,
+        };
+        o.done(&["name", "id", "metadata", "subgroups"])?;
+        Ok(group)
+    }
+}
+
+impl FromJson for SubGroupDef {
+    fn from_json(value: Value) -> Json<Self> {
+        let mut o = Obj::new(value)?;
+        let sub = Self {
+            name: o.opt("name")?,
+            description: o.opt("description")?,
+            plots: o.or_default("plots")?,
+        };
+        o.done(&["name", "description", "plots"])?;
+        Ok(sub)
+    }
+}
+
+impl FromJson for PlotItem {
+    fn from_json(value: Value) -> Json<Self> {
+        let mut o = Obj::new(value)?;
+        if o.has("split") {
+            let split = o.req("split")?;
+            o.done(&["split"])?;
+            Ok(Self::Split(Box::new(split)))
+        } else if o.has("rate_mean") {
+            let rm = o.req("rate_mean")?;
+            o.done(&["rate_mean"])?;
+            Ok(Self::RateMean(rm))
         } else {
-            Ok(Self::Plot(read(value)?))
+            Ok(Self::Plot(Box::new(leaf(Value::Object(o.0))?)))
         }
     }
 }
@@ -755,7 +1011,8 @@ impl<'de> Deserialize<'de> for RepeatValue {
                 for (field, value) in map {
                     let Value::String(text) = value else {
                         return Err(D::Error::custom(format!(
-                            "repeat value field {field:?} is not a string"
+                            "repeat value field {:?} is not a string",
+                            ex(&field)
                         )));
                     };
                     fields.insert(field, text);
@@ -763,7 +1020,8 @@ impl<'de> Deserialize<'de> for RepeatValue {
                 Ok(Self::Fields(fields))
             }
             other => Err(D::Error::custom(format!(
-                "repeat value {other} is not a string or an object of strings"
+                "repeat value {} is not a string or an object of strings",
+                kind_of(&other)
             ))),
         }
     }
@@ -836,7 +1094,7 @@ fn invalid(msg: impl Into<String>) -> TemplateError {
 /// How a section is named in an error: its index and route.
 fn section_label(index: usize, value: &Value) -> String {
     if let Some(route) = value.get("route").and_then(Value::as_str) {
-        format!("section {index} ({route:?})")
+        format!("section {index} ({:?})", ex(route))
     } else if value.get("builtin").is_some() {
         format!("section {index} (builtin)")
     } else {
@@ -872,7 +1130,7 @@ impl SectionTemplate {
                 "section template schema {schema} is not one this viewer expands (1 to {MAX_SCHEMA})"
             ));
         }
-        let doc: Document = read::<_, serde_json::Error>(value)
+        let doc = Document::from_json(value)
             .map_err(|e| invalid(format!("not a section template: {e}")))?;
         if doc.sections.len() > MAX_SECTIONS {
             return err(format!(
@@ -884,16 +1142,16 @@ impl SectionTemplate {
         for (index, value) in doc.sections.into_iter().enumerate() {
             let label = section_label(index, &value);
             let section =
-                SectionDef::deserialize(value).map_err(|e| invalid(format!("{label}: {e}")))?;
+                SectionDef::from_json(value).map_err(|e| invalid(format!("{label}: {e}")))?;
             sections.push(section);
         }
         let mut params = BTreeSet::new();
         for param in doc.params {
             if !is_name(&param) {
-                return err(format!("parameter name {param:?} is not a name"));
+                return err(format!("parameter name {:?} is not a name", ex(&param)));
             }
             if !params.insert(param.clone()) {
-                return err(format!("parameter {param:?} is declared twice"));
+                return err(format!("parameter {:?} is declared twice", ex(&param)));
             }
         }
         let template = Self {
@@ -1008,7 +1266,7 @@ impl SectionTemplate {
                 }
             };
             if !routes.insert(route) {
-                return err(format!("two sections have route {route:?}"));
+                return err(format!("two sections have route {:?}", ex(route)));
             }
         }
         let mut names = Names::new(&self.params);
@@ -1035,7 +1293,8 @@ impl SectionTemplate {
 fn check_section_name(name: &str, route: &str) -> Result<(), TemplateError> {
     if name.is_empty() || name.len() > MAX_SECTION_NAME_BYTES {
         return err(format!(
-            "section name {name:?} is not 1 to {MAX_SECTION_NAME_BYTES} bytes"
+            "section name {:?} is not 1 to {MAX_SECTION_NAME_BYTES} bytes",
+            ex(name)
         ));
     }
     let segments_ok = route.strip_prefix('/').is_some_and(|rest| {
@@ -1048,16 +1307,19 @@ fn check_section_name(name: &str, route: &str) -> Result<(), TemplateError> {
     });
     if !segments_ok || route.len() > MAX_SECTION_NAME_BYTES {
         return err(format!(
-            "route {route:?} is not `/` and segments of a-z, 0-9, `_` and `-`, at most {MAX_SECTION_NAME_BYTES} bytes"
+            "route {:?} is not `/` and segments of a-z, 0-9, `_` and `-`, at most {MAX_SECTION_NAME_BYTES} bytes",
+            ex(route)
         ));
     }
     Ok(())
 }
 
 /// `name` is a let, parameter, repeat variable or field name: ASCII
-/// letters, digits and `_`, not starting with a digit.
+/// letters, digits and `_`, not starting with a digit, at most
+/// [`MAX_NAME_BYTES`] bytes.
 fn is_name(name: &str) -> bool {
     !name.is_empty()
+        && name.len() <= MAX_NAME_BYTES
         && !name.starts_with(|c: char| c.is_ascii_digit())
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
@@ -1070,7 +1332,7 @@ fn references(text: &str) -> Result<Vec<&str>, TemplateError> {
     while let Some(start) = rest.find("${") {
         let after = &rest[start + 2..];
         let Some(end) = after.find('}') else {
-            return err(format!("unclosed `${{` in {text:?}"));
+            return err(format!("unclosed `${{` in {:?}", ex(text)));
         };
         let name = &after[..end];
         let well_formed = match name.split_once('.') {
@@ -1078,7 +1340,11 @@ fn references(text: &str) -> Result<Vec<&str>, TemplateError> {
             None => is_name(name),
         };
         if !well_formed {
-            return err(format!("`${{{name}}}` in {text:?} is not a name"));
+            return err(format!(
+                "`${{` name {:?} in {:?} is not a name",
+                ex(name),
+                ex(text)
+            ));
         }
         out.push(name);
         rest = &after[end + 1..];
@@ -1123,10 +1389,10 @@ impl<'a> Names<'a> {
         let params_only = Names::new(self.params);
         for (name, def) in lets {
             if !is_name(name) {
-                return err(format!("let name {name:?} is not a name"));
+                return err(format!("let name {:?} is not a name", ex(name)));
             }
             if self.in_scope(name) {
-                return err(format!("let {name:?} reuses a name already in scope"));
+                return err(format!("let {:?} reuses a name already in scope", ex(name)));
             }
             let checked = match def {
                 LetDef::Text(text) => params_only.text(text),
@@ -1137,7 +1403,7 @@ impl<'a> Names<'a> {
                     .try_for_each(|m| params_only.text(m)),
                 LetDef::Pred(pred) => params_only.pred(pred),
             };
-            checked.map_err(|e| e.context(format!("let {name:?}")))?;
+            checked.map_err(|e| e.context(format!("let {:?}", ex(name))))?;
         }
         for (name, def) in lets {
             let kind = match def {
@@ -1155,16 +1421,19 @@ impl<'a> Names<'a> {
                 Some(NameKind::Text | NameKind::Catalog) => {}
                 Some(NameKind::Pred) => {
                     return err(format!(
-                        "`${{{name}}}` in {text:?} names a predicate; use {{\"var\": {name:?}}}"
+                        "`${{{name}}}` in {:?} names a predicate; use {{\"var\": {:?}}}",
+                        ex(text),
+                        ex(name)
                     ));
                 }
                 Some(NameKind::Record) => {
                     return err(format!(
-                        "`${{{name}}}` in {text:?} names a repeat over objects; use `${{{name}.field}}`"
+                        "`${{{name}}}` in {:?} names a repeat over objects; use `${{{name}.field}}`",
+                        ex(text)
                     ));
                 }
                 None if self.params.contains(name) => {}
-                None => return err(format!("unknown name `${{{name}}}` in {text:?}")),
+                None => return err(format!("unknown name `${{{name}}}` in {:?}", ex(text))),
             }
         }
         Ok(())
@@ -1190,7 +1459,8 @@ impl<'a> Names<'a> {
         }
         if text.contains("\\${") {
             return err(format!(
-                "{text:?} has a `${{` after a `\\`, which a PromQL field does not allow"
+                "{:?} has a `${{` after a `\\`, which a PromQL field does not allow",
+                ex(text)
             ));
         }
         let mut state = In::Bare;
@@ -1202,7 +1472,8 @@ impl<'a> Names<'a> {
                 let name = &text[i + 2..end];
                 if self.names.get(name) == Some(&NameKind::Catalog) && state != In::Double {
                     return err(format!(
-                        "`${{{name}}}` in {text:?} is a label value, and goes only inside a double-quoted string there"
+                        "`${{{name}}}` in {:?} is a label value, and goes only inside a double-quoted string there",
+                        ex(text)
                     ));
                 }
                 i = end + 1;
@@ -1250,6 +1521,12 @@ impl<'a> Names<'a> {
                 int,
                 ..
             }) => {
+                if let Some(stray) = int.iter().find(|i| !by.contains(i)) {
+                    return err(format!(
+                        "distinct_gt `int` label {:?} is not one of its `by` labels",
+                        ex(stray)
+                    ));
+                }
                 if *each && (by.len() != 1 || !int.is_empty()) {
                     return err("distinct_gt with `each` takes one `by` label and no `int`");
                 }
@@ -1270,12 +1547,15 @@ impl<'a> Names<'a> {
             Pred::Var(name) => match self.names.get(name) {
                 Some(NameKind::Pred) => Ok(()),
                 Some(NameKind::Text | NameKind::Catalog | NameKind::Record) => {
-                    err(format!("{{\"var\": {name:?}}} names a value"))
+                    err(format!("{{\"var\": {:?}}} names a value", ex(name)))
                 }
-                None => err(format!("unknown predicate {name:?}")),
+                None => err(format!("unknown predicate {:?}", ex(name))),
             },
             Pred::Param(name) if self.params.contains(name) => Ok(()),
-            Pred::Param(name) => err(format!("parameter {name:?} is not declared in `params`")),
+            Pred::Param(name) => err(format!(
+                "parameter {:?} is not declared in `params`",
+                ex(name)
+            )),
         }
     }
 
@@ -1318,11 +1598,12 @@ impl<'a> Names<'a> {
     fn repeat(&mut self, repeat: &Repeat) -> Result<Vec<String>, TemplateError> {
         let var = &repeat.var;
         if !is_name(var) {
-            return err(format!("repeat variable {var:?} is not a name"));
+            return err(format!("repeat variable {:?} is not a name", ex(var)));
         }
         if self.in_scope(var) {
             return err(format!(
-                "repeat variable {var:?} reuses a name already in scope"
+                "repeat variable {:?} reuses a name already in scope",
+                ex(var)
             ));
         }
         let bound = match &repeat.over {
@@ -1336,25 +1617,30 @@ impl<'a> Names<'a> {
                 None => Vec::new(),
                 Some(RepeatValue::Text(_)) => {
                     if !values.iter().all(|v| matches!(v, RepeatValue::Text(_))) {
-                        return err(format!("repeat {var:?} mixes strings and objects"));
+                        return err(format!("repeat {:?} mixes strings and objects", ex(var)));
                     }
                     vec![var.clone()]
                 }
                 Some(RepeatValue::Fields(first)) => {
                     for value in values {
                         let RepeatValue::Fields(fields) = value else {
-                            return err(format!("repeat {var:?} mixes strings and objects"));
+                            return err(format!("repeat {:?} mixes strings and objects", ex(var)));
                         };
                         if !fields.keys().eq(first.keys()) {
                             return err(format!(
-                                "repeat {var:?}: every value needs the same fields"
+                                "repeat {:?}: every value needs the same fields",
+                                ex(var)
                             ));
                         }
                     }
                     let mut bound = Vec::new();
                     for field in first.keys() {
                         if !is_name(field) {
-                            return err(format!("repeat {var:?}: field {field:?} is not a name"));
+                            return err(format!(
+                                "repeat {:?}: field {:?} is not a name",
+                                ex(var),
+                                ex(field)
+                            ));
                         }
                         bound.push(format!("{var}.{field}"));
                     }
@@ -1454,15 +1740,46 @@ struct Bound {
     from_catalog: bool,
 }
 
+/// The limits one section's expansion runs under.
+#[derive(Debug, Clone, Copy)]
+struct Limits {
+    nodes: usize,
+    bytes: usize,
+    fuel: usize,
+}
+
+impl Limits {
+    const DEFAULT: Self = Self {
+        nodes: MAX_NODES,
+        bytes: MAX_TEXT_BYTES,
+        fuel: MAX_FUEL,
+    };
+}
+
 /// What one section's expansion has spent of each limit.
-#[derive(Default)]
 struct Budget {
+    limits: Limits,
     nodes: Cell<usize>,
     bytes: Cell<usize>,
-    work: Cell<usize>,
+    fuel: Cell<usize>,
+}
+
+impl Default for Budget {
+    fn default() -> Self {
+        Self::new(Limits::DEFAULT)
+    }
 }
 
 impl Budget {
+    fn new(limits: Limits) -> Self {
+        Self {
+            limits,
+            nodes: Cell::new(0),
+            bytes: Cell::new(0),
+            fuel: Cell::new(0),
+        }
+    }
+
     fn spend(cell: &Cell<usize>, n: usize, max: usize, what: &str) -> Result<(), TemplateError> {
         let total = cell.get().saturating_add(n);
         cell.set(total);
@@ -1475,12 +1792,13 @@ impl Budget {
         Ok(())
     }
 
-    /// Whether `n` more bytes fit, without spending them.
+    /// Whether `n` more bytes of output fit, without spending them.
     fn bytes_fit(&self, n: usize) -> Result<(), TemplateError> {
-        if self.bytes.get().saturating_add(n) > MAX_TEXT_BYTES {
+        let max = self.limits.bytes;
+        if self.bytes.get().saturating_add(n) > max {
             return Err(TemplateError::new(
                 TemplateErrorKind::Limit,
-                format!("expands to more than {MAX_TEXT_BYTES} bytes"),
+                format!("expands to more than {max} bytes"),
             ));
         }
         Ok(())
@@ -1491,6 +1809,9 @@ type Labels = BTreeMap<String, String>;
 
 /// What strings and predicates are evaluated in: the catalog, the viewer
 /// parameters, `let` values and repeat bindings, and the expansion budget.
+///
+/// Every loop below charges fuel for each iteration, and every copy
+/// charges its bytes; the comment at each loop names its charge.
 struct Scope<'a> {
     data: &'a dyn MetricsSource,
     params: &'a BTreeMap<String, String>,
@@ -1522,33 +1843,49 @@ impl<'a> Scope<'a> {
         }
     }
 
+    /// One node: one unit of fuel too.
     fn spend_node(&self) -> Result<(), TemplateError> {
-        Budget::spend(&self.budget.nodes, 1, MAX_NODES, "nodes")
+        self.spend_fuel(1)?;
+        Budget::spend(&self.budget.nodes, 1, self.budget.limits.nodes, "nodes")
     }
 
+    /// `len` bytes of output, which are also `len` units of fuel to copy.
     fn spend_bytes(&self, len: usize) -> Result<(), TemplateError> {
-        Budget::spend(&self.budget.bytes, len, MAX_TEXT_BYTES, "bytes")
+        self.spend_fuel(len)?;
+        Budget::spend(&self.budget.bytes, len, self.budget.limits.bytes, "bytes")
     }
 
-    fn spend_work(&self, n: usize) -> Result<(), TemplateError> {
-        Budget::spend(&self.budget.work, n, MAX_WORK, "units of catalog work")
+    fn spend_fuel(&self, n: usize) -> Result<(), TemplateError> {
+        Budget::spend(
+            &self.budget.fuel,
+            n,
+            self.budget.limits.fuel,
+            "units of fuel",
+        )
     }
 
     /// `metric`'s counter and gauge series, and its histogram series when
-    /// `histograms`, charged to the work budget one unit per series.
+    /// `histograms`. Charged one unit per series plus its label bytes, and
+    /// at least one unit for a metric with none.
     fn series(&self, metric: &str, histograms: bool) -> Result<Vec<Labels>, TemplateError> {
         let mut out = self.data.counter_labels(metric);
         out.extend(self.data.gauge_labels(metric));
         if histograms {
             out.extend(self.data.histogram_labels(metric));
         }
-        self.spend_work(out.len().max(1))?;
+        // Loop: one unit per series, plus its key and value bytes.
+        let cost: usize = out
+            .iter()
+            .map(|l| 1 + l.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>())
+            .sum();
+        self.spend_fuel(cost.max(1))?;
         Ok(out)
     }
 
     /// The values of `label` on `metric`'s series of every type, as
     /// [`MetricsSource::label_values`] gives them.
     fn label_values(&self, metric: &str, label: &str) -> Result<BTreeSet<String>, TemplateError> {
+        // Loop: over the series `series` charged for.
         Ok(self
             .series(metric, true)?
             .into_iter()
@@ -1565,14 +1902,18 @@ impl<'a> Scope<'a> {
     /// spending this scope's budget.
     fn bind_lets(&mut self, lets: &BTreeMap<String, LetDef>) -> Result<(), TemplateError> {
         let base = Scope::new(self.data, self.params, self.budget);
+        // Loop: one unit per let, plus what `subst`, `present` and `holds`
+        // charge.
         for (name, def) in lets {
+            self.spend_fuel(1)?;
             match def {
                 LetDef::Text(text) => {
                     let text = base.subst(text)?;
-                    self.bind(name, text, false);
+                    self.bind(name, text, false)?;
                 }
                 LetDef::FirstPresent(fp) => {
                     let mut chosen = None;
+                    // Loop: what `subst` and `present` charge.
                     for metric in &fp.list {
                         let metric = base.subst(metric)?;
                         if base.present(&metric)? {
@@ -1584,7 +1925,7 @@ impl<'a> Scope<'a> {
                         Some(metric) => metric,
                         None => base.subst(&fp.default)?,
                     };
-                    self.bind(name, chosen, false);
+                    self.bind(name, chosen, false)?;
                 }
                 LetDef::Pred(pred) => {
                     let holds = base.holds(pred)?;
@@ -1595,20 +1936,31 @@ impl<'a> Scope<'a> {
         Ok(())
     }
 
-    fn bind(&mut self, name: &str, text: String, from_catalog: bool) {
-        self.values
-            .insert(name.to_string(), Bound { text, from_catalog });
+    /// Bind `name` to `text`, charging the name's bytes. A name bound
+    /// before (by an earlier pass) keeps its key and takes the new value.
+    fn bind(&mut self, name: &str, text: String, from_catalog: bool) -> Result<(), TemplateError> {
+        self.spend_fuel(1 + name.len())?;
+        match self.values.get_mut(name) {
+            Some(bound) => *bound = Bound { text, from_catalog },
+            None => {
+                self.values
+                    .insert(name.to_string(), Bound { text, from_catalog });
+            }
+        }
+        Ok(())
     }
 
-    /// Whether `pred` holds: one unit of work, plus one per series read.
+    /// Whether `pred` holds: one unit, plus what its strings, lists and
+    /// catalog reads charge.
     fn holds(&self, pred: &Pred) -> Result<bool, TemplateError> {
-        self.spend_work(1)?;
+        self.spend_fuel(1)?;
         Ok(match pred {
             Pred::Present(metric) => self.present(&self.subst(metric)?)?,
             Pred::HasCounter(metric) => {
                 let metric = self.subst(metric)?;
                 let names = self.data.counter_names();
-                self.spend_work(names.len())?;
+                // Loop: one unit per counter name plus its bytes.
+                self.spend_fuel(names.iter().map(|n| 1 + n.len()).sum())?;
                 names.contains(&metric)
             }
             Pred::HasLabel(HasLabel {
@@ -1629,6 +1981,7 @@ impl<'a> Scope<'a> {
                 each,
                 int,
             }) => {
+                // Loops: what `subst` charges per entry.
                 let by: Vec<String> = by.iter().map(|b| self.subst(b)).collect::<Result<_, _>>()?;
                 let int: BTreeSet<String> = int
                     .iter()
@@ -1639,6 +1992,7 @@ impl<'a> Scope<'a> {
                     let Some(key) = by.first() else {
                         return err("distinct_gt with `each` needs a `by` label");
                     };
+                    // Loop: what `subst` and `label_values` charge.
                     for metric in metrics {
                         if self.label_values(&self.subst(metric)?, key)?.len() > *n {
                             return Ok(true);
@@ -1647,15 +2001,19 @@ impl<'a> Scope<'a> {
                     false
                 } else {
                     let mut seen: BTreeSet<Vec<Option<String>>> = BTreeSet::new();
+                    // Loop: what `subst` and `series` charge.
                     for metric in metrics {
                         let series = self.series(&self.subst(metric)?, false)?;
-                        // A tuple costs a lookup per `by` label.
-                        self.spend_work(series.len().saturating_mul(by.len().saturating_sub(1)))?;
+                        // Loop: `series` charged one unit per series; each
+                        // tuple adds one unit per `by` label beyond the
+                        // first, plus the bytes of the values it copies.
+                        self.spend_fuel(series.len().saturating_mul(by.len().saturating_sub(1)))?;
                         for labels in series {
                             let mut tuple = Vec::with_capacity(by.len());
                             let mut keep = true;
                             for key in &by {
                                 let value = labels.get(key).cloned();
+                                self.spend_fuel(value.as_ref().map_or(0, String::len))?;
                                 if int.contains(key) {
                                     match value.as_deref().map(str::parse::<i64>) {
                                         Some(Ok(i)) => tuple.push(Some(i.to_string())),
@@ -1677,6 +2035,7 @@ impl<'a> Scope<'a> {
                 }
             }
             Pred::Any(preds) => {
+                // Loop: what `holds` charges.
                 for p in preds {
                     if self.holds(p)? {
                         return Ok(true);
@@ -1685,6 +2044,7 @@ impl<'a> Scope<'a> {
                 false
             }
             Pred::All(preds) => {
+                // Loop: what `holds` charges.
                 for p in preds {
                     if !self.holds(p)? {
                         return Ok(false);
@@ -1695,7 +2055,7 @@ impl<'a> Scope<'a> {
             Pred::Not(p) => !self.holds(p)?,
             Pred::Var(name) => match self.preds.get(name) {
                 Some(holds) => *holds,
-                None => return err(format!("unknown predicate {name:?}")),
+                None => return err(format!("unknown predicate {:?}", ex(name))),
             },
             Pred::Param(name) => self.params.contains_key(name),
         })
@@ -1709,11 +2069,12 @@ impl<'a> Scope<'a> {
         self.subst_to(text, Dest::Promql)
     }
 
-    /// `text` with every `${name}` and `${name.field}` replaced, counted
-    /// against the byte budget. Each piece is checked against the budget
-    /// before it is appended, so a string that would exceed it is refused
-    /// before it is built.
+    /// `text` with every `${name}` and `${name.field}` replaced. Charged
+    /// fuel for the template text scanned and each reference, and output
+    /// bytes for the result, each piece checked against the byte limit
+    /// before it is appended so a string over it is refused unbuilt.
     fn subst_to(&self, text: &str, dest: Dest) -> Result<String, TemplateError> {
+        self.spend_fuel(text.len().max(1))?;
         let mut out = String::new();
         let mut rest = text;
         let push = |out: &mut String, piece: &str, escape: bool| -> Result<(), TemplateError> {
@@ -1730,11 +2091,14 @@ impl<'a> Scope<'a> {
             }
             Ok(())
         };
+        // Loop: one unit per reference (a reference to an empty value is
+        // not free), plus the text scanned, charged above.
         while let Some(start) = rest.find("${") {
+            self.spend_fuel(1)?;
             push(&mut out, &rest[..start], false)?;
             let after = &rest[start + 2..];
             let Some(end) = after.find('}') else {
-                return err(format!("unclosed `${{` in {text:?}"));
+                return err(format!("unclosed `${{` in {:?}", ex(text)));
             };
             let name = &after[..end];
             if let Some(bound) = self.values.get(name) {
@@ -1747,7 +2111,7 @@ impl<'a> Scope<'a> {
                 // declared parameter, so this is a parameter left unset.
                 return Err(TemplateError::new(
                     TemplateErrorKind::UnsetParam,
-                    format!("parameter {name:?} in {text:?} is not set"),
+                    format!("parameter {:?} in {:?} is not set", ex(name), ex(text)),
                 ));
             }
             rest = &after[end + 1..];
@@ -1764,10 +2128,12 @@ impl<'a> Scope<'a> {
     fn meta(&self, meta: &MetaDef) -> Result<Option<Value>, TemplateError> {
         match meta {
             MetaDef::Static(value) => {
+                // The copy: its in-memory bytes.
                 self.spend_bytes(json_size(value))?;
                 Ok(Some(value.clone()))
             }
             MetaDef::GpuSelector(probe) => {
+                // Loop: what `subst` charges.
                 let probe: Vec<String> = probe
                     .iter()
                     .map(|m| self.subst(m))
@@ -1786,6 +2152,7 @@ impl<'a> Scope<'a> {
     /// one.
     fn gpu_selector(&self, probe: &[String]) -> Result<Option<Value>, TemplateError> {
         let mut seen: BTreeSet<(Option<String>, i64)> = BTreeSet::new();
+        // Loop: what `series` charges, per metric and per series.
         for metric in probe {
             for labels in self.series(metric, false)? {
                 let Some(id) = labels.get("id").and_then(|v| v.parse::<i64>().ok()) else {
@@ -1813,12 +2180,18 @@ impl<'a> Scope<'a> {
     }
 
     fn group(&mut self, def: &GroupDef) -> Result<Option<Group>, TemplateError> {
+        // The group, its subgroups and plots are output too: each is
+        // charged its struct's size, so the byte limit bounds the memory
+        // the view takes and not only its strings.
+        self.spend_bytes(std::mem::size_of::<Group>())?;
         let mut group = Group::new(self.subst(&def.name)?, self.subst(&def.id)?);
+        // Loop: each entry's copy, its key and in-memory bytes.
         for (key, value) in &def.metadata {
             self.spend_bytes(key.len() + json_size(value))?;
             group.metadata.insert(key.clone(), value.clone());
         }
         walk(&def.subgroups, self, &mut |sub, scope| {
+            scope.spend_bytes(std::mem::size_of::<SubGroup>())?;
             let sg = match &sub.name {
                 Some(name) => group.subgroup(scope.subst(name)?),
                 None => group.subgroup_unnamed(),
@@ -1854,6 +2227,7 @@ impl<'a> Scope<'a> {
                     Some(q) => RateSource::Counter(self.subst_promql(q)?),
                     None => RateSource::FromHistogram,
                 };
+                self.spend_bytes(2 * std::mem::size_of::<Plot>())?;
                 let mean_unit = match rm.mean_unit {
                     MeanUnit::Time => Unit::Time,
                     MeanUnit::Bytes => Unit::Bytes,
@@ -1876,6 +2250,7 @@ impl<'a> Scope<'a> {
         def: &PlotDef,
         width: Option<PlotWidth>,
     ) -> Result<(), TemplateError> {
+        self.spend_bytes(std::mem::size_of::<Plot>())?;
         let title = self.subst(&def.title)?;
         let id = self.subst(&def.id)?;
         // `check` has refused a plot whose kind lacks the unit or subtype
@@ -1906,6 +2281,7 @@ impl<'a> Scope<'a> {
             opts = opts.with_description(description);
         }
         if let Some(percentiles) = &def.percentiles {
+            // The copy: eight bytes per percentile.
             self.spend_bytes(8 * percentiles.len())?;
             opts = opts.with_percentiles(percentiles.clone());
         }
@@ -1979,12 +2355,13 @@ type Visit<'v, T> = dyn FnMut(&T, &mut Scope<'_>) -> Result<(), TemplateError> +
 
 /// Visit the elements `items` expands to, in order, each with the scope it
 /// was produced in: `when` picks a branch, and `repeat` visits its body once
-/// per value with the variable bound for that pass only.
+/// per value with the variable bound for that pass.
 fn walk<T>(
     items: &[Item<T>],
     scope: &mut Scope<'_>,
     visit: &mut Visit<'_, T>,
 ) -> Result<(), TemplateError> {
+    // Loop: one node per item.
     for item in items {
         scope.spend_node()?;
         match item {
@@ -2014,14 +2391,22 @@ fn walk<T>(
                             }
                             _ => Vec::new(),
                         };
+                        // Loop: one node per pass, plus the bytes of the
+                        // value it clones and `bind`'s charge for the name.
                         for value in values {
                             scope.spend_node()?;
                             match value {
-                                RepeatValue::Text(text) => scope.bind(var, text.clone(), false),
+                                RepeatValue::Text(text) => {
+                                    scope.spend_fuel(text.len())?;
+                                    scope.bind(var, text.clone(), false)?;
+                                }
                                 RepeatValue::Fields(fields) => {
+                                    // Loop: one node per field, plus the
+                                    // value's bytes and `bind`'s charge.
                                     for (name, text) in names.iter().zip(fields.values()) {
                                         scope.spend_node()?;
-                                        scope.bind(name, text.clone(), false);
+                                        scope.spend_fuel(text.len())?;
+                                        scope.bind(name, text.clone(), false)?;
                                     }
                                 }
                             }
@@ -2029,9 +2414,11 @@ fn walk<T>(
                         }
                     }
                     RepeatOver::LabelValues(lv) => {
+                        // Loop: one node per pass; the values were charged
+                        // as `series` read them.
                         for text in label_values_sorted(lv, scope)? {
                             scope.spend_node()?;
-                            scope.bind(var, text, true);
+                            scope.bind(var, text, true)?;
                             walk(&node.body, scope, visit)?;
                         }
                     }
@@ -2048,6 +2435,9 @@ fn label_values_sorted(lv: &LabelValues, scope: &Scope<'_>) -> Result<Vec<String
         .label_values(&scope.subst(&lv.metric)?, &scope.subst(&lv.label)?)?
         .into_iter()
         .collect();
+    // The sort: one unit per value per comparison level, about n log n.
+    let n = values.len();
+    scope.spend_fuel(n.saturating_mul(usize::BITS as usize - n.leading_zeros() as usize))?;
     sort_label_values(&mut values, lv.sort);
     Ok(values)
 }
@@ -2858,7 +3248,7 @@ mod tests {
             { "name": "A", "route": "/a" },
             { "name": "B", "route": "/b", "groups": [{ "name": "G", "id": "g", "x": 1 }] },
         ]));
-        assert_refused(&t, "section 1 (\"/b\"): unknown field `x`");
+        assert_refused(&t, "section 1 (\"/b\"): groups[0]: unknown field `x`");
     }
 
     /// Enumerated values are checked at parse, in branches that would not
@@ -3054,11 +3444,11 @@ mod tests {
         );
     }
 
-    /// Five nested repeats of ten would be 100,000 plots.
+    /// Five nested repeats of ten would be 111,110 repeat passes.
     #[test]
     fn expansion_is_bounded_by_nodes() {
         let ten: Vec<String> = (0..10).map(|i| i.to_string()).collect();
-        let mut body = json!([gauge("p")]);
+        let mut body = json!([]);
         for var in ["a", "b", "c", "d", "e"] {
             body = json!([{ "repeat": { "var": var, "in": { "values": ten } }, "body": body }]);
         }
@@ -3092,10 +3482,13 @@ mod tests {
 
     #[test]
     fn expansion_is_bounded_by_bytes() {
-        let big = "x".repeat(MAX_TEXT_BYTES / 4 + 1);
+        let big = "x".repeat(MAX_STRING_BYTES);
+        let passes: Vec<String> = (0..MAX_TEXT_BYTES / MAX_STRING_BYTES + 1)
+            .map(|i| i.to_string())
+            .collect();
         let t = plots(
             json!({}),
-            json!([{ "repeat": { "var": "v", "in": { "values": ["1", "2", "3", "4"] } },
+            json!([{ "repeat": { "var": "v", "in": { "values": passes } },
                      "body": [{ "kind": "gauge", "title": big, "id": "i", "unit": "count", "query": "q" }] }]),
         );
         let t = SectionTemplate::parse(&t).unwrap();
@@ -3124,7 +3517,7 @@ mod tests {
                 .unwrap();
             assert!(budget.nodes.get() < MAX_NODES / 10, "{}", body.route);
             assert!(budget.bytes.get() < MAX_TEXT_BYTES / 10, "{}", body.route);
-            assert!(budget.work.get() < MAX_WORK / 10, "{}", body.route);
+            assert!(budget.fuel.get() < MAX_FUEL / 10, "{}", body.route);
         }
     }
 
@@ -3159,12 +3552,14 @@ mod tests {
     thread_local! {
         static MEASURING: Cell<bool> = const { Cell::new(false) };
         static PEAK: Cell<usize> = const { Cell::new(0) };
+        static TOTAL: Cell<usize> = const { Cell::new(0) };
     }
 
     fn note(size: usize) {
         let _ = MEASURING.try_with(|on| {
             if on.get() {
                 let _ = PEAK.try_with(|p| p.set(p.get().max(size)));
+                let _ = TOTAL.try_with(|t| t.set(t.get().saturating_add(size)));
             }
         });
     }
@@ -3199,21 +3594,30 @@ mod tests {
 
     /// `f`'s result and the largest single allocation it made on this thread.
     fn peak_alloc<R>(f: impl FnOnce() -> R) -> (R, usize) {
+        let (out, peak, _) = measure_alloc(f);
+        (out, peak)
+    }
+
+    /// `f`'s result, its largest single allocation and the bytes of all
+    /// its allocations, on this thread.
+    fn measure_alloc<R>(f: impl FnOnce() -> R) -> (R, usize, usize) {
         PEAK.with(|p| p.set(0));
+        TOTAL.with(|t| t.set(0));
         MEASURING.with(|on| on.set(true));
         let out = f();
         MEASURING.with(|on| on.set(false));
-        (out, PEAK.with(Cell::get))
+        (out, PEAK.with(Cell::get), TOTAL.with(Cell::get))
     }
 
     /// A string that would be far over the byte budget is refused before
     /// it is built, whatever its pieces are bound from: a let, a parameter,
-    /// a `values` field or a catalog value. Each would be about 2 GB; no
+    /// a `values` field or a catalog value. Each would be 19 MB; no
     /// allocation during the refused expansion reaches 4 times the budget.
     #[test]
     fn a_string_over_the_byte_budget_is_refused_before_it_is_built() {
-        let big = "x".repeat(100_000);
-        let refs = |name: &str| format!("${{{name}}}").repeat(20_000);
+        // At the string limit, referenced 1200 times: 19 MB each if built.
+        let big = "x".repeat(16_000);
+        let refs = |name: &str| format!("${{{name}}}").repeat(1200);
         let title_plot = |name: &str| json!({ "kind": "gauge", "title": refs(name), "id": "i", "unit": "count", "query": "q" });
         let data = Catalog::default().gauge("m", &[&[("k", big.as_str())]]);
         let cases = [
@@ -3287,45 +3691,50 @@ mod tests {
         assert!(peak < MAX_TEXT_BYTES, "allocated {peak} bytes at once");
     }
 
-    /// The work each predicate, repeat and computed value is charged: one
-    /// per predicate, one per series (or counter name) it reads.
+    /// Each catalog read is charged per series and per label byte: the
+    /// same document costs at least that much more fuel on a catalog where
+    /// `m` has 100 series of 3 labels than on one where it has none.
     #[test]
-    fn catalog_work_is_charged_per_series() {
-        // 3 counter, 2 gauge and 1 histogram series of `m`; 2 counter names.
-        let data = Catalog::default()
-            .counter("m", &[&[("id", "0")], &[("id", "1")], &[("id", "2")]])
-            .counter("other", &[&[]])
-            .gauge("m", &[&[("id", "0")], &[("id", "1")]])
-            .histogram("m", &[&[("id", "0")]]);
+    fn catalog_reads_are_charged_per_series_and_label() {
+        // Ids that do not parse, so the GPU selector reads the series but
+        // produces nothing.
+        let ids: Vec<String> = (0..100).map(|i| format!("a{i:02}")).collect();
+        let series: Vec<Vec<(&str, &str)>> = ids
+            .iter()
+            .map(|i| vec![("id", i.as_str()), ("aa", "xx"), ("bb", "yy")])
+            .collect();
+        let series: Vec<&[(&str, &str)]> = series.iter().map(Vec::as_slice).collect();
+        // One read of `m`'s series costs 100 × (1 + 13 label bytes).
+        let read = 100 * (1 + 13);
+        let full = Catalog::default().counter("m", &series);
+        let empty = Catalog::default();
         let when = |pred: Value| plots(json!({}), json!([{ "when": pred, "then": [] }]));
         let cases = [
-            (when(json!({ "present": "m" })), 1 + 6),
-            (when(json!({ "has_counter": "m" })), 1 + 2),
+            (when(json!({ "present": "m" })), read),
             (
                 when(json!({ "has_label": { "metric": "m", "label": "id" } })),
-                1 + 6,
+                read,
             ),
             (
-                when(json!({ "distinct_gt": { "metrics": ["m", "m"], "by": ["id"], "n": 99 } })),
-                1 + 5 + 5,
+                when(json!({ "distinct_gt": { "metrics": ["m", "m"], "by": ["id"], "n": 999 } })),
+                2 * read,
             ),
             (
                 when(
-                    json!({ "distinct_gt": { "metrics": ["m", "m"], "by": ["id"], "n": 99, "each": true } }),
+                    json!({ "distinct_gt": { "metrics": ["m", "m"], "by": ["id"], "n": 999, "each": true } }),
                 ),
-                1 + 6 + 6,
+                2 * read,
             ),
-            (when(json!({ "not": { "all": [{ "any": [] }] } })), 3),
             (
                 plots(json!({ "p": { "pred": { "present": "m" } } }), json!([])),
-                1 + 6,
+                read,
             ),
             (
                 plots(
-                    json!({ "f": { "first_present": { "list": ["x", "m"], "default": "d" } } }),
+                    json!({ "f": { "first_present": { "list": ["m"], "default": "d" } } }),
                     json!([]),
                 ),
-                1 + 6,
+                read,
             ),
             (
                 plots(
@@ -3333,29 +3742,50 @@ mod tests {
                     json!([{ "repeat": { "var": "v", "in": { "label_values": { "metric": "m", "label": "id" } } },
                              "body": [] }]),
                 ),
-                6,
+                read,
             ),
             (
                 doc(json!([{ "name": "T", "route": "/t", "metadata": {
                     "s": { "computed": "gpu_selector", "probe": ["m", "m"] } } }])),
-                5 + 5,
+                2 * read,
             ),
             (
                 plots(
                     json!({}),
                     json!([{ "split": { "when": { "present": "m" }, "plots": [gauge("a"), gauge("b")] } }]),
                 ),
-                1 + 6,
+                read,
             ),
         ];
-        for (template, work) in cases {
-            assert_eq!(spent(&template, &data).work.get(), work, "{template}");
+        for (template, at_least) in cases {
+            let more = spent(&template, &full).fuel.get() - spent(&template, &empty).fuel.get();
+            // An absent metric's read costs one unit, so each read adds one
+            // less than its series cost; the rest of the document can differ
+            // by a few units (`first_present` binds `m` or the default).
+            let at_least = at_least - at_least / read - 8;
+            assert!(more >= at_least, "{more} < {at_least}: {template}");
         }
+        // `has_counter` scans the counter names: 100 more names of 4 bytes.
+        let names: Vec<String> = (0..100).map(|i| format!("c{i:03}")).collect();
+        let mut many = Catalog::default();
+        for name in &names {
+            many = many.counter(name, &[&[]]);
+        }
+        let t = when(json!({ "has_counter": "m" }));
+        let more = spent(&t, &many).fuel.get() - spent(&t, &empty).fuel.get();
+        assert!(more >= 100 * 5, "{more}");
+        // A predicate costs fuel even when its metric is absent: one unit,
+        // `x` scanned and copied (two), and the empty read (one).
+        let any = |n: usize| when(json!({ "any": vec![json!({ "present": "x" }); n] }));
+        assert_eq!(
+            spent(&any(50), &empty).fuel.get() - spent(&any(0), &empty).fuel.get(),
+            50 * 4
+        );
     }
 
     /// The reviewer's case: a 5000-series metric listed 200 times in a
     /// `distinct_gt`, evaluated on each of 20 repeat passes, is 20 million
-    /// series reads. It is refused at the work limit.
+    /// series reads. It is refused at the fuel limit.
     #[test]
     fn expansion_is_bounded_by_catalog_work() {
         let ids: Vec<String> = (0..5000).map(|i| i.to_string()).collect();
@@ -3374,7 +3804,7 @@ mod tests {
         let e = expand_err(&t, &data, &[]);
         assert_eq!(
             e,
-            format!("/t: expands to more than {MAX_WORK} units of catalog work")
+            format!("/t: expands to more than {MAX_FUEL} units of fuel")
         );
         assert!(start.elapsed() < std::time::Duration::from_secs(10));
     }
@@ -3661,7 +4091,7 @@ mod tests {
             json!({ "has_label": { "metric": "m", "label": "l", "value": bad } }),
             json!({ "distinct_gt": { "metrics": [bad], "by": ["id"], "n": 1 } }),
             json!({ "distinct_gt": { "metrics": ["m"], "by": [bad], "n": 1 } }),
-            json!({ "distinct_gt": { "metrics": ["m"], "by": ["id"], "int": [bad], "n": 1 } }),
+            json!({ "distinct_gt": { "metrics": ["m"], "by": ["id", bad], "int": [bad], "n": 1 } }),
             json!({ "not": { "any": [{ "all": [{ "present": bad }] }] } }),
         ] {
             items.push(json!({ "when": pred, "then": [] }));
@@ -3842,7 +4272,13 @@ mod tests {
             json!([{ "when": { "distinct_gt": { "metrics": ["m"], "by": ["a", "b", "c"], "n": 99 } },
                      "then": [] }]),
         );
-        assert_eq!(spent(&t, &data).work.get(), 1 + 5 * 3);
+        let by1 = plots(
+            json!({}),
+            json!([{ "when": { "distinct_gt": { "metrics": ["m"], "by": ["a"], "n": 99 } },
+                     "then": [] }]),
+        );
+        // Two more `by` labels: at least two more units per series (five).
+        assert!(spent(&t, &data).fuel.get() >= spent(&by1, &data).fuel.get() + 5 * 2);
         let by: Vec<String> = (0..=MAX_BY_LABELS).map(|i| format!("l{i}")).collect();
         assert_refused(
             &plots(
@@ -3920,5 +4356,601 @@ mod tests {
         push_promql_escaped(&mut out, text);
         assert_eq!(out, "a\\\\b\\\"c\\nd\\re");
         assert_eq!(promql_escaped_len(text), out.len());
+    }
+
+    #[test]
+    fn documents_are_capped_in_entries_strings_and_names() {
+        let wide: Vec<String> = (0..=MAX_ENTRIES).map(|i| i.to_string()).collect();
+        assert_refused(
+            &plots(
+                json!({}),
+                json!([{ "repeat": { "var": "v", "in": { "values": wide } }, "body": [] }]),
+            ),
+            "an array of more than 4096 entries",
+        );
+        let many: serde_json::Map<String, Value> = (0..=MAX_ENTRIES)
+            .map(|i| (format!("l{i}"), json!("x")))
+            .collect();
+        assert_refused(
+            &plots(Value::Object(many), json!([])),
+            "an object of more than 4096 entries",
+        );
+        let long = "x".repeat(MAX_STRING_BYTES + 1);
+        assert_refused(
+            &plots(json!({}), json!([gauge(&long)])),
+            "a string of 16385 bytes",
+        );
+        assert_refused(
+            &plots(json!({ long.clone(): "x" }), json!([])),
+            "a string of 16385 bytes",
+        );
+        let fine = "x".repeat(MAX_STRING_BYTES);
+        assert!(SectionTemplate::parse(&plots(json!({}), json!([gauge(&fine)]))).is_ok());
+        assert_eq!(
+            (MAX_ENTRIES, MAX_STRING_BYTES, MAX_NAME_BYTES),
+            (4096, 16384, 64)
+        );
+        let name = "n".repeat(MAX_NAME_BYTES + 1);
+        assert_refused(
+            &plots(json!({ name.clone(): "x" }), json!([])),
+            "is not a name",
+        );
+        assert_refused(
+            &json!({ "schema": 1, "params": [name.clone()], "sections": [] }).to_string(),
+            "is not a name",
+        );
+        assert_refused(
+            &plots(
+                json!({}),
+                json!([{ "repeat": { "var": name.clone(), "in": { "values": [] } }, "body": [] }]),
+            ),
+            "is not a name",
+        );
+        assert_refused(
+            &plots(
+                json!({}),
+                json!([{ "repeat": { "var": "o", "in": { "values": [{ name.clone(): "x" }] } }, "body": [] }]),
+            ),
+            "is not a name",
+        );
+        let ok = "n".repeat(MAX_NAME_BYTES);
+        assert!(SectionTemplate::parse(&plots(json!({ ok: "x" }), json!([]))).is_ok());
+    }
+
+    #[test]
+    fn distinct_gt_int_labels_are_by_labels() {
+        assert_refused(
+            &plots(
+                json!({}),
+                json!([{ "when": { "distinct_gt": { "metrics": ["m"], "by": ["id"], "int": ["x"], "n": 1 } }, "then": [] }]),
+            ),
+            "`int` label \"x\" is not one of its `by` labels",
+        );
+    }
+
+    /// A reference to an empty value still costs fuel, and so does the
+    /// text scanned.
+    #[test]
+    fn references_to_empty_values_cost_fuel() {
+        let title = |n: usize| {
+            plots(
+                json!({ "e": "" }),
+                json!([{ "kind": "gauge", "title": "${e}".repeat(n), "id": "i", "unit": "count", "query": "q" }]),
+            )
+        };
+        let more = spent(&title(1000), &Catalog::default()).fuel.get()
+            - spent(&title(0), &Catalog::default()).fuel.get();
+        // Each reference: one unit, plus its four bytes scanned.
+        assert!(more >= 1000 * 5 - 1, "{more}");
+        let t = plots(
+            json!({ "e": "" }),
+            json!([{ "repeat": { "var": "r", "in": { "values": (0..4000).map(|i| i.to_string()).collect::<Vec<_>>() } },
+                     "body": [{ "kind": "gauge", "title": "${e}".repeat(4000), "id": "i", "unit": "count", "query": "q" }] }]),
+        );
+        let start = std::time::Instant::now();
+        assert_eq!(
+            expand_err(&t, &Catalog::default(), &[]),
+            format!("/t: expands to more than {MAX_FUEL} units of fuel")
+        );
+        assert!(start.elapsed() < std::time::Duration::from_secs(20));
+    }
+
+    /// Parsing moves each part of the document out of its parent: the
+    /// bytes allocated to parse a document do not grow with how deeply its
+    /// content is nested.
+    #[test]
+    fn parse_is_linear_in_nesting_depth() {
+        let leaf: Vec<String> = (0..4000).map(|i| format!("value-{i}")).collect();
+        let nested = |depth: usize| {
+            let mut body =
+                json!([{ "repeat": { "var": "v", "in": { "values": leaf } }, "body": [] }]);
+            for _ in 0..depth {
+                body = json!([{ "when": { "present": "m" }, "then": body }]);
+            }
+            plots(json!({}), body)
+        };
+        let alloc = |depth: usize| {
+            let text = nested(depth);
+            let (t, _, total) = measure_alloc(|| SectionTemplate::parse(&text));
+            assert!(t.is_ok());
+            total
+        };
+        let (shallow, deep) = (alloc(1), alloc(30));
+        assert!(
+            deep < shallow * 2,
+            "depth 30 allocated {deep} bytes, depth 1 {shallow}"
+        );
+    }
+
+    #[test]
+    fn more_refusals() {
+        // An empty `values` list binds nothing.
+        assert_refused(
+            &plots(
+                json!({}),
+                json!([{ "repeat": { "var": "v", "in": { "values": [] } }, "body": [gauge("${v}")] }]),
+            ),
+            "unknown name `${v}`",
+        );
+        // An escaped quote in a single-quoted string does not end it, and
+        // the `"` after it does not open a double-quoted one.
+        let t = plots(
+            json!({}),
+            json!([{ "repeat": { "var": "v", "in": { "label_values": { "metric": "m", "label": "k" } } },
+                     "body": [{ "kind": "gauge", "title": "t", "id": "i", "unit": "count",
+                                "query": r#"m{k='\'"${v}"'}"# }] }]),
+        );
+        assert_refused(&t, "goes only inside a double-quoted string");
+    }
+
+    /// An error quotes at most 200 characters of the text it names.
+    #[test]
+    fn errors_cut_long_text() {
+        let long = format!("{}${{", "x".repeat(MAX_STRING_BYTES - 2));
+        let e = parse_err(&plots(json!({}), json!([gauge(&long)])));
+        assert!(e.len() < 600, "{} bytes", e.len());
+        assert!(e.contains(&format!("({} bytes)", long.len())), "{e}");
+    }
+
+    /// A small deterministic generator of hostile documents: deep repeats,
+    /// long lists, empty bindings, many predicates.
+    struct Gen {
+        state: u64,
+        /// Items left to generate in this document, so a document stays
+        /// small while its expansion need not.
+        items: usize,
+    }
+
+    impl Gen {
+        fn next(&mut self) -> u64 {
+            // xorshift64
+            self.state ^= self.state << 13;
+            self.state ^= self.state >> 7;
+            self.state ^= self.state << 17;
+            self.state
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+        fn chance(&mut self, percent: usize) -> bool {
+            self.below(100) < percent
+        }
+    }
+
+    #[derive(Clone)]
+    enum Bind {
+        Text(String),
+        Catalog(String),
+    }
+
+    fn gen_pred(g: &mut Gen, depth: usize) -> Value {
+        let metric = ["m", "g", "h", "absent"][g.below(4)];
+        match g.below(if depth >= 2 { 5 } else { 8 }) {
+            0 => json!({ "present": metric }),
+            1 => json!({ "has_counter": metric }),
+            2 => {
+                json!({ "has_label": { "metric": metric, "label": "id", "value": g.below(30).to_string() } })
+            }
+            3 => {
+                json!({ "distinct_gt": { "metrics": vec![metric; 1 + g.below(64)], "by": ["id", "k"],
+                                          "int": ["id"], "n": g.below(20) } })
+            }
+            4 => json!({ "distinct_gt": { "metrics": vec![metric; 1 + g.below(64)], "by": ["id"],
+                                          "each": true, "n": g.below(20) } }),
+            5 => {
+                json!({ "any": (0..g.below(8)).map(|_| gen_pred(g, depth + 1)).collect::<Vec<_>>() })
+            }
+            6 => {
+                json!({ "all": (0..g.below(8)).map(|_| gen_pred(g, depth + 1)).collect::<Vec<_>>() })
+            }
+            _ => json!({ "not": gen_pred(g, depth + 1) }),
+        }
+    }
+
+    fn gen_text(g: &mut Gen, scope: &[Bind], promql: bool) -> String {
+        let mut out = String::from("t");
+        for _ in 0..g.below(40) {
+            if scope.is_empty() || g.chance(30) {
+                out.push_str("${e}");
+                continue;
+            }
+            match &scope[g.below(scope.len())] {
+                Bind::Text(name) => out.push_str(&format!("${{{name}}}")),
+                Bind::Catalog(name) if promql => out.push_str(&format!("{{k=\"${{{name}}}\"}}")),
+                Bind::Catalog(name) => out.push_str(&format!("${{{name}}}")),
+            }
+        }
+        out
+    }
+
+    fn gen_items(
+        g: &mut Gen,
+        depth: usize,
+        scope: &mut Vec<Bind>,
+        leaf: &mut dyn FnMut(&mut Gen, &[Bind]) -> Value,
+    ) -> Value {
+        let mut items = Vec::new();
+        for _ in 0..1 + g.below(6) {
+            if g.items == 0 && !items.is_empty() {
+                break;
+            }
+            g.items = g.items.saturating_sub(1);
+            let roll = if depth >= 6 || g.items == 0 {
+                9
+            } else {
+                g.below(10)
+            };
+            let item = match roll {
+                0..=2 => json!({ "when": gen_pred(g, 0),
+                                 "then": gen_items(g, depth + 1, scope, leaf),
+                                 "else": gen_items(g, depth + 1, scope, leaf) }),
+                3..=5 => {
+                    let var = format!("v{}", scope.len());
+                    let (over, binds) = match g.below(3) {
+                        0 => (
+                            json!({ "values": (0..g.below(64)).map(|i| "x".repeat(i)).collect::<Vec<_>>() }),
+                            vec![Bind::Text(var.clone())],
+                        ),
+                        1 => {
+                            let n = g.below(64);
+                            let fields = 1 + g.below(8);
+                            let values: Vec<Value> = (0..n)
+                                .map(|i| {
+                                    Value::Object(
+                                        (0..fields)
+                                            .map(|f| (format!("f{f}"), json!(i.to_string())))
+                                            .collect(),
+                                    )
+                                })
+                                .collect();
+                            let binds = if n == 0 {
+                                Vec::new()
+                            } else {
+                                (0..fields)
+                                    .map(|f| Bind::Text(format!("{var}.f{f}")))
+                                    .collect()
+                            };
+                            (json!({ "values": values }), binds)
+                        }
+                        _ => (
+                            json!({ "label_values": { "metric": "m", "label": "id", "sort": "int" } }),
+                            vec![Bind::Catalog(var.clone())],
+                        ),
+                    };
+                    // A list of strings that is empty binds nothing either.
+                    let binds = if over["values"].as_array().is_some_and(|v| v.is_empty()) {
+                        Vec::new()
+                    } else {
+                        binds
+                    };
+                    let mark = scope.len();
+                    scope.extend(binds);
+                    // Keep the variable names unique by padding the scope.
+                    if scope.len() == mark {
+                        scope.push(Bind::Text("e".into()));
+                    }
+                    let body = gen_items(g, depth + 1, scope, leaf);
+                    scope.truncate(mark);
+                    json!({ "repeat": { "var": var, "in": over }, "body": body })
+                }
+                _ => leaf(g, scope),
+            };
+            items.push(item);
+        }
+        Value::Array(items)
+    }
+
+    fn gen_document(g: &mut Gen) -> String {
+        let mut scope = Vec::new();
+        let groups = gen_items(g, 0, &mut scope, &mut |g, scope| {
+            let mut scope = scope.to_vec();
+            let subgroups = gen_items(g, 2, &mut scope, &mut |g, scope| {
+                let mut scope = scope.to_vec();
+                let plots = gen_items(g, 4, &mut scope, &mut |g, scope| {
+                    let title = gen_text(g, scope, false);
+                    let query = gen_text(g, scope, true);
+                    match g.below(4) {
+                        0 => json!({ "split": { "when": gen_pred(g, 0), "plots": [
+                            { "kind": "gauge", "title": title, "id": "a", "unit": "count", "query": query },
+                            { "kind": "counter", "title": "b", "id": "b", "unit": "rate", "query": "q" } ] } }),
+                        1 => {
+                            json!({ "rate_mean": { "title": title, "id": "r", "selector": query, "mean_unit": "time" } })
+                        }
+                        _ => {
+                            json!({ "kind": "histogram", "title": title, "id": "p", "unit": "time",
+                                     "subtype": "percentiles", "query": query,
+                                     "percentiles": vec![0.5; g.below(500)] })
+                        }
+                    }
+                });
+                json!({ "name": gen_text(g, &scope, false), "plots": plots })
+            });
+            json!({ "name": "G", "id": "g", "metadata": { "m": vec![json!({}); g.below(200)] },
+                    "subgroups": subgroups })
+        });
+        json!({ "schema": 1, "let": { "e": "",
+                                     "p": { "pred": gen_pred(g, 0) } },
+                "sections": [{ "name": "T", "route": "/t", "groups": groups }] })
+        .to_string()
+    }
+
+    /// Hostile documents under the parse caps: each section either expands
+    /// or is refused at a limit, with what it spent within the limit plus
+    /// one charge, and no single allocation above 4 times the byte limit
+    /// plus 1 MiB.
+    #[test]
+    fn hostile_documents_expand_within_the_limits() {
+        let limits = Limits {
+            nodes: 2_000,
+            bytes: 256 << 10,
+            fuel: 2 << 20,
+        };
+        let ids: Vec<String> = (0..20).map(|i| i.to_string()).collect();
+        let series: Vec<Vec<(&str, &str)>> = ids
+            .iter()
+            .map(|i| vec![("id", i.as_str()), ("k", "a\"b")])
+            .collect();
+        let series: Vec<&[(&str, &str)]> = series.iter().map(Vec::as_slice).collect();
+        let data = Catalog::default()
+            .counter("m", &series)
+            .gauge("g", &series)
+            .histogram("h", &series);
+        let mut g = Gen {
+            state: 0x5eed_5eed_5eed_5eed,
+            items: 0,
+        };
+        let (mut expanded, mut limited) = (0, 0);
+        for _ in 0..150 {
+            g.items = 200;
+            let text = gen_document(&mut g);
+            let t = SectionTemplate::parse(&text).unwrap_or_else(|e| panic!("{e}\n{text}"));
+            let SectionDef::Section(body) = &t.sections[0] else {
+                unreachable!()
+            };
+            let budget = Budget::new(limits);
+            let (result, peak) = peak_alloc(|| {
+                t.expand_body(&data, body, Vec::new(), &BTreeMap::new(), &budget)
+                    .map(|_| ())
+            });
+            match result {
+                Ok(()) => expanded += 1,
+                Err(e) => {
+                    assert_eq!(e.kind(), TemplateErrorKind::Limit, "{e}\n{text}");
+                    limited += 1;
+                }
+            }
+            assert!(budget.nodes.get() <= limits.nodes + 1);
+            assert!(budget.bytes.get() <= limits.bytes + MAX_STRING_BYTES);
+            assert!(budget.fuel.get() <= limits.fuel + limits.bytes + MAX_STRING_BYTES);
+            assert!(
+                peak <= 4 * limits.bytes + (1 << 20),
+                "allocated {peak} bytes at once"
+            );
+        }
+        // Both outcomes are exercised.
+        assert!(
+            expanded > 10 && limited > 10,
+            "{expanded} expanded, {limited} limited"
+        );
+    }
+
+    // Release-mode timing of hostile constructions, run by hand:
+    // `cargo test --release -p dashboard --lib adversarial -- --ignored --nocapture`.
+    fn adversarial_run(name: &str, text: String, data: &Catalog) {
+        let start = std::time::Instant::now();
+        let parsed = SectionTemplate::parse(&text);
+        let parse_time = start.elapsed();
+        let outcome = match parsed {
+            Err(e) => format!(
+                "parse refused: {}",
+                e.message().chars().take(120).collect::<String>()
+            ),
+            Ok(t) => match t.expand(data, "/t", Vec::new(), &BTreeMap::new()) {
+                Ok(_) => "expanded".to_string(),
+                Err(e) => format!(
+                    "expand refused: {}",
+                    e.message().chars().take(120).collect::<String>()
+                ),
+            },
+        };
+        eprintln!(
+            "ADVERSARIAL {name}: {} bytes, parse {:?}, total {:?}, {outcome}",
+            text.len(),
+            parse_time,
+            start.elapsed()
+        );
+    }
+
+    fn adversarial_doc(groups: Value, lets: Value) -> String {
+        json!({ "schema": 1, "let": lets, "sections": [{ "name": "T", "route": "/t", "groups": groups }] })
+            .to_string()
+    }
+
+    fn adversarial_plots(items: Value, lets: Value) -> String {
+        adversarial_doc(
+            json!([{ "name": "G", "id": "g", "subgroups": [{ "name": "S", "plots": items }] }]),
+            lets,
+        )
+    }
+
+    /// A `distinct_gt` whose `int` list has 200,000 entries, evaluated on
+    /// each of 20 repeat passes.
+    #[test]
+    #[ignore]
+    fn adversarial_distinct_gt_int() {
+        let passes: Vec<String> = (0..20).map(|i| i.to_string()).collect();
+        let t = adversarial_plots(
+            json!([{ "repeat": { "var": "r", "in": { "values": passes } }, "body": [
+                { "when": { "distinct_gt": { "metrics": ["m"], "by": ["id"], "int": vec!["id"; 200_000], "n": 1 } },
+                  "then": [] } ] }]),
+            json!({}),
+        );
+        let data = Catalog::default().counter("m", &[&[("id", "1")]]);
+        adversarial_run("distinct_gt int x200000 x20", t, &data);
+    }
+
+    /// A title of 200,000 references to an empty let, on each of 1000
+    /// repeat passes; and the same within the string cap (4000 references).
+    #[test]
+    #[ignore]
+    fn adversarial_empty_references() {
+        let passes: Vec<String> = (0..1000).map(|i| i.to_string()).collect();
+        for refs in [200_000, 4000] {
+            let t = adversarial_plots(
+                json!([{ "repeat": { "var": "r", "in": { "values": passes } }, "body": [
+                    { "kind": "gauge", "title": "${e}".repeat(refs), "id": "i", "unit": "count", "query": "q" } ] }]),
+                json!({ "e": "" }),
+            );
+            adversarial_run(&format!("empty refs x{refs} x1000"), t, &Catalog::default());
+        }
+    }
+
+    /// `present` on a metric of 2000 series of 200 labels, on each of
+    /// 20,000 repeat passes.
+    #[test]
+    #[ignore]
+    fn adversarial_wide_series() {
+        let keys: Vec<String> = (0..200).map(|i| format!("label{i}")).collect();
+        let ids: Vec<String> = (0..2000).map(|i| i.to_string()).collect();
+        let series: Vec<Vec<(&str, &str)>> = ids
+            .iter()
+            .map(|id| keys.iter().map(|k| (k.as_str(), id.as_str())).collect())
+            .collect();
+        let series: Vec<&[(&str, &str)]> = series.iter().map(Vec::as_slice).collect();
+        let data = Catalog::default().counter("m", &series);
+        let passes: Vec<String> = (0..4000).map(|i| i.to_string()).collect();
+        let inner: Vec<String> = (0..5).map(|i| i.to_string()).collect();
+        let t = adversarial_plots(
+            json!([{ "repeat": { "var": "r", "in": { "values": passes } }, "body": [
+                { "repeat": { "var": "s", "in": { "values": inner } }, "body": [
+                    { "when": { "present": "m" }, "then": [] } ] } ] }]),
+            json!({}),
+        );
+        adversarial_run("present m (2000x200 labels) x20000", t, &data);
+    }
+
+    /// A 1 MB document: one 520,000-entry array under 30 nested `when`s.
+    #[test]
+    #[ignore]
+    fn adversarial_deep_wide_parse() {
+        let mut body = json!([{ "repeat": { "var": "v", "in": { "values": vec!["a"; 520_000] } }, "body": [] }]);
+        for _ in 0..30 {
+            body = json!([{ "when": { "present": "m" }, "then": body }]);
+        }
+        let t = adversarial_plots(body, json!({}));
+        adversarial_run("520000-entry array at depth 30", t, &Catalog::default());
+    }
+
+    /// The fuel each binding costs, exactly: a pass is a node (one unit),
+    /// its value's bytes, and the binding (one unit plus the name's bytes).
+    #[test]
+    fn bindings_cost_fuel_exactly() {
+        let fuel = |t: &str| spent(t, &Catalog::default()).fuel.get();
+        let rep = |values: Value| {
+            plots(
+                json!({}),
+                json!([{ "repeat": { "var": "vv", "in": { "values": values } }, "body": [] }]),
+            )
+        };
+        // Strings: node 1 + value 1 + bind (1 + "vv") = 5 per pass.
+        assert_eq!(
+            fuel(&rep(json!(vec!["x"; 100]))) - fuel(&rep(json!([]))),
+            100 * 5
+        );
+        // Objects of one field: node 1, then per field node 1 + value 1 +
+        // bind (1 + "vv.f") = 8 per pass.
+        assert_eq!(
+            fuel(&rep(json!(vec![json!({ "f": "x" }); 100]))) - fuel(&rep(json!([]))),
+            100 * 8
+        );
+        // A let: 1, its text scanned (at least 1), the binding (1 + 3).
+        let lets: serde_json::Map<String, Value> =
+            (0..100).map(|i| (format!("l{i:02}"), json!(""))).collect();
+        assert_eq!(
+            fuel(&plots(Value::Object(lets), json!([]))) - fuel(&plots(json!({}), json!([]))),
+            100 * 6
+        );
+    }
+
+    /// Sorting a `label_values` repeat's values costs n times the bits of n.
+    #[test]
+    fn sorting_label_values_costs_fuel() {
+        let ids: Vec<String> = (0..100).map(|i| i.to_string()).collect();
+        let series: Vec<Vec<(&str, &str)>> = ids.iter().map(|i| vec![("id", i.as_str())]).collect();
+        let series: Vec<&[(&str, &str)]> = series.iter().map(Vec::as_slice).collect();
+        let data = Catalog::default().counter("m", &series);
+        let params = BTreeMap::new();
+        let read = Budget::default();
+        Scope::new(&data, &params, &read).series("m", true).unwrap();
+        let sorted = Budget::default();
+        let lv = LabelValues {
+            metric: "m".into(),
+            label: "id".into(),
+            sort: LabelSort::Int,
+        };
+        label_values_sorted(&lv, &Scope::new(&data, &params, &sorted)).unwrap();
+        // The read, `m` and `id` scanned and copied (1 + 1, 2 + 2), and
+        // 100 values times 7 bits.
+        assert_eq!(sorted.fuel.get() - read.fuel.get(), 6 + 100 * 7);
+    }
+
+    /// Each group, subgroup and plot is charged its struct's size in bytes.
+    #[test]
+    fn output_structs_cost_bytes() {
+        let bytes = |t: &str| spent(t, &Catalog::default()).bytes.get();
+        let one = plots(json!({}), json!([gauge("a")]));
+        let two = plots(json!({}), json!([gauge("a"), gauge("b")]));
+        // The plot struct plus "b" three times (title, id, query).
+        assert_eq!(bytes(&two) - bytes(&one), std::mem::size_of::<Plot>() + 3);
+        let rate_mean = plots(
+            json!({}),
+            json!([gauge("a"), { "rate_mean": { "title": "t", "id": "i", "selector": "s", "mean_unit": "time" } }]),
+        );
+        assert_eq!(
+            bytes(&rate_mean) - bytes(&one),
+            2 * std::mem::size_of::<Plot>() + 3
+        );
+        let groups = |extra: Value| {
+            let mut groups =
+                vec![json!({ "name": "G", "id": "g", "subgroups": [{ "plots": [gauge("a")] }] })];
+            groups.push(extra);
+            section(json!({}), Value::Array(groups))
+        };
+        let base = section(
+            json!({}),
+            json!([{ "name": "G", "id": "g", "subgroups": [{ "plots": [gauge("a")] }] }]),
+        );
+        assert_eq!(
+            bytes(&groups(json!({ "name": "H", "id": "h" }))) - bytes(&base),
+            std::mem::size_of::<Group>() + 2
+        );
+        let with_sub = section(
+            json!({}),
+            json!([{ "name": "G", "id": "g", "subgroups": [{ "plots": [gauge("a")] }, { "plots": [] }] }]),
+        );
+        assert_eq!(
+            bytes(&with_sub) - bytes(&base),
+            std::mem::size_of::<SubGroup>()
+        );
     }
 }
