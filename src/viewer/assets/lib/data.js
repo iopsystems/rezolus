@@ -1213,6 +1213,9 @@ const createDataApi = ({
     //   sectionRoute       — route string, used for the service/node rule.
     //   activeCgroupPattern — resolved cgroup selector, if any.
     //   serviceName        — section's service_name, if any.
+    //   intervalSec        — the queried capture's sampling interval, below
+    //                        which a step override is not a stride; the
+    //                        baseline's when omitted.
     //   crossCapture       — default false. When true, skip per-service
     //                        instance injection because service KPIs are
     //                        composable (e.g. sum across instances) and
@@ -1233,6 +1236,7 @@ const createDataApi = ({
             activeCgroupPattern = null,
             serviceName = null,
             crossCapture = false,
+            intervalSec = null,
             stepOverride = _stepOverride,
         } = opts;
         const injectTopologyLabels = !crossCapture;
@@ -1242,7 +1246,7 @@ const createDataApi = ({
         // recording a 1s override is a real 10x stride and must reach the
         // query, and on a 5s recording a 1s override is not a stride at all.
         const stepActive = stepOverride
-            && stepOverride > nativeInterval(cachedMetadata);
+            && stepOverride > (intervalSec ?? nativeInterval(cachedMetadata));
 
         if (plot.opts.type === 'histogram') {
             q = buildHistogramQuery(
@@ -1539,7 +1543,15 @@ const createDataApi = ({
         const meta = cachedMetadata || await fetchMetadata();
         const eff = range || defaultRangeFor(meta);
         const span = Math.max(0, eff.end - eff.start);
-        const native = nativeInterval(meta);
+        // The stride floor is the queried capture's own cadence: another
+        // capture may be read more slowly than the baseline.
+        let native = nativeInterval(meta);
+        if (captureId !== CAPTURE_BASELINE) {
+            const own = range?.interval
+                ? range
+                : await captureMetadata(captureId).then((r) => r?.data ?? r, () => null);
+            if (Number.isFinite(own?.interval) && own.interval > 0) native = own.interval;
+        }
         const stride = (_stepOverride && _stepOverride > native)
             ? _stepOverride
             : stepAtLeast(native, span / pixelBudget());

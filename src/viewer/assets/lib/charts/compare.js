@@ -249,27 +249,35 @@ const anchorSecondsFor = (anchors, id, timeDataSec) =>
 // recordings. An anchor that resolves to different offsets (an event that
 // fell at different moments in the two runs) needs the experiment index
 // shifted by that difference in steps; `k` is that shift (experiment
-// column = baseline column + k). A difference that is not a whole number
-// of steps has no honest cell pairing, so `ok` is false and the caller
-// shows the captures side by side and says why.
-export const diffTimeShift = (aId, bId, anchors, aTime, bTime) => {
+// column = baseline column + k). By default a difference that is not a
+// whole number of steps has no honest cell pairing, so `ok` is false and
+// the caller shows the captures side by side and says why. With `nearest`
+// each column pairs with the nearest one, and `offset` is how far apart, in
+// seconds, the paired columns sit: strided windows fall at multiples of the
+// stride, so two recordings' windows sit at different phases.
+export const diffTimeShift = (aId, bId, anchors, aTime, bTime, { nearest = false } = {}) => {
     const hasA = Array.isArray(aTime) && aTime.length > 0;
     const hasB = Array.isArray(bTime) && bTime.length > 0;
-    if (!hasA || !hasB) return { k: 0, ok: true };
+    if (!hasA || !hasB) return { k: 0, ok: true, offset: 0 };
     const stepOf = (t) => (t.length > 1 && t[1] - t[0] > 0 ? t[1] - t[0] : null);
-    // Cells pair by index, so the two must have the same step.
+    // Cells pair by index, so the two must have the same step. Timestamps
+    // are seconds since the epoch as f64, precise to about 2.4e-7 s, so two
+    // captures' steps can differ by a microsecond; 10 µs is the tolerance.
     const stepA = stepOf(aTime);
     const stepB = stepOf(bTime);
-    if (stepA && stepB && Math.abs(stepA - stepB) > 1e-9) return { k: 0, ok: false };
+    if (stepA && stepB && Math.abs(stepA - stepB) > 1e-5) {
+        return { k: 0, ok: false, offset: 0 };
+    }
     const relA = aTime[0] - anchorSecondsFor(anchors, aId, aTime);
     const relB = bTime[0] - anchorSecondsFor(anchors, bId, bTime);
     const diff = relA - relB;
-    if (Math.abs(diff) < 1e-9) return { k: 0, ok: true };
+    if (Math.abs(diff) < 1e-9) return { k: 0, ok: true, offset: 0 };
     const step = stepA ?? stepB;
-    if (!step) return { k: 0, ok: false };
+    if (!step) return { k: 0, ok: false, offset: 0 };
     const exact = diff / step;
     const k = Math.round(exact);
-    return { k, ok: Math.abs(exact - k) <= 0.25 };
+    const offset = (exact - k) * step;
+    return { k, ok: nearest || Math.abs(exact - k) <= 0.25, offset };
 };
 
 // The side-by-side rendering a diff view falls back to when the two
@@ -848,6 +856,7 @@ const renderDiffQuantileHeatmap = (opts) => {
     const shift = diffTimeShift(
         CAPTURE_BASELINE, CAPTURE_EXPERIMENT, anchors,
         baseline.spectrumTimeData, experiment.spectrumTimeData,
+        { nearest: true },
     );
     if (!shift.ok) return diffUnavailable(sideBySideQuantileHeatmap(opts));
     const drop = (fetch, n) => (n > 0 ? {
@@ -946,11 +955,24 @@ const renderDiffQuantileHeatmap = (opts) => {
         eventTimeOriginSec: baselineAnchorSec,
     };
 
+    // Paired columns a measurable part of a window apart: say so.
+    const stepSec = (baseline.spectrumTimeData[1] ?? 0) - (baseline.spectrumTimeData[0] ?? 0);
+    const apart = Math.abs(shift.offset);
+    const note = stepSec > 0 && apart > 0.01 * stepSec
+        ? m('div.compare-diff-note',
+            'Each column is paired with the nearest window of the other capture; paired '
+            + `windows are ${formatSeconds(apart)} apart (window ${formatSeconds(stepSec)}), so a `
+            + 'burst shorter than a window can show as a +/\u2212 pair in adjacent columns.')
+        : null;
+
     return {
         kind: 'vnode',
-        vnode: m('div.compare-heatmap-diff', m(Chart, { spec: diffSpec, chartsState, interval })),
+        vnode: m('div.compare-heatmap-diff', [m(Chart, { spec: diffSpec, chartsState, interval }), note]),
     };
 };
+
+// `s` seconds, to the precision a window offset needs.
+const formatSeconds = (s) => (s >= 1 ? `${Number(s.toFixed(1))} s` : `${Math.round(s * 1000)} ms`);
 
 // Trim outliers from the sorted ascending delta array, walking inward
 // one quantile step (1/100 of the distribution) per iteration. A step

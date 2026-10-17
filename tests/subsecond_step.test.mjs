@@ -153,3 +153,28 @@ test('granularity values parse back as numbers, including sub-second', () => {
     // parseInt, the previous parser, truncates every sub-second option to 0.
     assert.equal(parseInt('0.1', 10), 0);
 });
+
+test("an experiment's stride floor is its own interval, not the baseline's", async () => {
+    const minTime = 1_700_000_000;
+    const calls = [];
+    // Baseline at 1 s; the experiment reads every 10 s.
+    const api = makeApi(calls, { minTime, maxTime: minTime + 600, interval: 1 });
+    const plot = { promql_query: 'latency', opts: { type: 'histogram', subtype: 'percentiles' } };
+    setStepOverride(5);
+    try {
+        await api.fetchQuantileSpectrumForPlot(plot, [0.5], 'baseline');
+        assert.match(calls[0].query, /latency, 5\)$/, 'a stride on the 1 s baseline');
+        await api.fetchQuantileSpectrumForPlot(plot, [0.5], 'experiment',
+            { start: minTime, end: minTime + 600, step: 10, interval: 10 });
+        assert.match(calls[1].query, /\(\[[^\]]*\], latency\)$/, 'no stride under the experiment\'s 10 s rows');
+    } finally {
+        setStepOverride(null);
+    }
+    // A step override reaches a 10 s capture's query only past 10 s.
+    const q = (step) => api.buildEffectiveQuery(
+        { promql_query: 'latency', opts: { type: 'histogram', subtype: 'percentiles', percentiles: [0.5] } },
+        { stepOverride: step, intervalSec: 10, crossCapture: true },
+    );
+    assert.doesNotMatch(q(5), /latency, 5\)/);
+    assert.match(q(15), /latency, 15\)/);
+});

@@ -1001,6 +1001,20 @@
 
 ### Fixed
 
+- The A/B quantile heatmap diff pairs each column with the nearest
+  window of the other capture, and says how far apart the paired windows
+  sit when that is more than 1% of a window. Strided windows fall at
+  multiples of the stride, so two recordings' windows sit at different
+  phases, and the diff showed the two side by side for about half of
+  capture pairs. Steps that differ by under 10 µs count as equal: a
+  sub-second stride's stamps carry the error of seconds since the epoch as
+  f64, which a 1 ns tolerance refused.
+
+- A compare-mode capture's histogram stride is floored at its own
+  interval, where it was floored at the baseline's: an experiment read
+  every 10 s against a 1 s baseline took a 5 s Step override as a stride
+  shorter than its own rows.
+
 - A Save as Report trimmed to charts that include a histogram's Rate chart
   (`sum(histogram_irate(..))`: runqueue, off-CPU and running time, TCP
   packet latency, Block IO queue wait) but none of its percentile charts

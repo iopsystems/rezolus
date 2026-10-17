@@ -201,6 +201,20 @@ const effectiveExperimentStep = (attrs, range) => {
     return range.step;
 };
 
+// A capture's sampling interval in seconds: the range's when it carries
+// one, else the capture's metadata's; null when neither does, which leaves
+// the baseline's.
+const captureInterval = async (captureId, range) => {
+    const ok = (v) => (Number.isFinite(v) && v > 0 ? v : null);
+    if (ok(range?.interval)) return range.interval;
+    try {
+        const meta = await captureMetadata(captureId);
+        return ok((meta?.data ?? meta)?.interval);
+    } catch (_) {
+        return null;
+    }
+};
+
 // Fetch the experiment-side PromQL result and stash it on vnode.state.
 // Records `_lastFetchedStep` so the component's view can detect when
 // the granularity selector has moved and trigger another fetch.
@@ -221,11 +235,7 @@ const fetchExperimentResult = (vnode) => {
     // buildEffectiveQuery instead of spec.promql_query so the same
     // histogram/counter rewrites and step substitutions apply.
     const baseQuery = spec.promql_query_experiment || spec.promql_query;
-    const query = buildEffectiveQuery(
-        { ...spec, promql_query: baseQuery },
-        { sectionRoute, crossCapture: true },
-    );
-    if (query == null) {
+    if (buildEffectiveQuery({ ...spec, promql_query: baseQuery }, { sectionRoute, crossCapture: true }) == null) {
         vnode.state.error = 'compare: query skipped (unresolved cgroup pattern)';
         return;
     }
@@ -265,6 +275,15 @@ const fetchExperimentResult = (vnode) => {
                 return;
             }
             const step = effectiveExperimentStep(vnode.attrs, range);
+            // Built against the experiment's own cadence, below which a step
+            // override is not a stride. A range without one (the static
+            // site's script.js builds one) takes it from the capture's
+            // metadata.
+            const intervalSec = await captureInterval(CAPTURE_EXPERIMENT, range);
+            const query = buildEffectiveQuery(
+                { ...spec, promql_query: baseQuery },
+                { sectionRoute, crossCapture: true, intervalSec },
+            );
             // A per-entity heatmap is fetched as the baseline's was, at the
             // baseline's column spacing, so the two pair column for column.
             const res = entityHeatmap(spec, query)
@@ -498,16 +517,20 @@ const fetchExtraCaptures = (vnode) => {
                 } catch (_) { range = null; }
                 if (!range) return null;
                 const step = effectiveExperimentStep(vnode.attrs, range);
+                const capQuery = buildEffectiveQuery(
+                    { ...spec, promql_query: baseQuery },
+                    { sectionRoute, crossCapture: true, intervalSec: await captureInterval(cap.id, range) },
+                );
                 const [result, boxplot] = await Promise.all([
-                    (entityHeatmap(spec, query)
+                    (entityHeatmap(spec, capQuery)
                         ? fetchEntityHeatmapForCapture(
-                            cap.id, query, range, range.start, range.end, columnStep(spec),
+                            cap.id, capQuery, range, range.start, range.end, columnStep(spec),
                         )
-                        : queryRangeForCapture(cap.id, query, range.start, range.end, step))
+                        : queryRangeForCapture(cap.id, capQuery, range.start, range.end, step))
                         .catch(() => FETCH_FAILED),
                     wantBoxplot
                         ? queryRangeDisplayForCapture(
-                            cap.id, query, range.start, range.end, nativeInterval(range), pts,
+                            cap.id, capQuery, range.start, range.end, nativeInterval(range), pts,
                         ).catch(() => null)
                         : Promise.resolve(null),
                 ]);
