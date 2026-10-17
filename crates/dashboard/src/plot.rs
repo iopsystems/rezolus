@@ -1,5 +1,5 @@
 use metriken_query::MetricsSource;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Count distinct values of `key` across `labels`. Series missing the
@@ -200,7 +200,7 @@ impl Group {
 
     /// Remove the most recently opened subgroup if it holds no plots. A
     /// section template omits a subgroup its predicates left empty.
-    pub fn drop_last_subgroup_if_empty(&mut self) {
+    pub(crate) fn drop_last_subgroup_if_empty(&mut self) {
         if self.subgroups.last().is_some_and(|sg| sg.plots.is_empty()) {
             self.subgroups.pop();
         }
@@ -644,7 +644,8 @@ impl FormatConfig {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Unit {
     Count,
     Rate,

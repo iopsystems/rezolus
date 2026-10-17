@@ -4,12 +4,11 @@
 //! generator for that route, on every fixture catalog. The catalogs are a
 //! real recording's metric set (`bench`), every metric a generator names
 //! with two series each (`sink`), the same with one series each and with
-//! every metric a gauge, a
-//! recording from before the renames (`legacy`), a host with three GPUs
-//! from two vendors, two vendors' GPUs sharing `id="0"`, GPUs with no
-//! `vendor` label or a non-integer `id`, an empty recording, and `sink`
-//! with each named metric removed in turn, so every presence predicate is
-//! seen both ways.
+//! every metric a gauge, a recording from before the renames (`legacy`), a
+//! host with three GPUs from two vendors, two vendors' GPUs sharing
+//! `id="0"`, GPUs with no `vendor` label or a non-integer `id`, an empty
+//! recording, and `sink` with each named metric removed in turn, so every
+//! presence predicate is seen both ways.
 //!
 //! Golden files under `tests/golden/` hold the generators' output for the
 //! named catalogs, so the template stays checked once a generator is
@@ -29,13 +28,34 @@ type Labels = BTreeMap<String, String>;
 /// A metric catalog with no samples: what the generators and the template
 /// read to decide what to show.
 #[derive(Clone, Default)]
-struct Catalog {
+pub(crate) struct Catalog {
     counters: BTreeMap<String, Vec<Labels>>,
     gauges: BTreeMap<String, Vec<Labels>>,
     histograms: BTreeMap<String, Vec<Labels>>,
 }
 
 impl Catalog {
+    /// Add a counter series per label set.
+    pub(crate) fn counter(mut self, name: &str, series: &[&[(&str, &str)]]) -> Self {
+        self.counters
+            .insert(name.into(), series.iter().map(|s| labels(s)).collect());
+        self
+    }
+
+    /// Add a gauge series per label set.
+    pub(crate) fn gauge(mut self, name: &str, series: &[&[(&str, &str)]]) -> Self {
+        self.gauges
+            .insert(name.into(), series.iter().map(|s| labels(s)).collect());
+        self
+    }
+
+    /// Add a histogram series per label set.
+    pub(crate) fn histogram(mut self, name: &str, series: &[&[(&str, &str)]]) -> Self {
+        self.histograms
+            .insert(name.into(), series.iter().map(|s| labels(s)).collect());
+        self
+    }
+
     fn from_json(json: &str) -> Self {
         let mut doc: BTreeMap<String, BTreeMap<String, Vec<Labels>>> =
             serde_json::from_str(json).unwrap();
@@ -258,6 +278,13 @@ fn sink(bench: &Catalog) -> Catalog {
         target.insert(name, series.clone());
     }
     out
+}
+
+/// `sink` built from the `bench` fixture: the largest catalog.
+pub(crate) fn sink_catalog() -> Catalog {
+    sink(&Catalog::from_json(include_str!(
+        "../tests/fixtures/catalogs/bench.json"
+    )))
 }
 
 fn legacy(bench: &Catalog) -> Catalog {

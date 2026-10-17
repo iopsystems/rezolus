@@ -3,17 +3,19 @@
   "route": "/cgroups",
   "metadata": {
     "cgroup_selector": {
-      "enabled": true,
-      "metrics": [
-        "cgroup_cpu_usage",
-        "cgroup_cpu_migrations",
-        "cgroup_cpu_throttled_time",
-        "cgroup_cpu_throttled",
-        "cgroup_cpu_cycles",
-        "cgroup_cpu_instructions",
-        "cgroup_cpu_tlb_flush",
-        "cgroup_syscall"
-      ]
+      "value": {
+        "enabled": true,
+        "metrics": [
+          "cgroup_cpu_usage",
+          "cgroup_cpu_migrations",
+          "cgroup_cpu_throttled_time",
+          "cgroup_cpu_throttled",
+          "cgroup_cpu_cycles",
+          "cgroup_cpu_instructions",
+          "cgroup_cpu_tlb_flush",
+          "cgroup_syscall"
+        ]
+      }
     }
   },
   "groups": [

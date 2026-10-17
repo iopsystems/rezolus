@@ -40,7 +40,7 @@ const PARTS: &[(&str, &str)] = &[
     ("rezolus", include_str!("../sections/rezolus/rezolus.json")),
 ];
 
-/// The template document, as the agent sends it.
+/// The template document, with every section in navigation order.
 pub fn json() -> String {
     let sections: Vec<serde_json::Value> = PARTS
         .iter()
@@ -52,6 +52,7 @@ pub fn json() -> String {
     serde_json::json!({
         "schema": 1,
         "revision": "rezolus agent",
+        "params": ["throughput"],
         "sections": sections,
     })
     .to_string()
