@@ -492,3 +492,20 @@ fn section_template_matches_the_golden_files() {
     }
     assert!(failures.is_empty(), "template differs from: {failures:#?}");
 }
+
+/// The template lists every section the generators do, in the same order,
+/// so the navigation built from it is the navigation built from them.
+#[test]
+fn section_template_lists_the_generators_sections() {
+    let from_template: Vec<(String, String)> = template()
+        .sections()
+        .into_iter()
+        .map(|s| (s.name, s.route))
+        .collect();
+    let from_generators: Vec<(String, String)> = build_dashboard_context(None, &[], None, &[])
+        .sections
+        .into_iter()
+        .map(|s| (s.name, s.route))
+        .collect();
+    assert_eq!(from_template, from_generators);
+}

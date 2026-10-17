@@ -720,6 +720,19 @@
 
 ### Added
 
+- **Section templates, schema 1.** `dashboard::section_template` reads a
+  JSON document describing dashboard sections (groups, subgroups and plots,
+  with `when`, `repeat` and `split` nodes over predicates on the metric
+  catalog) and expands it against a recording into the same `View` JSON the
+  section generators produce. A document with a schema above 1 or an unknown
+  field is refused. `dashboard::rezolus_template::json()` is the Rezolus
+  agent's template, one file per section under
+  `crates/dashboard/sections/rezolus/`, about 106 KB compact. All sixteen
+  sections are converted; a test renders each from the template and from
+  its generator on eleven metric catalogs, and on a catalog of every named
+  metric with each removed in turn, and requires identical output. Nothing
+  renders from the template yet.
+
 - `filesystem` sampler: tmpfs usage per mount. Every visible tmpfs mount is
   read on the same sweep into `filesystem_tmpfs_used`,
   `filesystem_tmpfs_size`, `filesystem_tmpfs_inodes_used` and

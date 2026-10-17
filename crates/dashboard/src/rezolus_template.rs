@@ -1,9 +1,7 @@
 //! The section template for a Rezolus agent's metrics.
 //!
 //! Each section is a file under `sections/rezolus/`, and [`json`] assembles
-//! them, in navigation order, into one schema 1 document. A file holding
-//! `null` is a section not yet converted from its Rust generator, and is
-//! left out.
+//! them, in navigation order, into one schema 1 document.
 
 /// Each section's file, in navigation order. The query explorer is the
 /// library section, placed after Exceptions as the generators place it.
@@ -46,11 +44,10 @@ const PARTS: &[(&str, &str)] = &[
 pub fn json() -> String {
     let sections: Vec<serde_json::Value> = PARTS
         .iter()
-        .map(|(name, part)| {
+        .map(|(name, part)| -> serde_json::Value {
             serde_json::from_str(part)
                 .unwrap_or_else(|e| panic!("sections/rezolus/{name}.json: {e}"))
         })
-        .filter(|v: &serde_json::Value| !v.is_null())
         .collect();
     serde_json::json!({
         "schema": 1,
