@@ -1,1 +1,691 @@
-null
+{
+  "name": "Memory",
+  "route": "/memory",
+  "groups": [
+    {
+      "name": "Usage",
+      "id": "usage",
+      "subgroups": [
+        {
+          "name": "Capacity",
+          "description": "How much memory exists and how much of it is unclaimed.",
+          "plots": [
+            {
+              "kind": "gauge",
+              "title": "Total",
+              "id": "total",
+              "unit": "bytes",
+              "query": "memory_total"
+            },
+            {
+              "kind": "gauge",
+              "title": "Available",
+              "id": "available",
+              "unit": "bytes",
+              "query": "memory_available"
+            },
+            {
+              "kind": "gauge",
+              "title": "Free",
+              "id": "free",
+              "unit": "bytes",
+              "query": "memory_free"
+            }
+          ]
+        },
+        {
+          "name": "Breakdown",
+          "description": "Where allocated memory is going — kernel buffers, page cache, anonymous use — with overall utilization.",
+          "plots": [
+            {
+              "kind": "gauge",
+              "title": "Buffers",
+              "id": "buffers",
+              "unit": "bytes",
+              "query": "memory_buffers"
+            },
+            {
+              "kind": "gauge",
+              "title": "Cached",
+              "id": "cached",
+              "unit": "bytes",
+              "query": "memory_cached"
+            },
+            {
+              "kind": "gauge",
+              "title": "Used",
+              "id": "used",
+              "unit": "bytes",
+              "query": "memory_total - memory_available"
+            },
+            {
+              "kind": "gauge",
+              "title": "Utilization %",
+              "id": "utilization-pct",
+              "unit": "percentage",
+              "query": "(memory_total - memory_available) / memory_total",
+              "percentage_range": true
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "memory_dirty"
+          },
+          "then": [
+            {
+              "name": "Writeback",
+              "description": "Dirty is page cache written by processes and not yet on storage; it grows between flusher runs and is what the writeback throttle acts on when it nears the dirty limits. Writeback is the part in flight to the device right now.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "Dirty",
+                  "id": "dirty",
+                  "unit": "bytes",
+                  "query": "memory_dirty"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Writeback",
+                  "id": "writeback",
+                  "unit": "bytes",
+                  "query": "memory_writeback"
+                },
+                {
+                  "when": {
+                    "present": "memory_dirty_threshold"
+                  },
+                  "then": [
+                    {
+                      "kind": "gauge",
+                      "title": "Dirty Limits",
+                      "id": "dirty-thresholds",
+                      "unit": "bytes",
+                      "query": "sum by (kind) (memory_dirty_threshold)"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "writeback_runs"
+          },
+          "then": [
+            {
+              "name": "Writeback Throttle",
+              "description": "Once dirty pages pass the free-run ceiling (midway between the background and hard limits) the kernel evaluates each writer in balance_dirty_pages and may make it sleep. The sleep lands on the writer's own thread, so this is where a write path's tail comes from when writeback cannot keep up; zero checks means dirty pages never came near the limit.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Throttle Events",
+                  "id": "throttle-events",
+                  "unit": "count",
+                  "query": "sum(irate(writeback_throttle_events[5m]))"
+                },
+                {
+                  "kind": "latency",
+                  "title": "Throttle Sleep",
+                  "id": "throttle-latency",
+                  "query": "writeback_throttle_latency"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Throttle Evaluations",
+                  "id": "throttle-checks",
+                  "unit": "count",
+                  "query": "sum(irate(writeback_throttle_checks[5m]))"
+                }
+              ]
+            },
+            {
+              "name": "Flusher",
+              "description": "Flusher passes by why their work ran: periodic is the dirty_writeback_centisecs cadence, background is dirty pages over the background threshold, sync is an explicit sync, vmscan is memory reclaim. Pages written is what the flushers reported writing.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Runs by Reason",
+                  "id": "writeback-runs",
+                  "unit": "count",
+                  "query": "sum by (reason) (irate(writeback_runs[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Pages Written (flusher)",
+                  "id": "writeback-pages",
+                  "unit": "count",
+                  "query": "sum(irate(writeback_pages_written[5m]))"
+                },
+                {
+                  "when": {
+                    "present": "memory_pages_written"
+                  },
+                  "then": [
+                    {
+                      "kind": "counter",
+                      "title": "Pages Written (all)",
+                      "id": "pages-written",
+                      "unit": "count",
+                      "query": "sum(irate(memory_pages_written[5m]))"
+                    },
+                    {
+                      "kind": "counter",
+                      "title": "Pages Dirtied",
+                      "id": "pages-dirtied",
+                      "unit": "count",
+                      "query": "sum(irate(memory_pages_dirtied[5m]))"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "memory_active"
+          },
+          "then": [
+            {
+              "name": "Page Cache",
+              "description": "File-backed memory by LRU list: inactive is reclaimed first, active last. A working set that fits shows a stable active list; Shmem and Mapped are the parts of the cache that are tmpfs or mmap'd into processes. tmpfs Used splits the tmpfs part by mount.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "Active (file)",
+                  "id": "active-file",
+                  "unit": "bytes",
+                  "query": "memory_active{kind=\"file\"}"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Inactive (file)",
+                  "id": "inactive-file",
+                  "unit": "bytes",
+                  "query": "memory_inactive{kind=\"file\"}"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Shmem",
+                  "id": "shmem",
+                  "unit": "bytes",
+                  "query": "memory_shmem"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Mapped",
+                  "id": "mapped",
+                  "unit": "bytes",
+                  "query": "memory_mapped"
+                },
+                {
+                  "when": {
+                    "present": "filesystem_tmpfs_used"
+                  },
+                  "then": [
+                    {
+                      "kind": "gauge",
+                      "title": "tmpfs Used",
+                      "id": "tmpfs-used",
+                      "unit": "bytes",
+                      "query": "sum by (mount) (filesystem_tmpfs_used)"
+                    },
+                    {
+                      "kind": "gauge",
+                      "title": "tmpfs Used %",
+                      "id": "tmpfs-used-pct",
+                      "unit": "percentage",
+                      "query": "sum by (mount) (filesystem_tmpfs_used) / sum by (mount) (filesystem_tmpfs_size)",
+                      "percentage_range": true
+                    },
+                    {
+                      "kind": "gauge",
+                      "title": "tmpfs Inodes Used %",
+                      "id": "tmpfs-inodes-pct",
+                      "unit": "percentage",
+                      "query": "sum by (mount) (filesystem_tmpfs_inodes_used) / sum by (mount) (filesystem_tmpfs_inodes_total)",
+                      "percentage_range": true
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "Anonymous",
+              "description": "Process heaps, stacks and private data by LRU list, plus memory the kernel cannot reclaim at all.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "Anonymous",
+                  "id": "anon",
+                  "unit": "bytes",
+                  "query": "memory_anon"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Active (anon)",
+                  "id": "active-anon",
+                  "unit": "bytes",
+                  "query": "memory_active{kind=\"anon\"}"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Inactive (anon)",
+                  "id": "inactive-anon",
+                  "unit": "bytes",
+                  "query": "memory_inactive{kind=\"anon\"}"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Unevictable",
+                  "id": "unevictable",
+                  "unit": "bytes",
+                  "query": "memory_unevictable"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "pagecache_reads"
+          },
+          "then": [
+            {
+              "name": "Page Cache Traffic",
+              "description": "From the memory_pagecache sampler. Reads into the cache and the bytes they ask for, per mount; pages filled by what the filling task was doing (a read syscall, a write, an mmap fault, or something else) and pages evicted. The read miss ratio is pages filled during reads, as bytes, over bytes read: what fraction of what was read came from the device, readahead included.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Read Calls",
+                  "id": "pagecache-reads",
+                  "unit": "rate",
+                  "query": "sum by (mount) (irate(pagecache_reads[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Read Bytes",
+                  "id": "pagecache-read-bytes",
+                  "unit": "datarate",
+                  "query": "sum by (mount) (irate(pagecache_read_bytes[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Pages Filled by Reason",
+                  "id": "pagecache-filled",
+                  "unit": "rate",
+                  "query": "sum by (reason) (irate(pagecache_pages_added[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Pages Evicted",
+                  "id": "pagecache-evicted",
+                  "unit": "rate",
+                  "query": "sum by (mount) (irate(pagecache_pages_evicted[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Read Miss Ratio",
+                  "id": "pagecache-miss-ratio",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(pagecache_pages_added{reason=\"read\"}[5m])) * 4096 / sum by (mount) (irate(pagecache_read_bytes[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "mmap Faults",
+                  "id": "pagecache-faults",
+                  "unit": "rate",
+                  "query": "sum by (mount) (irate(pagecache_faults[5m]))"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "memory_slab"
+          },
+          "then": [
+            {
+              "name": "Kernel",
+              "description": "Kernel allocations. Reclaimable slab is mostly the dentry and inode caches, which the kernel drops under pressure at the cost of re-reading metadata from disk; unreclaimable slab, kernel stacks and page tables are not recoverable. Metadata Slab Caches draws the filesystem metadata caches one line each; Other Slab Caches is every other cache summed. The query engine has no topk, so to find which cache grew, break slab cache bytes down by cache in the metric explorer.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "Slab (reclaimable)",
+                  "id": "slab-reclaimable",
+                  "unit": "bytes",
+                  "query": "memory_slab{kind=\"reclaimable\"}"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Slab (unreclaimable)",
+                  "id": "slab-unreclaimable",
+                  "unit": "bytes",
+                  "query": "memory_slab{kind=\"unreclaimable\"}"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Page Tables",
+                  "id": "page-tables",
+                  "unit": "bytes",
+                  "query": "memory_page_tables"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Kernel Stacks",
+                  "id": "kernel-stack",
+                  "unit": "bytes",
+                  "query": "memory_kernel_stack"
+                },
+                {
+                  "when": {
+                    "present": "memory_slab_cache_bytes"
+                  },
+                  "then": [
+                    {
+                      "kind": "gauge",
+                      "title": "Metadata Slab Caches",
+                      "id": "slab-caches",
+                      "unit": "bytes",
+                      "query": "sum by (cache) (memory_slab_cache_bytes{cache=~\"dentry|inode_cache|ext4_inode_cache|ext4_extent_status|jbd2_journal_head|buffer_head|xfs_inode|radix_tree_node\"})"
+                    },
+                    {
+                      "kind": "gauge",
+                      "title": "Other Slab Caches",
+                      "id": "slab-caches-other",
+                      "unit": "bytes",
+                      "query": "sum(memory_slab_cache_bytes{cache!~\"dentry|inode_cache|ext4_inode_cache|ext4_extent_status|jbd2_journal_head|buffer_head|xfs_inode|radix_tree_node\"})"
+                    },
+                    {
+                      "kind": "gauge",
+                      "title": "Slab Cache Objects (active)",
+                      "id": "slab-cache-objects",
+                      "unit": "count",
+                      "query": "sum by (cache) (memory_slab_cache_objects{state=\"active\"})"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "memory_swap_total"
+          },
+          "then": [
+            {
+              "name": "Swap",
+              "description": "Swap in use and the overcommit position. Committed is every allocation processes could touch; it exceeding the commit limit only matters under strict overcommit.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "Swap Used",
+                  "id": "swap-used",
+                  "unit": "bytes",
+                  "query": "memory_swap_total - memory_swap_free"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Swap Cached",
+                  "id": "swap-cached",
+                  "unit": "bytes",
+                  "query": "memory_swap_cached"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Committed",
+                  "id": "committed",
+                  "unit": "bytes",
+                  "query": "memory_committed"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Commit Limit",
+                  "id": "commit-limit",
+                  "unit": "bytes",
+                  "query": "memory_commit_limit"
+                },
+                {
+                  "when": {
+                    "present": "memory_swap_in"
+                  },
+                  "then": [
+                    {
+                      "kind": "counter",
+                      "title": "Swap In",
+                      "id": "swap-in",
+                      "unit": "count",
+                      "query": "sum(irate(memory_swap_in[5m]))"
+                    },
+                    {
+                      "kind": "counter",
+                      "title": "Swap Out",
+                      "id": "swap-out",
+                      "unit": "count",
+                      "query": "sum(irate(memory_swap_out[5m]))"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "memory_reclaim_scanned"
+          },
+          "then": [
+            {
+              "name": "Reclaim",
+              "description": "kswapd reclaims in the background; direct reclaim and allocation stalls run on the allocating thread and are a latency source on the request path. Major faults are synchronous reads from storage.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Scanned",
+                  "id": "reclaim-scanned",
+                  "unit": "count",
+                  "query": "sum by (kind) (irate(memory_reclaim_scanned[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Reclaimed",
+                  "id": "reclaim-reclaimed",
+                  "unit": "count",
+                  "query": "sum by (kind) (irate(memory_reclaim_reclaimed[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Allocation Stalls",
+                  "id": "allocation-stalls",
+                  "unit": "count",
+                  "query": "sum(irate(memory_allocation_stalls[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Major Faults",
+                  "id": "major-faults",
+                  "unit": "count",
+                  "query": "sum(irate(memory_major_page_faults[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "OOM Kills",
+                  "id": "oom-kills",
+                  "unit": "count",
+                  "query": "sum(irate(memory_oom_kills[5m]))"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "memory_workingset_refaults"
+          },
+          "then": [
+            {
+              "name": "Working Set",
+              "description": "A refault is a page that was evicted and then needed again soon enough that the kernel still remembered it: the direct sign of a page cache or anonymous working set that does not fit in memory. Activations are refaults the kernel promoted straight to the active list.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Refaults",
+                  "id": "workingset-refaults",
+                  "unit": "count",
+                  "query": "sum by (kind) (irate(memory_workingset_refaults[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Activations",
+                  "id": "workingset-activations",
+                  "unit": "count",
+                  "query": "sum by (kind) (irate(memory_workingset_activations[5m]))"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "any": [
+              {
+                "present": "memory_hugepages_anon"
+              },
+              {
+                "present": "memory_hugetlb"
+              }
+            ]
+          },
+          "then": [
+            {
+              "name": "Huge Pages",
+              "description": "Transparent huge pages by what they back, and the hugetlbfs pool: reserved memory that is outside MemAvailable whether or not anything uses it.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "THP (anon)",
+                  "id": "thp-anon",
+                  "unit": "bytes",
+                  "query": "memory_hugepages_anon"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "THP (shmem)",
+                  "id": "thp-shmem",
+                  "unit": "bytes",
+                  "query": "memory_hugepages_shmem"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "THP (file)",
+                  "id": "thp-file",
+                  "unit": "bytes",
+                  "query": "memory_hugepages_file"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "hugetlb Reserved",
+                  "id": "hugetlb",
+                  "unit": "bytes",
+                  "query": "memory_hugetlb"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "hugetlb Pages",
+                  "id": "hugetlb-pages",
+                  "unit": "count",
+                  "query": "sum by (state) (memory_hugetlb_pages)"
+                },
+                {
+                  "when": {
+                    "present": "memory_thp_faults"
+                  },
+                  "then": [
+                    {
+                      "kind": "counter",
+                      "title": "THP Faults",
+                      "id": "thp-faults",
+                      "unit": "count",
+                      "query": "sum by (outcome) (irate(memory_thp_faults[5m]))"
+                    },
+                    {
+                      "kind": "counter",
+                      "title": "THP Splits",
+                      "id": "thp-splits",
+                      "unit": "count",
+                      "query": "sum(irate(memory_thp_splits[5m]))"
+                    },
+                    {
+                      "kind": "counter",
+                      "title": "Compaction Stalls",
+                      "id": "compaction-stalls",
+                      "unit": "count",
+                      "query": "sum(irate(memory_compaction_stalls[5m]))"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "NUMA",
+      "id": "numa",
+      "subgroups": [
+        {
+          "name": "Local vs Remote",
+          "description": "Allocations by where the allocating task ran: local allocations were made on the task's own node (fast); remote ones on another node, across the interconnect (slow). The two sum to every allocation.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "Local Rate",
+              "id": "numa-local-rate",
+              "unit": "rate",
+              "query": "irate(memory_numa_local[5m])"
+            },
+            {
+              "kind": "counter",
+              "title": "Remote Rate",
+              "id": "numa-remote-rate",
+              "unit": "rate",
+              "query": "irate(memory_numa_other[5m])"
+            }
+          ]
+        },
+        {
+          "name": "Memory Policy",
+          "description": "Allocations by whether the intended node (the memory policy's choice, or the node the caller asked for) served them. Hits were served by the intended node; misses by another node, usually because the intended node was short of free pages. Interleave counts allocations under the interleave policy that landed on their intended node.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "Hit Rate",
+              "id": "numa-hit-rate",
+              "unit": "rate",
+              "query": "irate(memory_numa_hit[5m])"
+            },
+            {
+              "kind": "counter",
+              "title": "Miss Rate",
+              "id": "numa-miss-rate",
+              "unit": "rate",
+              "query": "irate(memory_numa_miss[5m])"
+            },
+            {
+              "kind": "counter",
+              "title": "Interleave Rate",
+              "id": "numa-interleave-rate",
+              "unit": "rate",
+              "query": "irate(memory_numa_interleave[5m])"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,1 +1,359 @@
-null
+{
+  "name": "cgroups",
+  "route": "/cgroups",
+  "metadata": {
+    "cgroup_selector": {
+      "enabled": true,
+      "metrics": [
+        "cgroup_cpu_usage",
+        "cgroup_cpu_migrations",
+        "cgroup_cpu_throttled_time",
+        "cgroup_cpu_throttled",
+        "cgroup_cpu_cycles",
+        "cgroup_cpu_instructions",
+        "cgroup_cpu_tlb_flush",
+        "cgroup_syscall"
+      ]
+    }
+  },
+  "groups": [
+    {
+      "name": "Aggregate Cgroups",
+      "id": "aggregate",
+      "metadata": {
+        "side": "left"
+      },
+      "subgroups": [
+        {
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "Total CPU Cores",
+              "id": "aggregate-total-cores",
+              "unit": "count",
+              "query": "sum(irate(cgroup_cpu_usage{name!~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
+            },
+            {
+              "kind": "counter",
+              "title": "User CPU Cores",
+              "id": "aggregate-user-cores",
+              "unit": "count",
+              "query": "sum(irate(cgroup_cpu_usage{state=\"user\",name!~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
+            },
+            {
+              "kind": "counter",
+              "title": "System CPU Cores",
+              "id": "aggregate-system-cores",
+              "unit": "count",
+              "query": "sum(irate(cgroup_cpu_usage{state=\"system\",name!~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
+            },
+            {
+              "kind": "counter",
+              "title": "CPU Migrations",
+              "id": "aggregate-cpu-migrations",
+              "unit": "rate",
+              "query": "sum(irate(cgroup_cpu_migrations{name!~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "CPU Throttled Time",
+              "id": "aggregate-cpu-throttled-time",
+              "unit": "time",
+              "query": "sum(irate(cgroup_cpu_throttled_time{name!~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "ext4 Blocked Time",
+              "id": "aggregate-ext4-blocked-time",
+              "unit": "time",
+              "query": "sum(irate(cgroup_ext4_op_time{name!~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "XFS Log Blocked Time",
+              "id": "aggregate-xfs-log-blocked-time",
+              "unit": "time",
+              "query": "sum(irate(cgroup_xfs_log_wait_time{name!~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "IPC",
+              "id": "aggregate-ipc",
+              "unit": "count",
+              "query": "sum(irate(cgroup_cpu_instructions{name!~\"__SELECTED_CGROUPS__\"}[5m])) / sum(irate(cgroup_cpu_cycles{name!~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "TLB Flushes",
+              "id": "aggregate-tlb-flush",
+              "unit": "rate",
+              "query": "sum(irate(cgroup_cpu_tlb_flush{name!~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "Syscalls",
+              "id": "aggregate-syscall",
+              "unit": "rate",
+              "query": "sum(irate(cgroup_syscall{name!~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "repeat": {
+                "var": "op",
+                "in": {
+                  "values": [
+                    {
+                      "title": "Read",
+                      "lower": "read"
+                    },
+                    {
+                      "title": "Write",
+                      "lower": "write"
+                    },
+                    {
+                      "title": "Poll",
+                      "lower": "poll"
+                    },
+                    {
+                      "title": "Socket",
+                      "lower": "socket"
+                    },
+                    {
+                      "title": "Lock",
+                      "lower": "lock"
+                    },
+                    {
+                      "title": "Time",
+                      "lower": "time"
+                    },
+                    {
+                      "title": "Sleep",
+                      "lower": "sleep"
+                    },
+                    {
+                      "title": "Yield",
+                      "lower": "yield"
+                    },
+                    {
+                      "title": "Filesystem",
+                      "lower": "filesystem"
+                    },
+                    {
+                      "title": "Sync",
+                      "lower": "sync"
+                    },
+                    {
+                      "title": "Memory",
+                      "lower": "memory"
+                    },
+                    {
+                      "title": "Process",
+                      "lower": "process"
+                    },
+                    {
+                      "title": "Query",
+                      "lower": "query"
+                    },
+                    {
+                      "title": "IPC",
+                      "lower": "ipc"
+                    },
+                    {
+                      "title": "Timer",
+                      "lower": "timer"
+                    },
+                    {
+                      "title": "Event",
+                      "lower": "event"
+                    },
+                    {
+                      "title": "Other",
+                      "lower": "other"
+                    }
+                  ]
+                }
+              },
+              "body": [
+                {
+                  "kind": "counter",
+                  "title": "Syscall ${op.title}",
+                  "id": "aggregate-syscall-${op.lower}",
+                  "unit": "rate",
+                  "query": "sum(irate(cgroup_syscall{op=\"${op.lower}\",name!~\"__SELECTED_CGROUPS__\"}[5m]))"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Individual Cgroups",
+      "id": "individual",
+      "metadata": {
+        "side": "right"
+      },
+      "subgroups": [
+        {
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "Total CPU Cores",
+              "id": "individual-total-cores",
+              "unit": "count",
+              "query": "sum by (name) (irate(cgroup_cpu_usage{name=~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
+            },
+            {
+              "kind": "counter",
+              "title": "User CPU Cores",
+              "id": "individual-user-cores",
+              "unit": "count",
+              "query": "sum by (name) (irate(cgroup_cpu_usage{state=\"user\",name=~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
+            },
+            {
+              "kind": "counter",
+              "title": "System CPU Cores",
+              "id": "individual-system-cores",
+              "unit": "count",
+              "query": "sum by (name) (irate(cgroup_cpu_usage{state=\"system\",name=~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
+            },
+            {
+              "kind": "counter",
+              "title": "CPU Migrations",
+              "id": "individual-cpu-migrations",
+              "unit": "rate",
+              "query": "sum by (name) (irate(cgroup_cpu_migrations{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "CPU Throttled Time",
+              "id": "individual-cpu-throttled-time",
+              "unit": "time",
+              "query": "sum by (name) (irate(cgroup_cpu_throttled_time{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "ext4 Blocked Time",
+              "id": "individual-ext4-blocked-time",
+              "unit": "time",
+              "query": "sum by (name) (irate(cgroup_ext4_op_time{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "XFS Log Blocked Time",
+              "id": "individual-xfs-log-blocked-time",
+              "unit": "time",
+              "query": "sum by (name) (irate(cgroup_xfs_log_wait_time{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "IPC",
+              "id": "individual-ipc",
+              "unit": "count",
+              "query": "sum by (name) (irate(cgroup_cpu_instructions{name=~\"__SELECTED_CGROUPS__\"}[5m])) / sum by (name) (irate(cgroup_cpu_cycles{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "TLB Flushes",
+              "id": "individual-tlb-flush",
+              "unit": "rate",
+              "query": "sum by (name) (irate(cgroup_cpu_tlb_flush{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "Syscalls",
+              "id": "individual-syscall",
+              "unit": "rate",
+              "query": "sum by (name) (irate(cgroup_syscall{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "repeat": {
+                "var": "op",
+                "in": {
+                  "values": [
+                    {
+                      "title": "Read",
+                      "lower": "read"
+                    },
+                    {
+                      "title": "Write",
+                      "lower": "write"
+                    },
+                    {
+                      "title": "Poll",
+                      "lower": "poll"
+                    },
+                    {
+                      "title": "Socket",
+                      "lower": "socket"
+                    },
+                    {
+                      "title": "Lock",
+                      "lower": "lock"
+                    },
+                    {
+                      "title": "Time",
+                      "lower": "time"
+                    },
+                    {
+                      "title": "Sleep",
+                      "lower": "sleep"
+                    },
+                    {
+                      "title": "Yield",
+                      "lower": "yield"
+                    },
+                    {
+                      "title": "Filesystem",
+                      "lower": "filesystem"
+                    },
+                    {
+                      "title": "Sync",
+                      "lower": "sync"
+                    },
+                    {
+                      "title": "Memory",
+                      "lower": "memory"
+                    },
+                    {
+                      "title": "Process",
+                      "lower": "process"
+                    },
+                    {
+                      "title": "Query",
+                      "lower": "query"
+                    },
+                    {
+                      "title": "IPC",
+                      "lower": "ipc"
+                    },
+                    {
+                      "title": "Timer",
+                      "lower": "timer"
+                    },
+                    {
+                      "title": "Event",
+                      "lower": "event"
+                    },
+                    {
+                      "title": "Other",
+                      "lower": "other"
+                    }
+                  ]
+                }
+              },
+              "body": [
+                {
+                  "kind": "counter",
+                  "title": "Syscall ${op.title}",
+                  "id": "individual-syscall-${op.lower}",
+                  "unit": "rate",
+                  "query": "sum by (name) (irate(cgroup_syscall{op=\"${op.lower}\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

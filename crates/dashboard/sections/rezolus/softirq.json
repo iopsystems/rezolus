@@ -1,1 +1,153 @@
-null
+{
+  "name": "Softirq",
+  "route": "/softirq",
+  "groups": [
+    {
+      "name": "Softirq",
+      "id": "softirq",
+      "subgroups": [
+        {
+          "name": "Rate",
+          "description": "Softirqs handled per second, aggregate and per-CPU.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "Rate",
+              "id": "softirq-total-rate",
+              "unit": "rate",
+              "query": "sum(irate(softirq[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "Rate (per-CPU)",
+              "id": "softirq-total-rate-heatmap",
+              "unit": "rate",
+              "query": "sum by (id) (irate(softirq[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "CPU Time",
+          "description": "Fraction of CPU time spent servicing softirqs, aggregate and per-CPU.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "CPU %",
+              "id": "softirq-total-time",
+              "unit": "percentage",
+              "query": "sum(irate(softirq_time[5m])) / cpu_cores / 1000000000",
+              "percentage_range": true
+            },
+            {
+              "kind": "counter",
+              "title": "CPU % (per-CPU)",
+              "id": "softirq-total-time-heatmap",
+              "unit": "percentage",
+              "query": "sum by (id) (irate(softirq_time[5m])) / 1000000000",
+              "percentage_range": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "repeat": {
+        "var": "k",
+        "in": {
+          "values": [
+            {
+              "label": "Hardware Interrupts",
+              "kind": "hi"
+            },
+            {
+              "label": "IRQ Poll",
+              "kind": "irq_poll"
+            },
+            {
+              "label": "Network Transmit",
+              "kind": "net_tx"
+            },
+            {
+              "label": "Network Receive",
+              "kind": "net_rx"
+            },
+            {
+              "label": "RCU",
+              "kind": "rcu"
+            },
+            {
+              "label": "Sched",
+              "kind": "sched"
+            },
+            {
+              "label": "Tasklet",
+              "kind": "tasklet"
+            },
+            {
+              "label": "Timer",
+              "kind": "timer"
+            },
+            {
+              "label": "HR Timer",
+              "kind": "hrtimer"
+            },
+            {
+              "label": "Block",
+              "kind": "block"
+            }
+          ]
+        }
+      },
+      "body": [
+        {
+          "name": "${k.label}",
+          "id": "softirq-${k.kind}",
+          "subgroups": [
+            {
+              "name": "Rate",
+              "description": "Softirqs handled per second, aggregate and per-CPU.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Rate",
+                  "id": "softirq-${k.kind}-rate",
+                  "unit": "rate",
+                  "query": "sum(irate(softirq{kind=\"${k.kind}\"}[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Rate (per-CPU)",
+                  "id": "softirq-${k.kind}-rate-heatmap",
+                  "unit": "rate",
+                  "query": "sum by (id) (irate(softirq{kind=\"${k.kind}\"}[5m]))"
+                }
+              ]
+            },
+            {
+              "name": "CPU Time",
+              "description": "Fraction of CPU time spent servicing this softirq kind, aggregate and per-CPU.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "CPU %",
+                  "id": "softirq-${k.kind}-time",
+                  "unit": "percentage",
+                  "query": "sum(irate(softirq_time{kind=\"${k.kind}\"}[5m])) / cpu_cores / 1000000000",
+                  "percentage_range": true
+                },
+                {
+                  "kind": "counter",
+                  "title": "CPU % (per-CPU)",
+                  "id": "softirq-${k.kind}-time-heatmap",
+                  "unit": "percentage",
+                  "query": "sum by (id) (irate(softirq_time{kind=\"${k.kind}\"}[5m])) / 1000000000",
+                  "percentage_range": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
