@@ -355,6 +355,7 @@ const clearViewerCaches = () => {
     // payloads no longer embed `sections`, so it can't be recovered
     // by reloading.
     clearSectionResponses(sectionCacheState);
+    invalidateLoads();
     heatmapDataCache.clear();
     chartsState.clear();
     clearCaptureMemo();
@@ -411,8 +412,58 @@ const applyMultiNodeInfo = (experimentFileMetadata = null) => {
 
 // `cgroupPattern` replaces the selector's pattern for this load: an expanded
 // chart passes the link's selection, since it mounts no selector.
-const loadSection = async (section, { cgroupPattern = activeCgroupPattern } = {}) => {
-    if (sectionResponseCache[section]) return sectionResponseCache[section];
+// Section loads in flight, by section. A section loaded with `early` is
+// cached, and drawn, before its histogram queries land. A load caches
+// only while its generation is current: clearing the section cache, or
+// `invalidateSectionLoad`, makes every load then in flight stale, so a
+// change of step, node or file is not overwritten by a load that started
+// before it.
+const sectionLoads = new Map();
+// Heatmap fetches in flight, by route: a second request for the same
+// route waits on the first.
+const heatmapFetches = new Map();
+let loadGeneration = 0;
+const sectionGenerations = new Map();
+const generationOf = (section) => `${loadGeneration}:${sectionGenerations.get(section) || 0}`;
+const invalidateLoads = () => {
+    loadGeneration++;
+    sectionLoads.clear();
+    heatmapFetches.clear();
+};
+const invalidateSectionLoad = (section) => {
+    sectionGenerations.set(section, (sectionGenerations.get(section) || 0) + 1);
+    sectionLoads.delete(section);
+    heatmapFetches.delete(`/${section}`);
+};
+// Invalidate the loads and heatmap fetches of the sections `pred` accepts,
+// for a change (node, GPU) that leaves the service sections' caches.
+const invalidateLoadsWhere = (pred) => {
+    for (const section of [...sectionLoads.keys()]) {
+        if (pred(section)) invalidateSectionLoad(section);
+    }
+    for (const route of [...heatmapFetches.keys()]) {
+        if (pred(route.slice(1))) invalidateSectionLoad(route.slice(1));
+    }
+};
+const sectionLoadSettled = (section) =>
+    (sectionLoads.get(section) || Promise.resolve()).catch(() => {});
+
+const loadSection = (section, opts = {}) => {
+    if (sectionLoads.has(section)) return sectionLoads.get(section);
+    if (sectionResponseCache[section]) return Promise.resolve(sectionResponseCache[section]);
+    const load = fetchSection(section, opts).finally(() => {
+        if (sectionLoads.get(section) === load) sectionLoads.delete(section);
+    });
+    sectionLoads.set(section, load);
+    return load;
+};
+
+// `early`: draw the section once its counter and gauge charts have data
+// (see `processDashboardData`'s `onPrimary`). Only the section route asks
+// for it; a single-chart view copies its plot when it first draws.
+const fetchSection = async (section, { cgroupPattern = activeCgroupPattern, early = false } = {}) => {
+    const generation = generationOf(section);
+    const current = () => generationOf(section) === generation;
 
     const data = await ViewerApi.getSection(section);
     if (!data) return null;
@@ -467,7 +518,17 @@ const loadSection = async (section, { cgroupPattern = activeCgroupPattern } = {}
         }
     }
 
-    const processedData = await processDashboardData(data, cgroupPattern, `/${section}`);
+    // Show the section once its counter and gauge charts have data; the
+    // histogram charts show as loading until theirs land. Compare mode
+    // waits for every chart: each fetches its experiment when it mounts.
+    const processedData = await processDashboardData(data, cgroupPattern, `/${section}`, {
+        onPrimary: (!early || compareMode) ? null : (partial) => {
+            if (!current()) return;
+            cacheSectionResponse(section, partial);
+            m.redraw();
+        },
+    });
+    if (!current()) return processedData;
     const cached = cacheSectionResponse(section, processedData);
 
     // A link range still waiting for the recording's extent: clamp it now
@@ -506,6 +567,7 @@ const reloadCurrentSection = async () => {
     if (section.startsWith('source/')) return;
 
     try {
+        invalidateSectionLoad(section);
         delete sectionResponseCache[section];
         const data = await loadSection(section);
         if (data?.sections) preloadSections(data.sections);
@@ -551,6 +613,11 @@ const refetchCurrentSectionInPlace = async ({ signal, isStale } = {}) => {
     const currentRoute = m.route.get();
     if (!currentRoute) return;
     const section = currentRoute.replace(/^\//, '');
+    // A load replaced while waiting (a step change) is waited for too.
+    while (section && sectionLoads.has(section)) {
+        await sectionLoadSettled(section);
+        if (isStale && isStale()) return;
+    }
     const data = section && sectionResponseCache[section];
     // No cached section yet (shouldn't happen from a zoom) → fall back to the
     // full reload path rather than silently doing nothing.
@@ -719,6 +786,7 @@ const changeNode = async (nodeName) => {
     // Service routes don't depend on the node selector — keep their
     // caches and skip reload when one is the active route.
     clearNonServiceResponses(sectionCacheState);
+    invalidateLoadsWhere((section) => !section.startsWith('service/'));
     for (const route of Array.from(heatmapDataCache.keys())) {
         if (!route.startsWith('/service/')) {
             heatmapDataCache.delete(route);
@@ -741,6 +809,7 @@ const changeGpu = async (gpus) => {
     // Only the GPU section's charts depend on this; drop its cached data and
     // reload so the queries re-run with the id filter applied.
     clearNonServiceResponses(sectionCacheState);
+    invalidateLoadsWhere((section) => !section.startsWith('service/'));
     for (const route of Array.from(heatmapDataCache.keys())) {
         if (route === '/gpu') heatmapDataCache.delete(route);
     }
@@ -784,7 +853,12 @@ const changeGranularity = async (step) => {
     // serving the old step's decimated tiles — clear it explicitly.
     clearDisplayTiles();
     clearSectionResponses(sectionCacheState);
+    invalidateLoads();
     heatmapDataCache.clear();
+    // A zoom refetch waiting on the old load is superseded too.
+    if (_drillController) _drillController.abort();
+    _drillGen++;
+    chartsState._zoomRefine = false;
     // Route zoom clear through the observable setter so any charts
     // that are still alive at this point (explorers etc.) see the
     // reset via their subscription — setZoom accepts null as "no
@@ -810,6 +884,14 @@ const changeGranularity = async (step) => {
 
 const toggleGlobalHeatmap = async (sectionRoute, groups) => {
     heatmapEnabled = !heatmapEnabled;
+    // A section still loading: fetch for the groups it ends with.
+    const section = sectionRoute.replace(/^\//, '');
+    if (sectionLoads.has(section)) {
+        m.redraw();
+        await sectionLoadSettled(section);
+        groups = sectionResponseCache[section]?.groups || groups;
+        if (!heatmapEnabled) return;
+    }
     const cached = heatmapDataCache.get(sectionRoute);
     if (heatmapEnabled && (!cached || cached.size === 0)) {
         await fetchSectionHeatmapData(sectionRoute, groups);
@@ -820,13 +902,34 @@ const toggleGlobalHeatmap = async (sectionRoute, groups) => {
 
 // `isStale`, when given, returns true once this fetch is superseded; the
 // heatmaps are then not cached.
-const fetchSectionHeatmapData = async (sectionRoute, groups, isStale = null) => {
-    heatmapLoading = true;
-    m.redraw();
-    const heatmapData = await fetchHeatmapsForGroups(groups);
-    if (!(isStale && isStale())) heatmapDataCache.set(sectionRoute, heatmapData);
-    heatmapLoading = false;
-    m.redraw();
+let heatmapLoadingOwner = null;
+
+const fetchSectionHeatmapData = (sectionRoute, groups, isStale = null) => {
+    if (!isStale && heatmapFetches.has(sectionRoute)) return heatmapFetches.get(sectionRoute);
+    // Like a section load, a heatmap fetch caches only while its generation
+    // is current.
+    const section = sectionRoute.replace(/^\//, '');
+    const generation = generationOf(section);
+    const fetch = (async () => {
+        heatmapLoading = true;
+        m.redraw();
+        const heatmapData = await fetchHeatmapsForGroups(groups);
+        if (!(isStale && isStale()) && generationOf(section) === generation) {
+            heatmapDataCache.set(sectionRoute, heatmapData);
+        }
+        // Only the latest fetch clears the flag; an older one finishing
+        // while a newer runs leaves it set.
+        if (heatmapLoadingOwner === fetch) heatmapLoading = false;
+        m.redraw();
+    })();
+    heatmapLoadingOwner = fetch;
+    if (!isStale) {
+        heatmapFetches.set(sectionRoute, fetch);
+        fetch.finally(() => {
+            if (heatmapFetches.get(sectionRoute) === fetch) heatmapFetches.delete(sectionRoute);
+        }).catch(() => {});
+    }
+    return fetch;
 };
 
 const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
@@ -1560,7 +1663,7 @@ const initDashboard = (config = {}) => {
                 // which gets replaced by the populated view via m.redraw()
                 // once loadSection settles.
                 if (!sectionResponseCache[params.section]) {
-                    loadSection(params.section)
+                    loadSection(params.section, { early: true })
                         .then((data) => {
                             if (data?.sections) preloadSections(data.sections);
                             if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {
@@ -1584,7 +1687,8 @@ const initDashboard = (config = {}) => {
                                 m.route.set(target);
                             }
                         });
-                } else if (heatmapEnabled && !heatmapDataCache.has(requestedPath)) {
+                } else if (heatmapEnabled && !heatmapDataCache.has(requestedPath)
+                    && !sectionLoads.has(params.section)) {
                     fetchSectionHeatmapData(requestedPath, sectionResponseCache[params.section].groups);
                 }
                 return cachedView(params.section, requestedPath);

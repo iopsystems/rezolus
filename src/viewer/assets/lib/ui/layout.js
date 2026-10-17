@@ -346,7 +346,10 @@ const countCharts = (groups) => {
     for (const group of groups || []) {
         for (const plot of collectGroupPlots(group)) {
             total++;
-            if (plot.data && plot.data.length >= 1 && plot.data[0] && plot.data[0].length > 0) {
+            // A chart whose query is in flight is drawn (as loading), so it
+            // counts.
+            if (plot.pending === true
+                || (plot.data && plot.data.length >= 1 && plot.data[0] && plot.data[0].length > 0)) {
                 withData++;
             }
         }

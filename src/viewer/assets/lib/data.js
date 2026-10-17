@@ -1110,6 +1110,47 @@ const applyResultToPlot = (plot, result) => {
     }
 };
 
+// Remove the plots of `data` that have no data, adding them to
+// `unavailable`, and the subgroups and groups left empty. A plot `keep`
+// returns true for stays.
+//
+// Plots whose original query carries the `__SELECTED_CGROUPS__`
+// placeholder stay too: they intentionally have no data until the user
+// picks a cgroup, at which point cgroup_selector refetches them in place.
+// Stripping them would remove the right-side "Individual Cgroups" group
+// entirely on first load and the cgroup selector would have nothing to
+// repopulate.
+const dropUnavailable = (data, keep, unavailable) => {
+    const plotHasData = (plot) =>
+        Array.isArray(plot.data) && plot.data.some((s) => Array.isArray(s) && s.length > 0);
+    const isDeferredCgroupPlot = (plot) =>
+        typeof plot.promql_query === 'string'
+        && plot.promql_query.includes('__SELECTED_CGROUPS__');
+    for (const group of data.groups || []) {
+        for (const sg of group.subgroups || []) {
+            const surviving = [];
+            for (const plot of (sg.plots || [])) {
+                if (!plot.promql_query
+                    || plotHasData(plot)
+                    || keep(plot)
+                    || isDeferredCgroupPlot(plot)) {
+                    surviving.push(plot);
+                } else {
+                    unavailable.push({
+                        group: group.name,
+                        subgroup: sg.name || null,
+                        title: plot.opts?.title || '(unnamed chart)',
+                        query: plot.promql_query,
+                    });
+                }
+            }
+            sg.plots = surviving;
+        }
+        group.subgroups = (group.subgroups || []).filter((sg) => (sg.plots || []).length > 0);
+    }
+    data.groups = (data.groups || []).filter((g) => (g.subgroups || []).length > 0);
+};
+
 const createDataApi = ({
     getMetadata = defaultGetMetadata,
     queryRange = defaultQueryRange,
@@ -1248,7 +1289,14 @@ const createDataApi = ({
     // query window's maxTime to track the live TSDB instead of freezing
     // at first-fetch). Live-mode auto-refresh sets this; file-mode and
     // initial loads leave it off so the cache still saves a round-trip.
-    const processDashboardData = async (data, activeCgroupPattern, sectionRoute, { freshMetadata = false, isStale = null, signal = null } = {}) => {
+    // onPrimary: when given, the counter and gauge queries are sent first
+    // and `onPrimary(data)` is called once they have answered, before the
+    // histogram queries are sent, so a section can render while those are
+    // in flight. Histogram charts with no data yet are marked
+    // `plot.pending` until theirs land: true for a placeholder, 'hidden'
+    // for one not drawn. Without it every query is sent at
+    // once, as for a refetch of a section already on screen.
+    const processDashboardData = async (data, activeCgroupPattern, sectionRoute, { freshMetadata = false, isStale = null, signal = null, onPrimary = null } = {}) => {
         if (freshMetadata) { cachedMetadata = null; clearDisplayTiles(); }
         const metadata = cachedMetadata || await fetchMetadata();
         // A superseded fetch's metadata may describe a recording that has
@@ -1282,84 +1330,95 @@ const createDataApi = ({
         // (isStale) or its request was aborted (signal). A superseded fetch must
         // NOT apply its result or blank the chart — the newer refetch owns it.
         const superseded = () => (signal && signal.aborted) || (isStale && isStale());
-        await Promise.allSettled(
-            queryPlots.map(async ({ plot, query }) => {
-                try {
-                    // Display mode: line-ish plots fetch the decimated boxplot
-                    // binary, which now carries the aggregated measurement-
-                    // uncertainty band (median of interval edges per bucket; the
-                    // exact per-sample interval at native resolution), so the
-                    // uncertainty bands render at every zoom level. On any failure
-                    // (e.g. a non-Series result), fall back to the JSON matrix so a
-                    // hiccup never blanks a chart.
-                    if (_displayMode && plotUsesDisplay(plot)) {
-                        try {
-                            const decoded = await fetchDisplaySeries(query, metadata, signal);
-                            if (superseded()) return;
-                            applyDisplayToPlot(plot, decoded);
-                        } catch (_) {
-                            if (superseded()) return;
-                            const res = await executePromQLRangeQuery(query, metadata, signal);
-                            if (superseded()) return;
-                            applyResultToPlot(plot, res);
-                        }
-                    } else if (_displayMode && isEntityQuery(plot.promql_query)
-                        && plot.opts?.type !== 'histogram') {
-                        const res = await fetchEntityHeatmap(query, metadata, signal);
+        const plotHasData = (plot) =>
+            Array.isArray(plot.data) && plot.data.some((s) => Array.isArray(s) && s.length > 0);
+        // Counter and gauge queries go first: they are cheap and most of a
+        // section. Histogram queries read every bucket of every row, and
+        // sent alongside they hold the server's query slots while the rest
+        // wait.
+        const isSecondary = ({ plot, query }) => isHistogramPlot(plot) || query.includes('histogram_');
+        const primary = onPrimary ? queryPlots.filter((q) => !isSecondary(q)) : queryPlots;
+        const secondary = onPrimary ? queryPlots.filter(isSecondary) : [];
+        for (const { plot } of secondary) {
+            if (!plotHasData(plot)) plot.pending = true;
+        }
+        const run = async ({ plot, query }) => {
+            try {
+                // Display mode: line-ish plots fetch the decimated boxplot
+                // binary, which now carries the aggregated measurement-
+                // uncertainty band (median of interval edges per bucket; the
+                // exact per-sample interval at native resolution), so the
+                // uncertainty bands render at every zoom level. On any failure
+                // (e.g. a non-Series result), fall back to the JSON matrix so a
+                // hiccup never blanks a chart.
+                if (_displayMode && plotUsesDisplay(plot)) {
+                    try {
+                        const decoded = await fetchDisplaySeries(query, metadata, signal);
                         if (superseded()) return;
-                        applyResultToPlot(plot, res);
-                    } else {
+                        applyDisplayToPlot(plot, decoded);
+                    } catch (_) {
+                        if (superseded()) return;
                         const res = await executePromQLRangeQuery(query, metadata, signal);
                         if (superseded()) return;
                         applyResultToPlot(plot, res);
                     }
-                } catch (e) {
+                } else if (_displayMode && isEntityQuery(plot.promql_query)
+                    && plot.opts?.type !== 'histogram') {
+                    const res = await fetchEntityHeatmap(query, metadata, signal);
                     if (superseded()) return;
-                    console.error(`Failed to execute PromQL query "${plot.promql_query}":`, e);
-                    plot.data = [];
-                    plot.boxplot = null;
+                    applyResultToPlot(plot, res);
+                } else {
+                    const res = await executePromQLRangeQuery(query, metadata, signal);
+                    if (superseded()) return;
+                    applyResultToPlot(plot, res);
                 }
+            } catch (e) {
                 if (superseded()) return;
-                redraw();
-            }),
-        );
-
+                console.error(`Failed to execute PromQL query "${plot.promql_query}":`, e);
+                plot.data = [];
+                plot.boxplot = null;
+            }
+            if (superseded()) return;
+            // A held-back chart that came back empty stays hidden until the
+            // final drop removes it.
+            if (!(plot.pending === 'hidden' && !plotHasData(plot))) plot.pending = false;
+            redraw();
+        };
         // Surface no-data plots at the bottom (mirrors service KPI UX)
         // instead of leaving silent empty chart cards mid-section.
-        // Plots whose original query carries the `__SELECTED_CGROUPS__`
-        // placeholder are deferred — they intentionally have no data
-        // until the user picks a cgroup, at which point cgroup_selector
-        // refetches them in place. Stripping them here would remove the
-        // right-side "Individual Cgroups" group entirely on first load
-        // and the cgroup selector would have nothing to repopulate.
         const unavailable = [];
-        const plotHasData = (plot) =>
-            Array.isArray(plot.data) && plot.data.some((s) => Array.isArray(s) && s.length > 0);
-        const isDeferredCgroupPlot = (plot) =>
-            typeof plot.promql_query === 'string'
-            && plot.promql_query.includes('__SELECTED_CGROUPS__');
-        for (const group of data.groups || []) {
-            for (const sg of group.subgroups || []) {
-                const surviving = [];
-                for (const plot of (sg.plots || [])) {
-                    if (!plot.promql_query
-                        || plotHasData(plot)
-                        || isDeferredCgroupPlot(plot)) {
-                        surviving.push(plot);
-                    } else {
-                        unavailable.push({
-                            group: group.name,
-                            subgroup: sg.name || null,
-                            title: plot.opts?.title || '(unnamed chart)',
-                            query: plot.promql_query,
-                        });
+        await Promise.allSettled(primary.map(run));
+        if (secondary.length > 0 && !superseded()) {
+            // A subgroup whose counters and gauges all came back empty is
+            // likely a sampler the recording lacks; its histogram charts
+            // are held back (`pending` 'hidden') until they land rather
+            // than holding places that may be dropped.
+            const primaryPlots = new Set(primary.map(({ plot }) => plot));
+            for (const group of data.groups || []) {
+                for (const sg of group.subgroups || []) {
+                    const plots = sg.plots || [];
+                    const own = plots.filter((plot) => primaryPlots.has(plot));
+                    if (own.length > 0 && !own.some(plotHasData)) {
+                        for (const plot of plots) {
+                            if (plot.pending === true) plot.pending = 'hidden';
+                        }
                     }
                 }
-                sg.plots = surviving;
             }
-            group.subgroups = (group.subgroups || []).filter((sg) => (sg.plots || []).length > 0);
+            const inFlight = new Set(secondary.map(({ plot }) => plot));
+            dropUnavailable(data, (plot) => inFlight.has(plot), unavailable);
+            if (unavailable.length > 0) {
+                data.metadata = data.metadata || {};
+                data.metadata.unavailable_charts = unavailable.slice();
+            }
+            onPrimary(data);
         }
-        data.groups = (data.groups || []).filter((g) => (g.subgroups || []).length > 0);
+        await Promise.allSettled(secondary.map(run));
+
+        dropUnavailable(data, () => false, unavailable);
+        for (const { plot } of secondary) {
+            if (!superseded()) plot.pending = false;
+        }
         if (unavailable.length > 0) {
             data.metadata = data.metadata || {};
             data.metadata.unavailable_charts = unavailable;

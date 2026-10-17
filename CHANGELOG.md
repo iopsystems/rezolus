@@ -93,6 +93,19 @@
   cache across the upgrade, and a cache whose module unloads and loads again
   can come back on a different `id`.
 
+- **`rezolus view` renders a dashboard section once its counter and gauge
+  charts have data**, and its histogram charts show as loading until theirs
+  land; the histogram queries are sent after the others have answered,
+  where every query was sent at once and the browser's connections and the
+  server's query slots filled with histogram queries. On a 9.6 h recording
+  the Syscall section showed its first charts after 0.15-0.25 s where it
+  showed the loading page for 1.22-1.24 s, and finished 0.03-0.07 s later
+  (1.27-1.29 s). A subgroup whose counters came back empty holds its
+  histogram charts back until they land. An expanded chart opened while
+  its query is in flight shows as loading until it lands. Compare mode and
+  the static-site viewer are unchanged; a zoom refetch still sends every
+  query at once, after any load of the section has finished.
+
 - **metriken-query 0.39.** A strided histogram call
   (`histogram_heatmap(x, 60)`, `histogram_quantiles([..], x, 60)`,
   `histogram_count(x, 60)`) lays its windows at multiples of the stride,
