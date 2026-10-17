@@ -197,6 +197,13 @@ pub fn resolve_source_templates(
                 "source {s}: a service_queries template in its metadata does not parse \
                  ({err}); another template in its metadata renders instead"
             ),
+            // The registry knows the source but was not consulted: the
+            // registry fallback by `source` (step 3b) runs only when nothing
+            // else rendered, and a per-source map named other sources.
+            (Some(s), _) if registry.get(&s).is_some() => format!(
+                "source {s}: the service_queries template in its metadata does not parse \
+                 ({err}); it has no KPI sections"
+            ),
             (Some(s), _) => format!(
                 "source {s}: the service_queries template in its metadata does not parse \
                  ({err}); no built-in template matches, so it has no KPI sections"
@@ -408,6 +415,82 @@ mod tests {
         assert_eq!(t.notices.len(), 1, "{:?}", t.notices);
         assert!(
             t.notices[0].contains("another template in its metadata renders instead"),
+            "{:?}",
+            t.notices
+        );
+    }
+
+    /// The same fixture with the registry preferred: the registry's template
+    /// renders over the carried one, and the notice says so.
+    #[test]
+    fn a_malformed_template_beside_a_carried_one_under_registry_names_the_built_in() {
+        let psm = serde_json::json!({
+            "known": {"0": {"service_queries": ext("known", "carried")}},
+        });
+        let m = md(&[
+            ("source", "known".into()),
+            ("per_source_metadata", psm.to_string()),
+            ("service_queries", r#"{"service_name": 7}"#.into()),
+        ]);
+        let t = resolve_source_templates(&m, &registry(), TemplatePreference::Registry);
+        assert_eq!(titles(&t), [("known".into(), "registry".into())]);
+        assert_eq!(t.notices.len(), 1, "{:?}", t.notices);
+        assert!(
+            t.notices[0].contains("using the built-in template instead"),
+            "{:?}",
+            t.notices
+        );
+    }
+
+    /// A malformed nested template on a combined file falls back to the
+    /// registry's for that source (step 3a), and the notice says so.
+    #[test]
+    fn a_malformed_nested_template_names_the_built_in_that_renders() {
+        let psm = serde_json::json!({
+            "known": {"0": {"service_queries": {"service_name": 8}}},
+        });
+        let m = md(&[
+            ("source", r#"["known","rezolus"]"#.into()),
+            ("per_source_metadata", psm.to_string()),
+        ]);
+        let t = resolve_source_templates(&m, &registry(), TemplatePreference::Archive);
+        assert_eq!(titles(&t), [("known".into(), "registry".into())]);
+        assert_eq!(t.notices.len(), 1, "{:?}", t.notices);
+        assert!(
+            t.notices[0].contains("using the built-in template instead"),
+            "{:?}",
+            t.notices
+        );
+    }
+
+    /// `source` names a source the registry knows, its top-level template is
+    /// malformed, and the per-source map names only another source (a file
+    /// whose `source` was overwritten after combining). The registry entry by
+    /// `source` is not used, since the map's sources rendered, so the notice
+    /// says the source has no KPI sections without claiming no built-in
+    /// template matches.
+    #[test]
+    fn a_malformed_template_for_a_source_outside_the_per_source_map_has_no_sections() {
+        let registry = TemplateRegistry::from_templates(vec![
+            ext("known", "registry"),
+            ext("other", "registry"),
+        ]);
+        let psm = serde_json::json!({"other": {"0": {"version": "1"}}});
+        let m = md(&[
+            ("source", "known".into()),
+            ("per_source_metadata", psm.to_string()),
+            ("service_queries", r#"{"service_name": 7}"#.into()),
+        ]);
+        let t = resolve_source_templates(&m, &registry, TemplatePreference::Archive);
+        assert_eq!(titles(&t), [("other".into(), "registry".into())]);
+        assert_eq!(t.notices.len(), 1, "{:?}", t.notices);
+        assert!(
+            t.notices[0].contains("it has no KPI sections"),
+            "{:?}",
+            t.notices
+        );
+        assert!(
+            !t.notices[0].contains("no built-in template matches"),
             "{:?}",
             t.notices
         );

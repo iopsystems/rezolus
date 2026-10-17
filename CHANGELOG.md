@@ -107,21 +107,23 @@
   only, so a template embedded by `annotate` showed on `rezolus view` and not
   in the browser. Each recording of a multi-recording archive uses its own
   template; when two recordings have the same source name, the baseline's
-  renders for both. A template that does not parse falls back to the
-  built-in one with a warning (or, when there is none, shows no KPI
-  sections), once per distinct message (the server's log, the browser
-  console), not a failed load. A top-level template on a file whose
+  renders for both. A template that does not parse is replaced by another
+  template the metadata carries for the source, else the built-in one, else
+  no KPI sections, with a warning once per distinct message (the server's
+  log, the browser console), not a failed load. In a comparison, a notice
+  describes that recording's own lookup; the baseline's template renders for
+  a source name both recordings share. A top-level template on a file whose
   `source` names several sources (a combined parquet's JSON array) is keyed
   by the template's own `service_name`; one that does not parse there is
-  ignored. A live agent's handshake
-  metadata is read only by the terminal UI (`--tui`), which rebuilds its
-  sections each tick; the browser dashboard of a live agent builds its
-  sections once, with no KPI sections. The server viewer now also classifies
-  a `.rez` or `.dendro` source from its metadata, so a simple capture's
-  section is named by its `source` (`/source/127.0.0.1-18651`) rather than
-  the file name, as the WASM viewer and a parquet of the same capture name
-  it. A `dashboard` key, reserved for the section template, is kept and not
-  rendered yet.
+  ignored. A live agent's handshake metadata is read only by the terminal UI
+  (`--tui`), which rebuilds its sections each tick; the browser dashboard of
+  a live agent builds its sections once, with no KPI sections. The server
+  viewer now also classifies a `.rez` or `.dendro` source from its metadata,
+  so a simple capture's section is named by its `source`
+  (`/source/127.0.0.1-18651`) rather than the file name, as the WASM viewer
+  and a parquet of the same capture name it. A `dashboard` key, reserved for
+  the section template, is kept and not rendered yet.
+
 - **`memory_slabinfo` publishes `memory_slab_cache_bytes` for every slab
   cache**, labeled by `cache`, so slab growth that `memory_slab` shows is
   attributable to a cache by name (`kmalloc-*`, ZFS, KVM, VFIO or any other).
