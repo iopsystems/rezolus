@@ -1,1 +1,197 @@
-null
+{
+  "name": "Exceptions",
+  "route": "/exceptions",
+  "groups": [
+    {
+      "name": "Network",
+      "id": "network",
+      "subgroups": [
+        {
+          "name": "Packet Drops & Transmit Errors",
+          "description": "Packets dropped in the stack and driver-level transmit faults — the canonical signals that the host is shedding or failing network work.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "Packet Drops",
+              "id": "packet-drops",
+              "unit": "rate",
+              "query": "sum(irate(network_drop[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "Transmit Timeouts",
+              "id": "tx-timeouts",
+              "unit": "rate",
+              "query": "sum(irate(network_transmit_timeout[5m]))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "TCP",
+      "id": "tcp",
+      "subgroups": [
+        {
+          "name": "Retransmits",
+          "description": "TCP segments retransmitted because the peer didn't ack in time — indicates loss or congestion on the path.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "TCP Retransmits",
+              "id": "tcp-retransmits",
+              "unit": "rate",
+              "query": "sum(irate(tcp_retransmit[5m]))",
+              "width": "full"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "AWS ENA Allowance Exceeded",
+      "id": "ena",
+      "subgroups": [
+        {
+          "name": "Bandwidth",
+          "description": "Packets queued or dropped because the instance hit its bandwidth allowance.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "Inbound",
+              "id": "ena-bw-rx",
+              "unit": "rate",
+              "query": "sum(irate(network_ena_bandwidth_allowance_exceeded{direction=\"receive\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "Outbound",
+              "id": "ena-bw-tx",
+              "unit": "rate",
+              "query": "sum(irate(network_ena_bandwidth_allowance_exceeded{direction=\"transmit\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Connection & PPS Limits",
+          "description": "Packets dropped because the instance hit per-second packet, conntrack, or link-local allowances.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "PPS Allowance",
+              "id": "ena-pps",
+              "unit": "rate",
+              "query": "sum(irate(network_ena_pps_allowance_exceeded[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "Conntrack Allowance",
+              "id": "ena-conntrack",
+              "unit": "rate",
+              "query": "sum(irate(network_ena_conntrack_allowance_exceeded[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "Link-Local Allowance",
+              "id": "ena-linklocal",
+              "unit": "rate",
+              "query": "sum(irate(network_ena_linklocal_allowance_exceeded[5m]))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "CPU Throttling",
+      "id": "cpu-throttling",
+      "subgroups": [
+        {
+          "name": "Throttle Events",
+          "description": "Cgroups whose CPU runqueues were throttled by the CFS bandwidth controller — workload was ready to run but blocked by quota.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "Throttle Events",
+              "id": "cgroup-throttle-events",
+              "unit": "rate",
+              "query": "sum(irate(cgroup_cpu_throttled[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "Throttled Periods",
+              "id": "cgroup-throttled-periods",
+              "unit": "rate",
+              "query": "sum(irate(cgroup_cpu_bandwidth_throttled_periods[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Throttled Time",
+          "description": "Time cgroups spent waiting on the CFS bandwidth quota. Sustained non-zero values mean quota is the bottleneck.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "Throttled Time",
+              "id": "cgroup-throttled-time",
+              "unit": "percentage",
+              "query": "sum(irate(cgroup_cpu_throttled_time[5m])) / 1000000000",
+              "unit_system": "percentage"
+            },
+            {
+              "kind": "counter",
+              "title": "Bandwidth Throttled Time",
+              "id": "cgroup-bw-throttled-time",
+              "unit": "percentage",
+              "query": "sum(irate(cgroup_cpu_bandwidth_throttled_time[5m])) / 1000000000",
+              "unit_system": "percentage"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Block IO",
+      "id": "blockio",
+      "subgroups": [
+        {
+          "name": "Errors",
+          "description": "Terminal block IO failures.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "By Class",
+              "id": "blockio-err-by-class",
+              "unit": "rate",
+              "query": "sum by (error) (irate(blockio_errors[5m]))",
+              "width": "full",
+              "description": "Fault mode: timeout-heavy = controller / transport hang; nospc = thin pool out of room; protection = data-integrity check failed."
+            },
+            {
+              "kind": "counter",
+              "title": "By Op",
+              "id": "blockio-err-by-op",
+              "unit": "rate",
+              "query": "sum by (op) (irate(blockio_errors[5m]))",
+              "width": "full",
+              "description": "Fault source: a read-only spike points at the media; a write-only spike points at the controller / target."
+            }
+          ]
+        },
+        {
+          "name": "Requeues",
+          "description": "Requests the block layer put back on the queue for retry — SCSI error-handler escalation, NVMe controller reset, or multipath path failover. High requeues with flat errors above = transport blip the kernel absorbed cleanly.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "By Op",
+              "id": "blockio-requeue-by-op",
+              "unit": "rate",
+              "query": "sum by (op) (irate(blockio_requeues[5m]))",
+              "width": "full"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
