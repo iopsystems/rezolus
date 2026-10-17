@@ -254,6 +254,9 @@ pub struct AppState {
     /// compare-mode hand-off has attached one.
     pub captures: Arc<CaptureRegistry>,
     pub templates: TemplateRegistry,
+    /// Whose KPI template renders for a source that carries one in its
+    /// metadata and that `templates` also knows (`--registry-templates`).
+    pub template_preference: RwLock<::dashboard::source_templates::TemplatePreference>,
     /// The live agent being recorded (live mode only). Its temporary archive
     /// is the capture's data and what a save copies.
     pub live_session: Mutex<Option<super::live::LiveSession>>,
@@ -314,6 +317,7 @@ impl AppState {
             sections: Default::default(),
             captures: Arc::new(CaptureRegistry::new(data, None, None, None)),
             templates,
+            template_preference: RwLock::new(Default::default()),
             live_session: Mutex::new(None),
             live: AtomicBool::new(false),
             follow: Mutex::new(None),

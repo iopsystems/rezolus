@@ -93,6 +93,22 @@
   delivered 19 to 21 rows in 30 s. The agent now samples at most once per
   three quarters of its TTL.
 
+- **Both viewers take a source's KPI template from the recording, ahead of
+  the built-in one.** The `service_queries` key of a source's metadata (a
+  parquet footer, a `.rez` recording, a dendro source; what `rezolus
+  recording annotate --queries` writes) renders by default; the built-in
+  registry is consulted for a source only when its metadata has none.
+  `rezolus view --registry-templates` renders the built-in template instead
+  for sources the registry knows, and the WASM viewer has the same switch as
+  `set_prefer_registry_templates`. The server viewer read `service_queries`
+  only from a parquet's footer, so a `.rez` or `.dendro` showed no KPI
+  sections, and the static-site viewer matched the registry by source name
+  only, so a template embedded by `annotate` showed on `rezolus view` and not
+  in the browser. Each recording of a multi-recording archive uses its own.
+  A template that does not parse falls back to the built-in one with a
+  warning (the server's log, the browser console), not a failed load. A
+  `dashboard` key, reserved for the section template, is kept and not
+  rendered yet.
 - **`memory_slabinfo` publishes `memory_slab_cache_bytes` for every slab
   cache**, labeled by `cache`, so slab growth that `memory_slab` shows is
   attributable to a cache by name (`kmalloc-*`, ZFS, KVM, VFIO or any other).

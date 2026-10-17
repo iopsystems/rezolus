@@ -14,6 +14,20 @@ const ensureAttached = (captureId) => {
     }
 };
 
+// A template carried in a recording's metadata that did not parse falls back
+// to the built-in one; the server viewer logs that to its terminal, and the
+// browser logs it to the console.
+const logTemplateNotices = () => {
+    if (!registry || typeof registry.template_notices !== 'function') return;
+    try {
+        for (const notice of JSON.parse(registry.template_notices())) {
+            console.warn(notice);
+        }
+    } catch (_) {
+        // Notices are advisory; a malformed list is not worth failing a load.
+    }
+};
+
 const ViewerApi = {
     setRegistry(instance) {
         registry = instance;
@@ -158,6 +172,7 @@ const ViewerApi = {
     initTemplates(templatesJson, captureId = 'baseline') {
         ensureAttached(captureId);
         registry.init_templates(captureId, templatesJson);
+        logTemplateNotices();
     },
 
     regenerateCombined(templatesJson, categoryName) {
@@ -166,6 +181,7 @@ const ViewerApi = {
             templatesJson,
             categoryName ?? undefined,
         );
+        logTemplateNotices();
     },
 
     // Mirror of the server's POST /api/v1/save_with_selection. The

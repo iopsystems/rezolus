@@ -625,7 +625,8 @@ pub(crate) fn open_targets(
 
 /// The KPIs carrying a check for one recording: from `--queries` when
 /// given, else from the recording's own metadata through the viewer's
-/// lookup (`service_extensions_from_metadata`).
+/// lookup (`capture_service_extensions`), with the recording's own template
+/// winning over the registry's.
 fn checked_kpis(
     reader: &dyn MetricsSource,
     override_ext: Option<&ServiceExtension>,
@@ -633,9 +634,10 @@ fn checked_kpis(
 ) -> Vec<Kpi> {
     let exts: Vec<ServiceExtension> = match override_ext {
         Some(ext) => vec![ext.clone()],
-        None => crate::viewer::metadata::service_extensions_from_metadata(
-            &reader.file_metadata(),
+        None => crate::viewer::metadata::capture_service_extensions(
+            reader,
             registry,
+            ::dashboard::source_templates::TemplatePreference::Archive,
         )
         .into_iter()
         .map(|(_, ext)| ext)

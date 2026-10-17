@@ -411,7 +411,11 @@ pub fn ingest_baseline_from_path(
             ..Default::default()
         }
     } else {
-        let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
+        let mut service_exts = extract_service_extension_metadata(
+            &temp_path,
+            &state.templates,
+            *state.template_preference.read(),
+        );
         validate_service_extensions(reader_arc.as_ref(), &mut service_exts);
         let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
         // Classify sources so an uploaded simple-capture parquet gets its
