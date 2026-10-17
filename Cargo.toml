@@ -16,7 +16,7 @@ libc = "0.2.186"
 libloading = "0.8"
 log = "0.4.29"
 metriken = "0.11.3"
-metriken-exposition = "0.23.0"
+metriken-exposition = "0.23.1"
 metriken-query = { version = "0.40.0", default-features = false }
 metriken-storage = { version = "0.3.0", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
@@ -109,7 +109,7 @@ metriken-query = { workspace = true, features = ["ingest"] }
 # tick that commits every source into one `.dendro`: `record`, hindsight and
 # the live viewer over the library (metriken's
 # docs/journal/2026-10-12-metriken-recorder.md).
-metriken-recorder = "0.2.0"
+metriken-recorder = "0.3.0"
 # The archive writer `record -o out.dendro` writes through (`write`), and the
 # msgpack-to-parquet conversion behind `recording convert` and the recorder's
 # parquet output (`convert`).

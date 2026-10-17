@@ -330,8 +330,8 @@ or parquet, which scrape `/metrics/binary`.
 An agent that is merely unreachable is retried each tick, as is one that
 answers but whose stream fails to open with an error that can change (a 5xx,
 408 or 429 from a proxy, a handshake that times out). A stream that drops mid-run, or that
-produces no frame for the scrape timeout (twice the interval, between 2 s and
-10 s), is reconnected after one interval (at least a second), with the drop and the reconnect logged; rows between the two
+produces no frame for the interval the agent serves plus the scrape timeout
+(twice the interval, between 2 s and 10 s), is reconnected after one interval (at least a second), with the drop and the reconnect logged; rows between the two
 are lost, as a failed scrape's are. An agent that comes back unable to serve
 the stream (a 404, a wrong content type, a handshake that does not decode) is
 refused as a late agent is: its recording stops with the rows it had and is

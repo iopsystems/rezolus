@@ -6,12 +6,15 @@ language. Do not hand-edit them.
 ## `stream-frames/wide.bin`, `stream-frames/long.bin`
 
 Pin the bytes the agent's `/metrics/stream` sends for one fixed sequence of
-passes, in the wide and long layouts. They were recorded from the agent's own
-frame code (`StreamState`, #1434) before the route moved to
-metriken-exposition's `StreamSubscription`, which now reproduces them with the
-agent's pass types (`src/agent/exposition/http/mod.rs`, tests in
-`stream_frame_fixture`). metriken's `metriken-exposition/tests/stream_frames.rs`
-and `metriken-storage/tests/stream_frames.rs` carry copies.
+passes, in the wide and long layouts, through metriken-exposition's
+`StreamSubscription` with the agent's pass types and negotiation, as the
+handler serves it (`src/agent/exposition/http/mod.rs`, tests in
+`stream_frame_fixture`). The rows chunks are as the agent's own frame code
+(`StreamState`, #1434) wrote them; the opening chunk's handshake also carries
+`metriken.frame_interval` and `metriken.update_floor`. metriken's
+`metriken-exposition/tests/stream_frames.rs` and
+`metriken-storage/tests/stream_frames.rs` carry copies of the subscription
+without negotiation, whose handshake has neither key.
 
 Each file is one record per chunk the stream yields, the opening chunk
 (preamble and handshake) first, then one per interval: a little-endian `u32`

@@ -100,7 +100,9 @@ target/release/rezolus record -o bench.dendro -- ./bench.sh   # record for the c
 # reconnect, is marked Refused and left out from then on (a reconnect keeps the rows it had),
 # the rest finalize, and the run exits 1 (`Event::Refused`, then `refusal_summary`). An unreachable one (or a 5xx/408/429 /
 # handshake timeout) is retried each tick, and a stream that drops (or goes silent for the
-# scrape timeout) is reconnected after one interval, at least a second. A wrapped command that
+# interval the agent serves plus the scrape timeout) is reconnected after one interval, at least
+# a second. The stream interval is negotiated: an --interval below the agent's TTL is served,
+# and recorded, at the TTL. A wrapped command that
 # exits on its own waits for each agent's frame stamped at or after the exit (bounded by
 # interval + scrape timeout). When every endpoint has been refused the run ends; each refused
 # endpoint gets a line.
