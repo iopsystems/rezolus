@@ -139,9 +139,7 @@ export const nativeInterval = (meta) =>
 // A query step or histogram stride of at least `target` seconds, never finer
 // than the recording's own cadence (asking for points the producer never read
 // buys interpolation, not resolution) and quantized to whole multiples of it
-// so a coarser step still lands on sample boundaries. A histogram stride
-// that is not a whole multiple gives windows whose row counts alternate, so
-// a manual step override goes through here too. `toFixed` trims the
+// so a coarser step still lands on sample boundaries. `toFixed` trims the
 // binary-float tail that multiplying a sub-second interval leaves behind
 // (0.1 * 3 = 0.30000000000000004), which would otherwise reach the server in
 // a query string.
@@ -1249,9 +1247,7 @@ const createDataApi = ({
         if (plot.opts.type === 'histogram') {
             q = buildHistogramQuery(
                 q, plot.opts.subtype, plot.opts.percentiles,
-                stepActive
-                    ? stepAtLeast(nativeInterval(cachedMetadata), stepOverride)
-                    : undefined,
+                stepActive ? stepOverride : undefined,
             );
         }
         // A counter's irate needs no rewrite: the engine computes it per step
@@ -1454,7 +1450,7 @@ const createDataApi = ({
         const span = Math.max(0, end - start);
         const native = nativeInterval(meta);
         const stride = (_stepOverride && _stepOverride > native)
-            ? stepAtLeast(native, _stepOverride)
+            ? _stepOverride
             : stepAtLeast(native, span / pixelBudget());
         // Omit the argument at native resolution: the engine then emits one
         // column per tick, which is finer than any stride we could name.
@@ -1545,7 +1541,7 @@ const createDataApi = ({
         const span = Math.max(0, eff.end - eff.start);
         const native = nativeInterval(meta);
         const stride = (_stepOverride && _stepOverride > native)
-            ? stepAtLeast(native, _stepOverride)
+            ? _stepOverride
             : stepAtLeast(native, span / pixelBudget());
         const strideSuffix = stride > native ? `, ${stride}` : '';
         const wrapped = `histogram_quantiles([${queryQuantiles.join(', ')}], ${metricSelector}${strideSuffix})`;

@@ -106,27 +106,30 @@
   the static-site viewer are unchanged; a zoom refetch still sends every
   query at once, after any load of the section has finished.
 
-- **metriken-query 0.39.** A strided histogram call
+- **metriken-query 0.40.** A strided histogram call
   (`histogram_heatmap(x, 60)`, `histogram_quantiles([..], x, 60)`,
   `histogram_count(x, 60)`) lays its windows at multiples of the stride,
-  `(k·60 s, (k+1)·60 s]`, where 0.38 laid them from the first row read;
-  each point is still stamped at the last row of its window. A heatmap of a
-  whole recording starts with a partial column unless the recording starts
-  on a multiple of the stride. A strided instant query counts the one
-  stride ending at the instant, where `histogram_count`, `_quantiles` and
-  the rest read back 300 s (a heatmap counted one row). A stride under
-  1 ns, or NaN, is a parse error. Histogram functions are faster: on the
-  9.6 h bench recording a heatmap of all 16 `syscall_latency` series at a
-  60 s stride takes 0.25 s (release build, warm).
-
-- **The viewer rounds a manual step override up to a whole multiple of the
-  recording's interval for histogram strides**, as it already did for the
-  automatic stride. A stride that is not a multiple gives windows whose row
-  counts alternate: the 15 s step on a 10 s recording drew heatmap columns
-  of one and two rows in turn, with gaps between them. It now strides at
-  20 s. A chart's gap detection uses the rounded step too, so points one
-  stride apart stay joined; with such a step, a counter or gauge line no
-  longer breaks at a single missing point.
+  `(k·60 s, (k+1)·60 s]`, where 0.38 laid them from the first row read, and
+  shares each row's delta among the windows its interval overlaps, in
+  proportion to the overlap, where it counted the whole row in one window.
+  A stride that is not a multiple of the row interval gives windows that
+  each hold the same share of rows: on the 9.6 h bench recording, heatmap columns at a 1.5 s
+  stride sum to 391k, 388k, 398k, 457k where whole rows gave 536k, 248k,
+  528k, 268k. A heatmap cell or strided count can be fractional (to
+  1/65536 of an observation; the raw-count tooltip shows a share under
+  0.005 as 0). Across a gap in a series, the delta of the row after it is
+  shared over the gap's windows, so a strided heatmap or percentile line
+  shows a level band across an outage where it showed an empty stretch and
+  one spike.
+  A closed window's point is stamped at its close, the last window at its
+  last row. A heatmap of a whole recording starts with a partial column
+  unless the recording starts on a multiple of the stride. A strided
+  instant query counts the stride ending at the instant, including the
+  share of the row that straddles its opening, where `histogram_count`,
+  `_quantiles` and the rest read back 300 s. A stride under 1 ns, or NaN,
+  is a parse error, and one shorter than the row interval laying more than
+  100 000 windows over the range is refused. A heatmap of all 16 `syscall_latency` series over the 9.6 h
+  recording at a 60 s stride takes 0.3 s (release build, warm).
 
 - **`rezolus view`'s cache budget defaults to an eighth of the memory
   available**: physical memory, or a Linux cgroup's limit when lower (as in
@@ -145,7 +148,7 @@
   observations, up to 300 s earlier (on the bench recording,
   `tcp_connect_latency` at most instants). An instant `histogram_count by
   (op) (x)` now answers; on 0.37 it returned no series. A strided call
-  (`histogram_count(x, 60)`) read back 300 s until metriken-query 0.39. The
+  (`histogram_count(x, 60)`) read back 300 s until metriken-query 0.40. The
   dashboards issue range queries and are unaffected.
 
 - **metriken-query 0.37, metriken-storage 0.3, metriken-exposition 0.23,
