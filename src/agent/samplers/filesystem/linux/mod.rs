@@ -2,7 +2,8 @@
 //! superblock, sampled from `/proc/self/mountinfo` and `fstatvfs`: total, free
 //! and available bytes, total and free inodes, and the superblock read-only flag.
 //! For an ext4 filesystem the same sweep also reads its sysfs error count and
-//! lifetime device writes from `/sys/fs/ext4/<block_device>/`.
+//! lifetime device writes from `/sys/fs/ext4/<block_device>/`. tmpfs mounts are
+//! read on the same sweep into their own families; see "tmpfs" below.
 //!
 //! ```text
 //! mountinfo -> resolve visible mounts / classify -> assign slots
@@ -18,7 +19,8 @@
 //! types, since looking the path up walks that mount, and fails closed on a
 //! path that starts in a mount the table omits: a chroot's root, whose type is
 //! unknown. Candidates skipped for such a reason, or for an ambiguous table, are
-//! logged as warnings when the reasons change.
+//! logged when the reasons change: a warning when skipping starts, debug for
+//! candidates skipped while others already are, info when all resolve again.
 //! Network `statvfs` calls can block on an unavailable server; autofs path
 //! lookup can trigger a mount. Classification must precede path lookup.
 //! Mount-id validation detects replacement after discovery when the kernel
@@ -29,6 +31,28 @@
 //!
 //! Network support is deferred in `docs/backlog.md`; any opt-in must bound
 //! both blocking workers and per-mount wait time.
+//!
+//! # tmpfs
+//!
+//! A tmpfs mount's files are memory: meminfo counts their resident pages in
+//! `Shmem`, which says how much and not where. The sweep also selects visible tmpfs mounts
+//! ([`mounts::select_sampled`]) and publishes used and size bytes and inodes
+//! per mount as `filesystem_tmpfs_*`, kept out of the `filesystem_*` families
+//! because a tmpfs size is a limit on memory, not device capacity, and summing
+//! it with disks would be wrong. `statvfs` on tmpfs reads the superblock's
+//! counters and cannot block. `ramfs` is not read: it reports no usage.
+//! `hugetlbfs` is meminfo's (`memory_hugetlb`).
+//!
+//! tmpfs mounts come and go with logins (`/run/user/<uid>`), services
+//! (systemd credential mounts) and containers (a `/dev/shm` per container, a
+//! secret volume per pod). They share the slot space with local filesystems
+//! but have their own cap, [`MAX_TMPFS`], so they never take a local
+//! filesystem's slot. When more are visible than the cap, the ones with the
+//! fewest path components are placed first (`/tmp`, `/dev/shm`, `/run` before
+//! a container's), and a slot once held is kept until its mount goes. The
+//! first mount left out is a warning, changes in the count are debug, and
+//! fitting again is info, so a churning container host does not warn every
+//! sweep.
 //!
 //! # Cadence and publication
 //!
@@ -72,6 +96,7 @@ const SYS_FS_EXT4: &str = "/sys/fs/ext4";
 /// A sweep still running after this many intervals is reported as stuck.
 const STUCK_INTERVALS: u32 = 3;
 
+use crate::agent::samplers::{count_change, CountChange};
 use crate::agent::*;
 use metriken::CounterGroup;
 use metriken::GaugeGroup;
@@ -100,6 +125,10 @@ static GROUPS: &[&GaugeGroup] = &[
     &FILESYSTEM_INODES_FREE,
     &FILESYSTEM_READONLY,
     &FILESYSTEM_ERRORS,
+    &FILESYSTEM_TMPFS_USED,
+    &FILESYSTEM_TMPFS_SIZE,
+    &FILESYSTEM_TMPFS_INODES_USED,
+    &FILESYSTEM_TMPFS_INODES_TOTAL,
 ];
 
 // The one counter family, cleared and relabeled alongside GROUPS. Kept apart
@@ -122,6 +151,10 @@ static MOUNT_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[&[
     &FILESYSTEM_READONLY,
     &FILESYSTEM_ERRORS,
     &FILESYSTEM_WRITTEN_BYTES,
+    &FILESYSTEM_TMPFS_USED,
+    &FILESYSTEM_TMPFS_SIZE,
+    &FILESYSTEM_TMPFS_INODES_USED,
+    &FILESYSTEM_TMPFS_INODES_TOTAL,
 ]];
 
 fn init(config: Arc<Config>) -> SamplerResult {
@@ -251,7 +284,8 @@ pub struct Slots {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Assignment {
     pub freed: Vec<usize>,
-    pub dropped: usize,
+    /// Per class passed to [`Slots::assign_within`], the devices not placed.
+    pub dropped: Vec<usize>,
 }
 
 impl Slots {
@@ -263,12 +297,26 @@ impl Slots {
         }
     }
 
+    /// One class of devices, limited only by capacity.
+    #[cfg(test)]
     pub fn assign(&mut self, devices: &[String]) -> Assignment {
-        let mut outcome = Assignment::default();
+        let capacity = self.occupied.len();
+        self.assign_within(&[(devices, capacity)])
+    }
+
+    /// Free the slots of devices in no class, then place each class's new
+    /// devices in order while it holds fewer than its quota and a slot is free.
+    /// A device already placed keeps its slot. Quotas that sum to the capacity
+    /// keep one class from taking another's slots.
+    pub fn assign_within(&mut self, classes: &[(&[String], usize)]) -> Assignment {
+        let mut outcome = Assignment {
+            freed: Vec::new(),
+            dropped: vec![0; classes.len()],
+        };
 
         for (slot, held) in self.occupied.iter_mut().enumerate() {
             if let Some(device) = held {
-                if !devices.contains(device) {
+                if !classes.iter().any(|(devices, _)| devices.contains(device)) {
                     self.by_device.remove(device);
                     *held = None;
                     self.labeled[slot] = None;
@@ -277,16 +325,24 @@ impl Slots {
             }
         }
 
-        for device in devices {
-            if self.by_device.contains_key(device) {
-                continue;
-            }
-            match self.occupied.iter().position(Option::is_none) {
-                Some(slot) => {
-                    self.occupied[slot] = Some(device.clone());
-                    self.by_device.insert(device.clone(), slot);
+        for (class, (devices, quota)) in classes.iter().enumerate() {
+            let mut held = devices
+                .iter()
+                .filter(|d| self.by_device.contains_key(*d))
+                .count();
+            for device in devices.iter() {
+                if self.by_device.contains_key(device) {
+                    continue;
                 }
-                None => outcome.dropped += 1,
+                let free = self.occupied.iter().position(Option::is_none);
+                match free.filter(|_| held < *quota) {
+                    Some(slot) => {
+                        self.occupied[slot] = Some(device.clone());
+                        self.by_device.insert(device.clone(), slot);
+                        held += 1;
+                    }
+                    None => outcome.dropped[class] += 1,
+                }
             }
         }
 
@@ -325,8 +381,9 @@ struct SweepState {
     table: String,
     /// Resolution problems last logged, so a steady condition logs once.
     reported: Reported,
-    /// Filesystems over the cap at the last sweep, so its warning fires on change.
-    dropped: usize,
+    /// Local filesystems and tmpfs mounts over their caps at the last sweep,
+    /// so each warning fires on change.
+    dropped: [usize; 2],
 }
 
 /// How many mounts could hold the process root when not one, and the skipped
@@ -336,10 +393,10 @@ type Reported = (Option<usize>, Vec<mounts::Skipped>);
 impl SweepState {
     fn new() -> Self {
         Self {
-            slots: Slots::new(MAX_MOUNTS),
+            slots: Slots::new(MAX_SLOTS),
             table: String::with_capacity(16 * 1024),
             reported: (None, Vec::new()),
-            dropped: 0,
+            dropped: [0; 2],
         }
     }
 }
@@ -437,29 +494,50 @@ fn apply_identity(slots: &mut Slots, slot: usize, mount: &MountEntry) {
     }
 }
 
-/// Store `now` in `last`, reporting whether it differed.
-fn changed<T: PartialEq>(last: &mut T, now: T) -> bool {
-    if *last == now {
-        return false;
+/// Log why filesystem candidates are not sampled, comparing this sweep's
+/// reasons with the last. Skips starting is a warning per candidate; on a host
+/// whose mounts churn the set moves every sweep, so a candidate newly skipped
+/// while others already are is logged at debug, and every candidate resolving
+/// again is info.
+fn report_selection(previous: &Reported, current: &Reported) {
+    let (starts, skipped) = current;
+    if let Some(n) = starts {
+        if previous.0 != *starts {
+            warn!(
+                "{NAME}: the mount table names {n} mounts that could hold the process root, \
+                 not one; no filesystem is sampled"
+            );
+        }
     }
-    *last = now;
-    true
-}
-
-/// Log why local filesystem candidates are not sampled. Called when the reasons
-/// change, so a steady condition logs once.
-fn report_selection((starts, skipped): &Reported) {
-    if let Some(starts) = starts {
-        warn!(
-            "{NAME}: the mount table names {starts} mounts that could hold the process root, \
-             not one; no filesystem is sampled"
-        );
-    }
-    for skip in skipped {
-        warn!("{NAME}: not sampling {skip}");
+    let already = !previous.1.is_empty();
+    for skip in skipped.iter().filter(|s| !previous.1.contains(s)) {
+        if already {
+            debug!("{NAME}: not sampling {skip}");
+        } else {
+            warn!("{NAME}: not sampling {skip}");
+        }
     }
     if starts.is_none() && skipped.is_empty() {
-        info!("{NAME}: every local filesystem candidate resolves again");
+        info!("{NAME}: every filesystem candidate resolves again");
+    } else if already {
+        debug!("{NAME}: {} candidate(s) skipped", skipped.len());
+    }
+}
+
+/// Log a change in how many mounts of one kind are over their cap; see
+/// [`count_change`].
+fn report_dropped(what: &str, cap: usize, last: usize, now: usize) {
+    match count_change(last, now) {
+        Some(CountChange::Began(n)) => {
+            warn!("{NAME}: {n} {what}(s) beyond the {cap}-mount cap are not sampled")
+        }
+        Some(CountChange::Moved(n)) => {
+            debug!("{NAME}: {n} {what}(s) beyond the {cap}-mount cap are not sampled")
+        }
+        Some(CountChange::Ended) => {
+            info!("{NAME}: every {what} fits within the {cap}-mount cap again")
+        }
+        None => {}
     }
 }
 
@@ -505,31 +583,30 @@ fn sweep_table(state: &mut SweepState, path: &str) -> usize {
     }
     let read_done = Instant::now();
 
-    let selection = mounts::select_local(table);
+    let selection = mounts::select_sampled(table);
     let parse_done = Instant::now();
-    if changed(
-        reported,
-        (selection.unresolvable_starts, selection.skipped.clone()),
-    ) {
-        report_selection(reported);
+    let now = (selection.unresolvable_starts, selection.skipped.clone());
+    if *reported != now {
+        report_selection(reported, &now);
+        *reported = now;
     }
     let mounts = selection.mounts;
-    let devices: Vec<String> = mounts.iter().map(|m| m.device.clone()).collect();
-    let assignment = slots.assign(&devices);
+    let (local, tmpfs) = classes(&mounts);
+    let assignment = slots.assign_within(&[
+        (local.as_slice(), MAX_MOUNTS),
+        (tmpfs.as_slice(), MAX_TMPFS),
+    ]);
 
     // Reused slots must be cleared before any new labels or readings are published.
     for slot in &assignment.freed {
         vacate(*slot);
     }
-    if changed(dropped, assignment.dropped) {
-        if *dropped > 0 {
-            warn!(
-                "{NAME}: {} local filesystem(s) beyond the {MAX_MOUNTS}-mount cap are not sampled",
-                dropped
-            );
-        } else {
-            info!("{NAME}: every local filesystem fits within the {MAX_MOUNTS}-mount cap again");
-        }
+    for (class, (what, cap)) in [("local filesystem", MAX_MOUNTS), ("tmpfs mount", MAX_TMPFS)]
+        .into_iter()
+        .enumerate()
+    {
+        report_dropped(what, cap, dropped[class], assignment.dropped[class]);
+        dropped[class] = assignment.dropped[class];
     }
 
     let mut reads = Vec::with_capacity(mounts.len());
@@ -542,13 +619,22 @@ fn sweep_table(state: &mut SweepState, path: &str) -> usize {
         if let Err(e) = &read {
             debug!("{NAME}: statvfs {} failed: {e}", mount.mount_point);
         }
+        if mount.is_tmpfs() {
+            reads.push(Reading::Tmpfs { slot, read });
+            continue;
+        }
         // sysfs names the directory after the block device, the same link
         // the label resolves; a filesystem without one has no directory.
         let ext4 = (mount.fstype == "ext4")
             .then(|| block_device_name(Path::new(SYS_DEV_BLOCK), &mount.device))
             .flatten()
             .map(|name| read_ext4_sysfs(Path::new(SYS_FS_EXT4), &name));
-        reads.push((slot, mount.readonly, read, ext4));
+        reads.push(Reading::Local {
+            slot,
+            readonly: mount.readonly,
+            read,
+            ext4,
+        });
     }
     let published = publish(&reads);
 
@@ -562,8 +648,13 @@ fn sweep_table(state: &mut SweepState, path: &str) -> usize {
         guard.discard();
     }
     debug!(
-        "{NAME}: sweep published {published}/{} local filesystem(s) in {} us (read {} us, parse {} us, statvfs+publish {} us)",
+        "{NAME}: sweep published {published}/{} filesystem(s) ({} local, {} tmpfs selected; \
+         {} local, {} tmpfs over the cap) in {} us (read {} us, parse {} us, statvfs+publish {} us)",
         mounts.len(),
+        local.len(),
+        tmpfs.len(),
+        dropped[0],
+        dropped[1],
         started.elapsed().as_micros(),
         (read_done - started).as_micros(),
         (parse_done - read_done).as_micros(),
@@ -572,9 +663,49 @@ fn sweep_table(state: &mut SweepState, path: &str) -> usize {
     published
 }
 
-/// One mount's sweep result: its slot, superblock read-only flag, statvfs
-/// reading, and its ext4 sysfs attributes (`None` off ext4).
-type Reading = (usize, bool, std::io::Result<Usage>, Option<Ext4Sysfs>);
+/// One mount's sweep result. A local filesystem carries its superblock
+/// read-only flag and, on ext4, its sysfs attributes (`None` off ext4).
+pub enum Reading {
+    Local {
+        slot: usize,
+        readonly: bool,
+        read: std::io::Result<Usage>,
+        ext4: Option<Ext4Sysfs>,
+    },
+    Tmpfs {
+        slot: usize,
+        read: std::io::Result<Usage>,
+    },
+}
+
+impl Reading {
+    fn slot(&self) -> usize {
+        match self {
+            Reading::Local { slot, .. } | Reading::Tmpfs { slot, .. } => *slot,
+        }
+    }
+
+    fn succeeded(&self) -> bool {
+        match self {
+            Reading::Local { read, .. } | Reading::Tmpfs { read, .. } => read.is_ok(),
+        }
+    }
+}
+
+/// The tmpfs gauges for one `statvfs`. A tmpfs mounted with `size=0` reports
+/// zero blocks and no usage, and one with `nr_inodes=0` zero inodes: absent,
+/// not 0, so no consumer reads a limitless mount as empty.
+fn tmpfs_gauges(usage: &Usage) -> [i64; 4] {
+    let blocks = usage.total_bytes != 0;
+    let inodes = usage.total_inodes != 0;
+    let or_absent = |present: bool, value: u64| if present { gauge(value) } else { i64::MIN };
+    [
+        or_absent(blocks, usage.total_bytes.saturating_sub(usage.free_bytes)),
+        or_absent(blocks, usage.total_bytes),
+        or_absent(inodes, usage.total_inodes.saturating_sub(usage.free_inodes)),
+        or_absent(inodes, usage.total_inodes),
+    ]
+}
 
 /// Publish one sweep's reads and return how many succeeded.
 ///
@@ -582,11 +713,16 @@ type Reading = (usize, bool, std::io::Result<Usage>, Option<Ext4Sysfs>);
 /// pairs with stale values. When nothing did, the caller keeps the previous
 /// window, and failed slots must keep the values that window describes.
 fn publish(reads: &[Reading]) -> usize {
-    let published = reads.iter().filter(|(_, _, read, _)| read.is_ok()).count();
-    for (slot, readonly, read, ext4) in reads {
-        let slot = *slot;
-        match read {
-            Ok(usage) => {
+    let published = reads.iter().filter(|r| r.succeeded()).count();
+    for reading in reads {
+        match reading {
+            Reading::Local {
+                slot,
+                readonly,
+                read: Ok(usage),
+                ext4,
+            } => {
+                let slot = *slot;
                 let _ = FILESYSTEM_TOTAL.set(slot, gauge(usage.total_bytes));
                 let _ = FILESYSTEM_FREE.set(slot, gauge(usage.free_bytes));
                 let _ = FILESYSTEM_AVAILABLE.set(slot, gauge(usage.available_bytes));
@@ -601,11 +737,40 @@ fn publish(reads: &[Reading]) -> usize {
                 let _ = FILESYSTEM_ERRORS.set(slot, ext4.errors.map_or(i64::MIN, gauge));
                 let _ = FILESYSTEM_WRITTEN_BYTES.set(slot, ext4.written_bytes.unwrap_or(u64::MAX));
             }
-            Err(_) if published > 0 => unset(slot),
-            Err(_) => {}
+            Reading::Tmpfs {
+                slot,
+                read: Ok(usage),
+            } => {
+                let [used, size, inodes_used, inodes_total] = tmpfs_gauges(usage);
+                let _ = FILESYSTEM_TMPFS_USED.set(*slot, used);
+                let _ = FILESYSTEM_TMPFS_SIZE.set(*slot, size);
+                let _ = FILESYSTEM_TMPFS_INODES_USED.set(*slot, inodes_used);
+                let _ = FILESYSTEM_TMPFS_INODES_TOTAL.set(*slot, inodes_total);
+            }
+            failed if published > 0 => unset(failed.slot()),
+            _ => {}
         }
     }
     published
+}
+
+/// The devices of the local filesystems in `mounts`, in mount-point order, and
+/// of the tmpfs mounts, fewest path components first: the order each class
+/// is placed in when it has more than its cap.
+fn classes(mounts: &[MountEntry]) -> (Vec<String>, Vec<String>) {
+    let mut tmpfs: Vec<&MountEntry> = mounts.iter().filter(|m| m.is_tmpfs()).collect();
+    tmpfs.sort_by_key(|m| depth(&m.mount_point));
+    let devices =
+        |ms: Vec<&MountEntry>| -> Vec<String> { ms.iter().map(|m| m.device.clone()).collect() };
+    (
+        devices(mounts.iter().filter(|m| !m.is_tmpfs()).collect()),
+        devices(tmpfs),
+    )
+}
+
+/// Path components below `/`: `/` is 0, `/dev/shm` is 2.
+fn depth(mount_point: &str) -> usize {
+    mount_point.split('/').filter(|c| !c.is_empty()).count()
 }
 
 /// Clears the in-flight latch on drop, so a sweep that panics does not leave
@@ -626,7 +791,7 @@ fn lock_state(state: &Mutex<SweepState>) -> std::sync::MutexGuard<'_, SweepState
         state.clear_poison();
         // The abandoned map may not know which slots hold readings, so clear
         // every one before a fresh map reuses them.
-        for slot in 0..MAX_MOUNTS {
+        for slot in 0..MAX_SLOTS {
             vacate(slot);
         }
         let mut guard = poisoned.into_inner();
@@ -707,7 +872,7 @@ mod tests {
         let mut slots = Slots::new(2);
         let outcome = slots.assign(&["a".to_string(), "b".to_string(), "c".to_string()]);
         assert_eq!(slots.bound(), 2);
-        assert_eq!(outcome.dropped, 1);
+        assert_eq!(outcome.dropped, vec![1]);
         assert_eq!(slots.slot_of("c"), None);
     }
 
@@ -800,6 +965,15 @@ mod tests {
         );
     }
 
+    fn local(slot: usize, read: std::io::Result<Usage>, ext4: Option<Ext4Sysfs>) -> Reading {
+        Reading::Local {
+            slot,
+            readonly: false,
+            read,
+            ext4,
+        }
+    }
+
     #[test]
     fn ext4_attributes_publish_beside_usage_and_read_absent_off_ext4() {
         let _globals = SWEEP_GLOBALS.lock().unwrap_or_else(|p| p.into_inner());
@@ -817,8 +991,8 @@ mod tests {
         };
         assert_eq!(
             publish(&[
-                (ext4, false, Ok(usage), Some(attrs)),
-                (xfs, false, Ok(usage), None)
+                local(ext4, Ok(usage), Some(attrs)),
+                local(xfs, Ok(usage), None)
             ]),
             2
         );
@@ -1048,14 +1222,11 @@ mod tests {
         };
         let missing = || -> std::io::Result<Usage> { Err(std::io::ErrorKind::NotFound.into()) };
         assert_eq!(
-            publish(&[
-                (kept, false, Ok(usage), None),
-                (unset, false, Ok(usage), None)
-            ]),
+            publish(&[local(kept, Ok(usage), None), local(unset, Ok(usage), None)]),
             2
         );
 
-        assert_eq!(publish(&[(kept, false, missing(), None)]), 0);
+        assert_eq!(publish(&[local(kept, missing(), None)]), 0);
         assert_eq!(
             FILESYSTEM_TOTAL.value(kept),
             Some(7),
@@ -1063,10 +1234,7 @@ mod tests {
         );
 
         assert_eq!(
-            publish(&[
-                (kept, false, Ok(usage), None),
-                (unset, false, missing(), None)
-            ]),
+            publish(&[local(kept, Ok(usage), None), local(unset, missing(), None)]),
             1
         );
         assert_eq!(
@@ -1118,15 +1286,6 @@ mod tests {
         assert_eq!(block_device_name(sys.path(), "0:42"), None);
     }
 
-    #[test]
-    fn a_warning_fires_when_its_condition_changes_not_every_sweep() {
-        let mut last = 0;
-        assert!(!changed(&mut last, 0));
-        assert!(changed(&mut last, 3));
-        assert!(!changed(&mut last, 3));
-        assert!(changed(&mut last, 0));
-    }
-
     #[tokio::test]
     async fn a_held_latch_neither_dispatches_nor_advances_the_throttle() {
         let fs = {
@@ -1157,6 +1316,122 @@ mod tests {
             device: "8:1".to_string(),
             readonly: false,
         }
+    }
+
+    /// tmpfs mounts beyond their cap are dropped, the shallowest placed first,
+    /// and never take a slot a local filesystem needs.
+    #[test]
+    fn tmpfs_mounts_have_their_own_cap_and_the_shallowest_are_placed_first() {
+        let table = "\
+22 1 259:2 / / rw - ext4 /dev/nvme0n1p2 rw
+24 22 0:25 / /dev/shm rw - tmpfs tmpfs rw
+25 22 0:26 / /run rw - tmpfs tmpfs rw,size=26389620k
+26 25 0:27 / /run/lock rw - tmpfs tmpfs rw,size=5120k
+27 22 0:28 / /tmp rw - tmpfs tmpfs rw
+30 22 0:60 / /var/lib/docker/containers/3f2a/mounts/shm rw - tmpfs shm rw,size=65536k";
+        let (local, tmpfs) = classes(&mounts::select_sampled(table).mounts);
+        assert_eq!(local, vec!["259:2"]);
+        assert_eq!(tmpfs, vec!["0:26", "0:28", "0:25", "0:27", "0:60"]);
+
+        // Two local slots and three tmpfs slots in a space of five.
+        let mut slots = Slots::new(5);
+        let outcome = slots.assign_within(&[(local.as_slice(), 2), (tmpfs.as_slice(), 3)]);
+        assert_eq!(outcome.dropped, vec![0, 2]);
+        for (device, placed) in [
+            ("0:26", true),
+            ("0:28", true),
+            ("0:25", true),
+            ("0:27", false),
+        ] {
+            assert_eq!(slots.slot_of(device).is_some(), placed, "{device}");
+        }
+        // A disk mounted later still finds a slot: tmpfs left one free.
+        let disks = vec!["259:2".to_string(), "8:1".to_string()];
+        let outcome = slots.assign_within(&[(disks.as_slice(), 2), (tmpfs.as_slice(), 3)]);
+        assert_eq!(outcome.dropped, vec![0, 2]);
+        assert!(slots.slot_of("8:1").is_some());
+        // A held tmpfs slot is kept when a shallower mount would now rank above it.
+        let more = [vec!["0:99".to_string()], tmpfs.clone()].concat();
+        let outcome = slots.assign_within(&[(disks.as_slice(), 2), (more.as_slice(), 3)]);
+        assert_eq!(outcome.dropped, vec![0, 3]);
+        assert_eq!(slots.slot_of("0:99"), None);
+    }
+
+    #[test]
+    fn tmpfs_usage_publishes_to_its_own_families_and_a_limitless_one_is_absent() {
+        let _globals = SWEEP_GLOBALS.lock().unwrap_or_else(|p| p.into_inner());
+        let (shm, unlimited) = (MAX_SLOTS - 1, MAX_SLOTS - 2);
+        let mib = 1 << 20;
+        let usage = Usage {
+            total_bytes: 64 * mib,
+            free_bytes: 16 * mib,
+            available_bytes: 16 * mib,
+            total_inodes: 1000,
+            free_inodes: 900,
+        };
+        let limitless = Usage {
+            total_bytes: 0,
+            free_bytes: 0,
+            available_bytes: 0,
+            total_inodes: 0,
+            free_inodes: 0,
+        };
+        assert_eq!(
+            publish(&[
+                Reading::Tmpfs {
+                    slot: shm,
+                    read: Ok(usage)
+                },
+                Reading::Tmpfs {
+                    slot: unlimited,
+                    read: Ok(limitless)
+                },
+            ]),
+            2
+        );
+        assert_eq!(FILESYSTEM_TMPFS_USED.value(shm), Some(48 * mib as i64));
+        assert_eq!(FILESYSTEM_TMPFS_SIZE.value(shm), Some(64 * mib as i64));
+        assert_eq!(FILESYSTEM_TMPFS_INODES_USED.value(shm), Some(100));
+        assert_eq!(FILESYSTEM_TMPFS_INODES_TOTAL.value(shm), Some(1000));
+        assert_eq!(FILESYSTEM_TOTAL.value(shm), None, "not a local filesystem");
+        assert_eq!(FILESYSTEM_READONLY.value(shm), None);
+        for group in [
+            &FILESYSTEM_TMPFS_USED,
+            &FILESYSTEM_TMPFS_SIZE,
+            &FILESYSTEM_TMPFS_INODES_USED,
+            &FILESYSTEM_TMPFS_INODES_TOTAL,
+        ] {
+            assert_eq!(group.value(unlimited), None, "no limit reports no usage");
+        }
+    }
+
+    /// The agent's own mount table, where it has a tmpfs (`/dev/shm` on most
+    /// hosts and containers): the sweep publishes it under tmpfs labels and
+    /// leaves the local families absent on its slot.
+    #[test]
+    fn a_sweep_publishes_a_tmpfs_mount() {
+        let _globals = SWEEP_GLOBALS.lock().unwrap_or_else(|p| p.into_inner());
+        let table = std::fs::read_to_string(MOUNTINFO).unwrap();
+        let Some(mount) = mounts::select_sampled(&table).mounts.into_iter().find(|m| {
+            m.is_tmpfs() && read_usage(&m.mount_point, m.id).is_ok_and(|u| u.total_bytes > 0)
+        }) else {
+            eprintln!("skipped: no readable tmpfs with a size limit on this host");
+            return;
+        };
+        let mut state = SweepState::new();
+        assert!(sweep(&mut state) >= 1);
+        let slot = state
+            .slots
+            .slot_of(&mount.device)
+            .expect("the tmpfs holds a slot");
+        assert!(FILESYSTEM_TMPFS_SIZE.value(slot).is_some_and(|v| v > 0));
+        assert!(FILESYSTEM_TMPFS_USED.value(slot).is_some());
+        assert_eq!(FILESYSTEM_TOTAL.value(slot), None);
+        let labels = FILESYSTEM_TMPFS_USED
+            .load_metadata(slot)
+            .expect("labels set");
+        assert_eq!(labels.get("fstype").map(String::as_str), Some("tmpfs"));
+        assert_eq!(labels.get("mount"), Some(&mount.mount_point));
     }
 
     #[test]

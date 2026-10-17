@@ -52,7 +52,20 @@ pub struct Sampler {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     migrations: Option<bool>,
+    /// Which slab caches `memory_slabinfo` publishes `memory_slab_cache_bytes`
+    /// for: `"all"` (every cache in `/proc/slabinfo`, the default) or
+    /// `"fixed"` (the filesystem metadata and page-cache index caches whose
+    /// object counts it also follows). `None` means the default.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[serde(default)]
+    caches: Option<String>,
 }
+
+/// The values `caches` accepts.
+const CACHES_VALUES: &[&str] = &["all", "fixed"];
+
+/// The one section `caches` means something in.
+const CACHES_SAMPLER: &str = "memory_slabinfo";
 
 impl Sampler {
     pub fn enabled(&self) -> Option<bool> {
@@ -132,7 +145,37 @@ impl Sampler {
         }
     }
 
+    /// `caches` is only meaningful in `[samplers.memory_slabinfo]`; anywhere
+    /// else, including `[defaults]` (checked as `"default"`), it would be
+    /// ignored, so it is refused.
+    pub fn check_caches(&self, name: &str) -> Result<(), String> {
+        let Some(ref caches) = self.caches else {
+            return Ok(());
+        };
+        if name != CACHES_SAMPLER {
+            return Err(format!(
+                "sampler '{name}' does not take `caches`; it is a \
+                 [samplers.{CACHES_SAMPLER}] setting"
+            ));
+        }
+        if !CACHES_VALUES.contains(&caches.as_str()) {
+            return Err(format!(
+                "sampler '{name}' caches must be one of {CACHES_VALUES:?}, not {caches:?}"
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn caches(&self) -> Option<&str> {
+        self.caches.as_deref()
+    }
+
     pub fn check(&self, name: &str) {
+        if let Err(e) = self.check_caches(name) {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
         if let Some(ref interval) = self.interval {
             if let Err(e) = interval.parse::<humantime::Duration>() {
                 eprintln!("sampler '{name}' interval couldn't be parsed: {e}");
