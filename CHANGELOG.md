@@ -99,17 +99,21 @@
   recording annotate` writes) renders by default; the built-in registry is
   consulted for a source only when its metadata has none. `rezolus view
   --registry-templates` renders the built-in template instead for sources
-  the registry knows. The WASM viewer has the same switch as the
-  `WasmCaptureRegistry::set_prefer_registry_templates` method, which the
-  static site has no control for yet. The server viewer read `service_queries`
+  the registry knows. The WASM viewer exposes the same switch as
+  `WasmCaptureRegistry::set_prefer_registry_templates`, which the static
+  site has no control for yet. The server viewer read `service_queries`
   only from a parquet's footer, so a `.rez` or `.dendro` showed no KPI
   sections, and the static-site viewer matched the registry by source name
   only, so a template embedded by `annotate` showed on `rezolus view` and not
   in the browser. Each recording of a multi-recording archive uses its own
   template; when two recordings have the same source name, the baseline's
   renders for both. A template that does not parse falls back to the
-  built-in one with a warning, once per distinct message (the server's log,
-  the browser console), not a failed load. A live agent's handshake
+  built-in one with a warning (or, when there is none, shows no KPI
+  sections), once per distinct message (the server's log, the browser
+  console), not a failed load. A top-level template on a file whose
+  `source` names several sources (a combined parquet's JSON array) is keyed
+  by the template's own `service_name`; one that does not parse there is
+  ignored. A live agent's handshake
   metadata is read only by the terminal UI (`--tui`), which rebuilds its
   sections each tick; the browser dashboard of a live agent builds its
   sections once, with no KPI sections. The server viewer now also classifies

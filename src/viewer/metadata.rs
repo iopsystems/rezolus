@@ -259,7 +259,7 @@ pub fn extract_service_extension_metadata(
 /// `dashboard::source_templates::resolve_source_templates`.
 ///
 /// Order: top-level `service_queries`, then
-/// `per_source_metadata.<source>.service_queries`, then the registry by
+/// `per_source_metadata.<source>.<entry>.service_queries`, then the registry by
 /// source name. A template in the metadata wins over the registry's unless
 /// `preference` is `Registry`. A template that does not parse falls back to
 /// the registry, logged as a warning once per process: the terminal UI
@@ -479,6 +479,37 @@ mod warn_once_tests {
         assert!(super::first_time(notice));
         assert!(!super::first_time(notice));
         assert!(super::first_time("warn_once_tests: a different notice"));
+    }
+
+    /// The lookup reports a malformed template through `first_time`, so the
+    /// same notice is not warned again on the next regeneration.
+    #[test]
+    fn the_lookup_records_the_notices_it_warns() {
+        let metadata: std::collections::HashMap<String, String> = [
+            ("source", "warn-once-tests-svc"),
+            ("service_queries", r#"{"service_name": 7}"#),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let registry = ::dashboard::TemplateRegistry::empty();
+        let expected = ::dashboard::source_templates::resolve_source_templates(
+            &metadata,
+            &registry,
+            super::TemplatePreference::Archive,
+        )
+        .notices;
+        assert_eq!(expected.len(), 1, "{expected:?}");
+        super::service_extensions_from_metadata(
+            &metadata,
+            &registry,
+            super::TemplatePreference::Archive,
+        );
+        assert!(
+            !super::first_time(&expected[0]),
+            "the lookup did not record {:?}",
+            expected[0]
+        );
     }
 }
 

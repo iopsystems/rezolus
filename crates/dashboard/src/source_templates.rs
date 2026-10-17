@@ -33,7 +33,7 @@
 //! the reason is returned in [`SourceTemplates::notices`].
 
 use crate::{ServiceExtension, TemplateRegistry};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // Format keys owned by the binary's `src/parquet_metadata.rs`, duplicated as
 // literals for the same reason as in `source_kind.rs`: this crate cannot
@@ -85,13 +85,17 @@ pub fn resolve_source_templates(
         .map(String::as_str)
         .filter(|s| is_one_source_name(s));
 
-    // Picks between a template the metadata carried and the registry's.
-    let choose = |source: &str, carried: ServiceExtension| -> ServiceExtension {
+    // Picks between a template the metadata carried and the registry's;
+    // true when the registry's was picked.
+    let choose = |source: &str, carried: ServiceExtension| -> (ServiceExtension, bool) {
         match (preference, registry.get(source)) {
-            (TemplatePreference::Registry, Some(ext)) => ext.clone(),
-            _ => carried,
+            (TemplatePreference::Registry, Some(ext)) => (ext.clone(), true),
+            _ => (carried, false),
         }
     };
+    // Sources whose rendered template is the registry's rather than one the
+    // metadata carried, so a notice can say which one renders.
+    let mut from_registry: HashSet<String> = HashSet::new();
 
     // Templates in the metadata that did not parse: the source they belong
     // to, when one is named, and the error. Turned into notices at the end,
@@ -106,7 +110,10 @@ pub fn resolve_source_templates(
         match serde_json::from_str::<ServiceExtension>(json) {
             Ok(ext) => {
                 let source = top_source.unwrap_or(&ext.service_name).to_string();
-                let ext = choose(&source, ext);
+                let (ext, registry_won) = choose(&source, ext);
+                if registry_won {
+                    from_registry.insert(source.clone());
+                }
                 out.service_exts.push((source, ext));
             }
             Err(e) => malformed.push((top_source.map(str::to_string), e)),
@@ -133,7 +140,10 @@ pub fn resolve_source_templates(
                 };
                 match serde_json::from_value::<ServiceExtension>(sq.clone()) {
                     Ok(ext) => {
-                        let ext = choose(source, ext);
+                        let (ext, registry_won) = choose(source, ext);
+                        if registry_won {
+                            from_registry.insert(source.clone());
+                        }
                         out.service_exts.push((source.clone(), ext));
                         parsed = true;
                         break; // one extension per source
@@ -154,6 +164,7 @@ pub fn resolve_source_templates(
                 continue;
             }
             if let Some(ext) = registry.get(source) {
+                from_registry.insert(source.clone());
                 out.service_exts.push((source.clone(), ext.clone()));
             }
         }
@@ -164,19 +175,29 @@ pub fn resolve_source_templates(
         && let Some(source) = top_source
         && let Some(ext) = registry.get(source)
     {
+        from_registry.insert(source.to_string());
         out.service_exts.push((source.to_string(), ext.clone()));
     }
 
     for (source, err) in malformed {
-        let rendered = source
-            .as_deref()
-            .is_some_and(|s| out.service_exts.iter().any(|(name, _)| name == s));
+        // What renders for the source instead: the registry's template, one
+        // carried elsewhere in the metadata, or nothing.
+        let rendered = source.as_deref().map(|s| {
+            (
+                out.service_exts.iter().any(|(name, _)| name == s),
+                from_registry.contains(s),
+            )
+        });
         out.notices.push(match (source, rendered) {
-            (Some(s), true) => format!(
+            (Some(s), Some((true, true))) => format!(
                 "source {s}: the service_queries template in its metadata does not parse \
                  ({err}); using the built-in template instead"
             ),
-            (Some(s), false) => format!(
+            (Some(s), Some((true, false))) => format!(
+                "source {s}: a service_queries template in its metadata does not parse \
+                 ({err}); another template in its metadata renders instead"
+            ),
+            (Some(s), _) => format!(
                 "source {s}: the service_queries template in its metadata does not parse \
                  ({err}); no built-in template matches, so it has no KPI sections"
             ),
@@ -368,6 +389,28 @@ mod tests {
         let t = resolve_source_templates(&m, &registry(), TemplatePreference::Archive);
         assert_eq!(titles(&t), [("known".into(), "carried".into())]);
         assert!(t.notices.is_empty(), "{:?}", t.notices);
+    }
+
+    /// A malformed top-level template whose source has a nested template that
+    /// parsed names the nested one as what renders, not the built-in one.
+    #[test]
+    fn a_malformed_template_beside_a_carried_one_says_the_carried_one_renders() {
+        let psm = serde_json::json!({
+            "known": {"0": {"service_queries": ext("known", "carried")}},
+        });
+        let m = md(&[
+            ("source", "known".into()),
+            ("per_source_metadata", psm.to_string()),
+            ("service_queries", r#"{"service_name": 7}"#.into()),
+        ]);
+        let t = resolve_source_templates(&m, &registry(), TemplatePreference::Archive);
+        assert_eq!(titles(&t), [("known".into(), "carried".into())]);
+        assert_eq!(t.notices.len(), 1, "{:?}", t.notices);
+        assert!(
+            t.notices[0].contains("another template in its metadata renders instead"),
+            "{:?}",
+            t.notices
+        );
     }
 
     /// A source with a malformed template and no registry entry is told it
