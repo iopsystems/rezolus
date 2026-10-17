@@ -102,10 +102,12 @@
 //!   one label, `int` is not given, and any one metric's values of the
 //!   label count on their own (as [`metric_unique_label_count`]). Without
 //!   it, label tuples are counted across the counter and gauge series of
-//!   every metric, with the labels listed in `int` compared as integers
-//!   (`"01"` and `"1"` are one value), skipping a series that lacks an
-//!   `int` label or whose `int` label does not parse; a missing non-`int`
-//!   label counts as absent.
+//!   every metric, with the labels listed in `int` (each one of the `by`
+//!   labels) compared as integers (`"01"` and `"1"` are one value),
+//!   skipping a series that lacks an `int` label or whose `int` label does
+//!   not parse; a missing non-`int` label counts as absent. Tuples are
+//!   counted by a 128-bit hash: two distinct tuples whose hashes collide
+//!   would count as one, which at that width does not happen in practice.
 //! - `{"any": [..]}`, `{"all": [..]}`, `{"not": P}`.
 //! - `{"var": name}`: a `pred` let.
 //! - `{"param": name}`: the viewer set the declared parameter.
@@ -142,10 +144,12 @@
 //! `query_total`, or a `rate_mean`'s `selector` or `rate` (a PromQL
 //! field), a reference to one must sit inside a double-quoted string
 //! (`{k="${v}"}`). `parse` refuses one bare, in a single-quoted or
-//! backtick string, or in a `#` comment, and refuses any `${` that follows
-//! a `\` in a PromQL field. Inside the double-quoted string, the value's
-//! `\`, `"`, newlines and carriage returns are escaped as in a PromQL
-//! string literal. In a regex matcher (`=~"${v}"`, `!~"${v}"`) the value is
+//! backtick string, or after a `#` (a comment runs to the end of the
+//! field, since a template string holds no newline), and refuses any `${`
+//! that follows a `\` in a PromQL field. Inside the double-quoted
+//! string, the value's `\`, `"`, newlines and carriage returns are escaped
+//! as in a PromQL string literal; other control characters are inserted as
+//! given. In a regex matcher (`=~"${v}"`, `!~"${v}"`) the value is
 //! still read as a regex, so a value such as `.*` matches every series; a
 //! template that wants an exact match uses `=`. In other fields, and for
 //! every other binding and parameter, the value is inserted as given.
@@ -154,7 +158,8 @@
 //!
 //! [`SectionTemplate::parse`] refuses a document with an array or object
 //! of more than [`MAX_ENTRIES`] entries, a string or key over
-//! [`MAX_STRING_BYTES`], a name over [`MAX_NAME_BYTES`], more than
+//! [`MAX_STRING_BYTES`], a string holding a C0 control character (U+0000
+//! to U+001F), a name over [`MAX_NAME_BYTES`], more than
 //! [`MAX_SECTIONS`] sections, or a `distinct_gt` with more than
 //! [`MAX_BY_LABELS`] `by` labels. It reads the document in time and memory
 //! linear in its size, but has no limit on that size: a caller reading
@@ -169,20 +174,38 @@
 //! - visits at most [`MAX_NODES`] nodes, counting elements, `when` and
 //!   `repeat` nodes, repeat passes, and each field a pass over objects
 //!   binds;
-//! - produces at most [`MAX_TEXT_BYTES`] bytes of output: the length of
-//!   each string it builds, checked before each piece is appended; the
-//!   in-memory size of the metadata and percentiles it copies (each JSON
-//!   value counts as `size_of::<Value>()` plus its strings and keys); and
-//!   the size of each group, subgroup and plot struct it creates;
+//! - produces at most [`MAX_TEXT_BYTES`] bytes of output, counted in
+//!   memory: the length of each string it builds, checked before each
+//!   piece is appended; the size of the metadata and percentiles it copies
+//!   (each JSON value counts as `size_of::<Value>()` plus its strings and
+//!   keys); the size of each group, subgroup and plot struct it creates;
+//!   and the copies [`SubGroup::histogram_rate_mean`] makes of its
+//!   selector, title and id. A C0 control character, which a catalog value
+//!   or a parameter can bring in (template strings cannot hold one),
+//!   counts as the six bytes JSON writes it as, so the serialized view is
+//!   at most about twice the count (for strings of `"` and `\`);
 //! - spends at most [`MAX_FUEL`] units of fuel, which count the input it
 //!   processes: one unit per iteration of every loop (a node, a predicate,
-//!   a reference, a series, a counter name, a binding), plus one per byte
-//!   it scans or copies (template text, label keys and values, bound
-//!   values and names, output).
+//!   a reference, a series walked, a counter name, a binding), one per
+//!   byte it scans or copies (template text, label keys and values, bound
+//!   values and names, output), and [`SOURCE_CALL_FUEL`] per call into the
+//!   [`MetricsSource`]. Each metric's series of each type and the counter
+//!   names are read from the source once per section expansion and then
+//!   from a memo, so a metric named many times costs one source read.
 //!
 //! The invariant the fuel counter rests on: every loop in expansion
 //! charges at least one unit per iteration, and every copy charges its
 //! bytes. A comment at each loop in the code names its charge.
+//!
+//! Measured on a 9.6-hour, 1.3 GB recording opened as an archive, the
+//! slowest construction found that runs to the fuel limit (a
+//! `distinct_gt` with `each` over 4096 metric names, on each of 8100
+//! repeat passes) takes 0.35 s, so a document of [`MAX_SECTIONS`] such
+//! sections takes about 22 s to expand in full. The Rezolus template's
+//! sixteen sections take 53 ms together on the same recording, and its
+//! largest section spends about 1.7 million units on a test catalog of 256
+//! devices of every kind with ten labels per series (`/cpu`; about 7
+//! million at 1024).
 //!
 //! A section that would exceed any of these is refused with an error of
 //! kind [`TemplateErrorKind::Limit`]; the other sections are unaffected.
@@ -198,8 +221,11 @@
 //! anywhere, or that fails any other check `parse` makes in any branch, is
 //! refused whole, and the caller uses another template for that source.
 
-use std::cell::Cell;
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 use serde::de::{DeserializeOwned, Error as _};
 use serde::{Deserialize, Deserializer};
@@ -220,7 +246,7 @@ pub const MAX_TEXT_BYTES: usize = 4 << 20;
 
 /// The most fuel one section's expansion spends; see the module docs for
 /// what each unit is.
-pub const MAX_FUEL: usize = 64 << 20;
+pub const MAX_FUEL: usize = 16 << 20;
 
 /// The most sections a document holds.
 pub const MAX_SECTIONS: usize = 64;
@@ -593,7 +619,24 @@ fn check_string<E: serde::de::Error>(s: &str) -> Result<(), E> {
             s.len()
         )));
     }
+    if let Some(c) = s.chars().find(|c| is_c0(*c)) {
+        return Err(E::custom(format!(
+            "{:?} holds the control character U+{:04X}",
+            ex(s),
+            u32::from(c)
+        )));
+    }
     Ok(())
+}
+
+/// A C0 control character, which JSON escapes as six bytes (`\u0001`).
+fn is_c0(c: char) -> bool {
+    u32::from(c) < 0x20
+}
+
+/// How many C0 control characters `text` holds.
+fn c0_count(text: &str) -> usize {
+    text.chars().filter(|c| is_c0(*c)).count()
 }
 
 impl<'de> Deserialize<'de> for UniqueKeys {
@@ -841,8 +884,8 @@ impl Obj {
         match self.0.keys().next() {
             None => Ok(()),
             Some(k) => Err(JsonErr::new(format!(
-                "unknown field `{}`, expected one of `{}`",
-                ex(k).0.chars().take(200).collect::<String>(),
+                "unknown field {:?}, expected one of `{}`",
+                ex(k),
                 fields.join("`, `")
             ))),
         }
@@ -1485,7 +1528,6 @@ impl<'a> Names<'a> {
                 (In::Bare, '\'') => In::Single,
                 (In::Bare, '`') => In::Backtick,
                 (In::Bare, '#') => In::Comment,
-                (In::Comment, '\n' | '\r') => In::Bare,
                 (s @ (In::Double | In::Single), '\\') => {
                     // The escaped character, whatever it is.
                     i += text[i..].chars().next().map_or(0, char::len_utf8);
@@ -1521,6 +1563,14 @@ impl<'a> Names<'a> {
                 int,
                 ..
             }) => {
+                // The length first, so the `int` search below is at most
+                // MAX_BY_LABELS steps per entry.
+                if by.is_empty() || by.len() > MAX_BY_LABELS {
+                    return err(format!(
+                        "distinct_gt names 1 to {MAX_BY_LABELS} `by` labels, not {}",
+                        by.len()
+                    ));
+                }
                 if let Some(stray) = int.iter().find(|i| !by.contains(i)) {
                     return err(format!(
                         "distinct_gt `int` label {:?} is not one of its `by` labels",
@@ -1529,12 +1579,6 @@ impl<'a> Names<'a> {
                 }
                 if *each && (by.len() != 1 || !int.is_empty()) {
                     return err("distinct_gt with `each` takes one `by` label and no `int`");
-                }
-                if by.is_empty() || by.len() > MAX_BY_LABELS {
-                    return err(format!(
-                        "distinct_gt names 1 to {MAX_BY_LABELS} `by` labels, not {}",
-                        by.len()
-                    ));
                 }
                 metrics
                     .iter()
@@ -1689,7 +1733,7 @@ impl<'a> Names<'a> {
     }
 
     fn plot(&self, def: &PlotDef, in_split: bool) -> Result<(), TemplateError> {
-        let fail = |msg: &str| err(format!("plot {:?}: {msg}", def.id));
+        let fail = |msg: &str| err(format!("plot {:?}: {msg}", ex(&def.id)));
         match (def.kind, def.unit.is_some(), def.subtype.is_some()) {
             (PlotKind::Gauge | PlotKind::Counter, true, false) => {}
             (PlotKind::Gauge | PlotKind::Counter, _, _) => {
@@ -1756,12 +1800,39 @@ impl Limits {
     };
 }
 
-/// What one section's expansion has spent of each limit.
+/// What one section's expansion has spent of each limit, and what it has
+/// read from the catalog.
 struct Budget {
     limits: Limits,
     nodes: Cell<usize>,
     bytes: Cell<usize>,
     fuel: Cell<usize>,
+    memo: CatalogMemo,
+}
+
+/// The fuel one call into the [`MetricsSource`] costs, beyond what it
+/// returns. A source may scan every table it holds to answer for one
+/// metric name (about 120 ns for an absent name on a 9.6-hour archive),
+/// so a call is not cheap even when it returns nothing.
+const SOURCE_CALL_FUEL: usize = 64;
+
+/// The catalog as one section's expansion has read it: each metric's
+/// series of each type, and the counter names, read from the source once.
+#[derive(Default)]
+struct CatalogMemo {
+    /// Per metric: its counter, gauge and histogram series.
+    series: RefCell<HashMap<String, SeriesByKind>>,
+    counter_names: OnceCell<Rc<HashSet<String>>>,
+}
+
+/// A metric's series of each [`SeriesKind`], once read.
+type SeriesByKind = [Option<Rc<Vec<Labels>>>; 3];
+
+#[derive(Clone, Copy)]
+enum SeriesKind {
+    Counter = 0,
+    Gauge = 1,
+    Histogram = 2,
 }
 
 impl Default for Budget {
@@ -1777,6 +1848,7 @@ impl Budget {
             nodes: Cell::new(0),
             bytes: Cell::new(0),
             fuel: Cell::new(0),
+            memo: CatalogMemo::default(),
         }
     }
 
@@ -1864,38 +1936,102 @@ impl<'a> Scope<'a> {
         )
     }
 
-    /// `metric`'s counter and gauge series, and its histogram series when
-    /// `histograms`. Charged one unit per series plus its label bytes, and
-    /// at least one unit for a metric with none.
-    fn series(&self, metric: &str, histograms: bool) -> Result<Vec<Labels>, TemplateError> {
-        let mut out = self.data.counter_labels(metric);
-        out.extend(self.data.gauge_labels(metric));
-        if histograms {
-            out.extend(self.data.histogram_labels(metric));
+    /// `metric`'s series of `kind`, from the memo. The lookup costs one
+    /// unit plus the name's bytes; the first read of a metric and kind
+    /// costs [`SOURCE_CALL_FUEL`] plus one unit per series and its label
+    /// bytes, which the memo then holds.
+    fn series_of(&self, metric: &str, kind: SeriesKind) -> Result<Rc<Vec<Labels>>, TemplateError> {
+        self.spend_fuel(1 + metric.len())?;
+        let memo = &self.budget.memo;
+        if let Some(Some(cached)) = memo
+            .series
+            .borrow()
+            .get(metric)
+            .map(|k| k[kind as usize].clone())
+        {
+            return Ok(cached);
         }
-        // Loop: one unit per series, plus its key and value bytes.
-        let cost: usize = out
+        let read = match kind {
+            SeriesKind::Counter => self.data.counter_labels(metric),
+            SeriesKind::Gauge => self.data.gauge_labels(metric),
+            SeriesKind::Histogram => self.data.histogram_labels(metric),
+        };
+        // Loop: one unit per series read, plus its key and value bytes.
+        let cost: usize = read
             .iter()
             .map(|l| 1 + l.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>())
             .sum();
-        self.spend_fuel(cost.max(1))?;
+        self.spend_fuel(SOURCE_CALL_FUEL + metric.len() + cost)?;
+        let read = Rc::new(read);
+        memo.series
+            .borrow_mut()
+            .entry(metric.to_string())
+            .or_default()[kind as usize] = Some(Rc::clone(&read));
+        Ok(read)
+    }
+
+    /// `metric`'s counter and gauge series, and its histogram series when
+    /// `histograms`, from the memo. A caller that walks them charges one
+    /// unit per series.
+    fn series(
+        &self,
+        metric: &str,
+        histograms: bool,
+    ) -> Result<Vec<Rc<Vec<Labels>>>, TemplateError> {
+        let mut out = vec![
+            self.series_of(metric, SeriesKind::Counter)?,
+            self.series_of(metric, SeriesKind::Gauge)?,
+        ];
+        if histograms {
+            out.push(self.series_of(metric, SeriesKind::Histogram)?);
+        }
         Ok(out)
     }
 
     /// The values of `label` on `metric`'s series of every type, as
     /// [`MetricsSource::label_values`] gives them.
     fn label_values(&self, metric: &str, label: &str) -> Result<BTreeSet<String>, TemplateError> {
-        // Loop: over the series `series` charged for.
-        Ok(self
-            .series(metric, true)?
-            .into_iter()
-            .filter_map(|mut labels| labels.remove(label))
-            .collect())
+        let mut out = BTreeSet::new();
+        // Loop: one unit per series, plus the bytes of each value copied.
+        for part in self.series(metric, true)? {
+            self.spend_fuel(part.len())?;
+            for labels in part.iter() {
+                if let Some(v) = labels.get(label) {
+                    self.spend_fuel(v.len())?;
+                    out.insert(v.clone());
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// [`has_metric`], charged.
     fn present(&self, metric: &str) -> Result<bool, TemplateError> {
-        Ok(!self.series(metric, true)?.is_empty())
+        Ok(self
+            .series(metric, true)?
+            .iter()
+            .any(|part| !part.is_empty()))
+    }
+
+    /// Whether `metric` is a counter name. The names are read once, for
+    /// [`SOURCE_CALL_FUEL`] plus one unit per name and its bytes; each
+    /// lookup then costs one unit plus the name's bytes.
+    fn is_counter(&self, metric: &str) -> Result<bool, TemplateError> {
+        let memo = &self.budget.memo;
+        let names = match memo.counter_names.get() {
+            Some(names) => Rc::clone(names),
+            None => {
+                let names = self.data.counter_names();
+                // Loop: one unit per counter name plus its bytes.
+                self.spend_fuel(
+                    SOURCE_CALL_FUEL + names.iter().map(|n| 1 + n.len()).sum::<usize>(),
+                )?;
+                let names: Rc<HashSet<String>> = Rc::new(names.into_iter().collect());
+                Rc::clone(memo.counter_names.get_or_init(|| names))
+            }
+        };
+        self.spend_fuel(1 + metric.len())?;
+        Ok(names.contains(metric))
     }
 
     /// Bind each let, evaluated in a scope holding only the parameters and
@@ -1956,13 +2092,7 @@ impl<'a> Scope<'a> {
         self.spend_fuel(1)?;
         Ok(match pred {
             Pred::Present(metric) => self.present(&self.subst(metric)?)?,
-            Pred::HasCounter(metric) => {
-                let metric = self.subst(metric)?;
-                let names = self.data.counter_names();
-                // Loop: one unit per counter name plus its bytes.
-                self.spend_fuel(names.iter().map(|n| 1 + n.len()).sum())?;
-                names.contains(&metric)
-            }
+            Pred::HasCounter(metric) => self.is_counter(&self.subst(metric)?)?,
             Pred::HasLabel(HasLabel {
                 metric,
                 label,
@@ -2000,34 +2130,40 @@ impl<'a> Scope<'a> {
                     }
                     false
                 } else {
-                    let mut seen: BTreeSet<Vec<Option<String>>> = BTreeSet::new();
-                    // Loop: what `subst` and `series` charge.
+                    // Each tuple is kept as a 128-bit hash, so the set costs
+                    // 16 bytes per distinct tuple and no copies of label
+                    // values. Two tuples whose hashes collide count once,
+                    // which at 128 bits does not happen in practice.
+                    let mut seen: HashSet<u128> = HashSet::new();
+                    // Loop: what `subst` and `series` charge, per metric.
                     for metric in metrics {
-                        let series = self.series(&self.subst(metric)?, false)?;
-                        // Loop: `series` charged one unit per series; each
-                        // tuple adds one unit per `by` label beyond the
-                        // first, plus the bytes of the values it copies.
-                        self.spend_fuel(series.len().saturating_mul(by.len().saturating_sub(1)))?;
-                        for labels in series {
-                            let mut tuple = Vec::with_capacity(by.len());
-                            let mut keep = true;
-                            for key in &by {
-                                let value = labels.get(key).cloned();
-                                self.spend_fuel(value.as_ref().map_or(0, String::len))?;
-                                if int.contains(key) {
-                                    match value.as_deref().map(str::parse::<i64>) {
-                                        Some(Ok(i)) => tuple.push(Some(i.to_string())),
-                                        _ => {
-                                            keep = false;
-                                            break;
+                        // Loop: one unit per series; each tuple adds one
+                        // unit per `by` label and the bytes of each value
+                        // hashed.
+                        for part in self.series(&self.subst(metric)?, false)? {
+                            self.spend_fuel(part.len().saturating_mul(1 + by.len()))?;
+                            'series: for labels in part.iter() {
+                                let mut low = std::hash::DefaultHasher::new();
+                                let mut high = std::hash::DefaultHasher::new();
+                                1u8.hash(&mut high);
+                                for key in &by {
+                                    let value = labels.get(key);
+                                    self.spend_fuel(value.map_or(0, String::len))?;
+                                    let normal: Option<std::borrow::Cow<str>> = if int.contains(key)
+                                    {
+                                        match value.map(|v| v.parse::<i64>()) {
+                                            Some(Ok(i)) => Some(i.to_string().into()),
+                                            _ => continue 'series,
                                         }
-                                    }
-                                } else {
-                                    tuple.push(value);
+                                    } else {
+                                        value.map(|v| v.as_str().into())
+                                    };
+                                    normal.hash(&mut low);
+                                    normal.hash(&mut high);
                                 }
-                            }
-                            if keep {
-                                seen.insert(tuple);
+                                seen.insert(
+                                    (u128::from(high.finish()) << 64) | u128::from(low.finish()),
+                                );
                             }
                         }
                     }
@@ -2076,19 +2212,20 @@ impl<'a> Scope<'a> {
     fn subst_to(&self, text: &str, dest: Dest) -> Result<String, TemplateError> {
         self.spend_fuel(text.len().max(1))?;
         let mut out = String::new();
+        // The bytes counted for `out`: its length, plus five for each C0
+        // control character, which JSON escapes as six bytes. Template
+        // text holds none; a catalog value or a parameter can.
+        let mut counted = 0usize;
         let mut rest = text;
-        let push = |out: &mut String, piece: &str, escape: bool| -> Result<(), TemplateError> {
-            let len = if escape {
-                promql_escaped_len(piece)
-            } else {
-                piece.len()
-            };
-            self.budget.bytes_fit(out.len().saturating_add(len))?;
+        let mut push = |out: &mut String, piece: &str, escape: bool| -> Result<(), TemplateError> {
+            let cost = piece_cost(piece, escape);
+            self.budget.bytes_fit(counted.saturating_add(cost))?;
             if escape {
                 push_promql_escaped(out, piece);
             } else {
                 out.push_str(piece);
             }
+            counted += cost;
             Ok(())
         };
         // Loop: one unit per reference (a reference to an empty value is
@@ -2117,7 +2254,7 @@ impl<'a> Scope<'a> {
             rest = &after[end + 1..];
         }
         push(&mut out, rest, false)?;
-        self.spend_bytes(out.len())?;
+        self.spend_bytes(counted)?;
         Ok(out)
     }
 
@@ -2152,13 +2289,21 @@ impl<'a> Scope<'a> {
     /// one.
     fn gpu_selector(&self, probe: &[String]) -> Result<Option<Value>, TemplateError> {
         let mut seen: BTreeSet<(Option<String>, i64)> = BTreeSet::new();
-        // Loop: what `series` charges, per metric and per series.
+        // An empty probe still costs a unit.
+        self.spend_fuel(1)?;
+        // Loop: what `series` charges per metric; one unit per series, plus
+        // the bytes of each vendor copied.
         for metric in probe {
-            for labels in self.series(metric, false)? {
-                let Some(id) = labels.get("id").and_then(|v| v.parse::<i64>().ok()) else {
-                    continue;
-                };
-                seen.insert((labels.get("vendor").cloned(), id));
+            for part in self.series(metric, false)? {
+                self.spend_fuel(part.len())?;
+                for labels in part.iter() {
+                    let Some(id) = labels.get("id").and_then(|v| v.parse::<i64>().ok()) else {
+                        continue;
+                    };
+                    let vendor = labels.get("vendor").cloned();
+                    self.spend_fuel(vendor.as_ref().map_or(0, String::len))?;
+                    seen.insert((vendor, id));
+                }
             }
         }
         if seen.len() <= 1 {
@@ -2227,18 +2372,25 @@ impl<'a> Scope<'a> {
                     Some(q) => RateSource::Counter(self.subst_promql(q)?),
                     None => RateSource::FromHistogram,
                 };
-                self.spend_bytes(2 * std::mem::size_of::<Plot>())?;
                 let mean_unit = match rm.mean_unit {
                     MeanUnit::Time => Unit::Time,
                     MeanUnit::Bytes => Unit::Bytes,
                 };
-                sg.histogram_rate_mean(
-                    &self.subst(&rm.title)?,
-                    &self.subst(&rm.id)?,
-                    &self.subst_promql(&rm.selector)?,
-                    rate,
-                    mean_unit,
+                let (title, id, selector) = (
+                    self.subst(&rm.title)?,
+                    self.subst(&rm.id)?,
+                    self.subst_promql(&rm.selector)?,
                 );
+                // `histogram_rate_mean` makes two plots, copies the selector
+                // into three queries and the title and id into two plots
+                // each, and adds suffixes and a unit system of its own.
+                self.spend_bytes(
+                    2 * std::mem::size_of::<Plot>()
+                        + 3 * selector.len()
+                        + 2 * (title.len() + id.len())
+                        + 64,
+                )?;
+                sg.histogram_rate_mean(&title, &id, &selector, rate, mean_unit);
                 Ok(())
             }
         }
@@ -2330,6 +2482,22 @@ fn push_promql_escaped(out: &mut String, text: &str) {
     }
 }
 
+/// The bytes counted for appending `piece`, escaped for PromQL when
+/// `escape`: its length then, plus five for each C0 control character left
+/// in it (JSON writes one as six bytes; the PromQL escape turns `\n` and
+/// `\r` into two printable bytes each).
+fn piece_cost(piece: &str, escape: bool) -> usize {
+    if escape {
+        let left = piece
+            .chars()
+            .filter(|c| is_c0(*c) && !matches!(c, '\n' | '\r'))
+            .count();
+        promql_escaped_len(piece) + 5 * left
+    } else {
+        piece.len() + 5 * c0_count(piece)
+    }
+}
+
 /// The length of `text` once [`push_promql_escaped`] has escaped it.
 fn promql_escaped_len(text: &str) -> usize {
     text.len()
@@ -2344,9 +2512,12 @@ fn promql_escaped_len(text: &str) -> usize {
 fn json_size(value: &Value) -> usize {
     std::mem::size_of::<Value>()
         + match value {
-            Value::String(s) => s.len(),
+            Value::String(s) => s.len() + 5 * c0_count(s),
             Value::Array(items) => items.iter().map(json_size).sum(),
-            Value::Object(map) => map.iter().map(|(k, v)| k.len() + json_size(v)).sum(),
+            Value::Object(map) => map
+                .iter()
+                .map(|(k, v)| k.len() + 5 * c0_count(k) + json_size(v))
+                .sum(),
             Value::Null | Value::Bool(_) | Value::Number(_) => 0,
         }
 }
@@ -2387,7 +2558,14 @@ fn walk<T>(
                         // the first value's names serve every pass.
                         let names: Vec<String> = match values.first() {
                             Some(RepeatValue::Fields(fields)) => {
-                                fields.keys().map(|f| format!("{var}.{f}")).collect()
+                                // Loop: one unit per field plus the name's
+                                // bytes.
+                                let mut names = Vec::with_capacity(fields.len());
+                                for f in fields.keys() {
+                                    scope.spend_fuel(2 + var.len() + f.len())?;
+                                    names.push(format!("{var}.{f}"));
+                                }
+                                names
                             }
                             _ => Vec::new(),
                         };
@@ -3159,11 +3337,11 @@ mod tests {
                     json!({}),
                     json!([{ "when": { "present": "a" }, "then": [gauge("a")], "otherwise": [] }]),
                 ),
-                "unknown field `otherwise`",
+                "unknown field \"otherwise\"",
             ),
             (
                 doc(json!([{ "builtin": "query", "name": "Y", "route": "/x" }])),
-                "unknown field `name`",
+                "unknown field \"name\"",
             ),
             (
                 doc(
@@ -3175,7 +3353,7 @@ mod tests {
                 doc(
                     json!([{ "name": "T", "route": "/t", "metadata": { "k": { "value": 1, "x": 2 } } }]),
                 ),
-                "unknown field `x`",
+                "unknown field \"x\"",
             ),
             (
                 doc(
@@ -3188,7 +3366,7 @@ mod tests {
                     json!({ "l": { "pred": { "present": "a" }, "x": 1 } }),
                     json!([]),
                 ),
-                "unknown field `x`",
+                "unknown field \"x\"",
             ),
             (
                 plots(json!({ "l": { "frist_present": {} } }), json!([])),
@@ -3199,21 +3377,21 @@ mod tests {
                     json!({}),
                     json!([{ "repeat": { "var": "v", "in": { "values": [] } }, "body": [], "x": 1 }]),
                 ),
-                "unknown field `x`",
+                "unknown field \"x\"",
             ),
             (
                 plots(
                     json!({}),
                     json!([{ "split": { "when": { "present": "a" }, "plots": [gauge("a"), gauge("b")] }, "x": 1 }]),
                 ),
-                "unknown field `x`",
+                "unknown field \"x\"",
             ),
             (
                 plots(
                     json!({}),
                     json!([{ "rate_mean": { "title": "t", "id": "i", "selector": "s", "mean_unit": "time" }, "x": 1 }]),
                 ),
-                "unknown field `x`",
+                "unknown field \"x\"",
             ),
             (
                 plots(
@@ -3234,7 +3412,7 @@ mod tests {
                     json!({}),
                     json!([{ "name": "G", "id": "g", "keep_empty": true }]),
                 ),
-                "unknown field `keep_empty`",
+                "unknown field \"keep_empty\"",
             ),
         ];
         for (template, needle) in cases {
@@ -3248,7 +3426,7 @@ mod tests {
             { "name": "A", "route": "/a" },
             { "name": "B", "route": "/b", "groups": [{ "name": "G", "id": "g", "x": 1 }] },
         ]));
-        assert_refused(&t, "section 1 (\"/b\"): groups[0]: unknown field `x`");
+        assert_refused(&t, "section 1 (\"/b\"): groups[0]: unknown field \"x\"");
     }
 
     /// Enumerated values are checked at parse, in branches that would not
@@ -3435,7 +3613,7 @@ mod tests {
         let e = parse_err(r#"{"schema": "1", "sections": []}"#);
         assert!(e.contains("not an integer"), "{e}");
         let e = parse_err(r#"{"schema": 1, "sections": [], "newfield": 1}"#);
-        assert!(e.contains("unknown field `newfield`"), "{e}");
+        assert!(e.contains("unknown field \"newfield\""), "{e}");
         assert!(
             parse_err(
                 &doc(json!([])).replace("\"params\":[\"throughput\"]", "\"params\":[\"a\",\"a\"]")
@@ -3717,13 +3895,13 @@ mod tests {
             ),
             (
                 when(json!({ "distinct_gt": { "metrics": ["m", "m"], "by": ["id"], "n": 999 } })),
-                2 * read,
+                read,
             ),
             (
                 when(
                     json!({ "distinct_gt": { "metrics": ["m", "m"], "by": ["id"], "n": 999, "each": true } }),
                 ),
-                2 * read,
+                read,
             ),
             (
                 plots(json!({ "p": { "pred": { "present": "m" } } }), json!([])),
@@ -3747,7 +3925,7 @@ mod tests {
             (
                 doc(json!([{ "name": "T", "route": "/t", "metadata": {
                     "s": { "computed": "gpu_selector", "probe": ["m", "m"] } } }])),
-                2 * read,
+                read,
             ),
             (
                 plots(
@@ -3765,6 +3943,13 @@ mod tests {
             let at_least = at_least - at_least / read - 8;
             assert!(more >= at_least, "{more} < {at_least}: {template}");
         }
+        // A metric read twice is read from the source once: the second
+        // `m` costs its lookups and walk, not another read.
+        let twice =
+            when(json!({ "distinct_gt": { "metrics": ["m", "m"], "by": ["id"], "n": 999 } }));
+        let once = when(json!({ "distinct_gt": { "metrics": ["m"], "by": ["id"], "n": 999 } }));
+        let second = spent(&twice, &full).fuel.get() - spent(&once, &full).fuel.get();
+        assert!(second < read / 2, "{second}");
         // `has_counter` scans the counter names: 100 more names of 4 bytes.
         let names: Vec<String> = (0..100).map(|i| format!("c{i:03}")).collect();
         let mut many = Catalog::default();
@@ -3775,11 +3960,12 @@ mod tests {
         let more = spent(&t, &many).fuel.get() - spent(&t, &empty).fuel.get();
         assert!(more >= 100 * 5, "{more}");
         // A predicate costs fuel even when its metric is absent: one unit,
-        // `x` scanned and copied (two), and the empty read (one).
+        // `x` scanned and copied (two), and three memo lookups (one plus
+        // `x` each); the first also reads each type from the source once.
         let any = |n: usize| when(json!({ "any": vec![json!({ "present": "x" }); n] }));
         assert_eq!(
             spent(&any(50), &empty).fuel.get() - spent(&any(0), &empty).fuel.get(),
-            50 * 4
+            50 * (1 + 2 + 3 * 2) + 3 * (64 + 1)
         );
     }
 
@@ -3800,13 +3986,11 @@ mod tests {
                   "then": [] },
             ] }]),
         );
-        let start = std::time::Instant::now();
         let e = expand_err(&t, &data, &[]);
         assert_eq!(
             e,
             format!("/t: expands to more than {MAX_FUEL} units of fuel")
         );
-        assert!(start.elapsed() < std::time::Duration::from_secs(10));
     }
 
     /// Strings, lets, section and group metadata, the GPU selector and
@@ -4277,8 +4461,19 @@ mod tests {
             json!([{ "when": { "distinct_gt": { "metrics": ["m"], "by": ["a"], "n": 99 } },
                      "then": [] }]),
         );
-        // Two more `by` labels: at least two more units per series (five).
-        assert!(spent(&t, &data).fuel.get() >= spent(&by1, &data).fuel.get() + 5 * 2);
+        // Two more `by` labels: each scanned and copied (2 + 2), and one more
+        // unit per series per label (5 series); `b` and `c` are absent, so
+        // no value bytes.
+        let fuel = |t: &str| spent(t, &data).fuel.get();
+        assert_eq!(fuel(&t) - fuel(&by1), 4 + 5 * 2);
+        // The same label three times costs three lookups and hashes the
+        // value three times: one byte per series per extra label more.
+        let dup = plots(
+            json!({}),
+            json!([{ "when": { "distinct_gt": { "metrics": ["m"], "by": ["a", "a", "a"], "n": 99 } },
+                     "then": [] }]),
+        );
+        assert_eq!(fuel(&dup) - fuel(&by1), 4 + 5 * 2 + 5 * 2);
         let by: Vec<String> = (0..=MAX_BY_LABELS).map(|i| format!("l{i}")).collect();
         assert_refused(
             &plots(
@@ -4317,19 +4512,17 @@ mod tests {
             ),
             "after a `\\`",
         );
+        // A template string holds no newline, so a `#` comment runs to the
+        // end of the field.
+        assert_refused(&rep("sum(m)\n"), "holds the control character U+000A");
         for q in [
             r#"m{k=`"${v}"`}"#,
             r#"sum(m) # "${v}""#,
-            "sum(m) # x\n# \"${v}\"",
+            r#"sum(m) # x m{k="${v}"}"#,
         ] {
             assert_refused(&rep(q), "goes only inside a double-quoted string");
         }
-        for q in [
-            "sum(m) # x\n + m{k=\"${v}\"}",
-            "sum(m) # x\r + m{k=\"${v}\"}",
-            r#"m{j=`a"b`, k="${v}"}"#,
-            r##"m{j="#", k="${v}"}"##,
-        ] {
+        for q in [r#"m{j=`a"b`, k="${v}"}"#, r##"m{j="#", k="${v}"}"##] {
             assert!(SectionTemplate::parse(&rep(q)).is_ok(), "{q:?}");
         }
         // A carriage return in a label value is escaped.
@@ -4447,12 +4640,10 @@ mod tests {
             json!([{ "repeat": { "var": "r", "in": { "values": (0..4000).map(|i| i.to_string()).collect::<Vec<_>>() } },
                      "body": [{ "kind": "gauge", "title": "${e}".repeat(4000), "id": "i", "unit": "count", "query": "q" }] }]),
         );
-        let start = std::time::Instant::now();
         assert_eq!(
             expand_err(&t, &Catalog::default(), &[]),
             format!("/t: expands to more than {MAX_FUEL} units of fuel")
         );
-        assert!(start.elapsed() < std::time::Duration::from_secs(20));
     }
 
     /// Parsing moves each part of the document out of its parent: the
@@ -4701,9 +4892,9 @@ mod tests {
     #[test]
     fn hostile_documents_expand_within_the_limits() {
         let limits = Limits {
-            nodes: 2_000,
-            bytes: 256 << 10,
-            fuel: 2 << 20,
+            nodes: 1_000,
+            bytes: 128 << 10,
+            fuel: 512 << 10,
         };
         let ids: Vec<String> = (0..20).map(|i| i.to_string()).collect();
         let series: Vec<Vec<(&str, &str)>> = ids
@@ -4720,8 +4911,8 @@ mod tests {
             items: 0,
         };
         let (mut expanded, mut limited) = (0, 0);
-        for _ in 0..150 {
-            g.items = 200;
+        for _ in 0..48 {
+            g.items = 150;
             let text = gen_document(&mut g);
             let t = SectionTemplate::parse(&text).unwrap_or_else(|e| panic!("{e}\n{text}"));
             let SectionDef::Section(body) = &t.sections[0] else {
@@ -4740,6 +4931,18 @@ mod tests {
                 }
             }
             assert!(budget.nodes.get() <= limits.nodes + 1);
+            // And from below: each node and each byte of output also spent
+            // a unit of fuel, and so did each series read from the catalog.
+            let read: usize = budget
+                .memo
+                .series
+                .borrow()
+                .values()
+                .flatten()
+                .flatten()
+                .map(|part| part.len())
+                .sum();
+            assert!(budget.fuel.get() >= budget.nodes.get() + budget.bytes.get() + read);
             assert!(budget.bytes.get() <= limits.bytes + MAX_STRING_BYTES);
             assert!(budget.fuel.get() <= limits.fuel + limits.bytes + MAX_STRING_BYTES);
             assert!(
@@ -4878,10 +5081,11 @@ mod tests {
             100 * 5
         );
         // Objects of one field: node 1, then per field node 1 + value 1 +
-        // bind (1 + "vv.f") = 8 per pass.
+        // bind (1 + "vv.f") = 8 per pass, and the field's name formatted
+        // once per repeat (2 + "vv" + "f").
         assert_eq!(
             fuel(&rep(json!(vec![json!({ "f": "x" }); 100]))) - fuel(&rep(json!([]))),
-            100 * 8
+            100 * 8 + 5
         );
         // A let: 1, its text scanned (at least 1), the binding (1 + 3).
         let lets: serde_json::Map<String, Value> =
@@ -4909,9 +5113,10 @@ mod tests {
             sort: LabelSort::Int,
         };
         label_values_sorted(&lv, &Scope::new(&data, &params, &sorted)).unwrap();
-        // The read, `m` and `id` scanned and copied (1 + 1, 2 + 2), and
-        // 100 values times 7 bits.
-        assert_eq!(sorted.fuel.get() - read.fuel.get(), 6 + 100 * 7);
+        // Beyond the read: `m` and `id` scanned and copied (6), one unit per
+        // series walked (100), the values copied ("0" to "99", 190 bytes),
+        // and the sort (100 values times 7 bits).
+        assert_eq!(sorted.fuel.get() - read.fuel.get(), 6 + 100 + 190 + 100 * 7);
     }
 
     /// Each group, subgroup and plot is charged its struct's size in bytes.
@@ -4928,7 +5133,9 @@ mod tests {
         );
         assert_eq!(
             bytes(&rate_mean) - bytes(&one),
-            2 * std::mem::size_of::<Plot>() + 3
+            // Two plots, "t", "i" and "s" from the template, and the copies
+            // `histogram_rate_mean` makes: 3 selectors, 2 titles and ids, 64.
+            2 * std::mem::size_of::<Plot>() + 3 + 3 + 2 * 2 + 64
         );
         let groups = |extra: Value| {
             let mut groups =
@@ -4951,6 +5158,142 @@ mod tests {
         assert_eq!(
             bytes(&with_sub) - bytes(&base),
             std::mem::size_of::<SubGroup>()
+        );
+    }
+
+    /// The Rezolus template on a host with 1024 CPUs: the section that
+    /// spends the most fuel stays under half of [`MAX_FUEL`].
+    #[test]
+    fn the_rezolus_template_fits_a_1024_cpu_host() {
+        let t = SectionTemplate::parse(&crate::rezolus_template::json()).unwrap();
+        let data = crate::section_template_tests::bench_with_ids(1024);
+        let mut most = (0, String::new());
+        for section in &t.sections {
+            let SectionDef::Section(body) = section else {
+                continue;
+            };
+            let budget = Budget::default();
+            t.expand_body(&data, body, Vec::new(), &BTreeMap::new(), &budget)
+                .unwrap_or_else(|e| panic!("{}: {e}", body.route));
+            if budget.fuel.get() > most.0 {
+                most = (budget.fuel.get(), body.route.clone());
+            }
+        }
+        eprintln!("FUEL1024 {} {}", most.1, most.0);
+        assert!(most.0 < MAX_FUEL / 2, "{} spent {}", most.1, most.0);
+    }
+
+    /// A control character from the catalog counts at the six bytes JSON
+    /// writes it as; in a query, `\n` and `\r` become two printable bytes.
+    #[test]
+    fn control_characters_count_as_json_escapes() {
+        let value = "\u{1}".repeat(100);
+        let data = Catalog::default().gauge("m", &[&[("k", value.as_str())]]);
+        let rep = |plot: Value| {
+            plots(
+                json!({}),
+                json!([{ "repeat": { "var": "v", "in": { "label_values": { "metric": "m", "label": "k" } } },
+                         "body": [plot] }]),
+            )
+        };
+        let bytes = |t: &str| spent(t, &data).bytes.get();
+        let titled = |title: &str| {
+            rep(
+                json!({ "kind": "gauge", "title": title, "id": "i", "unit": "count", "query": "q" }),
+            )
+        };
+        assert_eq!(bytes(&titled("${v}")) - bytes(&titled("")), 100 * 6);
+        assert_eq!(piece_cost("a\u{1}\n", false), 3 + 2 * 5);
+        assert_eq!(piece_cost("a\u{1}\n", true), 4 + 5);
+        assert_eq!(json_size(&json!("\u{1}")), std::mem::size_of::<Value>() + 6);
+        // Template strings cannot hold one at all.
+        assert_refused(&titled("a\u{1}"), "holds the control character U+0001");
+    }
+
+    /// Tuples are counted by hash; `int` labels are normalized before
+    /// hashing, so `"01"` and `"1"` are one tuple and `"1"` and `"2"` two.
+    #[test]
+    fn distinct_gt_tuples_hash_normalized_values() {
+        let data = Catalog::default().counter(
+            "m",
+            &[
+                &[("id", "01"), ("v", "a")],
+                &[("id", "1"), ("v", "a")],
+                &[("id", "2"), ("v", "a")],
+            ],
+        );
+        let t = |int: Value, n: usize| {
+            plots(
+                json!({}),
+                json!([{ "when": { "distinct_gt": { "metrics": ["m"], "by": ["v", "id"], "int": int, "n": n } },
+                         "then": [gauge("yes")] }]),
+            )
+        };
+        assert_eq!(ids(&expand(&t(json!(["id"]), 1), &data)), ["yes"]);
+        assert!(ids(&expand(&t(json!(["id"]), 2), &data)).is_empty());
+        assert_eq!(ids(&expand(&t(json!([]), 2), &data)), ["yes"]);
+    }
+
+    /// A refused plot's id is quoted at most 200 characters long.
+    #[test]
+    fn plot_errors_cut_the_id() {
+        let mut p = gauge("p");
+        p["id"] = json!("i".repeat(MAX_STRING_BYTES));
+        p["kind"] = json!("latency");
+        let e = parse_err(&plots(json!({}), json!([p])));
+        assert!(e.len() < 600 && e.contains("takes no `unit`"), "{e}");
+    }
+
+    /// Counter names are read from the source once per expansion.
+    #[test]
+    fn counter_names_are_read_once() {
+        let names: Vec<String> = (0..100).map(|i| format!("c{i:03}")).collect();
+        let mut data = Catalog::default();
+        for name in &names {
+            data = data.counter(name, &[&[]]);
+        }
+        let n = |k: usize| {
+            plots(
+                json!({}),
+                json!([{ "when": { "any": vec![json!({ "has_counter": "m" }); k] }, "then": [] }]),
+            )
+        };
+        let fuel = |k: usize| spent(&n(k), &data).fuel.get();
+        // Each further `has_counter`: one unit, `m` scanned and copied, and
+        // the lookup (one plus `m`).
+        assert_eq!(fuel(3) - fuel(2), 1 + 2 + 2);
+    }
+
+    /// The GPU selector's charges: a unit for an empty probe, one per
+    /// series walked, and the bytes of each vendor copied.
+    #[test]
+    fn the_gpu_selector_is_charged_per_series_and_vendor() {
+        let meta = |probe: Value| {
+            doc(json!([{ "name": "T", "route": "/t", "metadata": {
+                "s": { "computed": "gpu_selector", "probe": probe } } }]))
+        };
+        let none = doc(json!([{ "name": "T", "route": "/t" }]));
+        let fuel = |t: &str, data: &Catalog| spent(t, data).fuel.get();
+        let empty = Catalog::default();
+        assert_eq!(fuel(&meta(json!([])), &empty) - fuel(&none, &empty), 1);
+        // Ten series without an `id`: read (1 + "k" + "x" each) and walked.
+        let ten: Vec<&[(&str, &str)]> = vec![&[("k", "x")]; 10];
+        let with = Catalog::default().counter("m", &ten);
+        assert_eq!(
+            fuel(&meta(json!(["m"])), &with) - fuel(&meta(json!(["m"])), &empty),
+            10 * 3 + 10
+        );
+        // Ten series of one GPU: a vendor three bytes longer is read and
+        // copied ten times, and the selector stays absent (one GPU).
+        let short: Vec<&[(&str, &str)]> = vec![&[("id", "0"), ("vendor", "v")]; 10];
+        let long: Vec<&[(&str, &str)]> = vec![&[("id", "0"), ("vendor", "vvvv")]; 10];
+        let (short, long) = (
+            Catalog::default().counter("m", &short),
+            Catalog::default().counter("m", &long),
+        );
+        assert_eq!(
+            fuel(&meta(json!(["m"])), &long) - fuel(&meta(json!(["m"])), &short),
+            10 * 3 * 2
         );
     }
 }

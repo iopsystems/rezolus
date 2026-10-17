@@ -281,6 +281,50 @@ fn sink(bench: &Catalog) -> Catalog {
     out
 }
 
+/// The `bench` fixture with every series that has an `id` label repeated
+/// for ids 0 to `n - 1`: a host with `n` CPUs (and as many of every other
+/// device with an `id`).
+pub(crate) fn bench_with_ids(n: usize) -> Catalog {
+    with_ids(
+        &Catalog::from_json(include_str!("../tests/fixtures/catalogs/bench.json")),
+        n,
+    )
+}
+
+/// `base` with every series that has an `id` label repeated for ids 0 to
+/// `n - 1`.
+pub(crate) fn with_ids(bench: &Catalog, n: usize) -> Catalog {
+    let widen = |metrics: &BTreeMap<String, Vec<Labels>>| -> BTreeMap<String, Vec<Labels>> {
+        metrics
+            .iter()
+            .map(|(name, series)| {
+                let mut out = Vec::new();
+                let mut seen = BTreeSet::new();
+                for labels in series {
+                    let mut base = labels.clone();
+                    if base.remove("id").is_none() {
+                        out.push(labels.clone());
+                        continue;
+                    }
+                    if seen.insert(base.clone()) {
+                        for i in 0..n {
+                            let mut one = base.clone();
+                            one.insert("id".to_string(), i.to_string());
+                            out.push(one);
+                        }
+                    }
+                }
+                (name.clone(), out)
+            })
+            .collect()
+    };
+    Catalog {
+        counters: widen(&bench.counters),
+        gauges: widen(&bench.gauges),
+        histograms: widen(&bench.histograms),
+    }
+}
+
 /// `sink` built from the `bench` fixture: the largest catalog.
 pub(crate) fn sink_catalog() -> Catalog {
     sink(&Catalog::from_json(include_str!(
