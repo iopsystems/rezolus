@@ -170,9 +170,6 @@ pub struct Viewer {
     /// and the registry knows the source too. The server's
     /// `--registry-templates` flag; see `dashboard::source_templates`.
     template_preference: TemplatePreference,
-    /// What the last template lookup had to say, such as a template in the
-    /// metadata that did not parse. See [`Viewer::template_notices`].
-    template_notices: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -298,7 +295,6 @@ impl Viewer {
             alias: None,
             source_bytes,
             template_preference: TemplatePreference::Archive,
-            template_notices: Vec::new(),
         }
     }
 
@@ -308,14 +304,6 @@ impl Viewer {
     /// `init_templates`.
     pub fn set_prefer_registry_templates(&mut self, prefer: bool) {
         self.template_preference = preference(prefer);
-    }
-
-    /// What the last `init_templates` had to say about this capture's
-    /// templates, as a JSON array of strings: a template in the metadata that
-    /// did not parse, and which template rendered instead. The server viewer
-    /// logs the same lines as warnings.
-    pub fn template_notices(&self) -> String {
-        serde_json::to_string(&self.template_notices).unwrap_or_else(|_| "[]".to_string())
     }
 
     /// Whether Save as Report can re-encode this capture.
@@ -565,13 +553,17 @@ impl Viewer {
     /// don't have per-KPI `query` fields and would fail to deserialize as
     /// `ServiceExtension`. Filter them out here; compare-mode bridging
     /// uses `regenerate_combined` which re-parses the full JSON.
-    pub fn init_templates(&mut self, templates_json: &str) -> Result<(), JsValue> {
+    ///
+    /// Returns what the template lookup had to say about this capture, as a
+    /// JSON array of strings: a template in the metadata that did not parse,
+    /// and what rendered instead. The server viewer logs the same lines as
+    /// warnings.
+    pub fn init_templates(&mut self, templates_json: &str) -> Result<String, JsValue> {
         let templates = parse_service_templates(templates_json)?;
         let registry = dashboard::TemplateRegistry::from_templates(templates);
 
         let (service_exts, notices) =
             self.detect_and_validate_service_exts(&registry, self.template_preference);
-        self.template_notices = notices;
 
         let service_refs: Vec<(&str, &dashboard::ServiceExtension)> = service_exts
             .iter()
@@ -594,16 +586,15 @@ impl Viewer {
         };
         self.context = context;
         self.cached_bodies.borrow_mut().clear();
-        Ok(())
+        Ok(serde_json::to_string(&notices).unwrap_or_else(|_| "[]".to_string()))
     }
 
     /// This Viewer's service extensions, validated against its own data.
     ///
     /// The capture's metadata decides: a `service_queries` template it
     /// carries (a parquet footer, a `.rez` recording, a dendro source), then
-    /// the registry by source name (`per_source_metadata` keys first, falling
-    /// back to `MetricsSource::source()`), through the lookup the server
-    /// viewer uses (`dashboard::source_templates::resolve_source_templates`).
+    /// the registry by source name (`per_source_metadata` keys first, then
+    /// the `source` key), through the lookup the server viewer uses (`dashboard::source_templates::resolve_source_templates`).
     /// Returns the extensions and the lookup's notices.
     ///
     /// Category membership for compare-mode follows from the detected source
@@ -617,10 +608,8 @@ impl Viewer {
         registry: &dashboard::TemplateRegistry,
         preference: TemplatePreference,
     ) -> (Vec<(String, dashboard::ServiceExtension)>, Vec<String>) {
-        let source = self.reader.source();
         let resolved = dashboard::source_templates::resolve_source_templates(
             &self.file_metadata,
-            Some(source.as_str()),
             registry,
             preference,
         );
@@ -906,8 +895,13 @@ impl WasmCaptureRegistry {
     }
 
     /// Initialise ServiceExtension templates for the given capture.  Mirrors
-    /// `Viewer::init_templates`.
-    pub fn init_templates(&mut self, capture: &str, templates_json: &str) -> Result<(), JsValue> {
+    /// `Viewer::init_templates`, and returns that capture's template notices
+    /// as a JSON array of strings.
+    pub fn init_templates(
+        &mut self,
+        capture: &str,
+        templates_json: &str,
+    ) -> Result<String, JsValue> {
         let preference = self.template_preference;
         let viewer = self
             .slot_by_id_mut(capture)
@@ -922,18 +916,6 @@ impl WasmCaptureRegistry {
     /// `init_templates` or `regenerate_combined`.
     pub fn set_prefer_registry_templates(&mut self, prefer: bool) {
         self.template_preference = preference(prefer);
-    }
-
-    /// Every attached capture's template notices (see
-    /// [`Viewer::template_notices`]), anchor first, as a JSON array.
-    pub fn template_notices(&self) -> String {
-        let all: Vec<&String> = self
-            .baseline
-            .iter()
-            .chain(self.others.iter().map(|(_, v)| v))
-            .flat_map(|v| v.template_notices.iter())
-            .collect();
-        serde_json::to_string(&all).unwrap_or_else(|_| "[]".to_string())
     }
 
     /// Regenerate BOTH viewers' lazy `DashboardContext` using service
@@ -979,22 +961,18 @@ impl WasmCaptureRegistry {
         // Each capture detects its own service extensions, validates
         // against its own tsdb (so a KPI present only in the experiment
         // doesn't get marked unavailable by the baseline tsdb).
+        // Notices are dropped here: each capture's `init_templates` already
+        // returned them for the same metadata and registry.
         let preference = self.template_preference;
-        let (baseline_exts, baseline_notices) = self
+        let (baseline_exts, _) = self
             .baseline
             .as_ref()
             .map(|v| v.detect_and_validate_service_exts(&registry, preference))
             .unwrap_or_default();
-        let (experiment_exts, experiment_notices) = self
+        let (experiment_exts, _) = self
             .experiment()
             .map(|v| v.detect_and_validate_service_exts(&registry, preference))
             .unwrap_or_default();
-        if let Some(baseline) = self.baseline.as_mut() {
-            baseline.template_notices = baseline_notices;
-        }
-        if let Some(experiment) = self.experiment_mut() {
-            experiment.template_notices = experiment_notices;
-        }
 
         let mut service_exts: Vec<(String, dashboard::ServiceExtension)> = Vec::new();
         service_exts.extend(baseline_exts);
@@ -1463,9 +1441,14 @@ mod tests {
         })
     }
 
-    /// The registry the static site would pass: one service, `known`.
+    /// The registry the static site would pass: two services, `known` and
+    /// `other`.
     fn site_templates() -> String {
-        serde_json::json!([titled_template("known", "from the registry")]).to_string()
+        serde_json::json!([
+            titled_template("known", "from the registry"),
+            titled_template("other", "from the registry"),
+        ])
+        .to_string()
     }
 
     /// The (source, first KPI title) pairs a capture rendered.
@@ -1528,6 +1511,51 @@ mod tests {
         );
     }
 
+    /// A capture whose `source` is a JSON array (a combined parquet's shape,
+    /// here in a dendro source's metadata) with a top-level template: the
+    /// template renders under its `service_name`, the other sources keep the
+    /// registry's, and no section is named after the array.
+    #[test]
+    fn a_top_level_template_on_a_combined_source_is_keyed_by_its_service_name() {
+        let psm = serde_json::json!({
+            "known": {"0": {"version": "1"}},
+            "other": {"0": {"version": "1"}},
+            "rezolus": {"0": {"version": "6"}},
+        })
+        .to_string();
+        let carried = titled_template("known", "carried").to_string();
+        let bytes = dendro_bytes(
+            "combined",
+            &[
+                ("source", r#"["known","other","rezolus"]"#),
+                ("per_source_metadata", &psm),
+                ("service_queries", &carried),
+            ],
+        );
+        let mut reg = WasmCaptureRegistry::new();
+        reg.attach("baseline", &bytes, "rec.dendro").unwrap();
+        reg.init_templates("baseline", &site_templates()).unwrap();
+        assert_eq!(
+            rendered(&reg),
+            [
+                ("known".to_string(), "carried".to_string()),
+                ("other".to_string(), "from the registry".to_string()),
+            ]
+        );
+        let sections = reg.get_sections("baseline").unwrap();
+        assert!(!sections.contains("/service/["), "{sections}");
+
+        reg.set_prefer_registry_templates(true);
+        reg.init_templates("baseline", &site_templates()).unwrap();
+        assert_eq!(
+            rendered(&reg),
+            [
+                ("known".to_string(), "from the registry".to_string()),
+                ("other".to_string(), "from the registry".to_string()),
+            ]
+        );
+    }
+
     /// A template in the metadata that does not parse falls back to the
     /// registry's, with a notice saying so, rather than failing the load.
     #[test]
@@ -1539,12 +1567,12 @@ mod tests {
             "rec.dendro",
         )
         .unwrap();
-        reg.init_templates("baseline", &site_templates()).unwrap();
+        let notices = reg.init_templates("baseline", &site_templates()).unwrap();
         assert_eq!(
             rendered(&reg),
             [("known".to_string(), "from the registry".to_string())]
         );
-        let notices: Vec<String> = serde_json::from_str(&reg.template_notices()).unwrap();
+        let notices: Vec<String> = serde_json::from_str(&notices).unwrap();
         assert_eq!(notices.len(), 1, "{notices:?}");
         assert!(notices[0].contains("does not parse"), "{notices:?}");
     }

@@ -199,7 +199,7 @@ pub fn command() -> Command {
                     "Render each source's KPI sections from the viewer's template registry \
                      (the built-in templates, or --templates DIR) instead of the template \
                      the recording carries in its metadata (`service_queries`, as written \
-                     by `rezolus recording annotate --queries` or by the producer). By \
+                     by `rezolus recording annotate` or by the producer). By \
                      default the recording's template wins. A source the registry does \
                      not know keeps its own template either way.",
                 )
@@ -516,7 +516,13 @@ pub fn run(config: Config) {
                 );
                 std::process::exit(1);
             }
-            init_live_mode(&rt, url, &registry, Arc::clone(&pool))
+            init_live_mode(
+                &rt,
+                url,
+                &registry,
+                config.template_preference,
+                Arc::clone(&pool),
+            )
         }
         Source::Empty => {
             if config.selects_a_recording() {
@@ -529,11 +535,15 @@ pub fn run(config: Config) {
             info!("No input file — starting in upload-only mode");
             let empty_store: std::sync::Arc<dyn metriken_query::MetricsSource> =
                 std::sync::Arc::new(metriken_query::MemoryStore::builder().build());
-            AppState::with_pool(empty_store, registry.clone(), Arc::clone(&pool))
+            AppState::with_pool(
+                empty_store,
+                registry.clone(),
+                config.template_preference,
+                Arc::clone(&pool),
+            )
         }
     };
 
-    *state.template_preference.write() = config.template_preference;
     state.set_proxy(config.proxy_allow.clone());
     state.set_query_concurrency(config.query_concurrency);
     if !config.tui {
@@ -678,9 +688,9 @@ fn init_file_mode(
     let state = AppState::with_pool(
         reader as std::sync::Arc<dyn metriken_query::MetricsSource>,
         registry.clone(),
+        config.template_preference,
         Arc::clone(&pool),
     );
-    *state.template_preference.write() = config.template_preference;
     *state.parquet_path.write() = Some(path.to_path_buf());
     state
         .captures
@@ -992,9 +1002,9 @@ fn init_file_mode_rez(
     let state = AppState::with_pool(
         source(capture_registry::BASELINE_ID, &b_labels, b_reader),
         registry.clone(),
+        config.template_preference,
         Arc::clone(&pool),
     );
-    *state.template_preference.write() = config.template_preference;
     *state.parquet_path.write() = Some(path.to_path_buf());
     *state.selection.write() = b_selection;
     // A `.rez` report stamps `KEY_REPORT=trimmed` on its anchor recording, the
@@ -1128,13 +1138,15 @@ fn init_file_mode_combined_ab(
     let state = AppState::with_pool(
         baseline_reader as std::sync::Arc<dyn metriken_query::MetricsSource>,
         registry.clone(),
+        config.template_preference,
         Arc::clone(&pool),
     );
-    *state.template_preference.write() = config.template_preference;
     // Point parquet_path at the *extracted* baseline parquet (not the
-    // tar itself) so `regenerate_dashboards` and other parquet-aware
-    // consumers can read its metadata. Same for the experiment side via
-    // cli_experiment_path.
+    // tar itself): `regenerate_dashboards` takes the file size and the
+    // filename stem from it, and Save as Report re-reads it. The experiment
+    // side's path goes in cli_experiment_path, which Save as Report also
+    // reads and detach clears. Templates come from each capture's own
+    // metadata, not from these paths.
     *state.parquet_path.write() = Some(extracted.baseline_path.clone());
     *state.cli_experiment_path.write() = Some(extracted.experiment_path.clone());
     state
@@ -1286,11 +1298,8 @@ fn attach_cli_experiment(
     *state.cli_experiment_path.write() = Some(exp_path.to_path_buf());
     info!("Attached experiment capture: {}", exp_path.display());
 
-    let mut exp_exts = metadata::extract_service_extension_metadata(
-        exp_path,
-        registry,
-        *state.template_preference.read(),
-    );
+    let mut exp_exts =
+        metadata::extract_service_extension_metadata(exp_path, registry, state.template_preference);
     if let Some(exp_data) = state.captures.get(CaptureId::Experiment) {
         metadata::validate_service_extensions(exp_data.as_ref(), &mut exp_exts);
     }
@@ -1317,6 +1326,7 @@ fn init_live_mode(
     rt: &tokio::runtime::Runtime,
     url: &Url,
     registry: &TemplateRegistry,
+    template_preference: TemplatePreference,
     pool: Arc<metriken_storage::BufferPool>,
 ) -> AppState {
     info!("Connecting to live agent at {url}...");
@@ -1346,7 +1356,12 @@ fn init_live_mode(
         version = info.version
     );
 
-    let state = AppState::with_pool(session.reader(), registry.clone(), pool);
+    let state = AppState::with_pool(
+        session.reader(),
+        registry.clone(),
+        template_preference,
+        pool,
+    );
     let context = dashboard::dashboard::build_dashboard_context(None, &[], None, &[]);
     *state.sections.write() = state::LazySectionStore::new(context);
     state.install_live(session);
@@ -1547,7 +1562,7 @@ mod tests {
 
     /// The (source, first KPI title) pairs and section routes the viewer built
     /// for `path` with the CLI flags `flags`, against a registry that knows
-    /// one service, `known`.
+    /// two services, `known` and `other`.
     fn served_templates(
         path: &std::path::Path,
         flags: &[&str],
@@ -1555,10 +1570,12 @@ mod tests {
         let mut argv = vec!["view", path.to_str().unwrap()];
         argv.extend_from_slice(flags);
         let config = super::Config::try_from(super::command().get_matches_from(argv)).unwrap();
-        let registry = ::dashboard::TemplateRegistry::from_templates(vec![serde_json::from_str(
-            &titled_template("known", "from the registry"),
-        )
-        .unwrap()]);
+        let registry = ::dashboard::TemplateRegistry::from_templates(
+            ["known", "other"]
+                .iter()
+                .map(|s| serde_json::from_str(&titled_template(s, "from the registry")).unwrap())
+                .collect(),
+        );
         let pool = metriken_storage::BufferPool::new(8 * 1024 * 1024);
         let state = super::init_file_mode(&config, path, &registry, pool);
         let sections = state.sections.read();
@@ -1627,6 +1644,76 @@ mod tests {
         assert_eq!(
             exts,
             [("known".to_string(), "from the registry".to_string())]
+        );
+    }
+
+    /// A recording whose `source` is a JSON array (the shape a combined
+    /// parquet's footer has, here in a dendro source's metadata) with a
+    /// template annotated at the top level: the template renders under its
+    /// own `service_name`, replacing that source's registry entry, and the
+    /// other sources keep the registry's. No section is named after the
+    /// array.
+    #[test]
+    fn a_top_level_template_on_a_combined_source_is_keyed_by_its_service_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let psm = serde_json::json!({
+            "known": {"0": {"version": "1"}},
+            "other": {"0": {"version": "1"}},
+            "rezolus": {"0": {"version": "6"}},
+        })
+        .to_string();
+        let path = dendro_with_metadata(
+            dir.path(),
+            "combined",
+            &[
+                ("source", r#"["known","other","rezolus"]"#),
+                ("per_source_metadata", &psm),
+                ("service_queries", &titled_template("known", "carried")),
+            ],
+        );
+        let (exts, routes) = served_templates(&path, &[]);
+        assert_eq!(
+            exts,
+            [
+                ("known".to_string(), "carried".to_string()),
+                ("other".to_string(), "from the registry".to_string()),
+            ]
+        );
+        assert!(
+            !routes.iter().any(|r| r.contains('[')),
+            "no section is named after the source array: {routes:?}"
+        );
+        let (exts, _) = served_templates(&path, &["--registry-templates"]);
+        assert_eq!(
+            exts,
+            [
+                ("known".to_string(), "from the registry".to_string()),
+                ("other".to_string(), "from the registry".to_string()),
+            ]
+        );
+    }
+
+    /// A `.rez` simple capture (a source with no template and no Rezolus
+    /// metrics) is classified from its recording's metadata, so its section
+    /// is named by its `source`, as the same capture's parquet and the WASM
+    /// viewer name it, rather than by the archive's filename.
+    #[test]
+    fn a_rez_simple_capture_is_named_by_its_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("simple_capture.rez");
+        crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
+            &path,
+            &[("127.0.0.1-18651", "web-01")],
+        );
+        let (exts, routes) = served_templates(&path, &[]);
+        assert!(exts.is_empty(), "{exts:?}");
+        assert!(
+            routes.iter().any(|r| r == "/source/127.0.0.1-18651"),
+            "{routes:?}"
+        );
+        assert!(
+            !routes.iter().any(|r| r == "/source/simple_capture"),
+            "{routes:?}"
         );
     }
 

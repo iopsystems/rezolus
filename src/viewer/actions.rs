@@ -414,7 +414,7 @@ pub fn ingest_baseline_from_path(
         let mut service_exts = extract_service_extension_metadata(
             &temp_path,
             &state.templates,
-            *state.template_preference.read(),
+            state.template_preference,
         );
         validate_service_extensions(reader_arc.as_ref(), &mut service_exts);
         let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
@@ -553,9 +553,11 @@ pub async fn detach_experiment(State(state): State<Arc<AppState>>) -> Response {
         if let Some(path) = state.experiment_parquet_path.write().take() {
             let _ = std::fs::remove_file(&path);
         }
-        // Clear the CLI-supplied experiment path too so regen below doesn't
-        // rebuild against a detached capture. Only the path reference is
-        // dropped — the user's parquet on disk is left alone.
+        // Clear the CLI-supplied experiment path too, so Save as Report
+        // (`resolve_experiment_parquet_path`) does not pair a detached file
+        // with the baseline. Only the path reference is dropped — the user's
+        // parquet on disk is left alone. The regen below reads templates from
+        // the attached captures, so the detached one drops out with it.
         state.cli_experiment_path.write().take();
         regenerate_dashboards(state);
     })

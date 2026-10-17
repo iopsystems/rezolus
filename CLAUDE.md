@@ -131,7 +131,8 @@ target/release/rezolus view out.dendro --registry-templates          # built-in 
 #   A source's KPI template is its metadata's `service_queries` (parquet footer, .rez recording, dendro source),
 #   ahead of the built-in registry, which is consulted only for a source without one; --registry-templates
 #   inverts that for sources the registry knows. Shared lookup: crates/dashboard/src/source_templates.rs
-#   (both shells; WASM: set_prefer_registry_templates). `dashboard` (section template) is reserved: kept, unused.
+#   (both shells; WASM: WasmCaptureRegistry::set_prefer_registry_templates, no site UI). A combined parquet's array
+#   `source` keys a top-level template by its service_name. `dashboard` (section template) is reserved: kept, unused.
 
 # Hindsight - rolling .dendro buffer for incident analysis (an output not ending in .dendro is refused)
 target/release/rezolus hindsight config/hindsight.toml

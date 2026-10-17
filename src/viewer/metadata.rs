@@ -247,7 +247,7 @@ pub fn extract_service_extension_metadata(
         .iter()
         .filter_map(|kv| Some((kv.key.clone(), kv.value.clone()?)))
         .collect();
-    service_extensions_from_metadata(&metadata, None, registry, preference)
+    service_extensions_from_metadata(&metadata, registry, preference)
 }
 
 /// The KPI templates for one source's metadata map: a parquet footer's
@@ -262,23 +262,38 @@ pub fn extract_service_extension_metadata(
 /// `per_source_metadata.<source>.service_queries`, then the registry by
 /// source name. A template in the metadata wins over the registry's unless
 /// `preference` is `Registry`. A template that does not parse falls back to
-/// the registry, logged as a warning.
+/// the registry, logged as a warning once per process: the terminal UI
+/// regenerates its dashboards every tick, and a template that did not parse
+/// the first time does not parse the next.
 pub fn service_extensions_from_metadata(
     metadata: &HashMap<String, String>,
-    fallback_source: Option<&str>,
     registry: &TemplateRegistry,
     preference: TemplatePreference,
 ) -> Vec<(String, ServiceExtension)> {
-    let resolved = ::dashboard::source_templates::resolve_source_templates(
-        metadata,
-        fallback_source,
-        registry,
-        preference,
-    );
-    for notice in &resolved.notices {
-        warn!("{notice}");
+    let resolved =
+        ::dashboard::source_templates::resolve_source_templates(metadata, registry, preference);
+    for notice in resolved.notices {
+        warn_once(notice);
     }
     resolved.service_exts
+}
+
+/// Log `notice` as a warning unless this process has already logged it.
+fn warn_once(notice: String) {
+    if first_time(&notice) {
+        warn!("{notice}");
+    }
+}
+
+/// Whether this process has not seen `notice` before; records it.
+fn first_time(notice: &str) -> bool {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    SEEN.get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(notice.to_string())
 }
 
 /// The KPI templates for a loaded capture, from its own metadata.
@@ -287,13 +302,7 @@ pub fn capture_service_extensions(
     registry: &TemplateRegistry,
     preference: TemplatePreference,
 ) -> Vec<(String, ServiceExtension)> {
-    let source = data.source();
-    service_extensions_from_metadata(
-        &data.file_metadata(),
-        Some(source.as_str()),
-        registry,
-        preference,
-    )
+    service_extensions_from_metadata(&data.file_metadata(), registry, preference)
 }
 
 /// Run each KPI's PromQL against the loaded TSDB so the dashboard can
@@ -366,7 +375,7 @@ pub fn regenerate_dashboards(state: &AppState) {
     }
 
     let registry = &state.templates;
-    let preference = *state.template_preference.read();
+    let preference = state.template_preference;
     let baseline_path = state.parquet_path.read().clone();
 
     // Each capture's templates come from its own metadata (a parquet footer,
@@ -419,17 +428,16 @@ pub(super) fn classify_sources(
     baseline_data: &dyn metriken_query::MetricsSource,
     service_exts: &[(String, ServiceExtension)],
 ) -> Vec<dashboard::dashboard::SourceEntry> {
-    // Nothing to classify without a parquet file (live mode).
+    // Nothing to classify without a file (live mode); its path gives the
+    // filename stem a simple capture's section is named by.
     let path = match baseline_path {
         Some(p) => p,
         None => return vec![],
     };
 
     // The capture's metadata as a JSON object for the shared classifier: a
-    // parquet's footer, or a `.rez`/dendro recording's own metadata (the
-    // path of an archive is not a parquet, so reading the footer from it
-    // found nothing). The WASM viewer builds the same object from the same
-    // map.
+    // parquet's footer, or a `.rez`/dendro recording's own metadata. The WASM
+    // viewer builds the same object from the same map.
     let mut kv_map = serde_json::Map::new();
     for (key, val) in baseline_data.file_metadata() {
         let json_val =
@@ -459,6 +467,19 @@ pub(super) fn classify_sources(
         &service_names,
         filename_stem,
     )
+}
+
+#[cfg(test)]
+mod warn_once_tests {
+    /// A notice is reported the first time and not after, so the terminal
+    /// UI's per-tick regeneration does not repeat a warning every second.
+    #[test]
+    fn a_notice_is_new_only_once() {
+        let notice = "warn_once_tests: a notice no other test raises";
+        assert!(super::first_time(notice));
+        assert!(!super::first_time(notice));
+        assert!(super::first_time("warn_once_tests: a different notice"));
+    }
 }
 
 #[cfg(test)]

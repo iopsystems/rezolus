@@ -96,18 +96,27 @@
 - **Both viewers take a source's KPI template from the recording, ahead of
   the built-in one.** The `service_queries` key of a source's metadata (a
   parquet footer, a `.rez` recording, a dendro source; what `rezolus
-  recording annotate --queries` writes) renders by default; the built-in
-  registry is consulted for a source only when its metadata has none.
-  `rezolus view --registry-templates` renders the built-in template instead
-  for sources the registry knows, and the WASM viewer has the same switch as
-  `set_prefer_registry_templates`. The server viewer read `service_queries`
+  recording annotate` writes) renders by default; the built-in registry is
+  consulted for a source only when its metadata has none. `rezolus view
+  --registry-templates` renders the built-in template instead for sources
+  the registry knows. The WASM viewer has the same switch as the
+  `WasmCaptureRegistry::set_prefer_registry_templates` method, which the
+  static site has no control for yet. The server viewer read `service_queries`
   only from a parquet's footer, so a `.rez` or `.dendro` showed no KPI
   sections, and the static-site viewer matched the registry by source name
   only, so a template embedded by `annotate` showed on `rezolus view` and not
-  in the browser. Each recording of a multi-recording archive uses its own.
-  A template that does not parse falls back to the built-in one with a
-  warning (the server's log, the browser console), not a failed load. A
-  `dashboard` key, reserved for the section template, is kept and not
+  in the browser. Each recording of a multi-recording archive uses its own
+  template; when two recordings have the same source name, the baseline's
+  renders for both. A template that does not parse falls back to the
+  built-in one with a warning, once per distinct message (the server's log,
+  the browser console), not a failed load. A live agent's handshake
+  metadata is read only by the terminal UI (`--tui`), which rebuilds its
+  sections each tick; the browser dashboard of a live agent builds its
+  sections once, with no KPI sections. The server viewer now also classifies
+  a `.rez` or `.dendro` source from its metadata, so a simple capture's
+  section is named by its `source` (`/source/127.0.0.1-18651`) rather than
+  the file name, as the WASM viewer and a parquet of the same capture name
+  it. A `dashboard` key, reserved for the section template, is kept and not
   rendered yet.
 - **`memory_slabinfo` publishes `memory_slab_cache_bytes` for every slab
   cache**, labeled by `cache`, so slab growth that `memory_slab` shows is
