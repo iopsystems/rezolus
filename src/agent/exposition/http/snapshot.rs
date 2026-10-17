@@ -63,11 +63,12 @@ struct CachedSnapshot {
     /// clock's disagreement with it at that moment.
     ///
     /// Stamped once, at the pass, and carried by every body built from it.
-    /// That is the whole point: inside the TTL a request is answered from this
-    /// cache, so a body stamped when the request arrived would claim values
-    /// were read up to a TTL after they actually were. The agent is the only
-    /// party that knows the difference — a consumer sees one HTTP response and
-    /// cannot tell a fresh pass from a cached one.
+    /// That is the whole point: within three quarters of the TTL of a pass a
+    /// request is answered from this cache, so a body stamped when the request
+    /// arrived would claim values were read up to that long after they
+    /// actually were. The agent is the only party that knows the difference:
+    /// a consumer sees one HTTP response and cannot tell a fresh pass from a
+    /// cached one.
     ///
     /// `ts + wall_offset` is the same wall clock `systemtime` carries, by
     /// construction: both come from the one pair of readings taken at the pass.
@@ -243,14 +244,18 @@ impl SnapshotBuilder {
     }
 
     /// A snapshot for `now` as rows — sampling only if the cached one has
-    /// aged past the TTL, exactly as a scrape would.
+    /// aged past three quarters of the TTL (see `ensure_fresh`), exactly as a
+    /// scrape would.
     ///
     /// **This is where a subscription's tick becomes (or does not become) a
-    /// sampling pass.** Two subscriptions whose timers fall within one TTL of
-    /// each other share a pass; one asking for less than the TTL gets the
-    /// reading it already has rather than being allowed to sample faster than
-    /// the operator configured. That makes the TTL the floor on sampling rate
-    /// without a second knob to keep in agreement with it.
+    /// sampling pass.** Two subscriptions whose timers fall close together
+    /// share a pass; a tick within three quarters of the TTL of the last pass
+    /// gets the reading it already has rather than being allowed to sample
+    /// faster than the operator configured. The stream serves no subscription
+    /// faster than the TTL (`StreamSubscription::negotiated`), and two passes
+    /// are at least three quarters of a TTL apart on the clocks the callers
+    /// read before taking the builder lock, so the TTL bounds the
+    /// sampling rate without a second knob to keep in agreement with it.
     ///
     /// Callers are expected to notice a repeated reading (by `wall_ns`) and
     /// act on it — the stream handler sends an EMPTY frame rather than
@@ -300,17 +305,30 @@ impl SnapshotBuilder {
     }
 
     /// Run a sampling pass if there is none or the cached one has aged past
-    /// the TTL. Builds no body.
+    /// three quarters of the TTL, counted from the `now` it was built for.
+    /// Builds no body.
+    ///
+    /// The quarter is margin for wake-time jitter: a subscriber served at an
+    /// interval equal to the TTL wakes about one TTL after its last pass, a
+    /// little early or late, and reusing for the whole TTL would hand an
+    /// early waker that pass again, so it would send an empty frame. The
+    /// agent samples at most once per three quarters of the TTL, so two
+    /// requests that far apart cause two passes.
     async fn ensure_fresh(&mut self, now: Instant) {
+        let reuse = self.ttl - self.ttl / 4;
         if self.cached.is_none()
-            || now.duration_since(self.cached.as_ref().unwrap().timestamp) > self.ttl
+            || now.saturating_duration_since(self.cached.as_ref().unwrap().timestamp) > reuse
         {
             self.refresh().await;
+            if let Some(cached) = self.cached.as_mut() {
+                cached.timestamp = now;
+            }
         }
     }
 
     /// [`rows_at`](Self::rows_at) for a long-layout subscriber: the pass as
-    /// [`StreamRows`], sampling only if the cached pass has aged past the TTL.
+    /// [`StreamRows`], sampling only if the cached pass has aged past three
+    /// quarters of the TTL.
     pub async fn stream_long_at(&mut self, now: Instant) -> Option<Arc<StreamRows>> {
         self.ensure_fresh(now).await;
         self.latest_stream_long()
@@ -3485,7 +3503,8 @@ mod tests {
     /// whole thing — measured at 3.47 MB per request on a 26-sampler host, and
     /// A body says when the values were READ, not when the request arrived.
     ///
-    /// Inside the TTL a request is answered from the cache, and a consumer
+    /// Within three quarters of the TTL of a pass a request is answered from
+    /// the cache, and a consumer
     /// sees one HTTP response either way — it cannot tell a fresh pass from a
     /// cached one. So an agent that stamped at request time would date values
     /// up to a TTL later than they were read, and only the agent is in a
@@ -3732,11 +3751,6 @@ mod tests {
         );
     }
 
-    /// **The TTL is the floor on sampling rate.** A subscription ticking
-    /// faster than the TTL is handed the reading it already has rather than
-    /// being allowed to drive the samplers — which is what makes a separate
-    /// "minimum interval" knob unnecessary, and what stops a remote subscriber
-    /// having any say over how hard this agent works.
     /// A pass read only by a long-layout subscriber never builds the wide
     /// snapshot; a scrape in the same pass builds it then.
     #[tokio::test]
@@ -3759,6 +3773,11 @@ mod tests {
         assert_eq!(builder.samples(), 1, "one pass for both");
     }
 
+    /// **The TTL bounds the sampling rate.** A subscription ticking faster
+    /// than three quarters of the TTL is handed the reading it already has
+    /// rather than being allowed to drive the samplers — which is what makes a
+    /// separate "minimum interval" knob unnecessary, and what stops a remote
+    /// subscriber having any say over how hard this agent works.
     #[tokio::test]
     async fn a_tick_inside_the_ttl_does_not_sample_again() {
         let config: Config = toml::from_str("[general]\nttl = \"60s\"\nsnapshot_format = \"v3\"\n")
@@ -3814,11 +3833,69 @@ mod tests {
         assert_eq!(builder.samples(), 2);
     }
 
-    /// Two subscriptions whose ticks fall within one TTL of each other share a
-    /// single sampling pass. This is the property that lets hindsight, a
-    /// recorder and a live viewer watch one agent without multiplying its
-    /// cost — and with per-subscription timers it comes from the TTL rather
-    /// than from a shared clock.
+    /// A subscriber served at an interval equal to the TTL samples at every
+    /// boundary, though it wakes a little late: each wake here is 0 to 5 ms
+    /// after its boundary, so some come less than one TTL after the last.
+    #[tokio::test]
+    async fn an_interval_equal_to_the_ttl_samples_at_every_boundary() {
+        let config: Config = toml::from_str("[general]\nttl = \"1s\"\nsnapshot_format = \"v3\"\n")
+            .expect("valid config");
+        let mut builder = SnapshotBuilder::new(
+            Arc::new(config),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+        let start = Instant::now();
+        let jitter_ms = [3u64, 1, 5, 0, 4, 2, 5, 1];
+        for (k, j) in jitter_ms.iter().enumerate() {
+            builder
+                .rows_at(start + Duration::from_secs(k as u64) + Duration::from_millis(*j))
+                .await
+                .expect("v3 agent");
+        }
+        assert_eq!(builder.samples() as usize, jitter_ms.len());
+    }
+
+    /// A pass is reused while its age is at most three quarters of the TTL,
+    /// counted from the `now` it was built for, and not from the real instant
+    /// the pass ran. The synthetic clock runs far ahead of the real one, so a
+    /// cache stamped with the real instant would find every pass after the
+    /// first already stale.
+    #[tokio::test]
+    async fn a_pass_is_reused_for_three_quarters_of_the_ttl_from_its_now() {
+        let config: Config = toml::from_str("[general]\nttl = \"1s\"\nsnapshot_format = \"v3\"\n")
+            .expect("valid config");
+        let mut builder = SnapshotBuilder::new(
+            Arc::new(config),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        builder.rows_at(at(0)).await.expect("v3 agent");
+        builder.rows_at(at(750)).await.expect("v3 agent");
+        assert_eq!(builder.samples(), 1, "750 ms after a pass: reused");
+        builder.rows_at(at(751)).await.expect("v3 agent");
+        assert_eq!(builder.samples(), 2, "751 ms after a pass: a new one");
+        builder.rows_at(at(1501)).await.expect("v3 agent");
+        assert_eq!(
+            builder.samples(),
+            2,
+            "750 ms after the pass at 751 ms: reused"
+        );
+        builder.rows_at(at(1502)).await.expect("v3 agent");
+        assert_eq!(
+            builder.samples(),
+            3,
+            "751 ms after the pass at 751 ms: a new one"
+        );
+    }
+
+    /// Two subscriptions whose ticks fall within three quarters of a TTL of
+    /// each other share a single sampling pass. This is the property that lets
+    /// hindsight, a recorder and a live viewer watch one agent without
+    /// multiplying its cost — and with per-subscription timers it comes from
+    /// the TTL rather than from a shared clock.
     #[tokio::test]
     async fn two_subscriptions_ticking_together_share_one_pass() {
         let config: Config = toml::from_str("[general]\nttl = \"1s\"\nsnapshot_format = \"v3\"\n")
@@ -3841,10 +3918,10 @@ mod tests {
         assert_eq!(builder.samples(), 1, "and it was sampled once");
     }
 
-    /// A subscription asking faster than the TTL gets UPDATES at the TTL's
-    /// rate, not at its own. It still gets a frame per interval — an empty one
-    /// where there is nothing new — so what the TTL bounds is the readings,
-    /// not the cadence.
+    /// A subscription asking faster than the TTL gets UPDATES at most once per
+    /// three quarters of the TTL, not at its own rate. It still gets a frame
+    /// per interval — an empty one where there is nothing new — so what the
+    /// TTL bounds is the readings, not the cadence.
     ///
     /// Models what the stream handler does: tick, ask, and carry rows only
     /// when the reading is one it has not already sent.
@@ -3875,29 +3952,22 @@ mod tests {
             }
         }
 
-        // The exact count is deliberately not asserted. `refresh` stamps the
-        // cache with the real `Instant::now()`, so how far this loop's
-        // synthetic clock gets ahead of it depends on how long a sampling pass
-        // takes in a debug build — noise, not behaviour.
+        // `ensure_fresh` stamps the cache with this loop's synthetic `now`,
+        // so the count does not depend on how long a pass takes. A pass is
+        // reused while its age is at most 75 ms (three quarters of 100 ms), so
+        // the first tick past that is 80 ms after the last pass: passes at 0,
+        // 80, 160, ... 960 ms, 13 in all.
         //
-        // What IS behaviour: one update per sampling pass, in both directions.
-        // No pass goes unreported (data would be lost) and no update is
-        // reported without one (that is the duplicate the empty frame
-        // replaces).
+        // One update per sampling pass, in both directions: no pass goes
+        // unreported (data would be lost) and no update is reported without
+        // one (that is the duplicate the empty frame replaces).
         assert_eq!(
             builder.samples() as usize,
             updates,
             "expected one update per sampling pass; {updates} updates, {} passes",
             builder.samples()
         );
-        assert!(
-            updates >= 2,
-            "the TTL must expire at least twice over this span"
-        );
-        assert!(
-            updates < 20,
-            "100 ticks at a tenth of the TTL must coalesce heavily; {updates} updates"
-        );
+        assert_eq!(updates, 13, "one pass per 80 ms of 10 ms ticks");
     }
 
     /// A V2 agent must be refused a stream rather than handed an open

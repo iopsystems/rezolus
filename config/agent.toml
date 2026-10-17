@@ -6,16 +6,19 @@ listen = "0.0.0.0:4241"
 #
 # This knob does two jobs, and it is worth knowing both before changing it.
 #
-# 1. It coalesces consumers. Two scrapes or subscriptions landing within one
-#    TTL of each other share a single sampling pass rather than causing two.
-#    Subscriptions align to wall-clock boundaries, so consumers at the same
-#    interval genuinely do land together and this works.
+# 1. It coalesces consumers. A scrape or subscription landing within three
+#    quarters of a TTL of the request that caused the last pass shares that
+#    pass rather than causing another. Subscriptions align to wall-clock boundaries, so consumers
+#    at the same interval genuinely do land together and this works.
 #
-# 2. It is the FLOOR on how often the agent samples, and therefore on how often
-#    a /metrics/stream frame can carry anything new. A subscriber asking for
-#    less than the TTL is legal — it gets the frames it asked for, most of them
-#    empty — but it cannot make the agent work harder than this. Subscribers
-#    are told the floor in the `x-metriken-update-floor` response header.
+# 2. It is the floor on the /metrics/stream interval, and so bounds how often
+#    the agent samples. A subscriber asking for less than the TTL is served at
+#    the TTL. A pass can follow the last after three quarters of the TTL, so
+#    that a subscriber waking slightly early still gets a new reading; two
+#    consumers whose requests fall that far apart cause two passes. The
+#    response names the interval served and the floor (the
+#    `x-metriken-frame-interval` and `x-metriken-update-floor` headers, and
+#    the stream's handshake).
 #
 # The consequence of one knob doing both: raising the TTL to protect the agent
 # from a demanding subscriber also coarsens every scrape-based consumer. The

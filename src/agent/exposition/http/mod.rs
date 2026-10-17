@@ -163,12 +163,14 @@ use metriken_exposition::stream::{Layout, StreamRequest, StreamSubscription};
 ///
 /// # Interval and update floor
 ///
-/// The interval is honoured exactly: each subscription has its own timer. It
-/// does not control how often the agent samples. A tick inside the snapshot
-/// TTL is answered from cache, and readings already sent are not repeated:
-/// that interval gets an empty frame. The update-floor header reports the
-/// TTL, so a subscriber asking for less can tell that its frames carry new
-/// readings only at the TTL's rate.
+/// The interval is negotiated: the request offers one, and the subscription
+/// is served at the larger of the offer and the snapshot TTL, the agent's
+/// update floor. The frame-interval and update-floor headers and the
+/// handshake's metadata name both, and a subscriber takes the served
+/// interval as the stream's. Each subscription has its own timer, which does
+/// not control how often the agent samples: a tick within three quarters of
+/// the TTL of the last pass is answered from cache, and readings already sent
+/// are not repeated.
 ///
 /// # Layout
 ///
@@ -215,9 +217,6 @@ async fn stream(
             .into_response();
     }
 
-    // Held by the body for the stream's life, so `/status` counts this
-    // subscriber until the client goes away.
-    let registration = state.subscribers.register(request.interval);
     let subscription = StreamSubscription::new(
         request,
         state.ttl,
@@ -225,7 +224,11 @@ async fn stream(
             .into_iter()
             .collect(),
         std::collections::BTreeMap::new(),
-    );
+    )
+    .negotiated();
+    // Held by the body for the stream's life, so `/status` counts this
+    // subscriber, at the interval it is served, until the client goes away.
+    let registration = state.subscribers.register(subscription.request().interval);
 
     let mut headers = axum::http::HeaderMap::new();
     for (name, value) in subscription.headers() {
@@ -479,7 +482,9 @@ mod stream_tests {
                 .expect("subscribes");
         assert_eq!(sub.layout(), Layout::Long);
 
-        // Recorded as `record -o out.dendro` records it: decoded, then staged.
+        // Recorded as `record -o out.dendro` records it: decoded, then staged
+        // (the recorder also drops the handshake's two stream keys, which
+        // this test keeps).
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("long.dendro");
         let mut writer =
@@ -748,16 +753,18 @@ mod stream_tests {
     /// subscription is sent `TICKS` frames, and the sampling passes are also
     /// at most the distinct intervals those frames name.
     ///
-    /// A sampler whose refresh sleeps 250 ms makes every pass 150 ms longer
-    /// than the TTL on any build, so a subscriber queued behind it would find
-    /// it stale if it read the time after the lock, unless it woke more than
-    /// 150 ms after the one building.
+    /// A sampler whose refresh sleeps 250 ms makes every pass longer than the
+    /// TTL on any build. A subscriber queued behind it that read the time
+    /// after the lock would be at least 250 ms past the `now` the pass was
+    /// built for, beyond the 75 ms the pass is reused, and would sample again.
+    /// The handler reads the time before taking the lock.
     ///
     /// The TTL is a quarter of the interval, as the agent's is far below its own
     /// (10 ms under 1 s). With a TTL equal to the interval, a subscriber that
-    /// woke earlier than the one that built the last pass can find that pass
-    /// still fresh at the next boundary, send an empty frame, and send that
-    /// pass one interval late, at the same `seq` as the new one.
+    /// woke more than a quarter TTL earlier than the one that built the last
+    /// pass can find that pass still fresh at the next boundary, send an empty
+    /// frame, and send that pass one interval late, at the same `seq` as the
+    /// new one.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn three_subscriptions_at_one_interval_share_one_pass_per_interval() {
         const TICKS: usize = 12;
@@ -1043,7 +1050,9 @@ mod stream_tests {
             header("content-type").as_deref(),
             Some(WIRE_NAMES.content_type)
         );
-        assert_eq!(header(WIRE_NAMES.frame_interval).as_deref(), Some("500ms"));
+        // A 500 ms offer against the 1 s TTL is served at the TTL, which the
+        // handshake names too.
+        assert_eq!(header(WIRE_NAMES.frame_interval).as_deref(), Some("1s"));
         assert_eq!(header(WIRE_NAMES.update_floor).as_deref(), Some("1s"));
         assert_eq!(header(WIRE_NAMES.layout).as_deref(), Some("long"));
         let legacy: Vec<_> = response
@@ -1052,6 +1061,30 @@ mod stream_tests {
             .filter(|k| k.as_str().starts_with("x-rezolus-"))
             .collect();
         assert!(legacy.is_empty(), "no legacy headers: {legacy:?}");
+        let mut response = response;
+        let mut body = Vec::new();
+        let handshake = loop {
+            body.extend_from_slice(&response.chunk().await.unwrap().expect("a handshake"));
+            let Ok(mut reader) =
+                dendro::replicate::wire::FrameReader::new(std::io::Cursor::new(&body))
+            else {
+                continue;
+            };
+            if let Ok(Some(frame)) = reader.next_frame() {
+                break frame;
+            }
+        };
+        let dendro::replicate::Frame::Handshake { metadata, .. } = handshake else {
+            panic!("the first frame is not a handshake");
+        };
+        assert_eq!(
+            metadata[metriken_exposition::stream::HANDSHAKE_FRAME_INTERVAL],
+            "1s"
+        );
+        assert_eq!(
+            metadata[metriken_exposition::stream::HANDSHAKE_UPDATE_FLOOR],
+            "1s"
+        );
     }
 
     /// The recorder matches the `Content-Type` against each accepted set of
@@ -1455,9 +1488,11 @@ mod stream_tests {
 /// sequence of synthetic passes, in each layout, with the agent's own pass
 /// types (`AgentRows` wide, `StreamRows` long), and its output is compared
 /// byte for byte with a committed fixture under
-/// `tests/fixtures/stream-frames/`. The fixtures were recorded from the
-/// agent's own frame code before the route moved to metriken-exposition
-/// (#1434), so a match says the move changed no frame.
+/// `tests/fixtures/stream-frames/`. The subscription is negotiated, as the
+/// handler's is, so the opening chunk's handshake carries the served
+/// interval and the update floor; every other chunk is as the agent's own
+/// frame code wrote it before the route moved to metriken-exposition
+/// (#1434).
 ///
 /// File format: one record per chunk the stream yields, the opening chunk
 /// (preamble and handshake) first, then one per interval. Each record is a
@@ -1499,6 +1534,7 @@ mod stream_frame_fixture {
                 .into_iter()
                 .collect(),
         )
+        .negotiated()
     }
 
     fn schema(n: usize) -> GroupSchema {

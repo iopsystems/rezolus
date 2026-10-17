@@ -71,6 +71,28 @@
 
 ### Changed
 
+- **The `/metrics/stream` interval is negotiated** (metriken-exposition
+  0.23.1, metriken-recorder 0.3). The agent serves a stream at the larger of
+  the interval asked for and its snapshot TTL, and names the interval served
+  and the TTL in the response headers and the stream's handshake, where it
+  served any interval asked for and sent mostly empty frames below the TTL.
+  `record`, hindsight and the live viewer take the interval a producer serves
+  as the source's interval: its `sampling_interval_ms`, the silence after
+  which a stream is reconnected, and the wait for a frame after a wrapped
+  command exits. A reconnect asks for at least the producer's floor.
+  `/status` counts a subscriber at the interval it is served. At the default
+  10 ms TTL an interval of 10 ms or more is served as asked; the handshake
+  gains the two keys either way, and a recorder on metriken-recorder older
+  than 0.3 (6.0.0 alphas before this) keeps them in a recording's metadata.
+- **The agent reuses a snapshot for three quarters of its TTL**, counted from
+  the moment it was asked for, where it reused it for the whole TTL counted
+  from the start of its pass. A subscriber served at an interval equal to
+  the TTL wakes about one TTL after its last snapshot, a little early or
+  late, and an early wake was handed that snapshot again and sent an empty
+  frame: an agent with a 1 s TTL, recorded at 100 ms and so served at 1 s,
+  delivered 19 to 21 rows in 30 s. The agent now samples at most once per
+  three quarters of its TTL.
+
 - **`memory_slabinfo` publishes `memory_slab_cache_bytes` for every slab
   cache**, labeled by `cache`, so slab growth that `memory_slab` shows is
   attributable to a cache by name (`kmalloc-*`, ZFS, KVM, VFIO or any other).

@@ -45,14 +45,13 @@
 //!   changes nothing for anyone else.
 //!
 //! - **The TTL is the floor.** A subscription asking for less than the TTL
-//!   finds the cached snapshot still valid, so it cannot make the agent sample
-//!   faster than an operator configured it to. The stream answers such a tick
-//!   with an empty frame rather than repeating readings the subscriber
-//!   already has, so asking too fast costs neither sampling passes nor
-//!   meaningful bandwidth. No second knob.
+//!   is served at the TTL (`StreamSubscription::negotiated`), so it cannot
+//!   make the agent sample faster than an operator configured it to. A pass
+//!   is reused for three quarters of the TTL, so two passes are at least that
+//!   far apart whatever the subscriptions ask for. No second knob.
 //!
-//! What it costs is that two subscriptions whose timers fall outside one
-//! TTL of each other cause two passes where a shared clock would have caused
+//! What it costs is that two subscriptions whose timers fall more than three
+//! quarters of a TTL apart cause two passes where a shared clock would have caused
 //! one. That is the right trade: each is answered with a reading taken when it
 //! asked, rather than one taken up to a full tick earlier and relabelled.
 //!
@@ -122,7 +121,7 @@ impl Subscribers {
             .len()
     }
 
-    /// The shortest interval anyone asked for, or `None` when nothing is
+    /// The shortest interval any subscription is served at, or `None` when nothing is
     /// subscribed — which is to say, when the agent is tickless.
     pub fn fastest(&self) -> Option<Duration> {
         self.inner
