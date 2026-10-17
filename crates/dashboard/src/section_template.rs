@@ -187,25 +187,42 @@
 //! - spends at most [`MAX_FUEL`] units of fuel, which count the input it
 //!   processes: one unit per iteration of every loop (a node, a predicate,
 //!   a reference, a series walked, a counter name, a binding), one per
-//!   byte it scans or copies (template text, label keys and values, bound
-//!   values and names, output), and [`SOURCE_CALL_FUEL`] per call into the
-//!   [`MetricsSource`]. Each metric's series of each type and the counter
-//!   names are read from the source once per section expansion and then
-//!   from a memo, so a metric named many times costs one source read.
+//!   byte it scans, compares or copies (template text, label names looked
+//!   up, label values, bound values and names, output), and
+//!   [`SOURCE_CALL_FUEL`] per call into the [`MetricsSource`]. Each
+//!   metric's series of each type and the counter names are read from the
+//!   source once per section expansion and then from a memo, so a metric
+//!   named many times costs one source read.
 //!
 //! The invariant the fuel counter rests on: every loop in expansion
-//! charges at least one unit per iteration, and every copy charges its
-//! bytes. A comment at each loop in the code names its charge.
+//! charges at least one unit per iteration, and every string it copies,
+//! scans or compares charges at least its length once. A map lookup
+//! compares its key a few times (once per level of the map) and is charged
+//! once; a sort is charged per level of comparisons. A comment at each
+//! loop in the code names its charge.
 //!
-//! Measured on a 9.6-hour, 1.3 GB recording opened as an archive, the
-//! slowest construction found that runs to the fuel limit (a
-//! `distinct_gt` with `each` over 4096 metric names, on each of 8100
-//! repeat passes) takes 0.35 s, so a document of [`MAX_SECTIONS`] such
-//! sections takes about 22 s to expand in full. The Rezolus template's
-//! sixteen sections take 53 ms together on the same recording, and its
-//! largest section spends about 1.7 million units on a test catalog of 256
-//! devices of every kind with ten labels per series (`/cpu`; about 7
-//! million at 1024).
+//! Measured on a 9.6-hour, 1.3 GB recording of a 16-CPU host opened as an
+//! archive (series of 6 to 9 labels, 125 to 200 bytes each), after the
+//! reader has read each metric once: the slowest construction found that
+//! runs to the fuel limit (a `distinct_gt` with `each` over 4096 metric
+//! names, on each of 8100 repeat passes) takes 0.35 s, so a document of
+//! [`MAX_SECTIONS`] such sections takes about 22 s to expand in full. The
+//! first read of a metric from a cold archive is outside the fuel count
+//! and is paid once per process: 2.6 s for `task_cpu_usage` on that
+//! recording. The Rezolus template's sixteen sections take 83 ms together
+//! on that recording when cold and 0.3 ms when warm.
+//!
+//! The Rezolus template's headroom: on that recording its largest section
+//! spends 43,581 units (`/cgroups`; `/cpu` 39,771). Estimated by scaling
+//! the recording's CPU count, `/cpu` grows by about 270 units per CPU and
+//! `/scheduler` by about 134, so `/cpu` would reach the limit near 62,000
+//! CPUs; `/cgroups`, `/softirq`, `/syscall` and `/network` do not grow
+//! with CPU count. (On the bench test catalog widened from 16 to 1024
+//! CPUs, measured: `/cpu` grows by 44 units per CPU and `/scheduler` by
+//! 12; that catalog has two CPU states where a host has more.) On the test catalog of every metric the generators name,
+//! widened to 256 devices of every kind with ten labels per series, the
+//! largest section is `/network` at 2.3 million units (about 9 million at
+//! 1024 devices).
 //!
 //! A section that would exceed any of these is refused with an error of
 //! kind [`TemplateErrorKind::Limit`]; the other sections are unaffected.
@@ -1357,6 +1374,19 @@ fn check_section_name(name: &str, route: &str) -> Result<(), TemplateError> {
     Ok(())
 }
 
+/// A label name in a predicate or repeat is at most [`MAX_NAME_BYTES`]
+/// before substitution: each series lookup compares it against the
+/// catalog's label names.
+fn check_label_name(label: &str) -> Result<(), TemplateError> {
+    if label.len() > MAX_NAME_BYTES {
+        return err(format!(
+            "label name {:?} is longer than {MAX_NAME_BYTES} bytes",
+            ex(label)
+        ));
+    }
+    Ok(())
+}
+
 /// `name` is a let, parameter, repeat variable or field name: ASCII
 /// letters, digits and `_`, not starting with a digit, at most
 /// [`MAX_NAME_BYTES`] bytes.
@@ -1553,6 +1583,7 @@ impl<'a> Names<'a> {
                 value,
             }) => {
                 self.text(metric)?;
+                check_label_name(label)?;
                 self.text(label)?;
                 self.text_opt(value)
             }
@@ -1580,6 +1611,7 @@ impl<'a> Names<'a> {
                 if *each && (by.len() != 1 || !int.is_empty()) {
                     return err("distinct_gt with `each` takes one `by` label and no `int`");
                 }
+                by.iter().chain(int).try_for_each(|l| check_label_name(l))?;
                 metrics
                     .iter()
                     .chain(by)
@@ -1653,6 +1685,7 @@ impl<'a> Names<'a> {
         let bound = match &repeat.over {
             RepeatOver::LabelValues(lv) => {
                 self.text(&lv.metric)?;
+                check_label_name(&lv.label)?;
                 self.text(&lv.label)?;
                 self.names.insert(var.clone(), NameKind::Catalog);
                 return Ok(vec![var.clone()]);
@@ -1992,9 +2025,10 @@ impl<'a> Scope<'a> {
     /// [`MetricsSource::label_values`] gives them.
     fn label_values(&self, metric: &str, label: &str) -> Result<BTreeSet<String>, TemplateError> {
         let mut out = BTreeSet::new();
-        // Loop: one unit per series, plus the bytes of each value copied.
+        // Loop: one unit per series plus the label's bytes (the lookup
+        // compares them), plus the bytes of each value copied.
         for part in self.series(metric, true)? {
-            self.spend_fuel(part.len())?;
+            self.spend_fuel(part.len().saturating_mul(1 + label.len()))?;
             for labels in part.iter() {
                 if let Some(v) = labels.get(label) {
                     self.spend_fuel(v.len())?;
@@ -2135,22 +2169,28 @@ impl<'a> Scope<'a> {
                     // values. Two tuples whose hashes collide count once,
                     // which at 128 bits does not happen in practice.
                     let mut seen: HashSet<u128> = HashSet::new();
+                    // Which `by` labels are `int` labels, found once rather
+                    // than per series: each search compares label names.
+                    // Loop: one unit per label plus its bytes.
+                    let by_cost: usize = by.iter().map(|k| 1 + k.len()).sum();
+                    self.spend_fuel(by_cost.saturating_mul(1 + int.len()))?;
+                    let is_int: Vec<bool> = by.iter().map(|k| int.contains(k)).collect();
                     // Loop: what `subst` and `series` charge, per metric.
                     for metric in metrics {
-                        // Loop: one unit per series; each tuple adds one
-                        // unit per `by` label and the bytes of each value
+                        // Loop: one unit per series; each tuple adds, per
+                        // `by` label, one unit plus the label's bytes (the
+                        // lookup compares them) and the bytes of the value
                         // hashed.
                         for part in self.series(&self.subst(metric)?, false)? {
-                            self.spend_fuel(part.len().saturating_mul(1 + by.len()))?;
+                            self.spend_fuel(part.len().saturating_mul(1 + by_cost))?;
                             'series: for labels in part.iter() {
                                 let mut low = std::hash::DefaultHasher::new();
                                 let mut high = std::hash::DefaultHasher::new();
                                 1u8.hash(&mut high);
-                                for key in &by {
+                                for (key, is_int) in by.iter().zip(&is_int) {
                                     let value = labels.get(key);
                                     self.spend_fuel(value.map_or(0, String::len))?;
-                                    let normal: Option<std::borrow::Cow<str>> = if int.contains(key)
-                                    {
+                                    let normal: Option<std::borrow::Cow<str>> = if *is_int {
                                         match value.map(|v| v.parse::<i64>()) {
                                             Some(Ok(i)) => Some(i.to_string().into()),
                                             _ => continue 'series,
@@ -2514,10 +2554,9 @@ fn json_size(value: &Value) -> usize {
         + match value {
             Value::String(s) => s.len() + 5 * c0_count(s),
             Value::Array(items) => items.iter().map(json_size).sum(),
-            Value::Object(map) => map
-                .iter()
-                .map(|(k, v)| k.len() + 5 * c0_count(k) + json_size(v))
-                .sum(),
+            // Keys come from the template, which cannot hold a control
+            // character, or are fixed (the GPU selector's).
+            Value::Object(map) => map.iter().map(|(k, v)| k.len() + json_size(v)).sum(),
             Value::Null | Value::Bool(_) | Value::Number(_) => 0,
         }
 }
@@ -2613,9 +2652,17 @@ fn label_values_sorted(lv: &LabelValues, scope: &Scope<'_>) -> Result<Vec<String
         .label_values(&scope.subst(&lv.metric)?, &scope.subst(&lv.label)?)?
         .into_iter()
         .collect();
-    // The sort: one unit per value per comparison level, about n log n.
+    // The sort: per comparison level (log n of them), one unit per value
+    // plus the bytes the comparisons read; an `int` sort is a second pass
+    // that also parses each value per comparison.
     let n = values.len();
-    scope.spend_fuel(n.saturating_mul(usize::BITS as usize - n.leading_zeros() as usize))?;
+    let bytes: usize = values.iter().map(String::len).sum();
+    let levels = usize::BITS as usize - n.leading_zeros() as usize;
+    let passes = match lv.sort {
+        LabelSort::Str => 1,
+        LabelSort::Int => 2,
+    };
+    scope.spend_fuel((n + bytes).saturating_mul(levels).saturating_mul(passes))?;
     sort_label_values(&mut values, lv.sort);
     Ok(values)
 }
@@ -3949,7 +3996,9 @@ mod tests {
             when(json!({ "distinct_gt": { "metrics": ["m", "m"], "by": ["id"], "n": 999 } }));
         let once = when(json!({ "distinct_gt": { "metrics": ["m"], "by": ["id"], "n": 999 } }));
         let second = spent(&twice, &full).fuel.get() - spent(&once, &full).fuel.get();
-        assert!(second < read / 2, "{second}");
+        // The walk and the hashed values cost about half a read here; a
+        // second source read would cost a whole one more.
+        assert!(second < read, "{second}");
         // `has_counter` scans the counter names: 100 more names of 4 bytes.
         let names: Vec<String> = (0..100).map(|i| format!("c{i:03}")).collect();
         let mut many = Catalog::default();
@@ -4461,11 +4510,13 @@ mod tests {
             json!([{ "when": { "distinct_gt": { "metrics": ["m"], "by": ["a"], "n": 99 } },
                      "then": [] }]),
         );
-        // Two more `by` labels: each scanned and copied (2 + 2), and one more
-        // unit per series per label (5 series); `b` and `c` are absent, so
-        // no value bytes.
+        // Two more `by` labels: each scanned and copied (2 + 2), and one
+        // unit plus a byte per series per label (5 series); `b` and `c` are
+        // absent, so no value bytes.
         let fuel = |t: &str| spent(t, &data).fuel.get();
-        assert_eq!(fuel(&t) - fuel(&by1), 4 + 5 * 2);
+        // Per series, one unit plus one byte per extra label (5 series);
+        // finding the `int` labels once costs the same again.
+        assert_eq!(fuel(&t) - fuel(&by1), 4 + 5 * 4 + 4);
         // The same label three times costs three lookups and hashes the
         // value three times: one byte per series per extra label more.
         let dup = plots(
@@ -4473,7 +4524,7 @@ mod tests {
             json!([{ "when": { "distinct_gt": { "metrics": ["m"], "by": ["a", "a", "a"], "n": 99 } },
                      "then": [] }]),
         );
-        assert_eq!(fuel(&dup) - fuel(&by1), 4 + 5 * 2 + 5 * 2);
+        assert_eq!(fuel(&dup) - fuel(&by1), 4 + 5 * 4 + 5 * 2 + 4);
         let by: Vec<String> = (0..=MAX_BY_LABELS).map(|i| format!("l{i}")).collect();
         assert_refused(
             &plots(
@@ -5113,10 +5164,14 @@ mod tests {
             sort: LabelSort::Int,
         };
         label_values_sorted(&lv, &Scope::new(&data, &params, &sorted)).unwrap();
-        // Beyond the read: `m` and `id` scanned and copied (6), one unit per
-        // series walked (100), the values copied ("0" to "99", 190 bytes),
-        // and the sort (100 values times 7 bits).
-        assert_eq!(sorted.fuel.get() - read.fuel.get(), 6 + 100 + 190 + 100 * 7);
+        // Beyond the read: `m` and `id` scanned and copied (6), one unit
+        // plus the label's two bytes per series walked (300), the values
+        // copied ("0" to "99", 190 bytes), and the sort (two passes of 7
+        // levels over 100 values and their 190 bytes).
+        assert_eq!(
+            sorted.fuel.get() - read.fuel.get(),
+            6 + 100 * 3 + 190 + 2 * 7 * (100 + 190)
+        );
     }
 
     /// Each group, subgroup and plot is charged its struct's size in bytes.
@@ -5295,5 +5350,66 @@ mod tests {
             fuel(&meta(json!(["m"])), &long) - fuel(&meta(json!(["m"])), &short),
             10 * 3 * 2
         );
+    }
+
+    /// The base charges of a tuple count and a first `has_counter`.
+    #[test]
+    fn first_reads_cost_their_base_units() {
+        let data = Catalog::default()
+            .counter("m", &[&[("a", "0")], &[("a", "1")], &[("a", "2")]])
+            .gauge("m", &[&[("a", "0")], &[("a", "1")]]);
+        let empty = Catalog::default();
+        let by1 = plots(
+            json!({}),
+            json!([{ "when": { "distinct_gt": { "metrics": ["m"], "by": ["a"], "n": 99 } }, "then": [] }]),
+        );
+        // Against an absent `m`: the reads' series (5 × 3: one unit plus
+        // "a" and a value), the walk (5 × (1 + 1 + "a")) and the values
+        // hashed (5).
+        assert_eq!(
+            spent(&by1, &data).fuel.get() - spent(&by1, &empty).fuel.get(),
+            15 + 15 + 5
+        );
+        // The first `has_counter` reads the names: 64, then one unit plus
+        // the bytes of each of the 100 four-byte names.
+        let names: Vec<String> = (0..100).map(|i| format!("c{i:03}")).collect();
+        let mut many = Catalog::default();
+        for name in &names {
+            many = many.counter(name, &[&[]]);
+        }
+        let n = |k: usize| {
+            plots(
+                json!({}),
+                json!([{ "when": { "any": vec![json!({ "has_counter": "m" }); k] }, "then": [] }]),
+            )
+        };
+        // One unit for the predicate, `m` scanned and copied, the read, and
+        // the lookup (one plus `m`).
+        assert_eq!(
+            spent(&n(1), &many).fuel.get() - spent(&n(0), &many).fuel.get(),
+            1 + 2 + 64 + 100 * 5 + 2
+        );
+        // Label names in predicates are at most 64 bytes.
+        let long = "l".repeat(MAX_NAME_BYTES + 1);
+        for pred in [
+            json!({ "has_label": { "metric": "m", "label": long } }),
+            json!({ "distinct_gt": { "metrics": ["m"], "by": [long], "n": 1 } }),
+        ] {
+            assert_refused(
+                &plots(json!({}), json!([{ "when": pred, "then": [] }])),
+                "longer than 64 bytes",
+            );
+        }
+        assert_refused(
+            &plots(
+                json!({}),
+                json!([{ "repeat": { "var": "v", "in": { "label_values": { "metric": "m", "label": long } } }, "body": [] }]),
+            ),
+            "longer than 64 bytes",
+        );
+        // U+001F is the last control character refused.
+        assert_refused(&plots(json!({}), json!([gauge("a\u{1f}")])), "U+001F");
+        assert!(SectionTemplate::parse(&plots(json!({}), json!([gauge("a ")]))).is_ok());
+        assert_eq!(piece_cost("\u{1f}", false), 6);
     }
 }
