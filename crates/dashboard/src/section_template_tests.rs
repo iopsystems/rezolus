@@ -6,9 +6,10 @@
 //! with two series each (`sink`), the same with one series each and with
 //! every metric a gauge, a recording from before the renames (`legacy`), a
 //! host with three GPUs from two vendors, two vendors' GPUs sharing
-//! `id="0"`, GPUs with no `vendor` label or a non-integer `id`, an empty
-//! recording, and `sink` with each named metric removed in turn, so every
-//! presence predicate is seen both ways.
+//! `id="0"`, GPUs with no `vendor` label or a non-integer `id`, an Intel GPU
+//! with every engine class and an unknown one, devices with ids `"01"` and
+//! `"1"`, an empty recording, and `sink` with each named metric removed in
+//! turn, so every presence predicate is seen both ways.
 //!
 //! Golden files under `tests/golden/` hold the generators' output for the
 //! named catalogs, so the template stays checked once a generator is
@@ -376,6 +377,56 @@ fn gpus_with_unparsed_id() -> Catalog {
     out
 }
 
+/// An Intel GPU with an engine of every class the sampler names, plus one it
+/// does not (`blitter`), so every class's subgroup is seen present and an
+/// unknown class is seen ignored.
+fn intel_all_engines() -> Catalog {
+    let series: Vec<Labels> = [
+        "compute",
+        "render",
+        "copy",
+        "video",
+        "video-enhance",
+        "other",
+        "blitter",
+    ]
+    .iter()
+    .map(|class| labels(&[("id", "0"), ("vendor", "intel"), ("engine_class", class)]))
+    .collect();
+    let mut out = Catalog::default();
+    out.counters.insert("gpu_engine_busy_time".into(), series);
+    out.counters.insert(
+        "gpu_frequency_sample".into(),
+        vec![
+            labels(&[("id", "0"), ("vendor", "intel"), ("frequency", "actual")]),
+            labels(&[("id", "0"), ("vendor", "intel"), ("frequency", "requested")]),
+        ],
+    );
+    out
+}
+
+/// GPUs and CPUs with ids `"01"` and `"1"`: one device where ids are
+/// compared as integers, two where they are compared as strings.
+fn non_canonical_ids() -> Catalog {
+    let series = vec![
+        labels(&[("id", "01"), ("vendor", "nvidia"), ("state", "user")]),
+        labels(&[("id", "1"), ("vendor", "nvidia"), ("state", "user")]),
+    ];
+    let mut out = Catalog::default();
+    for name in ["gpu_utilization", "gpu_memory", "gpu_power_usage"] {
+        out.gauges.insert(name.into(), series.clone());
+    }
+    for name in [
+        "cpu_usage",
+        "cpu_cycles",
+        "cpu_instructions",
+        "scheduler_runqueue_wait",
+    ] {
+        out.counters.insert(name.into(), series.clone());
+    }
+    out
+}
+
 fn named_catalogs() -> Vec<(&'static str, Catalog)> {
     let bench = Catalog::from_json(include_str!("../tests/fixtures/catalogs/bench.json"));
     let sink = sink(&bench);
@@ -390,6 +441,8 @@ fn named_catalogs() -> Vec<(&'static str, Catalog)> {
         ("gpus-sharing-an-id", gpus_sharing_an_id()),
         ("gpus-without-vendor", gpus_without_vendor()),
         ("gpus-with-unparsed-id", gpus_with_unparsed_id()),
+        ("intel-all-engines", intel_all_engines()),
+        ("non-canonical-ids", non_canonical_ids()),
         ("empty", Catalog::default()),
     ]
 }
