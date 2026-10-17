@@ -1,1 +1,803 @@
-null
+{
+  "name": "GPU",
+  "route": "/gpu",
+  "let": {
+    "multi_gpu": {
+      "pred": {
+        "distinct_gt": {
+          "metrics": [
+            "gpu_utilization",
+            "gpu_memory",
+            "gpu_temperature",
+            "gpu_power_usage",
+            "gpu_clock",
+            "gpu_memory_utilization",
+            "gpmu_clock",
+            "gpu_engine_busy_time",
+            "gpu_frequency_sample"
+          ],
+          "by": [
+            "vendor",
+            "id"
+          ],
+          "n": 1,
+          "int": [
+            "id"
+          ]
+        }
+      }
+    }
+  },
+  "metadata": {
+    "gpu_selector": {
+      "computed": "gpu_selector",
+      "probe": [
+        "gpu_utilization",
+        "gpu_memory",
+        "gpu_temperature",
+        "gpu_power_usage",
+        "gpu_clock",
+        "gpu_memory_utilization",
+        "gpmu_clock",
+        "gpu_engine_busy_time",
+        "gpu_frequency_sample"
+      ]
+    }
+  },
+  "groups": [
+    {
+      "name": "Utilization",
+      "id": "utilization",
+      "subgroups": [
+        {
+          "name": "GPU Utilization",
+          "description": "Fraction of time the GPU has work scheduled, averaged and per-device.",
+          "plots": [
+            {
+              "split": {
+                "when": {
+                  "var": "multi_gpu"
+                },
+                "plots": [
+                  {
+                    "kind": "gauge",
+                    "title": "GPU %",
+                    "id": "gpu-pct",
+                    "unit": "percentage",
+                    "query": "avg(gpu_utilization) / 100",
+                    "percentage_range": true
+                  },
+                  {
+                    "kind": "gauge",
+                    "title": "GPU % (Per-GPU)",
+                    "id": "gpu-pct-per-gpu",
+                    "unit": "percentage",
+                    "query": "sum by (id, vendor) (gpu_utilization) / 100",
+                    "row_label": "GPU",
+                    "style": "heatmap",
+                    "percentage_range": true
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Memory Controller",
+          "description": "Fraction of time the memory controller is servicing requests.",
+          "plots": [
+            {
+              "split": {
+                "when": {
+                  "var": "multi_gpu"
+                },
+                "plots": [
+                  {
+                    "kind": "gauge",
+                    "title": "Memory Controller %",
+                    "id": "mem-ctrl-pct",
+                    "unit": "percentage",
+                    "query": "avg(gpu_memory_utilization) / 100",
+                    "percentage_range": true
+                  },
+                  {
+                    "kind": "gauge",
+                    "title": "Memory Controller % (Per-GPU)",
+                    "id": "mem-ctrl-pct-per-gpu",
+                    "unit": "percentage",
+                    "query": "sum by (id, vendor) (gpu_memory_utilization) / 100",
+                    "row_label": "GPU",
+                    "style": "heatmap",
+                    "percentage_range": true
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Parallel Compute Activity",
+      "id": "activity",
+      "subgroups": [
+        {
+          "name": "Tensor Activity",
+          "description": "Tensor core utilization — how busy the matrix-math units are.",
+          "plots": [
+            {
+              "split": {
+                "when": {
+                  "var": "multi_gpu"
+                },
+                "plots": [
+                  {
+                    "kind": "gauge",
+                    "title": "GPU Tensor Activity %",
+                    "id": "gpu-tensor-act",
+                    "unit": "percentage",
+                    "query": "avg(gpu_tensor_utilization{vendor=\"nvidia\"}) / 100",
+                    "percentage_range": true
+                  },
+                  {
+                    "kind": "gauge",
+                    "title": "GPU Tensor Activity % (Per-GPU)",
+                    "id": "gpu-tensor-act-per-gpu",
+                    "unit": "percentage",
+                    "query": "sum by (id, vendor) (gpu_tensor_utilization{vendor=\"nvidia\"}) / 100",
+                    "row_label": "GPU",
+                    "style": "heatmap",
+                    "percentage_range": true
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "SM Activity & Occupancy",
+          "description": "Streaming multiprocessor active time and warp occupancy — core indicators of compute efficiency.",
+          "plots": [
+            {
+              "split": {
+                "when": {
+                  "var": "multi_gpu"
+                },
+                "plots": [
+                  {
+                    "kind": "gauge",
+                    "title": "GPU SM Activity %",
+                    "id": "gpu-sm-act",
+                    "unit": "percentage",
+                    "query": "avg(gpu_sm_utilization{vendor=\"nvidia\"}) / 100",
+                    "percentage_range": true
+                  },
+                  {
+                    "kind": "gauge",
+                    "title": "GPU SM Activity % (Per-GPU)",
+                    "id": "gpu-sm-act-per-gpu",
+                    "unit": "percentage",
+                    "query": "sum by (id, vendor) (gpu_sm_utilization{vendor=\"nvidia\"}) / 100",
+                    "row_label": "GPU",
+                    "style": "heatmap",
+                    "percentage_range": true
+                  }
+                ]
+              }
+            },
+            {
+              "split": {
+                "when": {
+                  "var": "multi_gpu"
+                },
+                "plots": [
+                  {
+                    "kind": "gauge",
+                    "title": "GPU SM Occupancy %",
+                    "id": "gpu-sm-ocp",
+                    "unit": "percentage",
+                    "query": "avg(gpu_sm_occupancy{vendor=\"nvidia\"}) / 100",
+                    "percentage_range": true
+                  },
+                  {
+                    "kind": "gauge",
+                    "title": "GPU SM Occupancy % (Per-GPU)",
+                    "id": "gpu-sm-ocp-per-gpu",
+                    "unit": "percentage",
+                    "query": "sum by (id, vendor) (gpu_sm_occupancy{vendor=\"nvidia\"}) / 100",
+                    "row_label": "GPU",
+                    "style": "heatmap",
+                    "percentage_range": true
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Memory",
+      "id": "memory",
+      "subgroups": [
+        {
+          "name": "Capacity",
+          "description": "Total GPU memory used and free across all devices, plus overall utilization.",
+          "plots": [
+            {
+              "kind": "gauge",
+              "title": "Used",
+              "id": "mem-used",
+              "unit": "bytes",
+              "query": "sum(gpu_memory{state=\"used\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Free",
+              "id": "mem-free",
+              "unit": "bytes",
+              "query": "sum(gpu_memory{state=\"free\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Memory Utilization %",
+              "id": "mem-util-pct",
+              "unit": "percentage",
+              "query": "sum(gpu_memory{state=\"used\"}) / (sum(gpu_memory{state=\"used\"}) + sum(gpu_memory{state=\"free\"}))",
+              "width": "full",
+              "percentage_range": true
+            }
+          ]
+        },
+        {
+          "when": {
+            "var": "multi_gpu"
+          },
+          "then": [
+            {
+              "name": "Per-Device Capacity",
+              "description": "Memory used and free broken out by GPU id.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "Used (Per-GPU)",
+                  "id": "mem-used-per-gpu",
+                  "unit": "bytes",
+                  "query": "sum by (id, vendor) (gpu_memory{state=\"used\"})",
+                  "row_label": "GPU",
+                  "style": "heatmap"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Free (Per-GPU)",
+                  "id": "mem-free-per-gpu",
+                  "unit": "bytes",
+                  "query": "sum by (id, vendor) (gpu_memory{state=\"free\"})",
+                  "row_label": "GPU",
+                  "style": "heatmap"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "DRAM Bandwidth",
+          "description": "Fraction of peak memory bandwidth in use.",
+          "plots": [
+            {
+              "split": {
+                "when": {
+                  "var": "multi_gpu"
+                },
+                "plots": [
+                  {
+                    "kind": "gauge",
+                    "title": "DRAM Bandwidth Utilization %",
+                    "id": "gpu-dram-act",
+                    "unit": "percentage",
+                    "query": "avg(gpu_dram_bandwidth_utilization{vendor=\"nvidia\"}) / 100",
+                    "percentage_range": true
+                  },
+                  {
+                    "kind": "gauge",
+                    "title": "DRAM Bandwidth % (Per-GPU)",
+                    "id": "gpu-dram-act-per-gpu",
+                    "unit": "percentage",
+                    "query": "sum by (id, vendor) (gpu_dram_bandwidth_utilization{vendor=\"nvidia\"}) / 100",
+                    "row_label": "GPU",
+                    "style": "heatmap",
+                    "percentage_range": true
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PCIe",
+      "id": "pcie",
+      "subgroups": [
+        {
+          "name": "Receive",
+          "description": "Host-to-GPU traffic over PCIe.",
+          "plots": [
+            {
+              "kind": "gauge",
+              "title": "Total Receive Rate",
+              "id": "pcie-rx-per-gpu",
+              "unit": "datarate",
+              "query": "sum(gpu_pcie_throughput{direction=\"receive\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Receive Bandwidth Utilization %",
+              "id": "pcie-rx-util",
+              "unit": "percentage",
+              "query": "gpu_pcie_throughput{direction=\"receive\"} / ignoring(direction) gpu_pcie_bandwidth{vendor=\"nvidia\"}",
+              "percentage_range": true
+            }
+          ]
+        },
+        {
+          "name": "Transmit",
+          "description": "GPU-to-host traffic over PCIe.",
+          "plots": [
+            {
+              "kind": "gauge",
+              "title": "Total Transmit Rate",
+              "id": "pcie-tx-per-gpu",
+              "unit": "datarate",
+              "query": "sum(gpu_pcie_throughput{direction=\"transmit\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Transmit Bandwidth Utilization %",
+              "id": "pcie-tx-util",
+              "unit": "percentage",
+              "query": "gpu_pcie_throughput{direction=\"transmit\"} / ignoring(direction) gpu_pcie_bandwidth{vendor=\"nvidia\"}",
+              "percentage_range": true
+            }
+          ]
+        },
+        {
+          "name": "Link Capacity",
+          "description": "Aggregate theoretical PCIe bandwidth available to all GPUs.",
+          "plots": [
+            {
+              "kind": "gauge",
+              "title": "Bandwidth",
+              "id": "pcie-bandwidth",
+              "unit": "datarate",
+              "query": "sum(gpu_pcie_bandwidth{vendor=\"nvidia\"})",
+              "width": "full"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Power",
+      "id": "power",
+      "subgroups": [
+        {
+          "name": "Power Draw",
+          "description": "Instantaneous power consumption, total and per-GPU.",
+          "plots": [
+            {
+              "split": {
+                "when": {
+                  "var": "multi_gpu"
+                },
+                "plots": [
+                  {
+                    "kind": "gauge",
+                    "title": "Power (W)",
+                    "id": "power-watts",
+                    "unit": "count",
+                    "query": "sum(gpu_power_usage) / 1000",
+                    "axis_label": "Watts"
+                  },
+                  {
+                    "kind": "gauge",
+                    "title": "Power (Per-GPU)",
+                    "id": "power-watts-per-gpu",
+                    "unit": "count",
+                    "query": "sum by (id, vendor) (gpu_power_usage) / 1000",
+                    "row_label": "GPU",
+                    "style": "heatmap",
+                    "axis_label": "Watts"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Energy",
+          "description": "Energy consumption rate derived from the accumulating GPU energy counter.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "Energy Rate (W)",
+              "id": "energy-rate",
+              "unit": "count",
+              "query": "sum(irate(gpu_energy_consumption[5m])) / 1000",
+              "axis_label": "Watts",
+              "width": "full"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Temperature",
+      "id": "temperature",
+      "subgroups": [
+        {
+          "name": "Temperatures",
+          "description": "Per-device temperatures and the hottest GPU across the system.",
+          "plots": [
+            {
+              "when": {
+                "var": "multi_gpu"
+              },
+              "then": [
+                {
+                  "kind": "gauge",
+                  "title": "Temperature (Per-GPU)",
+                  "id": "temp-per-gpu",
+                  "unit": "count",
+                  "query": "max by (id, vendor) (gpu_temperature)",
+                  "row_label": "GPU",
+                  "style": "heatmap",
+                  "axis_label": "°C"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Max (°C)",
+                  "id": "temp-max",
+                  "unit": "count",
+                  "query": "max(gpu_temperature)",
+                  "axis_label": "°C"
+                }
+              ],
+              "else": [
+                {
+                  "kind": "gauge",
+                  "title": "Max (°C)",
+                  "id": "temp-max",
+                  "unit": "count",
+                  "query": "max(gpu_temperature)",
+                  "axis_label": "°C",
+                  "width": "full"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Clocks",
+      "id": "clocks",
+      "subgroups": [
+        {
+          "name": "Clock Frequencies",
+          "description": "Per-device clock speeds for graphics, memory, compute, and video engines.",
+          "plots": [
+            {
+              "kind": "gauge",
+              "title": "Graphics",
+              "id": "clock-graphics",
+              "unit": "frequency",
+              "query": "sum by (id, vendor) (gpu_clock{clock=\"graphics\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Memory",
+              "id": "clock-memory",
+              "unit": "frequency",
+              "query": "sum by (id, vendor) (gpu_clock{clock=\"memory\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Compute",
+              "id": "clock-compute",
+              "unit": "frequency",
+              "query": "sum by (id, vendor) (gpu_clock{clock=\"compute\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Video",
+              "id": "clock-video",
+              "unit": "frequency",
+              "query": "sum by (id, vendor) (gpu_clock{clock=\"video\"})"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "AMD GPU Performance Counters",
+      "id": "amd-pmu",
+      "subgroups": [
+        {
+          "name": "Compute Activity",
+          "description": "GPU busy fraction and vector-ALU throughput, derived from GRBM and SQ hardware counters.",
+          "plots": [
+            {
+              "kind": "gauge",
+              "title": "Active Workgroup Processors",
+              "id": "amd-active-wgp",
+              "unit": "count",
+              "query": "sum(irate(gpmu_busy_cycles[5m])) / sum(irate(gpmu_clock[5m]))",
+              "axis_label": "WGPs"
+            },
+            {
+              "kind": "counter",
+              "title": "VALU Instructions/s",
+              "id": "amd-valu-rate",
+              "unit": "count",
+              "query": "sum(irate(gpmu_valu_instructions[5m]))",
+              "axis_label": "instr/s"
+            },
+            {
+              "kind": "counter",
+              "title": "SALU Instructions/s",
+              "id": "amd-salu-rate",
+              "unit": "count",
+              "query": "sum(irate(gpmu_salu_instructions[5m]))",
+              "axis_label": "instr/s"
+            },
+            {
+              "kind": "counter",
+              "title": "LDS Instructions/s",
+              "id": "amd-lds-rate",
+              "unit": "count",
+              "query": "sum(irate(gpmu_lds_instructions[5m]))",
+              "axis_label": "instr/s"
+            },
+            {
+              "kind": "counter",
+              "title": "Estimated Total Instructions (VALU + LDS + SALU)",
+              "id": "amd-total-insts",
+              "unit": "count",
+              "query": "sum(irate(gpmu_valu_instructions[5m])) + sum(irate(gpmu_salu_instructions[5m])) + sum(irate(gpmu_lds_instructions[5m]))",
+              "axis_label": "instr/s"
+            },
+            {
+              "kind": "counter",
+              "title": "Total Busy Cycles/s",
+              "id": "amd-total-busy-cycles",
+              "unit": "count",
+              "query": "sum(irate(gpmu_busy_cycles[5m]))",
+              "axis_label": "cycles/s"
+            },
+            {
+              "kind": "gauge",
+              "title": "Estimated IPC (Estimated Total Instructions / Total Busy Cycles)",
+              "id": "amd-est-ipc",
+              "unit": "count",
+              "query": "(sum(irate(gpmu_valu_instructions[5m])) + sum(irate(gpmu_salu_instructions[5m])) + sum(irate(gpmu_lds_instructions[5m]))) / sum(irate(gpmu_busy_cycles[5m]))",
+              "axis_label": "instr/cycle"
+            },
+            {
+              "kind": "counter",
+              "title": "Waves/s",
+              "id": "amd-waves-rate",
+              "unit": "count",
+              "query": "sum(irate(gpmu_waves[5m]))",
+              "axis_label": "waves/s"
+            },
+            {
+              "kind": "gauge",
+              "title": "Estimated Instructions Per Wave (Estimated Total Instructions / Waves)",
+              "id": "amd-insts-per-wave",
+              "unit": "count",
+              "query": "(sum(irate(gpmu_valu_instructions[5m])) + sum(irate(gpmu_salu_instructions[5m])) + sum(irate(gpmu_lds_instructions[5m]))) / sum(irate(gpmu_waves[5m]))",
+              "axis_label": "instr/wave"
+            },
+            {
+              "kind": "gauge",
+              "title": "Cycles Per Wave",
+              "id": "amd-cycles-per-wave",
+              "unit": "count",
+              "query": "sum(irate(gpmu_busy_cycles[5m])) / sum(irate(gpmu_waves[5m]))",
+              "axis_label": "cycles/wave"
+            },
+            {
+              "kind": "gauge",
+              "title": "Average Waves Per Workgroup Processors",
+              "id": "amd-waves-per-wgp",
+              "unit": "count",
+              "query": "sum(irate(gpmu_wave_cycles[5m])) / sum(irate(gpmu_busy_cycles[5m]))",
+              "axis_label": "waves/active cycle"
+            },
+            {
+              "kind": "gauge",
+              "title": "Average Waves Per GPU",
+              "id": "amd-waves-per-gpu",
+              "unit": "count",
+              "query": "sum(irate(gpmu_wave_cycles[5m])) / sum(irate(gpmu_active_clock[5m]))",
+              "axis_label": "waves/active cycle"
+            }
+          ]
+        },
+        {
+          "name": "Caches",
+          "description": "Instruction-cache and L2 cache hit rates, derived from SQC and GL2C hardware counters.",
+          "plots": [
+            {
+              "kind": "gauge",
+              "title": "Instruction Cache Hit %",
+              "id": "amd-icache-hit",
+              "unit": "percentage",
+              "query": "sum(irate(gpmu_icache_hits[5m])) / sum(irate(gpmu_icache_requests[5m]))",
+              "percentage_range": true
+            },
+            {
+              "kind": "gauge",
+              "title": "L2 Cache Hit %",
+              "id": "amd-l2-hit",
+              "unit": "percentage",
+              "query": "sum(irate(gpmu_l2_hits[5m])) / (sum(irate(gpmu_l2_hits[5m])) + sum(irate(gpmu_l2_misses[5m])))",
+              "percentage_range": true
+            }
+          ]
+        },
+        {
+          "name": "Memory Bandwidth",
+          "description": "L2<->VRAM bandwidth, derived from GL2C read/write request counters (reads weighted 128B, writes 64B).",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "Estimated Read Bandwidth (VRAM Read Requests x 128B)",
+              "id": "amd-mem-read-bw",
+              "unit": "datarate",
+              "query": "sum(irate(gpmu_vram_read_requests[5m])) * 128"
+            },
+            {
+              "kind": "counter",
+              "title": "Estimated Write Bandwidth (VRAM Write Requests x 64B)",
+              "id": "amd-mem-write-bw",
+              "unit": "datarate",
+              "query": "sum(irate(gpmu_vram_write_requests[5m])) * 64"
+            },
+            {
+              "kind": "counter",
+              "title": "VRAM Read Requests",
+              "id": "amd-vram-read-req",
+              "unit": "count",
+              "query": "sum(irate(gpmu_vram_read_requests[5m]))",
+              "axis_label": "requests/s"
+            },
+            {
+              "kind": "counter",
+              "title": "VRAM Write Requests",
+              "id": "amd-vram-write-req",
+              "unit": "count",
+              "query": "sum(irate(gpmu_vram_write_requests[5m]))",
+              "axis_label": "requests/s"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "when": {
+        "any": [
+          {
+            "has_label": {
+              "metric": "gpu_engine_busy_time",
+              "label": "engine_class"
+            }
+          },
+          {
+            "has_label": {
+              "metric": "gpu_frequency_sample",
+              "label": "frequency"
+            }
+          }
+        ]
+      },
+      "then": [
+        {
+          "name": "Intel GPU Performance Counters",
+          "id": "intel-pmu",
+          "subgroups": [
+            {
+              "repeat": {
+                "var": "e",
+                "in": {
+                  "values": [
+                    {
+                      "class": "compute",
+                      "title": "Compute"
+                    },
+                    {
+                      "class": "render",
+                      "title": "Render"
+                    },
+                    {
+                      "class": "copy",
+                      "title": "Copy"
+                    },
+                    {
+                      "class": "video",
+                      "title": "Video"
+                    },
+                    {
+                      "class": "video-enhance",
+                      "title": "Video Enhance"
+                    },
+                    {
+                      "class": "other",
+                      "title": "Other"
+                    }
+                  ]
+                }
+              },
+              "body": [
+                {
+                  "when": {
+                    "has_label": {
+                      "metric": "gpu_engine_busy_time",
+                      "label": "engine_class",
+                      "value": "${e.class}"
+                    }
+                  },
+                  "then": [
+                    {
+                      "name": "${e.title}",
+                      "description": "Fraction of wall time the ${e.class} engine(s) spent executing work, from the i915/xe PMU. This is occupancy, not efficiency: an engine at 100% had work queued, which does not mean the execution units were saturated — read it alongside the frequency charts. Summing several engines of one class can exceed 100%, since they run concurrently.",
+                      "plots": [
+                        {
+                          "kind": "gauge",
+                          "title": "${e.title} Busy %",
+                          "id": "intel-${e.class}-pct",
+                          "unit": "percentage",
+                          "query": "sum(irate(gpu_engine_busy_time{engine_class=\"${e.class}\", vendor=\"intel\"}[5m])) / 1000000000"
+                        },
+                        {
+                          "kind": "gauge",
+                          "title": "${e.title} Busy % (Per-GPU)",
+                          "id": "intel-${e.class}-pct-per-gpu",
+                          "unit": "percentage",
+                          "query": "sum by (id, vendor) (irate(gpu_engine_busy_time{engine_class=\"${e.class}\", vendor=\"intel\"}[5m])) / 1000000000",
+                          "row_label": "GPU",
+                          "style": "heatmap"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "Frequency",
+              "description": "Average GPU frequency over each interval, recovered from the PMU's cumulative sum of per-tick MHz samples. Requested is what the driver asked for; actual is what the hardware delivered — a persistent gap between them means the GPU is being held back (thermal, power or voltage limits). Both fall to zero when the GT parks, because the driver stops sampling rather than because the clock reached zero.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "Actual",
+                  "id": "intel-freq-actual",
+                  "unit": "frequency",
+                  "query": "sum by (id, vendor) (irate(gpu_frequency_sample{frequency=\"actual\", vendor=\"intel\"}[5m])) * 1000000"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Requested",
+                  "id": "intel-freq-requested",
+                  "unit": "frequency",
+                  "query": "sum by (id, vendor) (irate(gpu_frequency_sample{frequency=\"requested\", vendor=\"intel\"}[5m])) * 1000000"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

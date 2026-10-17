@@ -6,8 +6,10 @@
 //! with two series each (`sink`), the same with one series each and with
 //! every metric a gauge, a
 //! recording from before the renames (`legacy`), a host with three GPUs
-//! from two vendors, an empty recording, and `sink` with each named metric
-//! removed in turn, so every presence predicate is seen both ways.
+//! from two vendors, two vendors' GPUs sharing `id="0"`, GPUs with no
+//! `vendor` label or a non-integer `id`, an empty recording, and `sink`
+//! with each named metric removed in turn, so every presence predicate is
+//! seen both ways.
 //!
 //! Golden files under `tests/golden/` hold the generators' output for the
 //! named catalogs, so the template stays checked once a generator is
@@ -301,6 +303,52 @@ fn gpus() -> Catalog {
     out
 }
 
+/// An NVIDIA GPU and an Intel iGPU, both `id="0"`: two GPUs only when
+/// counted by `(vendor, id)`.
+fn gpus_sharing_an_id() -> Catalog {
+    let mut out = Catalog::default();
+    out.gauges.insert(
+        "gpu_utilization".into(),
+        vec![labels(&[("id", "0"), ("vendor", "nvidia")])],
+    );
+    out.counters.insert(
+        "gpu_engine_busy_time".into(),
+        vec![labels(&[
+            ("id", "0"),
+            ("vendor", "intel"),
+            ("engine_class", "render"),
+        ])],
+    );
+    out
+}
+
+/// Two GPUs from a sampler that sets no `vendor` label (as the Apple GPU
+/// sampler does), so the selector lists entries without a vendor.
+fn gpus_without_vendor() -> Catalog {
+    let mut out = Catalog::default();
+    out.gauges.insert(
+        "gpu_utilization".into(),
+        vec![labels(&[("id", "0")]), labels(&[("id", "1")])],
+    );
+    out
+}
+
+/// One GPU, plus a series whose `id` is not an integer and one with no
+/// `id`. Counting either as a GPU would make this a multi-GPU host.
+fn gpus_with_unparsed_id() -> Catalog {
+    let mut out = Catalog::default();
+    out.gauges.insert(
+        "gpu_utilization".into(),
+        vec![
+            labels(&[("id", "0"), ("vendor", "nvidia")]),
+            labels(&[("id", "gpu"), ("vendor", "nvidia")]),
+        ],
+    );
+    out.gauges
+        .insert("gpu_temperature".into(), vec![labels(&[("vendor", "amd")])]);
+    out
+}
+
 fn named_catalogs() -> Vec<(&'static str, Catalog)> {
     let bench = Catalog::from_json(include_str!("../tests/fixtures/catalogs/bench.json"));
     let sink = sink(&bench);
@@ -312,6 +360,9 @@ fn named_catalogs() -> Vec<(&'static str, Catalog)> {
         ("sink-single", sink.single()),
         ("sink-gauges", sink.as_gauges()),
         ("gpus", gpus()),
+        ("gpus-sharing-an-id", gpus_sharing_an_id()),
+        ("gpus-without-vendor", gpus_without_vendor()),
+        ("gpus-with-unparsed-id", gpus_with_unparsed_id()),
         ("empty", Catalog::default()),
     ]
 }

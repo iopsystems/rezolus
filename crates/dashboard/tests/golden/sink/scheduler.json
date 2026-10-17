@@ -1,0 +1,350 @@
+{
+  "interval": 1.0,
+  "source": "rezolus",
+  "version": "6.0.0",
+  "filename": "",
+  "start_time": 1700000000000.0,
+  "end_time": 1700000060000.0,
+  "groups": [
+    {
+      "name": "Scheduler",
+      "id": "scheduler",
+      "subgroups": [
+        {
+          "name": "Runqueue Latency",
+          "description": "How long tasks waited on the runqueue before getting CPU time.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Runqueue Rate",
+                "id": "scheduler-runqueue-latency-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(histogram_irate(scheduler_runqueue_latency))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Runqueue Mean/Total",
+                "id": "scheduler-runqueue-latency-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(scheduler_runqueue_latency)",
+              "promql_query_total": "histogram_sum(scheduler_runqueue_latency)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Runqueue Latency",
+                "id": "scheduler-runqueue-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Latency",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "scheduler_runqueue_latency",
+              "width": "full"
+            }
+          ]
+        },
+        {
+          "name": "Runqueue Wait",
+          "description": "Accumulated runqueue wait time, averaged across CPUs and broken out per-CPU. A value of 1s/s means one task was waiting for the entire interval; values above 1s/s mean multiple tasks were queued concurrently — an indicator of scheduler pressure.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Wait",
+                "id": "scheduler-runqueue-wait",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(scheduler_runqueue_wait[5m])) / cpu_cores"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Wait (Per-CPU)",
+                "id": "scheduler-runqueue-wait-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(scheduler_runqueue_wait[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Task Timing",
+          "description": "Time tasks spent off-CPU (blocked, waiting) and on-CPU (running).",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Off CPU Rate",
+                "id": "off-cpu-time-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(histogram_irate(scheduler_offcpu))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Off CPU Mean/Total",
+                "id": "off-cpu-time-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(scheduler_offcpu)",
+              "promql_query_total": "histogram_sum(scheduler_offcpu)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Off CPU Time",
+                "id": "off-cpu-time",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Time",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "scheduler_offcpu"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Running Rate",
+                "id": "running-time-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(histogram_irate(scheduler_running))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Running Mean/Total",
+                "id": "running-time-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(scheduler_running)",
+              "promql_query_total": "histogram_sum(scheduler_running)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Running Time",
+                "id": "running-time",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Time",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "scheduler_running"
+            }
+          ]
+        },
+        {
+          "name": "Context Switches",
+          "description": "Involuntary context-switch rate, aggregate and per-core.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Context Switch",
+                "id": "cswitch",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(scheduler_context_switch[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Context Switch (Per-CPU)",
+                "id": "cswitch-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(scheduler_context_switch[5m]))"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "name": "Overview",
+      "route": "/overview"
+    },
+    {
+      "name": "Exceptions",
+      "route": "/exceptions"
+    },
+    {
+      "name": "Query Explorer",
+      "route": "/query"
+    },
+    {
+      "name": "CPU",
+      "route": "/cpu"
+    },
+    {
+      "name": "GPU",
+      "route": "/gpu"
+    },
+    {
+      "name": "Hardware Sensors",
+      "route": "/hw_sensors"
+    },
+    {
+      "name": "Memory",
+      "route": "/memory"
+    },
+    {
+      "name": "Network",
+      "route": "/network"
+    },
+    {
+      "name": "Scheduler",
+      "route": "/scheduler"
+    },
+    {
+      "name": "Syscall",
+      "route": "/syscall"
+    },
+    {
+      "name": "Softirq",
+      "route": "/softirq"
+    },
+    {
+      "name": "BlockIO",
+      "route": "/blockio"
+    },
+    {
+      "name": "Filesystem",
+      "route": "/filesystem"
+    },
+    {
+      "name": "ext4",
+      "route": "/ext4"
+    },
+    {
+      "name": "XFS",
+      "route": "/xfs"
+    },
+    {
+      "name": "cgroups",
+      "route": "/cgroups"
+    },
+    {
+      "name": "Rezolus",
+      "route": "/rezolus"
+    }
+  ]
+}

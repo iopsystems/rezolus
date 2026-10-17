@@ -1,1 +1,150 @@
-null
+{
+  "name": "Scheduler",
+  "route": "/scheduler",
+  "let": {
+    "multi_cpu": {
+      "pred": {
+        "distinct_gt": {
+          "metrics": [
+            "scheduler_runqueue_wait",
+            "scheduler_context_switch"
+          ],
+          "by": [
+            "id"
+          ],
+          "n": 1,
+          "each": true
+        }
+      }
+    }
+  },
+  "groups": [
+    {
+      "name": "Scheduler",
+      "id": "scheduler",
+      "subgroups": [
+        {
+          "name": "Runqueue Latency",
+          "description": "How long tasks waited on the runqueue before getting CPU time.",
+          "plots": [
+            {
+              "rate_mean": {
+                "title": "Runqueue",
+                "id": "scheduler-runqueue-latency",
+                "selector": "scheduler_runqueue_latency",
+                "mean_unit": "time"
+              }
+            },
+            {
+              "kind": "latency",
+              "title": "Runqueue Latency",
+              "id": "scheduler-runqueue-latency",
+              "axis_label": "Latency",
+              "unit_system": "time",
+              "query": "scheduler_runqueue_latency",
+              "width": "full"
+            }
+          ]
+        },
+        {
+          "name": "Runqueue Wait",
+          "description": "Accumulated runqueue wait time, averaged across CPUs and broken out per-CPU. A value of 1s/s means one task was waiting for the entire interval; values above 1s/s mean multiple tasks were queued concurrently — an indicator of scheduler pressure.",
+          "plots": [
+            {
+              "split": {
+                "when": {
+                  "var": "multi_cpu"
+                },
+                "plots": [
+                  {
+                    "kind": "counter",
+                    "title": "Wait",
+                    "id": "scheduler-runqueue-wait",
+                    "unit": "time",
+                    "unit_system": "time",
+                    "query": "sum(irate(scheduler_runqueue_wait[5m])) / cpu_cores"
+                  },
+                  {
+                    "kind": "counter",
+                    "title": "Wait (Per-CPU)",
+                    "id": "scheduler-runqueue-wait-per-cpu",
+                    "unit": "time",
+                    "unit_system": "time",
+                    "query": "sum by (id) (irate(scheduler_runqueue_wait[5m]))"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Task Timing",
+          "description": "Time tasks spent off-CPU (blocked, waiting) and on-CPU (running).",
+          "plots": [
+            {
+              "rate_mean": {
+                "title": "Off CPU",
+                "id": "off-cpu-time",
+                "selector": "scheduler_offcpu",
+                "mean_unit": "time"
+              }
+            },
+            {
+              "kind": "latency",
+              "title": "Off CPU Time",
+              "id": "off-cpu-time",
+              "axis_label": "Time",
+              "unit_system": "time",
+              "query": "scheduler_offcpu"
+            },
+            {
+              "rate_mean": {
+                "title": "Running",
+                "id": "running-time",
+                "selector": "scheduler_running",
+                "mean_unit": "time"
+              }
+            },
+            {
+              "kind": "latency",
+              "title": "Running Time",
+              "id": "running-time",
+              "axis_label": "Time",
+              "unit_system": "time",
+              "query": "scheduler_running"
+            }
+          ]
+        },
+        {
+          "name": "Context Switches",
+          "description": "Involuntary context-switch rate, aggregate and per-core.",
+          "plots": [
+            {
+              "split": {
+                "when": {
+                  "var": "multi_cpu"
+                },
+                "plots": [
+                  {
+                    "kind": "counter",
+                    "title": "Context Switch",
+                    "id": "cswitch",
+                    "unit": "rate",
+                    "query": "sum(irate(scheduler_context_switch[5m]))"
+                  },
+                  {
+                    "kind": "counter",
+                    "title": "Context Switch (Per-CPU)",
+                    "id": "cswitch-per-cpu",
+                    "unit": "rate",
+                    "query": "sum by (id) (irate(scheduler_context_switch[5m]))"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
