@@ -338,6 +338,53 @@ mod tests {
         buffer.sync().unwrap();
     }
 
+    /// A live session against a real agent: the agent's stream handshake
+    /// carries its section template, the recorder keeps it in the archive's
+    /// source metadata, and the live view's built-in sections render from it,
+    /// all by the time `start` returns, which is when the view's sections
+    /// are built.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_live_view_renders_the_agents_section_template() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let url = crate::agent::exposition::http::serve_for_test().await;
+        let client = Client::builder().http1_only().build().unwrap();
+        let info = super::super::actions::fetch_agent_info(&client, &url)
+            .await
+            .unwrap();
+        let session = LiveSession::start(&client, &url, info, BufferPool::new(64 << 20))
+            .await
+            .unwrap();
+        let revision = format!("rezolus {}", env!("CARGO_PKG_VERSION"));
+
+        let metadata = session.reader().file_metadata();
+        let carried = ::dashboard::section_template::SectionTemplate::parse(
+            &metadata[::dashboard::source_templates::KEY_DASHBOARD],
+        )
+        .unwrap();
+        assert_eq!(carried.revision(), Some(revision.as_str()));
+
+        let context = crate::viewer::metadata::live_dashboard_context(
+            session.reader().as_ref(),
+            ::dashboard::source_templates::TemplatePreference::Archive,
+        );
+        let template = context.template.as_ref().unwrap();
+        assert_eq!(template.revision(), Some(revision.as_str()));
+
+        // The embedded template names no release, so it is not what rendered.
+        assert_eq!(
+            ::dashboard::source_templates::embedded_dashboard_template().revision(),
+            Some("rezolus agent")
+        );
+        let preferred = crate::viewer::metadata::live_dashboard_context(
+            session.reader().as_ref(),
+            ::dashboard::source_templates::TemplatePreference::Registry,
+        );
+        assert_eq!(
+            preferred.template.as_ref().unwrap().revision(),
+            Some("rezolus agent")
+        );
+    }
+
     /// Live mode opens its reader before the first interval arrives, so an
     /// archive with a source and no rows has to open, and a refresh then
     /// finds the rows.

@@ -210,8 +210,18 @@ impl LazySectionStore {
     }
 
     /// Generate the section at `route` from `data`, without caching it.
+    ///
+    /// A section the template could not expand is an empty view carrying the
+    /// reason (`dashboard::dashboard::render_section`), and the reason is
+    /// logged once per process.
     pub fn generate(&self, route: &str, data: &dyn MetricsSource) -> Option<serde_json::Value> {
-        let mut view = dashboard::dashboard::generate_section(data, route, &self.context)?;
+        let rendered = dashboard::dashboard::render_section(data, route, &self.context)?;
+        if let Some(error) = rendered.error {
+            super::metadata::warn_notice_once(format!(
+                "section {route} could not be rendered from its dashboard template: {error}"
+            ));
+        }
+        let mut view = rendered.view;
         view.set_filename(data.filename_or_default());
         if let Some(size) = self.context.filesize {
             view.set_filesize(size);

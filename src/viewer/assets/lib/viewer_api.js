@@ -30,6 +30,18 @@ const backendRequest = (opts) => {
 
 const sectionUrl = (section) => `/data/${section}.json`;
 
+// A built-in section the dashboard template could not expand arrives as an
+// empty view whose `metadata.template_error` says why. The server logs it to
+// its terminal; the page logs each distinct message to the console once.
+// Mirrored in the WASM copy.
+const loggedSectionErrors = new Set();
+const logSectionTemplateError = (view) => {
+    const message = view && view.metadata && view.metadata.template_error;
+    if (typeof message !== 'string' || loggedSectionErrors.has(message)) return;
+    loggedSectionErrors.add(message);
+    console.warn(message);
+};
+
 // Return '?capture=<id>' for non-baseline captures, '' otherwise. The
 // backend treats the absence of the param as "baseline".
 const captureQS = (captureId) =>
@@ -132,11 +144,13 @@ const ViewerApi = {
     },
 
     async getSection(section, background = false) {
-        return backendRequest({
+        const view = await backendRequest({
             method: 'GET',
             url: sectionUrl(section),
             background,
         });
+        logSectionTemplateError(view);
+        return view;
     },
 
     async queryRange(query, start, end, step, captureId = 'baseline', signal = undefined, rateMode = 'grid') {

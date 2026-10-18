@@ -2,7 +2,7 @@ use super::*;
 
 mod clock;
 mod config;
-mod exposition;
+pub(crate) mod exposition;
 
 mod external_metrics;
 /// What a slot means: its labels and the `__uid__` minted per occupant.

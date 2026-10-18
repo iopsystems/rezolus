@@ -65,6 +65,30 @@ pub(crate) struct AppState {
     ttl: Duration,
 }
 
+/// Serve an agent with no samplers (v3 snapshots, a 1 s TTL) on a free
+/// local port from the caller's runtime, for tests outside this module that
+/// need a real agent: its routes, its stream handshake and its metadata.
+#[cfg(test)]
+pub(crate) async fn serve_for_test() -> reqwest::Url {
+    let config: Config = toml::from_str("[general]\nttl = \"1s\"\nsnapshot_format = \"v3\"\n")
+        .expect("valid config");
+    let state = AppState {
+        builder: Arc::new(Mutex::new(SnapshotBuilder::new(
+            Arc::new(config),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        ))),
+        subscribers: Subscribers::new(),
+        ttl: Duration::from_secs(1),
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app(state)).await;
+    });
+    reqwest::Url::parse(&format!("http://{addr}")).unwrap()
+}
+
 fn app(state: AppState) -> Router {
     Router::new()
         .route("/", get(root))
@@ -223,7 +247,7 @@ async fn stream(
         [("source".to_string(), env!("CARGO_BIN_NAME").to_string())]
             .into_iter()
             .collect(),
-        std::collections::BTreeMap::new(),
+        handshake_metadata(),
     )
     .negotiated();
     // Held by the body for the stream's life, so `/status` counts this
@@ -243,6 +267,39 @@ async fn stream(
         std::time::SystemTime::now,
     ));
     (headers, body).into_response()
+}
+
+/// The metadata this agent's stream handshake carries, beside the keys
+/// metriken-exposition adds (the producer epoch, and the frame interval and
+/// update floor `.negotiated()` sets).
+///
+/// `dashboard` is the section template for this build's metrics
+/// (`dashboard::rezolus_template`) with `revision` naming this release. A
+/// stream recording keeps it in the source's metadata, and the viewers render
+/// the built-in sections from it (`dashboard::source_templates`). It is about
+/// 106 KB, sent once per subscription in the handshake, so it costs each
+/// recorder, hindsight buffer or live viewer that much once per connection
+/// and once per archive source.
+fn handshake_metadata() -> std::collections::BTreeMap<String, String> {
+    [(
+        ::dashboard::source_templates::KEY_DASHBOARD.to_string(),
+        handshake_dashboard().to_string(),
+    )]
+    .into_iter()
+    .collect()
+}
+
+/// The `dashboard` value [`handshake_metadata`] sends, built once.
+fn handshake_dashboard() -> &'static str {
+    static DASHBOARD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    DASHBOARD.get_or_init(|| {
+        let mut doc: serde_json::Value =
+            serde_json::from_str(&::dashboard::rezolus_template::json())
+                .expect("the Rezolus template is JSON");
+        doc["revision"] =
+            serde_json::Value::String(format!("rezolus {}", env!("CARGO_PKG_VERSION")));
+        doc.to_string()
+    })
 }
 
 /// The bytes a stream subscription sends: its opening, then one frame per
@@ -1084,6 +1141,15 @@ mod stream_tests {
         assert_eq!(
             metadata[metriken_exposition::stream::HANDSHAKE_UPDATE_FLOOR],
             "1s"
+        );
+        // The section template, naming this release.
+        let dashboard = ::dashboard::section_template::SectionTemplate::parse(
+            &metadata[::dashboard::source_templates::KEY_DASHBOARD],
+        )
+        .expect("the handshake's dashboard parses");
+        assert_eq!(
+            dashboard.revision(),
+            Some(format!("rezolus {}", env!("CARGO_PKG_VERSION")).as_str())
         );
     }
 

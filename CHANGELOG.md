@@ -129,8 +129,8 @@
   viewer now also classifies a `.rez` or `.dendro` source from its metadata,
   so a simple capture's section is named by its `source`
   (`/source/127.0.0.1-18651`) rather than the file name, as the WASM viewer
-  and a parquet of the same capture name it. A `dashboard` key, reserved for
-  the section template, is kept and not rendered yet.
+  and a parquet of the same capture name it. The `dashboard` key holds the
+  section template for the built-in sections (see Added).
 
 - **`memory_slabinfo` publishes `memory_slab_cache_bytes` for every slab
   cache**, labeled by `cache`, so slab growth that `memory_slab` shows is
@@ -759,6 +759,34 @@
 
 ### Added
 
+- **The agent sends its section template, and both viewers render the
+  built-in sections from a template.** A Rezolus agent's `/metrics/stream`
+  handshake carries the Rezolus section template under the metadata key
+  `dashboard`, with `revision` set to `rezolus <version>`. `record`,
+  hindsight and the live viewer keep it in the dendro source's metadata. The
+  viewers (`rezolus view`, its terminal UI, and the WASM viewer) render the
+  Overview, Exceptions, CPU and the other built-in sections by expanding a
+  section template rather than calling the Rust section generators: the
+  recording's `dashboard` when it is at most 1 MiB and parses, else the
+  template the viewer embeds. The navigation comes from the chosen template.
+  A recording without the key (parquet, `.rez`, anything scraped, or a
+  recording of an older agent) renders the embedded template, which draws
+  the same JSON as the generators did. A `dashboard` that is too large or
+  does not parse renders the embedded template, with a warning once per
+  distinct message (the server's log; the browser console, from
+  `init_templates`). `rezolus view --registry-templates` and
+  `WasmCaptureRegistry::set_prefer_registry_templates` now also select the
+  embedded section template over the recording's. A section the template
+  cannot expand (a limit, or a parameter the viewer did not set) renders
+  empty, with the reason in its `metadata.template_error`, logged once by
+  the server and by the page; the other sections are unaffected. In a
+  comparison, the baseline's template renders for both captures. The cost is
+  the handshake: about 106 KB once per subscription, and the same once per
+  source in each archive written from the stream. The viewer's
+  `/api/v1/file_metadata` returns the key with the rest of the metadata.
+  Rendering a section from the template took the same time as the
+  generators on a 9.6-hour recording (all built-in sections, warm: 0.48 ms
+  against 0.45 ms; cold: 83 ms for both).
 - **Section templates, schema 1.** `dashboard::section_template` reads a
   JSON document describing dashboard sections (groups, subgroups and plots,
   with `when`, `repeat`, `split` and `rate_mean` nodes over predicates on
