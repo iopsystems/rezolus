@@ -22,3 +22,8 @@ const VIEW_BY_ROUTE = new Map([
 // 'notebook', 'selection' or 'report'), or null for a section whose groups
 // the backend renders.
 export const clientViewFor = (route) => VIEW_BY_ROUTE.get(route) ?? null;
+
+// What `SectionContent` mounts for `section` (`{ name, route }`): the page's
+// own view for a client route, else 'groups', the section's groups as the
+// backend rendered them. Only the route decides.
+export const contentFor = (section) => clientViewFor(section?.route) ?? 'groups';

@@ -28,7 +28,7 @@ import { MetricBrowserView } from './features/metric_browser.js';
 import { createSourceRoutes } from './features/source_routes.js';
 import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView } from './viewer_core.js';
 import { renderSectionNotes } from './sections/section_notes.js';
-import { clientViewFor, CLIENT_SECTIONS } from './ui/client_views.js';
+import { contentFor, CLIENT_SECTIONS } from './ui/client_views.js';
 import {
     createSectionCacheState,
     storeSectionResponse,
@@ -1015,27 +1015,27 @@ const SectionContent = {
             });
         }
 
-        const clientView = clientViewFor(sectionRoute);
+        const content = contentFor(attrs.section);
 
-        if (clientView === 'query') {
+        if (content === 'query') {
             return m('div#section-content', [
                 m(QueryExplorer, { liveMode, isRecording: () => recording }),
             ]);
         }
 
-        if (clientView === 'systeminfo') {
+        if (content === 'systeminfo') {
             return m('div#section-content', [
                 m(SystemInfoView, { data: systemInfoData }),
             ]);
         }
 
-        if (clientView === 'metadata') {
+        if (content === 'metadata') {
             return m('div#section-content', [
                 m(MetadataView, { data: fileMetadata }),
             ]);
         }
 
-        if (clientView === 'notebook') {
+        if (content === 'notebook') {
             const sectionMeta = getCachedSectionMeta(sectionResponseCache, interval);
             return m(NotebookView, {
                 title: 'Notebook',
@@ -1061,7 +1061,7 @@ const SectionContent = {
             });
         }
 
-        if (clientView === 'selection') {
+        if (content === 'selection') {
             const sectionMeta = getCachedSectionMeta(sectionResponseCache, interval);
             return m(LoadedSelectionView, {
                 title: 'Selection',
@@ -1075,7 +1075,7 @@ const SectionContent = {
             });
         }
 
-        if (clientView === 'report') {
+        if (content === 'report') {
             const sectionMeta = getCachedSectionMeta(sectionResponseCache, interval);
             return m(ReportView, {
                 title: 'Report',

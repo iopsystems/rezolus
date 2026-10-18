@@ -812,9 +812,10 @@
   let that uses another let, an undeclared parameter, more than 64 sections,
   a malformed or duplicate route, a section at `/query` (the query
   explorer's, placed with `{"builtin": "query"}`), an array or object of
-  more than 4096 entries, a string over 16 KiB or holding a control character, a name or a
-  predicate label name over 64 bytes as written, and a `distinct_gt` `int`
-  label that is not one of its `by` labels (of which there are at most 16).
+  more than 4096 entries, a string over 16 KiB or holding a control
+  character, a name or a predicate label name over 64 bytes as written, and
+  a `distinct_gt` `int` label that is not one of its `by` labels (of which
+  there are at most 16).
   Parsing is linear in the document's size, which it does not limit, so a
   caller reading untrusted templates caps it first. Each section's expansion
   is bounded on its own: 20,000 nodes; 4 MiB of output counted in memory

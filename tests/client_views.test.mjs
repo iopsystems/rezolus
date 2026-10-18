@@ -4,7 +4,7 @@
 // ordinary section whose groups render.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clientViewFor, CLIENT_SECTIONS } from '../src/viewer/assets/lib/ui/client_views.js';
+import { clientViewFor, contentFor, CLIENT_SECTIONS } from '../src/viewer/assets/lib/ui/client_views.js';
 
 test('every client route has its view', () => {
     assert.equal(clientViewFor('/query'), 'query');
@@ -29,4 +29,17 @@ test('a section named like a client view elsewhere renders its groups', () => {
     assert.equal(clientViewFor('/overview'), null);
     assert.equal(clientViewFor('/cpu'), null);
     assert.equal(clientViewFor('/service/vllm'), null);
+});
+
+test('SectionContent mounts by route: client views, else the groups', () => {
+    for (const [view, section] of Object.entries(CLIENT_SECTIONS)) {
+        assert.equal(contentFor(section), view);
+    }
+    assert.equal(contentFor({ name: 'Query Explorer', route: '/query' }), 'query');
+    for (const { name } of Object.values(CLIENT_SECTIONS)) {
+        assert.equal(contentFor({ name, route: '/nb' }), 'groups', name);
+    }
+    assert.equal(contentFor({ name: 'Notebook', route: '/nb' }), 'groups');
+    assert.equal(contentFor({ name: 'Query Explorer', route: '/qe' }), 'groups');
+    assert.equal(contentFor({ name: 'CPU', route: '/cpu' }), 'groups');
 });
