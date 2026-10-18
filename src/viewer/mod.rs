@@ -888,11 +888,11 @@ pub(crate) fn opens_combined(
 /// and what the viewer keeps about each.
 pub(super) struct CombinedRecordings {
     pub reader: crate::rez_reader::RezReader,
-    /// Each recording with tables, for `build_combined_context`.
+    /// Each recording, for `build_combined_context`.
     pub members: Vec<::dashboard::combined::Member>,
     /// Every recording's labels, in the archive's order.
     pub labels: Vec<std::collections::BTreeMap<String, String>>,
-    /// The first recording's `systeminfo` that has one.
+    /// The recordings' systeminfo (`dashboard::combined::assemble_members`).
     pub systeminfo: Option<String>,
 }
 
@@ -904,35 +904,28 @@ pub(super) fn combine_recordings(
     use metriken_query::MetricsSource;
     let labels: Vec<_> = readers.iter().map(|(l, _)| l.clone()).collect();
     let mut parts = Vec::with_capacity(readers.len());
-    let mut systeminfo = None;
     for (l, reader) in &readers {
         if reader.is_empty() {
             warn!(
-                "recording {} holds no rows; nothing renders for it",
+                "recording {} holds no rows yet",
                 crate::mcp::render_labels(l)
             );
         }
-        if systeminfo.is_none() {
-            systeminfo = reader.metadata_get("systeminfo");
-        }
         parts.push((
+            l.clone(),
             ::dashboard::combined::Header::of(reader),
             reader.file_metadata(),
         ));
     }
     let filename = readers.first().and_then(|(_, r)| r.filename());
     let (reader, series) = crate::rez_reader::RezReader::combine(readers, filename);
-    let members = parts
-        .into_iter()
-        .zip(series)
-        .filter_map(|((header, metadata), series_labels)| {
-            Some(::dashboard::combined::Member {
-                series_labels: series_labels?,
-                metadata,
-                header,
-            })
-        })
-        .collect();
+    let (members, systeminfo) = ::dashboard::combined::assemble_members(
+        parts
+            .into_iter()
+            .zip(series)
+            .map(|((l, header, metadata), series)| (l, series, header, metadata))
+            .collect(),
+    );
     CombinedRecordings {
         reader,
         members,
@@ -997,6 +990,7 @@ fn init_file_mode_combined(
         .set_baseline_alias(config.baseline_alias.clone());
     *state.members.write() = combined.members;
     if let Some(live) = live {
+        *state.combined_live.lock() = Some((Arc::clone(&live), 0));
         let followed = vec![(capture_registry::BASELINE_ID.to_string(), live)];
         match follow::Follow::start(followed, Arc::clone(&pool), follow::FOLLOW_INTERVAL) {
             Ok(f) => {

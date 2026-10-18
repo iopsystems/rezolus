@@ -204,8 +204,9 @@ pub struct Viewer {
     /// which the sections are built from
     /// (`dashboard::dashboard::build_combined_context`). Empty otherwise.
     members: Vec<dashboard::combined::Member>,
-    /// The first recording's `systeminfo` that has one, for a combined
-    /// archive, whose metadata is its first recording's.
+    /// A combined archive's systeminfo, one recording's or each recording's
+    /// by name (`dashboard::combined::assemble_members`); its metadata is
+    /// the first recording's.
     combined_systeminfo: Option<String>,
 }
 
@@ -297,30 +298,25 @@ impl Viewer {
     /// One capture over every recording of an archive that opens
     /// combined: the server viewer's `init_file_mode_combined`.
     fn combined(recordings: rez::reader::LabeledRecordings, pool: Arc<BufferPool>) -> Viewer {
-        let mut parts = Vec::with_capacity(recordings.len());
-        let mut systeminfo = None;
-        for (_, reader) in &recordings {
-            if systeminfo.is_none() {
-                systeminfo = reader.metadata_get("systeminfo");
-            }
-            parts.push((
-                dashboard::combined::Header::of(reader),
-                reader.file_metadata(),
-            ));
-        }
-        let filename = recordings.first().and_then(|(_, r)| r.filename());
-        let (reader, series) = rez::reader::RezReader::combine(recordings, filename);
-        let members = parts
-            .into_iter()
-            .zip(series)
-            .filter_map(|((header, metadata), series_labels)| {
-                Some(dashboard::combined::Member {
-                    series_labels: series_labels?,
-                    metadata,
-                    header,
-                })
+        let parts: Vec<_> = recordings
+            .iter()
+            .map(|(labels, reader)| {
+                (
+                    labels.clone(),
+                    dashboard::combined::Header::of(reader),
+                    reader.file_metadata(),
+                )
             })
             .collect();
+        let filename = recordings.first().and_then(|(_, r)| r.filename());
+        let (reader, series) = rez::reader::RezReader::combine(recordings, filename);
+        let (members, systeminfo) = dashboard::combined::assemble_members(
+            parts
+                .into_iter()
+                .zip(series)
+                .map(|((l, header, metadata), series)| (l, series, header, metadata))
+                .collect(),
+        );
         let mut viewer = Self::from_source_bytes(Arc::new(reader), pool, Bytes::new());
         viewer.members = members;
         viewer.combined_systeminfo = systeminfo;
@@ -1870,7 +1866,7 @@ mod tests {
         }
         let cpu: serde_json::Value =
             serde_json::from_str(&reg.get_section("baseline", "cpu@h2").unwrap()).unwrap();
-        assert_eq!(cpu["metadata"]["scope"]["host"], "h2");
+        assert_eq!(cpu["metadata"]["scope"][0]["value"], "h2");
         assert!(
             cpu.to_string().contains(r#"cpu_usage{host=\"h2\"}"#),
             "{cpu}"

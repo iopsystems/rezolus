@@ -398,6 +398,52 @@ pub fn lookup_category<'a>(
     Some((category.service_name.as_str(), category))
 }
 
+/// Rebuild the sections of a followed combined archive whose recording set
+/// changed since they were built (an endpoint that came up after the open
+/// added a recording), and say so: the page lists sections when it loads,
+/// so the new recording's appear on a reload. A no-op otherwise.
+pub fn refresh_combined_members(state: &AppState) {
+    let Some((live, built)) = state.combined_live.lock().clone() else {
+        return;
+    };
+    let (labels, changes) = live.recordings();
+    if changes == built {
+        return;
+    }
+    let readers = match crate::rez_reader::RezReader::open_recordings(
+        live.path(),
+        std::sync::Arc::clone(&state.pool),
+    ) {
+        Ok(readers) => readers,
+        Err(e) => {
+            warn!(
+                "{}: could not reread its recordings: {e}",
+                live.path().display()
+            );
+            return;
+        }
+    };
+    let before = state.members.read().len();
+    let combined = super::combine_recordings(readers);
+    warn!(
+        "{} now holds {} recordings (was {before}): {}; its sections were rebuilt, reload \
+         the page to see them",
+        live.path().display(),
+        labels.len(),
+        labels
+            .iter()
+            .map(crate::mcp::render_labels)
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
+    *state.members.write() = combined.members;
+    state.captures.set_baseline_systeminfo(combined.systeminfo);
+    if let Some(slot) = state.combined_live.lock().as_mut() {
+        slot.1 = changes;
+    }
+    regenerate_dashboards(state);
+}
+
 /// Regenerate the section map from the currently attached captures.
 /// Called at CLI startup after the experiment attaches, and on every
 /// HTTP attach/detach so the section list stays in sync.

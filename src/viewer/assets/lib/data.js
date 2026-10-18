@@ -780,6 +780,18 @@ const injectLabel = (query, labelName, labelValue, op = '=') => {
     });
 };
 
+// A query restricted to one recording of a combined archive: each matcher of
+// a section's `metadata.scope` (`[{ label, op, value }]`, op `=`, `!=` or
+// `!~`) injected into every metric reference. Unchanged without a scope.
+const applyScope = (query, scope) => {
+    if (!Array.isArray(scope)) return query;
+    let q = query;
+    for (const m of scope) {
+        if (m && m.label && m.value) q = injectLabel(q, m.label, m.value, m.op || '=');
+    }
+    return q;
+};
+
 // Inject a regex label selector (label=~"a|b"). Used for selecting a subset of
 // GPU ids.
 const injectLabelRegex = (query, labelName, regexValue) =>
@@ -1676,6 +1688,7 @@ export {
     setSelectedInstance,
     getSelectedInstance,
     injectLabel,
+    applyScope,
     injectLabelRegex,
     buildEffectiveQuery,
     plotUsesDisplay,

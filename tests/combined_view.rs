@@ -357,9 +357,11 @@ fn an_agent_and_a_service_of_one_run_open_as_one_view() {
 
     let svc = get(&viewer, "/data/service/svc.json");
     let queries = plot_queries(&svc);
+    // The template's own `source="svc"`, and `host!="h1"`: the service's
+    // recording has no `host`, the agent's has.
     assert_eq!(
         queries[0].1,
-        "sum(irate(svc_requests_total{source=\"svc\"}[1s]))"
+        "sum(irate(svc_requests_total{source=\"svc\",host!=\"h1\"}[1s]))"
     );
     let cpu = get(&viewer, "/data/cpu.json");
     let cpu_queries = plot_queries(&cpu);

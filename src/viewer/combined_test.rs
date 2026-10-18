@@ -183,7 +183,10 @@ fn each_hosts_cpu_section_reads_only_that_host() {
             cpus > 1,
             "{route}: per-CPU chart from its own catalog"
         );
-        assert_eq!(cpu["metadata"]["scope"]["host"], host);
+        assert_eq!(
+            cpu["metadata"]["scope"],
+            serde_json::json!([{"label": "host", "op": "=", "value": host}])
+        );
         for (id, query) in &plots {
             assert!(
                 query.contains(&format!("host=\"{host}\"")),
@@ -342,4 +345,194 @@ fn recordings_with_equal_labels_are_kept_apart() {
         assert_eq!(values.len(), 1, "{route}: {query} -> {values:?}");
         assert!((values[0] - busy).abs() < 1e-9, "{route}: {values:?}");
     }
+}
+
+/// An instance's catalog is its recording's: a metric only another host
+/// recorded is not among its names, so a section gated on a metric being
+/// present is drawn only for the host that has it.
+#[test]
+fn an_instance_lists_only_its_own_metrics() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("run.rez");
+    one_run(
+        &path,
+        &[
+            Recording {
+                labels: &[("source", "rezolus"), ("host", "h1")],
+                metadata: &[("source", "rezolus")],
+                cpus: 1,
+                busy_ns: 1,
+                counter: None,
+            },
+            Recording {
+                labels: &[("source", "rezolus"), ("host", "h2")],
+                metadata: &[("source", "rezolus")],
+                cpus: 1,
+                busy_ns: 1,
+                counter: Some(("cpu_instructions", 5)),
+            },
+        ],
+    );
+    let state = view(&path, &[]);
+    let data = state.baseline_data();
+    let sections = state.sections.read();
+    let names = |route: &str| {
+        let scope = &sections.context().scopes[route].scope;
+        ::dashboard::combined::Scoped::new(data.as_ref(), scope).counter_names()
+    };
+    assert!(!names("/cpu").contains(&"cpu_instructions".to_string()));
+    assert!(names("/cpu@h2").contains(&"cpu_instructions".to_string()));
+    assert!(data
+        .counter_names()
+        .contains(&"cpu_instructions".to_string()));
+}
+
+/// Two agents and a service on the first agent's host: the first host's
+/// Overview shows the service's throughput, the second host's none (rather
+/// than the other host's service), and System Info lists each host's
+/// hardware under its name, in both viewers.
+#[test]
+fn each_instance_has_its_own_throughput_and_systeminfo() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("run.rez");
+    let template = svc_template();
+    one_run(
+        &path,
+        &[
+            Recording {
+                labels: &[("source", "rezolus"), ("host", "h1")],
+                metadata: &[
+                    ("source", "rezolus"),
+                    ("systeminfo", r#"{"hostname":"h1","cpus":[]}"#),
+                ],
+                cpus: 1,
+                busy_ns: 1,
+                counter: None,
+            },
+            Recording {
+                labels: &[("source", "rezolus"), ("host", "h2")],
+                metadata: &[
+                    ("source", "rezolus"),
+                    ("systeminfo", r#"{"hostname":"h2","cpus":[]}"#),
+                ],
+                cpus: 1,
+                busy_ns: 1,
+                counter: None,
+            },
+            Recording {
+                labels: &[("source", "svc"), ("host", "h1")],
+                metadata: &[("source", "svc"), ("service_queries", &template)],
+                cpus: 0,
+                busy_ns: 0,
+                counter: Some(("svc_requests", 40)),
+            },
+        ],
+    );
+    let state = view(&path, &[]);
+    {
+        let sections = state.sections.read();
+        let scopes = &sections.context().scopes;
+        assert_eq!(
+            scopes["/overview"].throughput.as_deref(),
+            Some(r#"sum(irate(svc_requests{host="h1",source="svc"}[5m]))"#)
+        );
+        assert_eq!(scopes["/overview@h2"].throughput, None);
+    }
+    let info: serde_json::Value =
+        serde_json::from_str(&state.captures.systeminfo_by_id("baseline").unwrap()).unwrap();
+    assert_eq!(info["h1"]["hostname"], "h1");
+    assert_eq!(info["h2"]["hostname"], "h2");
+
+    let mut reg = viewer::WasmCaptureRegistry::new();
+    reg.attach("baseline", &std::fs::read(&path).unwrap(), "run.rez")
+        .unwrap();
+    let wasm: serde_json::Value =
+        serde_json::from_str(&reg.systeminfo("baseline").unwrap()).unwrap();
+    assert_eq!(wasm, info);
+}
+
+/// A recording that lacks a label another recording carries is selected
+/// by `role!="x"`, and the engine answers each instance from its own
+/// recording only.
+#[test]
+fn a_recording_without_the_others_label_reads_only_its_series() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("run.rez");
+    one_run(
+        &path,
+        &[
+            Recording {
+                labels: &[("source", "rezolus"), ("host", "a")],
+                metadata: &[("source", "rezolus")],
+                cpus: 1,
+                busy_ns: 250_000_000,
+                counter: None,
+            },
+            Recording {
+                labels: &[("source", "rezolus"), ("host", "a"), ("role", "x")],
+                metadata: &[("source", "rezolus")],
+                cpus: 2,
+                busy_ns: 750_000_000,
+                counter: None,
+            },
+        ],
+    );
+    let state = view(&path, &[]);
+    let routes: Vec<String> = state
+        .sections
+        .read()
+        .sections()
+        .iter()
+        .map(|s| s.route.clone())
+        .collect();
+    assert!(routes.contains(&"/cpu@x".to_string()), "{routes:?}");
+    let data = state.baseline_data();
+    for (route, busy, per_cpu) in [("/cpu", 0.25, false), ("/cpu@x", 0.75, true)] {
+        let plots = plot_queries(&section(&state, route));
+        assert_eq!(
+            plots.iter().any(|(id, _)| id == "busy-pct-per-cpu"),
+            per_cpu,
+            "{route}: charts from its own catalog"
+        );
+        let (_, query) = plots.into_iter().find(|(id, _)| id == "busy-pct").unwrap();
+        let values = last_values(data.as_ref(), &query);
+        assert_eq!(values.len(), 1, "{route}: {query} -> {values:?}");
+        assert!(
+            (values[0] - busy).abs() < 1e-9,
+            "{route}: {query} {values:?}"
+        );
+    }
+}
+
+/// With two other values of the label, the recording lacking it is
+/// selected by `role!~"x|y"`.
+#[test]
+fn a_recording_without_a_label_two_others_carry_reads_only_its_series() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("run.rez");
+    let rec = |labels, busy_ns| Recording {
+        labels,
+        metadata: &[("source", "rezolus")],
+        cpus: 1,
+        busy_ns,
+        counter: None,
+    };
+    one_run(
+        &path,
+        &[
+            rec(&[("source", "rezolus")], 100_000_000),
+            rec(&[("source", "rezolus"), ("role", "x")], 200_000_000),
+            rec(&[("source", "rezolus"), ("role", "y")], 300_000_000),
+        ],
+    );
+    let state = view(&path, &[]);
+    let data = state.baseline_data();
+    let (_, query) = plot_queries(&section(&state, "/cpu"))
+        .into_iter()
+        .find(|(id, _)| id == "busy-pct")
+        .unwrap();
+    assert!(query.contains(r#"role!~"x|y""#), "{query}");
+    let values = last_values(data.as_ref(), &query);
+    assert_eq!(values.len(), 1, "{query} -> {values:?}");
+    assert!((values[0] - 0.1).abs() < 1e-9, "{values:?}");
 }

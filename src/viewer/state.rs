@@ -305,6 +305,10 @@ pub struct AppState {
     /// combined (`dashboard::combined`), which the sections are built from
     /// (`dashboard::dashboard::build_combined_context`). Empty otherwise.
     pub members: RwLock<Vec<::dashboard::combined::Member>>,
+    /// The followed reader of a combined archive, and the count of its
+    /// recording-set changes the sections were last built for
+    /// (`metadata::refresh_combined_members`).
+    pub combined_live: Mutex<Option<(Arc<rez::live::LiveReader>, u64)>>,
 }
 
 /// The default number of queries the viewer runs at once: half the CPUs,
@@ -354,6 +358,7 @@ impl AppState {
             pool,
             queries: Arc::new(tokio::sync::Semaphore::new(default_query_concurrency())),
             members: RwLock::new(Vec::new()),
+            combined_live: Mutex::new(None),
         }
     }
 
@@ -405,6 +410,7 @@ impl AppState {
     pub fn replace_baseline(&self, data: Arc<dyn MetricsSource>) {
         self.follow.lock().take();
         self.members.write().clear();
+        self.combined_live.lock().take();
         self.captures.set_baseline_data(data);
     }
 

@@ -914,6 +914,105 @@ mod tests {
         drop(writer);
     }
 
+    /// A Rezolus source of a growing archive on `host`.
+    fn agent(writer: &mut ArchiveWriter, host: &str) -> SourceRecorder {
+        let labels: BTreeMap<String, String> = [
+            ("source".to_string(), "rezolus".to_string()),
+            ("host".to_string(), host.to_string()),
+        ]
+        .into();
+        let metadata: BTreeMap<String, String> =
+            [("source".to_string(), "rezolus".to_string())].into();
+        writer.add_source(labels, metadata, ANCHOR).unwrap()
+    }
+
+    /// The routes of the sections `state` lists.
+    fn routes(state: &AppState) -> Vec<String> {
+        state
+            .sections
+            .read()
+            .sections()
+            .iter()
+            .map(|s| s.route.clone())
+            .collect()
+    }
+
+    /// A recording present at the open whose rows have not arrived yet (an
+    /// endpoint still starting) has its own sections from the start, so its
+    /// rows, once they arrive, are not read by the other host's sections.
+    #[test]
+    fn a_recording_without_rows_at_the_open_has_its_own_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.dendro");
+        let mut writer = ArchiveWriter::create(&path, WriterConfig::default()).unwrap();
+        let mut a = agent(&mut writer, "a");
+        let mut b = agent(&mut writer, "b");
+        for i in 0..3 {
+            let staged = a.stage(&tick(i), ANCHOR + i * SECOND, 0).unwrap();
+            writer.commit(vec![staged]).unwrap();
+        }
+        a.sync().unwrap();
+        b.sync().unwrap();
+        let state = view(&path);
+        assert_eq!(state.members.read().len(), 2);
+        assert!(
+            routes(&state).contains(&"/cpu@b".to_string()),
+            "{:?}",
+            routes(&state)
+        );
+        let sections = state.sections.read();
+        let scope = &sections.context().scopes["/cpu"].scope;
+        assert!(
+            scope
+                .matchers
+                .contains(&::dashboard::combined::Matcher::eq("host", "a")),
+            "{:?}",
+            scope.matchers
+        );
+        drop(sections);
+        drop(writer);
+    }
+
+    /// A recording added after the open (an endpoint that came up later)
+    /// gets its sections once a reopen finds it.
+    #[test]
+    fn a_recording_added_while_followed_gets_its_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.dendro");
+        let mut writer = ArchiveWriter::create(&path, WriterConfig::default()).unwrap();
+        let mut a = agent(&mut writer, "a");
+        let mut b = agent(&mut writer, "b");
+        let write = |writer: &mut ArchiveWriter,
+                     sources: &mut [&mut SourceRecorder],
+                     ticks: std::ops::Range<u64>| {
+            for i in ticks {
+                let staged = sources
+                    .iter_mut()
+                    .map(|s| s.stage(&tick(i), ANCHOR + i * SECOND, 0).unwrap())
+                    .collect();
+                writer.commit(staged).unwrap();
+            }
+            for s in sources.iter_mut() {
+                s.sync().unwrap();
+            }
+        };
+        write(&mut writer, &mut [&mut a, &mut b], 0..3);
+        let state = view(&path);
+        assert!(!routes(&state).contains(&"/cpu@c".to_string()));
+
+        let mut c = agent(&mut writer, "c");
+        write(&mut writer, &mut [&mut a, &mut b, &mut c], 3..6);
+        assert!(state.follow.lock().as_ref().unwrap().refresh_now());
+        super::super::metadata::refresh_combined_members(&state);
+        assert_eq!(state.members.read().len(), 3);
+        assert!(
+            routes(&state).contains(&"/cpu@c".to_string()),
+            "{:?}",
+            routes(&state)
+        );
+        drop(writer);
+    }
+
     /// Two recordings carrying `arm` fill the A/B slots. Each is followed,
     /// from one reopen per tick, and detaching the experiment stops
     /// reopening it.
