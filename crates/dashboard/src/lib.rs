@@ -1,4 +1,5 @@
 pub mod capture_alias;
+pub mod combined;
 pub mod dashboard;
 pub mod display_wire;
 pub mod events;

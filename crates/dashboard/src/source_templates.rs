@@ -394,7 +394,7 @@ fn dropped_routes(routes: &[String]) -> String {
 /// Whether a `source` value names one source. A combined parquet stores the
 /// list of its sources as a JSON array (`["llm-perf","rezolus"]`), which names
 /// none of them on its own.
-fn is_one_source_name(value: &str) -> bool {
+pub(crate) fn is_one_source_name(value: &str) -> bool {
     !value.is_empty()
         && !matches!(
             serde_json::from_str::<serde_json::Value>(value),

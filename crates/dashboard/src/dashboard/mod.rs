@@ -1,10 +1,12 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::MetricsSource;
+use crate::combined::{self, Member, Scope, Scoped};
 use crate::plot::*;
 use crate::section_template::{SectionTemplate, TemplateError};
-use crate::service_extension::{CategoryExtension, ServiceExtension};
+use crate::service_extension::{CategoryExtension, ServiceExtension, TemplateRegistry};
+use crate::source_templates::TemplatePreference;
 
 mod blockio;
 mod category;
@@ -77,6 +79,20 @@ pub struct DashboardContext {
     /// [`build_dashboard_context`], whose built-in sections are the Rust
     /// generators'.
     pub template: Option<Arc<SectionTemplate>>,
+    /// The routes that render for one recording of a combined source
+    /// ([`build_combined_context`]), each with that recording's scope and
+    /// the template its built-in sections expand. Empty otherwise.
+    pub scopes: HashMap<String, Arc<RouteScope>>,
+}
+
+/// What a route of a combined source renders against.
+#[derive(Debug)]
+pub struct RouteScope {
+    /// The recording's matchers, header and metadata.
+    pub scope: Scope,
+    /// The template the route's section expands, for a built-in section.
+    /// `None` for a service section.
+    pub template: Option<Arc<SectionTemplate>>,
 }
 
 /// Routes the frontend renders itself (`app.js`'s `/about` route and its
@@ -119,10 +135,12 @@ pub fn build_dashboard_context(
     let mut builtins = vec![Section {
         name: "Overview".to_string(),
         route: "/overview".to_string(),
+        instance: None,
     }];
     builtins.extend(SECTION_META.iter().map(|(name, route, _)| Section {
         name: (*name).to_string(),
         route: (*route).to_string(),
+        instance: None,
     }));
     build_context(builtins, None, filesize, service_exts, category, sources)
 }
@@ -202,6 +220,7 @@ fn build_context(
             Section {
                 name: category_name.to_string(),
                 route: format!("/service/{category_name}"),
+                instance: None,
             },
         );
     } else {
@@ -211,6 +230,7 @@ fn build_context(
                 Section {
                     name: source_name.to_string(),
                     route: format!("/service/{source_name}"),
+                    instance: None,
                 },
             );
         }
@@ -221,6 +241,7 @@ fn build_context(
         sections.push(Section {
             name: format!("source: {}", s.name),
             route: format!("/source/{}", s.name),
+            instance: None,
         });
     }
 
@@ -247,7 +268,258 @@ fn build_context(
         category: owned_category,
         throughput_query,
         template,
+        scopes: HashMap::new(),
     }
+}
+
+/// Run each KPI's query against `data` and mark the KPIs that return
+/// nothing unavailable, so their charts are listed as such rather than drawn
+/// empty. What both viewers do for a capture's service templates.
+pub fn validate_service_extensions(
+    data: &dyn MetricsSource,
+    exts: &mut [(String, ServiceExtension)],
+) {
+    use metriken_query::QueryResult;
+    let (start, end) = data.time_range().unwrap_or((0.0, 0.0));
+    for (_source, ext) in exts.iter_mut() {
+        for kpi in &mut ext.kpis {
+            let query = kpi.effective_query();
+            kpi.available = match data.query_range(&query, start, end, 1.0) {
+                Ok(QueryResult::Vector { result }) => !result.is_empty(),
+                Ok(QueryResult::Matrix { result }) => !result.is_empty(),
+                Ok(QueryResult::Scalar { .. }) => true,
+                Ok(QueryResult::HistogramHeatmap { result }) => !result.data.is_empty(),
+                Err(_) => false,
+            };
+        }
+    }
+}
+
+/// The section context of a combined source: `data` reads every recording
+/// of an archive, and `members` describes each one ([`Member`]). Both viewers
+/// call this for an archive that opens combined ([`combined::layout`]) with
+/// more than one recording.
+///
+/// Each recording is classified and its templates resolved from its own
+/// metadata, as a single recording's are, and every template is
+/// instantiated once per recording that carries it:
+///
+/// - The built-in sections render for each recording classified as a
+///   Rezolus agent, from that recording's section template. The first
+///   instance has the template's routes; each further one has them followed
+///   by `@` and a key from its name (`/cpu@web-02`), without the query
+///   explorer, which renders once. With two or more instances, every entry
+///   names its instance ([`Section::instance`]).
+/// - A service template renders for each recording whose metadata (or the
+///   registry, by its source) gives it one: `/service/<name>`, then
+///   `/service/<name>@<key>` for a second recording of the same service.
+/// - A recording with neither is a simple capture's `/source/<name>` entry.
+///
+/// Every route but the query explorer and `/source/` renders against
+/// [`Scoped`]: the recording's catalog, its own header (interval, source,
+/// version and time range), and its queries restricted to its series by
+/// [`combined::restrict_query`], with the matchers also under
+/// [`combined::SCOPE_KEY`] in the view's metadata. The Overview's
+/// throughput is the first service's, restricted to that service's
+/// recording.
+///
+/// Returns the context and what the template lookups had to say.
+pub fn build_combined_context(
+    data: &dyn MetricsSource,
+    members: &[Member],
+    registry: &TemplateRegistry,
+    preference: TemplatePreference,
+    filename_stem: Option<&str>,
+    filesize: Option<u64>,
+) -> (DashboardContext, Vec<String>) {
+    let series_labels: Vec<BTreeMap<String, String>> =
+        members.iter().map(|m| m.series_labels.clone()).collect();
+    let matchers = combined::scope_matchers(&series_labels);
+    let mut notices = Vec::new();
+
+    struct Part {
+        scope: Scope,
+        template: Option<Arc<SectionTemplate>>,
+        service_exts: Vec<(String, ServiceExtension)>,
+        simple: Vec<SourceEntry>,
+    }
+    let parts: Vec<Part> = members
+        .iter()
+        .zip(matchers)
+        .map(|(member, matchers)| {
+            let scope = Scope {
+                matchers,
+                header: member.header.clone(),
+                metadata: member.metadata.clone(),
+            };
+            let scoped = Scoped::new(data, &scope);
+            let resolved = crate::source_templates::resolve_source_templates(
+                &member.metadata,
+                registry,
+                preference,
+            );
+            notices.extend(resolved.notices);
+            let mut service_exts = resolved.service_exts;
+            validate_service_extensions(&scoped, &mut service_exts);
+            let service_names: HashSet<&str> =
+                service_exts.iter().map(|(s, _)| s.as_str()).collect();
+            let mut metric_names = scoped.counter_names();
+            metric_names.extend(scoped.gauge_names());
+            metric_names.extend(scoped.histogram_names());
+            let mut kv = serde_json::Map::new();
+            for (k, v) in &member.metadata {
+                let json = serde_json::from_str(v)
+                    .unwrap_or_else(|_| serde_json::Value::String(v.clone()));
+                kv.insert(k.clone(), json);
+            }
+            let sources = crate::source_kind::classify_sources(
+                &serde_json::Value::Object(kv),
+                &metric_names,
+                &service_names,
+                filename_stem,
+            );
+            let template = sources.iter().any(|s| s.is_rezolus).then(|| {
+                let chosen = crate::source_templates::resolve_dashboard_template(
+                    &member.metadata,
+                    preference,
+                );
+                notices.extend(chosen.notice);
+                chosen.template
+            });
+            let simple = sources.into_iter().filter(|s| !s.is_rezolus).collect();
+            drop(service_names);
+            Part {
+                scope,
+                template,
+                service_exts,
+                simple,
+            }
+        })
+        .collect();
+
+    let mut sections: Vec<Section> = Vec::new();
+    let mut scopes: HashMap<String, Arc<RouteScope>> = HashMap::new();
+
+    // Built-in sections, one instance per Rezolus recording.
+    let builtin: Vec<usize> = (0..parts.len())
+        .filter(|&i| parts[i].template.is_some())
+        .collect();
+    let (names, keys) = instance_naming(&builtin, &series_labels);
+    for (n, &i) in builtin.iter().enumerate() {
+        let template = parts[i].template.clone().expect("filtered on a template");
+        let scope = Arc::new(RouteScope {
+            scope: parts[i].scope.clone(),
+            template: Some(Arc::clone(&template)),
+        });
+        for mut section in template.sections() {
+            if is_reserved_route(&section.route) || (n > 0 && section.route == "/query") {
+                continue;
+            }
+            if n > 0 {
+                section.route = format!(
+                    "{}{}{}",
+                    section.route,
+                    combined::INSTANCE_SEPARATOR,
+                    keys[n]
+                );
+            }
+            // The query explorer reads the whole source, once.
+            if section.route != "/query" {
+                if builtin.len() > 1 {
+                    section.instance = Some(names[n].clone());
+                }
+                scopes.insert(section.route.clone(), Arc::clone(&scope));
+            }
+            sections.push(section);
+        }
+    }
+
+    // Service sections, after the first built-in (the Overview).
+    let insert_pos = sections.len().min(1);
+    let mut service_exts: Vec<(String, ServiceExtension)> = Vec::new();
+    let mut service_sections: Vec<Section> = Vec::new();
+    let mut throughput_query: Option<String> = None;
+    let mut by_service: Vec<(String, Vec<(usize, ServiceExtension)>)> = Vec::new();
+    for (i, part) in parts.iter().enumerate() {
+        for (name, ext) in &part.service_exts {
+            match by_service.iter_mut().find(|(n, _)| n == name) {
+                Some((_, holders)) => holders.push((i, ext.clone())),
+                None => by_service.push((name.clone(), vec![(i, ext.clone())])),
+            }
+        }
+    }
+    for (name, holders) in by_service {
+        let idx: Vec<usize> = holders.iter().map(|(i, _)| *i).collect();
+        let (names, keys) = instance_naming(&idx, &series_labels);
+        for (n, (i, ext)) in holders.into_iter().enumerate() {
+            let scope = &parts[i].scope;
+            let route_name = if n == 0 {
+                name.clone()
+            } else {
+                format!("{name}{}{}", combined::INSTANCE_SEPARATOR, keys[n])
+            };
+            if throughput_query.is_none()
+                && let Some(q) = ext.throughput_query()
+            {
+                throughput_query = Some(combined::restrict_query(q, &scope.matchers));
+            }
+            let route = format!("/service/{route_name}");
+            scopes.insert(
+                route.clone(),
+                Arc::new(RouteScope {
+                    scope: scope.clone(),
+                    template: None,
+                }),
+            );
+            service_sections.push(Section {
+                name: name.clone(),
+                route,
+                instance: (idx.len() > 1).then(|| names[n].clone()),
+            });
+            service_exts.push((route_name, ext));
+        }
+    }
+    for (n, section) in service_sections.into_iter().enumerate() {
+        sections.insert(insert_pos + n, section);
+    }
+
+    // Simple captures, once per name.
+    let mut seen = HashSet::new();
+    for part in &parts {
+        for s in &part.simple {
+            if seen.insert(s.name.clone()) {
+                sections.push(Section {
+                    name: format!("source: {}", s.name),
+                    route: format!("/source/{}", s.name),
+                    instance: None,
+                });
+            }
+        }
+    }
+
+    let template = builtin.first().and_then(|&i| parts[i].template.clone());
+    let context = DashboardContext {
+        sections,
+        filesize,
+        service_exts,
+        category: None,
+        throughput_query,
+        template,
+        scopes,
+    };
+    (context, notices)
+}
+
+/// The names and route keys of the recordings at `indices`, told apart
+/// among themselves.
+fn instance_naming(
+    indices: &[usize],
+    labels: &[BTreeMap<String, String>],
+) -> (Vec<String>, Vec<String>) {
+    let group: Vec<BTreeMap<String, String>> = indices.iter().map(|&i| labels[i].clone()).collect();
+    let names = combined::instance_names(&group);
+    let keys = combined::instance_keys(&names);
+    (names, keys)
 }
 
 /// A section [`render_section`] rendered.
@@ -275,6 +547,9 @@ pub fn render_section(
     route: &str,
     ctx: &DashboardContext,
 ) -> Option<Rendered> {
+    if let Some(scope) = ctx.scopes.get(route) {
+        return render_scoped(data, route, ctx, scope);
+    }
     let Some(template) = ctx.template.as_deref() else {
         return generate_section(data, route, ctx).map(|view| Rendered { view, error: None });
     };
@@ -284,6 +559,43 @@ pub fn render_section(
     if is_reserved_route(route) {
         return None;
     }
+    expand(data, template, route, ctx)
+}
+
+/// A route of a combined source ([`build_combined_context`]): rendered
+/// against [`Scoped`], with every query restricted to the recording.
+fn render_scoped(
+    data: &dyn MetricsSource,
+    route: &str,
+    ctx: &DashboardContext,
+    route_scope: &RouteScope,
+) -> Option<Rendered> {
+    let scoped = Scoped::new(data, &route_scope.scope);
+    let mut rendered = match route_scope.template.as_deref() {
+        Some(template) => expand(&scoped, template, combined::base_route(route), ctx)?,
+        None => generate_section(&scoped, route, ctx).map(|view| Rendered { view, error: None })?,
+    };
+    let matchers = &route_scope.scope.matchers;
+    if !matchers.is_empty() {
+        rendered
+            .view
+            .map_queries(|q| combined::restrict_query(q, matchers));
+        rendered.view.metadata.insert(
+            combined::SCOPE_KEY.to_string(),
+            serde_json::to_value(matchers).unwrap_or_default(),
+        );
+    }
+    Some(rendered)
+}
+
+/// Expand `route` of `template` against `data`, with the viewer parameter
+/// `throughput` set from the throughput KPI.
+fn expand(
+    data: &dyn MetricsSource,
+    template: &SectionTemplate,
+    route: &str,
+    ctx: &DashboardContext,
+) -> Option<Rendered> {
     let mut params = BTreeMap::new();
     if let Some(query) = &ctx.throughput_query {
         params.insert("throughput".to_string(), query.clone());
@@ -408,6 +720,57 @@ mod tests {
         let ctx = build_template_context(template, None, &services, None, &simple);
         let routes: Vec<&str> = ctx.sections.iter().map(|s| s.route.as_str()).collect();
         assert_eq!(routes, ["/service/svc", "/source/app"]);
+    }
+
+    /// Two recordings of one service in one run render the service's
+    /// template once each, named by host, where a comparison shows one entry
+    /// for both (`build_context_dedupes_section_when_two_captures_share_service_name`).
+    #[test]
+    fn a_combined_source_renders_a_service_once_per_recording() {
+        let template = serde_json::json!({
+            "service_name": "svc",
+            "kpis": [{"role": "throughput", "title": "t", "query": "up", "type": "gauge"}],
+        })
+        .to_string();
+        let member = |host: &str| crate::combined::Member {
+            series_labels: [("source", "svc"), ("host", host)]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            metadata: [("source", "svc"), ("service_queries", template.as_str())]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            header: Default::default(),
+        };
+        let data = metriken_query::MemoryStore::builder().build();
+        let (ctx, notices) = build_combined_context(
+            &data,
+            &[member("h1"), member("h2")],
+            &TemplateRegistry::empty(),
+            TemplatePreference::Archive,
+            None,
+            None,
+        );
+        assert!(notices.is_empty(), "{notices:?}");
+        let entries: Vec<(&str, &str, Option<&str>)> = ctx
+            .sections
+            .iter()
+            .map(|s| (s.name.as_str(), s.route.as_str(), s.instance.as_deref()))
+            .collect();
+        assert_eq!(
+            entries,
+            [
+                ("svc", "/service/svc", Some("h1")),
+                ("svc", "/service/svc@h2", Some("h2")),
+            ]
+        );
+        let names: Vec<&str> = ctx.service_exts.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["svc", "svc@h2"]);
+        // The KPI has no data here, so it is listed, not drawn; the view is
+        // the second recording's.
+        let view = render_section(&data, "/service/svc@h2", &ctx).unwrap().view;
+        assert_eq!(view.metadata["scope"], serde_json::json!({"host": "h2"}));
     }
 
     #[test]

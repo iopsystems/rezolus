@@ -2272,10 +2272,12 @@ mod tests {
                 Section {
                     name: "Overview".to_string(),
                     route: "/overview".to_string(),
+                    instance: None,
                 },
                 Section {
                     name: "CPU".to_string(),
                     route: "/cpu".to_string(),
+                    instance: None,
                 },
             ],
             ..DashboardContext::default()

@@ -1259,10 +1259,12 @@ impl SectionTemplate {
                 SectionDef::Builtin => Section {
                     name: "Query Explorer".to_string(),
                     route: "/query".to_string(),
+                    instance: None,
                 },
                 SectionDef::Section(body) => Section {
                     name: body.name.clone(),
                     route: body.route.clone(),
+                    instance: None,
                 },
             })
             .collect()
