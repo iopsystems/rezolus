@@ -9,6 +9,15 @@
 
 ### Fixed
 
+- **`recording combine … -o out.parquet` keeps each input's KPI template.**
+  It copied a fixed list of keys and dropped a top-level `service_queries`,
+  so a combined parquet showed only the built-in registry's KPIs. Each
+  input's template now goes into its source's entry in
+  `per_source_metadata`, where both viewers read it. An already-combined
+  input's top-level template goes to the source its `service_name` names,
+  and is dropped with a warning when that is none of its sources. A
+  `dashboard` section template is not carried: a parquet input never has
+  one, since only stream recordings (`.dendro`) keep it.
 - **The viewer escapes recording text it puts into chart HTML.** Chart
   tooltips, the heatmap tooltips and the embed demo's status line inserted
   strings from the recording as markup: plot titles from section templates
