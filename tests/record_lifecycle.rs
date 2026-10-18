@@ -1878,6 +1878,114 @@ fn spawn_strict_exporter() -> u16 {
     port
 }
 
+/// Label values as an exporter writes them in exposition text, each with the
+/// value the format says it stands for. `\\`, `\"` and `\n` are the format's
+/// escapes.
+const LABEL_VALUE_CASES: &[(&str, &str, &str)] = &[
+    ("plain", "abc", "abc"),
+    ("eq", "a=b", "a=b"),
+    ("eq_end", "a=", "a="),
+    ("pairs", "x=1,y=2", "x=1,y=2"),
+    ("comma", "a,b", "a,b"),
+    ("lbrace", "a{b", "a{b"),
+    ("rbrace", "a}b", "a}b"),
+    ("quote", r#"a\"b"#, "a\"b"),
+    ("backslash", r"a\\b", "a\\b"),
+    ("newline", r"a\nb", "a\nb"),
+    ("lt_gt", "<b>", "<b>"),
+    ("space", "a b", "a b"),
+    ("amp", "a&b", "a&b"),
+    ("apos", "a'b", "a'b"),
+    ("unicode", "ü€", "ü€"),
+    ("empty", "", ""),
+];
+
+/// A fake exporter serving one `xss_total` series per `LABEL_VALUE_CASES`
+/// row, told apart by its `case` label.
+fn spawn_label_value_exporter() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the fake exporter");
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let mut tick = 0u64;
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut buf = [0u8; 8192];
+            if !matches!(stream.read(&mut buf), Ok(n) if n > 0) {
+                continue;
+            }
+            tick += 1;
+            let mut body = String::from("# TYPE xss_total counter\n");
+            for (case, text, _) in LABEL_VALUE_CASES {
+                body.push_str(&format!(
+                    "xss_total{{case=\"{case}\",op=\"{text}\"}} {tick}\n"
+                ));
+            }
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    port
+}
+
+/// A Prometheus label value is stored as the exposition text spells it,
+/// read back through the reader `view` and `mcp` use. Through
+/// metriken-recorder 0.3.0, prometheus-parse split the label block on every
+/// `,` and `=`: `op="a=b"` was stored with no `op` label, `op="a,b"` as
+/// `op="a"`, `op="x=1,y=2"` as `y="2"`, the `a}b` series not at all, and
+/// escapes were stored as written.
+#[test]
+fn a_prometheus_label_value_is_stored_as_the_exposition_spells_it() {
+    use metriken_query::MetricsSource;
+
+    let port = spawn_label_value_exporter();
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("labels.dendro");
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{port}/metrics,source=svc"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("500ms")
+        .output()
+        .expect("failed to run rezolus record");
+    assert!(
+        out.status.success(),
+        "recording exits 0:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let recordings = rez::reader::RezReader::open_recordings(
+        &output,
+        metriken_storage::BufferPool::new(8 * 1024 * 1024),
+    )
+    .expect("the archive opens");
+    assert_eq!(recordings.len(), 1);
+    let series = recordings[0].1.counter_labels("xss_total");
+    let got: std::collections::BTreeMap<String, Option<String>> = series
+        .iter()
+        .filter_map(|l| Some((l.get("case")?.clone(), l.get("op").cloned())))
+        .collect();
+    let want: std::collections::BTreeMap<String, Option<String>> = LABEL_VALUE_CASES
+        .iter()
+        .map(|(case, _, value)| (case.to_string(), Some(value.to_string())))
+        .collect();
+    assert_eq!(got, want, "every series, with its op value: {series:?}");
+    assert!(
+        series.iter().all(|l| !l.contains_key("y")),
+        "no label is made out of a value: {series:?}"
+    );
+}
+
 /// The labels, the metadata, and the row count in `table` of the one
 /// recording in a `.dendro`.
 type Recording = (
