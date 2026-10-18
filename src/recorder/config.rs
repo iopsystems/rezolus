@@ -286,6 +286,11 @@ impl RecordingConfig {
                 ),
             };
             check_output(&output, origin)?;
+            let mut endpoints = toml_cfg.endpoints;
+            for ep in &mut endpoints {
+                ep.load_template()
+                    .map_err(|e| format!("in {}: {e}", config_path.display()))?;
+            }
 
             return Ok(RecordingConfig {
                 interval,
@@ -294,7 +299,7 @@ impl RecordingConfig {
                 output,
                 metadata,
                 labels,
-                endpoints: toml_cfg.endpoints,
+                endpoints,
                 command: command.clone(),
                 record_command_line,
             });
@@ -312,7 +317,10 @@ impl RecordingConfig {
         if let Some(endpoint_strs) = args.get_many::<String>("ENDPOINT") {
             let endpoints: Result<Vec<EndpointConfig>, String> =
                 endpoint_strs.map(|s| parse_endpoint_str(s)).collect();
-            let endpoints = endpoints?;
+            let mut endpoints = endpoints?;
+            for ep in &mut endpoints {
+                ep.load_template()?;
+            }
 
             if endpoints.is_empty() {
                 return Err("at least one --endpoint is required".to_string());
@@ -353,6 +361,8 @@ impl RecordingConfig {
             source,
             role: None,
             protocol: None,
+            template: None,
+            template_json: None,
         };
 
         Ok(RecordingConfig {
@@ -369,8 +379,10 @@ impl RecordingConfig {
     }
 }
 
-/// Parse `"http://host:port/path,source=name,role=agent,protocol=prometheus"`.
-/// URL is everything before the first comma. Key=value pairs after.
+/// Parse `"http://host:port/path,source=name,role=agent,protocol=prometheus,template=kpis.json"`.
+/// URL is everything before the first comma. Key=value pairs after. The
+/// template file is only named here; [`EndpointConfig::load_template`] reads
+/// it.
 pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
     let (url_str, rest) = match s.find(',') {
         Some(idx) => (&s[..idx], Some(&s[idx + 1..])),
@@ -382,6 +394,7 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
     let mut source: Option<String> = None;
     let mut role: Option<String> = None;
     let mut protocol: Option<Protocol> = None;
+    let mut template: Option<PathBuf> = None;
 
     if let Some(opts) = rest {
         for pair in opts.split(',') {
@@ -395,6 +408,12 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
             match key {
                 "source" => source = Some(value.to_string()),
                 "role" => role = Some(value.to_string()),
+                "template" => {
+                    if value.is_empty() {
+                        return Err("template= needs a file path".to_string());
+                    }
+                    template = Some(PathBuf::from(value));
+                }
                 "protocol" => {
                     protocol = Some(match value {
                         "stream" | "rezolus" | "msgpack" => Protocol::Stream,
@@ -412,6 +431,8 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
         source,
         role,
         protocol,
+        template,
+        template_json: None,
     })
 }
 
@@ -765,6 +786,60 @@ mod tests {
             assert_eq!(ep.protocol, Some(Protocol::Stream), "{p}");
         }
         assert!(parse_endpoint_str("http://host:4241,protocol=binary").is_err());
+    }
+
+    /// `template=` names a file and reads nothing; the file is read by
+    /// `from_args`, from `--endpoint` and from a config file's
+    /// `[[endpoints]]` alike, and a bad one refuses the configuration.
+    #[test]
+    fn an_endpoint_template_is_read_and_checked_from_either_form() {
+        let ep =
+            parse_endpoint_str("http://host:9090/metrics,source=vllm,template=kpis.json").unwrap();
+        assert_eq!(ep.template, Some(PathBuf::from("kpis.json")));
+        assert_eq!(ep.template_json, None);
+        assert!(parse_endpoint_str("http://host:9090/metrics,template=").is_err());
+
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("good.json");
+        let json = r#"{"service_name":"vllm","kpis":[{"role":"r","title":"t","query":"q","type":"gauge","unit_system":"count"}]}"#;
+        std::fs::write(&good, json).unwrap();
+        let bad = dir.path().join("bad.json");
+        std::fs::write(&bad, json.replace("count", "widgets")).unwrap();
+        let parse = |args: &[&str]| {
+            let mut argv = vec!["record"];
+            argv.extend_from_slice(args);
+            crate::recorder::command()
+                .try_get_matches_from(argv)
+                .map_err(|e| e.to_string())
+                .and_then(|m| RecordingConfig::from_args(&m))
+        };
+        let endpoint = |file: &Path| format!("http://h:9090/metrics,template={}", file.display());
+
+        let cfg = parse(&["--endpoint", &endpoint(&good)]).unwrap();
+        assert_eq!(cfg.endpoints[0].template_json.as_deref(), Some(json));
+        let err = parse(&["--endpoint", &endpoint(&bad)]).err().unwrap();
+        assert!(err.contains("unknown unit_system \"widgets\""), "{err}");
+        assert!(err.contains("bad.json"), "{err}");
+
+        let toml = |name: &str, file: &Path| {
+            let path = dir.path().join(name);
+            std::fs::write(
+                &path,
+                format!(
+                    "[recording]\noutput = \"run.dendro\"\n\n[[endpoints]]\n\
+                     url = \"http://h:9090/metrics\"\ntemplate = {:?}\n",
+                    file.display().to_string()
+                ),
+            )
+            .unwrap();
+            path.to_str().unwrap().to_string()
+        };
+        let cfg = parse(&["--config", &toml("good.toml", &good)]).unwrap();
+        assert_eq!(cfg.endpoints[0].template_json.as_deref(), Some(json));
+        let bad_toml = toml("bad.toml", &bad);
+        let err = parse(&["--config", &bad_toml]).err().unwrap();
+        assert!(err.starts_with(&format!("in {bad_toml}: ")), "{err}");
+        assert!(err.contains("unknown unit_system"), "{err}");
     }
 
     #[test]

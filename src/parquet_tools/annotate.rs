@@ -195,22 +195,25 @@ fn run_undo(path: &Path) {
 /// knows (`ServiceExtension::check_unit_systems`). Exits 1 otherwise. `run`
 /// calls this before any edit, so a refusal writes nothing.
 fn read_queries(path: &Path) -> String {
-    let content = std::fs::read_to_string(path).unwrap_or_else(|e| {
-        eprintln!("error: failed to read {}: {e}", path.display());
+    load_queries(path).unwrap_or_else(|e| {
+        eprintln!("error: {e}");
         std::process::exit(1);
-    });
-    let ext: ServiceExtension = serde_json::from_str(&content).unwrap_or_else(|e| {
-        eprintln!(
-            "error: invalid service extension JSON in {}: {e}",
-            path.display()
-        );
-        std::process::exit(1);
-    });
-    if let Err(e) = ext.check_unit_systems() {
-        eprintln!("error: {}: {e}", path.display());
-        std::process::exit(1);
-    }
-    content
+    })
+}
+
+/// Read a KPI template file and check it: it must parse as a
+/// [`ServiceExtension`] and name only unit systems the viewer knows
+/// ([`ServiceExtension::check_unit_systems`]). Returns the file's text as
+/// written, which is what goes into a recording's `service_queries`. Shared
+/// with `rezolus record --endpoint url,template=FILE`.
+pub(crate) fn load_queries(path: &Path) -> Result<String, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let ext: ServiceExtension = serde_json::from_str(&content)
+        .map_err(|e| format!("invalid service extension JSON in {}: {e}", path.display()))?;
+    ext.check_unit_systems()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(content)
 }
 
 /// Validate that each KPI query returns data from the parquet file.

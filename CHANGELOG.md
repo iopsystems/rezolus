@@ -790,6 +790,19 @@
 
 ### Added
 
+- **`record --endpoint url,template=FILE` attaches a KPI template to an
+  endpoint's recording.** The file, a `ServiceExtension` JSON as `recording
+  annotate --queries` takes, is written into that recording's metadata as
+  `service_queries`, so the viewer shows the service's KPI section for a
+  scraped Prometheus endpoint, which has no handshake to carry one. A config
+  file's `[[endpoints]]` entry takes `template = "FILE"`. The file is read and
+  checked before recording: an unreadable file, JSON that is not a
+  `ServiceExtension`, or an unknown `unit_system` refuses the run (exit 2)
+  and writes nothing. On a streamed producer, `template=` replaces the
+  template its handshake sends, and the recorder logs that at startup.
+  cachecannon and llm-perf send their own from their next releases; the files in
+  `crates/dashboard/templates/` stay as the fallback for recordings that
+  carry none (docs/usage.md, "KPI templates").
 - **The agent sends its section template, and both viewers render the
   built-in sections from a template.** A Rezolus agent's `/metrics/stream`
   handshake carries the Rezolus section template under the metadata key
