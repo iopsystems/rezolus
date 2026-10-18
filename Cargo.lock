@@ -3666,7 +3666,6 @@ dependencies = [
  "perf-event2",
  "plain",
  "plist",
- "prometheus-parse",
  "ratatui",
  "rayon",
  "regex",

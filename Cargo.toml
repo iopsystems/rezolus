@@ -126,7 +126,6 @@ parquet = { version = "60.0.0", default-features = false, features = [
     # in `lz4_flex` (pure Rust, no C). See `rez::segment_writer_props`.
     "lz4",
 ] }
-prometheus-parse = "0.2.5"
 plain = "0.2.3"
 ratatui = "0.30"
 rayon = "1.12"
