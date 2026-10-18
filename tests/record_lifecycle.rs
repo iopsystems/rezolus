@@ -1940,7 +1940,6 @@ fn spawn_label_value_exporter() -> u16 {
 /// `op="a"`, `op="x=1,y=2"` as `y="2"`, the `a}b` series not at all, and
 /// escapes were stored as written.
 #[test]
-#[ignore = "needs metriken-recorder > 0.3.0 (exposition parser that reads label values per the format)"]
 fn a_prometheus_label_value_is_stored_as_the_exposition_spells_it() {
     use metriken_query::MetricsSource;
 

@@ -37,14 +37,14 @@
   while an archive opens are no longer dropped (the viewer, `mcp` and
   `recording` reading a live hindsight buffer or recording).
 - **A Prometheus label value containing `=`, `,` or `}` is recorded intact**
-  once the build takes metriken-recorder 0.3.1. `record` from a Prometheus
+  (metriken-recorder 0.3.1). `record` from a Prometheus
   endpoint stored `op="a=b"` with no `op` label, `op="a,b"` as `op="a"` and
   `op="x=1,y=2"` as `y="2"`, dropped a series whose value held `}`, and kept
   `\"`, `\\` and `\n` escaped. The parser was the `prometheus-parse` crate,
   used by every output format, so 5.x `.rez`, parquet and raw recordings lost
   the same labels; reading an existing recording does not change. Pinned by
-  `a_prometheus_label_value_is_stored_as_the_exposition_spells_it`, ignored
-  until the bump.
+  `a_prometheus_label_value_is_stored_as_the_exposition_spells_it`. A line
+  the exposition parser cannot read is skipped and logged once per endpoint.
 
 ### Removed
 
