@@ -338,6 +338,126 @@ mod tests {
         buffer.sync().unwrap();
     }
 
+    /// A live session against a real agent: the agent's stream handshake
+    /// carries its section template, the recorder keeps it in the archive's
+    /// source metadata, and the live view's built-in sections render from it,
+    /// all by the time `start` returns, which is when the view's sections
+    /// are built.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_live_view_renders_the_agents_section_template() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let url = crate::agent::exposition::http::serve_for_test().await;
+        let client = Client::builder().http1_only().build().unwrap();
+        let info = super::super::actions::fetch_agent_info(&client, &url)
+            .await
+            .unwrap();
+        let session = LiveSession::start(&client, &url, info, BufferPool::new(64 << 20))
+            .await
+            .unwrap();
+        let revision = format!("rezolus {}", env!("CARGO_PKG_VERSION"));
+
+        let metadata = session.reader().file_metadata();
+        let carried = ::dashboard::section_template::SectionTemplate::parse(
+            &metadata[::dashboard::source_templates::KEY_DASHBOARD],
+        )
+        .unwrap();
+        assert_eq!(carried.revision(), Some(revision.as_str()));
+
+        let context = crate::viewer::metadata::live_dashboard_context(
+            session.reader().as_ref(),
+            ::dashboard::source_templates::TemplatePreference::Archive,
+        );
+        let template = context.template.as_ref().unwrap();
+        assert_eq!(template.revision(), Some(revision.as_str()));
+
+        // The embedded template names no release, so it is not what rendered.
+        assert_eq!(
+            ::dashboard::source_templates::embedded_dashboard_template().revision(),
+            Some("rezolus agent")
+        );
+        let preferred = crate::viewer::metadata::live_dashboard_context(
+            session.reader().as_ref(),
+            ::dashboard::source_templates::TemplatePreference::Registry,
+        );
+        assert_eq!(
+            preferred.template.as_ref().unwrap().revision(),
+            Some("rezolus agent")
+        );
+    }
+
+    /// The revision of the template the live view's built-in sections render
+    /// from, and the navigation's routes.
+    fn live_sections(state: &super::super::state::AppState) -> (Option<String>, Vec<String>) {
+        let store = state.sections.read();
+        let revision = store
+            .context()
+            .template
+            .as_ref()
+            .and_then(|t| t.revision().map(str::to_string));
+        let routes = store.sections().iter().map(|s| s.route.clone()).collect();
+        (revision, routes)
+    }
+
+    fn embedded_routes() -> Vec<String> {
+        ::dashboard::source_templates::embedded_dashboard_template()
+            .sections()
+            .into_iter()
+            .map(|s| s.route)
+            .collect()
+    }
+
+    /// `rezolus view http://agent`: the view `init_live_mode` builds renders
+    /// the built-in sections from the agent's template.
+    #[test]
+    fn view_of_a_live_agent_renders_the_agents_section_template() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let url = rt.block_on(crate::agent::exposition::http::serve_for_test());
+        let state = super::super::init_live_mode(
+            &rt,
+            &url,
+            &::dashboard::TemplateRegistry::empty(),
+            ::dashboard::source_templates::TemplatePreference::Archive,
+            BufferPool::new(64 << 20),
+        );
+        let (revision, routes) = live_sections(&state);
+        assert_eq!(
+            revision,
+            Some(format!("rezolus {}", env!("CARGO_PKG_VERSION")))
+        );
+        assert_eq!(routes, embedded_routes());
+        drop(state);
+    }
+
+    /// Connecting the page to an agent (`/api/v1/connect`): the view
+    /// `connect_agent` builds renders from the agent's template.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn connecting_to_a_live_agent_renders_the_agents_section_template() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let url = crate::agent::exposition::http::serve_for_test().await;
+        let state = Arc::new(super::super::state::AppState::new(
+            Arc::new(metriken_query::MemoryStore::builder().build()),
+            ::dashboard::TemplateRegistry::empty(),
+        ));
+        let axum::Json(response) = super::super::actions::connect_agent(
+            axum::extract::State(Arc::clone(&state)),
+            axum::body::Bytes::from(url.to_string()),
+        )
+        .await;
+        let response = serde_json::to_value(response).unwrap();
+        assert_eq!(response["status"], "success", "{response}");
+        let (revision, routes) = live_sections(&state);
+        assert_eq!(
+            revision,
+            Some(format!("rezolus {}", env!("CARGO_PKG_VERSION")))
+        );
+        assert_eq!(routes, embedded_routes());
+    }
+
     /// Live mode opens its reader before the first interval arrives, so an
     /// archive with a source and no rows has to open, and a refresh then
     /// finds the rows.

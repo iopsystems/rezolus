@@ -117,8 +117,10 @@ pub fn command() -> Command {
              The --templates/--category flags (service-extension dashboards) and the --proxy-*\n\
              flags (in-browser 'load from URL' fetching) are advanced; the input forms above\n\
              need none of them. A recording that carries a source's KPI template in its\n\
-             metadata renders it ahead of the built-in one; --registry-templates renders the\n\
-             built-in (or --templates DIR) template instead.\n\n\
+             metadata renders it ahead of the built-in one, and a stream recording of a\n\
+             Rezolus agent (6.0 or later) renders the built-in sections (CPU, network, ...)\n\
+             from the section template the agent sent; --registry-templates renders the\n\
+             viewer's own (or --templates DIR) templates instead, for both.\n\n\
              TERMINAL UI:\n    \
              Pass --tui to render in the terminal instead of a web browser: a live overview\n    \
              plus a drill-down browser of the same dashboard sections (CPU, network,\n    \
@@ -196,12 +198,15 @@ pub fn command() -> Command {
             clap::Arg::new("REGISTRY_TEMPLATES")
                 .long("registry-templates")
                 .help(
-                    "Render each source's KPI sections from the viewer's template registry \
-                     (the built-in templates, or --templates DIR) instead of the template \
-                     the recording carries in its metadata (`service_queries`, as written \
-                     by `rezolus recording annotate` or by the producer). By \
-                     default the recording's template wins. A source the registry does \
-                     not know keeps its own template either way.",
+                    "Render from the viewer's own templates instead of the ones the \
+                     recording carries in its metadata. KPI sections come from the \
+                     template registry (the built-in templates, or --templates DIR) \
+                     rather than `service_queries` (written by `rezolus recording \
+                     annotate` or by the producer); a source the registry does not \
+                     know keeps its own template either way. The built-in sections \
+                     (Overview, CPU, ...) come from the section template this viewer \
+                     embeds rather than `dashboard` (sent by a Rezolus agent in its \
+                     stream handshake). By default the recording's templates win.",
                 )
                 .action(clap::ArgAction::SetTrue),
         )
@@ -1362,7 +1367,7 @@ fn init_live_mode(
         template_preference,
         pool,
     );
-    let context = dashboard::dashboard::build_dashboard_context(None, &[], None, &[]);
+    let context = metadata::live_dashboard_context(session.reader().as_ref(), template_preference);
     *state.sections.write() = state::LazySectionStore::new(context);
     state.install_live(session);
     state.live.store(true, Ordering::Relaxed);

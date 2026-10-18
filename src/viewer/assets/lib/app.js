@@ -28,6 +28,7 @@ import { MetricBrowserView } from './features/metric_browser.js';
 import { createSourceRoutes } from './features/source_routes.js';
 import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView } from './viewer_core.js';
 import { renderSectionNotes } from './sections/section_notes.js';
+import { contentFor, CLIENT_SECTIONS } from './ui/client_views.js';
 import {
     createSectionCacheState,
     storeSectionResponse,
@@ -1014,25 +1015,27 @@ const SectionContent = {
             });
         }
 
-        if (sectionName === 'Query Explorer') {
+        const content = contentFor(attrs.section);
+
+        if (content === 'query') {
             return m('div#section-content', [
                 m(QueryExplorer, { liveMode, isRecording: () => recording }),
             ]);
         }
 
-        if (sectionName === 'System Info') {
+        if (content === 'systeminfo') {
             return m('div#section-content', [
                 m(SystemInfoView, { data: systemInfoData }),
             ]);
         }
 
-        if (sectionName === 'Metadata') {
+        if (content === 'metadata') {
             return m('div#section-content', [
                 m(MetadataView, { data: fileMetadata }),
             ]);
         }
 
-        if (sectionName === 'Notebook') {
+        if (content === 'notebook') {
             const sectionMeta = getCachedSectionMeta(sectionResponseCache, interval);
             return m(NotebookView, {
                 title: 'Notebook',
@@ -1058,7 +1061,7 @@ const SectionContent = {
             });
         }
 
-        if (sectionName === 'Selection') {
+        if (content === 'selection') {
             const sectionMeta = getCachedSectionMeta(sectionResponseCache, interval);
             return m(LoadedSelectionView, {
                 title: 'Selection',
@@ -1072,7 +1075,7 @@ const SectionContent = {
             });
         }
 
-        if (sectionName === 'Report') {
+        if (content === 'report') {
             const sectionMeta = getCachedSectionMeta(sectionResponseCache, interval);
             return m(ReportView, {
                 title: 'Report',
@@ -1210,11 +1213,13 @@ const SectionContent = {
     },
 };
 
-const systemInfoSection = { name: 'System Info', route: '/systeminfo' };
-const metadataSection = { name: 'Metadata', route: '/metadata' };
-const notebookSection = { name: 'Notebook', route: '/notebook' };
-const selectionSection = { name: 'Selection', route: '/selection' };
-const reportSection = { name: 'Report', route: '/report' };
+const {
+    systeminfo: systemInfoSection,
+    metadata: metadataSection,
+    notebook: notebookSection,
+    selection: selectionSection,
+    report: reportSection,
+} = CLIENT_SECTIONS;
 
 const bootstrapCacheIfNeeded = () => {
     if (Object.keys(sectionResponseCache).length > 0) return;

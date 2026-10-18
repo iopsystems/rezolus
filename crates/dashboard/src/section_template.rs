@@ -31,8 +31,9 @@
 //!   order. `{"builtin": "query"}` places the query explorer at `/query`.
 //!   A section's `name` is 1 to [`MAX_SECTION_NAME_BYTES`] bytes. Its
 //!   `route` is `/` and then segments of `a-z`, `0-9`, `_` and `-`
-//!   separated by single `/`, at most [`MAX_SECTION_NAME_BYTES`] bytes. No
-//!   two sections share a route.
+//!   separated by single `/`, at most [`MAX_SECTION_NAME_BYTES`] bytes,
+//!   and not `/query`, which is the query explorer's. No two sections share
+//!   a route.
 //! - A section's `metadata` maps each key of the view's metadata to
 //!   `{"value": V}`, the JSON value `V`, or `{"computed": "gpu_selector",
 //!   "probe": [..]}`, the GPU selector over the probe metrics, present when
@@ -165,8 +166,10 @@
 //! [`MAX_BY_LABELS`] `by` labels. It reads the document in time and memory
 //! linear in its size, but has no limit on that size: a caller reading
 //! templates from an untrusted source caps the document first. The
-//! Rezolus template is about 106 KB compact, so a viewer reading templates
-//! from a stream handshake can refuse a document over 1 MiB.
+//! Rezolus template is about 106 KB compact; the viewers refuse a
+//! recording's document over
+//! [`MAX_DASHBOARD_BYTES`](crate::source_templates::MAX_DASHBOARD_BYTES)
+//! (1 MiB) before parsing it.
 //!
 //! The limits below apply to each section's expansion on its own, so a
 //! document of [`MAX_SECTIONS`] sections can cost that many times as much.
@@ -1330,6 +1333,14 @@ impl SectionTemplate {
                 SectionDef::Section(body) => {
                     check_section_name(&body.name, &body.route)
                         .map_err(|e| e.context(format!("section {index}")))?;
+                    // The page mounts the query explorer at `/query`
+                    // whatever the section holds.
+                    if body.route == "/query" {
+                        return err(format!(
+                            "section {index}: route /query is the query explorer's; use \
+                             {{\"builtin\": \"query\"}}"
+                        ));
+                    }
                     &body.route
                 }
             };
@@ -3704,7 +3715,7 @@ mod tests {
         );
         assert_refused(
             &doc(json!([{ "builtin": "query" }, { "name": "Q", "route": "/query" }])),
-            "two sections have route \"/query\"",
+            "route /query is the query explorer's",
         );
         assert_refused(
             &doc(json!([{ "builtin": "graphs" }])),
@@ -4294,9 +4305,14 @@ mod tests {
                 &format!("route {route:?} is not"),
             );
         }
-        for route in ["/hw_sensors", "/a-b/c_1", "/0"] {
+        for route in ["/hw_sensors", "/a-b/c_1", "/0", "/query-x", "/query/x"] {
             assert!(SectionTemplate::parse(&doc(json!([{ "name": "S", "route": route }]))).is_ok());
         }
+        // `/query` is the query explorer's, placed by the builtin.
+        assert_refused(
+            &doc(json!([{ "name": "Q", "route": "/query" }])),
+            r#"route /query is the query explorer's; use {"builtin": "query"}"#,
+        );
         let long_name = "n".repeat(MAX_SECTION_NAME_BYTES + 1);
         for name in ["", long_name.as_str()] {
             assert_refused(

@@ -132,7 +132,10 @@ target/release/rezolus view out.dendro --registry-templates          # built-in 
 #   ahead of the built-in registry, which is consulted only for a source without one; --registry-templates
 #   inverts that for sources the registry knows. Shared lookup: crates/dashboard/src/source_templates.rs
 #   (both shells; WASM: WasmCaptureRegistry::set_prefer_registry_templates, no site UI). A combined parquet's array
-#   `source` keys a top-level template by its service_name. `dashboard` (section template) is reserved: kept, unused.
+#   `source` keys a top-level template by its service_name. `dashboard` is the section template for the built-in
+#   sections: a Rezolus agent sends it in its stream handshake (src/agent/exposition/http/mod.rs `handshake_metadata`,
+#   revision `rezolus <version>`), dendro sources keep it, and both viewers expand it (<= 1 MiB and it parses) or the
+#   embedded one (crates/dashboard/src/rezolus_template.rs); --registry-templates picks the embedded one here too.
 
 # Hindsight - rolling .dendro buffer for incident analysis (an output not ending in .dendro is refused)
 target/release/rezolus hindsight config/hindsight.toml
@@ -344,6 +347,10 @@ back onto the read path.
 ### Service Extensions
 
 Service-level KPI dashboards are defined in `src/viewer/service_extension.rs` (`ServiceExtension`/`Kpi` structs). They allow the viewer to generate custom dashboard sections from PromQL queries embedded in parquet metadata. The `parquet annotate` command validates and embeds these. Templates live in `src/parquet_tools/templates/`.
+
+### Built-in sections and section templates
+
+The built-in sections (Overview, Exceptions, CPU, ...) are rendered from a section template (`crates/dashboard/src/section_template.rs`, schema 1), not by the Rust generators in `crates/dashboard/src/dashboard/`. Which template: `dashboard::source_templates::resolve_dashboard_template` takes the source's `dashboard` metadata key (sent by the agent in its stream handshake) when it is at most `MAX_DASHBOARD_BYTES` (1 MiB) and parses, else the embedded `rezolus_template::json()`, parsed once; parsed recording templates are cached by text. A recording's template with no showable section falls back too. `dashboard::dashboard::build_template_context` lists the template's sections less `is_reserved_route` ones (the page's own routes in `CLIENT_ROUTES`, and any route of more than one segment, which covers `/service/` and `/source/`), and `render_section` expands a built-in route with the viewer parameter `throughput` from the throughput KPI; `/service/` routes stay on the `ServiceExtension` generators. A section that cannot expand is an empty view with `metadata.template_error`, which each `viewer_api.js` copy logs once. The sidebar groups sections by route (`ui/section_groups.js`), and `SectionContent` mounts the query explorer and the client-only views by route (`ui/client_views.js`); `SectionTemplate::parse` refuses a body section at `/query`. `/api/v1/file_metadata` (`capture_registry.rs` `for_page`) and WASM `file_metadata_json` leave `dashboard` out. The server viewer (`src/viewer/metadata.rs` `capture_dashboard_template`, `state.rs` `LazySectionStore::generate`) and the WASM viewer (`crates/viewer/src/lib.rs` `dashboard_template`, `get_section`) both go through these. The generators stay: `crates/dashboard/src/section_template_tests.rs` checks the template renders byte-identical JSON to them, and `src/viewer/dashboard_queries_test.rs` grows its fixture from their reads.
 
 ### Static Site Viewer (WASM)
 

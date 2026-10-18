@@ -16,8 +16,10 @@ use super::capture_registry::CaptureId;
 use metriken_query::{MetricsSource, QueryResult};
 
 use super::state::{AppState, LazySectionStore};
+use ::dashboard::section_template::SectionTemplate;
 use ::dashboard::source_templates::TemplatePreference;
 use ::dashboard::{self, CategoryExtension, ServiceExtension, TemplateRegistry};
+use std::sync::Arc;
 
 /// Read systeminfo, selection, and the full key-value map (with
 /// pre-computed multi-node enrichment) from a parquet file's metadata.
@@ -288,7 +290,7 @@ pub fn service_extensions_from_metadata(
 }
 
 /// Log `notice` as a warning unless this process has already logged it.
-fn warn_once(notice: String) {
+pub(super) fn warn_once(notice: String) {
     if first_time(&notice) {
         warn!("{notice}");
     }
@@ -303,6 +305,39 @@ fn first_time(notice: &str) -> bool {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(notice.to_string())
+}
+
+/// The section template a capture's built-in sections render from: the
+/// `dashboard` template in its metadata, or the embedded one
+/// (`dashboard::source_templates::resolve_dashboard_template`). Why a carried
+/// template was refused is logged once per process.
+pub fn capture_dashboard_template(
+    data: &dyn MetricsSource,
+    preference: TemplatePreference,
+) -> Arc<SectionTemplate> {
+    let chosen = ::dashboard::source_templates::resolve_dashboard_template(
+        &data.file_metadata(),
+        preference,
+    );
+    if let Some(notice) = chosen.notice {
+        warn_once(notice);
+    }
+    chosen.template
+}
+
+/// The section context of a live agent's capture: the built-in sections
+/// alone, from the template the agent's handshake carried when `data` has it.
+pub fn live_dashboard_context(
+    data: &dyn MetricsSource,
+    preference: TemplatePreference,
+) -> ::dashboard::dashboard::DashboardContext {
+    ::dashboard::dashboard::build_template_context(
+        capture_dashboard_template(data, preference),
+        None,
+        &[],
+        None,
+        &[],
+    )
 }
 
 /// The KPI templates for a loaded capture, from its own metadata.
@@ -421,8 +456,16 @@ pub fn regenerate_dashboards(state: &AppState) {
         state.baseline_data().as_ref(),
         &service_exts,
     );
-    let context =
-        dashboard::dashboard::build_dashboard_context(filesize, &service_refs, category, &sources);
+    // The built-in sections render from the baseline's template: the
+    // sections are generated against the baseline's data alone.
+    let template = capture_dashboard_template(state.baseline_data().as_ref(), preference);
+    let context = dashboard::dashboard::build_template_context(
+        template,
+        filesize,
+        &service_refs,
+        category,
+        &sources,
+    );
     *state.sections.write() = LazySectionStore::new(context);
 }
 
@@ -572,6 +615,207 @@ mod report_mode_tests {
         assert!(
             sections.is_empty(),
             "trimmed report should have no sections"
+        );
+    }
+}
+
+#[cfg(test)]
+mod dashboard_template_tests {
+    //! The server viewer renders the built-in sections from a section
+    //! template: the recording's `dashboard`, else the embedded one.
+    use super::*;
+    use ::dashboard::dashboard::{build_dashboard_context, generate_section};
+    use metriken_query::MemoryStore;
+    use std::collections::BTreeMap;
+
+    /// A Rezolus capture with a few per-CPU and memory series, and `extra`
+    /// in its metadata.
+    fn store(extra: &[(&str, String)]) -> Arc<dyn MetricsSource> {
+        let store = MemoryStore::builder()
+            .source("rezolus")
+            .filename("fixture.dendro")
+            .build();
+        let ts: Vec<u64> = (0..5)
+            .map(|i| 1_700_000_000_000_000_000 + i * 1_000_000_000)
+            .collect();
+        let labels = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        for id in ["0", "1"] {
+            for state in ["user", "system"] {
+                store
+                    .insert_counter_series(
+                        "cpu_usage",
+                        labels(&[("id", id), ("state", state)]),
+                        ts.clone(),
+                        vec![0, 10, 20, 30, 40],
+                        None,
+                    )
+                    .unwrap();
+            }
+        }
+        store
+            .insert_gauge_series("cpu_cores", labels(&[]), ts.clone(), vec![2; 5], None)
+            .unwrap();
+        store
+            .insert_gauge_series(
+                "memory_total",
+                labels(&[]),
+                ts.clone(),
+                vec![1 << 30; 5],
+                None,
+            )
+            .unwrap();
+        for (k, v) in extra {
+            store.set_metadata(*k, v.clone());
+        }
+        Arc::new(store)
+    }
+
+    fn state(data: Arc<dyn MetricsSource>, preference: TemplatePreference) -> AppState {
+        let mut state = AppState::new(data, TemplateRegistry::empty());
+        state.template_preference = preference;
+        regenerate_dashboards(&state);
+        state
+    }
+
+    /// The Rezolus template with `edit` applied to its CPU section.
+    fn edited_cpu(edit: impl FnOnce(&mut serde_json::Value)) -> String {
+        let mut doc: serde_json::Value =
+            serde_json::from_str(&::dashboard::rezolus_template::json()).unwrap();
+        let cpu = doc["sections"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|s| s["route"] == "/cpu")
+            .unwrap();
+        edit(cpu);
+        doc.to_string()
+    }
+
+    fn renamed_cpu(name: &str) -> String {
+        edited_cpu(|cpu| cpu["name"] = serde_json::Value::String(name.to_string()))
+    }
+
+    fn cpu_name(state: &AppState) -> String {
+        let store = state.sections.read();
+        store
+            .sections()
+            .iter()
+            .find(|s| s.route == "/cpu")
+            .unwrap()
+            .name
+            .clone()
+    }
+
+    /// With no `dashboard` in the metadata, the navigation and every built-in
+    /// section are what the generators render for the same capture.
+    #[test]
+    fn a_recording_without_a_dashboard_renders_what_the_generators_render() {
+        let data = store(&[]);
+        let state = state(Arc::clone(&data), TemplatePreference::Archive);
+        let want_ctx = build_dashboard_context(None, &[], None, &[]);
+        let store = state.sections.read();
+        assert!(store.context().template.is_some());
+        assert_eq!(
+            serde_json::to_string(store.sections()).unwrap(),
+            serde_json::to_string(&want_ctx.sections).unwrap()
+        );
+        for section in &want_ctx.sections {
+            let mut want = generate_section(data.as_ref(), &section.route, &want_ctx).unwrap();
+            want.set_filename(data.filename_or_default());
+            let got = store.generate(&section.route, data.as_ref()).unwrap();
+            assert_eq!(
+                got,
+                serde_json::to_value(&want).unwrap(),
+                "{}",
+                section.route
+            );
+        }
+    }
+
+    /// The recording's template renders, unless the registry is preferred:
+    /// the navigation's name for the section, and the section's own content.
+    #[test]
+    fn a_recordings_dashboard_renders_unless_the_registry_is_preferred() {
+        let doc = edited_cpu(|cpu| {
+            cpu["name"] = "Processors".into();
+            cpu["groups"][0]["name"] = "Busy".into();
+        });
+        let data = store(&[("dashboard", doc)]);
+        let archive = state(Arc::clone(&data), TemplatePreference::Archive);
+        assert_eq!(cpu_name(&archive), "Processors");
+        let section = archive
+            .sections
+            .read()
+            .generate("/cpu", data.as_ref())
+            .unwrap();
+        assert_eq!(section["groups"][0]["name"], "Busy");
+
+        let registry = state(Arc::clone(&data), TemplatePreference::Registry);
+        assert_eq!(cpu_name(&registry), "CPU");
+        let section = registry
+            .sections
+            .read()
+            .generate("/cpu", data.as_ref())
+            .unwrap();
+        assert_eq!(section["groups"][0]["name"], "Utilization");
+    }
+
+    /// A `dashboard` that does not parse, or is over the size limit, falls
+    /// back to the embedded template, and the reason is logged once.
+    #[test]
+    fn a_refused_dashboard_falls_back_with_a_notice() {
+        let malformed = r#"{"schema": 1, "sections": "server shell test"}"#.to_string();
+        let mut oversized = renamed_cpu("Processors");
+        oversized.push_str(
+            &" ".repeat(::dashboard::source_templates::MAX_DASHBOARD_BYTES + 1 - oversized.len()),
+        );
+        for doc in [malformed, oversized] {
+            let metadata: HashMap<String, String> = [("dashboard".to_string(), doc.clone())]
+                .into_iter()
+                .collect();
+            let notice = ::dashboard::source_templates::resolve_dashboard_template(
+                &metadata,
+                TemplatePreference::Archive,
+            )
+            .notice
+            .expect("refused");
+            let state = state(store(&[("dashboard", doc)]), TemplatePreference::Archive);
+            assert_eq!(cpu_name(&state), "CPU");
+            assert!(!first_time(&notice), "not logged: {notice}");
+        }
+    }
+
+    /// A section the template cannot expand is an empty section carrying the
+    /// reason, logged once; the other sections render.
+    #[test]
+    fn a_section_that_cannot_expand_is_empty_and_the_others_render() {
+        let doc = edited_cpu(|cpu| {
+            cpu["groups"] = serde_json::json!([{"name": "g", "id": "g", "subgroups": [{"plots": [
+                {"kind": "gauge", "title": "t", "id": "p", "unit": "count", "query": "${throughput}"}
+            ]}]}]);
+        });
+        let data = store(&[("dashboard", doc)]);
+        let state = state(Arc::clone(&data), TemplatePreference::Archive);
+        let store = state.sections.read();
+        let cpu = store.generate("/cpu", data.as_ref()).unwrap();
+        assert_eq!(cpu["groups"], serde_json::json!([]));
+        let error = cpu["metadata"]["template_error"].as_str().unwrap();
+        assert!(error.contains("throughput"), "{error}");
+        assert!(!first_time(&format!(
+            "section /cpu could not be rendered from its dashboard template: {error}"
+        )));
+
+        let want_ctx = build_dashboard_context(None, &[], None, &[]);
+        let mut want = generate_section(data.as_ref(), "/memory", &want_ctx).unwrap();
+        want.set_filename(data.filename_or_default());
+        assert_eq!(
+            store.generate("/memory", data.as_ref()).unwrap(),
+            serde_json::to_value(&want).unwrap()
         );
     }
 }

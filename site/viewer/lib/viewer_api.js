@@ -33,6 +33,17 @@ const logTemplateNotices = (noticesJson) => {
     }
 };
 
+// A built-in section the dashboard template could not expand arrives as an
+// empty view whose `metadata.template_error` says why; each distinct message
+// is logged once. Mirrored in the server copy.
+const loggedSectionErrors = new Set();
+const logSectionTemplateError = (view) => {
+    const message = view && view.metadata && view.metadata.template_error;
+    if (typeof message !== 'string' || loggedSectionErrors.has(message)) return;
+    loggedSectionErrors.add(message);
+    console.warn(message);
+};
+
 const ViewerApi = {
     setRegistry(instance) {
         registry = instance;
@@ -129,7 +140,9 @@ const ViewerApi = {
         ensureAttached(captureId);
         const json = registry.get_section(captureId, section);
         if (!json) throw new Error(`Unknown section: ${section}`);
-        return JSON.parse(json);
+        const view = JSON.parse(json);
+        logSectionTemplateError(view);
+        return view;
     },
 
     async getSections(captureId = 'baseline') {

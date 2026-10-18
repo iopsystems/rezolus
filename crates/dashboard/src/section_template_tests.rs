@@ -633,3 +633,149 @@ fn section_template_lists_the_generators_sections() {
         .collect();
     assert_eq!(from_template, from_generators);
 }
+
+/// What the viewers render: the context `build_template_context` makes from
+/// the embedded template, rendered with `render_section`, has the navigation
+/// and every section's JSON of the generators' context, with and without a
+/// service section and a throughput KPI.
+#[test]
+fn a_template_context_renders_what_the_generators_render() {
+    use crate::dashboard::{SourceEntry, build_template_context, render_section};
+    use crate::source_templates::embedded_dashboard_template;
+
+    let ext: crate::ServiceExtension = serde_json::from_value(serde_json::json!({
+        "service_name": "svc",
+        "kpis": [{"role": "throughput", "title": "Requests", "query": "sum(irate(requests[5m]))", "type": "delta_counter", "denominator": true}],
+    }))
+    .unwrap();
+    let services: &[&[(&str, &crate::ServiceExtension)]] = &[&[], &[("svc", &ext)]];
+    let sources = [
+        vec![],
+        vec![SourceEntry {
+            name: "rezolus".into(),
+            is_rezolus: true,
+        }],
+        vec![SourceEntry {
+            name: "app".into(),
+            is_rezolus: false,
+        }],
+    ];
+    let mut failures = Vec::new();
+    for svc in services {
+        for src in &sources {
+            let want_ctx = build_dashboard_context(Some(7), svc, None, src);
+            assert_eq!(want_ctx.throughput_query.is_some(), !svc.is_empty());
+            let got_ctx =
+                build_template_context(embedded_dashboard_template(), Some(7), svc, None, src);
+            assert_eq!(
+                serde_json::to_string(&want_ctx.sections).unwrap(),
+                serde_json::to_string(&got_ctx.sections).unwrap(),
+                "navigation, {} services, {} sources",
+                svc.len(),
+                src.len()
+            );
+            for (name, data) in named_catalogs() {
+                for section in &want_ctx.sections {
+                    let want = generate_section(&data, &section.route, &want_ctx)
+                        .map(|v| serde_json::to_string(&v).unwrap());
+                    let got = render_section(&data, &section.route, &got_ctx).map(|r| {
+                        assert!(r.error.is_none(), "{}: {:?}", section.route, r.error);
+                        serde_json::to_string(&r.view).unwrap()
+                    });
+                    if want != got {
+                        failures.push(format!("{} on {name}", section.route));
+                    }
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "differs: {failures:#?}");
+}
+
+/// A template section that cannot be expanded renders as an empty view
+/// carrying the reason, and the other sections render as usual. A route the
+/// template does not have is a 404 even when a generator has it, and a
+/// template section under `/service/` or `/source/` is neither listed nor
+/// rendered.
+#[test]
+fn a_template_context_renders_the_templates_routes_only() {
+    use crate::dashboard::{TEMPLATE_ERROR_KEY, build_template_context, render_section};
+    use crate::section_template::TemplateErrorKind;
+
+    let plot = |query: &str| {
+        serde_json::json!({"name": "g", "id": "g", "subgroups": [{"plots": [
+            {"kind": "gauge", "title": "t", "id": "p", "unit": "count", "query": query}
+        ]}]})
+    };
+    let doc = serde_json::json!({
+        "schema": 1,
+        "params": ["throughput"],
+        "sections": [
+            {"name": "Fine", "route": "/fine", "groups": [plot("up")]},
+            {"name": "Needs throughput", "route": "/needs", "groups": [plot("${throughput}")]},
+            {"name": "Shadow", "route": "/service/svc", "groups": [plot("up")]},
+            {"name": "Shadow source", "route": "/source/app", "groups": [plot("up")]},
+            {"name": "About", "route": "/about", "groups": [plot("up")]},
+            {"name": "Report", "route": "/report", "groups": [plot("up")]},
+            {"name": "Deep", "route": "/a/b", "groups": [plot("up")]},
+        ],
+    });
+    let template = std::sync::Arc::new(SectionTemplate::parse(&doc.to_string()).unwrap());
+    let ctx = build_template_context(template, None, &[], None, &[]);
+    let routes: Vec<&str> = ctx.sections.iter().map(|s| s.route.as_str()).collect();
+    assert_eq!(routes, ["/fine", "/needs"]);
+
+    let data = Catalog::default();
+    let fine = render_section(&data, "/fine", &ctx).unwrap();
+    assert!(fine.error.is_none());
+    assert!(!fine.view.metadata.contains_key(TEMPLATE_ERROR_KEY));
+
+    let needs = render_section(&data, "/needs", &ctx).unwrap();
+    let error = needs.error.expect("an unset parameter");
+    assert_eq!(error.kind(), TemplateErrorKind::UnsetParam);
+    let json = serde_json::to_value(&needs.view).unwrap();
+    assert_eq!(json["groups"], serde_json::json!([]));
+    assert_eq!(json["metadata"][TEMPLATE_ERROR_KEY], error.to_string());
+    assert_eq!(json["sections"].as_array().unwrap().len(), 2);
+
+    // With the parameter set, it renders.
+    let mut with = ctx.clone();
+    with.throughput_query = Some("sum(irate(requests[5m]))".into());
+    assert!(
+        render_section(&data, "/needs", &with)
+            .unwrap()
+            .error
+            .is_none()
+    );
+
+    assert!(render_section(&data, "/cpu", &ctx).is_none());
+    assert!(render_section(&data, "/service/svc", &ctx).is_none());
+    assert!(render_section(&data, "/source/app", &ctx).is_none());
+    assert!(render_section(&data, "/about", &ctx).is_none());
+    assert!(render_section(&data, "/report", &ctx).is_none());
+    assert!(render_section(&data, "/a/b", &ctx).is_none());
+}
+
+#[test]
+fn reserved_routes_are_the_frontends_and_deeper_ones() {
+    use crate::dashboard::{CLIENT_ROUTES, is_reserved_route};
+    for route in CLIENT_ROUTES {
+        assert!(is_reserved_route(route), "{route}");
+    }
+    for route in [
+        "/",
+        "",
+        "cpu",
+        "/service/x",
+        "/source/x",
+        "/cpu/chart/p",
+        "/a/b",
+    ] {
+        assert!(is_reserved_route(route), "{route}");
+    }
+    // Every section of the Rezolus template is shown.
+    for section in template().sections() {
+        assert!(!is_reserved_route(&section.route), "{}", section.route);
+    }
+    assert!(!is_reserved_route("/aboutx"));
+}

@@ -18,11 +18,11 @@
 //!   `per_source_metadata.<source>.<entry>.service_queries`, and its `source`
 //!   is a JSON array of its sources, so a top-level template on it is keyed
 //!   by the template's own `service_name`.
-//! - `dashboard`: reserved for a section template (schema 1), a document
-//!   separate from `ServiceExtension`. It is read and kept in
-//!   [`SourceTemplates::dashboard`] verbatim, and nothing consumes it yet: the
-//!   section-template expander will, and it decides the format. Nothing reads
-//!   `dashboard` from the registry yet.
+//! - `dashboard`: a section template (schema 1,
+//!   [`SectionTemplate`]) for the Rezolus built-in sections, which a Rezolus
+//!   agent sends in its stream handshake and a stream recording keeps in its
+//!   source metadata. [`resolve_dashboard_template`] picks between it and the
+//!   viewer's embedded template ([`crate::rezolus_template`]).
 //!
 //! Precedence: the template in the metadata wins over the registry's entry
 //! for the same source ([`TemplatePreference::Archive`], the default).
@@ -31,9 +31,22 @@
 //! way, since there is nothing to prefer over it. A `service_queries` value
 //! that does not parse is not fatal: the source falls back to the registry and
 //! the reason is returned in [`SourceTemplates::notices`].
+//!
+//! The same preference applies to `dashboard`: under
+//! [`TemplatePreference::Registry`] the embedded template renders whatever the
+//! metadata carries. Under [`TemplatePreference::Archive`] the metadata's
+//! template renders when it is at most [`MAX_DASHBOARD_BYTES`] and
+//! [`SectionTemplate::parse`] accepts it and it has a section the viewer can
+//! show (see [`crate::dashboard::is_reserved_route`]); otherwise the embedded
+//! template renders and [`DashboardTemplate::notice`] says why. A recording
+//! without the key (a parquet, a `.rez`, anything scraped rather than
+//! streamed, or an agent older than this change) renders the embedded
+//! template, silently.
 
+use crate::section_template::SectionTemplate;
 use crate::{ServiceExtension, TemplateRegistry};
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, OnceLock};
 
 // Format keys owned by the binary's `src/parquet_metadata.rs`, duplicated as
 // literals for the same reason as in `source_kind.rs`: this crate cannot
@@ -42,8 +55,12 @@ const KEY_SOURCE: &str = "source";
 const KEY_PER_SOURCE_METADATA: &str = "per_source_metadata";
 /// The KPI template key, top level or nested under `per_source_metadata`.
 pub const KEY_SERVICE_QUERIES: &str = "service_queries";
-/// Reserved for a section template; see the module docs.
+/// The section template key; see the module docs.
 pub const KEY_DASHBOARD: &str = "dashboard";
+
+/// The largest `dashboard` value a viewer parses. The Rezolus template is
+/// about 106 KB; [`SectionTemplate::parse`] has no size limit of its own.
+pub const MAX_DASHBOARD_BYTES: usize = 1 << 20;
 
 /// Whose template renders when a source's metadata carries one and the
 /// registry has one for the same source name.
@@ -61,9 +78,8 @@ pub enum TemplatePreference {
 pub struct SourceTemplates {
     /// KPI templates keyed by the source name they render for.
     pub service_exts: Vec<(String, ServiceExtension)>,
-    /// The raw `dashboard` value when the metadata carries one. Reserved:
-    /// kept so the section-template expander can consume it, passed nowhere
-    /// yet.
+    /// The raw `dashboard` value when the metadata carries one;
+    /// [`resolve_dashboard_template`] is what reads it.
     pub dashboard: Option<String>,
     /// What the viewer should say about the lookup, such as a template in
     /// the metadata that did not parse.
@@ -216,6 +232,163 @@ pub fn resolve_source_templates(
     }
 
     out
+}
+
+/// Where the section template a source renders with came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardOrigin {
+    /// The `dashboard` value in the source's metadata.
+    Recording,
+    /// The viewer's embedded template ([`embedded_dashboard_template`]).
+    Embedded,
+}
+
+/// The section template chosen for one source.
+#[derive(Clone, Debug)]
+pub struct DashboardTemplate {
+    pub template: Arc<SectionTemplate>,
+    pub origin: DashboardOrigin,
+    /// Why the metadata's template was not used, when it was present and
+    /// refused (too large, [`SectionTemplate::parse`] rejected it, or no
+    /// section is left once [`is_reserved_route`] sections are dropped), or
+    /// which of its sections are not shown.
+    ///
+    /// [`is_reserved_route`]: crate::dashboard::is_reserved_route
+    pub notice: Option<String>,
+}
+
+/// The Rezolus template this build embeds ([`crate::rezolus_template::json`]),
+/// parsed once per process.
+pub fn embedded_dashboard_template() -> Arc<SectionTemplate> {
+    static EMBEDDED: OnceLock<Arc<SectionTemplate>> = OnceLock::new();
+    EMBEDDED
+        .get_or_init(|| {
+            Arc::new(
+                SectionTemplate::parse(&crate::rezolus_template::json())
+                    .expect("the embedded Rezolus template parses"),
+            )
+        })
+        .clone()
+}
+
+/// Parsed `dashboard` documents, by their text. A viewer holds one or two
+/// captures at a time, and the terminal UI and each attach rebuild the
+/// section context; this keeps them from reparsing the same document.
+/// Refusals are kept too, so a document that does not parse is not parsed
+/// again on every rebuild.
+#[derive(Default)]
+struct ParseCache {
+    entries: Mutex<Vec<(String, Parsed)>>,
+}
+
+/// A parsed document, or why it was refused.
+type Parsed = Result<Arc<SectionTemplate>, String>;
+
+impl ParseCache {
+    /// How many distinct documents the cache keeps; the oldest goes first.
+    const ENTRIES: usize = 4;
+
+    /// The process's cache.
+    fn global() -> &'static ParseCache {
+        static CACHE: OnceLock<ParseCache> = OnceLock::new();
+        CACHE.get_or_init(Default::default)
+    }
+
+    /// Parse `json`, or return the result of parsing the same text before.
+    fn parse(&self, json: &str) -> Parsed {
+        if let Some((_, parsed)) = self
+            .entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|(text, _)| text == json)
+        {
+            return parsed.clone();
+        }
+        // Parsed outside the lock: two callers racing on a new document both
+        // parse it, and both results are equal.
+        let parsed = SectionTemplate::parse(json)
+            .map(Arc::new)
+            .map_err(|e| e.to_string());
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        if entries.len() >= Self::ENTRIES {
+            drop(entries.remove(0));
+        }
+        entries.push((json.to_string(), parsed.clone()));
+        parsed
+    }
+}
+
+/// Choose the section template for a source's built-in sections from its
+/// metadata; see the module docs for the order.
+pub fn resolve_dashboard_template(
+    metadata: &HashMap<String, String>,
+    preference: TemplatePreference,
+) -> DashboardTemplate {
+    let embedded = |notice: Option<String>| DashboardTemplate {
+        template: embedded_dashboard_template(),
+        origin: DashboardOrigin::Embedded,
+        notice,
+    };
+    let Some(json) = metadata.get(KEY_DASHBOARD) else {
+        return embedded(None);
+    };
+    if preference == TemplatePreference::Registry {
+        return embedded(None);
+    }
+    if json.len() > MAX_DASHBOARD_BYTES {
+        return embedded(Some(format!(
+            "the dashboard template in the recording's metadata is {} bytes, over the \
+             {MAX_DASHBOARD_BYTES}-byte limit; using the built-in template instead",
+            json.len()
+        )));
+    }
+    match ParseCache::global().parse(json) {
+        Ok(template) => {
+            let dropped: Vec<String> = template
+                .sections()
+                .into_iter()
+                .map(|s| s.route)
+                .filter(|r| crate::dashboard::is_reserved_route(r))
+                .collect();
+            let listed = template.sections().len() - dropped.len();
+            if listed == 0 {
+                return embedded(Some(format!(
+                    "the dashboard template in the recording's metadata has no section the \
+                     viewer can show{}; using the built-in template instead",
+                    dropped_routes(&dropped)
+                )));
+            }
+            DashboardTemplate {
+                template,
+                origin: DashboardOrigin::Recording,
+                notice: (!dropped.is_empty()).then(|| {
+                    format!(
+                        "the dashboard template in the recording's metadata has sections the \
+                         viewer does not show{}",
+                        dropped_routes(&dropped)
+                    )
+                }),
+            }
+        }
+        Err(e) => embedded(Some(format!(
+            "the dashboard template in the recording's metadata does not parse ({e}); \
+             using the built-in template instead"
+        ))),
+    }
+}
+
+/// ` (routes a, b: reserved for the viewer, or more than one segment)`, or
+/// nothing when `routes` is empty.
+fn dropped_routes(routes: &[String]) -> String {
+    if routes.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " (routes {}: reserved for the viewer, or more than one segment)",
+            routes.join(", ")
+        )
+    }
 }
 
 /// Whether a `source` value names one source. A combined parquet stores the
@@ -512,6 +685,139 @@ mod tests {
             "{:?}",
             t.notices
         );
+    }
+
+    /// The Rezolus template with the CPU section renamed `name`.
+    fn renamed_cpu(name: &str) -> String {
+        let mut doc: serde_json::Value =
+            serde_json::from_str(&crate::rezolus_template::json()).unwrap();
+        let cpu = doc["sections"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|s| s["route"] == "/cpu")
+            .unwrap();
+        cpu["name"] = serde_json::Value::String(name.to_string());
+        doc.to_string()
+    }
+
+    fn cpu_name(t: &DashboardTemplate) -> String {
+        t.template
+            .sections()
+            .into_iter()
+            .find(|s| s.route == "/cpu")
+            .unwrap()
+            .name
+    }
+
+    #[test]
+    fn metadata_without_a_dashboard_renders_the_embedded_template_silently() {
+        let t = resolve_dashboard_template(&md(&[]), TemplatePreference::Archive);
+        assert_eq!(t.origin, DashboardOrigin::Embedded);
+        assert!(t.notice.is_none());
+        assert!(Arc::ptr_eq(&t.template, &embedded_dashboard_template()));
+    }
+
+    #[test]
+    fn the_recordings_dashboard_renders_unless_the_registry_is_preferred() {
+        let m = md(&[("dashboard", renamed_cpu("Processors"))]);
+        let t = resolve_dashboard_template(&m, TemplatePreference::Archive);
+        assert_eq!(t.origin, DashboardOrigin::Recording);
+        assert_eq!(cpu_name(&t), "Processors");
+        assert!(t.notice.is_none());
+
+        let t = resolve_dashboard_template(&m, TemplatePreference::Registry);
+        assert_eq!(t.origin, DashboardOrigin::Embedded);
+        assert_eq!(cpu_name(&t), "CPU");
+        assert!(t.notice.is_none());
+    }
+
+    #[test]
+    fn a_dashboard_that_does_not_parse_falls_back_with_a_notice() {
+        let m = md(&[("dashboard", r#"{"schema": 1, "sections": 7}"#.into())]);
+        let t = resolve_dashboard_template(&m, TemplatePreference::Archive);
+        assert_eq!(t.origin, DashboardOrigin::Embedded);
+        let notice = t.notice.expect("a notice");
+        assert!(notice.contains("does not parse"), "{notice}");
+        assert!(notice.contains("built-in template"), "{notice}");
+    }
+
+    /// A document over the limit is refused before it is parsed, even one
+    /// that would parse: the padding is whitespace.
+    #[test]
+    fn a_dashboard_over_the_size_limit_falls_back_with_a_notice() {
+        let mut big = renamed_cpu("Processors");
+        big.push_str(&" ".repeat(MAX_DASHBOARD_BYTES + 1 - big.len()));
+        assert!(SectionTemplate::parse(&big).is_ok());
+        let t = resolve_dashboard_template(&md(&[("dashboard", big)]), TemplatePreference::Archive);
+        assert_eq!(t.origin, DashboardOrigin::Embedded);
+        assert_eq!(cpu_name(&t), "CPU");
+        let notice = t.notice.expect("a notice");
+        assert!(notice.contains("over the"), "{notice}");
+
+        // At the limit, it is read.
+        let mut at = renamed_cpu("Processors");
+        at.push_str(&" ".repeat(MAX_DASHBOARD_BYTES - at.len()));
+        let t = resolve_dashboard_template(&md(&[("dashboard", at)]), TemplatePreference::Archive);
+        assert_eq!(t.origin, DashboardOrigin::Recording);
+    }
+
+    /// A template whose every section is one the viewer does not show falls
+    /// back to the embedded one, saying which routes; one with some such
+    /// sections renders, saying which are not shown.
+    #[test]
+    fn a_dashboard_with_no_showable_section_falls_back_with_a_notice() {
+        let doc = |routes: &[&str]| {
+            let sections: Vec<serde_json::Value> = routes
+                .iter()
+                .map(|r| serde_json::json!({"name": r, "route": r, "groups": []}))
+                .collect();
+            serde_json::json!({"schema": 1, "sections": sections}).to_string()
+        };
+        let m = md(&[("dashboard", doc(&["/about", "/x/y"]))]);
+        let t = resolve_dashboard_template(&m, TemplatePreference::Archive);
+        assert_eq!(t.origin, DashboardOrigin::Embedded);
+        let notice = t.notice.expect("a notice");
+        assert!(
+            notice.contains("no section the viewer can show"),
+            "{notice}"
+        );
+        assert!(notice.contains("/about, /x/y"), "{notice}");
+
+        let m = md(&[("dashboard", doc(&["/fine", "/metadata"]))]);
+        let t = resolve_dashboard_template(&m, TemplatePreference::Archive);
+        assert_eq!(t.origin, DashboardOrigin::Recording);
+        let notice = t.notice.expect("a notice");
+        assert!(
+            notice.contains("does not show (routes /metadata"),
+            "{notice}"
+        );
+
+        let m = md(&[("dashboard", doc(&["/fine"]))]);
+        let t = resolve_dashboard_template(&m, TemplatePreference::Archive);
+        assert_eq!(t.origin, DashboardOrigin::Recording);
+        assert!(t.notice.is_none());
+    }
+
+    /// The same document is parsed once: the second lookup returns the
+    /// template the first parsed, until `ENTRIES` other documents have
+    /// pushed it out. A cache of the test's own, since other tests use the
+    /// process's at the same time.
+    #[test]
+    fn a_dashboard_is_parsed_once() {
+        let cache = ParseCache::default();
+        let doc = renamed_cpu("parsed once");
+        let a = cache.parse(&doc).unwrap();
+        let b = cache.parse(&doc).unwrap();
+        assert!(Arc::ptr_eq(&a, &b));
+        for i in 0..ParseCache::ENTRIES {
+            cache.parse(&renamed_cpu(&format!("other {i}"))).unwrap();
+        }
+        let c = cache.parse(&doc).unwrap();
+        assert!(!Arc::ptr_eq(&a, &c), "the oldest entry was not evicted");
+        // A refusal is kept as one.
+        assert!(cache.parse("{}").is_err());
+        assert!(cache.parse("{}").is_err());
     }
 
     #[test]

@@ -1,5 +1,9 @@
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
 use crate::MetricsSource;
 use crate::plot::*;
+use crate::section_template::{SectionTemplate, TemplateError};
 use crate::service_extension::{CategoryExtension, ServiceExtension};
 
 mod blockio;
@@ -68,6 +72,35 @@ pub struct DashboardContext {
     pub service_exts: Vec<(String, ServiceExtension)>,
     pub category: Option<(String, CategoryExtension)>,
     pub throughput_query: Option<String>,
+    /// The section template the built-in sections render from, set by
+    /// [`build_template_context`]. `None` in a context from
+    /// [`build_dashboard_context`], whose built-in sections are the Rust
+    /// generators'.
+    pub template: Option<Arc<SectionTemplate>>,
+}
+
+/// Routes the frontend renders itself (`app.js`'s `/about` route and its
+/// client-only `/:section` views), which a template section must not take.
+pub const CLIENT_ROUTES: &[&str] = &[
+    "/about",
+    "/systeminfo",
+    "/metadata",
+    "/notebook",
+    "/selection",
+    "/report",
+];
+
+/// Whether a template section at `route` is left out of the navigation and
+/// never rendered: a route the frontend renders itself ([`CLIENT_ROUTES`]),
+/// or one of more than one segment. The frontend routes a section as
+/// `/:section`, so a deeper route is unreachable (`/a/chart/b` is the
+/// single-chart route), and `/service/` and `/source/` belong to the service,
+/// category and source sections.
+pub fn is_reserved_route(route: &str) -> bool {
+    let Some(rest) = route.strip_prefix('/') else {
+        return true;
+    };
+    rest.is_empty() || rest.contains('/') || CLIENT_ROUTES.contains(&route)
 }
 
 /// Build the navigation list and other shared state needed to render
@@ -78,6 +111,54 @@ pub struct DashboardContext {
 /// Empty slice → legacy behavior (all built-ins shown). Non-empty with no
 /// Rezolus entry → built-ins suppressed (simple-capture case).
 pub fn build_dashboard_context(
+    filesize: Option<u64>,
+    service_exts: &[(&str, &ServiceExtension)],
+    category: Option<(&str, &CategoryExtension)>,
+    sources: &[SourceEntry],
+) -> DashboardContext {
+    let mut builtins = vec![Section {
+        name: "Overview".to_string(),
+        route: "/overview".to_string(),
+    }];
+    builtins.extend(SECTION_META.iter().map(|(name, route, _)| Section {
+        name: (*name).to_string(),
+        route: (*route).to_string(),
+    }));
+    build_context(builtins, None, filesize, service_exts, category, sources)
+}
+
+/// [`build_dashboard_context`], with the built-in sections listed and
+/// rendered by `template` rather than by the Rust generators. The service,
+/// category and source sections are the same in both.
+///
+/// Service and category sections are placed after the template's first
+/// section, which in the Rezolus template is the Overview, as they are
+/// placed after the generators' Overview.
+pub fn build_template_context(
+    template: Arc<SectionTemplate>,
+    filesize: Option<u64>,
+    service_exts: &[(&str, &ServiceExtension)],
+    category: Option<(&str, &CategoryExtension)>,
+    sources: &[SourceEntry],
+) -> DashboardContext {
+    let builtins: Vec<Section> = template
+        .sections()
+        .into_iter()
+        .filter(|s| !is_reserved_route(&s.route))
+        .collect();
+    build_context(
+        builtins,
+        Some(template),
+        filesize,
+        service_exts,
+        category,
+        sources,
+    )
+}
+
+fn build_context(
+    builtins: Vec<Section>,
+    template: Option<Arc<SectionTemplate>>,
     filesize: Option<u64>,
     service_exts: &[(&str, &ServiceExtension)],
     category: Option<(&str, &CategoryExtension)>,
@@ -108,28 +189,22 @@ pub fn build_dashboard_context(
     let mut sections: Vec<Section> = Vec::new();
 
     if show_builtins {
-        sections.push(Section {
-            name: "Overview".to_string(),
-            route: "/overview".to_string(),
-        });
-        sections.extend(SECTION_META.iter().map(|(name, route, _)| Section {
-            name: (*name).to_string(),
-            route: (*route).to_string(),
-        }));
+        sections.extend(builtins);
     }
+    // Service/category sections go after the first built-in (the Overview),
+    // before source: entries.
+    let insert_pos = sections.len().min(1);
 
-    // Service/category sections go after built-ins, before source: entries.
     if category_active {
         let (category_name, _) = category.unwrap();
         sections.insert(
-            if show_builtins { 1 } else { 0 },
+            insert_pos,
             Section {
                 name: category_name.to_string(),
                 route: format!("/service/{category_name}"),
             },
         );
     } else {
-        let insert_pos = if show_builtins { 1 } else { 0 };
         for (i, (source_name, _)) in unique_service_exts.iter().enumerate() {
             sections.insert(
                 insert_pos + i,
@@ -171,6 +246,61 @@ pub fn build_dashboard_context(
         service_exts: owned_service_exts,
         category: owned_category,
         throughput_query,
+        template,
+    }
+}
+
+/// A section [`render_section`] rendered.
+pub struct Rendered {
+    pub view: View,
+    /// Why the template could not expand this section. The view is then an
+    /// empty one (the navigation and no groups) whose `metadata` carries the
+    /// message under `template_error`, so the page shows an empty section
+    /// rather than failing, and the shells report the message as a notice.
+    pub error: Option<TemplateError>,
+}
+
+/// The `View::metadata` key an unexpandable section's message is under.
+pub const TEMPLATE_ERROR_KEY: &str = "template_error";
+
+/// Render a single dashboard section by route, as the viewers do.
+///
+/// With a template in `ctx` ([`build_template_context`]), every route outside
+/// `/service/` and `/source/` is the template's: expanded with the viewer
+/// parameter `throughput` set from the throughput KPI, `None` for a route the
+/// template does not have. `/service/` routes, and every route of a context
+/// without a template, are [`generate_section`]'s. `None` is a 404.
+pub fn render_section(
+    data: &dyn MetricsSource,
+    route: &str,
+    ctx: &DashboardContext,
+) -> Option<Rendered> {
+    let Some(template) = ctx.template.as_deref() else {
+        return generate_section(data, route, ctx).map(|view| Rendered { view, error: None });
+    };
+    if route.starts_with("/service/") {
+        return generate_section(data, route, ctx).map(|view| Rendered { view, error: None });
+    }
+    if is_reserved_route(route) {
+        return None;
+    }
+    let mut params = BTreeMap::new();
+    if let Some(query) = &ctx.throughput_query {
+        params.insert("throughput".to_string(), query.clone());
+    }
+    match template.expand(data, route, ctx.sections.clone(), &params) {
+        Ok(view) => view.map(|view| Rendered { view, error: None }),
+        Err(error) => {
+            let mut view = View::new(data, ctx.sections.clone());
+            view.metadata.insert(
+                TEMPLATE_ERROR_KEY.to_string(),
+                serde_json::Value::String(error.to_string()),
+            );
+            Some(Rendered {
+                view,
+                error: Some(error),
+            })
+        }
     }
 }
 
@@ -251,6 +381,33 @@ mod tests {
         assert!(routes.contains(&"/overview"));
         assert!(routes.contains(&"/cpu"));
         assert!(routes.contains(&"/source/myapp"));
+    }
+
+    /// A service section is listed second, after the first built-in (the
+    /// Overview), from either builder; with no built-ins it is first.
+    #[test]
+    fn a_service_section_follows_the_first_built_in() {
+        let ext: ServiceExtension = serde_json::from_value(serde_json::json!({
+            "service_name": "svc",
+            "kpis": [{"role": "throughput", "title": "t", "query": "up", "type": "gauge"}],
+        }))
+        .unwrap();
+        let services = [("svc", &ext)];
+        let template = crate::source_templates::embedded_dashboard_template();
+        for ctx in [
+            build_dashboard_context(None, &services, None, &[]),
+            build_template_context(template.clone(), None, &services, None, &[]),
+        ] {
+            let routes: Vec<&str> = ctx.sections.iter().map(|s| s.route.as_str()).collect();
+            assert_eq!(routes[..3], ["/overview", "/service/svc", "/exceptions"]);
+        }
+        let simple = [SourceEntry {
+            name: "app".into(),
+            is_rezolus: false,
+        }];
+        let ctx = build_template_context(template, None, &services, None, &simple);
+        let routes: Vec<&str> = ctx.sections.iter().map(|s| s.route.as_str()).collect();
+        assert_eq!(routes, ["/service/svc", "/source/app"]);
     }
 
     #[test]

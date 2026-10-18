@@ -24,7 +24,6 @@ use super::metadata::{
 use super::report_save;
 use super::routes::on_query_slot;
 use super::state::{ApiResponse, AppState, LazySectionStore};
-use ::dashboard;
 
 // ── Agent info ────────────────────────────────────────────────────────
 
@@ -422,7 +421,16 @@ pub fn ingest_baseline_from_path(
         // source: section here too — matching CLI load (regenerate_dashboards)
         // and the WASM viewer, all of which share this classifier.
         let sources = classify_sources(Some(&temp_path), reader_arc.as_ref(), &service_exts);
-        ::dashboard::dashboard::build_dashboard_context(filesize, &service_refs, None, &sources)
+        ::dashboard::dashboard::build_template_context(
+            super::metadata::capture_dashboard_template(
+                reader_arc.as_ref(),
+                state.template_preference,
+            ),
+            filesize,
+            &service_refs,
+            None,
+            &sources,
+        )
     };
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
@@ -638,7 +646,10 @@ pub async fn connect_agent(
             Ok(session) => session,
             Err(e) => return ApiResponse::err(e, "connection_error"),
         };
-    let context = dashboard::dashboard::build_dashboard_context(None, &[], None, &[]);
+    let context = super::metadata::live_dashboard_context(
+        session.reader().as_ref(),
+        state.template_preference,
+    );
 
     state.install_live(session);
     *state.sections.write() = LazySectionStore::new(context);

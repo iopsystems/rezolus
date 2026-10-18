@@ -151,8 +151,8 @@
   viewer now also classifies a `.rez` or `.dendro` source from its metadata,
   so a simple capture's section is named by its `source`
   (`/source/127.0.0.1-18651`) rather than the file name, as the WASM viewer
-  and a parquet of the same capture name it. A `dashboard` key, reserved for
-  the section template, is kept and not rendered yet.
+  and a parquet of the same capture name it. The `dashboard` key holds the
+  section template for the built-in sections (see Added).
 
 - **`memory_slabinfo` publishes `memory_slab_cache_bytes` for every slab
   cache**, labeled by `cache`, so slab growth that `memory_slab` shows is
@@ -781,6 +781,46 @@
 
 ### Added
 
+- **The agent sends its section template, and both viewers render the
+  built-in sections from a template.** A Rezolus agent's `/metrics/stream`
+  handshake carries the Rezolus section template under the metadata key
+  `dashboard`, with `revision` set to `rezolus <version>`. `record`,
+  hindsight and the live viewer keep it in the dendro source's metadata. The
+  viewers (`rezolus view`, its terminal UI, and the WASM viewer) render the
+  Overview, Exceptions, CPU and the other built-in sections by expanding a
+  section template rather than calling the Rust section generators: the
+  recording's `dashboard` when it is at most 1 MiB, parses, and has a section
+  the viewer can show, else the template the viewer embeds. The navigation
+  comes from the chosen template, less any section at a route the page renders
+  itself (`/about`, `/systeminfo`, `/metadata`, `/notebook`, `/selection`,
+  `/report`) or of more than one segment, which the page cannot reach; those
+  are named in a notice. The sidebar finds the Overview and Exceptions by
+  route, so a template may rename them, and the page mounts the query
+  explorer and its own views (system info, metadata, notebook, selection,
+  report) by route, so a template section named like one of them is an
+  ordinary section.
+  A recording without the key (parquet, `.rez`, anything scraped, or a
+  recording of an older agent) renders the embedded template, which draws
+  the same JSON as the generators did. A `dashboard` that is too large or
+  does not parse renders the embedded template, with a warning once per
+  distinct message (the server's log; the browser console, from
+  `init_templates`). `rezolus view --registry-templates` and
+  `WasmCaptureRegistry::set_prefer_registry_templates` now also select the
+  embedded section template over the recording's. A section the template
+  cannot expand (a limit, or a parameter the viewer did not set) renders
+  empty, with the reason in its `metadata.template_error`, logged once by
+  the server and by the page; the other sections are unaffected. In a
+  comparison, the baseline's template renders for both captures. The cost is
+  the handshake: about 106 KB once per subscription, and the same once per
+  source in each archive written from the stream. The viewers'
+  `/api/v1/file_metadata` (and the WASM `file_metadata_json`) leave the key
+  out; `rezolus recording metadata --json` prints it, as it prints every
+  key. The WASM bundle grows by 403 KB, from 7,273,651 to 7,677,243 bytes
+  (99 KB gzipped, 2,389,446 to 2,488,591): the embedded template and the
+  expander.
+  Rendering a section from the template took the same time as the
+  generators on a 9.6-hour recording (all built-in sections, warm: 0.48 ms
+  against 0.45 ms; cold: 83 ms for both).
 - **Section templates, schema 1.** `dashboard::section_template` reads a
   JSON document describing dashboard sections (groups, subgroups and plots,
   with `when`, `repeat`, `split` and `rate_mean` nodes over predicates on
@@ -792,10 +832,12 @@
   unknown or malformed `${..}` name, a catalog label value outside a
   double-quoted string in a query (or after a `\` or in a `#` comment), a
   let that uses another let, an undeclared parameter, more than 64 sections,
-  a malformed or duplicate route, an array or object of more than 4096
-  entries, a string over 16 KiB or holding a control character, a name or a
-  predicate label name over 64 bytes as written, and a `distinct_gt` `int`
-  label that is not one of its `by` labels (of which there are at most 16).
+  a malformed or duplicate route, a section at `/query` (the query
+  explorer's, placed with `{"builtin": "query"}`), an array or object of
+  more than 4096 entries, a string over 16 KiB or holding a control
+  character, a name or a predicate label name over 64 bytes as written, and
+  a `distinct_gt` `int` label that is not one of its `by` labels (of which
+  there are at most 16).
   Parsing is linear in the document's size, which it does not limit, so a
   caller reading untrusted templates caps it first. Each section's expansion
   is bounded on its own: 20,000 nodes; 4 MiB of output counted in memory

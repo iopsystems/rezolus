@@ -51,6 +51,20 @@ fn empty_dashboard_context() -> dashboard::dashboard::DashboardContext {
     dashboard::dashboard::DashboardContext::default()
 }
 
+/// The section template a capture's built-in sections render from, and why
+/// the one its metadata carries was refused, if it was. The same choice as the
+/// server viewer's `metadata::capture_dashboard_template`.
+fn dashboard_template(
+    file_metadata: &std::collections::HashMap<String, String>,
+    preference: TemplatePreference,
+) -> (
+    Arc<dashboard::section_template::SectionTemplate>,
+    Option<String>,
+) {
+    let chosen = dashboard::source_templates::resolve_dashboard_template(file_metadata, preference);
+    (chosen.template, chosen.notice)
+}
+
 /// Classify the sources in a loaded parquet into the `SourceEntry` list the
 /// dashboard renderer consumes. Delegates to `dashboard::source_kind` — the
 /// SAME classifier the axum server calls in `src/viewer/metadata.rs` — so both
@@ -283,7 +297,10 @@ impl Viewer {
                 &file_metadata,
                 &std::collections::HashSet::new(),
             );
-            dashboard::dashboard::build_dashboard_context(None, &[], None, &sources)
+            // The template's notice, if any, is returned by `init_templates`,
+            // which rebuilds this context with the same choice.
+            let (template, _) = dashboard_template(&file_metadata, TemplatePreference::Archive);
+            dashboard::dashboard::build_template_context(template, None, &[], None, &sources)
         };
 
         Viewer {
@@ -447,9 +464,15 @@ impl Viewer {
     /// Includes pre-computed `nodes`, `node_versions`, and
     /// `service_instances` fields so the frontend doesn't have to
     /// re-parse `per_source_metadata` itself.
+    ///
+    /// Leaves out `dashboard`, the section template (about 106 KB), which
+    /// the page has no use for; the server's endpoint leaves it out too.
     pub fn file_metadata_json(&self) -> String {
         let mut map = serde_json::Map::new();
         for (key, val) in &self.file_metadata {
+            if key == dashboard::source_templates::KEY_DASHBOARD {
+                continue;
+            }
             let json_val = serde_json::from_str(val)
                 .unwrap_or_else(|_| serde_json::Value::String(val.clone()));
             map.insert(key.clone(), json_val);
@@ -562,7 +585,7 @@ impl Viewer {
         let templates = parse_service_templates(templates_json)?;
         let registry = dashboard::TemplateRegistry::from_templates(templates);
 
-        let (service_exts, notices) =
+        let (service_exts, mut notices) =
             self.detect_and_validate_service_exts(&registry, self.template_preference);
 
         let service_refs: Vec<(&str, &dashboard::ServiceExtension)> = service_exts
@@ -577,7 +600,11 @@ impl Viewer {
         } else {
             let sources =
                 classify_sources(self.reader.as_ref(), &self.file_metadata, &service_names);
-            dashboard::dashboard::build_dashboard_context(
+            let (template, notice) =
+                dashboard_template(&self.file_metadata, self.template_preference);
+            notices.extend(notice);
+            dashboard::dashboard::build_template_context(
+                template,
                 None,
                 &service_refs,
                 None, // single-capture: no category
@@ -640,9 +667,11 @@ impl Viewer {
             return serialize_lean_section(value);
         }
 
-        // Render on demand.
+        // Render on demand. A section the template could not expand is an
+        // empty view whose metadata carries the reason under
+        // `template_error`, which the frontend logs.
         let mut view =
-            dashboard::dashboard::generate_section(self.reader.as_ref(), &route, &self.context)?;
+            dashboard::dashboard::render_section(self.reader.as_ref(), &route, &self.context)?.view;
         view.set_filename(self.reader.filename_or_default());
         if let Some(size) = self.context.filesize {
             view.set_filesize(size);
@@ -1024,10 +1053,24 @@ impl WasmCaptureRegistry {
                 .experiment()
                 .map(|v| is_trimmed_report(&v.file_metadata))
                 .unwrap_or(false);
+        // The built-in sections render from the baseline's template in both
+        // slots, so the two share one navigation; its notice was returned by
+        // the baseline's `init_templates`.
         let context = if report_mode {
             empty_dashboard_context()
         } else {
-            dashboard::dashboard::build_dashboard_context(None, &service_refs, category, &sources)
+            let (template, _) = self
+                .baseline
+                .as_ref()
+                .map(|b| dashboard_template(&b.file_metadata, preference))
+                .expect("both captures are attached");
+            dashboard::dashboard::build_template_context(
+                template,
+                None,
+                &service_refs,
+                category,
+                &sources,
+            )
         };
         if let Some(baseline) = self.baseline.as_mut() {
             baseline.context = context.clone();
@@ -1944,5 +1987,189 @@ mod tests {
         reg.attach("baseline", &rez_bytes(&[("redis", "web-01")]), "one.rez")
             .unwrap();
         assert_eq!(reg.report_extension(), ".rez");
+    }
+
+    /// The Rezolus template with `edit` applied to its CPU section.
+    fn edited_cpu(edit: impl FnOnce(&mut serde_json::Value)) -> String {
+        let mut doc: serde_json::Value =
+            serde_json::from_str(&dashboard::rezolus_template::json()).unwrap();
+        let cpu = doc["sections"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|s| s["route"] == "/cpu")
+            .unwrap();
+        edit(cpu);
+        doc.to_string()
+    }
+
+    fn renamed_cpu(name: &str) -> String {
+        edited_cpu(|cpu| cpu["name"] = serde_json::Value::String(name.to_string()))
+    }
+
+    /// A registry with `dendro` attached as the baseline and its templates
+    /// initialised; returns the init's notices.
+    fn loaded(dendro: &[u8], prefer_registry: bool) -> (WasmCaptureRegistry, Vec<String>) {
+        let mut reg = WasmCaptureRegistry::new();
+        reg.set_prefer_registry_templates(prefer_registry);
+        reg.attach("baseline", dendro, "rec.dendro").unwrap();
+        let notices = reg.init_templates("baseline", "[]").unwrap();
+        (reg, serde_json::from_str(&notices).unwrap())
+    }
+
+    fn cpu_name(reg: &WasmCaptureRegistry) -> String {
+        let sections: Vec<serde_json::Value> =
+            serde_json::from_str(&reg.get_sections("baseline").unwrap()).unwrap();
+        sections.iter().find(|s| s["route"] == "/cpu").unwrap()["name"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// With no `dashboard` in the recording, the navigation and every
+    /// built-in section are what the generators render for it.
+    #[test]
+    fn a_recording_without_a_dashboard_renders_what_the_generators_render() {
+        let (reg, notices) = loaded(&dendro_bytes("rezolus", &[]), false);
+        assert!(notices.is_empty(), "{notices:?}");
+        let viewer = reg.slot("baseline").unwrap();
+        assert!(viewer.context.template.is_some());
+        let sources = classify_sources(
+            viewer.reader.as_ref(),
+            &viewer.file_metadata,
+            &std::collections::HashSet::new(),
+        );
+        let want_ctx = dashboard::dashboard::build_dashboard_context(None, &[], None, &sources);
+        assert_eq!(
+            reg.get_sections("baseline").unwrap(),
+            serde_json::to_string(&want_ctx.sections).unwrap()
+        );
+        assert!(want_ctx.sections.iter().any(|s| s.route == "/cpu"));
+        for section in &want_ctx.sections {
+            let Some(mut want) = dashboard::dashboard::generate_section(
+                viewer.reader.as_ref(),
+                &section.route,
+                &want_ctx,
+            ) else {
+                assert!(reg.get_section("baseline", &section.route[1..]).is_none());
+                continue;
+            };
+            want.set_filename(viewer.reader.filename_or_default());
+            let mut want = serde_json::to_value(&want).unwrap();
+            strip_sections_from_section_body(&mut want);
+            let got: serde_json::Value =
+                serde_json::from_str(&reg.get_section("baseline", &section.route[1..]).unwrap())
+                    .unwrap();
+            assert_eq!(got, want, "{}", section.route);
+        }
+    }
+
+    /// The recording's template renders, unless the registry is preferred:
+    /// the navigation's name for the section, and the section's own content.
+    #[test]
+    fn a_recordings_dashboard_renders_unless_the_registry_is_preferred() {
+        let doc = edited_cpu(|cpu| {
+            cpu["name"] = "Processors".into();
+            cpu["groups"][0]["name"] = "Busy".into();
+        });
+        let dendro = dendro_bytes("rezolus", &[("dashboard", &doc)]);
+        let first_group = |reg: &WasmCaptureRegistry| {
+            let cpu: serde_json::Value =
+                serde_json::from_str(&reg.get_section("baseline", "cpu").unwrap()).unwrap();
+            cpu["groups"][0]["name"].as_str().unwrap().to_string()
+        };
+        let (reg, notices) = loaded(&dendro, false);
+        assert!(notices.is_empty(), "{notices:?}");
+        assert_eq!(cpu_name(&reg), "Processors");
+        assert_eq!(first_group(&reg), "Busy");
+        let (reg, _) = loaded(&dendro, true);
+        assert_eq!(cpu_name(&reg), "CPU");
+        assert_eq!(first_group(&reg), "Utilization");
+    }
+
+    /// The page's copy of the metadata has no `dashboard`; the rest is kept.
+    #[test]
+    fn the_page_is_not_sent_the_section_template() {
+        let (reg, _) = loaded(
+            &dendro_bytes("rezolus", &[("dashboard", &renamed_cpu("Processors"))]),
+            false,
+        );
+        let meta: serde_json::Value =
+            serde_json::from_str(&reg.file_metadata_json("baseline").unwrap()).unwrap();
+        assert!(meta.get("dashboard").is_none());
+        assert_eq!(meta["source"], "rezolus");
+        // The template still renders.
+        assert_eq!(cpu_name(&reg), "Processors");
+    }
+
+    /// In a comparison both captures render the baseline's template, so they
+    /// share one navigation.
+    #[test]
+    fn a_comparison_renders_the_baselines_dashboard_in_both_slots() {
+        let renamed = dendro_bytes("rezolus", &[("dashboard", &renamed_cpu("Processors"))]);
+        let plain = dendro_bytes("rezolus", &[]);
+        for (baseline, experiment, want) in
+            [(&renamed, &plain, "Processors"), (&plain, &renamed, "CPU")]
+        {
+            let mut reg = WasmCaptureRegistry::new();
+            reg.attach("baseline", baseline, "a.dendro").unwrap();
+            reg.attach("experiment", experiment, "b.dendro").unwrap();
+            reg.init_templates("baseline", "[]").unwrap();
+            reg.init_templates("experiment", "[]").unwrap();
+            reg.regenerate_combined("[]", None).unwrap();
+            for slot in ["baseline", "experiment"] {
+                let sections: Vec<serde_json::Value> =
+                    serde_json::from_str(&reg.get_sections(slot).unwrap()).unwrap();
+                let cpu = sections.iter().find(|s| s["route"] == "/cpu").unwrap();
+                assert_eq!(cpu["name"], want, "{slot}");
+            }
+        }
+    }
+
+    /// A `dashboard` that does not parse, or is over the size limit, falls
+    /// back to the embedded template with a notice from `init_templates`.
+    #[test]
+    fn a_refused_dashboard_falls_back_with_a_notice() {
+        let mut oversized = renamed_cpu("Processors");
+        oversized.push_str(
+            &" ".repeat(dashboard::source_templates::MAX_DASHBOARD_BYTES + 1 - oversized.len()),
+        );
+        for (doc, says) in [
+            (
+                r#"{"schema": 1, "sections": 7}"#.to_string(),
+                "does not parse",
+            ),
+            (oversized, "over the"),
+        ] {
+            let (reg, notices) = loaded(&dendro_bytes("rezolus", &[("dashboard", &doc)]), false);
+            assert_eq!(cpu_name(&reg), "CPU");
+            assert_eq!(notices.len(), 1, "{notices:?}");
+            assert!(notices[0].contains(says), "{notices:?}");
+        }
+    }
+
+    /// A section the template cannot expand is an empty section carrying the
+    /// reason; the other sections render.
+    #[test]
+    fn a_section_that_cannot_expand_is_empty_and_the_others_render() {
+        let doc = edited_cpu(|cpu| {
+            cpu["groups"] = serde_json::json!([{"name": "g", "id": "g", "subgroups": [{"plots": [
+                {"kind": "gauge", "title": "t", "id": "p", "unit": "count", "query": "${throughput}"}
+            ]}]}]);
+        });
+        let (reg, _) = loaded(&dendro_bytes("rezolus", &[("dashboard", &doc)]), false);
+        let cpu: serde_json::Value =
+            serde_json::from_str(&reg.get_section("baseline", "cpu").unwrap()).unwrap();
+        assert_eq!(cpu["groups"], serde_json::json!([]));
+        assert!(
+            cpu["metadata"]["template_error"]
+                .as_str()
+                .unwrap()
+                .contains("throughput")
+        );
+        let overview: serde_json::Value =
+            serde_json::from_str(&reg.get_section("baseline", "overview").unwrap()).unwrap();
+        assert!(overview["metadata"].get("template_error").is_none());
+        assert!(!overview["groups"].as_array().unwrap().is_empty());
     }
 }

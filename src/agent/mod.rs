@@ -2,7 +2,11 @@ use super::*;
 
 mod clock;
 mod config;
+// Visible to the crate in tests only, for `exposition::http::serve_for_test`.
+#[cfg(not(test))]
 mod exposition;
+#[cfg(test)]
+pub(crate) mod exposition;
 
 mod external_metrics;
 /// What a slot means: its labels and the `__uid__` minted per occupant.
