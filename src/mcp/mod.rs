@@ -689,7 +689,9 @@ pub(crate) fn describe_recording_output(
             format!(
                 "{} holds {} recordings of one run, read together: every series carries its \
                  recording's labels, so a matcher on one (`{{host=\"...\"}}`) selects its \
-                 series:",
+                 series. Recordings whose labels are identical are told apart in queries by \
+                 `__recording__` (each one's index in the archive), which no recording \
+                 selector can name:",
                 file.display(),
                 opened.combined.len()
             ),
@@ -2129,6 +2131,16 @@ pub(crate) mod tests {
             .filter_map(|l| l.get("host").cloned())
             .collect();
         assert_eq!(hosts, ["h1", "h2"].map(String::from).into());
+        // What the CHANGELOG points a single-host query at.
+        let (start, end) = reader.time_range().unwrap();
+        let per_host = |q: &str| match reader.query_range(q, start, end, 1.0).unwrap() {
+            metriken_query::QueryResult::Matrix { result } => result.len(),
+            other => panic!("{q}: {other:?}"),
+        };
+        assert_eq!(
+            per_host("sum by (host) (irate(cpu_usage[5m])) / on (host) cpu_cores"),
+            2
+        );
 
         let sel = RecordingSelector::parse("--recording", ["host=h2".to_string()]).unwrap();
         let one = open_source_selected(&path, &sel).unwrap();
