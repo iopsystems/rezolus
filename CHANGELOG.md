@@ -10,14 +10,27 @@
 ### Fixed
 
 - **The viewer escapes recording text it puts into chart HTML.** Chart
-  tooltips, the heatmap tooltips, the band-swatch row and the embed demo's
-  status line inserted strings from the recording as markup: plot titles from
-  section templates (which an agent can send in its stream handshake), KPI
-  titles from `service_queries`, series label values, heatmap row labels,
-  capture labels and template format labels. Markup in any of them was parsed
-  by the browser, and could run script, in both the server and the static
-  viewer. They now go through one HTML-escape helper
-  (`src/viewer/assets/lib/html.js`), which the Markdown renderer also uses.
+  tooltips, the heatmap tooltips and the embed demo's status line inserted
+  strings from the recording as markup: plot titles from section templates
+  (which an agent can send in its stream handshake), KPI titles and
+  `unit_system` values from `service_queries`, series label values, heatmap
+  row labels, capture labels and template format labels. Markup in any of
+  them was parsed by the browser, and could run script, in both the server
+  and the static viewer. They now go through one HTML-escape helper
+  (`src/viewer/assets/lib/html.js`), which the Markdown renderer and, as a
+  precaution, the band-swatch row (whose labels are constants) also use.
+- **An unknown `unit_system` is refused.** The viewer printed an unknown
+  unit system's name as the unit, so a section template with one fails to parse,
+  `recording annotate` refuses KPIs with one (exit 1, nothing written), and a
+  KPI template directory with one fails to load. A recording that already
+  carries one renders that KPI without a unit (the server viewer prints a
+  warning). The known systems are `time`, `bytes`, `bitrate`, `datarate`,
+  `percentage`, `frequency`, `power`, `count` and `rate`.
+- **Notebook and report Markdown links resolve the URL before allowing
+  it.** A link is kept only when it resolves to `http:`, `https:` or
+  `mailto:` (relative paths and anchors included). The previous check read
+  the raw text, so a scheme the browser's URL parser would still find, such
+  as one behind leading control characters, was allowed through.
 - **metriken-storage 0.3.1 and metriken-exposition 0.23.2.** A table queried
   while a writer sealed it no longer loses the sealed rows, a reused segment
   number no longer returns rows twice, and a table or occupant's labels sealed

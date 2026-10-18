@@ -214,3 +214,60 @@ test('quantile compare-pair tooltip escapes capture labels', () => {
     }, { data: [1000, 0, 5] });
     assertEscaped(html, 'quantile compare-pair series and capture labels');
 });
+
+// An unknown `unit_system` (from a KPI or a section template) is returned by
+// units.js as the unit suffix, so it reaches the tooltip with each value.
+test('line tooltip escapes an unknown unit_system in the value', () => {
+    const { chart, option } = fakeChart({
+        opts: { title: 'ok', format: { unit_system: PAYLOAD } },
+        data: [[1, 2, 3], [4, 5, 6]],
+    });
+    configureLineChart(chart);
+    const html = option().tooltip.formatter([{ seriesName: 'ok', marker: '', value: [1000, 4, null] }]);
+    assertEscaped(html, 'line unit_system');
+});
+
+test('line tooltip escapes an unknown unit_system in the clamped raw value', () => {
+    const fmt = getTooltipFormatter((v) => `${v} ${PAYLOAD}`, null, { _tooltipFrozen: false });
+    const html = fmt([{ seriesName: 'ok', marker: '', value: [0, 1, 2] }]);
+    assertEscaped(html, 'raw value');
+    assert.equal(html.split('&lt;img').length - 1, 2, 'value and raw value both escaped');
+});
+
+test('scatter tooltip escapes an unknown unit_system in the clamped value', () => {
+    const fmt = getTooltipFormatter((v) => `${v} ${PAYLOAD}`, new Set(), { _tooltipFrozen: false }, 'scatter');
+    assertEscaped(fmt([{ seriesName: 'ok', marker: '', value: [0, 1, 2] }]), 'scatter clamped value');
+});
+
+test('heatmap tooltip escapes an unknown unit_system in the value', () => {
+    const fmtSpec = { opts: { title: 't', format: { unit_system: PAYLOAD } } };
+    assertEscaped(heatmapTooltip(fmtSpec, { data: [1000, 0, 0, null, 1] }), 'heatmap value');
+    assertEscaped(heatmapTooltip(fmtSpec, { data: [1000, 0, 0, 1, 2] }), 'heatmap min-max value');
+    assertEscaped(heatmapTooltip({
+        ...fmtSpec,
+        diffMatrices: { baseline: [[1, 2]], experiment: [[3, 4]] },
+        diffCaptureLabels: { baseline: 'a', experiment: 'b' },
+    }, { data: [1000, 0, 0, null, 1] }), 'diff heatmap values');
+});
+
+test('quantile heatmap tooltip escapes an unknown unit_system in every branch', () => {
+    const base = { opts: { title: 't', format: { unit_system: PAYLOAD } }, series_names: ['0.5'] };
+    assertEscaped(quantileTooltip(base, { data: [1000, 0, 5] }), 'quantile value');
+    assertEscaped(quantileTooltip({
+        ...base,
+        diffMatrices: { baseline: [[1, 2]], experiment: [[3, 4]] },
+        diffCaptureLabels: { baseline: 'a', experiment: 'b' },
+    }, { data: [1000, 0, 5] }), 'quantile diff values');
+    assertEscaped(quantileTooltip({
+        ...base,
+        compareCounterpartData: { data: [[1, 2], [7, 8]] },
+        compareCaptureLabels: { baseline: 'a', experiment: 'b' },
+        compareSelfRole: 'baseline',
+    }, { data: [1000, 0, 5] }), 'quantile compare-pair values');
+});
+
+test('heatmap tooltip escapes an unknown unit_system in the clamped raw values', () => {
+    const fmtSpec = { opts: { title: 't', format: { unit_system: PAYLOAD, range: { min: 1.5, max: 1.6 } } } };
+    assertEscaped(heatmapTooltip(fmtSpec, { data: [1000, 0, 0, null, 2] }), 'heatmap clamped raw value');
+    assertEscaped(heatmapTooltip(fmtSpec, { data: [1000, 0, 0, 1, 2] }), 'heatmap clamped raw min-max');
+});

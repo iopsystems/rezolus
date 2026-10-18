@@ -240,6 +240,9 @@ export function configureQuantileHeatmap(chart) {
     const valueFmt = unitSystem
         ? createAxisLabelFormatter(unitSystem)
         : (v) => String(v);
+    // For tooltip HTML: an unknown `unit_system` is returned verbatim as the
+    // unit, so it is escaped. The color-legend ticks (textContent) keep valueFmt.
+    const tipFmt = (v) => escapeHtml(valueFmt(v));
 
     const customXFormatterForTooltip = chart.spec.xAxisFormatter;
 
@@ -267,12 +270,12 @@ export function configureQuantileHeatmap(chart) {
             }
             const bv = (tIdx >= 0) ? diffMatrices.baseline?.[q]?.[tIdx] : null;
             const ev = (tIdx >= 0) ? diffMatrices.experiment?.[q]?.[tIdx] : null;
-            const fmtCell = (x) => (x == null || Number.isNaN(x)) ? '—' : valueFmt(x);
+            const fmtCell = (x) => (x == null || Number.isNaN(x)) ? '—' : tipFmt(x);
             const baselineLabel = diffCaptureLabels?.baseline || 'baseline';
             const experimentLabel = diffCaptureLabels?.experiment || 'experiment';
             const deltaStr = (v == null || Number.isNaN(v))
                 ? '—'
-                : `${v >= 0 ? '+' : ''}${valueFmt(v)}`;
+                : `${v >= 0 ? '+' : ''}${tipFmt(v)}`;
             return `<div style="${FONTS.cssSans}">
                 <div style="${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.fgSecondary}; margin-bottom: 8px;">
                     ${formattedTime}
@@ -312,7 +315,7 @@ export function configureQuantileHeatmap(chart) {
             const otherV = (tIdx >= 0 && Array.isArray(counterpart.data) && counterpart.data[q + 1])
                 ? counterpart.data[q + 1][tIdx]
                 : null;
-            const fmtCell = (x) => (x == null || Number.isNaN(x)) ? '—' : valueFmt(x);
+            const fmtCell = (x) => (x == null || Number.isNaN(x)) ? '—' : tipFmt(x);
             const selfV = v;
             const baseV = selfRole === 'baseline' ? selfV : otherV;
             const expV  = selfRole === 'experiment' ? selfV : otherV;
@@ -320,7 +323,7 @@ export function configureQuantileHeatmap(chart) {
             if (baseV != null && !Number.isNaN(baseV) && expV != null && !Number.isNaN(expV)) {
                 const d = expV - baseV;
                 const pct = baseV !== 0 ? `(${d >= 0 ? '+' : ''}${(d / baseV * 100).toFixed(1)}%)` : '';
-                deltaStr = `${d >= 0 ? '+' : ''}${valueFmt(d)} ${pct}`.trim();
+                deltaStr = `${d >= 0 ? '+' : ''}${tipFmt(d)} ${pct}`.trim();
             }
             return `<div style="${FONTS.cssSans}">
                 <div style="${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.fgSecondary}; margin-bottom: 8px;">
@@ -353,7 +356,7 @@ export function configureQuantileHeatmap(chart) {
                     ${escapeHtml(label)}
                 </span>
                 <span style="${FONTS.cssMono} font-weight: ${FONTS.tooltipValue.fontWeight}; font-size: ${FONTS.tooltipValue.fontSize}px; color: ${COLORS.fg};">
-                    ${valueFmt(v)}
+                    ${tipFmt(v)}
                 </span>
             </div>
             ${getTooltipFreezeFooter(chart)}

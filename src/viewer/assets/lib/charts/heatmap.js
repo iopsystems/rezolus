@@ -170,9 +170,11 @@ export function configureHeatmap(chart) {
                     </div>`;
         }
 
-        const fmt = unitSystem
+        // Escaped: an unknown `unit_system` is returned verbatim as the unit.
+        const unitFmt = unitSystem
             ? createAxisLabelFormatter(unitSystem)
             : (v) => v.toFixed(6);
+        const fmt = (v) => escapeHtml(unitFmt(v));
 
         // Diff heatmap: pull baseline + experiment absolute values from
         // the side-channel matrices and render both instead of the

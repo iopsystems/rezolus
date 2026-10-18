@@ -101,8 +101,9 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
     let json = if let Some(custom_path) = custom_file {
         let content =
             std::fs::read_to_string(custom_path).expect("failed to read service extension file");
-        let _: ServiceExtension =
+        let ext: ServiceExtension =
             serde_json::from_str(&content).expect("invalid service extension JSON");
+        refuse_unknown_unit_systems(&ext, custom_path);
         content
     } else {
         let template = registry.get(&source).unwrap_or_else(|| {
@@ -190,6 +191,15 @@ fn run_undo(path: &Path) {
         std::process::exit(1);
     });
     println!("Removed service extension annotation from {:?}", path);
+}
+
+/// Exit 1 when a KPI's `unit_system` is not one the viewer knows (see
+/// `ServiceExtension::check_unit_systems`); nothing has been written yet.
+fn refuse_unknown_unit_systems(ext: &ServiceExtension, path: &Path) {
+    if let Err(e) = ext.check_unit_systems() {
+        eprintln!("error: {}: {e}", path.display());
+        std::process::exit(1);
+    }
 }
 
 /// Validate that each KPI query returns data from the parquet file.
@@ -369,10 +379,11 @@ fn run_rez(args: &ArgMatches, path: &Path, format: RezFormat) {
             std::process::exit(1);
         });
         // parse-validate up front
-        let _: ServiceExtension = serde_json::from_str(&content).unwrap_or_else(|e| {
+        let ext: ServiceExtension = serde_json::from_str(&content).unwrap_or_else(|e| {
             eprintln!("error: invalid service extension JSON: {e}");
             std::process::exit(1);
         });
+        refuse_unknown_unit_systems(&ext, custom);
         content
     });
 

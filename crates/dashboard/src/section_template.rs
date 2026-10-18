@@ -122,8 +122,9 @@
 //! `count`, `rate`, `time`, `bytes`, `datarate`, `bitrate`, `percentage`,
 //! `frequency`, `power`. `width` is absent or `full`. `range` is `[min,
 //! max]` with `min` below `max`, and cannot be given with
-//! `percentage_range`. The other fields (`unit_system`,
-//! `description`, `percentiles`, `axis_label`, `row_label`, `style`,
+//! `percentage_range`. `unit_system`, when given, is one of the same nine
+//! names as `unit`; another is a parse error. The other fields
+//! (`description`, `percentiles`, `axis_label`, `row_label`, `style`,
 //! `log_scale`, `query_total`) map to the [`PlotOpts`] option of that name.
 //!
 //! # Substitution
@@ -131,8 +132,8 @@
 //! `${name}` and `${name.field}` are replaced in every string field except
 //! these: names (`let` keys, `params` entries, a repeat's `var`, a `var` or
 //! `param` predicate's operand, metadata keys), enumerated values (`kind`,
-//! `unit`, `subtype`, `width`, `mean_unit`, `sort`, `computed`,
-//! `builtin`), `revision`, a section's `name` and `route`, repeat `values`
+//! `unit`, `unit_system`, `subtype`, `width`, `mean_unit`, `sort`,
+//! `computed`, `builtin`), `revision`, a section's `name` and `route`, repeat `values`
 //! entries, and `metadata` values. A name is a repeat binding, a string or
 //! `first_present` let, or a declared parameter; [`SectionTemplate::parse`]
 //! refuses a name that is none of these where it appears. A `${param}` the
@@ -516,8 +517,10 @@ struct PlotDef {
     percentage_range: bool,
     #[serde(default)]
     range: Option<[f64; 2]>,
+    /// The viewer shows an unknown system's name as the unit, in tooltip
+    /// HTML, so this is the enum and an unknown one fails the parse.
     #[serde(default)]
-    unit_system: Option<String>,
+    unit_system: Option<Unit>,
     #[serde(default)]
     description: Option<String>,
     #[serde(default)]
@@ -1803,7 +1806,6 @@ impl<'a> Names<'a> {
         self.promql(&def.query)?;
         self.promql_opt(&def.query_total)?;
         for text in [
-            &def.unit_system,
             &def.description,
             &def.axis_label,
             &def.row_label,
@@ -2515,8 +2517,8 @@ impl<'a> Scope<'a> {
         if let Some([min, max]) = def.range {
             opts = opts.range(min, max);
         }
-        if let Some(system) = self.subst_opt(&def.unit_system)? {
-            opts = opts.with_unit_system(system);
+        if let Some(system) = def.unit_system {
+            opts = opts.with_unit_system(system.to_string());
         }
         if let Some(description) = self.subst_opt(&def.description)? {
             opts = opts.with_description(description);
@@ -3553,6 +3555,14 @@ mod tests {
         let cases = [
             (plot(json!({ "kind": "gauj" })), "unknown variant `gauj`"),
             (plot(json!({ "unit": "watts" })), "unknown variant `watts`"),
+            (
+                plot(json!({ "unit_system": "<img src=x onerror=alert(1)>" })),
+                "unknown variant `<img src=x onerror=alert(1)>`",
+            ),
+            (
+                plot(json!({ "unit_system": "${u}" })),
+                "unknown variant `${u}`",
+            ),
             (plot(json!({ "width": "half" })), "unknown variant `half`"),
             (
                 plot(json!({ "kind": "histogram", "subtype": "heat" })),
@@ -4350,7 +4360,6 @@ mod tests {
             "title",
             "id",
             "query",
-            "unit_system",
             "description",
             "axis_label",
             "row_label",
