@@ -3681,6 +3681,7 @@ dependencies = [
  "tracing-appender",
  "tracing-log",
  "tracing-subscriber",
+ "viewer",
  "walkdir",
  "zstd 0.13.3",
 ]

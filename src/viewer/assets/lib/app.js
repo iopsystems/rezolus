@@ -7,7 +7,7 @@ import { CgroupSelector, seedSelectedCgroups, selectedCgroupPattern } from './fe
 import { GpuSelector } from './features/gpu_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
-import { collectGroupPlots } from './features/group_utils.js';
+import { collectGroupPlots, baseRoute } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, clampRangeToExtent, sameExtent, nativeInterval, stepAtLeast, CAPTURE_BASELINE, CAPTURE_EXPERIMENT, listCaptures, captureMetadata, clearCaptureMemo } from './data.js';
 
@@ -812,7 +812,7 @@ const changeGpu = async (gpus) => {
     clearNonServiceResponses(sectionCacheState);
     invalidateLoadsWhere((section) => !section.startsWith('service/'));
     for (const route of Array.from(heatmapDataCache.keys())) {
-        if (route === '/gpu') heatmapDataCache.delete(route);
+        if (baseRoute(route) === '/gpu') heatmapDataCache.delete(route);
     }
     chartsState.clear();
     m.redraw();
@@ -952,7 +952,7 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     onNodeChange: changeNode,
     gpuList,
     selectedGpus,
-    gpuSelectorActive: (m.route.get() || '').startsWith('/gpu'),
+    gpuSelectorActive: baseRoute(m.route.get() || '').startsWith('/gpu'),
     onGpuChange: changeGpu,
     // The window the charts are fetched for, which the time bar draws and
     // sets: a drill-down to `win` ({ start, end } seconds), or back to the
@@ -1128,9 +1128,12 @@ const SectionContent = {
         }
 
         const { withData } = countCharts(attrs.groups);
-        const titleText = `${sectionName} (${withData})`;
+        // A section of one recording of a combined archive names it.
+        const titleText = attrs.section.instance
+            ? `${sectionName} — ${attrs.section.instance} (${withData})`
+            : `${sectionName} (${withData})`;
 
-        if (attrs.section.route === '/cgroups') {
+        if (baseRoute(attrs.section.route) === '/cgroups') {
             return renderCgroupSection({
                 attrs,
                 titleText,
@@ -1141,6 +1144,12 @@ const SectionContent = {
                 executePromQLRangeQuery: (query, ...args) => {
                     const node = getSelectedNode();
                     if (node) query = injectLabel(query, 'node', node);
+                    // The cgroup discovery's own queries, restricted to the
+                    // section's recording as the backend restricted its
+                    // charts' (`metadata.scope`).
+                    for (const [key, value] of Object.entries(attrs.metadata?.scope || {})) {
+                        query = injectLabel(query, key, value);
+                    }
                     return executePromQLRangeQuery(query, ...args);
                 },
                 applyResultToPlot,
@@ -1185,7 +1194,7 @@ const SectionContent = {
             // filters the non-per-GPU charts to a subset of GPU ids. Shown only
             // when the recording has more than one GPU. Per-GPU charts (queries
             // grouped `by (id)`) always show all GPUs.
-            sectionRoute === '/gpu' && (gpuEntries.length > 1 || gpuList.length > 1) && m(GpuSelector, {
+            baseRoute(sectionRoute) === '/gpu' && (gpuEntries.length > 1 || gpuList.length > 1) && m(GpuSelector, {
                 // The (vendor, id) pairs to choose between; `ids` is the
                 // fallback for a recording whose metadata predates them.
                 gpus: gpuEntries,

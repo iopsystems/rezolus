@@ -369,7 +369,32 @@ const Sidebar = {
             services: serviceSections,
             metrics: metricSections,
             samplers: samplerSections,
+            instances,
         } = groupSections(attrs.sections, attrs.compareMode);
+
+        // A sampler section's link, its chart count once loaded.
+        const samplerLink = (section) => {
+            const sectionKey = section.route.replace(/^\//, '');
+            const cached = sectionResponseCache[sectionKey];
+            const count = cached ? countCharts(cached.groups) : null;
+            const label = count ? `${section.name} (${count.withData})` : section.name;
+            return m(
+                m.route.Link,
+                {
+                    class: attrs.activeSection === section ? 'selected' : '',
+                    href: section.route,
+                },
+                label,
+            );
+        };
+        const plainLink = (section) => section && m(
+            m.route.Link,
+            {
+                class: attrs.activeSection === section ? 'selected' : '',
+                href: section.route,
+            },
+            section.name,
+        );
 
         return [
         m('div.sidebar-backdrop', {
@@ -431,7 +456,8 @@ const Sidebar = {
                 const sectionKey = section.route.replace(/^\//, '');
                 const cached = sectionResponseCache[sectionKey];
                 const count = cached ? countCharts(cached.groups) : null;
-                const label = count ? `${section.name} (${count.withData})` : section.name;
+                const name = section.instance ? `${section.name} (${section.instance})` : section.name;
+                const label = count ? `${name} (${count.withData})` : name;
                 return m(
                     m.route.Link,
                     {
@@ -453,6 +479,15 @@ const Sidebar = {
                 },
                 exceptionsSection.name,
             ),
+
+            // One group per recording of a combined archive, named by it:
+            // its Overview, Exceptions and samplers.
+            instances.map((instance) => [
+                m('div.sidebar-label', instance.name),
+                plainLink(instance.overview),
+                plainLink(instance.exceptions),
+                instance.samplers.map(samplerLink),
+            ]),
 
             samplerSections.length > 0 && m('div.sidebar-label', 'Samplers'),
 

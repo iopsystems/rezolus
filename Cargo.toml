@@ -194,6 +194,9 @@ async-stream = "0.3.6"
 # builders. A `#[cfg(test)]` module over there would be invisible here, so they
 # live behind a feature that only the test build turns on.
 rez = { workspace = true, features = ["test-support"] }
+# The WASM viewer's backend, built natively, so a test can render one archive
+# through both viewers and compare (`src/viewer/combined_test.rs`).
+viewer = { path = "crates/viewer" }
 # A real shell-word splitter, used ONLY to verify `shell_word`'s quoting
 # round-trips — a different implementation from the quoter, so the test cannot
 # share a bug with the code it checks. Already in the tree via `cc`.

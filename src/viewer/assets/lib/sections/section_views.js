@@ -290,7 +290,9 @@ const renderCgroupSection = ({
     setActiveCgroupPattern,
     globalColorMapper,
 }) => {
-    const sectionRoute = '/cgroups';
+    // `/cgroups`, or `/cgroups@<key>` for another recording of a combined
+    // archive: the expand link and the selection name this section's route.
+    const sectionRoute = attrs.section?.route || '/cgroups';
     const sectionName = 'Cgroups';
 
     const leftGroups = attrs.groups.filter((g) => g.metadata?.side === 'left');

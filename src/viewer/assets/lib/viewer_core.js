@@ -18,6 +18,7 @@ import { canonicalQuantileLabel, composeScatterLabel } from './charts/util/compa
 import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
 import { heatmapTriplesMinMax } from './charts/util/heatmap_data.js';
 import { pairedSeriesNamer } from './labels.js';
+import { baseRoute } from './features/group_utils.js';
 
 // Normalization helpers for compare-mode captures.
 
@@ -759,7 +760,7 @@ export function createGroupComponent(getState) {
             const sectionHeatmapData = heatmapDataCache.get(sectionRoute);
             const isHeatmapMode = heatmapEnabled && !heatmapLoading;
 
-            const isOverview = sectionRoute === '/overview';
+            const isOverview = baseRoute(sectionRoute) === '/overview';
             const titlePrefix = isOverview ? attrs.name : sectionName;
             const prefixTitle = (opts) => titlePrefix
                 ? { ...opts, title: `${titlePrefix}: ${opts.title}` }

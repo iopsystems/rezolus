@@ -1,6 +1,6 @@
 import { ViewerApi } from './viewer_api.js';
 import { resolveStyle, buildHistogramQuery, isHistogramPlot } from './charts/metric_types.js';
-import { collectGroupPlots } from './features/group_utils.js';
+import { collectGroupPlots, baseRoute } from './features/group_utils.js';
 import { firstVisibleLabelValue, seriesNamer } from './labels.js';
 
 // Capture-id constants. Typos become grep-able; use these in place of
@@ -1274,7 +1274,7 @@ const createDataApi = ({
         // Per-GPU charts group by id (and by vendor, since an id is only
         // unique within one vendor) to draw one line per GPU; they must show
         // every GPU regardless of the selection, so they are exempt.
-        if (_selectedGpus.length > 0 && sectionRoute === '/gpu'
+        if (_selectedGpus.length > 0 && baseRoute(sectionRoute) === '/gpu'
             && !/by\s*\(\s*id\s*[,)]/.test(q)) {
             q = applyGpuSelection(q, _selectedGpus);
         }

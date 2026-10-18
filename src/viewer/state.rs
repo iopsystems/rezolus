@@ -301,6 +301,10 @@ pub struct AppState {
     /// experiment, or detaching the experiment. See
     /// [`default_query_concurrency`] and `--query-concurrency`.
     pub queries: Arc<tokio::sync::Semaphore>,
+    /// The recordings of the baseline when it is an archive opened
+    /// combined (`dashboard::combined`), which the sections are built from
+    /// (`dashboard::dashboard::build_combined_context`). Empty otherwise.
+    pub members: RwLock<Vec<::dashboard::combined::Member>>,
 }
 
 /// The default number of queries the viewer runs at once: half the CPUs,
@@ -349,6 +353,7 @@ impl AppState {
             trimmed_report_marker: RwLock::new(None),
             pool,
             queries: Arc::new(tokio::sync::Semaphore::new(default_query_concurrency())),
+            members: RwLock::new(Vec::new()),
         }
     }
 
@@ -399,6 +404,7 @@ impl AppState {
     /// archive stops being followed: it is no longer what the page shows.
     pub fn replace_baseline(&self, data: Arc<dyn MetricsSource>) {
         self.follow.lock().take();
+        self.members.write().clear();
         self.captures.set_baseline_data(data);
     }
 

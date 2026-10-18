@@ -5,6 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { clientViewFor, contentFor, CLIENT_SECTIONS } from '../src/viewer/assets/lib/ui/client_views.js';
+import { baseRoute } from '../src/viewer/assets/lib/features/group_utils.js';
 
 test('every client route has its view', () => {
     assert.equal(clientViewFor('/query'), 'query');
@@ -42,4 +43,11 @@ test('SectionContent mounts by route: client views, else the groups', () => {
     assert.equal(contentFor({ name: 'Notebook', route: '/nb' }), 'groups');
     assert.equal(contentFor({ name: 'Query Explorer', route: '/qe' }), 'groups');
     assert.equal(contentFor({ name: 'CPU', route: '/cpu' }), 'groups');
+});
+
+test('an instance route compares as its template route', () => {
+    assert.equal(baseRoute('/cgroups@web-02'), '/cgroups');
+    assert.equal(baseRoute('/gpu'), '/gpu');
+    assert.equal(baseRoute('/service/vllm@h2'), '/service/vllm');
+    assert.equal(baseRoute(undefined), '');
 });

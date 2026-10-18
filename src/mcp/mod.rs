@@ -176,8 +176,9 @@ pub(crate) fn open_source_with_pool_labeled(
         }
         // No labels: a bare parquet file is one recording with no label set
         // of its own, which is a stable identity for exactly one path.
-        let reader =
-            metriken_query::ParquetReader::open_with_pool(file, pool).map_err(OpenError::Other)?;
+        let reader = metriken_query::ParquetReader::open_with_pool(file, pool)
+            .map(::dashboard::combined::label_parquet_by_source)
+            .map_err(OpenError::Other)?;
         return Ok(Opened {
             labels: std::collections::BTreeMap::new(),
             reader: std::sync::Arc::new(reader),
@@ -1697,7 +1698,7 @@ pub fn command() -> Command {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::recorder::rez::RezRecorder;
     use metriken::Window;

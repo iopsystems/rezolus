@@ -422,6 +422,34 @@ pub fn regenerate_dashboards(state: &AppState) {
     let preference = state.template_preference;
     let baseline_path = state.parquet_path.read().clone();
 
+    // An archive opened combined: one context over every recording, each
+    // template once per recording that carries it. A comparison attached
+    // over it later renders as the captures' path below does.
+    let members = state.members.read().clone();
+    if members.len() > 1 && state.captures.get(CaptureId::Experiment).is_none() {
+        let filesize = baseline_path
+            .as_ref()
+            .and_then(|p| std::fs::metadata(p).ok().map(|m| m.len()));
+        let stem = baseline_path
+            .as_deref()
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str())
+            .map(|s| s.trim_end_matches(".parquet").to_string());
+        let (context, notices) = ::dashboard::dashboard::build_combined_context(
+            state.baseline_data().as_ref(),
+            &members,
+            registry,
+            preference,
+            stem.as_deref(),
+            filesize,
+        );
+        for notice in notices {
+            warn_once(notice);
+        }
+        *state.sections.write() = LazySectionStore::new(context);
+        return;
+    }
+
     // Each capture's templates come from its own metadata (a parquet footer,
     // a `.rez` recording's manifest, a dendro source), and each is validated
     // against its own data so a KPI present only in one recording isn't

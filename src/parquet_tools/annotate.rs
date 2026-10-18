@@ -237,7 +237,8 @@ pub(crate) fn load_queries(path: &Path) -> Result<String, String> {
 /// Sets `available` on each KPI based on whether its query returns data.
 /// Prints warnings for unavailable KPIs and exits if none match.
 fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
-    let reader = match ParquetReader::open(path) {
+    let reader = match ParquetReader::open(path).map(::dashboard::combined::label_parquet_by_source)
+    {
         Ok(r) => r,
         Err(e) => {
             eprintln!("warning: could not load parquet for validation: {e}");

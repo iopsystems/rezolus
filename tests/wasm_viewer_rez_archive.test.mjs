@@ -43,8 +43,26 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         return new Uint8Array(fs.readFileSync(out));
     };
 
-    test('a two-recording .rez loads as an A/B comparison', () => {
+    // The fixture's recordings are of one run (one time range), so they
+    // attach as one combined capture unless a comparison is asked for, as
+    // `rezolus view --baseline .. --experiment ..` asks for one.
+    test('a two-recording .rez of one run is one combined capture', () => {
         const registry = new WasmCaptureRegistry();
+        registry.attach('baseline', fixture('two-combined.rez', 2), 'fleet.rez');
+        assert.equal(registry.has('baseline'), true);
+        assert.equal(registry.has('experiment'), false);
+        const info = JSON.parse(registry.info('baseline'));
+        const result = JSON.parse(registry.query_range(
+            'baseline', 'irate(cpu_cycles[2s])', info.minTime, info.maxTime, 1, 'grid',
+        ));
+        assert.equal(result.status, 'success', JSON.stringify(result) + JSON.stringify(info));
+        const sources = result.data.result.map((s) => s.metric.source).sort();
+        assert.deepEqual(sources, ['redis', 'valkey'], JSON.stringify(result));
+    });
+
+    test('a two-recording .rez loads as an A/B comparison on request', () => {
+        const registry = new WasmCaptureRegistry();
+        registry.set_compare_requested(true);
         registry.attach('baseline', fixture('two.rez', 2), 'fleet.rez');
 
         assert.equal(registry.has('baseline'), true);
@@ -64,8 +82,9 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         assert.equal(JSON.parse(registry.notices()).length, 0);
     });
 
-    test('every recording of a 3-recording .rez attaches', () => {
+    test('every recording of a 3-recording .rez attaches as a comparison', () => {
         const registry = new WasmCaptureRegistry();
+        registry.set_compare_requested(true);
         registry.attach('baseline', fixture('three.rez', 3), 'fleet.rez');
 
         // No "some recordings not shown" notice any more — all three attach,

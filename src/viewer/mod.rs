@@ -40,6 +40,8 @@ mod proxy_allow;
 mod ab_extract;
 mod actions;
 #[cfg(test)]
+pub(crate) mod combined_test;
+#[cfg(test)]
 mod dashboard_queries_test;
 mod follow;
 mod live;
@@ -99,15 +101,21 @@ pub fn command() -> Command {
              WHAT TO VIEW (pick one input form):\n    \
              - a parquet recording:      rezolus view rezolus.parquet\n    \
              - two recordings (A/B):     rezolus view baseline.parquet experiment.parquet\n    \
-             - a .rez archive:           rezolus view out.rez\n    \
+             - an archive (.dendro/.rez): rezolus view out.dendro\n    \
              - a live agent:             rezolus view http://host:4241   (agent 5.21.0+ with snapshot_format = \"v3\"; recorded into a temporary .dendro)\n    \
              - nothing (upload-only):    rezolus view    (drag files in from the browser)\n\n\
-             A .rez archive loads its per-sampler tables directly. A 2-recording .rez is shown\n\
-             as an A/B baseline/experiment comparison (aliases derived from each recording's\n\
-             arm/host labels). With more than two recordings it shows the first two unless\n\
-             --baseline/--experiment name which ones by label (repeatable, ANDed, subset\n\
-             match); each must name exactly one recording. `rezolus mcp describe-recording\n\
-             FILE.rez` lists an archive's recordings.\n\n\
+             An archive holding several recordings of one run (`rezolus record --endpoint a\n\
+             --endpoint b`) opens as ONE combined view: every series carries its recording's\n\
+             labels (source, host, record's labels), and each recording renders its own sections, so\n\
+             two agents show the built-in sections once per host (the second host's routes\n\
+             end in @<host>, e.g. #/cpu@web-02) and a service shows the dashboard its\n\
+             recording's template describes. It opens as an A/B baseline/experiment comparison\n\
+             instead when --baseline/--experiment name its recordings by label (repeatable,\n\
+             ANDed, subset match; each must name exactly one recording), when its recordings\n\
+             carry an `arm` label, or when their time ranges do not overlap (recordings of\n\
+             different runs, as `rezolus recording combine a.rez b.rez` assembles). With no\n\
+             selectors a comparison shows the first two recordings and attaches the rest.\n\
+             `rezolus mcp describe-recording FILE` lists an archive's recordings.\n\n\
              Either positional may be given as alias=path (e.g. redis=./a.parquet) to set the\n\
              display label; the internal slots stay baseline/experiment. The second positional\n\
              (A/B experiment) is only honored when the first is a parquet file — live and\n\
@@ -139,8 +147,10 @@ pub fn command() -> Command {
              rezolus view --tui http://localhost:4241\n\n    \
              # A/B compare two recordings with display labels\n    \
              rezolus view redis=baseline.parquet valkey=experiment.parquet\n\n    \
-             # Pick two arms out of a multi-recording .rez\n    \
-             rezolus view fleet.rez --baseline host=web-01 --experiment host=web-02\n\n    \
+             # One run of two hosts: one view, each host's sections\n    \
+             rezolus view fleet.dendro\n\n    \
+             # The same archive as an A/B comparison of the two hosts\n    \
+             rezolus view fleet.dendro --baseline host=web-01 --experiment host=web-02\n\n    \
              # Stream live from a remote agent on a fixed address\n    \
              rezolus view http://host:4241 --listen 127.0.0.1:8080\n\n    \
              # Upload-only mode: start with no file, then upload from the browser\n    \
@@ -154,7 +164,8 @@ pub fn command() -> Command {
                     "First capture: parquet file, .rez archive, agent URL (http://…), \
                      or alias=parquet (e.g. redis=./a.parquet). The alias is a \
                      display label; internal identifiers stay baseline/experiment. \
-                     A 2-recording .rez loads as an A/B comparison on its own.",
+                     An archive of several recordings of one run opens as one combined \
+                     view; see --baseline for a comparison.",
                 )
                 .action(clap::ArgAction::Set)
                 .required(false)
@@ -271,13 +282,14 @@ pub fn command() -> Command {
                 .long("baseline")
                 .value_name("KEY=VALUE")
                 .help(
-                    "Which recording of a multi-recording .rez fills the baseline slot, \
-                     named by labels (repeatable, ANDed; a recording matches when it \
-                     carries every pair given). Must name exactly one recording: matching \
-                     none or several is an error listing the candidates. On its own it \
-                     shows that one recording; pair it with --experiment to choose both \
-                     sides of the A/B. `rezolus mcp describe-recording FILE.rez` lists an \
-                     archive's recordings and their labels.",
+                    "Open a multi-recording archive as an A/B comparison, with this \
+                     recording in the baseline slot, named by labels (repeatable, ANDed; a \
+                     recording matches when it carries every pair given). Must name exactly \
+                     one recording: matching none or several is an error listing the \
+                     candidates. On its own it shows that one recording; pair it with \
+                     --experiment to choose both sides of the A/B. Without either flag an \
+                     archive of one run opens as one combined view. `rezolus mcp \
+                     describe-recording FILE` lists an archive's recordings and their labels.",
                 )
                 .action(clap::ArgAction::Append),
         )
@@ -670,12 +682,12 @@ fn init_file_mode(
 
     // ParquetReader::open defaults filename() to the path's basename.
     let reader = std::sync::Arc::new(
-        metriken_query::ParquetReader::open_with_pool(path, Arc::clone(&pool)).unwrap_or_else(
-            |e| {
+        metriken_query::ParquetReader::open_with_pool(path, Arc::clone(&pool))
+            .map(::dashboard::combined::label_parquet_by_source)
+            .unwrap_or_else(|e| {
                 eprintln!("failed to load data from parquet: {e}");
                 std::process::exit(1);
-            },
-        ),
+            }),
     );
 
     let mut service_exts =
@@ -842,6 +854,169 @@ fn selectors_need_a_rez(what: &str) -> String {
     )
 }
 
+/// A capture's metadata as the JSON object `/api/v1/file_metadata` serves.
+pub(super) fn file_meta_json(reader: &dyn metriken_query::MetricsSource) -> Option<String> {
+    let mut map = serde_json::Map::new();
+    for (k, v) in reader.file_metadata() {
+        let jv = serde_json::from_str(&v).unwrap_or(serde_json::Value::String(v.clone()));
+        map.insert(k, jv);
+    }
+    serde_json::to_string(&serde_json::Value::Object(map)).ok()
+}
+
+/// Whether an archive's recordings open as one combined view: more than one
+/// recording, and `dashboard::combined::layout` says combined.
+/// `compare_requested` is `--baseline`/`--experiment`.
+pub(crate) fn opens_combined(
+    readers: &crate::rez_reader::LabeledRecordings,
+    compare_requested: bool,
+) -> bool {
+    use metriken_query::MetricsSource;
+    let summaries: Vec<::dashboard::combined::RecordingSummary> = readers
+        .iter()
+        .map(|(labels, reader)| ::dashboard::combined::RecordingSummary {
+            labels: labels.clone(),
+            time_range_ns: reader.time_range_ns(),
+        })
+        .collect();
+    readers.len() > 1
+        && ::dashboard::combined::layout(&summaries, compare_requested)
+            == ::dashboard::combined::Layout::Combined
+}
+
+/// An archive's recordings joined into one source (`RezReader::combine`),
+/// and what the viewer keeps about each.
+pub(super) struct CombinedRecordings {
+    pub reader: crate::rez_reader::RezReader,
+    /// Each recording with tables, for `build_combined_context`.
+    pub members: Vec<::dashboard::combined::Member>,
+    /// Every recording's labels, in the archive's order.
+    pub labels: Vec<std::collections::BTreeMap<String, String>>,
+    /// The first recording's `systeminfo` that has one.
+    pub systeminfo: Option<String>,
+}
+
+/// Join `readers` into the combined source. A recording without rows is
+/// warned about, as file mode does for any recording.
+pub(super) fn combine_recordings(
+    readers: crate::rez_reader::LabeledRecordings,
+) -> CombinedRecordings {
+    use metriken_query::MetricsSource;
+    let labels: Vec<_> = readers.iter().map(|(l, _)| l.clone()).collect();
+    let mut parts = Vec::with_capacity(readers.len());
+    let mut systeminfo = None;
+    for (l, reader) in &readers {
+        if reader.is_empty() {
+            warn!(
+                "recording {} holds no rows; nothing renders for it",
+                crate::mcp::render_labels(l)
+            );
+        }
+        if systeminfo.is_none() {
+            systeminfo = reader.metadata_get("systeminfo");
+        }
+        parts.push((
+            ::dashboard::combined::Header::of(reader),
+            reader.file_metadata(),
+        ));
+    }
+    let filename = readers.first().and_then(|(_, r)| r.filename());
+    let (reader, series) = crate::rez_reader::RezReader::combine(readers, filename);
+    let members = parts
+        .into_iter()
+        .zip(series)
+        .filter_map(|((header, metadata), series_labels)| {
+            Some(::dashboard::combined::Member {
+                series_labels: series_labels?,
+                metadata,
+                header,
+            })
+        })
+        .collect();
+    CombinedRecordings {
+        reader,
+        members,
+        labels,
+        systeminfo,
+    }
+}
+
+/// File mode for an archive that opens combined: one capture, the
+/// recordings joined, followed as one when the archive is not finalized.
+fn init_file_mode_combined(
+    config: &Config,
+    path: &Path,
+    registry: &TemplateRegistry,
+    pool: Arc<metriken_storage::BufferPool>,
+    readers: crate::rez_reader::LabeledRecordings,
+) -> AppState {
+    use metriken_query::MetricsSource;
+    let combined = combine_recordings(readers);
+    info!(
+        "{} holds {} recordings of one run; opening them as one view (--baseline/--experiment \
+         open a comparison)",
+        path.display(),
+        combined.labels.len()
+    );
+    let file_meta = file_meta_json(&combined.reader);
+    let selection = combined
+        .reader
+        .metadata_get(crate::parquet_metadata::KEY_SELECTION);
+    let report_marker = combined
+        .reader
+        .metadata_get(crate::parquet_metadata::KEY_REPORT);
+    let growable = crate::recorder::rez::detect_rez_format(path).ok()
+        == Some(crate::recorder::rez::RezFormat::V3Sqlite);
+    let following = growable && !combined.reader.complete();
+    let mut live = None;
+    let source: Arc<dyn metriken_query::MetricsSource> = if following {
+        let reader = Arc::new(rez::live::LiveReader::combined(
+            path,
+            combined.labels.clone(),
+            combined.reader,
+            Arc::clone(&pool),
+        ));
+        live = Some(Arc::clone(&reader));
+        reader
+    } else {
+        Arc::new(combined.reader)
+    };
+    let state = AppState::with_pool(
+        source,
+        registry.clone(),
+        config.template_preference,
+        Arc::clone(&pool),
+    );
+    *state.parquet_path.write() = Some(path.to_path_buf());
+    *state.selection.write() = selection;
+    *state.trimmed_report_marker.write() = report_marker;
+    state.captures.set_baseline_systeminfo(combined.systeminfo);
+    state.captures.set_baseline_file_metadata(file_meta);
+    state
+        .captures
+        .set_baseline_alias(config.baseline_alias.clone());
+    *state.members.write() = combined.members;
+    if let Some(live) = live {
+        let followed = vec![(capture_registry::BASELINE_ID.to_string(), live)];
+        match follow::Follow::start(followed, Arc::clone(&pool), follow::FOLLOW_INTERVAL) {
+            Ok(f) => {
+                info!(
+                    "{} was not finalized when opened; following it",
+                    path.display()
+                );
+                *state.follow.lock() = Some(f);
+            }
+            Err(e) => warn!(
+                "could not follow {}: {e}; showing it as it was when opened",
+                path.display()
+            ),
+        }
+    }
+    info!("Generating dashboards...");
+    metadata::regenerate_dashboards(&state);
+    state
+}
+
 /// `.rez` archive file mode: load the per-sampler tables as one `RezReader`
 /// (a `MetricsSource`) and build the baseline dashboard from it. The manifest's
 /// recording metadata stands in for the parquet footer (systeminfo, file
@@ -883,15 +1058,13 @@ fn init_file_mode_rez(
         );
     }
 
-    fn file_meta_json(reader: &crate::rez_reader::RezReader) -> Option<String> {
-        use metriken_query::MetricsSource;
-        let mut map = serde_json::Map::new();
-        for (k, v) in reader.file_metadata() {
-            let jv = serde_json::from_str(&v).unwrap_or(serde_json::Value::String(v.clone()));
-            map.insert(k, jv);
-        }
-        serde_json::to_string(&serde_json::Value::Object(map)).ok()
+    // An archive of one run opens as one combined view; a comparison only
+    // when --baseline/--experiment ask for one or the recordings say they
+    // are one (`dashboard::combined::layout`).
+    if opens_combined(&readers, config.selects_a_recording()) {
+        return init_file_mode_combined(config, path, registry, pool, readers);
     }
+
     let all_labels: Vec<BTreeMap<String, String>> =
         readers.iter().map(|(l, _)| l.clone()).collect();
     let n = readers.len();
@@ -1098,6 +1271,7 @@ fn init_file_mode_combined_ab(
 
     let baseline_reader = std::sync::Arc::new(
         metriken_query::ParquetReader::open_with_pool(&extracted.baseline_path, Arc::clone(&pool))
+            .map(::dashboard::combined::label_parquet_by_source)
             .unwrap_or_else(|e| {
                 eprintln!("failed to load baseline parquet from tarball: {e}");
                 std::process::exit(1);
@@ -1109,6 +1283,7 @@ fn init_file_mode_combined_ab(
             &extracted.experiment_path,
             Arc::clone(&pool),
         )
+        .map(::dashboard::combined::label_parquet_by_source)
         .unwrap_or_else(|e| {
             eprintln!("failed to load experiment parquet from tarball: {e}");
             std::process::exit(1);
@@ -1250,6 +1425,7 @@ fn validate_category_at_startup(
     );
     if let Ok(exp_reader) =
         metriken_query::ParquetReader::open_with_pool(experiment_path, Arc::clone(&pool))
+            .map(::dashboard::combined::label_parquet_by_source)
     {
         metadata::validate_service_extensions(&exp_reader, &mut experiment_exts);
     }
@@ -1284,7 +1460,9 @@ fn attach_cli_experiment(
     let (exp_sysinfo, _exp_selection, exp_file_meta) = metadata::extract_parquet_metadata(exp_path);
     // ParquetReader::open_with_pool defaults filename() to the path's basename.
     let exp_reader =
-        match metriken_query::ParquetReader::open_with_pool(exp_path, Arc::clone(&pool)) {
+        match metriken_query::ParquetReader::open_with_pool(exp_path, Arc::clone(&pool))
+            .map(::dashboard::combined::label_parquet_by_source)
+        {
             Ok(r) => std::sync::Arc::new(r),
             Err(e) => {
                 warn!(
@@ -2099,20 +2277,26 @@ mod tests {
         );
     }
 
-    /// The default is unchanged end to end: no flags on a 3-recording archive
-    /// still loads recordings 0 and 1. This also drives the warning that lists
-    /// the archive, which only runs on this path.
+    /// Labels for a fixture recording.
+    fn label_map(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// Without flags, a 3-recording comparison (its recordings carry `arm`)
+    /// loads recordings 0 and 1 into the A/B slots and attaches the third.
+    /// This also drives the warning that lists the archive, which only runs
+    /// on this path.
     #[test]
     fn without_flags_a_three_recording_archive_attaches_every_recording() {
         let dir = tempfile::tempdir().unwrap();
         let rez_path = dir.path().join("fleet.rez");
-        crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
+        crate::mcp::tests::multi_recording_rez_with_labels(
             &rez_path,
-            &[
-                ("redis", "web-01"),
-                ("valkey", "web-01"),
-                ("envoy", "web-01"),
-            ],
+            &["redis", "valkey", "envoy"]
+                .map(|s| label_map(&[("source", s), ("host", "web-01"), ("arm", s)])),
         );
 
         let matches = super::command().get_matches_from(["view", rez_path.to_str().unwrap()]);

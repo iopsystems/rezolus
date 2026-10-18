@@ -224,6 +224,34 @@ fn ingest_rez_from_path(
             }
         };
 
+    // An archive of one run opens as one combined view, as it does from the
+    // command line (`super::init_file_mode_combined`); an upload has no
+    // --baseline/--experiment to ask for a comparison.
+    if super::opens_combined(&readers, false) {
+        let combined = super::combine_recordings(readers);
+        let file_meta = super::file_meta_json(&combined.reader);
+        let selection = combined
+            .reader
+            .metadata_get(crate::parquet_metadata::KEY_SELECTION);
+        let report_marker = combined
+            .reader
+            .metadata_get(crate::parquet_metadata::KEY_REPORT);
+        state.replace_baseline(Arc::new(combined.reader) as Arc<dyn MetricsSource>);
+        *state.parquet_path.write() = Some(rez_path.clone());
+        *state.experiment_parquet_path.write() = None;
+        *state.cli_experiment_path.write() = None;
+        *state.selection.write() = selection;
+        *state.trimmed_report_marker.write() = report_marker;
+        state.captures.set_baseline_systeminfo(combined.systeminfo);
+        state.captures.set_baseline_file_metadata(file_meta);
+        *state.file_checksum.write() = compute_file_checksum(&rez_path);
+        state.captures.set_baseline_alias(None);
+        state.captures.detach_experiment();
+        *state.members.write() = combined.members;
+        regenerate_dashboards(state);
+        return ApiResponse::ok(serde_json::json!({ "filename": display_filename }));
+    }
+
     fn describe(reader: &crate::rez_reader::RezReader) -> (Option<String>, Option<String>) {
         use metriken_query::MetricsSource;
         let systeminfo = reader.metadata_get("systeminfo");
@@ -318,6 +346,7 @@ fn ingest_combined_ab_from_path(
 
     let open = |label: &str, path: &std::path::Path| -> Result<Arc<dyn MetricsSource>, String> {
         ParquetReader::open_with_pool(path, Arc::clone(&state.pool))
+            .map(::dashboard::combined::label_parquet_by_source)
             .map(|r| Arc::new(r.with_filename(display_filename.clone())) as Arc<dyn MetricsSource>)
             .map_err(|e| format!("failed to load {label} parquet from tarball: {e}"))
     };
@@ -390,7 +419,9 @@ pub fn ingest_baseline_from_path(
     temp_path: PathBuf,
     filename: String,
 ) -> Json<ApiResponse<serde_json::Value>> {
-    let reader = match ParquetReader::open_with_pool(&temp_path, Arc::clone(&state.pool)) {
+    let reader = match ParquetReader::open_with_pool(&temp_path, Arc::clone(&state.pool))
+        .map(::dashboard::combined::label_parquet_by_source)
+    {
         Ok(r) => r.with_filename(filename),
         Err(e) => {
             let _ = std::fs::remove_file(&temp_path);
@@ -514,7 +545,9 @@ fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
             .into_response();
     }
 
-    let exp_reader = match ParquetReader::open_with_pool(&temp_path, Arc::clone(&state.pool)) {
+    let exp_reader = match ParquetReader::open_with_pool(&temp_path, Arc::clone(&state.pool))
+        .map(::dashboard::combined::label_parquet_by_source)
+    {
         Ok(r) => r.with_filename(filename),
         Err(e) => {
             let _ = std::fs::remove_file(&temp_path);

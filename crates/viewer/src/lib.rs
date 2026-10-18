@@ -117,6 +117,22 @@ fn open_rez(data: &[u8], pool: Arc<BufferPool>) -> Result<rez::reader::LabeledRe
     Ok(recordings)
 }
 
+/// Whether an archive's recordings open as one combined view: more than one
+/// recording, and `dashboard::combined::layout` says combined. The server
+/// viewer's `opens_combined`.
+fn opens_combined(recordings: &rez::reader::LabeledRecordings, compare_requested: bool) -> bool {
+    let summaries: Vec<dashboard::combined::RecordingSummary> = recordings
+        .iter()
+        .map(|(labels, reader)| dashboard::combined::RecordingSummary {
+            labels: labels.clone(),
+            time_range_ns: reader.time_range_ns(),
+        })
+        .collect();
+    recordings.len() > 1
+        && dashboard::combined::layout(&summaries, compare_requested)
+            == dashboard::combined::Layout::Combined
+}
+
 /// What to say about an archive that was never cleanly finalized, or `None`
 /// when every recording in it was.
 ///
@@ -184,6 +200,13 @@ pub struct Viewer {
     /// and the registry knows the source too. The server's
     /// `--registry-templates` flag; see `dashboard::source_templates`.
     template_preference: TemplatePreference,
+    /// The recordings of an archive opened combined (`dashboard::combined`),
+    /// which the sections are built from
+    /// (`dashboard::dashboard::build_combined_context`). Empty otherwise.
+    members: Vec<dashboard::combined::Member>,
+    /// The first recording's `systeminfo` that has one, for a combined
+    /// archive, whose metadata is its first recording's.
+    combined_systeminfo: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -235,6 +258,10 @@ impl Viewer {
         // sniffs the container the same way.
         if rez::rez::detect_rez_format_bytes(data) != rez::rez::RezFormat::NotRez {
             let mut recordings = open_rez(data, Arc::clone(&pool))?;
+            // An archive of one run is one capture: its recordings joined.
+            if opens_combined(&recordings, false) {
+                return Ok(Self::combined(recordings, pool));
+            }
             if recordings.len() > 1 {
                 // One `Viewer` is one capture. Silently taking the first
                 // recording would show one arm of an A/B under the whole
@@ -242,8 +269,8 @@ impl Viewer {
                 // everywhere else. `WasmCaptureRegistry::attach` is the entry
                 // point that can fill both slots.
                 return Err(JsValue::from_str(&format!(
-                    "{filename} holds {} recordings; open it as a comparison rather than a \
-                     single capture",
+                    "{filename} holds {} recordings of a comparison; open it as a comparison \
+                     rather than a single capture",
                     recordings.len()
                 )));
             }
@@ -260,10 +287,71 @@ impl Viewer {
         let source_bytes = bytes.clone();
         let reader: Arc<dyn MetricsSource> = Arc::new(
             ParquetReader::open_bytes_with_pool(bytes, Arc::clone(&pool))
+                .map(dashboard::combined::label_parquet_by_source)
                 .map_err(|e| JsValue::from_str(&format!("Failed to load parquet: {}", e)))?
                 .with_filename(filename.to_string()),
         );
         Ok(Self::from_source_bytes(reader, pool, source_bytes))
+    }
+
+    /// One capture over every recording of an archive that opens
+    /// combined: the server viewer's `init_file_mode_combined`.
+    fn combined(recordings: rez::reader::LabeledRecordings, pool: Arc<BufferPool>) -> Viewer {
+        let mut parts = Vec::with_capacity(recordings.len());
+        let mut systeminfo = None;
+        for (_, reader) in &recordings {
+            if systeminfo.is_none() {
+                systeminfo = reader.metadata_get("systeminfo");
+            }
+            parts.push((
+                dashboard::combined::Header::of(reader),
+                reader.file_metadata(),
+            ));
+        }
+        let filename = recordings.first().and_then(|(_, r)| r.filename());
+        let (reader, series) = rez::reader::RezReader::combine(recordings, filename);
+        let members = parts
+            .into_iter()
+            .zip(series)
+            .filter_map(|((header, metadata), series_labels)| {
+                Some(dashboard::combined::Member {
+                    series_labels: series_labels?,
+                    metadata,
+                    header,
+                })
+            })
+            .collect();
+        let mut viewer = Self::from_source_bytes(Arc::new(reader), pool, Bytes::new());
+        viewer.members = members;
+        viewer.combined_systeminfo = systeminfo;
+        if !is_trimmed_report(&viewer.file_metadata) {
+            viewer.context = viewer
+                .combined_context(&dashboard::TemplateRegistry::empty())
+                .0;
+        }
+        viewer
+    }
+
+    /// The section context of a combined capture against `registry`, and
+    /// the template lookups' notices.
+    fn combined_context(
+        &self,
+        registry: &dashboard::TemplateRegistry,
+    ) -> (dashboard::dashboard::DashboardContext, Vec<String>) {
+        let filename = self.reader.filename_or_default();
+        let stem = filename
+            .strip_suffix(".parquet")
+            .or_else(|| filename.strip_suffix(".rez"))
+            .or_else(|| filename.strip_suffix(".dendro"))
+            .unwrap_or(&filename);
+        dashboard::dashboard::build_combined_context(
+            self.reader.as_ref(),
+            &self.members,
+            registry,
+            self.template_preference,
+            Some(stem),
+            None,
+        )
     }
 
     /// Build a capture around an already-open source.
@@ -312,6 +400,8 @@ impl Viewer {
             alias: None,
             source_bytes,
             template_preference: TemplatePreference::Archive,
+            members: Vec::new(),
+            combined_systeminfo: None,
         }
     }
 
@@ -447,6 +537,9 @@ impl Viewer {
             if nodes.len() > 1 {
                 return serde_json::to_string(&serde_json::Value::Object(nodes)).ok();
             }
+        }
+        if !self.members.is_empty() {
+            return self.combined_systeminfo.clone();
         }
         // Fall back to flat systeminfo
         self.file_metadata.get("systeminfo").cloned()
@@ -584,6 +677,13 @@ impl Viewer {
     pub fn init_templates(&mut self, templates_json: &str) -> Result<String, JsValue> {
         let templates = parse_service_templates(templates_json)?;
         let registry = dashboard::TemplateRegistry::from_templates(templates);
+
+        if !self.members.is_empty() && !is_trimmed_report(&self.file_metadata) {
+            let (context, notices) = self.combined_context(&registry);
+            self.context = context;
+            self.cached_bodies.borrow_mut().clear();
+            return Ok(serde_json::to_string(&notices).unwrap_or_else(|_| "[]".to_string()));
+        }
 
         let (service_exts, mut notices) =
             self.detect_and_validate_service_exts(&registry, self.template_preference);
@@ -725,6 +825,9 @@ pub struct WasmCaptureRegistry {
     /// Applied to every capture's template lookup; see
     /// [`WasmCaptureRegistry::set_prefer_registry_templates`].
     template_preference: TemplatePreference,
+    /// Whether a multi-recording archive attaches as a comparison whatever
+    /// its recordings say; see [`WasmCaptureRegistry::set_compare_requested`].
+    compare_requested: bool,
 }
 
 #[wasm_bindgen]
@@ -737,7 +840,16 @@ impl WasmCaptureRegistry {
             notices: Vec::new(),
             rez_source: None,
             template_preference: TemplatePreference::Archive,
+            compare_requested: false,
         }
+    }
+
+    /// Attach the next multi-recording archive as a comparison of its
+    /// recordings even when they are of one run: the server viewer's
+    /// `--baseline`/`--experiment`. Off by default, when such an archive
+    /// attaches as one combined capture (`dashboard::combined::layout`).
+    pub fn set_compare_requested(&mut self, requested: bool) {
+        self.compare_requested = requested;
     }
 
     /// Attach a capture under the given slot ("baseline" or "experiment").
@@ -758,6 +870,12 @@ impl WasmCaptureRegistry {
             let recordings = open_rez(data, Arc::clone(&pool))?;
             self.notices
                 .extend(incomplete_notice(&recordings, filename));
+            if opens_combined(&recordings, self.compare_requested) {
+                let viewer = Viewer::combined(recordings, pool);
+                self.others.clear();
+                self.set_capture(capture, viewer);
+                return Ok(());
+            }
             if recordings.len() >= 2 {
                 return self.attach_rez_comparison(recordings, pool, filename);
             }
@@ -1666,13 +1784,15 @@ mod tests {
         );
     }
 
-    /// A `.rez` carrying two recordings IS a comparison, so it fills both
-    /// slots — the same mapping `rezolus view` makes for the same file.
-    /// Loading one arm into one slot would show an A/B archive as a single
-    /// capture with nothing on screen saying half of it is missing.
+    /// A `.rez` of two recordings attached as a comparison fills both slots
+    /// — the same mapping `rezolus view --baseline .. --experiment ..` makes
+    /// for the same file. Loading one arm into one slot would show an A/B
+    /// archive as a single capture with nothing on screen saying half of it
+    /// is missing.
     #[test]
     fn a_two_recording_rez_fills_both_capture_slots() {
         let mut reg = WasmCaptureRegistry::new();
+        reg.set_compare_requested(true);
         reg.attach(
             "baseline",
             &rez_bytes(&[("redis", "web-01"), ("valkey", "web-01")]),
@@ -1707,6 +1827,61 @@ mod tests {
         assert_eq!(reg.notices(), "[]");
     }
 
+    /// An archive of two hosts of one run, from either entry point, is one
+    /// combined capture: the built-in sections once per host, the second
+    /// host's routes keyed `@h2`, each section's queries restricted to its
+    /// host. `set_compare_requested` attaches it as a comparison instead.
+    #[test]
+    fn a_one_run_archive_is_one_combined_capture() {
+        use rez::fixtures::{Recording, one_run};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.rez");
+        let host = |labels, cpus| Recording {
+            labels,
+            metadata: &[("source", "rezolus")],
+            cpus,
+            busy_ns: 500_000_000,
+            counter: None,
+        };
+        one_run(
+            &path,
+            &[
+                host(&[("source", "rezolus"), ("host", "h1")], 1),
+                host(&[("source", "rezolus"), ("host", "h2")], 2),
+            ],
+        );
+        let bytes = std::fs::read(&path).unwrap();
+
+        let single = Viewer::new(&bytes, "run.rez").expect("one run opens as one capture");
+        let mut reg = WasmCaptureRegistry::new();
+        reg.attach("baseline", &bytes, "run.rez").unwrap();
+        assert!(!reg.has("experiment"));
+        for sections in [single.get_sections(), reg.get_sections("baseline").unwrap()] {
+            let sections: Vec<serde_json::Value> = serde_json::from_str(&sections).unwrap();
+            let routes: Vec<&str> = sections
+                .iter()
+                .map(|s| s["route"].as_str().unwrap())
+                .collect();
+            assert!(
+                routes.contains(&"/cpu") && routes.contains(&"/cpu@h2"),
+                "{routes:?}"
+            );
+            assert_eq!(routes.iter().filter(|r| **r == "/query").count(), 1);
+        }
+        let cpu: serde_json::Value =
+            serde_json::from_str(&reg.get_section("baseline", "cpu@h2").unwrap()).unwrap();
+        assert_eq!(cpu["metadata"]["scope"]["host"], "h2");
+        assert!(
+            cpu.to_string().contains(r#"cpu_usage{host=\"h2\"}"#),
+            "{cpu}"
+        );
+
+        let mut compare = WasmCaptureRegistry::new();
+        compare.set_compare_requested(true);
+        compare.attach("baseline", &bytes, "run.rez").unwrap();
+        assert!(compare.has("experiment"));
+    }
+
     /// Above two, the archive holds recordings the browser is not showing.
     /// The server viewer says so on a terminal; here it has to reach the UI,
     /// because an archive whose third arm is silently missing looks exactly
@@ -1714,6 +1889,7 @@ mod tests {
     #[test]
     fn every_recording_of_a_multi_recording_rez_attaches() {
         let mut reg = WasmCaptureRegistry::new();
+        reg.set_compare_requested(true);
         reg.attach(
             "baseline",
             &rez_bytes(&[
