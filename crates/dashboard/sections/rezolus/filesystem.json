@@ -1,0 +1,160 @@
+{
+  "name": "Filesystem",
+  "route": "/filesystem",
+  "groups": [
+    {
+      "when": {
+        "present": "filesystem_total"
+      },
+      "then": [
+        {
+          "name": "Space",
+          "id": "space",
+          "subgroups": [
+            {
+              "name": "Capacity",
+              "description": "Bytes per locally mounted filesystem. Available is what an unprivileged writer can still use and is the number to alert on; Free also counts the superuser reserve. Used % is computed as df computes it, so the reserve does not count as used.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "Available",
+                  "id": "available",
+                  "unit": "bytes",
+                  "query": "sum by (mount) (filesystem_available)"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Free",
+                  "id": "free",
+                  "unit": "bytes",
+                  "query": "sum by (mount) (filesystem_free)"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Total",
+                  "id": "total",
+                  "unit": "bytes",
+                  "query": "sum by (mount) (filesystem_total)"
+                },
+                {
+                  "kind": "gauge",
+                  "title": "Used %",
+                  "id": "used-pct",
+                  "unit": "percentage",
+                  "query": "(sum by (mount) (filesystem_total) - sum by (mount) (filesystem_free)) / (sum by (mount) (filesystem_total) - sum by (mount) (filesystem_free) + sum by (mount) (filesystem_available))",
+                  "percentage_range": true
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "filesystem_inodes_total"
+          },
+          "then": [
+            {
+              "name": "Inodes",
+              "id": "inodes",
+              "subgroups": [
+                {
+                  "name": "Usage",
+                  "description": "Inodes per filesystem. A filesystem full of small files runs out of these before it runs out of bytes. ext4 fixes the count at mkfs time; XFS and ZFS report an estimate that moves with free space; btrfs and vfat report no limit and are not shown.",
+                  "plots": [
+                    {
+                      "kind": "gauge",
+                      "title": "Free Inodes",
+                      "id": "inodes-free",
+                      "unit": "count",
+                      "query": "sum by (mount) (filesystem_inodes_free)"
+                    },
+                    {
+                      "kind": "gauge",
+                      "title": "Inodes Free %",
+                      "id": "inodes-free-pct",
+                      "unit": "percentage",
+                      "query": "sum by (mount) (filesystem_inodes_free) / sum by (mount) (filesystem_inodes_total)",
+                      "percentage_range": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "filesystem_written_bytes"
+          },
+          "then": [
+            {
+              "name": "Writes",
+              "id": "writes",
+              "subgroups": [
+                {
+                  "name": "Device Writes",
+                  "description": "Bytes per second each ext4 filesystem writes to its block device, journal included, from the lifetime total ext4 keeps in sysfs. Compared with the bytes applications write, this is the filesystem's share of write amplification. Sampled once per sweep (60s by default), so the rate is a per-minute average.",
+                  "plots": [
+                    {
+                      "kind": "counter",
+                      "title": "Device Writes",
+                      "id": "device-writes",
+                      "unit": "datarate",
+                      "query": "sum by (mount) (irate(filesystem_written_bytes[5m]))"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "State",
+          "id": "state",
+          "subgroups": [
+            {
+              "when": {
+                "present": "filesystem_readonly"
+              },
+              "then": [
+                {
+                  "name": "Read-only",
+                  "description": "1 while a filesystem is read-only as a whole: mounted that way, or after an error (ext4 emergency_ro, btrfs forced read-only). 0 does not prove it is writable: an XFS shutdown does not show here, and a full filesystem stays writable while its writes fail.",
+                  "plots": [
+                    {
+                      "kind": "gauge",
+                      "title": "Read-only",
+                      "id": "readonly",
+                      "unit": "count",
+                      "query": "sum by (mount) (filesystem_readonly)"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "filesystem_errors"
+              },
+              "then": [
+                {
+                  "name": "Errors",
+                  "description": "Errors each ext4 filesystem has recorded in its superblock. The count survives remounts and reboots until e2fsck clears it, so any non-zero value means the filesystem has hit an error since its last check; a step means one just happened.",
+                  "plots": [
+                    {
+                      "kind": "gauge",
+                      "title": "Errors",
+                      "id": "errors",
+                      "unit": "count",
+                      "query": "sum by (mount) (filesystem_errors)"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "name": "Rezolus",
+  "route": "/rezolus",
+  "groups": [
+    {
+      "name": "Rezolus",
+      "id": "rezolus",
+      "subgroups": [
+        {
+          "name": "Resource Usage",
+          "description": "CPU and memory consumed by the Rezolus agent itself.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "CPU %",
+              "id": "cpu",
+              "unit": "percentage",
+              "query": "sum(irate(rezolus_cpu_usage[5m])) / 1000000000",
+              "percentage_range": true
+            },
+            {
+              "kind": "gauge",
+              "title": "Memory (RSS)",
+              "id": "memory",
+              "unit": "bytes",
+              "query": "sum(rezolus_memory_usage_resident_set_size)"
+            }
+          ]
+        },
+        {
+          "name": "Performance",
+          "description": "Rezolus's own IPC and syscall rate, measured via the rezolus.service cgroup.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "IPC",
+              "id": "ipc",
+              "unit": "count",
+              "query": "sum(irate(cgroup_cpu_instructions{name=\"/system.slice/rezolus.service\"}[5m])) / sum(irate(cgroup_cpu_cycles{name=\"/system.slice/rezolus.service\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "Syscalls",
+              "id": "syscalls",
+              "unit": "rate",
+              "query": "sum(irate(cgroup_syscall{name=\"/system.slice/rezolus.service\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "BPF Overhead",
+          "description": "Time spent in BPF programs — total agent overhead and per-sampler breakdown.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "Total BPF Overhead",
+              "id": "bpf-overhead",
+              "unit": "count",
+              "query": "sum(irate(rezolus_bpf_run_time[5m])) / 1000000000",
+              "width": "full"
+            },
+            {
+              "kind": "counter",
+              "title": "BPF Per-Sampler Overhead",
+              "id": "bpf-sampler-overhead",
+              "unit": "count",
+              "query": "sum by (sampler) (irate(rezolus_bpf_run_time[5m])) / 1000000000"
+            },
+            {
+              "kind": "counter",
+              "title": "BPF Per-Sampler Execution Time",
+              "id": "bpf-execution-time",
+              "unit": "time",
+              "query": "(sum by (sampler) (irate(rezolus_bpf_run_time[5m])) / sum by (sampler) (irate(rezolus_bpf_run_count[5m]))) / 1000000000"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

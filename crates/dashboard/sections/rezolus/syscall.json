@@ -1,0 +1,135 @@
+{
+  "name": "Syscall",
+  "route": "/syscall",
+  "groups": [
+    {
+      "name": "Syscall",
+      "id": "syscall",
+      "metadata": {
+        "no_collapse": true
+      },
+      "subgroups": [
+        {
+          "name": "Overall",
+          "description": "Aggregate syscall rate and latency across all operation categories.",
+          "plots": [
+            {
+              "rate_mean": {
+                "title": "Overall",
+                "id": "syscall-total",
+                "selector": "syscall_latency",
+                "rate": "sum(irate(syscall[5m]))",
+                "mean_unit": "time"
+              }
+            },
+            {
+              "kind": "latency",
+              "title": "Overall Latency",
+              "id": "syscall-total-latency",
+              "query": "syscall_latency"
+            }
+          ]
+        },
+        {
+          "repeat": {
+            "var": "op",
+            "in": {
+              "values": [
+                {
+                  "name": "Read",
+                  "lower": "read"
+                },
+                {
+                  "name": "Write",
+                  "lower": "write"
+                },
+                {
+                  "name": "Poll",
+                  "lower": "poll"
+                },
+                {
+                  "name": "Socket",
+                  "lower": "socket"
+                },
+                {
+                  "name": "Lock",
+                  "lower": "lock"
+                },
+                {
+                  "name": "Time",
+                  "lower": "time"
+                },
+                {
+                  "name": "Sleep",
+                  "lower": "sleep"
+                },
+                {
+                  "name": "Yield",
+                  "lower": "yield"
+                },
+                {
+                  "name": "Filesystem",
+                  "lower": "filesystem"
+                },
+                {
+                  "name": "Sync",
+                  "lower": "sync"
+                },
+                {
+                  "name": "Memory",
+                  "lower": "memory"
+                },
+                {
+                  "name": "Process",
+                  "lower": "process"
+                },
+                {
+                  "name": "Query",
+                  "lower": "query"
+                },
+                {
+                  "name": "IPC",
+                  "lower": "ipc"
+                },
+                {
+                  "name": "Timer",
+                  "lower": "timer"
+                },
+                {
+                  "name": "Event",
+                  "lower": "event"
+                },
+                {
+                  "name": "Other",
+                  "lower": "other"
+                }
+              ]
+            }
+          },
+          "body": [
+            {
+              "name": "${op.name}",
+              "plots": [
+                {
+                  "rate_mean": {
+                    "title": "${op.name}",
+                    "id": "syscall-${op.lower}",
+                    "selector": "syscall_latency{op=\"${op.lower}\"}",
+                    "rate": "sum(irate(syscall{op=\"${op.lower}\"}[5m]))",
+                    "mean_unit": "time"
+                  }
+                },
+                {
+                  "kind": "latency",
+                  "title": "${op.name} Latency",
+                  "id": "syscall-${op.name}-latency",
+                  "query": "syscall_latency{op=\"${op.lower}\"}"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,275 @@
+{
+  "name": "BlockIO",
+  "route": "/blockio",
+  "let": {
+    "device": {
+      "first_present": {
+        "list": [
+          "blockio_device_latency",
+          "blockio_latency"
+        ],
+        "default": "blockio_device_latency"
+      }
+    }
+  },
+  "groups": [
+    {
+      "name": "Operations",
+      "id": "operations",
+      "subgroups": [
+        {
+          "name": "Totals",
+          "description": "Throughput and operation rate aggregated across all block devices.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "Total Throughput",
+              "id": "blockio-throughput-total",
+              "unit": "datarate",
+              "query": "sum(irate(blockio_bytes[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "Total IOPS",
+              "id": "blockio-iops-total",
+              "unit": "count",
+              "query": "sum(irate(blockio_operations[5m]))"
+            }
+          ]
+        },
+        {
+          "repeat": {
+            "var": "op",
+            "in": {
+              "values": [
+                {
+                  "title": "Read",
+                  "lower": "read"
+                },
+                {
+                  "title": "Write",
+                  "lower": "write"
+                }
+              ]
+            }
+          },
+          "body": [
+            {
+              "name": "${op.title}",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "${op.title} Throughput",
+                  "id": "throughput-${op.lower}",
+                  "unit": "datarate",
+                  "query": "sum(irate(blockio_bytes{op=\"${op.lower}\"}[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "${op.title} IOPS",
+                  "id": "iops-${op.lower}",
+                  "unit": "count",
+                  "query": "sum(irate(blockio_operations{op=\"${op.lower}\"}[5m]))"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Latency",
+      "id": "latency",
+      "subgroups": [
+        {
+          "name": "Device",
+          "description": "How long the device took, from the moment it began servicing a request until the request completed. Percentiles broken down by read vs write.",
+          "plots": [
+            {
+              "repeat": {
+                "var": "op",
+                "in": {
+                  "values": [
+                    {
+                      "title": "Read",
+                      "lower": "read"
+                    },
+                    {
+                      "title": "Write",
+                      "lower": "write"
+                    }
+                  ]
+                }
+              },
+              "body": [
+                {
+                  "rate_mean": {
+                    "title": "${op.title}",
+                    "id": "latency-${op.lower}",
+                    "selector": "${device}{op=\"${op.lower}\"}",
+                    "rate": "sum(irate(blockio_operations{op=\"${op.lower}\"}[5m]))",
+                    "mean_unit": "time"
+                  }
+                },
+                {
+                  "kind": "latency",
+                  "title": "${op.title}",
+                  "id": "latency-${op.lower}",
+                  "query": "${device}{op=\"${op.lower}\"}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "has_label": {
+              "metric": "blockio_queue_latency",
+              "label": "op"
+            }
+          },
+          "then": [
+            {
+              "name": "Queue Wait",
+              "description": "How long requests waited before the device began servicing them. This is the component that grows under saturation — a device at its limit shows queue wait climbing while the device phase above stays flat.",
+              "plots": [
+                {
+                  "repeat": {
+                    "var": "op",
+                    "in": {
+                      "values": [
+                        {
+                          "title": "Read",
+                          "lower": "read"
+                        },
+                        {
+                          "title": "Write",
+                          "lower": "write"
+                        }
+                      ]
+                    }
+                  },
+                  "body": [
+                    {
+                      "rate_mean": {
+                        "title": "${op.title}",
+                        "id": "queue-latency-${op.lower}",
+                        "selector": "blockio_queue_latency{op=\"${op.lower}\"}",
+                        "mean_unit": "time"
+                      }
+                    },
+                    {
+                      "kind": "latency",
+                      "title": "${op.title}",
+                      "id": "queue-latency-${op.lower}",
+                      "query": "blockio_queue_latency{op=\"${op.lower}\"}"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "has_label": {
+              "metric": "blockio_total_latency",
+              "label": "op"
+            }
+          },
+          "then": [
+            {
+              "name": "End-to-End",
+              "description": "Queue wait and device service together, from the request entering the queue until it completed — what the workload issuing the IO actually experiences. Measured directly rather than summed, because two histograms cannot be added.",
+              "plots": [
+                {
+                  "repeat": {
+                    "var": "op",
+                    "in": {
+                      "values": [
+                        {
+                          "title": "Read",
+                          "lower": "read"
+                        },
+                        {
+                          "title": "Write",
+                          "lower": "write"
+                        }
+                      ]
+                    }
+                  },
+                  "body": [
+                    {
+                      "rate_mean": {
+                        "title": "${op.title}",
+                        "id": "total-latency-${op.lower}",
+                        "selector": "blockio_total_latency{op=\"${op.lower}\"}",
+                        "rate": "sum(irate(blockio_operations{op=\"${op.lower}\"}[5m]))",
+                        "mean_unit": "time"
+                      }
+                    },
+                    {
+                      "kind": "latency",
+                      "title": "${op.title}",
+                      "id": "total-latency-${op.lower}",
+                      "query": "blockio_total_latency{op=\"${op.lower}\"}"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Size",
+      "id": "size",
+      "subgroups": [
+        {
+          "name": "By Operation",
+          "description": "IO size distribution percentiles broken down by read vs write.",
+          "plots": [
+            {
+              "repeat": {
+                "var": "op",
+                "in": {
+                  "values": [
+                    {
+                      "title": "Read",
+                      "lower": "read"
+                    },
+                    {
+                      "title": "Write",
+                      "lower": "write"
+                    }
+                  ]
+                }
+              },
+              "body": [
+                {
+                  "rate_mean": {
+                    "title": "${op.title}",
+                    "id": "size-${op.lower}",
+                    "selector": "blockio_size{op=\"${op.lower}\"}",
+                    "rate": "sum(irate(blockio_operations{op=\"${op.lower}\"}[5m]))",
+                    "mean_unit": "bytes"
+                  }
+                },
+                {
+                  "kind": "histogram",
+                  "title": "${op.title}",
+                  "id": "size-${op.lower}",
+                  "unit": "bytes",
+                  "query": "blockio_size{op=\"${op.lower}\"}",
+                  "subtype": "percentiles",
+                  "log_scale": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

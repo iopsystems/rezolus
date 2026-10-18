@@ -1,0 +1,167 @@
+{
+  "name": "Hardware Sensors",
+  "route": "/hw_sensors",
+  "groups": [
+    {
+      "name": "Hardware Sensors",
+      "id": "hw_sensors",
+      "subgroups": [
+        {
+          "when": {
+            "present": "sensor_temperature"
+          },
+          "then": [
+            {
+              "name": "Temperature",
+              "description": "Temperatures from each native sensor identity. Missing or unreadable sensors are absent.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "Temperature",
+                  "id": "sensor-temperature",
+                  "unit": "count",
+                  "axis_label": "°C",
+                  "query": "sum by (sensor) (sensor_temperature) / 1000",
+                  "width": "full"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "sensor_power"
+          },
+          "then": [
+            {
+              "name": "Power",
+              "description": "Power per native channel, including direct readings and marked derived readings. Derived power can pair sequential voltage and current reads; channels are not summed across rails because rails can overlap.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "Power",
+                  "id": "sensor-power",
+                  "unit": "power",
+                  "axis_label": "Watts",
+                  "query": "sum by (sensor) (sensor_power) / 1000000",
+                  "width": "full"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "sensor_voltage"
+          },
+          "then": [
+            {
+              "name": "Voltage",
+              "description": "Bus voltage per native sensor identity.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "Voltage",
+                  "id": "sensor-voltage",
+                  "unit": "count",
+                  "axis_label": "Volts",
+                  "query": "sum by (sensor) (sensor_voltage) / 1000",
+                  "width": "full"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "sensor_current"
+          },
+          "then": [
+            {
+              "name": "Current",
+              "description": "Current per native sensor identity.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "Current",
+                  "id": "sensor-current",
+                  "unit": "count",
+                  "axis_label": "Amps",
+                  "query": "sum by (sensor) (sensor_current) / 1000",
+                  "width": "full"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "sensor_fan_speed"
+          },
+          "then": [
+            {
+              "name": "Fan Speed",
+              "description": "Measured fan speed in revolutions per minute, separate from PWM demand.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "Fan Speed",
+                  "id": "sensor-fan-speed",
+                  "unit": "count",
+                  "axis_label": "RPM",
+                  "query": "sum by (sensor) (sensor_fan_speed)",
+                  "width": "full"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "sensor_fan_pwm"
+          },
+          "then": [
+            {
+              "name": "Fan PWM",
+              "description": "Fan PWM demand converted from the native 0–255 value to a percentage; it is not fan speed.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "Fan PWM",
+                  "id": "sensor-fan-pwm",
+                  "unit": "percentage",
+                  "axis_label": "Percent",
+                  "query": "sum by (sensor) (sensor_fan_pwm) / 255",
+                  "width": "full",
+                  "percentage_range": true
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "present": "sensor_cooling_state"
+          },
+          "then": [
+            {
+              "name": "Cooling State",
+              "description": "The driver-defined state index. This is an ordinal device state, not a throttling percentage.",
+              "plots": [
+                {
+                  "kind": "gauge",
+                  "title": "Cooling State",
+                  "id": "sensor-cooling-state",
+                  "unit": "count",
+                  "axis_label": "State",
+                  "query": "sum by (sensor) (sensor_cooling_state)",
+                  "width": "full"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

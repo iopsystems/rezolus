@@ -1,0 +1,1338 @@
+{
+  "interval": 1.0,
+  "source": "rezolus",
+  "version": "6.0.0",
+  "filename": "",
+  "start_time": 1700000000000.0,
+  "end_time": 1700000060000.0,
+  "groups": [
+    {
+      "name": "Usage",
+      "id": "usage",
+      "subgroups": [
+        {
+          "name": "Capacity",
+          "description": "How much memory exists and how much of it is unclaimed.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Total",
+                "id": "total",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_total"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Available",
+                "id": "available",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_available"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Free",
+                "id": "free",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_free"
+            }
+          ]
+        },
+        {
+          "name": "Breakdown",
+          "description": "Where allocated memory is going — kernel buffers, page cache, anonymous use — with overall utilization.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Buffers",
+                "id": "buffers",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_buffers"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Cached",
+                "id": "cached",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_cached"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Used",
+                "id": "used",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_total - memory_available"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Utilization %",
+                "id": "utilization-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "(memory_total - memory_available) / memory_total"
+            }
+          ]
+        },
+        {
+          "name": "Writeback",
+          "description": "Dirty is page cache written by processes and not yet on storage; it grows between flusher runs and is what the writeback throttle acts on when it nears the dirty limits. Writeback is the part in flight to the device right now.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Dirty",
+                "id": "dirty",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_dirty"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Writeback",
+                "id": "writeback",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_writeback"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Dirty Limits",
+                "id": "dirty-thresholds",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (kind) (memory_dirty_threshold)"
+            }
+          ]
+        },
+        {
+          "name": "Writeback Throttle",
+          "description": "Once dirty pages pass the free-run ceiling (midway between the background and hard limits) the kernel evaluates each writer in balance_dirty_pages and may make it sleep. The sleep lands on the writer's own thread, so this is where a write path's tail comes from when writeback cannot keep up; zero checks means dirty pages never came near the limit.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Throttle Events",
+                "id": "throttle-events",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(writeback_throttle_events[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Throttle Sleep",
+                "id": "throttle-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "writeback_throttle_latency"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Throttle Evaluations",
+                "id": "throttle-checks",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(writeback_throttle_checks[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Flusher",
+          "description": "Flusher passes by why their work ran: periodic is the dirty_writeback_centisecs cadence, background is dirty pages over the background threshold, sync is an explicit sync, vmscan is memory reclaim. Pages written is what the flushers reported writing.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Runs by Reason",
+                "id": "writeback-runs",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (reason) (irate(writeback_runs[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Pages Written (flusher)",
+                "id": "writeback-pages",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(writeback_pages_written[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Pages Written (all)",
+                "id": "pages-written",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_pages_written[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Pages Dirtied",
+                "id": "pages-dirtied",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_pages_dirtied[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Page Cache",
+          "description": "File-backed memory by LRU list: inactive is reclaimed first, active last. A working set that fits shows a stable active list; Shmem and Mapped are the parts of the cache that are tmpfs or mmap'd into processes. tmpfs Used splits the tmpfs part by mount.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Active (file)",
+                "id": "active-file",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_active{kind=\"file\"}"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Inactive (file)",
+                "id": "inactive-file",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_inactive{kind=\"file\"}"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Shmem",
+                "id": "shmem",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_shmem"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Mapped",
+                "id": "mapped",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_mapped"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "tmpfs Used",
+                "id": "tmpfs-used",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (filesystem_tmpfs_used)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "tmpfs Used %",
+                "id": "tmpfs-used-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (filesystem_tmpfs_used) / sum by (mount) (filesystem_tmpfs_size)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "tmpfs Inodes Used %",
+                "id": "tmpfs-inodes-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (filesystem_tmpfs_inodes_used) / sum by (mount) (filesystem_tmpfs_inodes_total)"
+            }
+          ]
+        },
+        {
+          "name": "Anonymous",
+          "description": "Process heaps, stacks and private data by LRU list, plus memory the kernel cannot reclaim at all.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Anonymous",
+                "id": "anon",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_anon"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Active (anon)",
+                "id": "active-anon",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_active{kind=\"anon\"}"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Inactive (anon)",
+                "id": "inactive-anon",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_inactive{kind=\"anon\"}"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Unevictable",
+                "id": "unevictable",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_unevictable"
+            }
+          ]
+        },
+        {
+          "name": "Page Cache Traffic",
+          "description": "From the memory_pagecache sampler. Reads into the cache and the bytes they ask for, per mount; pages filled by what the filling task was doing (a read syscall, a write, an mmap fault, or something else) and pages evicted. The read miss ratio is pages filled during reads, as bytes, over bytes read: what fraction of what was read came from the device, readahead included.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Read Calls",
+                "id": "pagecache-reads",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(pagecache_reads[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Read Bytes",
+                "id": "pagecache-read-bytes",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "datarate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(pagecache_read_bytes[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Pages Filled by Reason",
+                "id": "pagecache-filled",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (reason) (irate(pagecache_pages_added[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Pages Evicted",
+                "id": "pagecache-evicted",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(pagecache_pages_evicted[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Read Miss Ratio",
+                "id": "pagecache-miss-ratio",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(pagecache_pages_added{reason=\"read\"}[5m])) * 4096 / sum by (mount) (irate(pagecache_read_bytes[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "mmap Faults",
+                "id": "pagecache-faults",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(pagecache_faults[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Kernel",
+          "description": "Kernel allocations. Reclaimable slab is mostly the dentry and inode caches, which the kernel drops under pressure at the cost of re-reading metadata from disk; unreclaimable slab, kernel stacks and page tables are not recoverable. Metadata Slab Caches draws the filesystem metadata caches one line each; Other Slab Caches is every other cache summed. The query engine has no topk, so to find which cache grew, break slab cache bytes down by cache in the metric explorer.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Slab (reclaimable)",
+                "id": "slab-reclaimable",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_slab{kind=\"reclaimable\"}"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Slab (unreclaimable)",
+                "id": "slab-unreclaimable",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_slab{kind=\"unreclaimable\"}"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Page Tables",
+                "id": "page-tables",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_page_tables"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Kernel Stacks",
+                "id": "kernel-stack",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_kernel_stack"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Metadata Slab Caches",
+                "id": "slab-caches",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (cache) (memory_slab_cache_bytes{cache=~\"dentry|inode_cache|ext4_inode_cache|ext4_extent_status|jbd2_journal_head|buffer_head|xfs_inode|radix_tree_node\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Other Slab Caches",
+                "id": "slab-caches-other",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(memory_slab_cache_bytes{cache!~\"dentry|inode_cache|ext4_inode_cache|ext4_extent_status|jbd2_journal_head|buffer_head|xfs_inode|radix_tree_node\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Slab Cache Objects (active)",
+                "id": "slab-cache-objects",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (cache) (memory_slab_cache_objects{state=\"active\"})"
+            }
+          ]
+        },
+        {
+          "name": "Swap",
+          "description": "Swap in use and the overcommit position. Committed is every allocation processes could touch; it exceeding the commit limit only matters under strict overcommit.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Swap Used",
+                "id": "swap-used",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_swap_total - memory_swap_free"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Swap Cached",
+                "id": "swap-cached",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_swap_cached"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Committed",
+                "id": "committed",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_committed"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Commit Limit",
+                "id": "commit-limit",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_commit_limit"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Swap In",
+                "id": "swap-in",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_swap_in[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Swap Out",
+                "id": "swap-out",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_swap_out[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Reclaim",
+          "description": "kswapd reclaims in the background; direct reclaim and allocation stalls run on the allocating thread and are a latency source on the request path. Major faults are synchronous reads from storage.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Scanned",
+                "id": "reclaim-scanned",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (kind) (irate(memory_reclaim_scanned[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Reclaimed",
+                "id": "reclaim-reclaimed",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (kind) (irate(memory_reclaim_reclaimed[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Allocation Stalls",
+                "id": "allocation-stalls",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_allocation_stalls[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Major Faults",
+                "id": "major-faults",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_major_page_faults[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "OOM Kills",
+                "id": "oom-kills",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_oom_kills[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Working Set",
+          "description": "A refault is a page that was evicted and then needed again soon enough that the kernel still remembered it: the direct sign of a page cache or anonymous working set that does not fit in memory. Activations are refaults the kernel promoted straight to the active list.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Refaults",
+                "id": "workingset-refaults",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (kind) (irate(memory_workingset_refaults[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Activations",
+                "id": "workingset-activations",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (kind) (irate(memory_workingset_activations[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Huge Pages",
+          "description": "Transparent huge pages by what they back, and the hugetlbfs pool: reserved memory that is outside MemAvailable whether or not anything uses it.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "THP (anon)",
+                "id": "thp-anon",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_hugepages_anon"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "THP (shmem)",
+                "id": "thp-shmem",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_hugepages_shmem"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "THP (file)",
+                "id": "thp-file",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_hugepages_file"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "hugetlb Reserved",
+                "id": "hugetlb",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_hugetlb"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "hugetlb Pages",
+                "id": "hugetlb-pages",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (state) (memory_hugetlb_pages)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "THP Faults",
+                "id": "thp-faults",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (outcome) (irate(memory_thp_faults[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "THP Splits",
+                "id": "thp-splits",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_thp_splits[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Compaction Stalls",
+                "id": "compaction-stalls",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_compaction_stalls[5m]))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "NUMA",
+      "id": "numa",
+      "subgroups": [
+        {
+          "name": "Local vs Remote",
+          "description": "Allocations by where the allocating task ran: local allocations were made on the task's own node (fast); remote ones on another node, across the interconnect (slow). The two sum to every allocation.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Local Rate",
+                "id": "numa-local-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "irate(memory_numa_local[5m])"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Remote Rate",
+                "id": "numa-remote-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "irate(memory_numa_other[5m])"
+            }
+          ]
+        },
+        {
+          "name": "Memory Policy",
+          "description": "Allocations by whether the intended node (the memory policy's choice, or the node the caller asked for) served them. Hits were served by the intended node; misses by another node, usually because the intended node was short of free pages. Interleave counts allocations under the interleave policy that landed on their intended node.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Hit Rate",
+                "id": "numa-hit-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "irate(memory_numa_hit[5m])"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Miss Rate",
+                "id": "numa-miss-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "irate(memory_numa_miss[5m])"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Interleave Rate",
+                "id": "numa-interleave-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "irate(memory_numa_interleave[5m])"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "name": "Overview",
+      "route": "/overview"
+    },
+    {
+      "name": "Exceptions",
+      "route": "/exceptions"
+    },
+    {
+      "name": "Query Explorer",
+      "route": "/query"
+    },
+    {
+      "name": "CPU",
+      "route": "/cpu"
+    },
+    {
+      "name": "GPU",
+      "route": "/gpu"
+    },
+    {
+      "name": "Hardware Sensors",
+      "route": "/hw_sensors"
+    },
+    {
+      "name": "Memory",
+      "route": "/memory"
+    },
+    {
+      "name": "Network",
+      "route": "/network"
+    },
+    {
+      "name": "Scheduler",
+      "route": "/scheduler"
+    },
+    {
+      "name": "Syscall",
+      "route": "/syscall"
+    },
+    {
+      "name": "Softirq",
+      "route": "/softirq"
+    },
+    {
+      "name": "BlockIO",
+      "route": "/blockio"
+    },
+    {
+      "name": "Filesystem",
+      "route": "/filesystem"
+    },
+    {
+      "name": "ext4",
+      "route": "/ext4"
+    },
+    {
+      "name": "XFS",
+      "route": "/xfs"
+    },
+    {
+      "name": "cgroups",
+      "route": "/cgroups"
+    },
+    {
+      "name": "Rezolus",
+      "route": "/rezolus"
+    }
+  ]
+}

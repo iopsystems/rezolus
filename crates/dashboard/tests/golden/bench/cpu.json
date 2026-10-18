@@ -1,0 +1,900 @@
+{
+  "interval": 1.0,
+  "source": "rezolus",
+  "version": "6.0.0",
+  "filename": "",
+  "start_time": 1700000000000.0,
+  "end_time": 1700000060000.0,
+  "groups": [
+    {
+      "name": "Utilization",
+      "id": "utilization",
+      "subgroups": [
+        {
+          "name": "Total CPU",
+          "description": "Overall CPU busy time across all cores, with per-core breakdown.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Busy %",
+                "id": "busy-pct",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Busy % (Per-CPU)",
+                "id": "busy-pct-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_usage[5m])) / 1000000000"
+            }
+          ]
+        },
+        {
+          "name": "CPU Time by State",
+          "description": "Kernel vs. user-space CPU time, aggregate and per-core.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "User %",
+                "id": "user-pct",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_usage{state=\"user\"}[5m])) / cpu_cores / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "User % (Per-CPU)",
+                "id": "user-pct-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_usage{state=\"user\"}[5m])) / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "System %",
+                "id": "system-pct",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_usage{state=\"system\"}[5m])) / cpu_cores / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "System % (Per-CPU)",
+                "id": "system-pct-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_usage{state=\"system\"}[5m])) / 1000000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Performance",
+      "id": "performance",
+      "subgroups": [
+        {
+          "name": "Instructions per Cycle",
+          "description": "How efficiently the CPU retires instructions per clock cycle.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "IPC",
+                "id": "ipc",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "IPC (Per-CPU)",
+                "id": "ipc-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_instructions[5m])) / sum by (id) (irate(cpu_cycles[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Instructions per Nanosecond",
+          "description": "Wall-clock-normalized instruction throughput — accounts for frequency scaling.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "IPNS",
+                "id": "ipns",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m])) * sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / 1000000000 / cpu_cores"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "IPNS (Per-CPU)",
+                "id": "ipns-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_instructions[5m])) / sum by (id) (irate(cpu_cycles[5m])) * sum by (id) (irate(cpu_tsc[5m])) * sum by (id) (irate(cpu_aperf[5m])) / sum by (id) (irate(cpu_mperf[5m])) / 1000000000"
+            }
+          ]
+        },
+        {
+          "name": "L3 Cache Hit Rate",
+          "description": "Fraction of L3 cache accesses that hit, indicating last-level cache efficiency.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "L3 Hit %",
+                "id": "l3-hit",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "1 - sum(irate(cpu_l3_miss[5m])) / sum(irate(cpu_l3_access[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "L3 Hit % (Per-CPU)",
+                "id": "l3-hit-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "1 - sum by (id) (irate(cpu_l3_miss[5m])) / sum by (id) (irate(cpu_l3_access[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Frequency",
+          "description": "Effective CPU clock speed, averaged and per-core.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Frequency",
+                "id": "frequency",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "frequency",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / cpu_cores"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Frequency (Per-CPU)",
+                "id": "frequency-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "frequency",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_tsc[5m])) * sum by (id) (irate(cpu_aperf[5m])) / sum by (id) (irate(cpu_mperf[5m]))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Branch Prediction",
+      "id": "branch-prediction",
+      "subgroups": [
+        {
+          "name": "Misprediction Rate",
+          "description": "Fraction of branches that the predictor got wrong.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Misprediction Rate %",
+                "id": "branch-miss-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_branch_misses[5m])) / sum(irate(cpu_branch_instructions[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Misprediction Rate % (Per-CPU)",
+                "id": "branch-miss-rate-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_branch_misses[5m])) / sum by (id) (irate(cpu_branch_instructions[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Branch Activity",
+          "description": "Absolute branch instruction and miss rates.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Instructions",
+                "id": "branch-instructions",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_branch_instructions[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Instructions (Per-CPU)",
+                "id": "branch-instructions-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_branch_instructions[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Misses",
+                "id": "branch-misses",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_branch_misses[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Misses (Per-CPU)",
+                "id": "branch-misses-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_branch_misses[5m]))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "DTLB",
+      "id": "dtlb",
+      "subgroups": [
+        {
+          "name": "DTLB Misses",
+          "description": "Raw data-TLB miss rate, aggregated and per-core.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Misses",
+                "id": "dtlb-misses",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_dtlb_miss[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Misses (Per-CPU)",
+                "id": "dtlb-misses-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_dtlb_miss[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "DTLB MPKI",
+          "description": "Misses per thousand instructions, normalized so workload differences don't distort the rate.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "MPKI",
+                "id": "dtlb-mpki",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_dtlb_miss[5m])) / sum(irate(cpu_instructions[5m])) * 1000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "MPKI (Per-CPU)",
+                "id": "dtlb-mpki-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_dtlb_miss[5m])) / sum by (id) (irate(cpu_instructions[5m])) * 1000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Migrations",
+      "id": "migrations",
+      "subgroups": [
+        {
+          "name": "Incoming Migrations",
+          "description": "Tasks migrated onto a CPU, per second.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "To",
+                "id": "cpu-migrations-to",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_migrations{direction=\"to\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "To (Per-CPU)",
+                "id": "cpu-migrations-to-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_migrations{direction=\"to\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Outgoing Migrations",
+          "description": "Tasks migrated off a CPU, per second.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "From",
+                "id": "cpu-migrations-from",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_migrations{direction=\"from\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "From (Per-CPU)",
+                "id": "cpu-migrations-from-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_migrations{direction=\"from\"}[5m]))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "TLB Flush",
+      "id": "tlb-flush",
+      "subgroups": [
+        {
+          "name": "Total TLB Flushes",
+          "description": "Aggregate TLB invalidation rate across all reasons.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Total",
+                "id": "tlb-total",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_tlb_flush[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Total (Per-CPU)",
+                "id": "tlb-total-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_tlb_flush[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Local MM Shootdown",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Local MM Shootdown",
+                "id": "tlb-local-mm-shootdown",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_tlb_flush{reason=\"local_mm_shootdown\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Local MM Shootdown (Per-CPU)",
+                "id": "tlb-local-mm-shootdown-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_tlb_flush{reason=\"local_mm_shootdown\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Remote Send IPI",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Remote Send IPI",
+                "id": "tlb-remote-send-ipi",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_tlb_flush{reason=\"remote_send_ipi\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Remote Send IPI (Per-CPU)",
+                "id": "tlb-remote-send-ipi-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_tlb_flush{reason=\"remote_send_ipi\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Remote Shootdown",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Remote Shootdown",
+                "id": "tlb-remote-shootdown",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_tlb_flush{reason=\"remote_shootdown\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Remote Shootdown (Per-CPU)",
+                "id": "tlb-remote-shootdown-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_tlb_flush{reason=\"remote_shootdown\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Task Switch",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Task Switch",
+                "id": "tlb-task-switch",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_tlb_flush{reason=\"task_switch\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Task Switch (Per-CPU)",
+                "id": "tlb-task-switch-per-cpu",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_tlb_flush{reason=\"task_switch\"}[5m]))"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "name": "Overview",
+      "route": "/overview"
+    },
+    {
+      "name": "Exceptions",
+      "route": "/exceptions"
+    },
+    {
+      "name": "Query Explorer",
+      "route": "/query"
+    },
+    {
+      "name": "CPU",
+      "route": "/cpu"
+    },
+    {
+      "name": "GPU",
+      "route": "/gpu"
+    },
+    {
+      "name": "Hardware Sensors",
+      "route": "/hw_sensors"
+    },
+    {
+      "name": "Memory",
+      "route": "/memory"
+    },
+    {
+      "name": "Network",
+      "route": "/network"
+    },
+    {
+      "name": "Scheduler",
+      "route": "/scheduler"
+    },
+    {
+      "name": "Syscall",
+      "route": "/syscall"
+    },
+    {
+      "name": "Softirq",
+      "route": "/softirq"
+    },
+    {
+      "name": "BlockIO",
+      "route": "/blockio"
+    },
+    {
+      "name": "Filesystem",
+      "route": "/filesystem"
+    },
+    {
+      "name": "ext4",
+      "route": "/ext4"
+    },
+    {
+      "name": "XFS",
+      "route": "/xfs"
+    },
+    {
+      "name": "cgroups",
+      "route": "/cgroups"
+    },
+    {
+      "name": "Rezolus",
+      "route": "/rezolus"
+    }
+  ]
+}

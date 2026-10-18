@@ -1,0 +1,609 @@
+{
+  "name": "ext4",
+  "route": "/ext4",
+  "groups": [
+    {
+      "when": {
+        "present": "ext4_journal_commits"
+      },
+      "then": [
+        {
+          "name": "Journal",
+          "id": "journal",
+          "subgroups": [
+            {
+              "name": "Commits",
+              "description": "jbd2 transaction commits across every ext4 filesystem on the host. A commit happens every commit interval (5 s by default) or sooner when something calls fsync, so the commit rate tracks fsync rate on a durability-bound workload.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Commits",
+                  "id": "commits",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_journal_commits[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Handles",
+                  "id": "commit-handles",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_journal_commit_handles[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Blocks Logged",
+                  "id": "commit-blocks-logged",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_journal_commit_blocks{kind=\"logged\"}[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Blocks Dirtied",
+                  "id": "commit-blocks-dirtied",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_journal_commit_blocks{kind=\"dirtied\"}[5m]))"
+                }
+              ]
+            },
+            {
+              "name": "Commit Phases",
+              "description": "Where each commit spent its time. Running is how long the transaction stayed open before the commit began; locked is waiting for outstanding handles to finish; flushing is submitting the data writes (ordered mode); logging is writing the metadata, waiting for the data writes, flushing the device cache and writing the commit record, and is where fsync waits on the device.",
+              "plots": [
+                {
+                  "repeat": {
+                    "var": "p",
+                    "in": {
+                      "values": [
+                        {
+                          "phase": "flushing",
+                          "title": "Flushing"
+                        },
+                        {
+                          "phase": "logging",
+                          "title": "Logging"
+                        },
+                        {
+                          "phase": "running",
+                          "title": "Running"
+                        },
+                        {
+                          "phase": "locked",
+                          "title": "Locked"
+                        }
+                      ]
+                    }
+                  },
+                  "body": [
+                    {
+                      "kind": "latency",
+                      "title": "${p.title}",
+                      "id": "commit-${p.phase}",
+                      "query": "ext4_journal_commit_latency{phase=\"${p.phase}\"}"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "Handle Start",
+              "description": "The time a thread took to start a journal handle before a metadata change: waiting for the committing transaction to leave the locked state, for journal space and for credits.",
+              "plots": [
+                {
+                  "kind": "latency",
+                  "title": "Handle Start",
+                  "id": "handle-start",
+                  "query": "ext4_journal_handle_start_latency"
+                }
+              ]
+            },
+            {
+              "name": "Checkpoint",
+              "description": "A checkpoint writes a committed transaction's buffers to their final location and frees its journal space. Forced-to-close rising means the journal is too small for the write rate: transactions are being closed early to make room.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Checkpoints",
+                  "id": "checkpoints",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_journal_checkpoints[5m]))"
+                },
+                {
+                  "kind": "latency",
+                  "title": "Checkpoint Latency",
+                  "id": "checkpoint-latency",
+                  "query": "ext4_journal_checkpoint_latency"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Forced to Close",
+                  "id": "checkpoint-forced-to-close",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_journal_checkpoint_forced_to_close[5m]))"
+                }
+              ]
+            },
+            {
+              "name": "Lock Buffer Stalls",
+              "description": "Time the journal spent waiting on a locked buffer. Rare on a healthy host; jbd2 reports these in whole milliseconds.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Stalls",
+                  "id": "lock-buffer-stalls",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_journal_lock_buffer_stalls[5m]))"
+                },
+                {
+                  "kind": "latency",
+                  "title": "Stall Latency",
+                  "id": "lock-buffer-stall-latency",
+                  "query": "ext4_journal_lock_buffer_stall_latency"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Sync",
+          "id": "sync",
+          "subgroups": [
+            {
+              "name": "fsync",
+              "description": "fsync and fdatasync calls that reached ext4, and the ones that failed. Latency is under Syscall, in the sync class.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Calls",
+                  "id": "sync-calls",
+                  "unit": "count",
+                  "query": "sum by (op) (irate(ext4_sync_file[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Errors",
+                  "id": "sync-errors",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_sync_file_errors[5m]))"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Errors",
+          "id": "errors",
+          "subgroups": [
+            {
+              "name": "Reported",
+              "description": "Errors ext4 reported, counted as they happen and before any errors=remount-ro takes effect, and forced shutdowns. Zero is the expected reading; the Filesystem section's read-only gauge shows the state a remount leaves behind.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Errors",
+                  "id": "errors",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_errors[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Shutdowns",
+                  "id": "shutdowns",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_shutdowns[5m]))"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "when": {
+        "present": "ext4_allocations"
+      },
+      "then": [
+        {
+          "name": "Allocator",
+          "id": "allocator",
+          "subgroups": [
+            {
+              "name": "Effort",
+              "description": "What it costs the block allocator to find space. Groups scanned per allocation rises and allocations finish at the slower criteria as free space fragments; on a healthy filesystem nearly everything finishes at criterion 0 or 1 after scanning one group. This is the always-on form of what e2freefrag reports offline.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Allocations",
+                  "id": "allocations",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_allocations[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Groups Scanned per Allocation",
+                  "id": "groups-per-allocation",
+                  "unit": "count",
+                  "query": "sum(irate(ext4_allocation_groups_scanned[5m])) / sum(irate(ext4_allocations[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "By Criterion",
+                  "id": "allocations-by-criterion",
+                  "unit": "count",
+                  "query": "sum by (criterion) (irate(ext4_allocations_by_criterion[5m]))"
+                }
+              ]
+            },
+            {
+              "name": "Extents",
+              "description": "Blocks asked for against blocks returned, and the size of each returned extent. Returned falling short of requested means a request had to be split across extents because no free run was long enough.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Blocks Requested vs Allocated",
+                  "id": "allocation-blocks",
+                  "unit": "count",
+                  "query": "sum by (kind) (irate(ext4_allocation_blocks[5m]))"
+                },
+                {
+                  "kind": "histogram",
+                  "title": "Extent Size",
+                  "id": "allocation-size",
+                  "unit": "count",
+                  "query": "ext4_allocation_size",
+                  "subtype": "percentiles",
+                  "log_scale": true
+                },
+                {
+                  "kind": "counter",
+                  "title": "Blocks Freed",
+                  "id": "freed-blocks",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_freed_blocks[5m]))"
+                }
+              ]
+            },
+            {
+              "name": "Discard and Preallocation",
+              "description": "Blocks handed back to the device by fstrim or online discard, and preallocated blocks released back to the pool when files are closed, truncated or unlinked.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Trimmed Blocks",
+                  "id": "trimmed-blocks",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_trimmed_blocks[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Preallocation Releases",
+                  "id": "prealloc-discards",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_preallocation_discards[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Preallocated Blocks Released",
+                  "id": "prealloc-blocks",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_preallocation_discarded_blocks[5m]))"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Inodes",
+          "id": "inodes",
+          "subgroups": [
+            {
+              "name": "Churn",
+              "description": "Files and directories created and removed. An eviction pass on a file-per-object store shows here as a burst of frees.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Allocated vs Freed",
+                  "id": "inodes",
+                  "unit": "count",
+                  "query": "sum by (op) (irate(ext4_inodes[5m]))"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Writeback",
+          "id": "writeback",
+          "subgroups": [
+            {
+              "name": "Passes",
+              "description": "Writeback passes ext4 ran over dirty inodes, the pages they wrote, and the pages they skipped and left dirty for a later pass. Skipped rising means writeback is not keeping up with the dirtying rate.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Passes",
+                  "id": "writepages",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_writepages[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Pages Written vs Skipped",
+                  "id": "writepages-pages",
+                  "unit": "count",
+                  "query": "sum by (outcome) (irate(ext4_writepages_pages[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Errors",
+                  "id": "writepages-errors",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_writepages_errors[5m]))"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Metadata Reads",
+          "id": "metadata",
+          "subgroups": [
+            {
+              "name": "From the Device",
+              "description": "Metadata blocks read from the device because they were not cached, each a synchronous read on the calling thread. Inode-table reads are the cost of stat and atime on a cold inode cache; bitmap reads are the allocator's own cold-metadata cost.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Inode-table Reads",
+                  "id": "inode-loads",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_inode_loads[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Bitmap Reads",
+                  "id": "bitmap-loads",
+                  "unit": "count",
+                  "query": "sum by (kind) (irate(ext4_bitmap_loads[5m]))"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "when": {
+        "present": "ext4_ops"
+      },
+      "then": [
+        {
+          "name": "Operations",
+          "id": "operations",
+          "subgroups": [
+            {
+              "name": "fsync",
+              "description": "fsync and fdatasync, from the ext4 entry point to its return: the device round trip a durable write waits for. Mean latency is time held over calls, per filesystem; the distribution is host-wide.",
+              "plots": [
+                {
+                  "kind": "latency",
+                  "title": "fsync Latency",
+                  "id": "op-fsync-latency",
+                  "query": "ext4_op_latency{op=\"fsync\"}"
+                },
+                {
+                  "kind": "counter",
+                  "title": "fsync Calls",
+                  "id": "op-fsync-calls",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_ops{op=\"fsync\"}[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "fsync Mean Latency",
+                  "id": "op-fsync-mean",
+                  "unit": "time",
+                  "query": "sum by (mount) (irate(ext4_op_time{op=\"fsync\"}[5m])) / sum by (mount) (irate(ext4_ops{op=\"fsync\"}[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "fsync Errors",
+                  "id": "op-fsync-errors",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_op_errors{op=\"fsync\"}[5m]))"
+                }
+              ]
+            },
+            {
+              "name": "Write",
+              "description": "write calls into ext4 (buffered or direct). A buffered write that returns quickly has only copied into the page cache; one that stalls is being throttled by dirty pages or waiting on a page lock.",
+              "plots": [
+                {
+                  "kind": "latency",
+                  "title": "Write Latency",
+                  "id": "op-write-latency",
+                  "query": "ext4_op_latency{op=\"write\"}"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Write Calls",
+                  "id": "op-write-calls",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_ops{op=\"write\"}[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Write Mean Latency",
+                  "id": "op-write-mean",
+                  "unit": "time",
+                  "query": "sum by (mount) (irate(ext4_op_time{op=\"write\"}[5m])) / sum by (mount) (irate(ext4_ops{op=\"write\"}[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Write Errors",
+                  "id": "op-write-errors",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_op_errors{op=\"write\"}[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Bytes Written",
+                  "id": "op-write-bytes",
+                  "unit": "datarate",
+                  "query": "sum by (mount) (irate(ext4_write_bytes[5m]))"
+                }
+              ]
+            },
+            {
+              "name": "Unlink",
+              "description": "unlink calls: an eviction pass on a file-per-object store shows here as a burst of calls whose latency tracks the journal.",
+              "plots": [
+                {
+                  "kind": "latency",
+                  "title": "Unlink Latency",
+                  "id": "op-unlink-latency",
+                  "query": "ext4_op_latency{op=\"unlink\"}"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Unlink Calls",
+                  "id": "op-unlink-calls",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_ops{op=\"unlink\"}[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Unlink Mean Latency",
+                  "id": "op-unlink-mean",
+                  "unit": "time",
+                  "query": "sum by (mount) (irate(ext4_op_time{op=\"unlink\"}[5m])) / sum by (mount) (irate(ext4_ops{op=\"unlink\"}[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Unlink Errors",
+                  "id": "op-unlink-errors",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_op_errors{op=\"unlink\"}[5m]))"
+                }
+              ]
+            },
+            {
+              "name": "Rename",
+              "description": "rename calls (ext4_rename2). A write path whose durability ends at a rename that is not itself fsynced pays for it here.",
+              "plots": [
+                {
+                  "kind": "latency",
+                  "title": "Rename Latency",
+                  "id": "op-rename-latency",
+                  "query": "ext4_op_latency{op=\"rename\"}"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Rename Calls",
+                  "id": "op-rename-calls",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_ops{op=\"rename\"}[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Rename Mean Latency",
+                  "id": "op-rename-mean",
+                  "unit": "time",
+                  "query": "sum by (mount) (irate(ext4_op_time{op=\"rename\"}[5m])) / sum by (mount) (irate(ext4_ops{op=\"rename\"}[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Rename Errors",
+                  "id": "op-rename-errors",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(ext4_op_errors{op=\"rename\"}[5m]))"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "when": {
+        "any": [
+          {
+            "present": "ext4_write_bytes"
+          },
+          {
+            "present": "ext4_writepages_pages"
+          }
+        ]
+      },
+      "then": [
+        {
+          "name": "Write Path",
+          "id": "write-path",
+          "subgroups": [
+            {
+              "name": "Amplification",
+              "description": "Bytes per second at each stage of the write path, on one axis: pages writeback sent to the device, blocks the journal logged, bytes the block layer wrote, and, when the ext4_ops sampler is on, the bytes applications wrote into ext4 (buffered and synchronous direct writes; queued async direct writes are not counted). Device bytes over application bytes is the write amplification; which of the middle terms moved says where it comes from. Pages and journal blocks are converted at 4 KiB, the default for both.",
+              "plots": [
+                {
+                  "when": {
+                    "present": "ext4_write_bytes"
+                  },
+                  "then": [
+                    {
+                      "kind": "counter",
+                      "title": "Application Bytes",
+                      "id": "path-application",
+                      "unit": "datarate",
+                      "query": "sum(irate(ext4_write_bytes[5m]))"
+                    }
+                  ]
+                },
+                {
+                  "when": {
+                    "present": "ext4_writepages_pages"
+                  },
+                  "then": [
+                    {
+                      "kind": "counter",
+                      "title": "Writeback Bytes",
+                      "id": "path-writeback",
+                      "unit": "datarate",
+                      "query": "sum(irate(ext4_writepages_pages{outcome=\"written\"}[5m])) * 4096"
+                    }
+                  ]
+                },
+                {
+                  "when": {
+                    "present": "ext4_journal_commit_blocks"
+                  },
+                  "then": [
+                    {
+                      "kind": "counter",
+                      "title": "Journal Bytes",
+                      "id": "path-journal",
+                      "unit": "datarate",
+                      "query": "sum(irate(ext4_journal_commit_blocks{kind=\"logged\"}[5m])) * 4096"
+                    }
+                  ]
+                },
+                {
+                  "when": {
+                    "present": "blockio_bytes"
+                  },
+                  "then": [
+                    {
+                      "kind": "counter",
+                      "title": "Device Bytes",
+                      "id": "path-device",
+                      "unit": "datarate",
+                      "query": "sum(irate(blockio_bytes{op=\"write\"}[5m]))"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

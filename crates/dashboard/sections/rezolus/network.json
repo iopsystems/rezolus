@@ -1,0 +1,664 @@
+{
+  "name": "Network",
+  "route": "/network",
+  "groups": [
+    {
+      "name": "Traffic",
+      "id": "traffic",
+      "subgroups": [
+        {
+          "when": {
+            "present": "network_host_bytes"
+          },
+          "then": [
+            {
+              "name": "Host Bandwidth",
+              "description": "Bits per second crossing the host boundary, counted once at the interface bound to a device driver — the wire on bare metal, the hypervisor boundary in a VM guest. Matches the NIC's own counters. Excludes intra-host traffic between virtual interfaces (container east-west, loopback).",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Host Bandwidth Transmit",
+                  "id": "host-bandwidth-tx",
+                  "unit": "bitrate",
+                  "query": "sum(irate(network_host_bytes{direction=\"transmit\"}[5m])) * 8",
+                  "unit_system": "bitrate"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Host Bandwidth Receive",
+                  "id": "host-bandwidth-rx",
+                  "unit": "bitrate",
+                  "query": "sum(irate(network_host_bytes{direction=\"receive\"}[5m])) * 8",
+                  "unit_system": "bitrate"
+                }
+              ]
+            },
+            {
+              "name": "Host Packets",
+              "description": "Packet rate crossing the host boundary, counted once per packet rather than once per interface it traverses.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Host Packets Transmit",
+                  "id": "host-packets-tx",
+                  "unit": "rate",
+                  "query": "sum(irate(network_host_packets{direction=\"transmit\"}[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Host Packets Receive",
+                  "id": "host-packets-rx",
+                  "unit": "rate",
+                  "query": "sum(irate(network_host_packets{direction=\"receive\"}[5m]))"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Interface Bandwidth",
+          "description": "Bits per second summed over every network interface the traffic traverses. A packet crossing a stacked interface (bond, VLAN, bridge, tunnel) is counted once per layer, so this reads higher than the host bandwidth above — roughly 2x on a bonded host, 3x for VLAN-over-bond. It also includes loopback and intra-host virtual traffic that never reaches a NIC, which on a container or VM host can dominate.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "Bandwidth Transmit",
+              "id": "bandwidth-tx",
+              "unit": "bitrate",
+              "query": "sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8",
+              "unit_system": "bitrate"
+            },
+            {
+              "kind": "counter",
+              "title": "Bandwidth Receive",
+              "id": "bandwidth-rx",
+              "unit": "bitrate",
+              "query": "sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8",
+              "unit_system": "bitrate"
+            }
+          ]
+        },
+        {
+          "name": "Interface Packets",
+          "description": "Packet rate summed over every network interface the traffic traverses — see the interface bandwidth note above.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "Packets Transmit",
+              "id": "packets-tx",
+              "unit": "rate",
+              "query": "sum(irate(network_packets{direction=\"transmit\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "Packets Receive",
+              "id": "packets-rx",
+              "unit": "rate",
+              "query": "sum(irate(network_packets{direction=\"receive\"}[5m]))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Errors",
+      "id": "errors",
+      "subgroups": [
+        {
+          "name": "Drops & Retransmits",
+          "description": "Packets dropped at the network layer and TCP-level retransmissions — key health signals.",
+          "plots": [
+            {
+              "kind": "counter",
+              "title": "Packet Drops",
+              "id": "packet-drops",
+              "unit": "rate",
+              "query": "sum(irate(network_drop[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "TCP Retransmits",
+              "id": "tcp-retransmits",
+              "unit": "rate",
+              "query": "sum(irate(tcp_retransmit[5m]))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "TCP",
+      "id": "tcp",
+      "subgroups": [
+        {
+          "name": "Packet Latency",
+          "description": "Time from packet received to being processed by the application.",
+          "plots": [
+            {
+              "rate_mean": {
+                "title": "TCP Packet",
+                "id": "tcp-packet-latency",
+                "selector": "tcp_packet_latency",
+                "mean_unit": "time"
+              }
+            },
+            {
+              "kind": "latency",
+              "title": "TCP Packet Latency",
+              "id": "tcp-packet-latency",
+              "query": "tcp_packet_latency",
+              "width": "full",
+              "axis_label": "Latency",
+              "unit_system": "time"
+            }
+          ]
+        },
+        {
+          "name": "Retransmission & Loss Recovery",
+          "description": "Retransmission timeouts stall a connection for at least the minimum RTO (200 ms by default); tail loss probes and fast recovery repair loss without waiting for one. D-SACKs received are retransmissions the peer did not need.",
+          "plots": [
+            {
+              "when": {
+                "present": "tcp_rto_expirations"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "RTO Expirations",
+                  "id": "tcp-rto-expirations",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_rto_expirations[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_segments_retransmitted"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Segments Retransmitted",
+                  "id": "tcp-segments-retransmitted",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_segments_retransmitted[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_loss_retransmits"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Lost Segments Retransmitted",
+                  "id": "tcp-loss-retransmits",
+                  "unit": "rate",
+                  "query": "sum by (kind) (irate(tcp_loss_retransmits[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_loss_probes"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Tail Loss Probes",
+                  "id": "tcp-loss-probes",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_loss_probes[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_loss_probe_recoveries"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Loss Probe Recoveries",
+                  "id": "tcp-loss-probe-recoveries",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_loss_probe_recoveries[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_fast_recoveries"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Fast Recoveries",
+                  "id": "tcp-fast-recoveries",
+                  "unit": "rate",
+                  "query": "sum by (kind) (irate(tcp_fast_recoveries[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_spurious_rtos"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Spurious RTOs",
+                  "id": "tcp-spurious-rtos",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_spurious_rtos[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_retransmits_lost"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Retransmits Lost Again",
+                  "id": "tcp-retransmits-lost",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_retransmits_lost[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_dsacks_received"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "D-SACKs Received",
+                  "id": "tcp-dsacks-received",
+                  "unit": "rate",
+                  "query": "sum by (kind) (irate(tcp_dsacks_received[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_dsacks_sent"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "D-SACKs Sent",
+                  "id": "tcp-dsacks-sent",
+                  "unit": "rate",
+                  "query": "sum by (kind) (irate(tcp_dsacks_sent[5m]))"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Delayed ACKs & Autocorking",
+          "description": "A delayed-ACK firing means this host held an ACK for the delayed-ACK timeout (40 ms minimum) because nothing outgoing carried it; a peer sending with Nagle, or limited by its congestion or receive window, may be waiting for it. Duplicate data segments are usually the peer retransmitting data already received; on each one the kernel sends its next ACKs immediately, up to 16. Autocorking holds back small sends while earlier data is still queued in the qdisc or device.",
+          "plots": [
+            {
+              "when": {
+                "present": "tcp_delayed_acks"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Delayed ACKs",
+                  "id": "tcp-delayed-acks",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_delayed_acks[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_delayed_ack_deferrals"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Delayed ACKs Deferred",
+                  "id": "tcp-delayed-ack-deferrals",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_delayed_ack_deferrals[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_duplicate_data_segments"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Duplicate Data Segments",
+                  "id": "tcp-duplicate-data-segments",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_duplicate_data_segments[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_autocorks"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Autocorks",
+                  "id": "tcp-autocorks",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_autocorks[5m]))"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Receive Window",
+          "description": "A receiver advertises a zero window when the application is not reading fast enough to keep its receive buffer from filling; the sender then stops until the window reopens.",
+          "plots": [
+            {
+              "when": {
+                "present": "tcp_zero_window_transitions"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Zero Window Transitions",
+                  "id": "tcp-zero-window-transitions",
+                  "unit": "rate",
+                  "query": "sum by (kind) (irate(tcp_zero_window_transitions[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_zero_window_withheld"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Zero Window Withheld",
+                  "id": "tcp-zero-window-withheld",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_zero_window_withheld[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_zero_window_drops"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Zero Window Drops",
+                  "id": "tcp-zero-window-drops",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_zero_window_drops[5m]))"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Receive Memory",
+          "description": "Receive-side memory work and drops. Pruning and collapsing run when a socket cannot be charged memory for an incoming segment. A prune failure is usually followed by a receive-buffer drop, which discards a segment the peer has to retransmit, so the two overlap; a prune failure on an empty receive queue queues the segment anyway.",
+          "plots": [
+            {
+              "when": {
+                "present": "tcp_prune_attempts"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Prune Attempts",
+                  "id": "tcp-prune-attempts",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_prune_attempts[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_prune_failures"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Prune Failures",
+                  "id": "tcp-prune-failures",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_prune_failures[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_out_of_order_prunes"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Out-of-Order Prunes",
+                  "id": "tcp-out-of-order-prunes",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_out_of_order_prunes[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_collapsed_buffers"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Collapsed Buffers",
+                  "id": "tcp-collapsed-buffers",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_collapsed_buffers[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_rcvbuf_drops"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Receive Buffer Drops",
+                  "id": "tcp-rcvbuf-drops",
+                  "unit": "rate",
+                  "query": "sum by (kind) (irate(tcp_rcvbuf_drops[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_backlog_drops"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Backlog Drops",
+                  "id": "tcp-backlog-drops",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_backlog_drops[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_out_of_order_queued"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Out-of-Order Queued",
+                  "id": "tcp-out-of-order-queued",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_out_of_order_queued[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_memory_pressure_entries"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Memory Pressure Entries",
+                  "id": "tcp-memory-pressure-entries",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_memory_pressure_entries[5m]))"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Connections",
+          "description": "Connection state changes, failures and errors in the agent's network namespace.",
+          "plots": [
+            {
+              "when": {
+                "present": "tcp_established_connections"
+              },
+              "then": [
+                {
+                  "kind": "gauge",
+                  "title": "Established Connections",
+                  "id": "tcp-established-connections",
+                  "unit": "count",
+                  "query": "sum(tcp_established_connections)"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_open_failures"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Open Failures",
+                  "id": "tcp-open-failures",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_open_failures[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_established_resets"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Established Resets",
+                  "id": "tcp-established-resets",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_established_resets[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_resets_sent"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Resets Sent",
+                  "id": "tcp-resets-sent",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_resets_sent[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_aborts"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Aborts",
+                  "id": "tcp-aborts",
+                  "unit": "rate",
+                  "query": "sum by (reason) (irate(tcp_aborts[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_listen_overflows"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Listen Overflows",
+                  "id": "tcp-listen-overflows",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_listen_overflows[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_listen_drops"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Listen Drops",
+                  "id": "tcp-listen-drops",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_listen_drops[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_input_errors"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Input Errors",
+                  "id": "tcp-input-errors",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_input_errors[5m]))"
+                }
+              ]
+            },
+            {
+              "when": {
+                "present": "tcp_checksum_errors"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Checksum Errors",
+                  "id": "tcp-checksum-errors",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_checksum_errors[5m]))"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

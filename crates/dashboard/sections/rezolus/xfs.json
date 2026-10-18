@@ -1,0 +1,344 @@
+{
+  "name": "XFS",
+  "route": "/xfs",
+  "groups": [
+    {
+      "when": {
+        "present": "xfs_log_waits"
+      },
+      "then": [
+        {
+          "name": "Blocked Time",
+          "id": "blocked-time",
+          "subgroups": [
+            {
+              "name": "Log Space",
+              "description": "A transaction that found the log full sleeps until the AIL pusher frees space. Any waits at all mean the log is too small or its device too slow for the metadata write rate; the wait count equals xfs_log_space_sleeps, and the time is what that count cannot say.",
+              "plots": [
+                {
+                  "kind": "latency",
+                  "title": "Log Space Wait Latency",
+                  "id": "blocked-space-latency",
+                  "query": "xfs_log_wait_latency{wait=\"space\"}"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Log Space Waits",
+                  "id": "blocked-space-waits",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(xfs_log_waits{wait=\"space\"}[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Mean Log Space Wait",
+                  "id": "blocked-space-mean",
+                  "unit": "time",
+                  "query": "sum by (mount) (irate(xfs_log_wait_time{wait=\"space\"}[5m])) / sum by (mount) (irate(xfs_log_waits{wait=\"space\"}[5m]))"
+                }
+              ]
+            },
+            {
+              "name": "Log Force",
+              "description": "A log force writes the committed log out and waits for it: the device round trip every fsync pays. Mean force latency per mount against the block device's write latency says whether the fsync is waiting on the device or on other commits.",
+              "plots": [
+                {
+                  "kind": "latency",
+                  "title": "Log Force Latency",
+                  "id": "blocked-force-latency",
+                  "query": "xfs_log_wait_latency{wait=\"force\"}"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Log Forces",
+                  "id": "blocked-forces",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(xfs_log_waits{wait=\"force\"}[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Mean Log Force Latency",
+                  "id": "blocked-force-mean",
+                  "unit": "time",
+                  "query": "sum by (mount) (irate(xfs_log_wait_time{wait=\"force\"}[5m])) / sum by (mount) (irate(xfs_log_waits{wait=\"force\"}[5m]))"
+                }
+              ]
+            },
+            {
+              "name": "CIL",
+              "description": "Committing transactions that found the committed item list over its hard limit and waited for a push to the log. A count only: the log's checkpoint writer is behind the commit rate.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "CIL Waits",
+                  "id": "blocked-cil-waits",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(xfs_log_waits{wait=\"cil\"}[5m]))"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "when": {
+        "present": "xfs_log_forces"
+      },
+      "then": [
+        {
+          "name": "Log",
+          "id": "log",
+          "subgroups": [
+            {
+              "name": "Forces",
+              "description": "Log forces are the synchronous flush an fsync or a synchronous transaction demands; a force sleep is a force that waited for a log write to complete. A synchronous force sleeps once for its own write, so sleeps per force above one is fsyncs waiting on each other's log writes as well.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Forces",
+                  "id": "log-forces",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(xfs_log_forces[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Force Sleeps",
+                  "id": "log-force-sleeps",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(xfs_log_force_sleeps[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Log Writes",
+                  "id": "log-writes",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(xfs_log_writes[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Log Bytes",
+                  "id": "log-bytes",
+                  "unit": "datarate",
+                  "query": "sum by (mount) (irate(xfs_log_blocks_written[5m])) * 512"
+                }
+              ]
+            },
+            {
+              "name": "Log Space",
+              "description": "Every transaction reserves log space; one that sleeps here is waiting for the AIL pusher to write logged metadata to its final place so the log tail can move. Any sleeps at all mean the log is too small or its device too slow for the write rate. Buffer stalls are log writes that found every in-core log buffer in flight.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Space Requests",
+                  "id": "log-space-requests",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(xfs_log_space_requests[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Space Sleeps",
+                  "id": "log-space-sleeps",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(xfs_log_space_sleeps[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Buffer Stalls",
+                  "id": "log-iclog-stalls",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(xfs_log_iclog_stalls[5m]))"
+                }
+              ]
+            },
+            {
+              "name": "AIL Pusher",
+              "description": "The xfsaild thread pushes logged metadata out so the log can reclaim space. Items it finds pinned need a log force first; locked ones are retried; a flush is the pusher forcing the log itself because everything was pinned.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Pushes",
+                  "id": "ail-pushes",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(xfs_ail_pushes[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Items by Outcome",
+                  "id": "ail-items",
+                  "unit": "count",
+                  "query": "sum by (outcome) (irate(xfs_ail_push_items[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Restarts",
+                  "id": "ail-restarts",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(xfs_ail_push_restarts[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Flushes",
+                  "id": "ail-flushes",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(xfs_ail_flushes[5m]))"
+                }
+              ]
+            },
+            {
+              "name": "Transactions",
+              "description": "Transactions committed, by whether the caller waited for the log.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "By Kind",
+                  "id": "transactions",
+                  "unit": "count",
+                  "query": "sum by (kind) (irate(xfs_transactions[5m]))"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Inode Cache",
+          "id": "inode-cache",
+          "subgroups": [
+            {
+              "name": "Lookups",
+              "description": "Inode-cache lookups by outcome. A miss reads the inode from disk on the calling thread; on a file-per-object store with more inodes than cache, the miss rate is the cold metadata cost of every stat and atime update.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "By Outcome",
+                  "id": "inode-lookups",
+                  "unit": "count",
+                  "query": "sum by (outcome) (irate(xfs_inode_cache_lookups[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Misses",
+                  "id": "inode-misses",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(xfs_inode_cache_lookups{outcome=\"missed\"}[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Reclaims",
+                  "id": "inode-reclaims",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(xfs_inode_reclaims[5m]))"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Allocator",
+          "id": "allocator",
+          "subgroups": [
+            {
+              "name": "Extents",
+              "description": "Extents and blocks allocated and freed. Blocks per extent falling is free space fragmenting: files are being split across more, smaller extents.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Extents",
+                  "id": "extents",
+                  "unit": "count",
+                  "query": "sum by (op) (irate(xfs_extents[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Blocks",
+                  "id": "extent-blocks",
+                  "unit": "count",
+                  "query": "sum by (op) (irate(xfs_extent_blocks[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Blocks per Extent Allocated",
+                  "id": "blocks-per-extent",
+                  "unit": "count",
+                  "query": "sum(irate(xfs_extent_blocks{op=\"allocated\"}[5m])) / sum(irate(xfs_extents{op=\"allocated\"}[5m]))"
+                }
+              ]
+            },
+            {
+              "name": "Directories",
+              "description": "Directory operations at the XFS layer.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "By Operation",
+                  "id": "directory-ops",
+                  "unit": "count",
+                  "query": "sum by (op) (irate(xfs_directory_ops[5m]))"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "I/O",
+          "id": "io",
+          "subgroups": [
+            {
+              "name": "File I/O",
+              "description": "Read and write calls into XFS and the bytes they moved. Bytes written against log bytes and the device's write bytes is the write-amplification chain.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Calls",
+                  "id": "file-calls",
+                  "unit": "count",
+                  "query": "sum by (op) (irate(xfs_file_calls[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Bytes",
+                  "id": "file-bytes",
+                  "unit": "datarate",
+                  "query": "sum by (op) (irate(xfs_file_bytes[5m]))"
+                }
+              ]
+            },
+            {
+              "name": "Metadata Buffers",
+              "description": "The metadata buffer cache: lookups, misses and the reads a miss caused, and lookups that waited for or found a busy lock.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "Lookups",
+                  "id": "buffer-lookups",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(xfs_buffer_lookups[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Misses",
+                  "id": "buffer-misses",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(xfs_buffer_misses[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Reads",
+                  "id": "buffer-reads",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(xfs_buffer_reads[5m]))"
+                },
+                {
+                  "kind": "counter",
+                  "title": "Lock Waits",
+                  "id": "buffer-lock-waits",
+                  "unit": "count",
+                  "query": "sum by (mount) (irate(xfs_buffer_lock_waits[5m]))"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

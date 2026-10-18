@@ -1,0 +1,736 @@
+{
+  "interval": 1.0,
+  "source": "rezolus",
+  "version": "6.0.0",
+  "filename": "",
+  "start_time": 1700000000000.0,
+  "end_time": 1700000060000.0,
+  "groups": [
+    {
+      "name": "Blocked Time",
+      "id": "blocked-time",
+      "subgroups": [
+        {
+          "name": "Log Space",
+          "description": "A transaction that found the log full sleeps until the AIL pusher frees space. Any waits at all mean the log is too small or its device too slow for the metadata write rate; the wait count equals xfs_log_space_sleeps, and the time is what that count cannot say.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Log Space Wait Latency",
+                "id": "blocked-space-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "xfs_log_wait_latency{wait=\"space\"}"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Log Space Waits",
+                "id": "blocked-space-waits",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_log_waits{wait=\"space\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Mean Log Space Wait",
+                "id": "blocked-space-mean",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_log_wait_time{wait=\"space\"}[5m])) / sum by (mount) (irate(xfs_log_waits{wait=\"space\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Log Force",
+          "description": "A log force writes the committed log out and waits for it: the device round trip every fsync pays. Mean force latency per mount against the block device's write latency says whether the fsync is waiting on the device or on other commits.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Log Force Latency",
+                "id": "blocked-force-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "xfs_log_wait_latency{wait=\"force\"}"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Log Forces",
+                "id": "blocked-forces",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_log_waits{wait=\"force\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Mean Log Force Latency",
+                "id": "blocked-force-mean",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_log_wait_time{wait=\"force\"}[5m])) / sum by (mount) (irate(xfs_log_waits{wait=\"force\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "CIL",
+          "description": "Committing transactions that found the committed item list over its hard limit and waited for a push to the log. A count only: the log's checkpoint writer is behind the commit rate.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "CIL Waits",
+                "id": "blocked-cil-waits",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_log_waits{wait=\"cil\"}[5m]))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Log",
+      "id": "log",
+      "subgroups": [
+        {
+          "name": "Forces",
+          "description": "Log forces are the synchronous flush an fsync or a synchronous transaction demands; a force sleep is a force that waited for a log write to complete. A synchronous force sleeps once for its own write, so sleeps per force above one is fsyncs waiting on each other's log writes as well.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Forces",
+                "id": "log-forces",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_log_forces[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Force Sleeps",
+                "id": "log-force-sleeps",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_log_force_sleeps[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Log Writes",
+                "id": "log-writes",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_log_writes[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Log Bytes",
+                "id": "log-bytes",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "datarate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_log_blocks_written[5m])) * 512"
+            }
+          ]
+        },
+        {
+          "name": "Log Space",
+          "description": "Every transaction reserves log space; one that sleeps here is waiting for the AIL pusher to write logged metadata to its final place so the log tail can move. Any sleeps at all mean the log is too small or its device too slow for the write rate. Buffer stalls are log writes that found every in-core log buffer in flight.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Space Requests",
+                "id": "log-space-requests",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_log_space_requests[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Space Sleeps",
+                "id": "log-space-sleeps",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_log_space_sleeps[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Buffer Stalls",
+                "id": "log-iclog-stalls",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_log_iclog_stalls[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "AIL Pusher",
+          "description": "The xfsaild thread pushes logged metadata out so the log can reclaim space. Items it finds pinned need a log force first; locked ones are retried; a flush is the pusher forcing the log itself because everything was pinned.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Pushes",
+                "id": "ail-pushes",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_ail_pushes[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Items by Outcome",
+                "id": "ail-items",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (outcome) (irate(xfs_ail_push_items[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Restarts",
+                "id": "ail-restarts",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_ail_push_restarts[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Flushes",
+                "id": "ail-flushes",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_ail_flushes[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Transactions",
+          "description": "Transactions committed, by whether the caller waited for the log.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "By Kind",
+                "id": "transactions",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (kind) (irate(xfs_transactions[5m]))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Inode Cache",
+      "id": "inode-cache",
+      "subgroups": [
+        {
+          "name": "Lookups",
+          "description": "Inode-cache lookups by outcome. A miss reads the inode from disk on the calling thread; on a file-per-object store with more inodes than cache, the miss rate is the cold metadata cost of every stat and atime update.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "By Outcome",
+                "id": "inode-lookups",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (outcome) (irate(xfs_inode_cache_lookups[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Misses",
+                "id": "inode-misses",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_inode_cache_lookups{outcome=\"missed\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Reclaims",
+                "id": "inode-reclaims",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_inode_reclaims[5m]))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Allocator",
+      "id": "allocator",
+      "subgroups": [
+        {
+          "name": "Extents",
+          "description": "Extents and blocks allocated and freed. Blocks per extent falling is free space fragmenting: files are being split across more, smaller extents.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Extents",
+                "id": "extents",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (op) (irate(xfs_extents[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Blocks",
+                "id": "extent-blocks",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (op) (irate(xfs_extent_blocks[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Blocks per Extent Allocated",
+                "id": "blocks-per-extent",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(xfs_extent_blocks{op=\"allocated\"}[5m])) / sum(irate(xfs_extents{op=\"allocated\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Directories",
+          "description": "Directory operations at the XFS layer.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "By Operation",
+                "id": "directory-ops",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (op) (irate(xfs_directory_ops[5m]))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "I/O",
+      "id": "io",
+      "subgroups": [
+        {
+          "name": "File I/O",
+          "description": "Read and write calls into XFS and the bytes they moved. Bytes written against log bytes and the device's write bytes is the write-amplification chain.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Calls",
+                "id": "file-calls",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (op) (irate(xfs_file_calls[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Bytes",
+                "id": "file-bytes",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "datarate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (op) (irate(xfs_file_bytes[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Metadata Buffers",
+          "description": "The metadata buffer cache: lookups, misses and the reads a miss caused, and lookups that waited for or found a busy lock.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Lookups",
+                "id": "buffer-lookups",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_buffer_lookups[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Misses",
+                "id": "buffer-misses",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_buffer_misses[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Reads",
+                "id": "buffer-reads",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_buffer_reads[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Lock Waits",
+                "id": "buffer-lock-waits",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (irate(xfs_buffer_lock_waits[5m]))"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "name": "Overview",
+      "route": "/overview"
+    },
+    {
+      "name": "Exceptions",
+      "route": "/exceptions"
+    },
+    {
+      "name": "Query Explorer",
+      "route": "/query"
+    },
+    {
+      "name": "CPU",
+      "route": "/cpu"
+    },
+    {
+      "name": "GPU",
+      "route": "/gpu"
+    },
+    {
+      "name": "Hardware Sensors",
+      "route": "/hw_sensors"
+    },
+    {
+      "name": "Memory",
+      "route": "/memory"
+    },
+    {
+      "name": "Network",
+      "route": "/network"
+    },
+    {
+      "name": "Scheduler",
+      "route": "/scheduler"
+    },
+    {
+      "name": "Syscall",
+      "route": "/syscall"
+    },
+    {
+      "name": "Softirq",
+      "route": "/softirq"
+    },
+    {
+      "name": "BlockIO",
+      "route": "/blockio"
+    },
+    {
+      "name": "Filesystem",
+      "route": "/filesystem"
+    },
+    {
+      "name": "ext4",
+      "route": "/ext4"
+    },
+    {
+      "name": "XFS",
+      "route": "/xfs"
+    },
+    {
+      "name": "cgroups",
+      "route": "/cgroups"
+    },
+    {
+      "name": "Rezolus",
+      "route": "/rezolus"
+    }
+  ]
+}

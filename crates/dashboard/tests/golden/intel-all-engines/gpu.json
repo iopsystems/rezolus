@@ -1,0 +1,1240 @@
+{
+  "interval": 1.0,
+  "source": "rezolus",
+  "version": "6.0.0",
+  "filename": "",
+  "start_time": 1700000000000.0,
+  "end_time": 1700000060000.0,
+  "groups": [
+    {
+      "name": "Utilization",
+      "id": "utilization",
+      "subgroups": [
+        {
+          "name": "GPU Utilization",
+          "description": "Fraction of time the GPU has work scheduled, averaged and per-device.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "GPU %",
+                "id": "gpu-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "avg(gpu_utilization) / 100",
+              "width": "full"
+            }
+          ]
+        },
+        {
+          "name": "Memory Controller",
+          "description": "Fraction of time the memory controller is servicing requests.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Memory Controller %",
+                "id": "mem-ctrl-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "avg(gpu_memory_utilization) / 100",
+              "width": "full"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Parallel Compute Activity",
+      "id": "activity",
+      "subgroups": [
+        {
+          "name": "Tensor Activity",
+          "description": "Tensor core utilization — how busy the matrix-math units are.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "GPU Tensor Activity %",
+                "id": "gpu-tensor-act",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "avg(gpu_tensor_utilization{vendor=\"nvidia\"}) / 100",
+              "width": "full"
+            }
+          ]
+        },
+        {
+          "name": "SM Activity & Occupancy",
+          "description": "Streaming multiprocessor active time and warp occupancy — core indicators of compute efficiency.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "GPU SM Activity %",
+                "id": "gpu-sm-act",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "avg(gpu_sm_utilization{vendor=\"nvidia\"}) / 100",
+              "width": "full"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "GPU SM Occupancy %",
+                "id": "gpu-sm-ocp",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "avg(gpu_sm_occupancy{vendor=\"nvidia\"}) / 100",
+              "width": "full"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Memory",
+      "id": "memory",
+      "subgroups": [
+        {
+          "name": "Capacity",
+          "description": "Total GPU memory used and free across all devices, plus overall utilization.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Used",
+                "id": "mem-used",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(gpu_memory{state=\"used\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Free",
+                "id": "mem-free",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(gpu_memory{state=\"free\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Memory Utilization %",
+                "id": "mem-util-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(gpu_memory{state=\"used\"}) / (sum(gpu_memory{state=\"used\"}) + sum(gpu_memory{state=\"free\"}))",
+              "width": "full"
+            }
+          ]
+        },
+        {
+          "name": "DRAM Bandwidth",
+          "description": "Fraction of peak memory bandwidth in use.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "DRAM Bandwidth Utilization %",
+                "id": "gpu-dram-act",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "avg(gpu_dram_bandwidth_utilization{vendor=\"nvidia\"}) / 100",
+              "width": "full"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PCIe",
+      "id": "pcie",
+      "subgroups": [
+        {
+          "name": "Receive",
+          "description": "Host-to-GPU traffic over PCIe.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Total Receive Rate",
+                "id": "pcie-rx-per-gpu",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "datarate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(gpu_pcie_throughput{direction=\"receive\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Receive Bandwidth Utilization %",
+                "id": "pcie-rx-util",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "gpu_pcie_throughput{direction=\"receive\"} / ignoring(direction) gpu_pcie_bandwidth{vendor=\"nvidia\"}"
+            }
+          ]
+        },
+        {
+          "name": "Transmit",
+          "description": "GPU-to-host traffic over PCIe.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Total Transmit Rate",
+                "id": "pcie-tx-per-gpu",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "datarate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(gpu_pcie_throughput{direction=\"transmit\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Transmit Bandwidth Utilization %",
+                "id": "pcie-tx-util",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "gpu_pcie_throughput{direction=\"transmit\"} / ignoring(direction) gpu_pcie_bandwidth{vendor=\"nvidia\"}"
+            }
+          ]
+        },
+        {
+          "name": "Link Capacity",
+          "description": "Aggregate theoretical PCIe bandwidth available to all GPUs.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Bandwidth",
+                "id": "pcie-bandwidth",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "datarate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(gpu_pcie_bandwidth{vendor=\"nvidia\"})",
+              "width": "full"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Power",
+      "id": "power",
+      "subgroups": [
+        {
+          "name": "Power Draw",
+          "description": "Instantaneous power consumption, total and per-GPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Power (W)",
+                "id": "power-watts",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Watts",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(gpu_power_usage) / 1000",
+              "width": "full"
+            }
+          ]
+        },
+        {
+          "name": "Energy",
+          "description": "Energy consumption rate derived from the accumulating GPU energy counter.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Energy Rate (W)",
+                "id": "energy-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Watts",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpu_energy_consumption[5m])) / 1000",
+              "width": "full"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Temperature",
+      "id": "temperature",
+      "subgroups": [
+        {
+          "name": "Temperatures",
+          "description": "Per-device temperatures and the hottest GPU across the system.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Max (°C)",
+                "id": "temp-max",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "°C",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "max(gpu_temperature)",
+              "width": "full"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Clocks",
+      "id": "clocks",
+      "subgroups": [
+        {
+          "name": "Clock Frequencies",
+          "description": "Per-device clock speeds for graphics, memory, compute, and video engines.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Graphics",
+                "id": "clock-graphics",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "frequency",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id, vendor) (gpu_clock{clock=\"graphics\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Memory",
+                "id": "clock-memory",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "frequency",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id, vendor) (gpu_clock{clock=\"memory\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Compute",
+                "id": "clock-compute",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "frequency",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id, vendor) (gpu_clock{clock=\"compute\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Video",
+                "id": "clock-video",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "frequency",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id, vendor) (gpu_clock{clock=\"video\"})"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "AMD GPU Performance Counters",
+      "id": "amd-pmu",
+      "subgroups": [
+        {
+          "name": "Compute Activity",
+          "description": "GPU busy fraction and vector-ALU throughput, derived from GRBM and SQ hardware counters.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Active Workgroup Processors",
+                "id": "amd-active-wgp",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "WGPs",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpmu_busy_cycles[5m])) / sum(irate(gpmu_clock[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "VALU Instructions/s",
+                "id": "amd-valu-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "instr/s",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpmu_valu_instructions[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "SALU Instructions/s",
+                "id": "amd-salu-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "instr/s",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpmu_salu_instructions[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "LDS Instructions/s",
+                "id": "amd-lds-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "instr/s",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpmu_lds_instructions[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Estimated Total Instructions (VALU + LDS + SALU)",
+                "id": "amd-total-insts",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "instr/s",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpmu_valu_instructions[5m])) + sum(irate(gpmu_salu_instructions[5m])) + sum(irate(gpmu_lds_instructions[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Total Busy Cycles/s",
+                "id": "amd-total-busy-cycles",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "cycles/s",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpmu_busy_cycles[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Estimated IPC (Estimated Total Instructions / Total Busy Cycles)",
+                "id": "amd-est-ipc",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "instr/cycle",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "(sum(irate(gpmu_valu_instructions[5m])) + sum(irate(gpmu_salu_instructions[5m])) + sum(irate(gpmu_lds_instructions[5m]))) / sum(irate(gpmu_busy_cycles[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Waves/s",
+                "id": "amd-waves-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "waves/s",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpmu_waves[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Estimated Instructions Per Wave (Estimated Total Instructions / Waves)",
+                "id": "amd-insts-per-wave",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "instr/wave",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "(sum(irate(gpmu_valu_instructions[5m])) + sum(irate(gpmu_salu_instructions[5m])) + sum(irate(gpmu_lds_instructions[5m]))) / sum(irate(gpmu_waves[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Cycles Per Wave",
+                "id": "amd-cycles-per-wave",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "cycles/wave",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpmu_busy_cycles[5m])) / sum(irate(gpmu_waves[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Average Waves Per Workgroup Processors",
+                "id": "amd-waves-per-wgp",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "waves/active cycle",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpmu_wave_cycles[5m])) / sum(irate(gpmu_busy_cycles[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Average Waves Per GPU",
+                "id": "amd-waves-per-gpu",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "waves/active cycle",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpmu_wave_cycles[5m])) / sum(irate(gpmu_active_clock[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Caches",
+          "description": "Instruction-cache and L2 cache hit rates, derived from SQC and GL2C hardware counters.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Instruction Cache Hit %",
+                "id": "amd-icache-hit",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpmu_icache_hits[5m])) / sum(irate(gpmu_icache_requests[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "L2 Cache Hit %",
+                "id": "amd-l2-hit",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpmu_l2_hits[5m])) / (sum(irate(gpmu_l2_hits[5m])) + sum(irate(gpmu_l2_misses[5m])))"
+            }
+          ]
+        },
+        {
+          "name": "Memory Bandwidth",
+          "description": "L2<->VRAM bandwidth, derived from GL2C read/write request counters (reads weighted 128B, writes 64B).",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Estimated Read Bandwidth (VRAM Read Requests x 128B)",
+                "id": "amd-mem-read-bw",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "datarate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpmu_vram_read_requests[5m])) * 128"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Estimated Write Bandwidth (VRAM Write Requests x 64B)",
+                "id": "amd-mem-write-bw",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "datarate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpmu_vram_write_requests[5m])) * 64"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "VRAM Read Requests",
+                "id": "amd-vram-read-req",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "requests/s",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpmu_vram_read_requests[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "VRAM Write Requests",
+                "id": "amd-vram-write-req",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "requests/s",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpmu_vram_write_requests[5m]))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Intel GPU Performance Counters",
+      "id": "intel-pmu",
+      "subgroups": [
+        {
+          "name": "Compute",
+          "description": "Fraction of wall time the compute engine(s) spent executing work, from the i915/xe PMU. This is occupancy, not efficiency: an engine at 100% had work queued, which does not mean the execution units were saturated — read it alongside the frequency charts. Summing several engines of one class can exceed 100%, since they run concurrently.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Compute Busy %",
+                "id": "intel-compute-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpu_engine_busy_time{engine_class=\"compute\", vendor=\"intel\"}[5m])) / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Compute Busy % (Per-GPU)",
+                "id": "intel-compute-pct-per-gpu",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null,
+                  "row_label": "GPU"
+                },
+                "style": "heatmap"
+              },
+              "promql_query": "sum by (id, vendor) (irate(gpu_engine_busy_time{engine_class=\"compute\", vendor=\"intel\"}[5m])) / 1000000000"
+            }
+          ]
+        },
+        {
+          "name": "Render",
+          "description": "Fraction of wall time the render engine(s) spent executing work, from the i915/xe PMU. This is occupancy, not efficiency: an engine at 100% had work queued, which does not mean the execution units were saturated — read it alongside the frequency charts. Summing several engines of one class can exceed 100%, since they run concurrently.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Render Busy %",
+                "id": "intel-render-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpu_engine_busy_time{engine_class=\"render\", vendor=\"intel\"}[5m])) / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Render Busy % (Per-GPU)",
+                "id": "intel-render-pct-per-gpu",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null,
+                  "row_label": "GPU"
+                },
+                "style": "heatmap"
+              },
+              "promql_query": "sum by (id, vendor) (irate(gpu_engine_busy_time{engine_class=\"render\", vendor=\"intel\"}[5m])) / 1000000000"
+            }
+          ]
+        },
+        {
+          "name": "Copy",
+          "description": "Fraction of wall time the copy engine(s) spent executing work, from the i915/xe PMU. This is occupancy, not efficiency: an engine at 100% had work queued, which does not mean the execution units were saturated — read it alongside the frequency charts. Summing several engines of one class can exceed 100%, since they run concurrently.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Copy Busy %",
+                "id": "intel-copy-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpu_engine_busy_time{engine_class=\"copy\", vendor=\"intel\"}[5m])) / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Copy Busy % (Per-GPU)",
+                "id": "intel-copy-pct-per-gpu",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null,
+                  "row_label": "GPU"
+                },
+                "style": "heatmap"
+              },
+              "promql_query": "sum by (id, vendor) (irate(gpu_engine_busy_time{engine_class=\"copy\", vendor=\"intel\"}[5m])) / 1000000000"
+            }
+          ]
+        },
+        {
+          "name": "Video",
+          "description": "Fraction of wall time the video engine(s) spent executing work, from the i915/xe PMU. This is occupancy, not efficiency: an engine at 100% had work queued, which does not mean the execution units were saturated — read it alongside the frequency charts. Summing several engines of one class can exceed 100%, since they run concurrently.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Video Busy %",
+                "id": "intel-video-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpu_engine_busy_time{engine_class=\"video\", vendor=\"intel\"}[5m])) / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Video Busy % (Per-GPU)",
+                "id": "intel-video-pct-per-gpu",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null,
+                  "row_label": "GPU"
+                },
+                "style": "heatmap"
+              },
+              "promql_query": "sum by (id, vendor) (irate(gpu_engine_busy_time{engine_class=\"video\", vendor=\"intel\"}[5m])) / 1000000000"
+            }
+          ]
+        },
+        {
+          "name": "Video Enhance",
+          "description": "Fraction of wall time the video-enhance engine(s) spent executing work, from the i915/xe PMU. This is occupancy, not efficiency: an engine at 100% had work queued, which does not mean the execution units were saturated — read it alongside the frequency charts. Summing several engines of one class can exceed 100%, since they run concurrently.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Video Enhance Busy %",
+                "id": "intel-video-enhance-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpu_engine_busy_time{engine_class=\"video-enhance\", vendor=\"intel\"}[5m])) / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Video Enhance Busy % (Per-GPU)",
+                "id": "intel-video-enhance-pct-per-gpu",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null,
+                  "row_label": "GPU"
+                },
+                "style": "heatmap"
+              },
+              "promql_query": "sum by (id, vendor) (irate(gpu_engine_busy_time{engine_class=\"video-enhance\", vendor=\"intel\"}[5m])) / 1000000000"
+            }
+          ]
+        },
+        {
+          "name": "Other",
+          "description": "Fraction of wall time the other engine(s) spent executing work, from the i915/xe PMU. This is occupancy, not efficiency: an engine at 100% had work queued, which does not mean the execution units were saturated — read it alongside the frequency charts. Summing several engines of one class can exceed 100%, since they run concurrently.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Other Busy %",
+                "id": "intel-other-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(gpu_engine_busy_time{engine_class=\"other\", vendor=\"intel\"}[5m])) / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Other Busy % (Per-GPU)",
+                "id": "intel-other-pct-per-gpu",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null,
+                  "row_label": "GPU"
+                },
+                "style": "heatmap"
+              },
+              "promql_query": "sum by (id, vendor) (irate(gpu_engine_busy_time{engine_class=\"other\", vendor=\"intel\"}[5m])) / 1000000000"
+            }
+          ]
+        },
+        {
+          "name": "Frequency",
+          "description": "Average GPU frequency over each interval, recovered from the PMU's cumulative sum of per-tick MHz samples. Requested is what the driver asked for; actual is what the hardware delivered — a persistent gap between them means the GPU is being held back (thermal, power or voltage limits). Both fall to zero when the GT parks, because the driver stops sampling rather than because the clock reached zero.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Actual",
+                "id": "intel-freq-actual",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "frequency",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id, vendor) (irate(gpu_frequency_sample{frequency=\"actual\", vendor=\"intel\"}[5m])) * 1000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Requested",
+                "id": "intel-freq-requested",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "frequency",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id, vendor) (irate(gpu_frequency_sample{frequency=\"requested\", vendor=\"intel\"}[5m])) * 1000000"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "name": "Overview",
+      "route": "/overview"
+    },
+    {
+      "name": "Exceptions",
+      "route": "/exceptions"
+    },
+    {
+      "name": "Query Explorer",
+      "route": "/query"
+    },
+    {
+      "name": "CPU",
+      "route": "/cpu"
+    },
+    {
+      "name": "GPU",
+      "route": "/gpu"
+    },
+    {
+      "name": "Hardware Sensors",
+      "route": "/hw_sensors"
+    },
+    {
+      "name": "Memory",
+      "route": "/memory"
+    },
+    {
+      "name": "Network",
+      "route": "/network"
+    },
+    {
+      "name": "Scheduler",
+      "route": "/scheduler"
+    },
+    {
+      "name": "Syscall",
+      "route": "/syscall"
+    },
+    {
+      "name": "Softirq",
+      "route": "/softirq"
+    },
+    {
+      "name": "BlockIO",
+      "route": "/blockio"
+    },
+    {
+      "name": "Filesystem",
+      "route": "/filesystem"
+    },
+    {
+      "name": "ext4",
+      "route": "/ext4"
+    },
+    {
+      "name": "XFS",
+      "route": "/xfs"
+    },
+    {
+      "name": "cgroups",
+      "route": "/cgroups"
+    },
+    {
+      "name": "Rezolus",
+      "route": "/rezolus"
+    }
+  ]
+}
