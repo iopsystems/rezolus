@@ -1,6 +1,8 @@
-// The sidebar's grouping of the navigation. Built-in sections are found by
-// route, not by name: a section template names its sections, and a
-// recording's template may rename them.
+// The sidebar's grouping of the navigation. The Overview and Exceptions are
+// found by route, not by name: a section template names its sections, and a
+// recording's template may rename them. The query explorer is found by route
+// too; its name is fixed, since a template places it with
+// `{"builtin": "query"}` and cannot put another section at `/query`.
 
 // Routes the sidebar lists on their own, above the sampler sections.
 const PINNED_ROUTES = ['/query', '/overview', '/exceptions'];

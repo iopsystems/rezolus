@@ -1,0 +1,1 @@
+../../../../src/viewer/assets/lib/ui/client_views.js

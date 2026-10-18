@@ -772,8 +772,11 @@
   comes from the chosen template, less any section at a route the page renders
   itself (`/about`, `/systeminfo`, `/metadata`, `/notebook`, `/selection`,
   `/report`) or of more than one segment, which the page cannot reach; those
-  are named in a notice. The sidebar finds the Overview, Exceptions and the
-  query explorer by route, so a template may rename them.
+  are named in a notice. The sidebar finds the Overview and Exceptions by
+  route, so a template may rename them, and the page mounts the query
+  explorer and its own views (system info, metadata, notebook, selection,
+  report) by route, so a template section named like one of them is an
+  ordinary section.
   A recording without the key (parquet, `.rez`, anything scraped, or a
   recording of an older agent) renders the embedded template, which draws
   the same JSON as the generators did. A `dashboard` that is too large or
@@ -790,8 +793,8 @@
   source in each archive written from the stream. The viewers'
   `/api/v1/file_metadata` (and the WASM `file_metadata_json`) leave the key
   out; `rezolus recording metadata --json` prints it, as it prints every
-  key. The WASM bundle grows by 403 KB, from 7,273,651 to 7,677,090 bytes
-  (99 KB gzipped, 2,389,446 to 2,488,736): the embedded template and the
+  key. The WASM bundle grows by 403 KB, from 7,273,651 to 7,677,243 bytes
+  (99 KB gzipped, 2,389,446 to 2,488,591): the embedded template and the
   expander.
   Rendering a section from the template took the same time as the
   generators on a 9.6-hour recording (all built-in sections, warm: 0.48 ms
@@ -807,8 +810,9 @@
   unknown or malformed `${..}` name, a catalog label value outside a
   double-quoted string in a query (or after a `\` or in a `#` comment), a
   let that uses another let, an undeclared parameter, more than 64 sections,
-  a malformed or duplicate route, an array or object of more than 4096
-  entries, a string over 16 KiB or holding a control character, a name or a
+  a malformed or duplicate route, a section at `/query` (the query
+  explorer's, placed with `{"builtin": "query"}`), an array or object of
+  more than 4096 entries, a string over 16 KiB or holding a control character, a name or a
   predicate label name over 64 bytes as written, and a `distinct_gt` `int`
   label that is not one of its `by` labels (of which there are at most 16).
   Parsing is linear in the document's size, which it does not limit, so a
