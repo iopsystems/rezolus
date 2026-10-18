@@ -98,6 +98,9 @@ struct CachedReader {
     /// re-deriving provenance from the reader would answer "foreign" for data
     /// that is unambiguously the agent's.
     provenance: crate::analysis::extract::Provenance,
+    /// Whether `source` joins several recordings of one run
+    /// (`Opened::combined`), which `extract_features` does not read.
+    combined: bool,
 }
 
 /// The six read tools, as the server has always listed them.
@@ -116,7 +119,7 @@ fn read_tools() -> Vec<Value> {
                     "recording": {
                         "type": "object",
                         "additionalProperties": {"type": "string"},
-                        "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
+                        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`, or of different runs) needs one, and so does extract_features. Call describe_recording without it first to list them."
                     }
                 },
                 "required": ["parquet_file"]
@@ -135,7 +138,7 @@ fn read_tools() -> Vec<Value> {
                     "recording": {
                         "type": "object",
                         "additionalProperties": {"type": "string"},
-                        "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
+                        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`, or of different runs) needs one, and so does extract_features. Call describe_recording without it first to list them."
                     },
                     "metric1": {
                         "type": "string",
@@ -162,7 +165,7 @@ fn read_tools() -> Vec<Value> {
                     "recording": {
                         "type": "object",
                         "additionalProperties": {"type": "string"},
-                        "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
+                        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`, or of different runs) needs one, and so does extract_features. Call describe_recording without it first to list them."
                     }
                 },
                 "required": ["parquet_file"]
@@ -181,7 +184,7 @@ fn read_tools() -> Vec<Value> {
                     "recording": {
                         "type": "object",
                         "additionalProperties": {"type": "string"},
-                        "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
+                        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`, or of different runs) needs one, and so does extract_features. Call describe_recording without it first to list them."
                     },
                     "query": {
                         "type": "string",
@@ -204,7 +207,7 @@ fn read_tools() -> Vec<Value> {
                     "recording": {
                         "type": "object",
                         "additionalProperties": {"type": "string"},
-                        "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
+                        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`, or of different runs) needs one, and so does extract_features. Call describe_recording without it first to list them."
                     },
                     "query": {
                         "type": "string",
@@ -227,7 +230,7 @@ fn read_tools() -> Vec<Value> {
                     "recording": {
                         "type": "object",
                         "additionalProperties": {"type": "string"},
-                        "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
+                        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`, or of different runs) needs one, and so does extract_features. Call describe_recording without it first to list them."
                     }
                 },
                 "required": ["parquet_file"]
@@ -244,7 +247,7 @@ fn recording_property() -> Value {
     json!({
         "type": "object",
         "additionalProperties": {"type": "string"},
-        "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
+        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`, or of different runs) needs one, and so does extract_features. Call describe_recording without it first to list them."
     })
 }
 
@@ -950,18 +953,20 @@ impl Server {
         parquet_file: &str,
         selector: &crate::mcp::RecordingSelector,
     ) -> Result<Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
-        self.get_reader_with_provenance(parquet_file, selector)
+        self.get_reader_with_provenance(parquet_file, selector, true)
             .await
             .map(|(reader, _)| reader)
     }
 
     /// As `get_reader_selected`, also reporting what the open determined
     /// about the recording's provenance — needed only by `extract_features`,
-    /// whose sampler attribution depends on it.
+    /// whose sampler attribution depends on it. `combined_ok` as for
+    /// `mcp::open_source_with_pool_labeled`: false for `extract_features`.
     async fn get_reader_with_provenance(
         &self,
         parquet_file: &str,
         selector: &crate::mcp::RecordingSelector,
+        combined_ok: bool,
     ) -> Result<
         (
             Arc<dyn metriken_query::MetricsSource>,
@@ -973,7 +978,7 @@ impl Server {
         let key = (path_key.clone(), selector.clone());
         {
             let cache = self.reader_cache.read().unwrap();
-            if let Some(hit) = cache.get(&key) {
+            if let Some(hit) = cache.get(&key).filter(|hit| combined_ok || !hit.combined) {
                 return Ok((Arc::clone(&hit.source), hit.provenance));
             }
         }
@@ -996,8 +1001,10 @@ impl Server {
             Arc::clone(&self.pool),
             selector,
             crate::mcp::SelectorSyntax::Json,
+            combined_ok,
         )?;
         let provenance = opened.provenance();
+        let combined = !opened.combined.is_empty();
         let reader = opened.reader;
         let identity = opened.labels.clone();
 
@@ -1010,7 +1017,7 @@ impl Server {
         // an archive with no labels at all has the empty map as its identity.
         let source = cache
             .iter()
-            .find(|((p, _), c)| *p == path_key && c.identity == identity)
+            .find(|((p, _), c)| *p == path_key && c.identity == identity && c.combined == combined)
             .map(|(_, c)| Arc::clone(&c.source))
             .unwrap_or(reader);
         cache.insert(
@@ -1019,6 +1026,7 @@ impl Server {
                 identity,
                 source: Arc::clone(&source),
                 provenance,
+                combined,
             },
         );
 
@@ -1131,7 +1139,7 @@ impl Server {
 
         let selector = Self::selector_of(arguments)?;
         let (reader, provenance) = self
-            .get_reader_with_provenance(parquet_file, &selector)
+            .get_reader_with_provenance(parquet_file, &selector, false)
             .await?;
         let record = crate::analysis::extract::extract(reader.as_ref(), provenance)?;
         Ok(serde_json::to_string_pretty(&record)?)
@@ -1446,7 +1454,14 @@ mod tests {
     async fn get_reader_refuses_a_multi_recording_archive() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ab.rez");
-        crate::mcp::tests::multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        // `arm` makes it a comparison, which needs a selector; an archive of
+        // one run is read combined (`a_one_run_archive_is_read_combined`).
+        crate::mcp::tests::multi_recording_rez_with_arms(
+            &path,
+            &["redis", "valkey"],
+            &[Some("ab"), Some("ab")],
+            &[true, true],
+        );
 
         let server = Server::new();
         let err = server
@@ -1732,16 +1747,43 @@ mod tests {
         );
     }
 
+    /// The server reads an archive of one run combined for every tool but
+    /// `extract_features`, which asks for a recording even after a combined
+    /// reader of the same file is cached.
+    #[tokio::test]
+    async fn a_one_run_archive_is_read_combined_except_by_extract_features() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = crate::viewer::combined_test::two_hosts(dir.path());
+        let p = path.to_str().unwrap();
+        let server = Server::new();
+        let reader = server
+            .get_reader_selected(p, &crate::mcp::RecordingSelector::default())
+            .await
+            .expect("one run opens combined");
+        assert_eq!(reader.counter_labels("cpu_usage").len(), 3);
+        let err = server
+            .execute_extract_features(&json!({ "parquet_file": p }))
+            .await
+            .expect_err("extract_features reads one recording")
+            .to_string();
+        assert!(err.contains("2 recordings with data"), "{err}");
+    }
+
     /// ...and so must every error the server returns, not just the listing.
     #[tokio::test]
     async fn server_errors_render_the_json_selector_not_the_cli_flag() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ab.rez");
-        crate::mcp::tests::multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        crate::mcp::tests::multi_recording_rez_with_arms(
+            &path,
+            &["redis", "valkey"],
+            &[Some("ab"), Some("ab")],
+            &[true, true],
+        );
         let p = path.to_str().unwrap();
         let server = Server::new();
 
-        // No selector: ambiguous over both arms.
+        // No selector: ambiguous over both arms of the comparison.
         let ambiguous = server
             .get_reader_selected(p, &crate::mcp::RecordingSelector::default())
             .await

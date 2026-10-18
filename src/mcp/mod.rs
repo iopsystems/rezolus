@@ -47,6 +47,10 @@ pub(crate) struct Opened {
     /// identified, because the recording's own `source` metadata cannot
     /// answer it: that is the endpoint name the caller chose.
     pub rezolus_native: bool,
+    /// The recordings joined into `reader`, when the archive holds several of
+    /// one run and no selector named one (`viewer::opens_combined`): every
+    /// series carries its recording's labels. Empty otherwise.
+    pub combined: Vec<std::collections::BTreeMap<String, String>>,
 }
 
 impl Opened {
@@ -115,13 +119,17 @@ impl std::error::Error for OpenError {}
 /// `syntax` is the front end this call's messages will be read by: the same
 /// selector is `--recording k=v` to the CLI and a `recording` JSON object to
 /// an MCP client, and a message that offers the wrong one cannot be acted on.
+///
+/// An archive of several recordings of one run (`viewer::opens_combined`)
+/// with no selector is read combined, as the viewer opens it: every
+/// recording joined, each series under its recording's labels.
 pub(crate) fn open_source_with_pool(
     file: &std::path::Path,
     pool: std::sync::Arc<metriken_storage::BufferPool>,
     selector: &RecordingSelector,
     syntax: SelectorSyntax,
 ) -> Result<std::sync::Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
-    open_source_with_pool_labeled(file, pool, selector, syntax)
+    open_source_with_pool_labeled(file, pool, selector, syntax, true)
         .map(|opened| opened.reader)
         .map_err(Into::into)
 }
@@ -135,11 +143,18 @@ pub(crate) fn open_source_with_pool(
 /// same recording). Only the resolver knows which recording a selector landed
 /// on, so it is the only place that can say — hence the richer return value
 /// rather than a second, guessing, resolution at the call site.
+///
+/// `combined_ok`: with no selector, an archive of several recordings of one
+/// run is opened combined ([`Opened::combined`]) rather than refused. A
+/// comparison (recordings carrying `arm`, or of different runs) is refused
+/// either way. `extract-features`, whose record describes one recording,
+/// passes false.
 pub(crate) fn open_source_with_pool_labeled(
     file: &std::path::Path,
     pool: std::sync::Arc<metriken_storage::BufferPool>,
     selector: &RecordingSelector,
     syntax: SelectorSyntax,
+    combined_ok: bool,
 ) -> Result<Opened, OpenError> {
     use crate::recorder::rez::RezFormat;
 
@@ -187,6 +202,7 @@ pub(crate) fn open_source_with_pool_labeled(
             // `source` metadata's question again, as it has always been for a
             // plain parquet file.
             rezolus_native: false,
+            combined: Vec::new(),
         });
     }
 
@@ -263,6 +279,28 @@ pub(crate) fn open_source_with_pool_labeled(
             reader: std::sync::Arc::new(reader),
             all_empty_recordings,
             rezolus_native: true,
+            combined: Vec::new(),
+        });
+    }
+
+    // Several recordings with data, of one run, and no selector: read them
+    // together, as the viewer opens them.
+    if combined_ok
+        && selector.is_empty()
+        && candidates.len() > 1
+        && crate::viewer::opens_combined(&recordings, false)
+    {
+        let filename = recordings.first().and_then(|(_, r)| {
+            use metriken_query::MetricsSource;
+            r.filename()
+        });
+        let (reader, _) = crate::rez_reader::RezReader::combine(recordings, filename);
+        return Ok(Opened {
+            labels: std::collections::BTreeMap::new(),
+            reader: std::sync::Arc::new(reader),
+            all_empty_recordings: Vec::new(),
+            rezolus_native: true,
+            combined: candidates,
         });
     }
 
@@ -373,6 +411,7 @@ pub(crate) fn open_source_with_pool_labeled(
         reader: std::sync::Arc::new(reader),
         all_empty_recordings: Vec::new(),
         rezolus_native: true,
+        combined: Vec::new(),
     })
 }
 
@@ -392,16 +431,19 @@ pub(crate) fn open_source_selected(
 
 /// As `open_source_selected`, but keeping everything the open learned — for
 /// the callers that describe the archive rather than just query the reader.
+/// `combined_ok` as for [`open_source_with_pool_labeled`].
 pub(crate) fn open_selected_labeled(
     file: &std::path::Path,
     selector: &RecordingSelector,
     syntax: SelectorSyntax,
+    combined_ok: bool,
 ) -> Result<Opened, OpenError> {
     open_source_with_pool_labeled(
         file,
         metriken_storage::BufferPool::new(256 * 1024 * 1024),
         selector,
         syntax,
+        combined_ok,
     )
 }
 
@@ -642,7 +684,19 @@ pub(crate) fn describe_recording_output(
     // between the two opens flipped the candidate count and turned this
     // summary into a "Pick one" error about an archive the first open had
     // already resolved.
-    match open_selected_labeled(file, selector, syntax) {
+    match open_selected_labeled(file, selector, syntax, true) {
+        Ok(opened) if !opened.combined.is_empty() => Ok(listing(
+            format!(
+                "{} holds {} recordings of one run, read together: every series carries its \
+                 recording's labels, so a matcher on one (`{{host=\"...\"}}`) selects its \
+                 series:",
+                file.display(),
+                opened.combined.len()
+            ),
+            &opened.combined,
+            syntax,
+            Some("Run any tool with one of the selectors above to read that recording alone."),
+        )),
         Ok(opened) => {
             // Every arm is empty: report the ARCHIVE. `format_recording_info`
             // would otherwise print arm 0's metadata as though the file held
@@ -993,13 +1047,14 @@ fn run_extract_features(file: PathBuf, selector: &RecordingSelector) {
     // deciding sampler inference from that field alone would leave every
     // unlabeled metric `unattributed` on exactly the archives this selector
     // exists to read.
-    let opened = match open_selected_labeled(&file, selector, SelectorSyntax::Flag("--recording")) {
-        Ok(o) => o,
-        Err(e) => {
-            eprintln!("Failed to load recording: {e}");
-            std::process::exit(1);
-        }
-    };
+    let opened =
+        match open_selected_labeled(&file, selector, SelectorSyntax::Flag("--recording"), false) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("Failed to load recording: {e}");
+                std::process::exit(1);
+            }
+        };
     let provenance = opened.provenance();
     let reader = opened.reader;
 
@@ -1377,9 +1432,12 @@ fn recording_arg() -> clap::Arg {
         // here without `wrap_help`, so it prints this verbatim (one endless
         // line otherwise) and `-h` leads with that first line.
         .help(
-            "Which recording of a multi-recording .rez to read, as key=value (e.g. --recording source=redis)\n\
+            "Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)\n\
              Repeatable: the pairs are ANDed and must together name exactly one\n\
              recording. Matching none or several is an error, never a guess.\n\
+             Without it, the recordings of one run are read together, each series\n\
+             under its recording's labels; extract-features, and any tool on a\n\
+             comparison (recordings carrying `arm`, or of different runs), need it.\n\
              Run `rezolus mcp describe-recording FILE` with no --recording to list\n\
              an archive's recordings and the selector that picks each one.\n\
              Not accepted for a .parquet file, which holds one recording and so has\n\
@@ -1935,7 +1993,13 @@ pub(crate) mod tests {
     fn open_source_refuses_a_multi_recording_archive_with_a_message() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ab.rez");
-        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        // `arm` makes it a comparison; one run is read combined.
+        multi_recording_rez_with_arms(
+            &path,
+            &["redis", "valkey"],
+            &[Some("ab"), Some("ab")],
+            &[true, true],
+        );
 
         let msg = match open_source(&path) {
             Ok(_) => panic!("a 2-recording archive must be refused"),
@@ -2031,7 +2095,13 @@ pub(crate) mod tests {
     fn no_selector_on_a_multi_recording_archive_lists_them() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ab.rez");
-        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        // `arm` makes it a comparison; one run is read combined.
+        multi_recording_rez_with_arms(
+            &path,
+            &["redis", "valkey"],
+            &[Some("ab"), Some("ab")],
+            &[true, true],
+        );
 
         let msg = match open_source(&path) {
             Ok(_) => panic!("must not silently pick an arm"),
@@ -2040,6 +2110,52 @@ pub(crate) mod tests {
         assert!(msg.contains("source=redis"), "{msg}");
         assert!(msg.contains("source=valkey"), "{msg}");
         assert!(msg.contains("--recording"), "{msg}");
+    }
+
+    /// An archive of several recordings of one run is read combined when no
+    /// selector names one, as the viewer opens it: each series carries its
+    /// recording's labels. `--recording` still narrows, `describe-recording`
+    /// lists the recordings, and `extract-features`, whose record describes
+    /// one recording, still asks for one.
+    #[test]
+    fn a_one_run_archive_is_read_combined() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = crate::viewer::combined_test::two_hosts(dir.path());
+
+        let reader = open_source(&path).expect("one run opens combined");
+        let hosts: std::collections::BTreeSet<String> = reader
+            .counter_labels("cpu_usage")
+            .into_iter()
+            .filter_map(|l| l.get("host").cloned())
+            .collect();
+        assert_eq!(hosts, ["h1", "h2"].map(String::from).into());
+
+        let sel = RecordingSelector::parse("--recording", ["host=h2".to_string()]).unwrap();
+        let one = open_source_selected(&path, &sel).unwrap();
+        assert_eq!(one.counter_labels("cpu_usage").len(), 2, "h2's two CPUs");
+
+        let out = describe_recording_output(
+            &path,
+            &RecordingSelector::default(),
+            SelectorSyntax::Flag("--recording"),
+        )
+        .unwrap();
+        assert!(
+            out.contains("2 recordings of one run, read together"),
+            "{out}"
+        );
+        assert!(out.contains("--recording host=h1"), "{out}");
+
+        match open_selected_labeled(
+            &path,
+            &RecordingSelector::default(),
+            SelectorSyntax::Flag("--recording"),
+            false,
+        ) {
+            Err(OpenError::NeedsSelection { candidates, .. }) => assert_eq!(candidates.len(), 2),
+            Err(e) => panic!("{e}"),
+            Ok(_) => panic!("extract-features reads one recording"),
+        }
     }
 
     #[test]
@@ -2382,9 +2498,10 @@ pub(crate) mod tests {
     fn describe_recording_does_not_count_a_dead_arm_as_a_recording() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("triple.rez");
-        multi_recording_rez(
+        multi_recording_rez_with_arms(
             &path,
             &["redis", "valkey", "memcached"],
+            &[Some("ab"), Some("ab"), Some("ab")],
             &[true, true, false],
         );
 
@@ -2529,7 +2646,7 @@ pub(crate) mod tests {
 
         let sel = RecordingSelector::parse("--recording", ["source=redis".to_string()]).unwrap();
         let opened =
-            open_selected_labeled(&path, &sel, SelectorSyntax::Flag("--recording")).unwrap();
+            open_selected_labeled(&path, &sel, SelectorSyntax::Flag("--recording"), false).unwrap();
         assert_eq!(
             opened.reader.source(),
             "redis",
@@ -2556,6 +2673,7 @@ pub(crate) mod tests {
             &parquet_path,
             &RecordingSelector::default(),
             SelectorSyntax::Flag("--recording"),
+            false,
         )
         .unwrap();
         assert!(!opened.rezolus_native);
