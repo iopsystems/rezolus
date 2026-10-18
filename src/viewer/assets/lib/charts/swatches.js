@@ -9,7 +9,10 @@
 //                  sample-acquisition timing (#1017), a hard interval,
 //                  not a statistical confidence band
 //
-// `chartSwatches` is pure (node-tested); `renderSwatchRow` injects the DOM.
+// `chartSwatches` and `swatchRowHtml` are pure (node-tested); `renderSwatchRow`
+// injects the DOM.
+
+import { escapeHtml } from '../html.js';
 
 const finite = (v) => Number.isFinite(v);
 
@@ -103,8 +106,13 @@ export function renderSwatchRow(domNode, swatches) {
         el.className = ROW_CLASS;
         domNode.appendChild(el);
     }
-    el.innerHTML = swatches.map((s) =>
-        `<span class="swatch" title="${s.title}">`
-        + `<span class="swatch-chip swatch-${s.kind}"></span>${s.label}</span>`,
+    el.innerHTML = swatchRowHtml(swatches);
+}
+
+/** The swatch row's inner HTML. Every field is escaped (see ../html.js). */
+export function swatchRowHtml(swatches) {
+    return swatches.map((s) =>
+        `<span class="swatch" title="${escapeHtml(s.title)}">`
+        + `<span class="swatch-chip swatch-${escapeHtml(s.kind)}"></span>${escapeHtml(s.label)}</span>`,
     ).join('');
 }

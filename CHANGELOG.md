@@ -9,6 +9,15 @@
 
 ### Fixed
 
+- **The viewer escapes recording text it puts into chart HTML.** Chart
+  tooltips, the heatmap tooltips, the band-swatch row and the embed demo's
+  status line inserted strings from the recording as markup: plot titles from
+  section templates (which an agent can send in its stream handshake), KPI
+  titles from `service_queries`, series label values, heatmap row labels,
+  capture labels and template format labels. Markup in any of them was parsed
+  by the browser, and could run script, in both the server and the static
+  viewer. They now go through one HTML-escape helper
+  (`src/viewer/assets/lib/html.js`), which the Markdown renderer also uses.
 - **metriken-storage 0.3.1 and metriken-exposition 0.23.2.** A table queried
   while a writer sealed it no longer loses the sealed rows, a reused segment
   number no longer returns rows twice, and a table or occupant's labels sealed

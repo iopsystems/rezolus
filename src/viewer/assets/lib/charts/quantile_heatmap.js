@@ -18,6 +18,7 @@ import {
     COLORS,
     FONTS,
 } from './base.js';
+import { escapeHtml } from '../html.js';
 import { rdYlGnColor } from './util/colormap.js';
 import {
     buildGradientCanvas,
@@ -278,13 +279,13 @@ export function configureQuantileHeatmap(chart) {
                 </div>
                 <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
                     <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
-                        ${label}
+                        ${escapeHtml(label)}
                     </span>
                 </div>
                 <div style="display: grid; grid-template-columns: max-content max-content; gap: 2px 12px; ${FONTS.cssMono} font-size: ${FONTS.tooltipValue.fontSize}px;">
-                    <span style="color: var(--compare-baseline, ${COLORS.fgSecondary});">${baselineLabel}</span>
+                    <span style="color: var(--compare-baseline, ${COLORS.fgSecondary});">${escapeHtml(baselineLabel)}</span>
                     <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(bv)}</span>
-                    <span style="color: var(--compare-experiment, ${COLORS.fgSecondary});">${experimentLabel}</span>
+                    <span style="color: var(--compare-experiment, ${COLORS.fgSecondary});">${escapeHtml(experimentLabel)}</span>
                     <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(ev)}</span>
                     <span style="color: ${COLORS.fgSecondary};">Δ</span>
                     <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${deltaStr}</span>
@@ -327,13 +328,13 @@ export function configureQuantileHeatmap(chart) {
                 </div>
                 <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
                     <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
-                        ${label}
+                        ${escapeHtml(label)}
                     </span>
                 </div>
                 <div style="display: grid; grid-template-columns: max-content max-content; gap: 2px 12px; ${FONTS.cssMono} font-size: ${FONTS.tooltipValue.fontSize}px;">
-                    <span style="color: var(--compare-baseline, ${COLORS.fgSecondary});">${labels.baseline || 'baseline'}</span>
+                    <span style="color: var(--compare-baseline, ${COLORS.fgSecondary});">${escapeHtml(labels.baseline || 'baseline')}</span>
                     <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(baseV)}</span>
-                    <span style="color: var(--compare-experiment, ${COLORS.fgSecondary});">${labels.experiment || 'experiment'}</span>
+                    <span style="color: var(--compare-experiment, ${COLORS.fgSecondary});">${escapeHtml(labels.experiment || 'experiment')}</span>
                     <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(expV)}</span>
                     <span style="color: ${COLORS.fgSecondary};">Δ</span>
                     <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${deltaStr}</span>
@@ -349,7 +350,7 @@ export function configureQuantileHeatmap(chart) {
             </div>
             <div style="display: flex; align-items: center; gap: 12px;">
                 <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
-                    ${label}
+                    ${escapeHtml(label)}
                 </span>
                 <span style="${FONTS.cssMono} font-weight: ${FONTS.tooltipValue.fontWeight}; font-size: ${FONTS.tooltipValue.fontSize}px; color: ${COLORS.fg};">
                     ${valueFmt(v)}
