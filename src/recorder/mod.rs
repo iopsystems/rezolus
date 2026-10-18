@@ -132,9 +132,11 @@ pub fn command() -> Command {
              rezolus for a Rezolus agent, or a name made from the URL\'s host, port and\n\
              path (with a warning). Its other labels are the user\'s --label, over host from\n\
              a Rezolus agent\'s /systeminfo, over the handshake\'s labels. Its metadata is\n\
-             the user\'s --metadata, over the keys the recorder writes (sampling_interval_ms,\n\
-             producer_epoch, role), over a Rezolus agent\'s version, systeminfo and\n\
-             descriptions, over the handshake\'s metadata. So a producer that names itself\n\
+             its --endpoint\'s role= and template= (as role and service_queries), over the\n\
+             user\'s --metadata, over the keys the recorder writes (sampling_interval_ms,\n\
+             producer_epoch), over a Rezolus agent\'s version, systeminfo and\n\
+             descriptions, over the handshake\'s metadata: a per-endpoint key beats the\n\
+             run-wide --metadata. So a producer that names itself\n\
              and its version in its handshake is recorded under that name with no source=.\n\n\
              KPI TEMPLATES: the viewer shows a service\'s KPI section from the template\n\
              in its recording\'s metadata (service_queries). A producer that sends one in\n\
@@ -1089,8 +1091,8 @@ fn template_override_line(
 ///
 /// The metadata is the caller's, which outranks what a producer's handshake
 /// carries, so a `template=` file replaces a streamed producer's own
-/// template. It also replaces a `--metadata service_queries=`, which applies
-/// to every recording rather than this one.
+/// template. A per-endpoint key (`role=`, `template=`) replaces the same key
+/// from `--metadata`, which applies to every recording rather than this one.
 fn endpoint_spec(config: &RecordingConfig, ep: &endpoint::EndpointConfig) -> mr::EndpointSpec {
     let mut labels = BTreeMap::new();
     if let Some(source) = &ep.source {
@@ -1099,9 +1101,10 @@ fn endpoint_spec(config: &RecordingConfig, ep: &endpoint::EndpointConfig) -> mr:
     labels.extend(config.labels.iter().cloned());
     let mut metadata: BTreeMap<String, String> = config.metadata.iter().cloned().collect();
     if let Some(role) = &ep.role {
-        metadata
-            .entry(crate::parquet_metadata::NESTED_ROLE.to_string())
-            .or_insert_with(|| role.clone());
+        metadata.insert(
+            crate::parquet_metadata::NESTED_ROLE.to_string(),
+            role.clone(),
+        );
     }
     if let Some(json) = &ep.template_json {
         metadata.insert(
@@ -1236,7 +1239,8 @@ mod tests {
 
     /// An endpoint `--endpoint url,source=x,role=y` with `--label` and
     /// `--metadata`: the endpoint's `source` and the labels are labels, the
-    /// metadata and `role` metadata, and a `--metadata role=` wins.
+    /// metadata and `role` metadata, and the endpoint's `role=` wins over a
+    /// `--metadata role=`, as every per-endpoint key does.
     #[test]
     fn an_endpoint_spec_carries_the_users_labels_and_metadata() {
         let dir = tempfile::tempdir().unwrap();
@@ -1257,7 +1261,7 @@ mod tests {
         assert_eq!(spec.metadata["role"], "service");
         assert_eq!(spec.transport, mr::Transport::Prometheus);
         config.metadata = vec![("role".to_string(), "mine".to_string())];
-        assert_eq!(endpoint_spec(&config, &ep).metadata["role"], "mine");
+        assert_eq!(endpoint_spec(&config, &ep).metadata["role"], "service");
         assert!(!spec.metadata.contains_key("service_queries"));
     }
 

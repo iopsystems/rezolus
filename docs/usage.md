@@ -188,9 +188,11 @@ A recording's `source` is the first of: `source=` on its `--endpoint` (or
 handshake; `rezolus` for a Rezolus agent; a name made from the URL's host,
 port and path, with a warning. The rest of its labels are `--label`, over
 `host` from a Rezolus agent's `/systeminfo`, over the handshake's labels. Its
-metadata is `--metadata`, over the keys the recorder writes
-(`sampling_interval_ms`, `producer_epoch`, `role`), over a Rezolus agent's
-`version`, `systeminfo` and `descriptions`, over the handshake's metadata. A
+metadata is its `--endpoint`'s `role=` and `template=` (as `role` and
+`service_queries`), over `--metadata`, over the keys the recorder writes
+(`sampling_interval_ms`, `producer_epoch`), over a Rezolus agent's `version`,
+`systeminfo` and `descriptions`, over the handshake's metadata; a
+per-endpoint key beats the run-wide `--metadata`. A
 producer that names itself and its version in its handshake is therefore
 recorded under that name, with that version, and needs no `source=`:
 

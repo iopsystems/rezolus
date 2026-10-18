@@ -81,7 +81,7 @@ target/release/rezolus record -o bench.dendro -- ./bench.sh   # record for the c
 # protocol=prometheus scrapes only. /metrics/binary is not read. Identity (metriken-recorder's):
 # labels user --label > hook (`enrich`: source=rezolus and host from /systeminfo for an agent) >
 # handshake labels; source = user source= > handshake source label > hook's > inferred from URL;
-# metadata user --metadata and role= > recorder keys (sampling_interval_ms, producer_epoch) > hook
+# metadata endpoint role=/template= > user --metadata > recorder keys (sampling_interval_ms, producer_epoch) > hook
 # (version, systeminfo, descriptions) > handshake metadata; --metadata producer_epoch(s)= is
 # refused (config.rs), and a pinned key survives a restart and a scrape's HELP text. The startup enrich runs concurrently
 # per streamed endpoint, bounded by the scrape timeout (warning on fallback); a late activation's

@@ -110,6 +110,12 @@
 
 ### Changed
 
+- **An endpoint's `role=` outranks `--metadata role=`.** `record
+  --endpoint url,role=service --metadata role=x` now records `role=service`,
+  where the run-wide `--metadata` value won before. A per-endpoint key
+  (`role=`, `template=`) beats the same key from `--metadata`, which applies
+  to every recording.
+
 - **The `/metrics/stream` interval is negotiated** (metriken-exposition
   0.23.1, metriken-recorder 0.3). The agent serves a stream at the larger of
   the interval asked for and its snapshot TTL, and names the interval served
