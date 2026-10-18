@@ -587,21 +587,16 @@ impl PlotOpts {
 
     /// A KPI's `unit_system`, which comes from a template or a recording's
     /// metadata as free text. One that is not a [`Unit`] is dropped (the plot
-    /// renders unscaled) with a warning, rather than refusing the dashboard:
-    /// `recording annotate` refuses it when the KPIs are written, so only a
-    /// file written some other way carries one.
+    /// renders with the KPI's default `count` scaling) rather than refusing
+    /// the dashboard: `recording annotate` refuses it when the KPIs are
+    /// written, so only a file written some other way carries one. This is
+    /// silent because it runs on every dashboard render, and the terminal UI
+    /// renders every tick; the viewer warns once when it loads the KPIs
+    /// (`service_extensions_from_metadata` in `src/viewer/metadata.rs`).
     pub fn maybe_unit_system(self, unit: Option<&str>) -> Self {
         match unit.map(str::parse::<Unit>) {
             Some(Ok(u)) => self.with_unit_system(u.to_string()),
-            Some(Err(_e)) => {
-                #[cfg(not(target_arch = "wasm32"))]
-                eprintln!(
-                    "warning: plot {:?}: {_e}; rendering it without a unit",
-                    self.title
-                );
-                self
-            }
-            None => self,
+            Some(Err(_)) | None => self,
         }
     }
 

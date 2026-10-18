@@ -356,12 +356,21 @@ impl ServiceExtension {
     /// shows an unknown system's name as the unit, inside tooltip HTML, so
     /// `recording annotate` and the template loader reject one rather than
     /// write or register it. A recording that already carries one renders
-    /// that KPI without a unit ([`crate::plot::PlotOpts::maybe_unit_system`]).
+    /// that KPI with its default `count` scaling
+    /// ([`crate::plot::PlotOpts::maybe_unit_system`]).
     pub fn check_unit_systems(&self) -> Result<(), String> {
-        for kpi in &self.kpis {
-            check_unit_system(&kpi.title, kpi.unit_system.as_deref())?;
+        match self.unknown_unit_systems().into_iter().next() {
+            Some(e) => Err(e),
+            None => Ok(()),
         }
-        Ok(())
+    }
+
+    /// One message per KPI whose `unit_system` is not a [`crate::plot::Unit`].
+    pub fn unknown_unit_systems(&self) -> Vec<String> {
+        self.kpis
+            .iter()
+            .filter_map(|kpi| check_unit_system(&kpi.title, kpi.unit_system.as_deref()).err())
+            .collect()
     }
 
     pub fn throughput_query(&self) -> Option<&str> {
@@ -941,6 +950,31 @@ mod tests {
         // The category IS reachable by name via get_category.
         assert!(registry.get_category("inference-library").is_some());
         assert!(registry.get_category("nonexistent").is_none());
+    }
+
+    #[test]
+    fn a_category_template_with_an_unknown_unit_system_is_refused_at_load() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a", "b"] {
+            write_template(
+                &dir,
+                &format!("{name}.json"),
+                &format!(r#"{{"service_name":"{name}","kpis":[]}}"#),
+            )
+            .unwrap();
+        }
+        write_template(
+            &dir,
+            "cat.json",
+            r#"{"service_name":"cat","category":true,"members":["a","b"],
+                "kpis":[{"role":"load","title":"Rate","type":"gauge","unit_system":"furlongs"}]}"#,
+        )
+        .unwrap();
+        let err = TemplateRegistry::load(dir.path()).unwrap_err().to_string();
+        assert!(
+            err.contains("cat.json") && err.contains("furlongs"),
+            "{err}"
+        );
     }
 
     #[test]

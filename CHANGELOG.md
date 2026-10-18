@@ -23,8 +23,8 @@
   unit system's name as the unit, so a section template with one fails to parse,
   `recording annotate` refuses KPIs with one (exit 1, nothing written), and a
   KPI template directory with one fails to load. A recording that already
-  carries one renders that KPI without a unit (the server viewer prints a
-  warning). The known systems are `time`, `bytes`, `bitrate`, `datarate`,
+  carries one renders that KPI with the default `count` scaling, and the
+  viewer warns once when it loads the KPIs. The known systems are `time`, `bytes`, `bitrate`, `datarate`,
   `percentage`, `frequency`, `power`, `count` and `rate`.
 - **Notebook and report Markdown links resolve the URL before allowing
   it.** A link is kept only when it resolves to `http:`, `https:` or

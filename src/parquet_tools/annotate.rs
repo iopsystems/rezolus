@@ -24,9 +24,13 @@ fn dispatch_format(path: &Path) -> RezFormat {
 pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
     let path = args.get_one::<PathBuf>("FILE").unwrap();
 
+    // Read, parse and check the --queries file before anything is written, so
+    // a refusal leaves the file as it was whatever other edits were asked for.
+    let queries = args.get_one::<PathBuf>("queries").map(|p| read_queries(p));
+
     match dispatch_format(path) {
         format @ (RezFormat::V3Sqlite | RezFormat::V2Tar) => {
-            run_rez(args, path, format);
+            run_rez(args, path, format, queries.as_deref());
             return;
         }
         RezFormat::NotRez => {}
@@ -80,12 +84,10 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
         });
     }
 
-    let custom_file = args.get_one::<PathBuf>("queries");
-
     // If only individual edits (--node/--source/--systeminfo/events) were
     // requested, don't also auto-apply a default service template.
     if (node.is_some() || new_source.is_some() || sysinfo_path.is_some() || events_requested)
-        && custom_file.is_none()
+        && queries.is_none()
         && !args.get_flag("filter")
     {
         return;
@@ -98,12 +100,7 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
         std::process::exit(1);
     });
 
-    let json = if let Some(custom_path) = custom_file {
-        let content =
-            std::fs::read_to_string(custom_path).expect("failed to read service extension file");
-        let ext: ServiceExtension =
-            serde_json::from_str(&content).expect("invalid service extension JSON");
-        refuse_unknown_unit_systems(&ext, custom_path);
+    let json = if let Some(content) = queries {
         content
     } else {
         let template = registry.get(&source).unwrap_or_else(|| {
@@ -193,13 +190,27 @@ fn run_undo(path: &Path) {
     println!("Removed service extension annotation from {:?}", path);
 }
 
-/// Exit 1 when a KPI's `unit_system` is not one the viewer knows (see
-/// `ServiceExtension::check_unit_systems`); nothing has been written yet.
-fn refuse_unknown_unit_systems(ext: &ServiceExtension, path: &Path) {
+/// The --queries file's contents, after checking that it parses as a
+/// `ServiceExtension` and that every KPI's `unit_system` is one the viewer
+/// knows (`ServiceExtension::check_unit_systems`). Exits 1 otherwise. `run`
+/// calls this before any edit, so a refusal writes nothing.
+fn read_queries(path: &Path) -> String {
+    let content = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("error: failed to read {}: {e}", path.display());
+        std::process::exit(1);
+    });
+    let ext: ServiceExtension = serde_json::from_str(&content).unwrap_or_else(|e| {
+        eprintln!(
+            "error: invalid service extension JSON in {}: {e}",
+            path.display()
+        );
+        std::process::exit(1);
+    });
     if let Err(e) = ext.check_unit_systems() {
         eprintln!("error: {}: {e}", path.display());
         std::process::exit(1);
     }
+    content
 }
 
 /// Validate that each KPI query returns data from the parquet file.
@@ -338,8 +349,7 @@ pub(crate) struct EventOps<'a> {
 /// Footer-shaped flags (`--undo`/`--node`/`--source`/`--systeminfo`) have no
 /// per-recording manifest analogue wired yet, so they warn rather than
 /// silently no-op.
-fn run_rez(args: &ArgMatches, path: &Path, format: RezFormat) {
-    let queries = args.get_one::<PathBuf>("queries");
+fn run_rez(args: &ArgMatches, path: &Path, format: RezFormat, ext_content: Option<&str>) {
     let event_files: Vec<&Path> = args
         .get_many::<PathBuf>("add-events")
         .map(|it| it.map(PathBuf::as_path).collect())
@@ -365,27 +375,13 @@ fn run_rez(args: &ArgMatches, path: &Path, format: RezFormat) {
         }
     }
 
-    if queries.is_none() && !events_requested {
+    if ext_content.is_none() && !events_requested {
         eprintln!(
             "error: annotating a .rez needs --queries <service-extension.json> and/or event \
              flags (--event/--add-events/--clear-events); a .rez has no built-in service template"
         );
         std::process::exit(1);
     }
-
-    let ext_content = queries.map(|custom| {
-        let content = std::fs::read_to_string(custom).unwrap_or_else(|e| {
-            eprintln!("error: failed to read {custom:?}: {e}");
-            std::process::exit(1);
-        });
-        // parse-validate up front
-        let ext: ServiceExtension = serde_json::from_str(&content).unwrap_or_else(|e| {
-            eprintln!("error: invalid service extension JSON: {e}");
-            std::process::exit(1);
-        });
-        refuse_unknown_unit_systems(&ext, custom);
-        content
-    });
 
     let events = events_requested.then(|| EventOps {
         add_files: &event_files,
@@ -394,7 +390,7 @@ fn run_rez(args: &ArgMatches, path: &Path, format: RezFormat) {
     });
 
     let annotation = RezAnnotation {
-        ext_json: ext_content.as_deref(),
+        ext_json: ext_content,
         events,
         per_recording_events: None,
         per_recording_replace: None,
