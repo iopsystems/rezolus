@@ -7,6 +7,14 @@
   (GHSA-rhfx-m35p-ff5j), through metriken-query 0.37, metriken-storage 0.3
   and ratatui 0.30.
 
+### Fixed
+
+- **metriken-storage 0.3.1 and metriken-exposition 0.23.2.** A table queried
+  while a writer sealed it no longer loses the sealed rows, a reused segment
+  number no longer returns rows twice, and a table or occupant's labels sealed
+  while an archive opens are no longer dropped (the viewer, `mcp` and
+  `recording` reading a live hindsight buffer or recording).
+
 ### Removed
 
 - **The viewer's Time selector (Aligned/Raw) is gone.** Every dashboard
