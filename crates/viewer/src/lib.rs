@@ -464,9 +464,15 @@ impl Viewer {
     /// Includes pre-computed `nodes`, `node_versions`, and
     /// `service_instances` fields so the frontend doesn't have to
     /// re-parse `per_source_metadata` itself.
+    ///
+    /// Leaves out `dashboard`, the section template (about 106 KB), which
+    /// the page has no use for; the server's endpoint leaves it out too.
     pub fn file_metadata_json(&self) -> String {
         let mut map = serde_json::Map::new();
         for (key, val) in &self.file_metadata {
+            if key == dashboard::source_templates::KEY_DASHBOARD {
+                continue;
+            }
             let json_val = serde_json::from_str(val)
                 .unwrap_or_else(|_| serde_json::Value::String(val.clone()));
             map.insert(key.clone(), json_val);
@@ -2079,6 +2085,21 @@ mod tests {
         let (reg, _) = loaded(&dendro, true);
         assert_eq!(cpu_name(&reg), "CPU");
         assert_eq!(first_group(&reg), "Utilization");
+    }
+
+    /// The page's copy of the metadata has no `dashboard`; the rest is kept.
+    #[test]
+    fn the_page_is_not_sent_the_section_template() {
+        let (reg, _) = loaded(
+            &dendro_bytes("rezolus", &[("dashboard", &renamed_cpu("Processors"))]),
+            false,
+        );
+        let meta: serde_json::Value =
+            serde_json::from_str(&reg.file_metadata_json("baseline").unwrap()).unwrap();
+        assert!(meta.get("dashboard").is_none());
+        assert_eq!(meta["source"], "rezolus");
+        // The template still renders.
+        assert_eq!(cpu_name(&reg), "Processors");
     }
 
     /// In a comparison both captures render the baseline's template, so they

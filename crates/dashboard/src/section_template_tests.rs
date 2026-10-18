@@ -715,6 +715,9 @@ fn a_template_context_renders_the_templates_routes_only() {
             {"name": "Needs throughput", "route": "/needs", "groups": [plot("${throughput}")]},
             {"name": "Shadow", "route": "/service/svc", "groups": [plot("up")]},
             {"name": "Shadow source", "route": "/source/app", "groups": [plot("up")]},
+            {"name": "About", "route": "/about", "groups": [plot("up")]},
+            {"name": "Report", "route": "/report", "groups": [plot("up")]},
+            {"name": "Deep", "route": "/a/b", "groups": [plot("up")]},
         ],
     });
     let template = std::sync::Arc::new(SectionTemplate::parse(&doc.to_string()).unwrap());
@@ -748,4 +751,31 @@ fn a_template_context_renders_the_templates_routes_only() {
     assert!(render_section(&data, "/cpu", &ctx).is_none());
     assert!(render_section(&data, "/service/svc", &ctx).is_none());
     assert!(render_section(&data, "/source/app", &ctx).is_none());
+    assert!(render_section(&data, "/about", &ctx).is_none());
+    assert!(render_section(&data, "/report", &ctx).is_none());
+    assert!(render_section(&data, "/a/b", &ctx).is_none());
+}
+
+#[test]
+fn reserved_routes_are_the_frontends_and_deeper_ones() {
+    use crate::dashboard::{CLIENT_ROUTES, is_reserved_route};
+    for route in CLIENT_ROUTES {
+        assert!(is_reserved_route(route), "{route}");
+    }
+    for route in [
+        "/",
+        "",
+        "cpu",
+        "/service/x",
+        "/source/x",
+        "/cpu/chart/p",
+        "/a/b",
+    ] {
+        assert!(is_reserved_route(route), "{route}");
+    }
+    // Every section of the Rezolus template is shown.
+    for section in template().sections() {
+        assert!(!is_reserved_route(&section.route), "{}", section.route);
+    }
+    assert!(!is_reserved_route("/aboutx"));
 }

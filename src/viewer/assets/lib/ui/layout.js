@@ -2,6 +2,7 @@ import { TimeRangeBar, GranularitySelector } from './controls.js';
 import { notebookStore, reportStore, loadedSelectionStore, importSelection } from '../selection/selection.js';
 import { toggleTheme, currentTheme } from './theme.js';
 import { collectGroupPlots } from '../features/group_utils.js';
+import { groupSections } from './section_groups.js';
 import { compareBadgeRows, splitBadgeRows } from '../charts/compare.js';
 import { setAlignmentKind, setFamily } from '../selection/selection.js';
 import { captureContext, resolveAnchor, isKindAnchor } from '../events/capture_events.js';
@@ -361,27 +362,14 @@ const Sidebar = {
     view({ attrs }) {
         const sectionResponseCache = attrs.sectionResponseCache;
 
-        // In compare mode, cgroup section is hidden from navigation (v1 scope).
-        const visibleSections = attrs.compareMode
-            ? attrs.sections.filter((s) => s.route !== '/cgroups')
-            : attrs.sections;
-
-        const queryExplorer = visibleSections.find(
-            (s) => s.name === 'Query Explorer',
-        );
-        const overviewSection = visibleSections.find((s) => s.name === 'Overview');
-        const exceptionsSection = visibleSections.find((s) => s.name === 'Exceptions');
-        const serviceSections = visibleSections.filter((s) => s.route.startsWith('/service/'));
-        // Foreign (non-Rezolus) source sections get their own "Metrics" group;
-        // "Samplers" is reserved for the Rezolus agent's built-in samplers.
-        const metricSections = visibleSections.filter((s) => s.route.startsWith('/source/'));
-        const samplerSections = visibleSections.filter(
-            (s) => s.name !== 'Query Explorer'
-                && s.name !== 'Overview'
-                && s.name !== 'Exceptions'
-                && !s.route.startsWith('/service/')
-                && !s.route.startsWith('/source/'),
-        );
+        const {
+            queryExplorer,
+            overview: overviewSection,
+            exceptions: exceptionsSection,
+            services: serviceSections,
+            metrics: metricSections,
+            samplers: samplerSections,
+        } = groupSections(attrs.sections, attrs.compareMode);
 
         return [
         m('div.sidebar-backdrop', {

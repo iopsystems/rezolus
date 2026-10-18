@@ -36,10 +36,12 @@
 //! [`TemplatePreference::Registry`] the embedded template renders whatever the
 //! metadata carries. Under [`TemplatePreference::Archive`] the metadata's
 //! template renders when it is at most [`MAX_DASHBOARD_BYTES`] and
-//! [`SectionTemplate::parse`] accepts it; otherwise the embedded template
-//! renders and [`DashboardTemplate::notice`] says why. A recording without the
-//! key (a parquet, a `.rez`, anything scraped rather than streamed, or an
-//! agent older than this change) renders the embedded template, silently.
+//! [`SectionTemplate::parse`] accepts it and it has a section the viewer can
+//! show (see [`crate::dashboard::is_reserved_route`]); otherwise the embedded
+//! template renders and [`DashboardTemplate::notice`] says why. A recording
+//! without the key (a parquet, a `.rez`, anything scraped rather than
+//! streamed, or an agent older than this change) renders the embedded
+//! template, silently.
 
 use crate::section_template::SectionTemplate;
 use crate::{ServiceExtension, TemplateRegistry};
@@ -247,7 +249,11 @@ pub struct DashboardTemplate {
     pub template: Arc<SectionTemplate>,
     pub origin: DashboardOrigin,
     /// Why the metadata's template was not used, when it was present and
-    /// refused: too large, or [`SectionTemplate::parse`] rejected it.
+    /// refused (too large, [`SectionTemplate::parse`] rejected it, or no
+    /// section is left once [`is_reserved_route`] sections are dropped), or
+    /// which of its sections are not shown.
+    ///
+    /// [`is_reserved_route`]: crate::dashboard::is_reserved_route
     pub notice: Option<String>,
 }
 
@@ -338,15 +344,50 @@ pub fn resolve_dashboard_template(
         )));
     }
     match ParseCache::global().parse(json) {
-        Ok(template) => DashboardTemplate {
-            template,
-            origin: DashboardOrigin::Recording,
-            notice: None,
-        },
+        Ok(template) => {
+            let dropped: Vec<String> = template
+                .sections()
+                .into_iter()
+                .map(|s| s.route)
+                .filter(|r| crate::dashboard::is_reserved_route(r))
+                .collect();
+            let listed = template.sections().len() - dropped.len();
+            if listed == 0 {
+                return embedded(Some(format!(
+                    "the dashboard template in the recording's metadata has no section the \
+                     viewer can show{}; using the built-in template instead",
+                    dropped_routes(&dropped)
+                )));
+            }
+            DashboardTemplate {
+                template,
+                origin: DashboardOrigin::Recording,
+                notice: (!dropped.is_empty()).then(|| {
+                    format!(
+                        "the dashboard template in the recording's metadata has sections the \
+                         viewer does not show{}",
+                        dropped_routes(&dropped)
+                    )
+                }),
+            }
+        }
         Err(e) => embedded(Some(format!(
             "the dashboard template in the recording's metadata does not parse ({e}); \
              using the built-in template instead"
         ))),
+    }
+}
+
+/// ` (routes a, b: reserved for the viewer, or more than one segment)`, or
+/// nothing when `routes` is empty.
+fn dropped_routes(routes: &[String]) -> String {
+    if routes.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " (routes {}: reserved for the viewer, or more than one segment)",
+            routes.join(", ")
+        )
     }
 }
 
@@ -719,6 +760,43 @@ mod tests {
         at.push_str(&" ".repeat(MAX_DASHBOARD_BYTES - at.len()));
         let t = resolve_dashboard_template(&md(&[("dashboard", at)]), TemplatePreference::Archive);
         assert_eq!(t.origin, DashboardOrigin::Recording);
+    }
+
+    /// A template whose every section is one the viewer does not show falls
+    /// back to the embedded one, saying which routes; one with some such
+    /// sections renders, saying which are not shown.
+    #[test]
+    fn a_dashboard_with_no_showable_section_falls_back_with_a_notice() {
+        let doc = |routes: &[&str]| {
+            let sections: Vec<serde_json::Value> = routes
+                .iter()
+                .map(|r| serde_json::json!({"name": r, "route": r, "groups": []}))
+                .collect();
+            serde_json::json!({"schema": 1, "sections": sections}).to_string()
+        };
+        let m = md(&[("dashboard", doc(&["/about", "/x/y"]))]);
+        let t = resolve_dashboard_template(&m, TemplatePreference::Archive);
+        assert_eq!(t.origin, DashboardOrigin::Embedded);
+        let notice = t.notice.expect("a notice");
+        assert!(
+            notice.contains("no section the viewer can show"),
+            "{notice}"
+        );
+        assert!(notice.contains("/about, /x/y"), "{notice}");
+
+        let m = md(&[("dashboard", doc(&["/fine", "/metadata"]))]);
+        let t = resolve_dashboard_template(&m, TemplatePreference::Archive);
+        assert_eq!(t.origin, DashboardOrigin::Recording);
+        let notice = t.notice.expect("a notice");
+        assert!(
+            notice.contains("does not show (routes /metadata"),
+            "{notice}"
+        );
+
+        let m = md(&[("dashboard", doc(&["/fine"]))]);
+        let t = resolve_dashboard_template(&m, TemplatePreference::Archive);
+        assert_eq!(t.origin, DashboardOrigin::Recording);
+        assert!(t.notice.is_none());
     }
 
     /// The same document is parsed once: the second lookup returns the

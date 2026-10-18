@@ -1014,7 +1014,7 @@ const SectionContent = {
             });
         }
 
-        if (sectionName === 'Query Explorer') {
+        if (sectionRoute === '/query') {
             return m('div#section-content', [
                 m(QueryExplorer, { liveMode, isRecording: () => recording }),
             ]);

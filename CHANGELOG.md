@@ -767,8 +767,13 @@
   viewers (`rezolus view`, its terminal UI, and the WASM viewer) render the
   Overview, Exceptions, CPU and the other built-in sections by expanding a
   section template rather than calling the Rust section generators: the
-  recording's `dashboard` when it is at most 1 MiB and parses, else the
-  template the viewer embeds. The navigation comes from the chosen template.
+  recording's `dashboard` when it is at most 1 MiB, parses, and has a section
+  the viewer can show, else the template the viewer embeds. The navigation
+  comes from the chosen template, less any section at a route the page renders
+  itself (`/about`, `/systeminfo`, `/metadata`, `/notebook`, `/selection`,
+  `/report`) or of more than one segment, which the page cannot reach; those
+  are named in a notice. The sidebar finds the Overview, Exceptions and the
+  query explorer by route, so a template may rename them.
   A recording without the key (parquet, `.rez`, anything scraped, or a
   recording of an older agent) renders the embedded template, which draws
   the same JSON as the generators did. A `dashboard` that is too large or
@@ -782,8 +787,12 @@
   the server and by the page; the other sections are unaffected. In a
   comparison, the baseline's template renders for both captures. The cost is
   the handshake: about 106 KB once per subscription, and the same once per
-  source in each archive written from the stream. The viewer's
-  `/api/v1/file_metadata` returns the key with the rest of the metadata.
+  source in each archive written from the stream. The viewers'
+  `/api/v1/file_metadata` (and the WASM `file_metadata_json`) leave the key
+  out; `rezolus recording metadata --json` prints it, as it prints every
+  key. The WASM bundle grows by 403 KB, from 7,273,651 to 7,677,090 bytes
+  (99 KB gzipped, 2,389,446 to 2,488,736): the embedded template and the
+  expander.
   Rendering a section from the template took the same time as the
   generators on a 9.6-hour recording (all built-in sections, warm: 0.48 ms
   against 0.45 ms; cold: 83 ms for both).

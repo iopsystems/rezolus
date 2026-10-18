@@ -63,9 +63,29 @@ impl CaptureSlot {
         Self {
             data: RwLock::new(data),
             systeminfo: RwLock::new(systeminfo),
-            file_metadata: RwLock::new(file_metadata),
+            file_metadata: RwLock::new(for_page(file_metadata)),
             alias: RwLock::new(alias),
         }
+    }
+}
+
+/// A capture's metadata as `/api/v1/file_metadata` serves it: the JSON object
+/// without its top-level `dashboard` key. The section template is about
+/// 106 KB, the page has no use for it (the server renders the sections), and
+/// one that is oversized would be shipped whole. A value that is not a JSON
+/// object is kept as it is.
+fn for_page(file_metadata: Option<String>) -> Option<String> {
+    let json = file_metadata?;
+    let key = ::dashboard::source_templates::KEY_DASHBOARD;
+    if !json.contains(&format!("\"{key}\"")) {
+        return Some(json);
+    }
+    match serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&json) {
+        Ok(mut map) => {
+            map.remove(key);
+            Some(serde_json::to_string(&map).unwrap_or(json))
+        }
+        Err(_) => Some(json),
     }
 }
 
@@ -158,7 +178,7 @@ impl CaptureRegistry {
 
     /// Overwrite the baseline slot's file_metadata.
     pub fn set_baseline_file_metadata(&self, file_metadata: Option<String>) {
-        *self.baseline.file_metadata.write() = file_metadata;
+        *self.baseline.file_metadata.write() = for_page(file_metadata);
     }
 
     /// Replace the baseline data store. The display filename is carried on
@@ -236,6 +256,41 @@ mod tests {
 
     fn registry() -> CaptureRegistry {
         CaptureRegistry::new(store("base.parquet"), None, None, Some("base".into()))
+    }
+
+    /// The page's copy of a capture's metadata has no `dashboard`, whichever
+    /// way it was set; the other keys are kept.
+    #[test]
+    fn the_page_is_not_sent_the_section_template() {
+        let meta = serde_json::json!({
+            "source": "rezolus",
+            "dashboard": {"schema": 1, "sections": []},
+            "per_source_metadata": {"x": {"dashboard": "kept"}},
+        })
+        .to_string();
+        let served = |json: Option<String>| -> serde_json::Value {
+            serde_json::from_str(&json.unwrap()).unwrap()
+        };
+        let reg = CaptureRegistry::new(store("b"), None, Some(meta.clone()), None);
+        let base = served(reg.file_metadata_by_id(BASELINE_ID));
+        assert!(base.get("dashboard").is_none(), "{base}");
+        assert_eq!(base["source"], "rezolus");
+        assert_eq!(base["per_source_metadata"]["x"]["dashboard"], "kept");
+
+        reg.set_baseline_file_metadata(Some(meta.clone()));
+        assert!(served(reg.file_metadata_by_id(BASELINE_ID))
+            .get("dashboard")
+            .is_none());
+
+        reg.attach_experiment(store("e"), None, Some(meta), None);
+        let exp = served(reg.file_metadata_by_id(EXPERIMENT_ID));
+        assert!(exp.get("dashboard").is_none(), "{exp}");
+        assert_eq!(exp["source"], "rezolus");
+
+        // Without the key, the text is served as it was given.
+        let plain = r#"{"source":"rezolus","b":1}"#.to_string();
+        reg.set_baseline_file_metadata(Some(plain.clone()));
+        assert_eq!(reg.file_metadata_by_id(BASELINE_ID), Some(plain));
     }
 
     #[test]

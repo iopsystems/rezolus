@@ -217,7 +217,7 @@ impl LazySectionStore {
     pub fn generate(&self, route: &str, data: &dyn MetricsSource) -> Option<serde_json::Value> {
         let rendered = dashboard::dashboard::render_section(data, route, &self.context)?;
         if let Some(error) = rendered.error {
-            super::metadata::warn_notice_once(format!(
+            super::metadata::warn_once(format!(
                 "section {route} could not be rendered from its dashboard template: {error}"
             ));
         }

@@ -281,7 +281,7 @@ pub fn service_extensions_from_metadata(
 }
 
 /// Log `notice` as a warning unless this process has already logged it.
-fn warn_once(notice: String) {
+pub(super) fn warn_once(notice: String) {
     if first_time(&notice) {
         warn!("{notice}");
     }
@@ -329,12 +329,6 @@ pub fn live_dashboard_context(
         None,
         &[],
     )
-}
-
-/// Log `notice` as a warning unless this process has already logged it, for
-/// the section store's expansion errors.
-pub(super) fn warn_notice_once(notice: String) {
-    warn_once(notice);
 }
 
 /// The KPI templates for a loaded capture, from its own metadata.

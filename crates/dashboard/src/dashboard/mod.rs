@@ -79,13 +79,28 @@ pub struct DashboardContext {
     pub template: Option<Arc<SectionTemplate>>,
 }
 
-/// Route prefixes the service, category and source sections own. A template
-/// section under one is left out of the navigation and never rendered, so it
-/// cannot shadow a section of those kinds.
-const RESERVED_ROUTE_PREFIXES: &[&str] = &["/service/", "/source/"];
+/// Routes the frontend renders itself (`app.js`'s `/about` route and its
+/// client-only `/:section` views), which a template section must not take.
+pub const CLIENT_ROUTES: &[&str] = &[
+    "/about",
+    "/systeminfo",
+    "/metadata",
+    "/notebook",
+    "/selection",
+    "/report",
+];
 
-fn is_reserved_route(route: &str) -> bool {
-    RESERVED_ROUTE_PREFIXES.iter().any(|p| route.starts_with(p))
+/// Whether a template section at `route` is left out of the navigation and
+/// never rendered: a route the frontend renders itself ([`CLIENT_ROUTES`]),
+/// or one of more than one segment. The frontend routes a section as
+/// `/:section`, so a deeper route is unreachable (`/a/chart/b` is the
+/// single-chart route), and `/service/` and `/source/` belong to the service,
+/// category and source sections.
+pub fn is_reserved_route(route: &str) -> bool {
+    let Some(rest) = route.strip_prefix('/') else {
+        return true;
+    };
+    rest.is_empty() || rest.contains('/') || CLIENT_ROUTES.contains(&route)
 }
 
 /// Build the navigation list and other shared state needed to render
