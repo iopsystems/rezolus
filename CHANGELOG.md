@@ -140,7 +140,8 @@
   `@<host>` (`#/cpu@web-02`), grouped by host in the sidebar; an agent and a
   service show the agent's sections next to the service's dashboard from the
   template in its recording. Every query of a recording's sections is
-  restricted to that recording by its labels (`{host="web-02"}`), the
+  restricted to that recording by its labels (`{host="web-02"}`, or
+  `{role!="x"}` for a recording that lacks a label another carries), the
   section's header (interval, source, version, time range) is the
   recording's, and its charts are chosen from its own metrics. It opens as an
   A/B comparison, as before, when `--baseline`/`--experiment` name its
@@ -151,8 +152,14 @@
   in time (two hosts recorded by separate `record` processes in one run) now
   opens combined; `--baseline`/`--experiment` still open it A/B. In the
   static viewer, `WasmCaptureRegistry::set_compare_requested(true)` asks for
-  the comparison. A combined archive that is still being written is followed
-  as one capture, recordings with identical label sets included.
+  the comparison (the static site: `?compare=1`). A combined archive that is
+  still being written is followed as one capture, recordings with identical
+  label sets included; a recording whose rows have not arrived at the open
+  has its sections from the start, and one added while followed gets them
+  when found, with a warning to reload the page. Each host's Overview shows
+  the throughput of a service recorded on that host (none for a host with
+  no service), and System Info lists each recording's hardware under its
+  host.
 - **A single-source parquet's `source` is a series label.** Its series
   carry the file's `source`, as an archive recording's series carry its
   recording's labels, so a KPI template carried in the parquet (llm-perf's,
@@ -161,12 +168,20 @@
   KPIs where it listed them all as unavailable, and `rezolus mcp query`,
   `recording check` and the static viewer read the same series. A combined
   parquet, whose columns carry their own `source`, and a parquet any of
-  whose series already carry a `source` label are read as before.
+  whose series already carry a `source` label are read as before. A series
+  that had no visible label now has `source`, so a chart of one such series
+  can be named by it (a lone series named "rezolus" where it was unnamed).
 - **`rezolus mcp` reads an archive of one run combined.** Without
   `--recording` (or the stdio server's `recording` object), `query`,
   `describe-metrics`, `detect-anomalies` and `analyze-correlation` read every
-  recording together, each series under its recording's labels, where they
-  refused before; `describe-recording` lists the recordings and says so.
+  recording together, each series under its recording's labels, and exit 0
+  with the merged result, where before they exited 1 with a listing of the
+  recordings; `describe-recording` lists the recordings and says so. A query
+  written for one host can now match nothing: `sum(irate(cpu_usage[5m])) /
+  cpu_cores` over two hosts divides one series by two (`cpu_cores` has one
+  per host) and answers "No series matched". Use `sum by (host)
+  (irate(cpu_usage[5m])) / on (host) cpu_cores`, a matcher
+  (`cpu_cores{host="web-01"}`), or `--recording host=web-01`.
   `extract-features`, whose record describes one recording, and every tool
   on a comparison (recordings carrying `arm`, or of different runs) still
   need a selector. `recording check` is unchanged: it evaluates each

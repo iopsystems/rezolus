@@ -542,9 +542,12 @@ filters. Parameters placed after the hash (`#/cpu?from=...`) are not read.
 The viewer rewrites the query string as you zoom or change a selector, so
 the address bar is always a link to what you see. Both the server viewer and
 the static site read the same parameters; the static site adds `capture=`
-for the file. Compare mode is not a parameter: it comes from what was
-opened (two files, or a two-recording `.rez`), and the `anchor.*` keys only
-apply then.
+for the file, and `compare=1`, which opens an archive of several
+recordings of one run as an A/B comparison of its first two (the static
+site's form of `rezolus view --baseline .. --experiment ..`; without it such
+an archive is one combined view). Otherwise compare mode comes from what
+was opened (two files, or an archive whose recordings carry `arm` or are of
+different runs), and the `anchor.*` keys only apply then.
 
 ```text
 http://127.0.0.1:4200/?from=2026-09-28T14:03:11.250Z&to=2026-09-28T14:05:40Z#/cpu
