@@ -743,8 +743,8 @@
   makes; a control character from the catalog counts as its six-byte JSON
   escape); and 16 Mi units of fuel, one per iteration of every loop plus one
   per byte scanned, compared or copied and 64 per call into the metric
-  source; a map lookup charges its key's bytes once per level of the map.
-  Each metric is read from the source once per section expansion.
+  source; a lookup in an ordered map charges its key's bytes once per
+  level of the map, and one in a hash map twice. Each metric is read from the source once per section expansion.
   `distinct_gt` counts tuples by a 128-bit hash, so two tuples whose hashes
   collide would count as one. On a 9.6-hour recording with a warm reader,
   the slowest construction found takes 0.34 s to reach the fuel limit, about

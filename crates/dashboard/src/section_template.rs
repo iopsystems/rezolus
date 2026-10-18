@@ -182,8 +182,9 @@
 //!   and the copies [`SubGroup::histogram_rate_mean`] makes of its
 //!   selector, title and id. A C0 control character, which a catalog value
 //!   or a parameter can bring in (template strings cannot hold one),
-//!   counts as the six bytes JSON writes it as, so the serialized view is
-//!   at most about twice the count (for strings of `"` and `\`);
+//!   counts as the six bytes JSON writes it as. A percentile counts as 8
+//!   bytes and serializes as up to 25, so the serialized view is at most
+//!   about three times the count;
 //! - spends at most [`MAX_FUEL`] units of fuel, which count the input it
 //!   processes: one unit per iteration of every loop (a node, a predicate,
 //!   a reference, a series walked, a counter name, a binding), one per
@@ -196,9 +197,9 @@
 //!
 //! The invariant the fuel counter rests on: every loop in expansion
 //! charges at least one unit per iteration, and every string it copies,
-//! scans or compares charges at least its length once. A map lookup
-//! charges the key's bytes once per level of the map; a sort is charged
-//! per level of comparisons. A comment at each loop in the code names its
+//! scans or compares charges at least its length once. A lookup in an
+//! ordered map charges the key's bytes once per level of the map, and one
+//! in a hash map twice; a sort is charged per level of comparisons. A comment at each loop in the code names its
 //! charge.
 //!
 //! Measured on a 9.6-hour, 1.3 GB recording of a 16-CPU host opened as an
@@ -1967,7 +1968,8 @@ impl<'a> Scope<'a> {
 
     /// A lookup or insert of a `key`-byte key in an ordered map or set of
     /// `len` entries: one unit, plus the key's bytes once per level of the
-    /// map, since each level compares it.
+    /// map. A level can compare the key against several keys of its node;
+    /// the charge is per level.
     fn spend_lookup(&self, key: usize, len: usize) -> Result<(), TemplateError> {
         self.spend_fuel(1 + key.saturating_mul(levels(len)))
     }
