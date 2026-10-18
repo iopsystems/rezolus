@@ -81,19 +81,106 @@ pub fn layout(recordings: &[RecordingSummary], compare_requested: bool) -> Layou
     }
 }
 
+/// How a [`Matcher`] compares a label's value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum MatchOp {
+    /// `label="value"`.
+    #[serde(rename = "=")]
+    Eq,
+    /// `label!="value"`, which a series without the label also passes.
+    #[serde(rename = "!=")]
+    Ne,
+    /// `label!~"a|b"`: none of the alternatives, which a series without the
+    /// label also passes.
+    #[serde(rename = "!~")]
+    NotRegex,
+}
+
+/// One label matcher of a recording's scope.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Matcher {
+    pub label: String,
+    pub op: MatchOp,
+    pub value: String,
+}
+
+impl Matcher {
+    pub fn eq(label: &str, value: &str) -> Self {
+        Self {
+            label: label.to_string(),
+            op: MatchOp::Eq,
+            value: value.to_string(),
+        }
+    }
+
+    pub fn ne(label: &str, value: &str) -> Self {
+        Self {
+            label: label.to_string(),
+            op: MatchOp::Ne,
+            value: value.to_string(),
+        }
+    }
+
+    /// Whether a series labelled `labels` passes.
+    pub fn matches(&self, labels: &BTreeMap<String, String>) -> bool {
+        let own = labels.get(&self.label).map(String::as_str);
+        match self.op {
+            MatchOp::Eq => own == Some(self.value.as_str()),
+            MatchOp::Ne => own != Some(self.value.as_str()),
+            MatchOp::NotRegex => own.is_none_or(|v| !self.value.split('|').any(|a| a == v)),
+        }
+    }
+
+    fn push(&self, out: &mut String) {
+        out.push_str(&self.label);
+        out.push_str(match self.op {
+            MatchOp::Eq => "=\"",
+            MatchOp::Ne => "!=\"",
+            MatchOp::NotRegex => "!~\"",
+        });
+        for c in self.value.chars() {
+            match c {
+                '\\' => out.push_str("\\\\"),
+                '"' => out.push_str("\\\""),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+    }
+}
+
 /// The matchers that select each recording's series out of a combined
-/// source: for each of `series_labels` (the labels each recording's series
-/// carry, `__recording__` included where it applies), its values for the
-/// keys whose values are not the same for every recording. A key a
-/// recording lacks is left out of its matchers. One recording, or recordings
-/// whose series carry equal labels, get no matchers.
-pub fn scope_matchers(series_labels: &[BTreeMap<String, String>]) -> Vec<BTreeMap<String, String>> {
+/// source, from `series_labels` (the labels each recording's series carry,
+/// `__recording__` included where it applies), over the keys whose values
+/// are not the same for every recording: `k="v"` for a key the recording
+/// has, and for a key it lacks `k!="v"` for the one value the others carry,
+/// or `k!~"v1|v2"` for several (a selector may match a label once). One
+/// recording, or recordings whose series carry equal labels, get none.
+pub fn scope_matchers(series_labels: &[BTreeMap<String, String>]) -> Vec<Vec<Matcher>> {
     let keys = discriminating_keys(series_labels);
     series_labels
         .iter()
         .map(|labels| {
             keys.iter()
-                .filter_map(|k| labels.get(*k).map(|v| ((*k).to_string(), v.clone())))
+                .map(|k| match labels.get(*k) {
+                    Some(v) => Matcher::eq(k, v),
+                    None => {
+                        let others: BTreeSet<&String> =
+                            series_labels.iter().filter_map(|l| l.get(*k)).collect();
+                        let values: Vec<&str> = others.into_iter().map(String::as_str).collect();
+                        if values.len() == 1 {
+                            Matcher::ne(k, values[0])
+                        } else {
+                            Matcher {
+                                label: (*k).to_string(),
+                                op: MatchOp::NotRegex,
+                                value: values.join("|"),
+                            }
+                        }
+                    }
+                })
                 .collect()
         })
         .collect()
@@ -114,17 +201,18 @@ fn discriminating_keys(labels: &[BTreeMap<String, String>]) -> Vec<&str> {
 }
 
 /// A display name for each of `labels` that tells them apart: the `host`
-/// value when hosts differ, else the differing values joined by `/`, else
-/// `recording N` (1-based).
+/// value when every one has a host and no two share it, else the differing
+/// values joined by `/`, else `recording N` (1-based).
 pub fn instance_names(labels: &[BTreeMap<String, String>]) -> Vec<String> {
     let keys = discriminating_keys(labels);
+    let hosts: Vec<Option<&String>> = labels.iter().map(|l| l.get("host")).collect();
+    let unique_hosts = hosts.iter().all(Option::is_some)
+        && hosts.iter().collect::<HashSet<_>>().len() == hosts.len();
     labels
         .iter()
         .enumerate()
         .map(|(i, l)| {
-            if keys.contains(&"host")
-                && let Some(host) = l.get("host")
-            {
+            if unique_hosts && let Some(host) = l.get("host") {
                 return host.clone();
             }
             let values: Vec<&str> = keys
@@ -221,21 +309,25 @@ const AGGREGATORS: &[&str] = &[
 ];
 
 /// `query` with `matchers` added to every series selector: a bare metric
-/// name gains `{k="v",...}`, and a selector's braces (`x{a="b"}`,
-/// `{__name__="x"}`) gain each matcher on a label they do not already
-/// match. A selector that already has a matcher on one of the keys keeps
-/// its own for that key, so a query written for a source (`{source="vllm"}`)
-/// or restricted before (a service's throughput query placed into another
-/// source's Overview) is left as it asks.
+/// name gains `{k="v",...}`, and each `or` branch of a selector's braces
+/// (`x{a="b"}`, `{__name__="x"}`, `{a="1" or b="2"}`) gains each matcher.
+/// A branch with its own `k="v"` (an `=` with a value) on a matcher's label
+/// keeps it in place of the matcher, so a query written for a source
+/// (`{source="vllm"}`) or restricted before (a service's throughput query
+/// placed into another source's Overview) is left as it asks. Any other
+/// matcher of its own on the label (`host!=""`, `host=~".+"`) is kept and
+/// the scope's is added too; the engine refuses a selector that matches a
+/// label twice, so such a query errors rather than reading every
+/// recording.
 ///
 /// The query is read by its tokens rather than parsed, so it works for the
 /// histogram functions PromQL does not have (`histogram_quantiles([0.5],
 /// x)`), and every character outside the inserted matchers is kept as
-/// written. Strings, `[...]` ranges and quantile lists, the label lists of
-/// `by`, `without`, `on`, `ignoring`, `group_left` and `group_right`, and an
-/// `offset` duration are skipped; an identifier followed by `(` is a
-/// function or an aggregation.
-pub fn restrict_query(query: &str, matchers: &BTreeMap<String, String>) -> String {
+/// written. Strings, `#` comments, `[...]` ranges and quantile lists, the
+/// label lists of `by`, `without`, `on`, `ignoring`, `group_left` and
+/// `group_right`, and an `offset` duration are skipped; an identifier
+/// followed by `(` is a function or an aggregation.
+pub fn restrict_query(query: &str, matchers: &[Matcher]) -> String {
     if matchers.is_empty() {
         return query.to_string();
     }
@@ -248,6 +340,11 @@ pub fn restrict_query(query: &str, matchers: &BTreeMap<String, String>) -> Strin
         match c {
             b'"' | b'\'' | b'`' => {
                 let end = skip_string(bytes, i);
+                out.push_str(&query[i..end]);
+                i = end;
+            }
+            b'#' => {
+                let end = skip_comment(bytes, i);
                 out.push_str(&query[i..end]);
                 i = end;
             }
@@ -336,78 +433,124 @@ pub fn restrict_query(query: &str, matchers: &BTreeMap<String, String>) -> Strin
     out
 }
 
-/// The braces of a selector, `inner` being what is between them, with each
-/// matcher on a label `inner` does not already match added.
-fn restrict_braces(inner: &str, matchers: &BTreeMap<String, String>) -> String {
-    let named = matched_labels(inner);
-    let missing: Vec<(&String, &String)> = matchers
-        .iter()
-        .filter(|(k, _)| !named.contains(k.as_str()))
-        .collect();
+/// The braces of a selector, `inner` being what is between them, with
+/// each `or` branch restricted by [`restrict_branch`].
+fn restrict_braces(inner: &str, matchers: &[Matcher]) -> String {
     let mut out = String::with_capacity(inner.len() + 32);
     out.push('{');
-    if missing.is_empty() {
-        out.push_str(inner);
-        out.push('}');
-        return out;
+    let mut start = 0;
+    for (or_start, or_end) in or_separators(inner) {
+        out.push_str(&restrict_branch(&inner[start..or_start], matchers));
+        out.push_str(&inner[or_start..or_end]);
+        start = or_end;
     }
-    let kept = inner.trim_end();
-    out.push_str(kept);
-    if !kept.trim().is_empty() && !kept.ends_with(',') {
-        out.push(',');
-    }
-    push_matchers(&mut out, missing.into_iter());
+    out.push_str(&restrict_branch(&inner[start..], matchers));
     out.push('}');
     out
 }
 
-/// The label names matched between a selector's braces.
-fn matched_labels(inner: &str) -> HashSet<&str> {
+/// One `or` branch of a selector's braces with each matcher added whose
+/// label the branch does not match with `=` and a value. Whitespace around
+/// the branch is kept.
+fn restrict_branch(branch: &str, matchers: &[Matcher]) -> String {
+    let pinned = pinned_labels(branch);
+    let missing: Vec<&Matcher> = matchers
+        .iter()
+        .filter(|m| !pinned.contains(m.label.as_str()))
+        .collect();
+    if missing.is_empty() {
+        return branch.to_string();
+    }
+    let body_end = branch.trim_end().len();
+    let (body, tail) = branch.split_at(body_end);
+    let mut out = String::with_capacity(branch.len() + 32);
+    out.push_str(body);
+    if !body.trim().is_empty() && !body.ends_with(',') {
+        out.push(',');
+    }
+    push_matchers(&mut out, missing.into_iter());
+    out.push_str(tail);
+    out
+}
+
+/// The spans of the top-level `or` keywords between a selector's braces.
+fn or_separators(inner: &str) -> Vec<(usize, usize)> {
     let bytes = inner.as_bytes();
-    let mut names = HashSet::new();
+    let mut spans = Vec::new();
     let mut i = 0;
-    let mut at_name = true;
     while i < bytes.len() {
         let c = bytes[i];
         if c == b'"' || c == b'\'' || c == b'`' {
             i = skip_string(bytes, i);
-            at_name = false;
-        } else if c == b',' {
-            at_name = true;
-            i += 1;
-        } else if at_name && is_ident_start(c) {
+        } else if c == b'#' {
+            i = skip_comment(bytes, i);
+        } else if is_ident_start(c) {
             let end = skip_ident(bytes, i);
-            names.insert(&inner[i..end]);
-            at_name = false;
+            let word = &inner[i..end];
+            let before = i == 0 || bytes[i - 1].is_ascii_whitespace();
+            let after = end == bytes.len() || bytes[end].is_ascii_whitespace();
+            if word.eq_ignore_ascii_case("or") && before && after {
+                spans.push((i, end));
+            }
             i = end;
         } else {
-            if !c.is_ascii_whitespace() {
-                at_name = false;
-            }
             i += 1;
         }
     }
-    names
+    spans
 }
 
-fn push_matchers<'a>(out: &mut String, matchers: impl Iterator<Item = (&'a String, &'a String)>) {
-    for (n, (k, v)) in matchers.enumerate() {
+/// The labels a branch of a selector's braces matches with `=` and a
+/// non-empty value.
+fn pinned_labels(branch: &str) -> HashSet<&str> {
+    let bytes = branch.as_bytes();
+    let mut pinned = HashSet::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'"' || c == b'\'' || c == b'`' {
+            i = skip_string(bytes, i);
+        } else if c == b'#' {
+            i = skip_comment(bytes, i);
+        } else if is_ident_start(c) {
+            let end = skip_ident(bytes, i);
+            let name = &branch[i..end];
+            let j = skip_ws(bytes, end);
+            // `=` alone: not `=~`, `!=` or `!~`.
+            let eq = bytes.get(j) == Some(&b'=') && bytes.get(j + 1) != Some(&b'~');
+            i = end;
+            if eq {
+                let k = skip_ws(bytes, j + 1);
+                if matches!(bytes.get(k), Some(b'"' | b'\'' | b'`')) {
+                    let close = skip_string(bytes, k);
+                    if close > k + 2 {
+                        pinned.insert(name);
+                    }
+                    i = close;
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    pinned
+}
+
+fn push_matchers<'a>(out: &mut String, matchers: impl Iterator<Item = &'a Matcher>) {
+    for (n, m) in matchers.enumerate() {
         if n > 0 {
             out.push(',');
         }
-        out.push_str(k);
-        out.push_str("=\"");
-        for c in v.chars() {
-            match c {
-                '\\' => out.push_str("\\\\"),
-                '"' => out.push_str("\\\""),
-                '\n' => out.push_str("\\n"),
-                '\r' => out.push_str("\\r"),
-                c => out.push(c),
-            }
-        }
-        out.push('"');
+        m.push(out);
     }
+}
+
+/// The index of the newline ending the `#` comment at `i`, or the end.
+fn skip_comment(bytes: &[u8], i: usize) -> usize {
+    bytes[i..]
+        .iter()
+        .position(|b| *b == b'\n')
+        .map_or(bytes.len(), |n| i + n)
 }
 
 fn is_ident_start(c: u8) -> bool {
@@ -454,6 +597,7 @@ fn skip_until(bytes: &[u8], mut i: usize, close: u8) -> usize {
     while i < bytes.len() {
         match bytes[i] {
             b'"' | b'\'' | b'`' => i = skip_string(bytes, i),
+            b'#' => i = skip_comment(bytes, i),
             c if c == close => return i + 1,
             _ => i += 1,
         }
@@ -514,12 +658,62 @@ pub struct Member {
     pub header: Header,
 }
 
+/// One recording for [`assemble_members`]: its labels, the labels its
+/// series carry in the joined reader, its header and its metadata.
+pub type RecordingParts = (
+    BTreeMap<String, String>,
+    Option<BTreeMap<String, String>>,
+    Header,
+    HashMap<String, String>,
+);
+
+/// The [`Member`]s of a combined source, from each recording's labels (as
+/// the catalog holds them), the labels its series carry in the joined reader
+/// (`None` for a recording with no tables yet, which then counts by its
+/// labels, so an endpoint whose rows have not arrived still has its
+/// sections and is not merged into another's), its header and its
+/// metadata; and the source's systeminfo: the one recording's that carries
+/// one, or with several, an object of each by its instance name
+/// ([`instance_names`]), the shape the System Info page shows per node.
+pub fn assemble_members(recordings: Vec<RecordingParts>) -> (Vec<Member>, Option<String>) {
+    let members: Vec<Member> = recordings
+        .into_iter()
+        .map(|(labels, series, header, metadata)| Member {
+            series_labels: series.unwrap_or(labels),
+            metadata,
+            header,
+        })
+        .collect();
+    let with_info: Vec<&Member> = members
+        .iter()
+        .filter(|m| m.metadata.contains_key("systeminfo"))
+        .collect();
+    let systeminfo = match with_info.as_slice() {
+        [] => None,
+        [one] => one.metadata.get("systeminfo").cloned(),
+        several => {
+            let labels: Vec<BTreeMap<String, String>> =
+                several.iter().map(|m| m.series_labels.clone()).collect();
+            let names = instance_names(&labels);
+            let mut nodes = serde_json::Map::new();
+            for (name, m) in names.into_iter().zip(several) {
+                let raw = &m.metadata["systeminfo"];
+                let value = serde_json::from_str(raw)
+                    .unwrap_or_else(|_| serde_json::Value::String(raw.clone()));
+                nodes.insert(name, value);
+            }
+            serde_json::to_string(&nodes).ok()
+        }
+    };
+    (members, systeminfo)
+}
+
 /// One recording's part of a combined source: its matchers, header and
 /// metadata.
 #[derive(Clone, Debug, Default)]
 pub struct Scope {
     /// What selects the recording's series; see [`scope_matchers`].
-    pub matchers: BTreeMap<String, String>,
+    pub matchers: Vec<Matcher>,
     pub header: Header,
     pub metadata: HashMap<String, String>,
 }
@@ -544,7 +738,7 @@ impl<'a> Scoped<'a> {
     fn keep(&self, labels: Vec<BTreeMap<String, String>>) -> Vec<BTreeMap<String, String>> {
         labels
             .into_iter()
-            .filter(|l| self.scope.matchers.iter().all(|(k, v)| l.get(k) == Some(v)))
+            .filter(|l| self.scope.matchers.iter().all(|m| m.matches(l)))
             .collect()
     }
 
@@ -781,19 +975,68 @@ mod tests {
         assert_eq!(
             scope_matchers(&labels),
             [
-                m(&[("source", "rezolus"), ("host", "a")]),
-                m(&[("source", "rezolus"), ("host", "b")]),
-                m(&[("source", "svc"), ("host", "a")]),
+                eqs(&[("host", "a"), ("source", "rezolus")]),
+                eqs(&[("host", "b"), ("source", "rezolus")]),
+                eqs(&[("host", "a"), ("source", "svc")]),
             ]
         );
-        assert_eq!(scope_matchers(&labels[..1]), [m(&[])]);
+        assert_eq!(scope_matchers(&labels[..1]), [eqs(&[])]);
         let twins = [
             m(&[("source", "rezolus"), (RECORDING_LABEL, "0")]),
             m(&[("source", "rezolus"), (RECORDING_LABEL, "1")]),
         ];
         assert_eq!(
             scope_matchers(&twins),
-            [m(&[(RECORDING_LABEL, "0")]), m(&[(RECORDING_LABEL, "1")])]
+            [
+                eqs(&[(RECORDING_LABEL, "0")]),
+                eqs(&[(RECORDING_LABEL, "1")])
+            ]
+        );
+    }
+
+    /// A recording that lacks a label another carries is told apart by the
+    /// other's value: `role!="x"` (the engine's `role=""` matches nothing and
+    /// `role!~".+"` everything). Each scope selects its recording alone.
+    #[test]
+    fn a_recording_lacking_a_label_is_selected_by_its_absence() {
+        let pair = [
+            m(&[("source", "rezolus"), ("host", "a")]),
+            m(&[("source", "rezolus"), ("host", "a"), ("role", "x")]),
+        ];
+        let scopes = scope_matchers(&pair);
+        assert_eq!(
+            scopes,
+            [vec![Matcher::ne("role", "x")], eqs(&[("role", "x")])]
+        );
+        let three = [
+            m(&[("host", "a"), ("role", "x")]),
+            m(&[("host", "b")]),
+            m(&[("host", "c"), ("role", "y")]),
+            m(&[("host", "d")]),
+        ];
+        let scopes = scope_matchers(&three);
+        assert_eq!(
+            scopes[1],
+            [
+                Matcher::eq("host", "b"),
+                Matcher {
+                    label: "role".into(),
+                    op: MatchOp::NotRegex,
+                    value: "x|y".into(),
+                },
+            ]
+        );
+        for (labels, scope) in [(&pair[..], scope_matchers(&pair)), (&three[..], scopes)] {
+            for (i, matchers) in scope.iter().enumerate() {
+                let selected: Vec<usize> = (0..labels.len())
+                    .filter(|j| matchers.iter().all(|m| m.matches(&labels[*j])))
+                    .collect();
+                assert_eq!(selected, [i], "{matchers:?}");
+            }
+        }
+        assert_eq!(
+            restrict_query("cpu_cores", &scope_matchers(&pair)[0]),
+            r#"cpu_cores{role!="x"}"#
         );
     }
 
@@ -812,12 +1055,23 @@ mod tests {
             m(&[("source", "a"), (RECORDING_LABEL, "3")]),
         ]);
         assert_eq!(names, ["recording 1", "recording 2"]);
+        // A host two recordings share names neither alone.
+        let names = instance_names(&[
+            m(&[("source", "rezolus"), ("host", "a")]),
+            m(&[("source", "svc"), ("host", "a")]),
+            m(&[("source", "rezolus"), ("host", "b")]),
+        ]);
+        assert_eq!(names, ["a/rezolus", "a/svc", "b/rezolus"]);
         assert_eq!(base_route("/cpu@web-01"), "/cpu");
         assert_eq!(base_route("/cpu"), "/cpu");
     }
 
-    fn h1() -> BTreeMap<String, String> {
-        m(&[("host", "h1")])
+    fn eqs(pairs: &[(&str, &str)]) -> Vec<Matcher> {
+        pairs.iter().map(|(k, v)| Matcher::eq(k, v)).collect()
+    }
+
+    fn h1() -> Vec<Matcher> {
+        eqs(&[("host", "h1")])
     }
 
     #[test]
@@ -882,7 +1136,7 @@ mod tests {
 
     #[test]
     fn a_selector_keeps_its_own_matcher_on_a_key() {
-        let both = m(&[("host", "h1"), ("source", "svc")]);
+        let both = eqs(&[("host", "h1"), ("source", "svc")]);
         assert_eq!(
             restrict_query(r#"up{source="vllm"} + down"#, &both),
             r#"up{source="vllm",host="h1"} + down{host="h1",source="svc"}"#
@@ -894,6 +1148,35 @@ mod tests {
         // Restricting twice changes nothing.
         let once = restrict_query("sum(irate(x[5m])) / y", &both);
         assert_eq!(restrict_query(&once, &both), once);
+        // Only `=` with a value stands in for the scope's matcher; any other
+        // matcher on the label is kept and the scope's added too.
+        assert_eq!(
+            restrict_query(r#"x{host!=""} + y{host=~".+"} + z{host=""}"#, &h1()),
+            r#"x{host!="",host="h1"} + y{host=~".+",host="h1"} + z{host="",host="h1"}"#
+        );
+    }
+
+    /// Each `or` branch of a selector's braces gains the matchers, and a `#`
+    /// comment is skipped, quotes and braces in it included.
+    #[test]
+    fn or_branches_and_comments() {
+        assert_eq!(
+            restrict_query(r#"x{a="1" or b="2"}"#, &h1()),
+            r#"x{a="1",host="h1" or b="2",host="h1"}"#
+        );
+        assert_eq!(
+            restrict_query(r#"x{host="h9" or b="2"}"#, &h1()),
+            r#"x{host="h9" or b="2",host="h1"}"#
+        );
+        // `or` as a label value or name part is not a separator.
+        assert_eq!(
+            restrict_query(r#"x{color="or",orient="v"}"#, &h1()),
+            r#"x{color="or",orient="v",host="h1"}"#
+        );
+        assert_eq!(
+            restrict_query("sum(x) # don't {count} y\n/ z", &h1()),
+            "sum(x{host=\"h1\"}) # don't {count} y\n/ z{host=\"h1\"}"
+        );
     }
 
     fn fixture(name: &str) -> metriken_query::ParquetReader {
@@ -954,8 +1237,8 @@ mod tests {
 
     #[test]
     fn values_are_escaped_and_no_matchers_change_nothing() {
-        let odd = m(&[("host", "a\"b\\c")]);
+        let odd = eqs(&[("host", "a\"b\\c")]);
         assert_eq!(restrict_query("x", &odd), r#"x{host="a\"b\\c"}"#);
-        assert_eq!(restrict_query("sum(x)", &m(&[])), "sum(x)");
+        assert_eq!(restrict_query("sum(x)", &[]), "sum(x)");
     }
 }

@@ -93,6 +93,9 @@ pub struct RouteScope {
     /// The template the route's section expands, for a built-in section.
     /// `None` for a service section.
     pub template: Option<Arc<SectionTemplate>>,
+    /// The viewer parameter `throughput` the section expands with; see
+    /// [`build_combined_context`].
+    pub throughput: Option<String>,
 }
 
 /// Routes the frontend renders itself (`app.js`'s `/about` route and its
@@ -319,9 +322,12 @@ pub fn validate_service_extensions(
 /// [`Scoped`]: the recording's catalog, its own header (interval, source,
 /// version and time range), and its queries restricted to its series by
 /// [`combined::restrict_query`], with the matchers also under
-/// [`combined::SCOPE_KEY`] in the view's metadata. The Overview's
-/// throughput is the first service's, restricted to that service's
-/// recording.
+/// [`combined::SCOPE_KEY`] in the view's metadata. An instance's Overview
+/// shows the throughput of a service of its own recording, else of a
+/// service recorded from the same `host`, restricted to that service's
+/// recording; an instance with neither has none, rather than another
+/// host's. `DashboardContext::throughput_query` is the first instance's (or,
+/// with no built-in instance, the first service's).
 ///
 /// Returns the context and what the template lookups had to say.
 pub fn build_combined_context(
@@ -404,12 +410,35 @@ pub fn build_combined_context(
     let builtin: Vec<usize> = (0..parts.len())
         .filter(|&i| parts[i].template.is_some())
         .collect();
+    // Each service's throughput query, restricted to its recording, with
+    // the recording it reads.
+    let throughputs: Vec<(usize, String)> = parts
+        .iter()
+        .enumerate()
+        .flat_map(|(i, part)| {
+            part.service_exts
+                .iter()
+                .filter_map(move |(_, ext)| ext.throughput_query().map(|q| (i, q)))
+        })
+        .map(|(i, q)| (i, combined::restrict_query(q, &parts[i].scope.matchers)))
+        .collect();
+    // An instance's throughput: a service of its own recording's, else of a
+    // recording on its host, else none.
+    let host = |i: usize| series_labels[i].get("host");
+    let throughput_for = |i: usize| -> Option<String> {
+        throughputs
+            .iter()
+            .find(|(j, _)| *j == i)
+            .or_else(|| host(i).and_then(|h| throughputs.iter().find(|(j, _)| host(*j) == Some(h))))
+            .map(|(_, q)| q.clone())
+    };
     let (names, keys) = instance_naming(&builtin, &series_labels);
     for (n, &i) in builtin.iter().enumerate() {
         let template = parts[i].template.clone().expect("filtered on a template");
         let scope = Arc::new(RouteScope {
             scope: parts[i].scope.clone(),
             template: Some(Arc::clone(&template)),
+            throughput: throughput_for(i),
         });
         for mut section in template.sections() {
             if is_reserved_route(&section.route) || (n > 0 && section.route == "/query") {
@@ -438,7 +467,6 @@ pub fn build_combined_context(
     let insert_pos = sections.len().min(1);
     let mut service_exts: Vec<(String, ServiceExtension)> = Vec::new();
     let mut service_sections: Vec<Section> = Vec::new();
-    let mut throughput_query: Option<String> = None;
     let mut by_service: Vec<(String, Vec<(usize, ServiceExtension)>)> = Vec::new();
     for (i, part) in parts.iter().enumerate() {
         for (name, ext) in &part.service_exts {
@@ -458,17 +486,13 @@ pub fn build_combined_context(
             } else {
                 format!("{name}{}{}", combined::INSTANCE_SEPARATOR, keys[n])
             };
-            if throughput_query.is_none()
-                && let Some(q) = ext.throughput_query()
-            {
-                throughput_query = Some(combined::restrict_query(q, &scope.matchers));
-            }
             let route = format!("/service/{route_name}");
             scopes.insert(
                 route.clone(),
                 Arc::new(RouteScope {
                     scope: scope.clone(),
                     template: None,
+                    throughput: None,
                 }),
             );
             service_sections.push(Section {
@@ -498,6 +522,10 @@ pub fn build_combined_context(
     }
 
     let template = builtin.first().and_then(|&i| parts[i].template.clone());
+    let throughput_query = builtin
+        .first()
+        .and_then(|&i| throughput_for(i))
+        .or_else(|| throughputs.first().map(|(_, q)| q.clone()));
     let context = DashboardContext {
         sections,
         filesize,
@@ -559,7 +587,7 @@ pub fn render_section(
     if is_reserved_route(route) {
         return None;
     }
-    expand(data, template, route, ctx)
+    expand(data, template, route, ctx, ctx.throughput_query.as_deref())
 }
 
 /// A route of a combined source ([`build_combined_context`]): rendered
@@ -572,7 +600,13 @@ fn render_scoped(
 ) -> Option<Rendered> {
     let scoped = Scoped::new(data, &route_scope.scope);
     let mut rendered = match route_scope.template.as_deref() {
-        Some(template) => expand(&scoped, template, combined::base_route(route), ctx)?,
+        Some(template) => expand(
+            &scoped,
+            template,
+            combined::base_route(route),
+            ctx,
+            route_scope.throughput.as_deref(),
+        )?,
         None => generate_section(&scoped, route, ctx).map(|view| Rendered { view, error: None })?,
     };
     let matchers = &route_scope.scope.matchers;
@@ -589,16 +623,17 @@ fn render_scoped(
 }
 
 /// Expand `route` of `template` against `data`, with the viewer parameter
-/// `throughput` set from the throughput KPI.
+/// `throughput` set to `throughput`.
 fn expand(
     data: &dyn MetricsSource,
     template: &SectionTemplate,
     route: &str,
     ctx: &DashboardContext,
+    throughput: Option<&str>,
 ) -> Option<Rendered> {
     let mut params = BTreeMap::new();
-    if let Some(query) = &ctx.throughput_query {
-        params.insert("throughput".to_string(), query.clone());
+    if let Some(query) = throughput {
+        params.insert("throughput".to_string(), query.to_string());
     }
     match template.expand(data, route, ctx.sections.clone(), &params) {
         Ok(view) => view.map(|view| Rendered { view, error: None }),
@@ -770,7 +805,10 @@ mod tests {
         // The KPI has no data here, so it is listed, not drawn; the view is
         // the second recording's.
         let view = render_section(&data, "/service/svc@h2", &ctx).unwrap().view;
-        assert_eq!(view.metadata["scope"], serde_json::json!({"host": "h2"}));
+        assert_eq!(
+            view.metadata["scope"],
+            serde_json::json!([{"label": "host", "op": "=", "value": "h2"}])
+        );
     }
 
     #[test]
