@@ -131,6 +131,46 @@
   where the run-wide `--metadata` value won before. A per-endpoint key
   (`role=`, `template=`) beats the same key from `--metadata`, which applies
   to every recording.
+- **An archive of several recordings of one run opens as one combined
+  view.** `rezolus view run.dendro` on `record --endpoint a --endpoint b`'s
+  archive, and the static viewer given it, show one capture: every series
+  carries its recording's labels (`source`, `host`, `--label`s), and each
+  template renders once per recording that carries it. Two agents show the
+  built-in sections once per host, the second host's at routes ending in
+  `@<host>` (`#/cpu@web-02`), grouped by host in the sidebar; an agent and a
+  service show the agent's sections next to the service's dashboard from the
+  template in its recording. Every query of a recording's sections is
+  restricted to that recording by its labels (`{host="web-02"}`), the
+  section's header (interval, source, version, time range) is the
+  recording's, and its charts are chosen from its own metrics. It opens as an
+  A/B comparison, as before, when `--baseline`/`--experiment` name its
+  recordings, when they carry an `arm` label, or when their time ranges do
+  not overlap: separate runs, which is what `recording combine a.rez b.rez`
+  assembles, so archives combined from separate runs, before this release or
+  after it, still open A/B. An archive combined from recordings that overlap
+  in time (two hosts recorded by separate `record` processes in one run) now
+  opens combined; `--baseline`/`--experiment` still open it A/B. In the
+  static viewer, `WasmCaptureRegistry::set_compare_requested(true)` asks for
+  the comparison. A combined archive that is still being written is followed
+  as one capture, recordings with identical label sets included.
+- **A single-source parquet's `source` is a series label.** Its series
+  carry the file's `source`, as an archive recording's series carry its
+  recording's labels, so a KPI template carried in the parquet (llm-perf's,
+  or one written by `recording annotate`) whose queries select
+  `{source="llm-perf"}` matches them: `rezolus view run.parquet` draws those
+  KPIs where it listed them all as unavailable, and `rezolus mcp query`,
+  `recording check` and the static viewer read the same series. A combined
+  parquet, whose columns carry their own `source`, and a parquet any of
+  whose series already carry a `source` label are read as before.
+- **`rezolus mcp` reads an archive of one run combined.** Without
+  `--recording` (or the stdio server's `recording` object), `query`,
+  `describe-metrics`, `detect-anomalies` and `analyze-correlation` read every
+  recording together, each series under its recording's labels, where they
+  refused before; `describe-recording` lists the recordings and says so.
+  `extract-features`, whose record describes one recording, and every tool
+  on a comparison (recordings carrying `arm`, or of different runs) still
+  need a selector. `recording check` is unchanged: it evaluates each
+  recording's own KPIs against that recording.
 
 - **The `/metrics/stream` interval is negotiated** (metriken-exposition
   0.23.1, metriken-recorder 0.3). The agent serves a stream at the larger of

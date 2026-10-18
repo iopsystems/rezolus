@@ -197,9 +197,11 @@ rezolus mcp query run.rez 'sum(irate(cpu_cycles[1m]))'
 ```
 
 For a multi-recording archive, first run `describe-recording` without a selector
-to list the recordings, then pass `--recording source=system` (or another
-matching label set) to subsequent commands. MCP tools take the equivalent
-`recording` object. A selector must identify exactly one recording.
+to list the recordings. The recordings of one run are read together, each
+series under its recording's labels; pass `--recording source=system` (or
+another matching label set) to read one alone, as `extract-features` and a
+comparison's tools require. MCP tools take the equivalent `recording` object.
+A selector must identify exactly one recording.
 
 Before drawing conclusions, check the time range, source identity, metric
 coverage, units, and acquisition uncertainty. Missing data is not zero;

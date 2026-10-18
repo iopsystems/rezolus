@@ -172,8 +172,8 @@ endpoint's HELP text as `descriptions`, and is kept when an agent restarts.
 `producer_epoch` and `producer_epochs` are written by the recorder and are
 refused (exit 2).
 `-l/--label k=v` tags the recordings inside the archive (`source` and `host` are
-filled in for you), and a two-recording archive drives the viewer's A/B
-comparison, which is what `--label arm=redis` is for:
+filled in for you). Recordings that carry an `arm` label open in the viewer as
+an A/B comparison, which is what `--label arm=redis` is for:
 
 ```bash
 rezolus record --url http://localhost:4241 -o out.dendro --label arm=redis
@@ -252,9 +252,17 @@ captured in a single invocation and land in one archive:
 rezolus record --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.dendro
 ```
 
-A two-recording archive opens in the viewer as an A/B comparison. Concurrent
-captures share the same time period; captures taken sequentially can also
-differ in background load, not just the experimental change.
+An archive of several recordings from one run opens in the viewer as one
+combined view: every series carries its recording's labels (`source`, `host`,
+`--label`s), a template renders once per recording that carries it (two agents
+show the built-in sections once per host, the second host's at routes ending
+in `@<host>`), and every query in a recording's sections is restricted to that
+recording's series by those labels. `rezolus view fleet.dendro --baseline
+host=web-01 --experiment host=web-02` opens the same archive as an A/B
+comparison; so do recordings that carry an `arm` label, and recordings whose
+time ranges do not overlap (separate runs, as `recording combine` assembles).
+Concurrent captures share the same time period; captures taken sequentially
+can also differ in background load, not just the experimental change.
 
 Each recording is identified by its label set. For a Rezolus endpoint, `host`
 is filled in from the
@@ -400,9 +408,13 @@ and quantile heatmaps. A remote agent must be reachable from the viewer server.
 ```bash
 # open a recording
 rezolus view run.dendro
-# A/B compare two recordings: combine them into one archive, then view it
+# A/B compare two runs: combine them into one archive, then view it (their
+# time ranges do not overlap, so it opens as a comparison)
 rezolus recording combine baseline.dendro experiment.dendro -o ab.dendro
 rezolus view ab.dendro
+# one run of several endpoints opens as one combined view; name two
+# recordings to compare them instead
+rezolus view fleet.dendro --baseline host=web-01 --experiment host=web-02
 # two parquet files are compared as given
 rezolus view baseline.parquet experiment.parquet
 # stream live from an agent
@@ -891,10 +903,15 @@ says it was upgraded to v3 on the way.
 
 ### Multi-recording archives
 
-A `.rez` built from several endpoints (see "Several endpoints in one archive"
-above) holds one *recording* per endpoint. Every MCP tool reads one recording
-at a time, so run `describe-recording` with no selector to see what the
-archive holds and the flag that picks each one:
+An archive built from several endpoints (see "Several endpoints in one archive"
+above) holds one *recording* per endpoint. With no selector, the tools read
+the recordings of one run together, as the viewer does: every series carries
+its recording's labels, so `sum by (host) (irate(cpu_usage[1m]))` answers per
+host and a matcher (`cpu_usage{host="web-01"}`) selects one recording's series.
+`extract-features`, whose record describes one recording, needs a selector,
+and so does every tool on a comparison (recordings carrying `arm`, or of runs
+whose time ranges do not overlap). `describe-recording` with no selector lists
+what the archive holds and the flag that picks each one:
 
 ```
 $ rezolus mcp describe-recording ab.rez
