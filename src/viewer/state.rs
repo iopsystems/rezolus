@@ -20,6 +20,7 @@ use metriken_storage::BufferPool;
 
 use super::capture_registry::{CaptureId, CaptureRegistry};
 use super::proxy_allow;
+use ::dashboard::source_templates::TemplatePreference;
 use ::dashboard::{self, TemplateRegistry};
 
 /// The least the server-side viewer's buffer pool budget defaults to, and the
@@ -254,6 +255,9 @@ pub struct AppState {
     /// compare-mode hand-off has attached one.
     pub captures: Arc<CaptureRegistry>,
     pub templates: TemplateRegistry,
+    /// Whose KPI template renders for a source that carries one in its
+    /// metadata and that `templates` also knows (`--registry-templates`).
+    pub template_preference: TemplatePreference,
     /// The live agent being recorded (live mode only). Its temporary archive
     /// is the capture's data and what a save copies.
     pub live_session: Mutex<Option<super::live::LiveSession>>,
@@ -302,18 +306,25 @@ pub fn default_query_concurrency() -> usize {
 impl AppState {
     #[cfg(test)]
     pub fn new(data: Arc<dyn MetricsSource>, templates: TemplateRegistry) -> Self {
-        Self::with_pool(data, templates, BufferPool::new(default_cache_size_bytes()))
+        Self::with_pool(
+            data,
+            templates,
+            TemplatePreference::Archive,
+            BufferPool::new(default_cache_size_bytes()),
+        )
     }
 
     pub fn with_pool(
         data: Arc<dyn MetricsSource>,
         templates: TemplateRegistry,
+        template_preference: TemplatePreference,
         pool: Arc<BufferPool>,
     ) -> Self {
         Self {
             sections: Default::default(),
             captures: Arc::new(CaptureRegistry::new(data, None, None, None)),
             templates,
+            template_preference,
             live_session: Mutex::new(None),
             live: AtomicBool::new(false),
             follow: Mutex::new(None),

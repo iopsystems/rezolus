@@ -16,6 +16,7 @@ use super::capture_registry::CaptureId;
 use metriken_query::{MetricsSource, QueryResult};
 
 use super::state::{AppState, LazySectionStore};
+use ::dashboard::source_templates::TemplatePreference;
 use ::dashboard::{self, CategoryExtension, ServiceExtension, TemplateRegistry};
 
 /// Read systeminfo, selection, and the full key-value map (with
@@ -222,10 +223,8 @@ pub fn compute_file_checksum(path: &Path) -> Option<String> {
     })()
 }
 
-/// Service-extension lookup: by precedence,
-/// (1) top-level `service_queries`,
-/// (2) `per_source_metadata.<source>.service_queries`,
-/// (3) built-in template for known sources.
+/// Service-extension lookup over a parquet file's footer. See
+/// [`service_extensions_from_metadata`] for the order.
 ///
 /// The returned source keys come purely from the parquet's metadata —
 /// CLI legend labels are display-only and don't influence template
@@ -233,6 +232,7 @@ pub fn compute_file_checksum(path: &Path) -> Option<String> {
 pub fn extract_service_extension_metadata(
     path: &Path,
     registry: &TemplateRegistry,
+    preference: TemplatePreference,
 ) -> Vec<(String, ServiceExtension)> {
     let Ok(f) = std::fs::File::open(path) else {
         return Vec::new();
@@ -247,79 +247,62 @@ pub fn extract_service_extension_metadata(
         .iter()
         .filter_map(|kv| Some((kv.key.clone(), kv.value.clone()?)))
         .collect();
-    service_extensions_from_metadata(&metadata, registry)
+    service_extensions_from_metadata(&metadata, registry, preference)
 }
 
-/// The same lookup over an already-read metadata map: a parquet footer's
-/// key/values, or a `.rez` recording's manifest metadata as
-/// `MetricsSource::file_metadata` returns it. `extract_service_extension_metadata`
-/// and `rezolus recording check` both go through here, so a recording's
-/// embedded KPIs resolve the same way wherever they are read.
+/// The KPI templates for one source's metadata map: a parquet footer's
+/// key/values, a `.rez` recording's manifest metadata, or a dendro source's
+/// metadata, as `MetricsSource::file_metadata` returns each. The viewer,
+/// `extract_service_extension_metadata` and `rezolus recording check` all go
+/// through here, so a recording's embedded KPIs resolve the same way wherever
+/// they are read, and the WASM viewer calls the same
+/// `dashboard::source_templates::resolve_source_templates`.
+///
+/// Order: top-level `service_queries`, then
+/// `per_source_metadata.<source>.<entry>.service_queries`, then the registry by
+/// source name. A template in the metadata wins over the registry's unless
+/// `preference` is `Registry`. A template that does not parse falls back to
+/// the registry, logged as a warning once per process: the terminal UI
+/// regenerates its dashboards every tick, and a template that did not parse
+/// the first time does not parse the next.
 pub fn service_extensions_from_metadata(
     metadata: &HashMap<String, String>,
     registry: &TemplateRegistry,
+    preference: TemplatePreference,
 ) -> Vec<(String, ServiceExtension)> {
-    use crate::parquet_metadata::{
-        KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE, NESTED_SERVICE_QUERIES,
-    };
-
-    let mut results = Vec::new();
-
-    // 1. Top-level service_queries (written by `parquet annotate`).
-    if let Some(sq_json) = metadata.get(KEY_SERVICE_QUERIES) {
-        if let Ok(ext) = serde_json::from_str::<ServiceExtension>(sq_json) {
-            let source = metadata
-                .get(KEY_SOURCE)
-                .map(String::as_str)
-                .unwrap_or(&ext.service_name);
-            results.push((source.to_string(), ext));
-        }
+    let resolved =
+        ::dashboard::source_templates::resolve_source_templates(metadata, registry, preference);
+    for notice in resolved.notices {
+        warn_once(notice);
     }
+    resolved.service_exts
+}
 
-    // 2. Nested under per_source_metadata (combined files).
-    if let Some(metadata_json) = metadata.get(KEY_PER_SOURCE_METADATA) {
-        if let Ok(metadata_map) =
-            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(metadata_json)
-        {
-            for (source, group_val) in &metadata_map {
-                if results.iter().any(|(s, _)| s == source) {
-                    continue;
-                }
-                if let Some(group) = group_val.as_object() {
-                    for (_sub_key, entry) in group {
-                        if let Some(sq) = entry.get(NESTED_SERVICE_QUERIES) {
-                            if let Ok(ext) = serde_json::from_value::<ServiceExtension>(sq.clone())
-                            {
-                                results.push((source.clone(), ext));
-                                break; // one extension per source
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 3a. No service_queries — fall back to built-in templates.
-            for source in metadata_map.keys() {
-                if results.iter().any(|(s, _)| s == source) {
-                    continue;
-                }
-                if let Some(ext) = registry.get(source) {
-                    results.push((source.clone(), ext.clone()));
-                }
-            }
-        }
+/// Log `notice` as a warning unless this process has already logged it.
+fn warn_once(notice: String) {
+    if first_time(&notice) {
+        warn!("{notice}");
     }
+}
 
-    // 3b. No per_source_metadata — check the top-level source key.
-    if results.is_empty() {
-        if let Some(source) = metadata.get(KEY_SOURCE) {
-            if let Some(ext) = registry.get(source) {
-                results.push((source.to_string(), ext.clone()));
-            }
-        }
-    }
+/// Whether this process has not seen `notice` before; records it.
+fn first_time(notice: &str) -> bool {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    SEEN.get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(notice.to_string())
+}
 
-    results
+/// The KPI templates for a loaded capture, from its own metadata.
+pub fn capture_service_extensions(
+    data: &dyn MetricsSource,
+    registry: &TemplateRegistry,
+    preference: TemplatePreference,
+) -> Vec<(String, ServiceExtension)> {
+    service_extensions_from_metadata(&data.file_metadata(), registry, preference)
 }
 
 /// Run each KPI's PromQL against the loaded TSDB so the dashboard can
@@ -392,38 +375,28 @@ pub fn regenerate_dashboards(state: &AppState) {
     }
 
     let registry = &state.templates;
+    let preference = state.template_preference;
     let baseline_path = state.parquet_path.read().clone();
-    // Prefer the HTTP-owned temp path; fall back to the CLI-supplied
-    // user path. Stored in separate fields so `detach_experiment` can
-    // safely delete only server-owned temp files.
-    let experiment_path = state
-        .experiment_parquet_path
-        .read()
-        .clone()
-        .or_else(|| state.cli_experiment_path.read().clone());
 
-    // Validate baseline exts against the baseline tsdb and experiment
-    // exts against the experiment tsdb so a KPI present only in one
-    // recording isn't wrongly marked unavailable.
-    let mut baseline_exts: Vec<(String, ServiceExtension)> = baseline_path
-        .as_ref()
-        .map(|p| extract_service_extension_metadata(p, registry))
-        .unwrap_or_default();
-    let mut experiment_exts: Vec<(String, ServiceExtension)> = experiment_path
-        .as_ref()
-        .map(|p| extract_service_extension_metadata(p, registry))
-        .unwrap_or_default();
-
-    {
+    // Each capture's templates come from its own metadata (a parquet footer,
+    // a `.rez` recording's manifest, a dendro source), and each is validated
+    // against its own data so a KPI present only in one recording isn't
+    // wrongly marked unavailable.
+    let baseline_exts: Vec<(String, ServiceExtension)> = {
         let baseline_data = state.baseline_data();
-        validate_service_extensions(baseline_data.as_ref(), &mut baseline_exts);
-    }
-    if !experiment_exts.is_empty() {
-        if let Some(experiment_data) = state.captures.get(CaptureId::Experiment) {
-            validate_service_extensions(experiment_data.as_ref(), &mut experiment_exts);
-        }
-    }
-
+        let mut exts = capture_service_extensions(baseline_data.as_ref(), registry, preference);
+        validate_service_extensions(baseline_data.as_ref(), &mut exts);
+        exts
+    };
+    let experiment_exts: Vec<(String, ServiceExtension)> = state
+        .captures
+        .get(CaptureId::Experiment)
+        .map(|data| {
+            let mut exts = capture_service_extensions(data.as_ref(), registry, preference);
+            validate_service_extensions(data.as_ref(), &mut exts);
+            exts
+        })
+        .unwrap_or_default();
     let mut service_exts = baseline_exts;
     service_exts.extend(experiment_exts);
 
@@ -455,28 +428,22 @@ pub(super) fn classify_sources(
     baseline_data: &dyn metriken_query::MetricsSource,
     service_exts: &[(String, ServiceExtension)],
 ) -> Vec<dashboard::dashboard::SourceEntry> {
-    // Nothing to classify without a parquet file (live mode).
+    // Nothing to classify without a file (live mode); its path gives the
+    // filename stem a simple capture's section is named by.
     let path = match baseline_path {
         Some(p) => p,
         None => return vec![],
     };
 
-    // Read raw kv from parquet into a JSON object for the shared classifier.
-    let kv_map: serde_json::Map<String, serde_json::Value> = (|| {
-        let f = std::fs::File::open(path).ok()?;
-        let reader = parquet::file::serialized_reader::SerializedFileReader::new(f).ok()?;
-        let kv = reader.metadata().file_metadata().key_value_metadata()?;
-        let mut map = serde_json::Map::new();
-        for pair in kv {
-            if let Some(ref val) = pair.value {
-                let json_val = serde_json::from_str(val)
-                    .unwrap_or_else(|_| serde_json::Value::String(val.clone()));
-                map.insert(pair.key.clone(), json_val);
-            }
-        }
-        Some(map)
-    })()
-    .unwrap_or_default();
+    // The capture's metadata as a JSON object for the shared classifier: a
+    // parquet's footer, or a `.rez`/dendro recording's own metadata. The WASM
+    // viewer builds the same object from the same map.
+    let mut kv_map = serde_json::Map::new();
+    for (key, val) in baseline_data.file_metadata() {
+        let json_val =
+            serde_json::from_str(&val).unwrap_or_else(|_| serde_json::Value::String(val.clone()));
+        kv_map.insert(key, json_val);
+    }
 
     let service_names: std::collections::HashSet<&str> =
         service_exts.iter().map(|(s, _)| s.as_str()).collect();
@@ -500,6 +467,50 @@ pub(super) fn classify_sources(
         &service_names,
         filename_stem,
     )
+}
+
+#[cfg(test)]
+mod warn_once_tests {
+    /// A notice is reported the first time and not after, so the terminal
+    /// UI's per-tick regeneration does not repeat a warning every second.
+    #[test]
+    fn a_notice_is_new_only_once() {
+        let notice = "warn_once_tests: a notice no other test raises";
+        assert!(super::first_time(notice));
+        assert!(!super::first_time(notice));
+        assert!(super::first_time("warn_once_tests: a different notice"));
+    }
+
+    /// The lookup reports a malformed template through `first_time`, so the
+    /// same notice is not warned again on the next regeneration.
+    #[test]
+    fn the_lookup_records_the_notices_it_warns() {
+        let metadata: std::collections::HashMap<String, String> = [
+            ("source", "warn-once-tests-svc"),
+            ("service_queries", r#"{"service_name": 7}"#),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let registry = ::dashboard::TemplateRegistry::empty();
+        let expected = ::dashboard::source_templates::resolve_source_templates(
+            &metadata,
+            &registry,
+            super::TemplatePreference::Archive,
+        )
+        .notices;
+        assert_eq!(expected.len(), 1, "{expected:?}");
+        super::service_extensions_from_metadata(
+            &metadata,
+            &registry,
+            super::TemplatePreference::Archive,
+        );
+        assert!(
+            !super::first_time(&expected[0]),
+            "the lookup did not record {:?}",
+            expected[0]
+        );
+    }
 }
 
 #[cfg(test)]

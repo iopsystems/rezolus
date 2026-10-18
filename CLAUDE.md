@@ -127,6 +127,12 @@ target/release/rezolus view http://localhost:4241 [--listen ADDR]   # live agent
 target/release/rezolus view [--listen ADDR]                         # upload-only mode (no file)
 target/release/rezolus view --tui output.parquet                    # terminal UI (parquet or live agent; not upload-only)
 target/release/rezolus view --tui http://localhost:4241             # terminal UI, live agent
+target/release/rezolus view out.dendro --registry-templates          # built-in KPI templates over the recording's own
+#   A source's KPI template is its metadata's `service_queries` (parquet footer, .rez recording, dendro source),
+#   ahead of the built-in registry, which is consulted only for a source without one; --registry-templates
+#   inverts that for sources the registry knows. Shared lookup: crates/dashboard/src/source_templates.rs
+#   (both shells; WASM: WasmCaptureRegistry::set_prefer_registry_templates, no site UI). A combined parquet's array
+#   `source` keys a top-level template by its service_name. `dashboard` (section template) is reserved: kept, unused.
 
 # Hindsight - rolling .dendro buffer for incident analysis (an output not ending in .dendro is refused)
 target/release/rezolus hindsight config/hindsight.toml
