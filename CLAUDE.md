@@ -64,8 +64,10 @@ target/release/rezolus record --endpoint http://gpu:8000/metrics,source=vllm,tem
 #   template= (TOML: template = "FILE") is read and checked in RecordingConfig::from_args (EndpointConfig::load_template ->
 #   parquet_tools::annotate::load_queries: ServiceExtension + check_unit_systems), refused with exit 2 before recording;
 #   endpoint_spec puts it in the spec's metadata, which outranks a streamed producer's handshake service_queries.
-#   Producers own their templates (cachecannon, llm-perf send them in the handshake); crates/dashboard/templates is the
-#   fallback for recordings without one and the source of template= files for vLLM/SGLang/Valkey.
+#   A producer can send its own template in the handshake (cachecannon and llm-perf do from their next releases);
+#   crates/dashboard/templates is the fallback for recordings without one and the source of template= files for
+#   vLLM/SGLang/Valkey. A config file's relative template = is read from the config file's directory; load_queries
+#   refuses a file over 1 MiB (MAX_DASHBOARD_BYTES), for annotate --queries too.
 target/release/rezolus record -o bench.dendro -- ./bench.sh   # record for the command's lifetime; writes run_start/run_end events
 #   (program name only; --record-command-line adds the full argument list)
 # Detection by stream (metriken_recorder::detect, the generic half; src/recorder/agent_probe.rs,

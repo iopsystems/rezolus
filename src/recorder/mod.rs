@@ -143,10 +143,12 @@ pub fn command() -> Command {
              template = in its [[endpoints]] entry) writes FILE into its recording. The\n\
              file is a ServiceExtension JSON, the format `rezolus recording annotate\n\
              --queries` takes; the templates rezolus ships are crates/dashboard/templates/\n\
-             in its source tree. A relative path is read from the working directory, and\n\
-             the path cannot contain a comma. The file is read and checked before the\n\
-             recording starts: an unreadable file, JSON that is not a ServiceExtension, or\n\
-             an unknown unit_system refuses the run and writes nothing. On a streamed\n\
+             in its source tree. A relative template= on --endpoint is read from the\n\
+             working directory, and cannot contain a comma; a relative template = in a\n\
+             --config file is read from that file\'s directory. The file is read and\n\
+             checked before the recording starts: an unreadable file, one over 1 MiB, JSON\n\
+             that is not a ServiceExtension, or an unknown unit_system refuses the run\n\
+             (exit 2) and writes nothing. On a streamed\n\
              endpoint template= replaces the producer\'s own template, as any user\n\
              metadata outranks the handshake\'s, and it also replaces a --metadata\n\
              service_queries=. The template\'s queries select by source (e.g.\n\
@@ -238,7 +240,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("ENDPOINT")
                 .long("endpoint")
-                .help("Add an endpoint as url[,source=name][,role=label][,protocol=stream|prometheus][,template=FILE]; role is a free-form tag (conventionally service or loadgen); template is a KPI template file (a ServiceExtension JSON, as `recording annotate --queries` takes) written into this endpoint's recording as service_queries, so the viewer shows that service's KPI section: it is checked before recording starts, an unreadable file, JSON that is not a ServiceExtension or an unknown unit_system refuses the run, and it replaces any template a streamed producer sends in its handshake; protocol skips detection: stream records it from its replication stream only, never scraping it (rezolus and msgpack are accepted for it too), prometheus scrapes it as text exposition (at /metrics for a URL whose path is /); without protocol, a URL whose path is / or /metrics/stream is asked for its stream first and any other URL is scraped (see DETECTION); repeat for several (e.g. http://host:9090/metrics,source=svc,role=service,protocol=prometheus)")
+                .help("Add an endpoint as url[,source=name][,role=label][,protocol=stream|prometheus][,template=FILE]; role is a free-form tag (conventionally service or loadgen); template is a KPI template file (a ServiceExtension JSON, as `recording annotate --queries` takes) written into this endpoint's recording as service_queries, so the viewer shows that service's KPI section: it is checked before recording starts, an unreadable file, one over 1 MiB, JSON that is not a ServiceExtension or an unknown unit_system refuses the run (exit 2), and it replaces any template a streamed producer sends in its handshake; protocol skips detection: stream records it from its replication stream only, never scraping it (rezolus and msgpack are accepted for it too), prometheus scrapes it as text exposition (at /metrics for a URL whose path is /); without protocol, a URL whose path is / or /metrics/stream is asked for its stream first and any other URL is scraped (see DETECTION); repeat for several (e.g. http://host:9090/metrics,source=svc,role=service,protocol=prometheus)")
                 .action(clap::ArgAction::Append)
                 .conflicts_with_all(["URL", "CONFIG_FILE"]),
         )

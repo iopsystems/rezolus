@@ -217,12 +217,13 @@ rezolus record --endpoint http://gpu-01:8000/metrics,source=vllm,template=vllm.j
 ```
 
 In a `--config` file the same key is `template = "vllm.json"` in the
-endpoint's `[[endpoints]]` entry. A relative path is read from the working
-directory, and an `--endpoint` path cannot contain a comma. The file is read
-and checked before the recording starts: one that cannot be read, is not a
-`ServiceExtension`, or has a `unit_system` the viewer does not know refuses
-the run (exit 2) and writes nothing, as `recording annotate --queries` refuses
-it. The file is stored as written.
+endpoint's `[[endpoints]]` entry. A relative path on `--endpoint` is read from
+the working directory, and cannot contain a comma; a relative path in a
+config file is read from the config file's directory. The file is read and
+checked before the recording starts: one that cannot be read, is larger than
+1 MiB, is not a `ServiceExtension`, or has a `unit_system` the viewer does not
+know refuses the run (exit 2) and writes nothing, as `recording annotate
+--queries` refuses it. The file is stored as written.
 
 A template's queries select by `source` (`{source="vllm"}`), so give the
 endpoint the `source=` its template names. On a streamed endpoint `template=`

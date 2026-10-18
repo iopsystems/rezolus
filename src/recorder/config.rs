@@ -287,7 +287,13 @@ impl RecordingConfig {
             };
             check_output(&output, origin)?;
             let mut endpoints = toml_cfg.endpoints;
+            // A relative `template` names a file beside the config file, as
+            // the file's author sees it, not one in the working directory.
+            let config_dir = config_path.parent().unwrap_or(Path::new(""));
             for ep in &mut endpoints {
+                if let Some(t) = ep.template.as_mut().filter(|t| t.is_relative()) {
+                    *t = config_dir.join(&*t);
+                }
                 ep.load_template()
                     .map_err(|e| format!("in {}: {e}", config_path.display()))?;
             }
@@ -840,6 +846,21 @@ mod tests {
         let err = parse(&["--config", &bad_toml]).err().unwrap();
         assert!(err.starts_with(&format!("in {bad_toml}: ")), "{err}");
         assert!(err.contains("unknown unit_system"), "{err}");
+
+        // A relative path in a config file names a file beside it; the test
+        // runs from the crate root, where there is no good.json. On
+        // --endpoint the same relative path is read from the working
+        // directory, and is not found.
+        let cfg = parse(&["--config", &toml("relative.toml", Path::new("good.json"))]).unwrap();
+        assert_eq!(
+            cfg.endpoints[0].template,
+            Some(dir.path().join("good.json"))
+        );
+        assert_eq!(cfg.endpoints[0].template_json.as_deref(), Some(json));
+        let err = parse(&["--endpoint", "http://h:9090/metrics,template=good.json"])
+            .err()
+            .unwrap();
+        assert!(err.contains("failed to read good.json"), "{err}");
     }
 
     #[test]

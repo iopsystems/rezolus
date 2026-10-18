@@ -2724,4 +2724,40 @@ fn a_template_replaces_the_one_a_producers_handshake_sends() {
         )),
         "{stderr}"
     );
+
+    // A producer that sends no template: template= is the recording's, and
+    // there is nothing for it to replace, so no line.
+    let bare = spawn_fixture(
+        Streams::Always,
+        None,
+        Names::Metriken,
+        Fixture {
+            labels: &[("source", "cachecannon")],
+            ..Fixture::default()
+        },
+    );
+    let output = dir.path().join("bare.dendro");
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!(
+            "http://127.0.0.1:{bare},template={}",
+            template.display()
+        ))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    let (_, metadata, _) = the_recording(&output, "fake/ops");
+    assert_eq!(
+        metadata.get("service_queries").map(String::as_str),
+        Some(SVC_TEMPLATE)
+    );
+    assert!(!stderr.contains("replaces the KPI template"), "{stderr}");
 }

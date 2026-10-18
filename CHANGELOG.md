@@ -795,10 +795,11 @@
   annotate --queries` takes, is written into that recording's metadata as
   `service_queries`, so the viewer shows the service's KPI section for a
   scraped Prometheus endpoint, which has no handshake to carry one. A config
-  file's `[[endpoints]]` entry takes `template = "FILE"`. The file is read and
-  checked before recording: an unreadable file, JSON that is not a
-  `ServiceExtension`, or an unknown `unit_system` refuses the run (exit 2)
-  and writes nothing. On a streamed producer, `template=` replaces the
+  file's `[[endpoints]]` entry takes `template = "FILE"`, relative to the
+  config file's directory. The file is read and checked before recording:
+  an unreadable file, one over 1 MiB, JSON that is not a `ServiceExtension`,
+  or an unknown `unit_system` refuses the run (exit 2) and writes nothing.
+  `recording annotate --queries` refuses a file over 1 MiB too. On a streamed producer, `template=` replaces the
   template its handshake sends, and the recorder logs that at startup.
   cachecannon and llm-perf send their own from their next releases; the files in
   `crates/dashboard/templates/` stay as the fallback for recordings that

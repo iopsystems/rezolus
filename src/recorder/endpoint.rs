@@ -49,8 +49,9 @@ pub struct EndpointConfig {
     #[serde(default)]
     pub protocol: Option<Protocol>,
     /// `template=FILE`: a KPI template (a `ServiceExtension` JSON file)
-    /// written into this endpoint's recording as `service_queries`. A path
-    /// relative to the working directory.
+    /// written into this endpoint's recording as `service_queries`. Relative
+    /// to the working directory on `--endpoint`, and to the config file's
+    /// directory in a `--config` file (resolved by `from_args`).
     #[serde(default)]
     pub template: Option<PathBuf>,
     /// The template's text, read and checked by
