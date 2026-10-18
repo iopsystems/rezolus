@@ -158,6 +158,11 @@ struct Fixture {
     /// `/status`, `/systeminfo` and `/metrics/descriptions` accept the
     /// request and never answer, so the recorder's metadata read times out.
     hang_metadata: bool,
+    /// Created when `/systeminfo` or `/metrics/descriptions` is requested,
+    /// so a test can end the run on that event instead of on a timer. Only
+    /// the metadata read after the stream opens asks for those; the probe of
+    /// an endpoint that cannot stream yet asks for `/status`.
+    on_hang: Option<std::path::PathBuf>,
 }
 
 /// The fake agent's accept loop; see [`spawn_fake_agent`].
@@ -221,6 +226,11 @@ fn serve_agent(
                         "/status" | "/systeminfo" | "/metrics/descriptions"
                     )
                 {
+                    if let (Some(flag), "/systeminfo" | "/metrics/descriptions") =
+                        (&fixture.on_hang, path.as_str())
+                    {
+                        let _ = std::fs::write(flag, b"");
+                    }
                     std::thread::sleep(Duration::from_secs(60));
                     return;
                 } else if let (Some(body), "/systeminfo") = (fixture.systeminfo, path.as_str()) {
@@ -2192,6 +2202,8 @@ fn an_endpoint_still_reading_its_metadata_at_the_end_is_named() {
     use metriken_storage::Catalog;
 
     let (exporter, hits) = spawn_fake_exporter_counted("http_requests_total");
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let flag = dir.path().join("metadata-requested");
     let agent = spawn_fixture(
         Streams::Always,
         None,
@@ -2201,15 +2213,19 @@ fn an_endpoint_still_reading_its_metadata_at_the_end_is_named() {
                 hits.load(std::sync::atomic::Ordering::SeqCst) >= 3
             })),
             hang_metadata: true,
+            on_hang: Some(flag.clone()),
             ..Fixture::default()
         },
     );
-    let dir = tempfile::tempdir().expect("failed to create a temp dir");
     let output = dir.path().join("activating.dendro");
 
-    // The metadata read is bounded by the scrape timeout (2 s at this
-    // interval), which starts after the run is more than 0.6 s in: the run
-    // ends first.
+    // The run is a command that exits once the agent has received the
+    // metadata request that never returns. The read is bounded by the scrape
+    // timeout (2 s at this interval) from that moment. The run's end waits
+    // only for frames from recorded streams, and this endpoint is not
+    // recorded yet, so the run ends first however long the agent took to come
+    // up. `--duration` ends a run whose endpoint never comes up, which then
+    // fails the exit-status assertion.
     let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
         .arg("record")
         .arg("--endpoint")
@@ -2221,7 +2237,13 @@ fn an_endpoint_still_reading_its_metadata_at_the_end_is_named() {
         .arg("--interval")
         .arg("200ms")
         .arg("--duration")
-        .arg("1600ms")
+        .arg("30s")
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg("until [ -e \"$1\" ]; do sleep 0.02; done")
+        .arg("sh")
+        .arg(&flag)
         .output()
         .expect("failed to run rezolus record");
     let stderr = String::from_utf8_lossy(&out.stderr);
