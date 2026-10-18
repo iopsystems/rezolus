@@ -264,7 +264,9 @@ pub fn extract_service_extension_metadata(
 /// `preference` is `Registry`. A template that does not parse falls back to
 /// the registry, logged as a warning once per process: the terminal UI
 /// regenerates its dashboards every tick, and a template that did not parse
-/// the first time does not parse the next.
+/// the first time does not parse the next. A KPI whose `unit_system` the
+/// viewer does not know is warned about the same way; it renders with its
+/// default `count` scaling (`PlotOpts::maybe_unit_system`).
 pub fn service_extensions_from_metadata(
     metadata: &HashMap<String, String>,
     registry: &TemplateRegistry,
@@ -274,6 +276,13 @@ pub fn service_extensions_from_metadata(
         ::dashboard::source_templates::resolve_source_templates(metadata, registry, preference);
     for notice in resolved.notices {
         warn_once(notice);
+    }
+    for (source, ext) in &resolved.service_exts {
+        for e in ext.unknown_unit_systems() {
+            warn_once(format!(
+                "service template for {source:?}: {e}; rendering it with the default `count` scaling"
+            ));
+        }
     }
     resolved.service_exts
 }
@@ -479,6 +488,38 @@ mod warn_once_tests {
         assert!(super::first_time(notice));
         assert!(!super::first_time(notice));
         assert!(super::first_time("warn_once_tests: a different notice"));
+    }
+
+    /// A KPI with a `unit_system` the viewer does not know is warned about
+    /// once, at load; the render that drops it is silent.
+    #[test]
+    fn an_unknown_unit_system_is_warned_once_at_load() {
+        let metadata: std::collections::HashMap<String, String> = [
+            ("source", "warn-once-tests-unit"),
+            (
+                "service_queries",
+                r#"{"service_name": "warn-once-tests-unit", "kpis": [{"role": "load",
+                    "title": "Depth", "query": "q", "type": "gauge", "unit_system": "furlongs"}]}"#,
+            ),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let exts = super::service_extensions_from_metadata(
+            &metadata,
+            &::dashboard::TemplateRegistry::empty(),
+            super::TemplatePreference::Archive,
+        );
+        assert_eq!(exts.len(), 1, "the extension is kept");
+        let notice = format!(
+            "service template for \"warn-once-tests-unit\": {}; rendering it with the default `count` scaling",
+            exts[0].1.unknown_unit_systems()[0]
+        );
+        assert!(notice.contains("furlongs"), "{notice}");
+        assert!(
+            !super::first_time(&notice),
+            "the load did not warn {notice:?}"
+        );
     }
 
     /// The lookup reports a malformed template through `first_time`, so the

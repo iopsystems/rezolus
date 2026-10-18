@@ -4,6 +4,7 @@ import {
 import { formatDateTime } from './util/utils.js';
 import { COLORS, CHART_PALETTE } from './util/colormap.js';
 import { FONTS } from './util/fonts.js';
+import { escapeHtml } from '../html.js';
 
 export function isDarkTheme() {
     return typeof document !== 'undefined'
@@ -62,7 +63,7 @@ export function buildFreezeFooterContent(chart) {
     const frozen = chart && chart._tooltipFrozen;
     if (frozen) {
         const addLink = isEventEditingAllowed()
-            ? `<a href="#" class="tooltip-add-event" data-chart-id="${chart.chartId}" style="display: block; margin-top: 4px; padding-top: 4px; border-top: 1px solid ${COLORS.borderMuted}; color: ${COLORS.accent}; text-decoration: none;">+ Add Event</a>`
+            ? `<a href="#" class="tooltip-add-event" data-chart-id="${escapeHtml(chart.chartId)}" style="display: block; margin-top: 4px; padding-top: 4px; border-top: 1px solid ${COLORS.borderMuted}; color: ${COLORS.accent}; text-decoration: none;">+ Add Event</a>`
             : '';
         return `<span class="tooltip-freeze-state">FROZEN · click to unfreeze</span>${addLink}`;
     }
@@ -86,6 +87,10 @@ export function getTooltipFreezeFooter(chart) {
  * (using formatDateTime) and our own value formatting (using valueFormatter).
  */
 export function getTooltipFormatter(valueFormatter, pinnedSet, chart, style) {
+    // The unit suffix can be the template's own `unit_system` string (units.js
+    // returns an unknown system's name as the unit), so the formatted value is
+    // escaped like any other recording text.
+    const fmt = (v) => escapeHtml(valueFormatter(v));
     return (paramsArray) => {
         const hasPins = pinnedSet && pinnedSet.size > 0;
 
@@ -133,20 +138,20 @@ export function getTooltipFormatter(valueFormatter, pinnedSet, chart, style) {
                             marker = isClamped && !faded
                                 ? `<span style="display:inline-block;margin-right:4px;border-radius:10px;width:10px;height:10px;background-color:${COLORS.clamped};"></span>`
                                 : p.marker;
-                            displayValue = valueFormatter(isClamped ? p.value[2] : p.value[1]);
+                            displayValue = fmt(isClamped ? p.value[2] : p.value[1]);
                         } else {
                             // Line/multi: normal color, (raw: value) annotation
                             valColor = faded ? COLORS.fgMuted : COLORS.fg;
                             marker = p.marker;
-                            displayValue = valueFormatter(p.value[1]);
+                            displayValue = fmt(p.value[1]);
                             if (isClamped) {
-                                displayValue += ` <span style="color: ${COLORS.fgMuted};">(raw: ${valueFormatter(p.value[2])})</span>`;
+                                displayValue += ` <span style="color: ${COLORS.fgMuted};">(raw: ${fmt(p.value[2])})</span>`;
                             }
                         }
                         return `<div style="display: flex; justify-content: space-between; align-items: center; gap: 16px; ${opacity}">
                         <span style="display: flex; align-items: center; gap: 6px;">
                             ${marker}
-                            <span style="color: ${nameColor}; font-size: ${FONTS.tooltipLabel.fontSize}px;">${p.seriesName}</span>
+                            <span style="color: ${nameColor}; font-size: ${FONTS.tooltipLabel.fontSize}px;">${escapeHtml(p.seriesName)}</span>
                         </span>
                         <span style="${FONTS.cssMono} font-weight: ${FONTS.tooltipValue.fontWeight}; font-size: ${FONTS.tooltipValue.fontSize}px; color: ${valColor};">
                             ${displayValue}

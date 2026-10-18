@@ -343,7 +343,36 @@ impl Kpi {
     }
 }
 
+/// `Err` naming the KPI when a `unit_system` is not a [`crate::plot::Unit`].
+fn check_unit_system(title: &str, unit_system: Option<&str>) -> Result<(), String> {
+    match unit_system.map(str::parse::<crate::plot::Unit>) {
+        Some(Err(e)) => Err(format!("KPI {title:?}: {e}")),
+        _ => Ok(()),
+    }
+}
+
 impl ServiceExtension {
+    /// Refuse a KPI whose `unit_system` the viewer does not know. The viewer
+    /// shows an unknown system's name as the unit, inside tooltip HTML, so
+    /// `recording annotate` and the template loader reject one rather than
+    /// write or register it. A recording that already carries one renders
+    /// that KPI with its default `count` scaling
+    /// ([`crate::plot::PlotOpts::maybe_unit_system`]).
+    pub fn check_unit_systems(&self) -> Result<(), String> {
+        match self.unknown_unit_systems().into_iter().next() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    /// One message per KPI whose `unit_system` is not a [`crate::plot::Unit`].
+    pub fn unknown_unit_systems(&self) -> Vec<String> {
+        self.kpis
+            .iter()
+            .filter_map(|kpi| check_unit_system(&kpi.title, kpi.unit_system.as_deref()).err())
+            .collect()
+    }
+
     pub fn throughput_query(&self) -> Option<&str> {
         self.kpis
             .iter()
@@ -468,6 +497,8 @@ fn parse_template(
     } else {
         let ext: ServiceExtension =
             serde_json::from_value(v).map_err(|e| format!("failed to parse {source}: {e}"))?;
+        ext.check_unit_systems()
+            .map_err(|e| format!("{source}: {e}"))?;
         Ok(ParsedTemplate::Service(ext))
     }
 }
@@ -487,6 +518,8 @@ fn validate_category(
     let allowed: std::collections::HashSet<&str> =
         category.members.iter().map(String::as_str).collect();
     for kpi in &category.kpis {
+        check_unit_system(&kpi.title, kpi.unit_system.as_deref())
+            .map_err(|e| format!("{source}: {e}"))?;
         for key in kpi.member_titles.keys() {
             if !allowed.contains(key.as_str()) {
                 return Err(format!(
@@ -773,6 +806,38 @@ fn insert_template_key(
 mod tests {
     use super::*;
 
+    #[test]
+    fn check_unit_systems_refuses_an_unknown_system() {
+        let ext = |unit: Option<&str>| -> ServiceExtension {
+            serde_json::from_value(serde_json::json!({
+                "service_name": "svc",
+                "kpis": [{ "role": "throughput", "title": "Rate", "query": "x",
+                           "type": "gauge", "unit_system": unit }],
+            }))
+            .unwrap()
+        };
+        assert!(ext(None).check_unit_systems().is_ok());
+        assert!(ext(Some("rate")).check_unit_systems().is_ok());
+        let err = ext(Some("<b>")).check_unit_systems().unwrap_err();
+        assert!(
+            err.contains("KPI \"Rate\"") && err.contains("\"<b>\""),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_template_with_an_unknown_unit_system_is_refused_at_load() {
+        let dir = tempfile::tempdir().unwrap();
+        write_template(
+            &dir,
+            "svc.json",
+            r#"{"service_name":"svc","kpis":[{"role":"throughput","title":"Rate","query":"x","type":"gauge","unit_system":"furlongs"}]}"#,
+        )
+        .unwrap();
+        let err = TemplateRegistry::load(dir.path()).unwrap_err().to_string();
+        assert!(err.contains("furlongs"), "{err}");
+    }
+
     fn write_template(
         dir: &tempfile::TempDir,
         name: &str,
@@ -885,6 +950,31 @@ mod tests {
         // The category IS reachable by name via get_category.
         assert!(registry.get_category("inference-library").is_some());
         assert!(registry.get_category("nonexistent").is_none());
+    }
+
+    #[test]
+    fn a_category_template_with_an_unknown_unit_system_is_refused_at_load() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a", "b"] {
+            write_template(
+                &dir,
+                &format!("{name}.json"),
+                &format!(r#"{{"service_name":"{name}","kpis":[]}}"#),
+            )
+            .unwrap();
+        }
+        write_template(
+            &dir,
+            "cat.json",
+            r#"{"service_name":"cat","category":true,"members":["a","b"],
+                "kpis":[{"role":"load","title":"Rate","type":"gauge","unit_system":"furlongs"}]}"#,
+        )
+        .unwrap();
+        let err = TemplateRegistry::load(dir.path()).unwrap_err().to_string();
+        assert!(
+            err.contains("cat.json") && err.contains("furlongs"),
+            "{err}"
+        );
     }
 
     #[test]

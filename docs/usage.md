@@ -625,7 +625,9 @@ the file, since it names the check in the output and in events), `query`
 (`delta_counter`, `counter`); any other `type` is charted as a counter and
 evaluated as written. `description`, `unit_system`, `subtype`, `percentiles`,
 `subgroup`, `subgroup_description`, `full_width`, `denominator` and `check`
-are optional. A KPI without `check` is a chart only.
+are optional. A KPI without `check` is a chart only. `unit_system` is one of
+`time`, `bytes`, `bitrate`, `datarate`, `percentage`, `frequency`, `power`,
+`count` or `rate`; `recording annotate` refuses any other.
 
 The check:
 

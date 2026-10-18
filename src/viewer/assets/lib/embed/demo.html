@@ -53,6 +53,7 @@
     <script type="module">
         // Viewer's exact node-scoping label injection.
         import { injectLabel } from '../data.js';
+        import { escapeHtml } from '../html.js';
 
         const chartEl = document.getElementById('chart');
         const statusEl = document.getElementById('status');
@@ -159,9 +160,9 @@
                     chartEl.plot = result.plot;
                     statusEl.className = 'status ok';
                     const scope = result.node
-                        ? ` scoped to <code>node="${result.node}"</code>`
+                        ? ` scoped to <code>node="${escapeHtml(result.node)}"</code>`
                         : '';
-                    statusEl.innerHTML = `Executed <code>${result.query}</code> via
+                    statusEl.innerHTML = `Executed <code>${escapeHtml(result.query)}</code> via
                         <code>/api/v1/query_range</code>${scope} —
                         ${result.plot.data[0].length} data points.`;
                     return;
@@ -174,7 +175,7 @@
             } catch (err) {
                 chartEl.plot = syntheticData(fallbackDescriptor);
                 statusEl.className = 'status fallback';
-                statusEl.innerHTML = `Fetch/query failed (<code>${err.message}</code>). Showing
+                statusEl.innerHTML = `Fetch/query failed (<code>${escapeHtml(err.message)}</code>). Showing
                     hand-authored fallback descriptor with synthetic series.`;
             }
         }

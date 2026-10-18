@@ -17,6 +17,7 @@ import {
     COLORS,
     FONTS,
 } from './base.js';
+import { escapeHtml } from '../html.js';
 import { VIRIDIS_COLORS, viridisColor } from './util/colormap.js';
 import {
     createHeatmapResolutionStore,
@@ -159,7 +160,7 @@ export function configureHeatmap(chart) {
                         </div>
                         <div style="display: flex; align-items: center; gap: 12px;">
                             <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
-                                ${rowName}
+                                ${escapeHtml(rowName)}
                             </span>
                             <span style="${FONTS.cssMono} font-weight: ${FONTS.tooltipValue.fontWeight}; font-size: ${FONTS.tooltipValue.fontSize}px; color: ${COLORS.fgMuted};">
                                 no data
@@ -169,9 +170,11 @@ export function configureHeatmap(chart) {
                     </div>`;
         }
 
-        const fmt = unitSystem
+        // Escaped: an unknown `unit_system` is returned verbatim as the unit.
+        const unitFmt = unitSystem
             ? createAxisLabelFormatter(unitSystem)
             : (v) => v.toFixed(6);
+        const fmt = (v) => escapeHtml(unitFmt(v));
 
         // Diff heatmap: pull baseline + experiment absolute values from
         // the side-channel matrices and render both instead of the
@@ -188,20 +191,20 @@ export function configureHeatmap(chart) {
                         </div>
                         <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 4px;">
                             <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
-                                ${rowName}
+                                ${escapeHtml(rowName)}
                             </span>
                         </div>
                         <div style="display: grid; grid-template-columns: max-content max-content; gap: 2px 12px; ${FONTS.cssMono} font-size: ${FONTS.tooltipValue.fontSize}px;">
-                            <span style="color: var(--compare-baseline, ${COLORS.fgSecondary});">${diffCaptureLabels?.baseline || 'baseline'}</span>
+                            <span style="color: var(--compare-baseline, ${COLORS.fgSecondary});">${escapeHtml(diffCaptureLabels?.baseline || 'baseline')}</span>
                             <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(bv)}</span>
-                            <span style="color: var(--compare-experiment, ${COLORS.fgSecondary});">${diffCaptureLabels?.experiment || 'experiment'}</span>
+                            <span style="color: var(--compare-experiment, ${COLORS.fgSecondary});">${escapeHtml(diffCaptureLabels?.experiment || 'experiment')}</span>
                             <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(ev)}</span>
                         </div>
                         ${getTooltipFreezeFooter(chart)}
                     </div>`;
         }
 
-        const label = valueLabel ? `<span style="margin-left: 10px;">${valueLabel}: </span>` : '';
+        const label = valueLabel ? `<span style="margin-left: 10px;">${escapeHtml(valueLabel)}: </span>` : '';
 
         const [clampedVal, rawVal] = clampToRange(value, range);
         const isClamped = rawVal != null;
@@ -227,7 +230,7 @@ export function configureHeatmap(chart) {
                     </div>
                     <div style="display: flex; align-items: center; gap: 12px;">
                         <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
-                            ${rowName}
+                            ${escapeHtml(rowName)}
                         </span>
                         ${label}
                         <span style="${FONTS.cssMono} font-weight: ${FONTS.tooltipValue.fontWeight}; font-size: ${FONTS.tooltipValue.fontSize}px; color: ${COLORS.fg};">

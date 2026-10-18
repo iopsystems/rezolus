@@ -20,6 +20,21 @@ test('escapes HTML before any markdown transform (XSS)', () => {
     assert.ok(out.includes('&quot;'));
 });
 
+test('a scheme hidden behind leading C0 controls is neutered (the URL parser strips them)', () => {
+    for (const lead of ['\x01', '\x1f', '\x00', '\x01\x02']) {
+        const out = renderMarkdown(`[x](${lead}javascript:alert(1))`);
+        assert.ok(!out.includes('<a '), `lead ${JSON.stringify(lead)}: ${out}`);
+        assert.ok(!renderMarkdownInline(`[x](${lead}javascript:alert(1))`).includes('<a '));
+    }
+    assert.ok(!renderMarkdown('[x](JavaScript:alert(1))').includes('<a '));
+    assert.ok(!renderMarkdown('[x](vbscript:msgbox(1))').includes('<a '));
+});
+
+test('relative links without a leading slash still link', () => {
+    assert.ok(renderMarkdown('[a](notes/x.md)').includes('href="notes/x.md"'));
+    assert.ok(renderMarkdown('[a](HTTPS://rezolus.com)').includes('href="HTTPS://rezolus.com"'));
+});
+
 test('bold and italic', () => {
     assert.equal(renderMarkdown('**bold**'), '<p><strong>bold</strong></p>');
     assert.equal(renderMarkdown('*it*'), '<p><em>it</em></p>');

@@ -585,10 +585,18 @@ impl PlotOpts {
         self
     }
 
+    /// A KPI's `unit_system`, which comes from a template or a recording's
+    /// metadata as free text. One that is not a [`Unit`] is dropped (the plot
+    /// renders with the KPI's default `count` scaling) rather than refusing
+    /// the dashboard: `recording annotate` refuses it when the KPIs are
+    /// written, so only a file written some other way carries one. This is
+    /// silent because it runs on every dashboard render, and the terminal UI
+    /// renders every tick; the viewer warns once when it loads the KPIs
+    /// (`service_extensions_from_metadata` in `src/viewer/metadata.rs`).
     pub fn maybe_unit_system(self, unit: Option<&str>) -> Self {
-        match unit {
-            Some(u) => self.with_unit_system(u),
-            None => self,
+        match unit.map(str::parse::<Unit>) {
+            Some(Ok(u)) => self.with_unit_system(u.to_string()),
+            Some(Err(_)) | None => self,
         }
     }
 
@@ -644,7 +652,11 @@ impl FormatConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+/// A unit system the viewer can scale and label: the keys of `UNIT_SYSTEMS`
+/// in `src/viewer/assets/lib/charts/util/units.js`. The viewer shows an
+/// unknown system's name verbatim as the unit, so a plot's `unit_system` is
+/// one of these or absent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Unit {
     Count,
@@ -676,9 +688,76 @@ impl std::fmt::Display for Unit {
     }
 }
 
+impl Unit {
+    /// Every variant, in the order `units.js` lists them.
+    pub const ALL: [Unit; 9] = [
+        Self::Time,
+        Self::Bytes,
+        Self::Bitrate,
+        Self::Datarate,
+        Self::Percentage,
+        Self::Frequency,
+        Self::Power,
+        Self::Count,
+        Self::Rate,
+    ];
+}
+
+impl std::str::FromStr for Unit {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|u| u.to_string() == s)
+            .ok_or_else(|| {
+                let known: Vec<String> = Self::ALL.iter().map(Unit::to_string).collect();
+                format!(
+                    "unknown unit_system {s:?}; expected one of {}",
+                    known.join(", ")
+                )
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Unit` names exactly the systems `units.js` scales; a system added to
+    /// one and not the other would be refused, or shown verbatim, by the viewer.
+    #[test]
+    fn units_match_the_viewer() {
+        let js = include_str!("../../../src/viewer/assets/lib/charts/util/units.js");
+        let block = &js[js.find("const UNIT_SYSTEMS = {").unwrap()..];
+        let block = &block[..block.find("\n};").unwrap()];
+        let viewer: Vec<&str> = block
+            .lines()
+            .filter_map(|l| l.strip_prefix("    ")?.strip_suffix(": {"))
+            .filter(|k| k.chars().all(|c| c.is_ascii_lowercase()))
+            .collect();
+        let ours: Vec<String> = Unit::ALL.iter().map(Unit::to_string).collect();
+        assert_eq!(viewer, ours);
+        for name in &ours {
+            assert_eq!(name.parse::<Unit>().unwrap().to_string(), *name);
+        }
+    }
+
+    #[test]
+    fn maybe_unit_system_drops_an_unknown_system() {
+        let unit =
+            |opts: PlotOpts| serde_json::to_value(&opts).unwrap()["format"]["unit_system"].clone();
+        let known = PlotOpts::counter("t", "id", Unit::Count).maybe_unit_system(Some("bytes"));
+        assert_eq!(unit(known), "bytes");
+        let unknown = PlotOpts::counter("t", "id", Unit::Count)
+            .maybe_unit_system(Some("<img src=x onerror=alert(1)>"));
+        assert_eq!(unit(unknown), "count", "the unknown system is not applied");
+        let err = "watts".parse::<Unit>().unwrap_err();
+        assert!(
+            err.contains("\"watts\"") && err.contains("percentage"),
+            "{err}"
+        );
+    }
 
     fn make_plot(width: PlotWidth) -> Plot {
         Plot {

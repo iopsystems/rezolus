@@ -18,6 +18,7 @@ import {
     COLORS,
     FONTS,
 } from './base.js';
+import { escapeHtml } from '../html.js';
 import { rdYlGnColor } from './util/colormap.js';
 import {
     buildGradientCanvas,
@@ -239,6 +240,9 @@ export function configureQuantileHeatmap(chart) {
     const valueFmt = unitSystem
         ? createAxisLabelFormatter(unitSystem)
         : (v) => String(v);
+    // For tooltip HTML: an unknown `unit_system` is returned verbatim as the
+    // unit, so it is escaped. The color-legend ticks (textContent) keep valueFmt.
+    const tipFmt = (v) => escapeHtml(valueFmt(v));
 
     const customXFormatterForTooltip = chart.spec.xAxisFormatter;
 
@@ -266,25 +270,25 @@ export function configureQuantileHeatmap(chart) {
             }
             const bv = (tIdx >= 0) ? diffMatrices.baseline?.[q]?.[tIdx] : null;
             const ev = (tIdx >= 0) ? diffMatrices.experiment?.[q]?.[tIdx] : null;
-            const fmtCell = (x) => (x == null || Number.isNaN(x)) ? '—' : valueFmt(x);
+            const fmtCell = (x) => (x == null || Number.isNaN(x)) ? '—' : tipFmt(x);
             const baselineLabel = diffCaptureLabels?.baseline || 'baseline';
             const experimentLabel = diffCaptureLabels?.experiment || 'experiment';
             const deltaStr = (v == null || Number.isNaN(v))
                 ? '—'
-                : `${v >= 0 ? '+' : ''}${valueFmt(v)}`;
+                : `${v >= 0 ? '+' : ''}${tipFmt(v)}`;
             return `<div style="${FONTS.cssSans}">
                 <div style="${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.fgSecondary}; margin-bottom: 8px;">
                     ${formattedTime}
                 </div>
                 <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
                     <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
-                        ${label}
+                        ${escapeHtml(label)}
                     </span>
                 </div>
                 <div style="display: grid; grid-template-columns: max-content max-content; gap: 2px 12px; ${FONTS.cssMono} font-size: ${FONTS.tooltipValue.fontSize}px;">
-                    <span style="color: var(--compare-baseline, ${COLORS.fgSecondary});">${baselineLabel}</span>
+                    <span style="color: var(--compare-baseline, ${COLORS.fgSecondary});">${escapeHtml(baselineLabel)}</span>
                     <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(bv)}</span>
-                    <span style="color: var(--compare-experiment, ${COLORS.fgSecondary});">${experimentLabel}</span>
+                    <span style="color: var(--compare-experiment, ${COLORS.fgSecondary});">${escapeHtml(experimentLabel)}</span>
                     <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(ev)}</span>
                     <span style="color: ${COLORS.fgSecondary};">Δ</span>
                     <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${deltaStr}</span>
@@ -311,7 +315,7 @@ export function configureQuantileHeatmap(chart) {
             const otherV = (tIdx >= 0 && Array.isArray(counterpart.data) && counterpart.data[q + 1])
                 ? counterpart.data[q + 1][tIdx]
                 : null;
-            const fmtCell = (x) => (x == null || Number.isNaN(x)) ? '—' : valueFmt(x);
+            const fmtCell = (x) => (x == null || Number.isNaN(x)) ? '—' : tipFmt(x);
             const selfV = v;
             const baseV = selfRole === 'baseline' ? selfV : otherV;
             const expV  = selfRole === 'experiment' ? selfV : otherV;
@@ -319,7 +323,7 @@ export function configureQuantileHeatmap(chart) {
             if (baseV != null && !Number.isNaN(baseV) && expV != null && !Number.isNaN(expV)) {
                 const d = expV - baseV;
                 const pct = baseV !== 0 ? `(${d >= 0 ? '+' : ''}${(d / baseV * 100).toFixed(1)}%)` : '';
-                deltaStr = `${d >= 0 ? '+' : ''}${valueFmt(d)} ${pct}`.trim();
+                deltaStr = `${d >= 0 ? '+' : ''}${tipFmt(d)} ${pct}`.trim();
             }
             return `<div style="${FONTS.cssSans}">
                 <div style="${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.fgSecondary}; margin-bottom: 8px;">
@@ -327,13 +331,13 @@ export function configureQuantileHeatmap(chart) {
                 </div>
                 <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 6px;">
                     <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
-                        ${label}
+                        ${escapeHtml(label)}
                     </span>
                 </div>
                 <div style="display: grid; grid-template-columns: max-content max-content; gap: 2px 12px; ${FONTS.cssMono} font-size: ${FONTS.tooltipValue.fontSize}px;">
-                    <span style="color: var(--compare-baseline, ${COLORS.fgSecondary});">${labels.baseline || 'baseline'}</span>
+                    <span style="color: var(--compare-baseline, ${COLORS.fgSecondary});">${escapeHtml(labels.baseline || 'baseline')}</span>
                     <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(baseV)}</span>
-                    <span style="color: var(--compare-experiment, ${COLORS.fgSecondary});">${labels.experiment || 'experiment'}</span>
+                    <span style="color: var(--compare-experiment, ${COLORS.fgSecondary});">${escapeHtml(labels.experiment || 'experiment')}</span>
                     <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${fmtCell(expV)}</span>
                     <span style="color: ${COLORS.fgSecondary};">Δ</span>
                     <span style="color: ${COLORS.fg}; font-weight: ${FONTS.tooltipValue.fontWeight};">${deltaStr}</span>
@@ -349,10 +353,10 @@ export function configureQuantileHeatmap(chart) {
             </div>
             <div style="display: flex; align-items: center; gap: 12px;">
                 <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
-                    ${label}
+                    ${escapeHtml(label)}
                 </span>
                 <span style="${FONTS.cssMono} font-weight: ${FONTS.tooltipValue.fontWeight}; font-size: ${FONTS.tooltipValue.fontSize}px; color: ${COLORS.fg};">
-                    ${valueFmt(v)}
+                    ${tipFmt(v)}
                 </span>
             </div>
             ${getTooltipFreezeFooter(chart)}
