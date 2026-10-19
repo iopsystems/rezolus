@@ -185,9 +185,10 @@ the same arm. Give each endpoint of a concurrent A/B its own `arm=`
 or label two separate recordings when combining them (`recording combine
 a.dendro b.dendro --ab baseline=a.dendro experiment=b.dendro -o ab.dendro`).
 One recording per arm: one arm among unarmed recordings, two recordings
-with the same arm, or more than two arms are refused by the viewer. A recording without an arm in such an
-archive (an agent recorded beside two arms of a service) is shown beside the
-comparison, in its own sections and as a single capture.
+with the same arm, or more than two arms are refused by the viewer. A
+recording without an arm in such an archive (an agent recorded beside two
+arms of a service) is shown beside the comparison, in its own sections and
+as a single capture.
 
 `--label` applies to *every* recording the run produces, so in a multi-endpoint
 run it cannot tell two endpoints apart — see below. An endpoint's `role=`
