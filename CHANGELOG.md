@@ -9,6 +9,12 @@
 
 ### Fixed
 
+- **`task_cpu_usage` follows thread renames.** `comm` was read once, when
+  the sampler first accounted the thread, so a thread that renamed itself
+  afterwards (`pthread_setname_np`, `prctl(PR_SET_NAME)`, exec) kept its
+  creator's or its previous name for the rest of its life. The sampler now
+  attaches to the `task:task_rename` tracepoint when `task_attribution` is
+  on and relabels the thread's series; a rename starts a new series. (#1489)
 - **`recording combine … -o out.parquet` keeps each input's KPI template.**
   It copied a fixed list of keys and dropped a top-level `service_queries`,
   so a combined parquet showed only the built-in registry's KPIs. Each

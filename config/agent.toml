@@ -229,7 +229,7 @@ enabled = true
 # default; the per-task accounting behind the host and cgroup totals runs
 # either way. See docs/metrics.md#cpu_usage.
 [samplers.cpu_usage]
-# task_attribution = true   # export task_cpu_usage, one series per thread
+# task_attribution = true   # export task_cpu_usage, one series per thread plus one per rename
 # cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
 
 # Reports per-drive temperature for NVMe and SATA drives via read-only
