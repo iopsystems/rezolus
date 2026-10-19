@@ -1117,6 +1117,14 @@
    --fg-secondary rather than --fg-muted: muted is the disabled tier (#484f58 on
    the dark badge ground) and this is meant to be read. */
 .compare-badge-more .compare-badge-label { color: var(--fg-secondary); }
+/* Recordings shown beside a comparison: named after the arms, not as one. */
+.compare-badge-also {
+    margin-left: 8px;
+    color: var(--fg-secondary);
+    font-size: 0.9em;
+    white-space: nowrap;
+}
+
 .compare-badge-chip + .compare-badge-chip {
     padding-left: 8px;
     border-left: 1px solid var(--border-subtle);

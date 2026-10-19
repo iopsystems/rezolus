@@ -594,37 +594,48 @@ fn the_arms_fill_the_slots_in_both_viewers() {
     // its JsValue error aborts outside wasm32.
 }
 
-/// An archive of `labels`, one recording each (`source` mirrored into its
-/// metadata).
-fn labelled(dir: &Path, name: &str, labels: &[&[(&str, &str)]]) -> PathBuf {
-    let path = dir.join(name);
-    let maps: Vec<std::collections::BTreeMap<String, String>> = labels
-        .iter()
-        .map(|l| {
-            l.iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect()
-        })
-        .collect();
-    crate::mcp::tests::multi_recording_rez_with_labels(&path, &maps);
+/// The owner's concurrent A/B: two services with `arm=` and a Rezolus agent
+/// without one on the same host, recorded in one run.
+pub(crate) fn concurrent_ab(dir: &Path) -> PathBuf {
+    let path = dir.join("conc.rez");
+    one_run(
+        &path,
+        &[
+            Recording {
+                labels: &[("source", "rezolus"), ("host", "h")],
+                metadata: &[("source", "rezolus")],
+                cpus: 2,
+                busy_ns: 500_000_000,
+                counter: None,
+            },
+            Recording {
+                labels: &[("source", "svcB"), ("host", "h"), ("arm", "experiment")],
+                metadata: &[("source", "svcB")],
+                cpus: 0,
+                busy_ns: 0,
+                counter: Some(("svc_requests", 20)),
+            },
+            Recording {
+                labels: &[("source", "svcA"), ("host", "h"), ("arm", "baseline")],
+                metadata: &[("source", "svcA")],
+                cpus: 0,
+                busy_ns: 0,
+                counter: Some(("svc_requests", 10)),
+            },
+        ],
+    );
     path
 }
 
-/// The owner's concurrent A/B: two services with `arm=` and an agent
-/// without one, recorded in one run. The arms fill the slots, the agent
-/// attaches beside them, and both viewers say so.
+/// The arms fill the comparison's two slots, and the agent is shown beside
+/// it, not as a third arm: its sections at `@h`, grouped under its name,
+/// rendering as a single capture, every query naming it by `__capture__`,
+/// which the baseline's source answers from the agent alone. The same in
+/// both viewers, from file mode and from an upload.
 #[test]
-fn a_concurrent_ab_with_an_unarmed_agent_opens_in_both_viewers() {
+fn a_concurrent_ab_shows_the_unarmed_agent_beside_it() {
     let dir = tempfile::tempdir().unwrap();
-    let path = labelled(
-        dir.path(),
-        "run.rez",
-        &[
-            &[("source", "agent"), ("host", "h")],
-            &[("source", "svcB"), ("host", "h"), ("arm", "experiment")],
-            &[("source", "svcA"), ("host", "h"), ("arm", "baseline")],
-        ],
-    );
+    let path = concurrent_ab(dir.path());
     let state = view(&path, &[]);
     let meta = |id: &str| state.captures.file_metadata_by_id(id).unwrap();
     assert!(meta("baseline").contains("svcA"), "{}", meta("baseline"));
@@ -633,19 +644,103 @@ fn a_concurrent_ab_with_an_unarmed_agent_opens_in_both_viewers() {
         "{}",
         meta("experiment")
     );
-    let ids = state.captures.capture_ids();
-    assert_eq!(ids.len(), 3, "{ids:?}");
-    assert!(meta(&ids[2]).contains("agent"), "{}", meta(&ids[2]));
+    assert_eq!(state.captures.capture_ids(), ["baseline", "experiment"]);
+
+    let sections: Vec<(String, Option<String>)> = state
+        .sections
+        .read()
+        .sections()
+        .iter()
+        .map(|s| (s.route.clone(), s.instance.clone()))
+        .collect();
+    assert!(
+        sections.contains(&("/cpu@h".to_string(), Some("h".to_string()))),
+        "{sections:?}"
+    );
+    assert!(
+        sections
+            .iter()
+            .filter(|(r, _)| !r.contains('@'))
+            .all(|(_, i)| i.is_none()),
+        "the comparison's sections keep their routes: {sections:?}"
+    );
+    let cpu = section(&state, "/cpu@h");
+    assert_eq!(cpu["metadata"]["single_capture"], "h");
+    let (_, busy) = plot_queries(&cpu)
+        .into_iter()
+        .find(|(id, _)| id == "busy-pct")
+        .unwrap();
+    assert!(busy.contains(r#"__capture__="h""#), "{busy}");
+    let values = last_values(state.baseline_data().as_ref(), &busy);
+    assert_eq!(values.len(), 1, "{busy}: {values:?}");
+    assert!((values[0] - 0.5).abs() < 1e-9, "{values:?}");
+    // The comparison still compares: the baseline's own query reads svcA.
+    let svc = last_values(
+        state.baseline_data().as_ref(),
+        "sum(irate(svc_requests[5m]))",
+    );
+    assert_eq!(svc.len(), 1);
+    assert!((svc[0] - 10.0).abs() < 1e-9, "{svc:?}");
 
     let mut reg = viewer::WasmCaptureRegistry::new();
-    reg.attach("baseline", &std::fs::read(&path).unwrap(), "run.rez")
+    reg.attach("baseline", &std::fs::read(&path).unwrap(), "conc.rez")
         .unwrap();
+    reg.init_templates("baseline", "[]").unwrap();
+    // Before the combined regeneration the baseline's own sections already
+    // carry the agent's.
+    let first: Vec<serde_json::Value> =
+        serde_json::from_str(&reg.get_sections("baseline").unwrap()).unwrap();
+    assert!(first.iter().any(|s| s["route"] == "/cpu@h"), "{first:?}");
+    reg.init_templates("experiment", "[]").unwrap();
+    reg.regenerate_combined("[]", None).unwrap();
     assert!(reg.file_metadata_json("baseline").unwrap().contains("svcA"));
-    assert!(reg
-        .file_metadata_json("experiment")
-        .unwrap()
-        .contains("svcB"));
-    let captures: Vec<serde_json::Value> = serde_json::from_str(&reg.captures()).unwrap();
-    assert_eq!(captures.len(), 3);
-    assert!(reg.notices().contains("source=agent"), "{}", reg.notices());
+    let ids: Vec<serde_json::Value> = serde_json::from_str(&reg.captures()).unwrap();
+    assert_eq!(ids.len(), 2);
+    let wasm_sections: Vec<serde_json::Value> =
+        serde_json::from_str(&reg.get_sections("baseline").unwrap()).unwrap();
+    assert!(wasm_sections
+        .iter()
+        .any(|s| s["route"] == "/cpu@h" && s["instance"] == "h"));
+    let wasm_cpu: serde_json::Value =
+        serde_json::from_str(&reg.get_section("baseline", "cpu@h").unwrap()).unwrap();
+    assert_eq!(wasm_cpu["metadata"]["single_capture"], "h");
+}
+
+/// `--baseline`/`--experiment` choose the slots; every other recording is
+/// beside, the agent of the concurrent A/B included.
+#[test]
+fn selectors_keep_the_other_recordings_beside() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = concurrent_ab(dir.path());
+    let state = view(
+        &path,
+        &["--baseline", "source=svcA", "--experiment", "source=svcB"],
+    );
+    assert_eq!(state.captures.capture_ids(), ["baseline", "experiment"]);
+    let routes: Vec<String> = state
+        .sections
+        .read()
+        .sections()
+        .iter()
+        .map(|s| s.route.clone())
+        .collect();
+    assert!(routes.contains(&"/cpu@h".to_string()), "{routes:?}");
+}
+
+/// One armed recording among unarmed ones names no comparison: refused by
+/// the server's slot resolution and by the WASM viewer's order (the upload
+/// path shares the first).
+#[test]
+fn one_arm_among_unarmed_recordings_is_refused() {
+    let labels: Vec<std::collections::BTreeMap<String, String>> = vec![
+        [("source".to_string(), "a".to_string())].into(),
+        [
+            ("source".to_string(), "b".to_string()),
+            ("arm".to_string(), "baseline".to_string()),
+        ]
+        .into(),
+    ];
+    let none = crate::mcp::RecordingSelector::default();
+    let err = super::resolve_ab_slots(&labels, &none, &none).unwrap_err();
+    assert!(err.contains("one recording carries an `arm`"), "{err}");
 }

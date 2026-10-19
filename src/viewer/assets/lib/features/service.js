@@ -2,6 +2,7 @@
 // Used by both the binary viewer and the static site viewer.
 
 import { renderSectionNotes } from '../sections/section_notes.js';
+import { isSingleCapture } from './group_utils.js';
 import { writeViewState } from '../ui/url_state.js';
 
 /**
@@ -59,7 +60,11 @@ const renderServiceSection = (attrs, Group, sectionRoute, sectionName, interval,
                 // sectionMetadata (not `metadata`) so per-group config
                 // isn't clobbered. Group consumes category_members
                 // for the compare-mode bridge.
-                m(Group, { ...group, sectionRoute, sectionName, interval, sectionMetadata: meta })
+                m(Group, {
+                    ...group, sectionRoute, sectionName, interval, sectionMetadata: meta,
+                    // A service beside a comparison draws as one capture.
+                    singleCapture: isSingleCapture(meta),
+                })
             )
         ),
         renderSectionNotes({

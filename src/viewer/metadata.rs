@@ -533,13 +533,23 @@ pub fn regenerate_dashboards(state: &AppState) {
     // The built-in sections render from the baseline's template: the
     // sections are generated against the baseline's data alone.
     let template = capture_dashboard_template(state.baseline_data().as_ref(), preference);
-    let context = dashboard::dashboard::build_template_context(
+    let mut context = dashboard::dashboard::build_template_context(
         template,
         filesize,
         &service_refs,
         category,
         &sources,
     );
+    // The recordings beside a comparison, each in its own sections.
+    let beside = state.beside.read();
+    if !beside.is_empty() {
+        for notice in
+            ::dashboard::dashboard::add_beside_sections(&mut context, &beside, registry, preference)
+        {
+            warn_once(notice);
+        }
+    }
+    drop(beside);
     *state.sections.write() = LazySectionStore::new(context);
 }
 

@@ -117,10 +117,13 @@ pub fn command() -> Command {
              experiment=b`). Without selectors the arms fill the slots, whatever the\n\
              archive's order: arm=baseline is the baseline and arm=experiment the experiment\n\
              (ignoring case); with one of them, the other arm fills the other slot; with\n\
-             neither, the archive's first armed recording is the baseline. Recordings without\n\
-             an arm (an agent recorded beside two arms of a service) attach beside the\n\
-             comparison. One recording per arm: an arm two recordings share, or more than two\n\
-             arms, is refused with a listing; name two with --baseline/--experiment.\n\
+             neither, the archive's first armed recording is the baseline. Every other\n\
+             recording (one without an arm, such as an agent recorded beside two arms of a\n\
+             service, or one --baseline/--experiment did not name) is shown beside the\n\
+             comparison in its own sections, at routes ending in @<host>, as a single\n\
+             capture. One recording per arm: one arm alone, an arm two recordings share, or\n\
+             more than two arms is refused with a listing; name two with\n\
+             --baseline/--experiment.\n\
              `rezolus mcp describe-recording FILE` lists an archive's recordings.\n\n\
              Either positional may be given as alias=path (e.g. redis=./a.parquet) to set the\n\
              display label; the internal slots stay baseline/experiment. The second positional\n\
@@ -1096,11 +1099,28 @@ fn init_file_mode_rez(
     // chosen recordings (the subset-view #1120 introduced, when only two could
     // show). Giving NEITHER shows the whole archive, which is the N-way
     // default. The two-slot ids stay wire-stable for the A/B path either way.
-    let selected = !config.baseline_recording.is_empty() || !config.experiment_recording.is_empty();
+    // The slots, then every other recording beside the comparison: one
+    // without an arm, or one --baseline/--experiment did not name. Each is
+    // shown in its own sections, as a single capture
+    // (`dashboard::dashboard::add_beside_sections`), never as a third arm.
     let mut order: Vec<usize> = vec![b_idx];
     order.extend(e_idx);
-    if !selected {
-        order.extend((0..n).filter(|i| *i != b_idx && e_idx != Some(*i)));
+    let beside_idx: Vec<usize> = (0..n).filter(|i| !order.contains(i)).collect();
+    let beside_names = ::dashboard::dashboard::beside_names(
+        &beside_idx
+            .iter()
+            .map(|&i| all_labels[i].clone())
+            .collect::<Vec<_>>(),
+    );
+    if !beside_idx.is_empty() {
+        info!(
+            "beside the comparison, each in its own sections: {}",
+            beside_idx
+                .iter()
+                .map(|&i| crate::mcp::render_labels(&all_labels[i]))
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
     }
 
     // Ids and aliases from the shared scheme, over the recordings AS SHOWN, so
@@ -1118,12 +1138,17 @@ fn init_file_mode_rez(
     // tar `.rez` is written whole.
     let growable = crate::recorder::rez::detect_rez_format(path).ok()
         == Some(crate::recorder::rez::RezFormat::V3Sqlite);
-    let mut following = growable && order.iter().any(|&i| !readers[i].1.complete());
+    let mut following = growable
+        && order
+            .iter()
+            .chain(&beside_idx)
+            .any(|&i| !readers[i].1.complete());
     // A reopen finds each recording by its label set, so a shown recording
     // whose label set another recording shares cannot be found again.
     if following {
         if let Some(&dup) = order
             .iter()
+            .chain(&beside_idx)
             .find(|&&i| all_labels.iter().filter(|l| **l == all_labels[i]).count() > 1)
         {
             warn!(
@@ -1186,12 +1211,32 @@ fn init_file_mode_rez(
         .clone()
         .unwrap_or_else(|| identities[0].alias.clone());
 
+    let primary = source(capture_registry::BASELINE_ID, &b_labels, b_reader);
+    let mut beside = Vec::with_capacity(beside_idx.len());
+    for (&idx, (key, name)) in beside_idx.iter().zip(beside_names) {
+        let (labels, reader) = slots[idx].take().expect("index is in range");
+        warn_if_empty(&labels, &reader);
+        let data = source(&format!("beside:{key}"), &labels, reader);
+        beside.push(::dashboard::dashboard::Beside { key, name, data });
+    }
+    let baseline: Arc<dyn metriken_query::MetricsSource> = if beside.is_empty() {
+        primary
+    } else {
+        Arc::new(::dashboard::combined::Routed::new(
+            primary,
+            beside
+                .iter()
+                .map(|b| (b.key.clone(), Arc::clone(&b.data)))
+                .collect(),
+        ))
+    };
     let state = AppState::with_pool(
-        source(capture_registry::BASELINE_ID, &b_labels, b_reader),
+        baseline,
         registry.clone(),
         config.template_preference,
         Arc::clone(&pool),
     );
+    *state.beside.write() = beside;
     *state.parquet_path.write() = Some(path.to_path_buf());
     *state.selection.write() = b_selection;
     // A `.rez` report stamps `KEY_REPORT=trimmed` on its anchor recording, the
@@ -1203,8 +1248,7 @@ fn init_file_mode_rez(
     state.captures.set_baseline_file_metadata(b_file_meta);
     state.captures.set_baseline_alias(Some(b_alias));
 
-    // Every other recording attaches under its own id — the first is
-    // `experiment` (the classic A/B second arm), the rest named-or-positional.
+    // The experiment attaches under its own id.
     for (pos, &idx) in order.iter().enumerate().skip(1) {
         let (labels, reader) = slots[idx].take().expect("index is in range");
         warn_if_empty(&labels, &reader);

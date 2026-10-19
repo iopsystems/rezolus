@@ -309,6 +309,10 @@ pub struct AppState {
     /// recording-set changes the sections were last built for
     /// (`metadata::refresh_combined_members`).
     pub combined_live: Mutex<Option<(Arc<rez::live::LiveReader>, u64)>>,
+    /// The recordings shown beside a comparison
+    /// (`dashboard::dashboard::add_beside_sections`); the baseline source is
+    /// a `dashboard::combined::Routed` over them. Empty otherwise.
+    pub beside: RwLock<Vec<::dashboard::dashboard::Beside>>,
 }
 
 /// The default number of queries the viewer runs at once: half the CPUs,
@@ -359,6 +363,7 @@ impl AppState {
             queries: Arc::new(tokio::sync::Semaphore::new(default_query_concurrency())),
             members: RwLock::new(Vec::new()),
             combined_live: Mutex::new(None),
+            beside: RwLock::new(Vec::new()),
         }
     }
 
@@ -411,6 +416,7 @@ impl AppState {
         self.follow.lock().take();
         self.members.write().clear();
         self.combined_live.lock().take();
+        self.beside.write().clear();
         self.captures.set_baseline_data(data);
     }
 

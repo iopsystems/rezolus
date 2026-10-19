@@ -3921,6 +3921,16 @@ mod tests {
         .to_string();
         assert!(err.contains("would not open as a comparison"), "{err}");
         assert!(!dir.path().join("x.rez").exists());
+        let x = dir.path().join("x.dendro");
+        let err = run_combine_ab(
+            std::slice::from_ref(&three),
+            &x,
+            &["baseline=0", "experiment=1"],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("would not open as a comparison"), "{err}");
+        assert!(!x.exists(), "no .dendro is written");
     }
 
     /// A failure after the copy (here, the relabel) leaves nothing at the

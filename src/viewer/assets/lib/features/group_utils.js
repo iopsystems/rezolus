@@ -10,6 +10,16 @@
 // compares this.
 export const baseRoute = (route) => (route || '').split('@')[0];
 
+// Whether a section renders as a single capture: a recording shown beside a
+// comparison, whose section metadata names it (`single_capture`).
+export const isSingleCapture = (metadata) => typeof metadata?.single_capture === 'string';
+
+// The instance names of the recordings shown beside a comparison: in compare
+// mode only those sections carry an `instance`.
+export const besideNames = (sections) => [
+    ...new Set((sections || []).map((s) => s.instance).filter((n) => n != null)),
+];
+
 // Flatten a group's plots across its subgroups. Falls back to the legacy
 // flat `group.plots` shape during the transition window.
 export const collectGroupPlots = (group) =>

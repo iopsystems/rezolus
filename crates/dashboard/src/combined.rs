@@ -35,6 +35,134 @@ pub const RECORDING_LABEL: &str = "__recording__";
 /// discovery) the same way.
 pub const SCOPE_KEY: &str = "scope";
 
+/// The label a query of a section shown beside a comparison carries to name
+/// the recording it reads (`__capture__="<key>"`); [`Routed`] answers it
+/// from that recording and removes it. Internal (`__`): no series has it.
+pub const CAPTURE_LABEL: &str = "__capture__";
+
+/// The View metadata key of a section that renders as a single capture,
+/// valued by its recording's key: a recording beside a comparison.
+pub const SINGLE_CAPTURE_KEY: &str = "single_capture";
+
+/// A comparison's baseline source with the recordings shown beside it
+/// (`dashboard::add_beside_sections`): a query whose selectors carry
+/// `__capture__="<key>"` is answered by that recording's source, without
+/// the matcher; every other query, and the catalog and header, by the
+/// baseline.
+pub struct Routed {
+    primary: std::sync::Arc<dyn MetricsSource>,
+    beside: Vec<(String, std::sync::Arc<dyn MetricsSource>)>,
+}
+
+impl Routed {
+    pub fn new(
+        primary: std::sync::Arc<dyn MetricsSource>,
+        beside: Vec<(String, std::sync::Arc<dyn MetricsSource>)>,
+    ) -> Self {
+        Self { primary, beside }
+    }
+
+    /// The source a query names and the query without its
+    /// `__capture__` matchers.
+    fn route(&self, query: &str) -> (&dyn MetricsSource, String) {
+        let marker = format!("{CAPTURE_LABEL}=\"");
+        let Some(at) = query.find(&marker) else {
+            return (self.primary.as_ref(), query.to_string());
+        };
+        let rest = &query[at + marker.len()..];
+        let key = rest.split('"').next().unwrap_or_default();
+        let Some((_, source)) = self.beside.iter().find(|(k, _)| k == key) else {
+            return (self.primary.as_ref(), query.to_string());
+        };
+        let m = format!("{CAPTURE_LABEL}=\"{key}\"");
+        let stripped = query
+            .replace(&format!("{{{m}}}"), "")
+            .replace(&format!(",{m}"), "")
+            .replace(&format!("{m},"), "")
+            .replace(&m, "");
+        (source.as_ref(), stripped)
+    }
+}
+
+impl MetricsSource for Routed {
+    fn query_range_opts(
+        &self,
+        expr: &str,
+        start_s: f64,
+        end_s: f64,
+        step_s: f64,
+        opts: &QueryOptions,
+    ) -> Result<QueryResult, QueryError> {
+        let (source, expr) = self.route(expr);
+        source.query_range_opts(&expr, start_s, end_s, step_s, opts)
+    }
+    fn query_range_display_opts(
+        &self,
+        expr: &str,
+        start_s: f64,
+        end_s: f64,
+        step_s: f64,
+        opts: &DisplayOptions,
+        qopts: &QueryOptions,
+    ) -> Result<DisplayResult, QueryError> {
+        let (source, expr) = self.route(expr);
+        source.query_range_display_opts(&expr, start_s, end_s, step_s, opts, qopts)
+    }
+    fn query(&self, expr: &str, time: Option<f64>) -> Result<QueryResult, QueryError> {
+        let (source, expr) = self.route(expr);
+        source.query(&expr, time)
+    }
+    fn columns(&self, query: &str) -> Result<HashSet<String>, QueryError> {
+        let (source, query) = self.route(query);
+        source.columns(&query)
+    }
+    fn time_range(&self) -> Option<(f64, f64)> {
+        self.primary.time_range()
+    }
+    fn time_range_ns(&self) -> Option<(u64, u64)> {
+        self.primary.time_range_ns()
+    }
+    fn interval(&self) -> f64 {
+        self.primary.interval()
+    }
+    fn source(&self) -> String {
+        self.primary.source()
+    }
+    fn version(&self) -> String {
+        self.primary.version()
+    }
+    fn filename(&self) -> Option<String> {
+        self.primary.filename()
+    }
+    fn metadata_get(&self, key: &str) -> Option<String> {
+        self.primary.metadata_get(key)
+    }
+    fn file_metadata(&self) -> HashMap<String, String> {
+        self.primary.file_metadata()
+    }
+    fn counter_names(&self) -> Vec<String> {
+        self.primary.counter_names()
+    }
+    fn gauge_names(&self) -> Vec<String> {
+        self.primary.gauge_names()
+    }
+    fn histogram_names(&self) -> Vec<String> {
+        self.primary.histogram_names()
+    }
+    fn counter_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
+        self.primary.counter_labels(name)
+    }
+    fn gauge_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
+        self.primary.gauge_labels(name)
+    }
+    fn histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
+        self.primary.histogram_labels(name)
+    }
+    fn sample_timestamps(&self) -> Vec<u64> {
+        self.primary.sample_timestamps()
+    }
+}
+
 /// How an archive of several recordings opens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layout {
@@ -124,7 +252,10 @@ pub fn arm_slots(labels: &[BTreeMap<String, String>]) -> Result<ArmSlots, String
     }
     let mut notes = Vec::new();
     let (baseline, experiment) = match armed.as_slice() {
-        [(only, _)] => (*only, None),
+        [(only, _)] if labels.len() == 1 => (*only, None),
+        [_] => {
+            return Err("one recording carries an `arm`; a comparison takes two arms".into());
+        }
         [(i, a), (j, b)] => {
             let pick = |want: &str| norm.iter().position(|n| n == want);
             let (b_at, e_at) = match (pick("baseline"), pick("experiment")) {
@@ -1085,6 +1216,8 @@ mod tests {
         let agent_first = slots(&[None, Some("experiment"), Some("baseline")]).unwrap();
         assert_eq!((agent_first.baseline, agent_first.experiment), (2, Some(1)));
         for refused in [
+            &[Some("baseline"), None][..],
+            &[None, Some("experiment"), None][..],
             &[Some("baseline"), Some("baseline")][..],
             &[Some("baseline"), Some("Baseline")][..],
             &[Some("baseline"), Some("experiment"), Some("c")][..],

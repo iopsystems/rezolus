@@ -7,7 +7,7 @@ import { CgroupSelector, seedSelectedCgroups, selectedCgroupPattern } from './fe
 import { GpuSelector } from './features/gpu_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
-import { collectGroupPlots, baseRoute } from './features/group_utils.js';
+import { collectGroupPlots, baseRoute, isSingleCapture } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
 import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, applyScope, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, clampRangeToExtent, sameExtent, nativeInterval, stepAtLeast, CAPTURE_BASELINE, CAPTURE_EXPERIMENT, listCaptures, captureMetadata, clearCaptureMemo } from './data.js';
 
@@ -1128,6 +1128,9 @@ const SectionContent = {
         }
 
         const { withData } = countCharts(attrs.groups);
+        // A section of a recording shown beside a comparison
+        // (`metadata.single_capture`) renders without the experiment.
+        const sectionCompare = compareMode && !isSingleCapture(attrs.metadata);
         // A section of one recording of a combined archive names it.
         const titleText = attrs.section.instance
             ? `${sectionName} — ${attrs.section.instance} (${withData})`
@@ -1182,7 +1185,7 @@ const SectionContent = {
                     // toggling renders the baseline heatmap next to an
                     // empty experiment pane. Re-enable when that gap
                     // is closed.
-                    !compareMode && m('button.section-action-btn', {
+                    !sectionCompare && m('button.section-action-btn', {
                         onclick: () => toggleGlobalHeatmap(sectionRoute, attrs.groups),
                         disabled: heatmapLoading || !hasHistogramCharts,
                     }, heatmapLoading ? 'LOADING...' : (heatmapEnabled ? 'SHOW PERCENTILES' : 'SHOW HEATMAPS')),
@@ -1204,7 +1207,11 @@ const SectionContent = {
                 details: systemInfoData?.gpus || [],
             }),
             m('div#groups',
-                attrs.groups.map((group) => m(Group, { ...group, sectionRoute, sectionName, interval })),
+                attrs.groups.map((group) => m(Group, {
+                    ...group, sectionRoute, sectionName, interval,
+                    // A recording beside a comparison draws as one capture.
+                    singleCapture: !sectionCompare,
+                })),
             ),
             renderSectionNotes({
                 title: 'Charts with no data',

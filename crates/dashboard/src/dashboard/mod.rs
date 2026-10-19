@@ -86,7 +86,6 @@ pub struct DashboardContext {
 }
 
 /// What a route of a combined source renders against.
-#[derive(Debug)]
 pub struct RouteScope {
     /// The recording's matchers, header and metadata.
     pub scope: Scope,
@@ -96,6 +95,11 @@ pub struct RouteScope {
     /// The viewer parameter `throughput` the section expands with; see
     /// [`build_combined_context`].
     pub throughput: Option<String>,
+    /// For a recording shown beside a comparison ([`add_beside_sections`]):
+    /// its key and its own source, which the section is expanded against,
+    /// its queries carrying `__capture__="<key>"` for
+    /// [`combined::Routed`] to send them to that source.
+    pub capture: Option<(String, Arc<dyn MetricsSource>)>,
 }
 
 /// Routes the frontend renders itself (`app.js`'s `/about` route and its
@@ -439,6 +443,7 @@ pub fn build_combined_context(
             scope: parts[i].scope.clone(),
             template: Some(Arc::clone(&template)),
             throughput: throughput_for(i),
+            capture: None,
         });
         for mut section in template.sections() {
             if is_reserved_route(&section.route) || (n > 0 && section.route == "/query") {
@@ -493,6 +498,7 @@ pub fn build_combined_context(
                     scope: scope.clone(),
                     template: None,
                     throughput: None,
+                    capture: None,
                 }),
             );
             service_sections.push(Section {
@@ -598,6 +604,10 @@ fn render_scoped(
     ctx: &DashboardContext,
     route_scope: &RouteScope,
 ) -> Option<Rendered> {
+    let data = match &route_scope.capture {
+        Some((_, own)) => own.as_ref(),
+        None => data,
+    };
     let scoped = Scoped::new(data, &route_scope.scope);
     let mut rendered = match route_scope.template.as_deref() {
         Some(template) => expand(
@@ -609,17 +619,108 @@ fn render_scoped(
         )?,
         None => generate_section(&scoped, route, ctx).map(|view| Rendered { view, error: None })?,
     };
-    let matchers = &route_scope.scope.matchers;
+    let mut matchers = route_scope.scope.matchers.clone();
+    if let Some((key, _)) = &route_scope.capture {
+        matchers.push(combined::Matcher::eq(combined::CAPTURE_LABEL, key));
+        // A recording beside a comparison renders as a single capture.
+        rendered.view.metadata.insert(
+            combined::SINGLE_CAPTURE_KEY.to_string(),
+            serde_json::Value::String(key.clone()),
+        );
+    }
     if !matchers.is_empty() {
         rendered
             .view
-            .map_queries(|q| combined::restrict_query(q, matchers));
+            .map_queries(|q| combined::restrict_query(q, &matchers));
         rendered.view.metadata.insert(
             combined::SCOPE_KEY.to_string(),
-            serde_json::to_value(matchers).unwrap_or_default(),
+            serde_json::to_value(&matchers).unwrap_or_default(),
         );
     }
     Some(rendered)
+}
+
+/// A recording shown beside a comparison: one whose `arm` does not take a
+/// slot (it has none), or that `--baseline`/`--experiment` did not name.
+pub struct Beside {
+    /// Its route key (`/cpu@<key>`) and the value of its queries'
+    /// `__capture__` matcher.
+    pub key: String,
+    /// What the sidebar groups its sections under.
+    pub name: String,
+    /// Its own source.
+    pub data: Arc<dyn MetricsSource>,
+}
+
+/// The keys and names of recordings shown beside a comparison, from their
+/// labels, told apart among themselves as instances are
+/// ([`combined::instance_names`]).
+pub fn beside_names(labels: &[BTreeMap<String, String>]) -> Vec<(String, String)> {
+    let names = combined::instance_names(labels);
+    let keys = combined::instance_keys(&names);
+    keys.into_iter().zip(names).collect()
+}
+
+/// Add to a comparison's context the sections of each recording shown
+/// beside it: each renders as a single capture, from its own templates as
+/// a combined view's instance does ([`build_combined_context`] of that
+/// recording alone), at its routes followed by `@<key>` and grouped under
+/// its name. Every query of those sections carries `__capture__="<key>"`,
+/// so the comparison's baseline source, a [`combined::Routed`], answers it
+/// from that recording; the view's metadata carries
+/// [`combined::SINGLE_CAPTURE_KEY`], so the page draws it without the
+/// experiment. A simple capture's `/source/` entry is not added (the page
+/// lists its metrics from the baseline). Returns the template notices.
+pub fn add_beside_sections(
+    ctx: &mut DashboardContext,
+    beside: &[Beside],
+    registry: &TemplateRegistry,
+    preference: TemplatePreference,
+) -> Vec<String> {
+    let mut notices = Vec::new();
+    for b in beside {
+        let member = Member {
+            series_labels: BTreeMap::new(),
+            metadata: b.data.file_metadata(),
+            header: combined::Header::of(b.data.as_ref()),
+        };
+        let (sub, sub_notices) = build_combined_context(
+            b.data.as_ref(),
+            std::slice::from_ref(&member),
+            registry,
+            preference,
+            None,
+            None,
+        );
+        notices.extend(sub_notices);
+        let suffix = |route: &str| format!("{route}{}{}", combined::INSTANCE_SEPARATOR, b.key);
+        for section in sub.sections {
+            if section.route == "/query" || section.route.starts_with("/source/") {
+                continue;
+            }
+            let route = suffix(&section.route);
+            if let Some(scope) = sub.scopes.get(&section.route) {
+                ctx.scopes.insert(
+                    route.clone(),
+                    Arc::new(RouteScope {
+                        scope: scope.scope.clone(),
+                        template: scope.template.clone(),
+                        throughput: scope.throughput.clone(),
+                        capture: Some((b.key.clone(), Arc::clone(&b.data))),
+                    }),
+                );
+            }
+            ctx.sections.push(Section {
+                name: section.name,
+                route,
+                instance: Some(b.name.clone()),
+            });
+        }
+        for (name, ext) in sub.service_exts {
+            ctx.service_exts.push((suffix(&name), ext));
+        }
+    }
+    notices
 }
 
 /// Expand `route` of `template` against `data`, with the viewer parameter

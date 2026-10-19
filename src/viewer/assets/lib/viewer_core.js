@@ -747,9 +747,11 @@ export function createGroupComponent(getState) {
             const state = getState();
             const {
                 chartsState, heatmapEnabled, heatmapLoading, heatmapDataCache,
-                compareMode, toggles, setChartToggle, anchors, family, experimentQueryRange,
+                toggles, setChartToggle, anchors, family, experimentQueryRange,
                 baselineAlias, experimentAlias,
             } = state;
+            // A recording beside a comparison draws as one capture.
+            const compareMode = state.compareMode && !(attrs.singleCapture === true);
             const captureLabels = {
                 baseline: baselineAlias || 'baseline',
                 experiment: experimentAlias || 'experiment',

@@ -983,6 +983,10 @@ mod tests {
         ];
         let out = describe_candidates(&all, &[], SelectorSyntax::Flag("--recording"));
         assert!(out.contains("--ab baseline=1 experiment=2"), "{out}");
+        assert!(
+            out.contains("source=demo (position 1)") && out.contains("source=demo (position 2)"),
+            "{out}"
+        );
         assert!(!out.contains("baseline=0"), "{out}");
         let out =
             describe_candidates_at(&all, &[0, 2, 3], &[], SelectorSyntax::Flag("--recording"));

@@ -295,25 +295,45 @@ fn ingest_rez_from_path(
     if let Some(note) = &slots.note {
         tracing::info!("{note}");
     }
-    let mut readers = readers;
-    if let Some(e) = slots.experiment {
-        let mut picked: Vec<Option<_>> = readers.into_iter().map(Some).collect();
-        let b = picked[slots.baseline].take().expect("in range");
-        let x = picked[e].take().expect("in range");
-        readers = std::iter::once(b)
-            .chain(std::iter::once(x))
-            .chain(picked.into_iter().flatten())
-            .collect();
-    }
+    // The slots, then every other recording beside the comparison, each in
+    // its own sections (`super::init_file_mode_rez` does the same).
+    let mut picked: Vec<Option<_>> = readers.into_iter().map(Some).collect();
+    let (b_labels, b_reader) = picked[slots.baseline].take().expect("in range");
+    let experiment = slots
+        .experiment
+        .map(|e| picked[e].take().expect("in range"));
+    let rest: Vec<_> = picked.into_iter().flatten().collect();
+    let names = ::dashboard::dashboard::beside_names(
+        &rest.iter().map(|(l, _)| l.clone()).collect::<Vec<_>>(),
+    );
+    let beside: Vec<::dashboard::dashboard::Beside> = rest
+        .into_iter()
+        .zip(names)
+        .map(
+            |((_, reader), (key, name))| ::dashboard::dashboard::Beside {
+                key,
+                name,
+                data: Arc::new(reader) as Arc<dyn MetricsSource>,
+            },
+        )
+        .collect();
 
-    let n = readers.len();
-    let mut readers = readers.into_iter();
-
-    // Baseline = the `baseline` arm, or recording 0.
-    let (b_labels, b_reader) = readers.next().expect("non-empty checked above");
     let (b_systeminfo, b_file_meta) = describe(&b_reader);
     let b_alias = alias_of(&b_labels, "baseline");
-    state.replace_baseline(Arc::new(b_reader) as Arc<dyn MetricsSource>);
+    let primary = Arc::new(b_reader) as Arc<dyn MetricsSource>;
+    let baseline: Arc<dyn MetricsSource> = if beside.is_empty() {
+        primary
+    } else {
+        Arc::new(::dashboard::combined::Routed::new(
+            primary,
+            beside
+                .iter()
+                .map(|b| (b.key.clone(), Arc::clone(&b.data)))
+                .collect(),
+        ))
+    };
+    state.replace_baseline(baseline);
+    *state.beside.write() = beside;
     *state.parquet_path.write() = Some(rez_path.clone());
     *state.experiment_parquet_path.write() = None;
     *state.cli_experiment_path.write() = None;
@@ -322,25 +342,18 @@ fn ingest_rez_from_path(
     *state.file_checksum.write() = compute_file_checksum(&rez_path);
     state.captures.set_baseline_alias(Some(b_alias));
 
-    // Experiment = recording 1, if present.
-    if n >= 2 {
-        let (e_labels, e_reader) = readers.next().expect("n >= 2");
-        let (e_systeminfo, e_file_meta) = describe(&e_reader);
-        let e_alias = alias_of(&e_labels, "experiment");
-        state.captures.attach_experiment(
-            Arc::new(e_reader) as Arc<dyn MetricsSource>,
-            e_systeminfo,
-            e_file_meta,
-            Some(e_alias),
-        );
-        if n > 2 {
-            warn!(
-                "{n}-recording .rez uploaded: showing recordings 0 and 1 as \
-                 baseline/experiment; N-way faceting is not yet supported"
+    match experiment {
+        Some((e_labels, e_reader)) => {
+            let (e_systeminfo, e_file_meta) = describe(&e_reader);
+            let e_alias = alias_of(&e_labels, "experiment");
+            state.captures.attach_experiment(
+                Arc::new(e_reader) as Arc<dyn MetricsSource>,
+                e_systeminfo,
+                e_file_meta,
+                Some(e_alias),
             );
         }
-    } else {
-        state.captures.detach_experiment();
+        None => state.captures.detach_experiment(),
     }
 
     regenerate_dashboards(state);
@@ -1072,6 +1085,54 @@ mod tests {
         let meta = |id: &str| state.captures.file_metadata_by_id(id).unwrap();
         assert!(meta("baseline").contains("s1"), "{}", meta("baseline"));
         assert!(meta("experiment").contains("s0"), "{}", meta("experiment"));
+    }
+
+    /// An upload with one armed recording among unarmed ones is refused, and
+    /// the view is left as it was.
+    #[test]
+    fn an_upload_with_one_arm_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one.rez");
+        let labels: Vec<std::collections::BTreeMap<String, String>> = vec![
+            [("source".to_string(), "a".to_string())].into(),
+            [
+                ("source".to_string(), "b".to_string()),
+                ("arm".to_string(), "baseline".to_string()),
+            ]
+            .into(),
+        ];
+        crate::mcp::tests::multi_recording_rez_with_labels(&path, &labels);
+        let state = upload_only_state();
+        let Json(reply) = ingest_rez_from_path(&state, path, "one.rez".to_string());
+        let reply = serde_json::to_value(&reply).unwrap();
+        assert_eq!(reply["status"], "error", "{reply}");
+        assert!(state.captures.get_by_id("experiment").is_none());
+    }
+
+    /// An upload of the concurrent A/B keeps the agent beside the
+    /// comparison, as file mode does.
+    #[test]
+    fn an_uploaded_comparison_keeps_the_unarmed_recordings_beside() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = crate::viewer::combined_test::concurrent_ab(dir.path());
+        let state = upload_only_state();
+        let _ = ingest_rez_from_path(&state, path, "conc.rez".to_string());
+        let meta = |id: &str| state.captures.file_metadata_by_id(id).unwrap();
+        assert!(meta("baseline").contains("svcA"), "{}", meta("baseline"));
+        assert!(
+            meta("experiment").contains("svcB"),
+            "{}",
+            meta("experiment")
+        );
+        assert_eq!(state.captures.capture_ids(), ["baseline", "experiment"]);
+        let routes: Vec<String> = state
+            .sections
+            .read()
+            .sections()
+            .iter()
+            .map(|s| s.route.clone())
+            .collect();
+        assert!(routes.contains(&"/cpu@h".to_string()), "{routes:?}");
     }
 
     /// Save as Report of a `.rez` source returns a `.rez` report carrying the
