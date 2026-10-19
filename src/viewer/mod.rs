@@ -109,12 +109,13 @@ pub fn command() -> Command {
              labels (source, host, record's labels), and each recording renders its own sections, so\n\
              two agents show the built-in sections once per host (the second host's routes\n\
              end in @<host>, e.g. #/cpu@web-02) and a service shows the dashboard its\n\
-             recording's template describes. It opens as an A/B baseline/experiment comparison\n\
-             instead when --baseline/--experiment name its recordings by label (repeatable,\n\
-             ANDed, subset match; each must name exactly one recording), when its recordings\n\
-             carry an `arm` label, or when their time ranges do not overlap (recordings of\n\
-             different runs, as `rezolus recording combine a.rez b.rez` assembles). With no\n\
-             selectors a comparison shows the first two recordings and attaches the rest.\n\
+             recording's template describes. A/B is opt-in: the archive opens as a\n\
+             baseline/experiment comparison only when --baseline/--experiment name its\n\
+             recordings by label (repeatable, ANDed, subset match; each must name exactly one\n\
+             recording) or its recordings carry an `arm` label (`rezolus record --endpoint\n\
+             url,arm=baseline`, or `rezolus recording combine a b --ab baseline=a\n\
+             experiment=b`). With no selectors a comparison shows the first two recordings and\n\
+             attaches the rest.\n\
              `rezolus mcp describe-recording FILE` lists an archive's recordings.\n\n\
              Either positional may be given as alias=path (e.g. redis=./a.parquet) to set the\n\
              display label; the internal slots stay baseline/experiment. The second positional\n\
@@ -871,16 +872,10 @@ pub(crate) fn opens_combined(
     readers: &crate::rez_reader::LabeledRecordings,
     compare_requested: bool,
 ) -> bool {
-    use metriken_query::MetricsSource;
-    let summaries: Vec<::dashboard::combined::RecordingSummary> = readers
-        .iter()
-        .map(|(labels, reader)| ::dashboard::combined::RecordingSummary {
-            labels: labels.clone(),
-            time_range_ns: reader.time_range_ns(),
-        })
-        .collect();
+    let labels: Vec<std::collections::BTreeMap<String, String>> =
+        readers.iter().map(|(l, _)| l.clone()).collect();
     readers.len() > 1
-        && ::dashboard::combined::layout(&summaries, compare_requested)
+        && ::dashboard::combined::layout(&labels, compare_requested)
             == ::dashboard::combined::Layout::Combined
 }
 

@@ -121,15 +121,10 @@ fn open_rez(data: &[u8], pool: Arc<BufferPool>) -> Result<rez::reader::LabeledRe
 /// recording, and `dashboard::combined::layout` says combined. The server
 /// viewer's `opens_combined`.
 fn opens_combined(recordings: &rez::reader::LabeledRecordings, compare_requested: bool) -> bool {
-    let summaries: Vec<dashboard::combined::RecordingSummary> = recordings
-        .iter()
-        .map(|(labels, reader)| dashboard::combined::RecordingSummary {
-            labels: labels.clone(),
-            time_range_ns: reader.time_range_ns(),
-        })
-        .collect();
+    let labels: Vec<std::collections::BTreeMap<String, String>> =
+        recordings.iter().map(|(l, _)| l.clone()).collect();
     recordings.len() > 1
-        && dashboard::combined::layout(&summaries, compare_requested)
+        && dashboard::combined::layout(&labels, compare_requested)
             == dashboard::combined::Layout::Combined
 }
 

@@ -46,35 +46,18 @@ pub enum Layout {
     Compare,
 }
 
-/// What [`layout`] reads about one recording.
-#[derive(Clone, Debug, Default)]
-pub struct RecordingSummary {
-    /// The recording's labels, as the archive's catalog holds them.
-    pub labels: BTreeMap<String, String>,
-    /// The span of its rows in nanoseconds, `None` when it holds none.
-    pub time_range_ns: Option<(u64, u64)>,
-}
-
 /// Whether an archive opens combined or as a comparison.
 ///
-/// A comparison when `compare_requested` (the server's `--baseline` or
-/// `--experiment`, the WASM registry's `set_compare_requested`), when any
-/// recording carries an [`ARM_LABEL`] label, or when the archive holds two
-/// or more recordings with rows and no two of their time ranges overlap:
-/// recordings of different runs, which is what `recording combine a.rez b.rez`
-/// assembles and which no `arm` label marks. Combined otherwise, a single
-/// recording included.
-pub fn layout(recordings: &[RecordingSummary], compare_requested: bool) -> Layout {
-    if compare_requested || recordings.iter().any(|r| r.labels.contains_key(ARM_LABEL)) {
-        return Layout::Compare;
-    }
-    let mut spans: Vec<(u64, u64)> = recordings.iter().filter_map(|r| r.time_range_ns).collect();
-    if spans.len() < 2 {
-        return Layout::Combined;
-    }
-    spans.sort_unstable();
-    let disjoint = spans.windows(2).all(|w| w[0].1 < w[1].0);
-    if disjoint {
+/// A comparison is opt-in: when `compare_requested` (the server's
+/// `--baseline` or `--experiment`, the WASM registry's
+/// `set_compare_requested`, the static site's `?compare=1`), or when any
+/// recording carries an [`ARM_LABEL`] label (`record --endpoint url,arm=..`,
+/// `recording combine --ab`). Combined otherwise, a single recording
+/// included. Nothing is inferred from when the recordings were taken: an A/B
+/// can be recorded in one run, two endpoints under the same load, and
+/// recordings of one run can be assembled from separate files.
+pub fn layout(labels: &[BTreeMap<String, String>], compare_requested: bool) -> Layout {
+    if compare_requested || labels.iter().any(|l| l.contains_key(ARM_LABEL)) {
         Layout::Compare
     } else {
         Layout::Combined
@@ -909,60 +892,22 @@ mod tests {
             .collect()
     }
 
-    fn rec(pairs: &[(&str, &str)], span: Option<(u64, u64)>) -> RecordingSummary {
-        RecordingSummary {
-            labels: m(pairs),
-            time_range_ns: span,
-        }
-    }
-
     #[test]
-    fn one_run_opens_combined_and_a_request_or_an_arm_opens_a_comparison() {
+    fn a_comparison_is_asked_for_or_labelled() {
         let one_run = [
-            rec(&[("source", "rezolus"), ("host", "a")], Some((0, 100))),
-            rec(&[("source", "svc"), ("host", "a")], Some((10, 90))),
+            m(&[("source", "rezolus"), ("host", "a")]),
+            m(&[("source", "svc"), ("host", "a")]),
         ];
         assert_eq!(layout(&one_run, false), Layout::Combined);
         assert_eq!(layout(&one_run, true), Layout::Compare);
         assert_eq!(layout(&one_run[..1], false), Layout::Combined);
         let armed = [
-            rec(
-                &[("source", "rezolus"), ("arm", "baseline")],
-                Some((0, 100)),
-            ),
-            rec(
-                &[("source", "rezolus"), ("arm", "experiment")],
-                Some((0, 100)),
-            ),
+            m(&[("source", "rezolus"), ("arm", "baseline")]),
+            m(&[("source", "rezolus"), ("arm", "experiment")]),
         ];
         assert_eq!(layout(&armed, false), Layout::Compare);
-    }
-
-    /// Two runs at different times (`recording combine a.rez b.rez`) open
-    /// as a comparison; a recording with no rows decides nothing.
-    #[test]
-    fn recordings_of_different_runs_open_as_a_comparison() {
-        let runs = [
-            rec(&[("source", "rezolus")], Some((0, 100))),
-            rec(&[("source", "rezolus")], Some((200, 300))),
-        ];
-        assert_eq!(layout(&runs, false), Layout::Compare);
-        let touching = [
-            rec(&[("source", "rezolus")], Some((0, 200))),
-            rec(&[("source", "rezolus")], Some((200, 300))),
-        ];
-        assert_eq!(layout(&touching, false), Layout::Combined);
-        let one_empty = [
-            rec(&[("source", "rezolus")], Some((0, 100))),
-            rec(&[("source", "svc")], None),
-        ];
-        assert_eq!(layout(&one_empty, false), Layout::Combined);
-        let three = [
-            rec(&[("host", "a")], Some((0, 100))),
-            rec(&[("host", "b")], Some((50, 150))),
-            rec(&[("host", "c")], Some((400, 500))),
-        ];
-        assert_eq!(layout(&three, false), Layout::Combined);
+        let one_armed = [m(&[("arm", "baseline")]), m(&[("host", "b")])];
+        assert_eq!(layout(&one_armed, false), Layout::Compare);
     }
 
     #[test]
