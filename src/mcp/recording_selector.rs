@@ -305,12 +305,12 @@ pub(crate) fn describe_candidates(
                 "  - {rendered}\n\
                  {IND}cannot be selected by labels — every selector that names it also \
                  names another\n\
-                 {IND}recording in this archive. To tell them apart, give them distinct \
-                 labels: re-capture\n\
-                 {IND}giving each --endpoint its own source=NAME, or — for an archive \
-                 built by `rezolus\n\
-                 {IND}recording combine` — re-record its inputs with `record --label \
-                 arm=NAME`.\n"
+                 {IND}recording in this archive. To compare them, label them by position: \
+                 `rezolus recording\n\
+                 {IND}combine FILE --ab baseline=0 experiment=1 -o ab.rez` (positions in \
+                 this listing's order,\n\
+                 {IND}from 0); for a new capture, give each --endpoint its own source=NAME \
+                 or arm=NAME.\n"
             ));
             continue;
         };
@@ -927,17 +927,14 @@ mod tests {
             "no selector can pick between identical label sets, so none should be offered: {out}"
         );
         assert!(
-            out.contains("re-capture") && out.contains("source=NAME"),
-            "must explain why, echoing the recorder's own warning: {out}"
+            out.contains("source=NAME"),
+            "must give the fix for a new capture, echoing the recorder's own warning: {out}"
         );
-        // An archive assembled by `recording combine` holds recordings that
-        // were never `--endpoint`s of one run, so "give each --endpoint its
-        // own source=NAME" is advice its owner cannot act on. The label they
-        // can set is `record --label` on the inputs, before combining.
+        // The archive at hand can be compared without re-recording it:
+        // `combine --ab` labels its recordings by position.
         assert!(
-            out.contains("--label") && out.contains("combine"),
-            "must also give the fix for a combined archive, whose recordings \
-             were never endpoints of one run: {out}"
+            out.contains("combine FILE --ab baseline=0 experiment=1"),
+            "must give the fix for the archive at hand: {out}"
         );
     }
 

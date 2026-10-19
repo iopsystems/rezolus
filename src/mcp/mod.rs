@@ -2640,6 +2640,10 @@ pub(crate) mod tests {
             out.contains("cannot be selected by labels"),
             "it must say so plainly instead: {out}"
         );
+        assert!(
+            out.contains("--ab baseline=0 experiment=1"),
+            "and say how to label them: {out}"
+        );
     }
 
     /// A `.rez` is a rezolus recording whatever an arm is CALLED.

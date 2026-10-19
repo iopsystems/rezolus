@@ -327,15 +327,21 @@ pub fn command() -> Command {
                 .about("Combine recordings: multi-node/multi-instance parquet, a multi-recording .dendro or .rez, or an A/B tarball (legacy)")
                 .long_about(
                     "Merge two or more recordings into a single file. Requires at least two\n\
-                     inputs and an output path (-o).\n\n\
+                     inputs (one archive with --ab, below) and an output path (-o).\n\n\
                      Default (row-merge): joins the inputs on timestamp into one recording — use\n\
                      it to stitch together multiple rezolus nodes and/or per-instance service\n\
                      files so the viewer shows them together.\n\n\
-                     A/B compare — PREFER a `.rez` output: give a `.rez` output path and combine\n\
+                     Archive output: give a `.rez` (or `.dendro`, below) output path and combine\n\
                      assembles the inputs into one multi-recording archive, a recording per\n\
-                     input, which the viewer renders as a baseline/experiment comparison for two\n\
-                     recordings. This is the recommended A/B form: it identifies the sides by\n\
-                     their LABEL SETS rather than a `baseline=<source>` mapping you must look up.\n\
+                     input, which the viewer opens as one combined view. With `--ab\n\
+                     baseline=<input> experiment=<input>` each input's recordings are labelled\n\
+                     arm=baseline or arm=experiment and the viewer opens a baseline/experiment\n\
+                     comparison; an input recording that already carries the other arm is\n\
+                     refused, naming the input. With ONE archive input, `--ab baseline=0\n\
+                     experiment=1` labels its recordings by position (from 0, in the order\n\
+                     `rezolus mcp describe-recording` lists them): the way to compare the two\n\
+                     recordings of an archive combined before --ab existed, whose labels may be\n\
+                     identical.\n\
                      `.rez` inputs keep each side's per-sampler cadence and real acquisition\n\
                      windows (v1/v2 tar inputs are upgraded to v3 on the way in). `.parquet`\n\
                      inputs are ingested too — each becomes one recording, split into a table\n\
@@ -360,12 +366,16 @@ pub fn command() -> Command {
                      rezolus recording combine rezolus.parquet service.parquet -o combined.parquet\n\n    \
                      # Merge several rezolus nodes, pinning which one the viewer shows first\n    \
                      rezolus recording combine node1.parquet node2.parquet -o cluster.parquet --pinned node1\n\n    \
-                     # A/B compare two rezolus .rez captures (PREFERRED): a 2-recording .rez\n    \
-                     rezolus recording combine baseline.rez experiment.rez -o ab.rez\n\n    \
-                     # A/B compare two .dendro captures: a 2-recording .dendro\n    \
-                     rezolus recording combine baseline.dendro experiment.dendro -o ab.dendro\n\n    \
+                     # A/B compare two rezolus .rez captures (PREFERRED)\n    \
+                     rezolus recording combine a.rez b.rez --ab baseline=a.rez experiment=b.rez -o ab.rez\n\n    \
+                     # A/B compare two .dendro captures\n    \
+                     rezolus recording combine a.dendro b.dendro --ab baseline=a.dendro experiment=b.dendro -o ab.dendro\n\n    \
+                     # Two hosts recorded separately in one run: one combined view\n    \
+                     rezolus recording combine web-01.dendro web-02.dendro -o run.dendro\n\n    \
+                     # Label the two recordings of an older archive as an A/B, by position\n    \
+                     rezolus recording combine old.rez --ab baseline=0 experiment=1 -o ab.rez\n\n    \
                      # A/B compare two parquet captures into one .rez (windowless recordings)\n    \
-                     rezolus recording combine redis.parquet valkey.parquet -o ab.rez\n\n    \
+                     rezolus recording combine redis.parquet valkey.parquet --ab baseline=redis.parquet experiment=valkey.parquet -o ab.rez\n\n    \
                      # A/B tarball (legacy) — a combined tarball rather than a .rez\n    \
                      rezolus recording combine a.parquet b.parquet --ab baseline=redis experiment=valkey -o out.parquet.ab.tar",
                 )
@@ -374,7 +384,7 @@ pub fn command() -> Command {
                         .help("Input recordings: .parquet files (rezolus agent and/or service files), or .dendro and .rez archives")
                         .value_parser(value_parser!(PathBuf))
                         .required(true)
-                        .num_args(2..)
+                        .num_args(1..)
                         .index(1),
                 )
                 .arg(

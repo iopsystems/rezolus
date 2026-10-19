@@ -167,26 +167,28 @@ fn resolve_ab_input_indices(
     Ok((baseline_idxs[0], experiment_idxs[0]))
 }
 
-/// The `arm` each input's recordings take in an archive output, from
-/// `--ab baseline=<input> experiment=<input>`: each value names one of the
-/// two inputs, as given on the command line or by its file name. `None`
-/// for each input without `--ab`, when nothing is stamped and the archive
-/// opens as one combined view.
-fn archive_arms(
-    raw: &[String],
-    files: &[PathBuf],
-) -> Result<Vec<Option<&'static str>>, Box<dyn std::error::Error>> {
+/// How `--ab` assigns arms in an archive output.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AbPlan {
+    /// No `--ab`: nothing is stamped, and the archive opens combined.
+    Nothing,
+    /// Two inputs: each input's recordings take that input's arm.
+    Inputs([&'static str; 2]),
+    /// One input: the recordings at these positions (0-based, in the
+    /// archive's order, as `describe-recording` lists them) take these arms.
+    /// For an archive assembled before `--ab` existed, whose two recordings
+    /// may carry the same labels.
+    Positions([(usize, &'static str); 2]),
+}
+
+/// The plan of `--ab baseline=<x> experiment=<y>`. With two inputs, each
+/// value names one input: the path as typed, else its file name. With one
+/// input, each is the position of one of its recordings.
+fn ab_plan(raw: &[String], files: &[PathBuf]) -> Result<AbPlan, Box<dyn std::error::Error>> {
     if raw.is_empty() {
-        return Ok(vec![None; files.len()]);
+        return Ok(AbPlan::Nothing);
     }
-    if files.len() != 2 {
-        return Err(format!(
-            "--ab takes exactly two inputs, one per arm (got {})",
-            files.len()
-        )
-        .into());
-    }
-    let mut arms: Vec<Option<&'static str>> = vec![None; 2];
+    let mut pairs: Vec<(&'static str, &str)> = Vec::new();
     for entry in raw {
         let (key, value) = entry
             .split_once('=')
@@ -201,124 +203,249 @@ fn archive_arms(
                 .into());
             }
         };
-        let hits: Vec<usize> = files
-            .iter()
-            .enumerate()
-            .filter(|(_, f)| f.as_os_str() == value || f.file_name().is_some_and(|n| n == value))
-            .map(|(i, _)| i)
-            .collect();
-        let at = match hits.as_slice() {
-            [at] => *at,
-            [] => {
-                return Err(format!(
-                    "--ab {key}={value:?} names neither input ({} or {})",
-                    files[0].display(),
-                    files[1].display()
-                )
-                .into());
-            }
-            _ => {
-                return Err(format!(
-                    "--ab {key}={value:?} names both inputs; give the path as typed"
-                )
-                .into());
-            }
-        };
-        if arms.contains(&Some(arm)) {
+        if pairs.iter().any(|(a, _)| *a == arm) {
             return Err(format!("--ab {key}= specified more than once").into());
         }
-        if let Some(other) = arms[at] {
-            return Err(format!(
-                "--ab names {} as both {other} and {arm}",
-                files[at].display()
-            )
-            .into());
+        pairs.push((arm, value));
+    }
+    if pairs.len() != 2 {
+        return Err("--ab requires baseline=<x> and experiment=<y>".into());
+    }
+    match files.len() {
+        1 => {
+            let mut out = [(0usize, ""); 2];
+            for (slot, (arm, value)) in out.iter_mut().zip(&pairs) {
+                let at: usize = value.parse().map_err(|_| {
+                    format!(
+                        "--ab {arm}={value:?}: with one input, name a recording by its \
+                         position (0, 1, ...) as `rezolus mcp describe-recording` lists them"
+                    )
+                })?;
+                *slot = (at, *arm);
+            }
+            if out[0].0 == out[1].0 {
+                return Err(format!("--ab names recording {} as both arms", out[0].0).into());
+            }
+            Ok(AbPlan::Positions(out))
         }
-        arms[at] = Some(arm);
+        2 => {
+            let mut arms: [Option<&'static str>; 2] = [None, None];
+            for (arm, value) in &pairs {
+                // The path as typed first, then a file name, so `a.rez` beside
+                // `z/a.rez` names the one typed `a.rez`.
+                let typed: Vec<usize> =
+                    (0..2).filter(|i| files[*i].as_os_str() == *value).collect();
+                let hits = if typed.is_empty() {
+                    (0..2)
+                        .filter(|i| files[*i].file_name().is_some_and(|n| n == *value))
+                        .collect()
+                } else {
+                    typed
+                };
+                let at = match hits.as_slice() {
+                    [at] => *at,
+                    [] => {
+                        return Err(format!(
+                            "--ab {arm}={value:?} names neither input ({} or {})",
+                            files[0].display(),
+                            files[1].display()
+                        )
+                        .into());
+                    }
+                    _ => {
+                        return Err(format!(
+                            "--ab {arm}={value:?} names both inputs; give the path as typed"
+                        )
+                        .into());
+                    }
+                };
+                if let Some(other) = arms[at] {
+                    return Err(format!(
+                        "--ab names {} as both {other} and {arm}",
+                        files[at].display()
+                    )
+                    .into());
+                }
+                arms[at] = Some(arm);
+            }
+            Ok(AbPlan::Inputs([
+                arms[0].expect("two distinct inputs named"),
+                arms[1].expect("two distinct inputs named"),
+            ]))
+        }
+        n => Err(format!(
+            "--ab takes two inputs, one per arm, or one archive and two of its \
+             recordings' positions (got {n} inputs)"
+        )
+        .into()),
     }
-    if arms.iter().any(Option::is_none) {
-        return Err("--ab requires baseline=<input> and experiment=<input>".into());
+}
+
+/// A recording's arm and the input it came from.
+type ArmOf<'a> = (&'static str, &'a PathBuf);
+
+impl AbPlan {
+    /// The arm each recording of the output takes, and the input it came
+    /// from: `counts` is how many recordings each input contributed, in the
+    /// order they were copied.
+    fn per_recording<'a>(
+        &self,
+        counts: &[usize],
+        files: &'a [PathBuf],
+    ) -> Result<Vec<Option<ArmOf<'a>>>, Box<dyn std::error::Error>> {
+        let total: usize = counts.iter().sum();
+        match self {
+            AbPlan::Nothing => Ok(vec![None; total]),
+            AbPlan::Inputs(arms) => Ok(counts
+                .iter()
+                .zip(arms.iter().zip(files))
+                .flat_map(|(n, (arm, file))| std::iter::repeat_n(Some((*arm, file)), *n))
+                .collect()),
+            AbPlan::Positions(picks) => {
+                let mut out = vec![None; total];
+                for (at, arm) in picks {
+                    let slot = out.get_mut(*at).ok_or_else(|| {
+                        format!(
+                            "--ab {arm}={at}: {} holds {total} recording(s), numbered from 0",
+                            files[0].display()
+                        )
+                    })?;
+                    *slot = Some((*arm, &files[0]));
+                }
+                Ok(out)
+            }
+        }
     }
-    Ok(arms)
 }
 
 /// A recording's labels.
 type Labels = BTreeMap<String, String>;
 
-/// The labels of each recording of an assembled archive with its input's
-/// `arm` added: `counts` is how many recordings each input contributed, in
-/// the order they were copied, and `labels` the output's recordings in id
-/// order. A recording that already carries the same `arm` keeps it; one
-/// carrying another is refused. `None` for a recording left as it is.
+/// Each recording's labels with its `arm` added (`per` is
+/// [`AbPlan::per_recording`]), `None` for one left as it is: no arm to give,
+/// or the same arm already. A recording that carries another arm is refused,
+/// naming its input; `--ab` never replaces one.
 fn stamped_labels(
     labels: &[Labels],
-    counts: &[usize],
-    arms: &[Option<&'static str>],
+    per: &[Option<ArmOf<'_>>],
 ) -> Result<Vec<Option<Labels>>, Box<dyn std::error::Error>> {
-    let mut out = Vec::with_capacity(labels.len());
-    let mut it = labels.iter();
-    for (count, arm) in counts.iter().zip(arms) {
-        for _ in 0..*count {
-            let l = it
-                .next()
-                .ok_or("the output holds fewer recordings than were copied")?;
-            let Some(arm) = arm else {
-                out.push(None);
-                continue;
+    if labels.len() != per.len() {
+        return Err(format!(
+            "the output holds {} recording(s) but {} were copied",
+            labels.len(),
+            per.len()
+        )
+        .into());
+    }
+    labels
+        .iter()
+        .zip(per)
+        .map(|(l, p)| {
+            let Some((arm, file)) = p else {
+                return Ok(None);
             };
             match l.get(::dashboard::combined::ARM_LABEL).map(String::as_str) {
-                Some(existing) if existing == *arm => out.push(None),
-                Some(existing) => {
-                    return Err(format!(
-                        "a recording labelled {} already carries arm={existing}; refusing to \
-                         stamp arm={arm} over it",
-                        crate::mcp::render_labels(l)
-                    )
-                    .into());
-                }
+                Some(existing) if existing.eq_ignore_ascii_case(arm) => Ok(None),
+                Some(existing) => Err(format!(
+                    "{}: its recording {} is already arm {existing}; --ab would make it {arm} \
+                     (it never replaces an arm)",
+                    file.display(),
+                    crate::mcp::render_labels(l)
+                )
+                .into()),
                 None => {
                     let mut l = l.clone();
                     l.insert(
                         ::dashboard::combined::ARM_LABEL.to_string(),
                         arm.to_string(),
                     );
-                    out.push(Some(l));
+                    Ok(Some(l))
                 }
             }
-        }
-    }
-    Ok(out)
+        })
+        .collect()
 }
 
-/// Stamp each input's `arm` on its recordings of the `.rez` v3 at `path`
-/// (`stamped_labels`). The output is removed on a refusal.
+/// Refuse a plan an input's recordings already contradict, before anything
+/// is copied: each archive input's labels, read from its catalog. A parquet
+/// input's labels are known only once it is ingested, and are checked then.
+fn check_ab_plan(
+    plan: &AbPlan,
+    files: &[PathBuf],
+    archives: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if *plan == AbPlan::Nothing || !archives {
+        return Ok(());
+    }
+    let pool = metriken_storage::BufferPool::new(16 * 1024 * 1024);
+    let mut labels = Vec::new();
+    let mut counts = Vec::new();
+    for file in files {
+        let recordings =
+            crate::rez_reader::RezReader::open_recordings(file, std::sync::Arc::clone(&pool))?;
+        counts.push(recordings.len());
+        labels.extend(recordings.into_iter().map(|(l, _)| l));
+    }
+    stamped_labels(&labels, &plan.per_recording(&counts, files)?).map(|_| ())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Fail the relabel after the copy, for a test of what a late failure
+    /// leaves behind.
+    static FAIL_STAMP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Stamp `plan`'s arms on the `.rez` v3 at `path`, assembled from inputs
+/// that contributed `counts` recordings each. Returns how many were stamped.
 fn stamp_rez_arms(
     path: &std::path::Path,
+    plan: &AbPlan,
     counts: &[usize],
-    arms: &[Option<&'static str>],
+    files: &[PathBuf],
 ) -> Result<usize, Box<dyn std::error::Error>> {
     use crate::recorder::rez_sqlite::RezDb;
-    if arms.iter().all(Option::is_none) {
+    if *plan == AbPlan::Nothing {
         return Ok(0);
     }
-    let result = (|| -> Result<usize, Box<dyn std::error::Error>> {
-        let db = RezDb::open(path)?;
-        let recordings = db.read_recordings()?;
-        let labels: Vec<_> = recordings.iter().map(|r| r.meta.labels.clone()).collect();
-        let stamped = stamped_labels(&labels, counts, arms)?;
-        let mut n = 0;
-        for (rec, new) in recordings.iter().zip(stamped) {
-            if let Some(new) = new {
-                db.update_recording_labels(rec.id, &new)?;
-                n += 1;
-            }
-        }
-        Ok(n)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(path);
+    #[cfg(test)]
+    if FAIL_STAMP.with(|f| f.get()) {
+        return Err("injected relabel failure".into());
     }
-    result
+    let db = RezDb::open(path)?;
+    let recordings = db.read_recordings()?;
+    let labels: Vec<_> = recordings.iter().map(|r| r.meta.labels.clone()).collect();
+    let stamped = stamped_labels(&labels, &plan.per_recording(counts, files)?)?;
+    let mut n = 0;
+    for (rec, new) in recordings.iter().zip(stamped) {
+        if let Some(new) = new {
+            db.update_recording_labels(rec.id, &new)?;
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
+/// A staging directory beside `output`, and the path in it an assembly
+/// writes, renamed onto `output` once complete: a failure at any step
+/// leaves nothing at `output`. Refuses an existing `output`.
+fn staged_output(
+    output: &std::path::Path,
+) -> Result<(tempfile::TempDir, PathBuf), Box<dyn std::error::Error>> {
+    if output.exists() {
+        return Err(format!(
+            "{} already exists; refusing to overwrite it",
+            output.display()
+        )
+        .into());
+    }
+    let dir = output.parent().filter(|p| !p.as_os_str().is_empty());
+    let staging = match dir {
+        Some(dir) => tempfile::tempdir_in(dir),
+        None => tempfile::tempdir(),
+    }?;
+    let staged = staging.path().join("combined.rez");
+    Ok((staging, staged))
 }
 
 pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
@@ -333,6 +460,11 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         .get_many::<String>("ab")
         .map(|i| i.cloned().collect())
         .unwrap_or_default();
+    // One input only relabels an archive's recordings (`--ab baseline=0
+    // experiment=1`); everything else combines two or more.
+    if files.len() < 2 && ab_raw.is_empty() {
+        return Err("combine takes two or more inputs (or one archive with --ab)".into());
+    }
 
     let pinned = args.get_one::<String>("pinned");
 
@@ -360,8 +492,9 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
                         .into(),
                 );
             }
-            let arms = archive_arms(&ab_raw, &files)?;
-            return combine_dendro(&files, &formats, &dendro_in, output, &arms);
+            let plan = ab_plan(&ab_raw, &files)?;
+            check_ab_plan(&plan, &files, true)?;
+            return combine_dendro(&files, &formats, &dendro_in, output, &plan);
         }
         if let Some(i) = dendro_in.iter().position(|d| *d) {
             return Err(format!(
@@ -378,8 +511,9 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
             // A v1/v2 input is upgraded to v3 on the way in, so the output is
             // always v3 and mixing containers needs no special case: by the
             // time anything is assembled, every input is the same shape.
-            let arms = archive_arms(&ab_raw, &files)?;
-            return combine_rez_v3(&files, &formats, output, &arms);
+            let plan = ab_plan(&ab_raw, &files)?;
+            check_ab_plan(&plan, &files, true)?;
+            return combine_rez_v3(&files, &formats, output, &plan);
         }
     }
 
@@ -388,8 +522,11 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     // form that replaces `combine --ab` for a rezolus-vs-rezolus comparison.
     // Inputs are detected by content above; the output is chosen by extension.
     if output.extension().and_then(|e| e.to_str()) == Some("rez") {
-        let arms = archive_arms(&ab_raw, &files)?;
-        return combine_parquet_to_rez(&files, output, &arms);
+        let plan = ab_plan(&ab_raw, &files)?;
+        if matches!(plan, AbPlan::Positions(_)) {
+            return Err("--ab by recording position takes one .rez or .dendro input".into());
+        }
+        return combine_parquet_to_rez(&files, output, &plan);
     }
 
     let mut inputs = load_inputs(&files)?;
@@ -489,11 +626,13 @@ fn combine_rez_v3(
     files: &[PathBuf],
     formats: &[crate::recorder::rez::RezFormat],
     output: &std::path::Path,
-    arms: &[Option<&'static str>],
+    plan: &AbPlan,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::recorder::rez::RezFormat;
     use crate::recorder::rez_sqlite::RezDb;
     use crate::recorder::rez_v3_rewrite::{copy_recordings_into, upgrade_tar_to_v3, CopySpec};
+
+    let (out_dir, staged_out) = staged_output(output)?;
 
     let staging = tempfile::tempdir()?;
     let mut upgraded = 0usize;
@@ -513,7 +652,7 @@ fn combine_rez_v3(
         println!("upgraded {upgraded} tar (v1/v2) input(s) to v3 for the assembly");
     }
 
-    let mut dst = RezDb::create(output)?;
+    let mut dst = RezDb::create(&staged_out)?;
     let mut recordings = 0usize;
     let mut counts: Vec<usize> = Vec::with_capacity(opened.len());
     dst.transaction(|tx| {
@@ -533,8 +672,10 @@ fn combine_rez_v3(
         Ok(())
     })?;
     drop(dst);
-    let stamped = stamp_rez_arms(output, &counts, arms)?;
-    report_arms(stamped, files, arms);
+    let stamped = stamp_rez_arms(&staged_out, plan, &counts, files)?;
+    std::fs::rename(&staged_out, output)?;
+    drop(out_dir);
+    report_arms(stamped, files, plan);
     println!(
         "wrote {} with {} recording(s) from {} input(s)",
         output.display(),
@@ -559,7 +700,7 @@ fn combine_dendro(
     formats: &[crate::recorder::rez::RezFormat],
     dendro_in: &[bool],
     output: &std::path::Path,
-    arms: &[Option<&'static str>],
+    plan: &AbPlan,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::recorder::rez::RezFormat;
     use dendro::archive::{Archive, ArchiveMut};
@@ -638,10 +779,11 @@ fn combine_dendro(
     })?;
     // Stamped on the staged copy, so a refusal leaves no output.
     let mut stamped = 0;
-    if arms.iter().any(Option::is_some) {
+    if *plan != AbPlan::Nothing {
         let rows = dst.read_sources()?;
         let labels: Vec<_> = rows.iter().map(|r| r.meta.labels.clone()).collect();
-        for (row, new) in rows.iter().zip(stamped_labels(&labels, &counts, arms)?) {
+        let per = plan.per_recording(&counts, files)?;
+        for (row, new) in rows.iter().zip(stamped_labels(&labels, &per)?) {
             if let Some(new) = new {
                 dst.update_source_labels(row.id, &new)?;
                 stamped += 1;
@@ -649,7 +791,7 @@ fn combine_dendro(
         }
     }
     drop(dst);
-    report_arms(stamped, files, arms);
+    report_arms(stamped, files, plan);
     drop(archives);
     std::fs::rename(&staged, output)?;
     println!(
@@ -661,16 +803,22 @@ fn combine_dendro(
     Ok(())
 }
 
-/// Say which input became which arm, when `--ab` was given.
-fn report_arms(stamped: usize, files: &[PathBuf], arms: &[Option<&'static str>]) {
-    for (file, arm) in files.iter().zip(arms) {
-        if let Some(arm) = arm {
-            println!("{}: arm={arm}", file.display());
+/// Say which input or recording became which arm, when `--ab` was given.
+fn report_arms(stamped: usize, files: &[PathBuf], plan: &AbPlan) {
+    match plan {
+        AbPlan::Nothing => return,
+        AbPlan::Inputs(arms) => {
+            for (file, arm) in files.iter().zip(arms) {
+                println!("{}: arm={arm}", file.display());
+            }
+        }
+        AbPlan::Positions(picks) => {
+            for (at, arm) in picks {
+                println!("{} recording {at}: arm={arm}", files[0].display());
+            }
         }
     }
-    if arms.iter().any(Option::is_some) {
-        println!("stamped arm on {stamped} recording(s); the archive opens as an A/B comparison");
-    }
+    println!("stamped arm on {stamped} recording(s); the archive opens as an A/B comparison");
 }
 
 /// Assemble a multi-recording v3 `.rez` from plain `.parquet` inputs: each
@@ -680,7 +828,7 @@ fn report_arms(stamped: usize, files: &[PathBuf], arms: &[Option<&'static str>])
 fn combine_parquet_to_rez(
     files: &[PathBuf],
     output: &std::path::Path,
-    arms: &[Option<&'static str>],
+    plan: &AbPlan,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::recorder::parquet_ingest::ingest_parquet_bytes;
     use crate::recorder::rez_sqlite::RezDb;
@@ -702,7 +850,8 @@ fn combine_parquet_to_rez(
         .map(|f| std::fs::read(f).map_err(|e| format!("failed to read {}: {e}", f.display())))
         .collect::<Result<_, _>>()?;
 
-    let mut dst = RezDb::create(output)?;
+    let (out_dir, staged_out) = staged_output(output)?;
+    let mut dst = RezDb::create(&staged_out)?;
     let mut tables = 0usize;
     dst.transaction(|tx| {
         for bytes in &inputs {
@@ -712,8 +861,10 @@ fn combine_parquet_to_rez(
     })?;
     drop(dst);
     // One recording per parquet input.
-    let stamped = stamp_rez_arms(output, &vec![1; files.len()], arms)?;
-    report_arms(stamped, files, arms);
+    let stamped = stamp_rez_arms(&staged_out, plan, &vec![1; files.len()], files)?;
+    std::fs::rename(&staged_out, output)?;
+    drop(out_dir);
+    report_arms(stamped, files, plan);
     println!(
         "wrote {} with {} recording(s) ({} sampler table(s)) from {} parquet input(s)",
         output.display(),
@@ -3570,7 +3721,20 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert!(err.contains("already carries arm=baseline"), "{err}");
+        assert!(
+            err.contains("b.rez") && err.contains("already arm baseline"),
+            "{err}"
+        );
+        // Refused before the copy: the relabel after it is never reached.
+        FAIL_STAMP.with(|f| f.set(true));
+        let early = run_combine_ab(
+            &[a.clone(), b.clone()],
+            &dir.path().join("early.rez"),
+            &["baseline=a.rez", "experiment=b.rez"],
+        );
+        FAIL_STAMP.with(|f| f.set(false));
+        let early = early.unwrap_err().to_string();
+        assert!(early.contains("already arm baseline"), "{early}");
         assert!(!out.exists(), "a refusal leaves no output");
         let out = dir.path().join("out.dendro");
         run_combine_ab(
@@ -3604,24 +3768,135 @@ mod tests {
         assert_eq!(arms, ["baseline", "experiment"]);
     }
 
+    /// An archive assembled without `--ab` (as every `combine` before it
+    /// did) whose two recordings carry the same labels: no selector tells
+    /// them apart, so `--ab` names them by position, and the result opens as
+    /// a comparison with the named recording as the baseline. Into a `.rez`
+    /// and a `.dendro`.
     #[test]
-    fn combine_ab_takes_two_named_inputs() {
-        let f = |names: &[&str]| -> Vec<PathBuf> { names.iter().map(PathBuf::from).collect() };
-        let ok = |raw: &[&str], files: &[&str]| {
-            archive_arms(
+    fn combine_ab_relabels_one_archive_by_position() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.rez"), dir.path().join("b.rez"));
+        rez::fixtures::one_run(
+            &a,
+            &[rez::fixtures::Recording {
+                labels: &[("source", "rezolus")],
+                metadata: &[("source", "rezolus"), ("version", "first")],
+                cpus: 1,
+                busy_ns: 1,
+                counter: None,
+            }],
+        );
+        rez::fixtures::one_run(
+            &b,
+            &[rez::fixtures::Recording {
+                labels: &[("source", "rezolus")],
+                metadata: &[("source", "rezolus"), ("version", "second")],
+                cpus: 1,
+                busy_ns: 1,
+                counter: None,
+            }],
+        );
+        let old = dir.path().join("old.rez");
+        run_combine_ab(&[a, b], &old, &[]).unwrap();
+        let labels = archive_labels(&old);
+        assert_eq!(labels[0], labels[1], "twins: {labels:?}");
+
+        for out in ["new.rez", "new.dendro"] {
+            let out = dir.path().join(out);
+            run_combine_ab(
+                std::slice::from_ref(&old),
+                &out,
+                &["baseline=1", "experiment=0"],
+            )
+            .unwrap();
+            let readers = crate::rez_reader::RezReader::open_recordings(
+                &out,
+                metriken_storage::BufferPool::new(16 * 1024 * 1024),
+            )
+            .unwrap();
+            let arms: Vec<(String, String)> = readers
+                .iter()
+                .map(|(l, r)| {
+                    use metriken_query::MetricsSource;
+                    (r.version(), l["arm"].clone())
+                })
+                .collect();
+            assert_eq!(
+                arms,
+                [
+                    ("first".to_string(), "experiment".to_string()),
+                    ("second".to_string(), "baseline".to_string()),
+                ],
+                "{}",
+                out.display()
+            );
+            assert!(!crate::viewer::opens_combined(&readers, false));
+        }
+        let err = run_combine_ab(
+            std::slice::from_ref(&old),
+            &dir.path().join("x.rez"),
+            &["baseline=2", "experiment=0"],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("holds 2 recording(s)"), "{err}");
+    }
+
+    /// A failure after the copy (here, the relabel) leaves nothing at the
+    /// output, so the same command runs again.
+    #[test]
+    fn a_failed_relabel_leaves_no_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.rez"), dir.path().join("b.rez"));
+        agent_rez(&a, &[("source", "rezolus"), ("host", "a")]);
+        agent_rez(&b, &[("source", "rezolus"), ("host", "b")]);
+        let out = dir.path().join("ab.rez");
+        let ab = ["baseline=a.rez", "experiment=b.rez"];
+        FAIL_STAMP.with(|f| f.set(true));
+        let err = run_combine_ab(&[a.clone(), b.clone()], &out, &ab);
+        FAIL_STAMP.with(|f| f.set(false));
+        assert!(err.unwrap_err().to_string().contains("injected"));
+        assert!(!out.exists());
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(leftovers.len(), 2, "{leftovers:?}");
+        run_combine_ab(&[a, b], &out, &ab).unwrap();
+        assert!(out.exists());
+    }
+
+    #[test]
+    fn combine_ab_takes_two_named_inputs_or_two_positions() {
+        let plan = |raw: &[&str], files: &[&str]| {
+            ab_plan(
                 &raw.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-                &f(files),
+                &files.iter().map(PathBuf::from).collect::<Vec<_>>(),
             )
         };
         assert_eq!(
-            ok(
+            plan(
                 &["experiment=x/a.rez", "baseline=b.rez"],
                 &["x/a.rez", "y/b.rez"]
             )
             .unwrap(),
-            [Some("experiment"), Some("baseline")]
+            AbPlan::Inputs(["experiment", "baseline"])
         );
-        assert_eq!(ok(&[], &["a", "b", "c"]).unwrap(), [None, None, None]);
+        // The path as typed wins over another input's file name.
+        assert_eq!(
+            plan(
+                &["baseline=a.parquet", "experiment=z/a.parquet"],
+                &["z/a.parquet", "a.parquet"]
+            )
+            .unwrap(),
+            AbPlan::Inputs(["experiment", "baseline"])
+        );
+        assert_eq!(
+            plan(&["baseline=1", "experiment=0"], &["old.rez"]).unwrap(),
+            AbPlan::Positions([(1, "baseline"), (0, "experiment")])
+        );
+        assert_eq!(plan(&[], &["a", "b", "c"]).unwrap(), AbPlan::Nothing);
         for (raw, files) in [
             (&["baseline=a", "experiment=b"][..], &["a", "b", "c"][..]),
             (&["baseline=a"][..], &["a", "b"][..]),
@@ -3632,8 +3907,10 @@ mod tests {
                 &["baseline=a.rez", "experiment=b"][..],
                 &["x/a.rez", "y/a.rez"][..],
             ),
+            (&["baseline=0", "experiment=0"][..], &["old.rez"][..]),
+            (&["baseline=first", "experiment=1"][..], &["old.rez"][..]),
         ] {
-            assert!(ok(raw, files).is_err(), "{raw:?} {files:?}");
+            assert!(plan(raw, files).is_err(), "{raw:?} {files:?}");
         }
     }
 
@@ -3789,7 +4066,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("ab.rez");
 
-        combine_parquet_to_rez(&[p1, p2], &out, &[None, None]).unwrap();
+        combine_parquet_to_rez(&[p1, p2], &out, &AbPlan::Nothing).unwrap();
 
         let db = crate::recorder::rez_sqlite::RezDb::open(&out).unwrap();
         let recs = db.read_recordings().unwrap();
@@ -3824,7 +4101,7 @@ mod tests {
         let out = dir.path().join("ab.rez");
         std::fs::write(&out, b"existing").unwrap();
 
-        let err = combine_parquet_to_rez(&[p1], &out, &[None])
+        let err = combine_parquet_to_rez(&[p1], &out, &AbPlan::Nothing)
             .unwrap_err()
             .to_string();
         assert!(
