@@ -593,3 +593,59 @@ fn the_arms_fill_the_slots_in_both_viewers() {
     // The WASM viewer's refusal is `comparison_order`'s (crates/viewer):
     // its JsValue error aborts outside wasm32.
 }
+
+/// An archive of `labels`, one recording each (`source` mirrored into its
+/// metadata).
+fn labelled(dir: &Path, name: &str, labels: &[&[(&str, &str)]]) -> PathBuf {
+    let path = dir.join(name);
+    let maps: Vec<std::collections::BTreeMap<String, String>> = labels
+        .iter()
+        .map(|l| {
+            l.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        })
+        .collect();
+    crate::mcp::tests::multi_recording_rez_with_labels(&path, &maps);
+    path
+}
+
+/// The owner's concurrent A/B: two services with `arm=` and an agent
+/// without one, recorded in one run. The arms fill the slots, the agent
+/// attaches beside them, and both viewers say so.
+#[test]
+fn a_concurrent_ab_with_an_unarmed_agent_opens_in_both_viewers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = labelled(
+        dir.path(),
+        "run.rez",
+        &[
+            &[("source", "agent"), ("host", "h")],
+            &[("source", "svcB"), ("host", "h"), ("arm", "experiment")],
+            &[("source", "svcA"), ("host", "h"), ("arm", "baseline")],
+        ],
+    );
+    let state = view(&path, &[]);
+    let meta = |id: &str| state.captures.file_metadata_by_id(id).unwrap();
+    assert!(meta("baseline").contains("svcA"), "{}", meta("baseline"));
+    assert!(
+        meta("experiment").contains("svcB"),
+        "{}",
+        meta("experiment")
+    );
+    let ids = state.captures.capture_ids();
+    assert_eq!(ids.len(), 3, "{ids:?}");
+    assert!(meta(&ids[2]).contains("agent"), "{}", meta(&ids[2]));
+
+    let mut reg = viewer::WasmCaptureRegistry::new();
+    reg.attach("baseline", &std::fs::read(&path).unwrap(), "run.rez")
+        .unwrap();
+    assert!(reg.file_metadata_json("baseline").unwrap().contains("svcA"));
+    assert!(reg
+        .file_metadata_json("experiment")
+        .unwrap()
+        .contains("svcB"));
+    let captures: Vec<serde_json::Value> = serde_json::from_str(&reg.captures()).unwrap();
+    assert_eq!(captures.len(), 3);
+    assert!(reg.notices().contains("source=agent"), "{}", reg.notices());
+}

@@ -70,78 +70,104 @@ pub fn layout(labels: &[BTreeMap<String, String>], compare_requested: bool) -> L
 pub struct ArmSlots {
     pub baseline: usize,
     pub experiment: Option<usize>,
-    /// What the viewer should say about the choice, when the arms do not
-    /// name it (two arms other than `baseline` and `experiment`).
+    /// What the viewer should say about the choice: which arm is the
+    /// baseline when the arms do not say, and which recordings without an
+    /// arm are attached beside the comparison.
     pub note: Option<String>,
 }
 
 /// The slots of a comparison from its recordings' `arm` labels, the same in
-/// both viewers. `arm=baseline` fills the baseline slot and
-/// `arm=experiment` the experiment slot (matched ignoring ASCII case, so
-/// `Baseline` counts), whatever the archive's order. Two recordings with
-/// two other arm values fill the slots in the archive's order, and the note
-/// says which is the baseline. Recordings that carry no `arm` fill them in
-/// the archive's order (a comparison asked for with `?compare=1`). An
-/// error, for the caller to list the recordings and point at
-/// `--baseline`/`--experiment`, when only some recordings carry `arm`, two
-/// share one, or more than two do.
+/// both viewers, whatever the archive's order:
+///
+/// - `arm=baseline` fills the baseline slot and `arm=experiment` the
+///   experiment slot, matched ignoring ASCII case and surrounding
+///   whitespace (`Baseline` counts);
+/// - with two arms of which only one is standard, the other fills the other
+///   slot (`arm=control` beside `arm=baseline` is the experiment);
+/// - with two arms of which neither is, they fill the slots in the
+///   archive's order, and the note says which is the baseline;
+/// - recordings without an arm attach beside the comparison (an agent
+///   recorded with two arms of a service), and the note names them;
+/// - with no recording carrying an arm (a comparison asked for with
+///   `?compare=1`), the first two recordings fill the slots.
+///
+/// One recording per arm is the current limit: an arm two recordings share,
+/// or more than two arms, is an error, for the caller to list the
+/// recordings and point at `--baseline`/`--experiment`.
 pub fn arm_slots(labels: &[BTreeMap<String, String>]) -> Result<ArmSlots, String> {
-    let arms: Vec<Option<&str>> = labels
+    let armed: Vec<(usize, &str)> = labels
         .iter()
-        .map(|l| l.get(ARM_LABEL).map(String::as_str))
+        .enumerate()
+        .filter_map(|(i, l)| l.get(ARM_LABEL).map(|a| (i, a.as_str())))
         .collect();
-    let armed = arms.iter().filter(|a| a.is_some()).count();
-    if armed == 0 {
+    if armed.is_empty() {
         return Ok(ArmSlots {
             baseline: 0,
             experiment: (labels.len() >= 2).then_some(1),
             note: None,
         });
     }
-    if armed != labels.len() {
+    let norm: Vec<String> = armed
+        .iter()
+        .map(|(_, a)| a.trim().to_ascii_lowercase())
+        .collect();
+    if norm.iter().collect::<BTreeSet<_>>().len() != norm.len() {
+        return Err(
+            "two recordings carry the same `arm`; a comparison takes one recording per arm".into(),
+        );
+    }
+    if armed.len() > 2 {
         return Err(format!(
-            "{armed} of the {} recordings carry an `arm` label, so which two to compare is \
-             not said",
-            labels.len()
+            "{} recordings carry an `arm`; a comparison takes one recording per arm, two arms",
+            armed.len()
         ));
     }
-    let lower: Vec<String> = arms
-        .iter()
-        .map(|a| a.unwrap_or_default().to_ascii_lowercase())
-        .collect();
-    if lower.iter().collect::<BTreeSet<_>>().len() != lower.len() {
-        return Err("two recordings carry the same `arm`, so they cannot fill two slots".into());
-    }
-    match lower.len() {
-        1 => Ok(ArmSlots {
-            baseline: 0,
-            experiment: None,
-            note: None,
-        }),
-        2 => {
-            let at = |want: &str| lower.iter().position(|a| a == want);
-            if let (Some(b), Some(e)) = (at("baseline"), at("experiment")) {
-                return Ok(ArmSlots {
-                    baseline: b,
-                    experiment: Some(e),
-                    note: None,
-                });
-            }
-            Ok(ArmSlots {
-                baseline: 0,
-                experiment: Some(1),
-                note: Some(format!(
-                    "neither arm is `baseline` or `experiment`: arm={} (the archive's first \
-                     recording) is the baseline, arm={} the experiment",
-                    arms[0].unwrap_or_default(),
-                    arms[1].unwrap_or_default()
-                )),
-            })
+    let mut notes = Vec::new();
+    let (baseline, experiment) = match armed.as_slice() {
+        [(only, _)] => (*only, None),
+        [(i, a), (j, b)] => {
+            let pick = |want: &str| norm.iter().position(|n| n == want);
+            let (b_at, e_at) = match (pick("baseline"), pick("experiment")) {
+                (Some(x), Some(y)) => (x, y),
+                (Some(x), None) => (x, 1 - x),
+                (None, Some(y)) => (1 - y, y),
+                (None, None) => {
+                    notes.push(format!(
+                        "neither arm is `baseline` or `experiment`: arm={a}, the archive's \
+                         first, is the baseline and arm={b} the experiment"
+                    ));
+                    (0, 1)
+                }
+            };
+            let at = [*i, *j];
+            (at[b_at], Some(at[e_at]))
         }
-        n => Err(format!(
-            "{n} recordings carry an `arm`, and a comparison has two slots"
-        )),
+        _ => unreachable!("one or two arms"),
+    };
+    let extras: Vec<usize> = (0..labels.len())
+        .filter(|i| !armed.iter().any(|(j, _)| j == i))
+        .collect();
+    if !extras.is_empty() {
+        let names: Vec<String> = extras
+            .iter()
+            .map(|&i| {
+                labels[i]
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .collect();
+        notes.push(format!(
+            "attached beside the comparison, without an arm: {}",
+            names.join("; ")
+        ));
     }
+    Ok(ArmSlots {
+        baseline,
+        experiment,
+        note: (!notes.is_empty()).then(|| notes.join("; ")),
+    })
 }
 
 /// How a [`Matcher`] compares a label's value.
@@ -996,33 +1022,69 @@ mod tests {
         let slots = |arms: &[Option<&str>]| {
             let labels: Vec<_> = arms
                 .iter()
-                .map(|a| match a {
-                    Some(a) => m(&[("source", "rezolus"), ("arm", a)]),
-                    None => m(&[("source", "rezolus")]),
+                .enumerate()
+                .map(|(i, a)| {
+                    let mut l = m(&[("source", "rezolus")]);
+                    l.insert("n".into(), i.to_string());
+                    if let Some(a) = a {
+                        l.insert("arm".into(), a.to_string());
+                    }
+                    l
                 })
                 .collect();
             arm_slots(&labels)
         };
-        let ok = |b, e| ArmSlots {
-            baseline: b,
-            experiment: e,
-            note: None,
+        let at = |r: Result<ArmSlots, String>| {
+            let r = r.unwrap();
+            (r.baseline, r.experiment)
         };
         assert_eq!(
-            slots(&[Some("experiment"), Some("baseline")]),
-            Ok(ok(1, Some(0)))
+            at(slots(&[Some("experiment"), Some("baseline")])),
+            (1, Some(0))
         );
         assert_eq!(
-            slots(&[Some("Baseline"), Some("EXPERIMENT")]),
-            Ok(ok(0, Some(1)))
+            at(slots(&[Some("Baseline"), Some(" EXPERIMENT ")])),
+            (0, Some(1))
         );
-        assert_eq!(slots(&[None, None]), Ok(ok(0, Some(1))));
-        assert_eq!(slots(&[Some("experiment")]), Ok(ok(0, None)));
+        assert_eq!(at(slots(&[None, None])), (0, Some(1)));
+        assert_eq!(at(slots(&[Some("experiment")])), (0, None));
+        // One standard arm decides both.
+        assert_eq!(
+            at(slots(&[Some("control"), Some("baseline")])),
+            (1, Some(0))
+        );
+        assert_eq!(
+            at(slots(&[Some("experiment"), Some("control")])),
+            (1, Some(0))
+        );
         let named = slots(&[Some("redis"), Some("valkey")]).unwrap();
         assert_eq!((named.baseline, named.experiment), (0, Some(1)));
-        assert!(named.note.unwrap().contains("arm=redis"));
+        assert!(
+            named
+                .note
+                .unwrap()
+                .contains("arm=redis, the archive's first")
+        );
+        assert!(
+            slots(&[Some("control"), Some("baseline")])
+                .unwrap()
+                .note
+                .is_none()
+        );
+        // Whitespace around a standard arm still names it.
+        assert!(
+            slots(&[Some(" Baseline "), Some("control")])
+                .unwrap()
+                .note
+                .is_none()
+        );
+        // Two arms of a service and an agent without one: the agent attaches.
+        let concurrent = slots(&[Some("baseline"), Some("experiment"), None]).unwrap();
+        assert_eq!((concurrent.baseline, concurrent.experiment), (0, Some(1)));
+        assert!(concurrent.note.unwrap().contains("n=2"));
+        let agent_first = slots(&[None, Some("experiment"), Some("baseline")]).unwrap();
+        assert_eq!((agent_first.baseline, agent_first.experiment), (2, Some(1)));
         for refused in [
-            &[Some("baseline"), None][..],
             &[Some("baseline"), Some("baseline")][..],
             &[Some("baseline"), Some("Baseline")][..],
             &[Some("baseline"), Some("experiment"), Some("c")][..],

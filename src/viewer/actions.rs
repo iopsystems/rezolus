@@ -1051,6 +1051,29 @@ mod tests {
         Arc::new(AppState::new(store, TemplateRegistry::empty()))
     }
 
+    /// An uploaded comparison fills its slots by arm, as file mode does.
+    #[test]
+    fn an_uploaded_comparison_fills_its_slots_by_arm() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rev.rez");
+        let labels: Vec<std::collections::BTreeMap<String, String>> =
+            [("s0", "experiment"), ("s1", "baseline")]
+                .iter()
+                .map(|(s, arm)| {
+                    [("source", *s), ("host", "h"), ("arm", *arm)]
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect()
+                })
+                .collect();
+        crate::mcp::tests::multi_recording_rez_with_labels(&path, &labels);
+        let state = upload_only_state();
+        let _ = ingest_rez_from_path(&state, path, "rev.rez".to_string());
+        let meta = |id: &str| state.captures.file_metadata_by_id(id).unwrap();
+        assert!(meta("baseline").contains("s1"), "{}", meta("baseline"));
+        assert!(meta("experiment").contains("s0"), "{}", meta("experiment"));
+    }
+
     /// Save as Report of a `.rez` source returns a `.rez` report carrying the
     /// selection, through the handler.
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]

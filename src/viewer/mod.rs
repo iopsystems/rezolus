@@ -114,8 +114,13 @@ pub fn command() -> Command {
              recordings by label (repeatable, ANDed, subset match; each must name exactly one\n\
              recording) or its recordings carry an `arm` label (`rezolus record --endpoint\n\
              url,arm=baseline`, or `rezolus recording combine a b --ab baseline=a\n\
-             experiment=b`). With no selectors a comparison shows the first two recordings and\n\
-             attaches the rest.\n\
+             experiment=b`). Without selectors the arms fill the slots, whatever the\n\
+             archive's order: arm=baseline is the baseline and arm=experiment the experiment\n\
+             (ignoring case); with one of them, the other arm fills the other slot; with\n\
+             neither, the archive's first armed recording is the baseline. Recordings without\n\
+             an arm (an agent recorded beside two arms of a service) attach beside the\n\
+             comparison. One recording per arm: an arm two recordings share, or more than two\n\
+             arms, is refused with a listing; name two with --baseline/--experiment.\n\
              `rezolus mcp describe-recording FILE` lists an archive's recordings.\n\n\
              Either positional may be given as alias=path (e.g. redis=./a.parquet) to set the\n\
              display label; the internal slots stay baseline/experiment. The second positional\n\
