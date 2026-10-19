@@ -188,9 +188,11 @@ A recording's `source` is the first of: `source=` on its `--endpoint` (or
 handshake; `rezolus` for a Rezolus agent; a name made from the URL's host,
 port and path, with a warning. The rest of its labels are `--label`, over
 `host` from a Rezolus agent's `/systeminfo`, over the handshake's labels. Its
-metadata is `--metadata`, over the keys the recorder writes
-(`sampling_interval_ms`, `producer_epoch`, `role`), over a Rezolus agent's
-`version`, `systeminfo` and `descriptions`, over the handshake's metadata. A
+metadata is its `--endpoint`'s `role=` and `template=` (as `role` and
+`service_queries`), over `--metadata`, over the keys the recorder writes
+(`sampling_interval_ms`, `producer_epoch`), over a Rezolus agent's `version`,
+`systeminfo` and `descriptions`, over the handshake's metadata; a
+per-endpoint key beats the run-wide `--metadata`. A
 producer that names itself and its version in its handshake is therefore
 recorded under that name, with that version, and needs no `source=`:
 
@@ -201,6 +203,45 @@ rezolus record --url http://loadgen:9090 -o run.dendro   # source and version fr
 When a Rezolus agent's metadata routes do not answer within the timeout, its
 recording is added with its handshake's labels and metadata only (no `host`
 label), and a warning says so.
+
+### KPI templates
+
+The viewer shows a service's KPI section from the template its recording
+carries: the `service_queries` key of the recording's metadata, a
+`ServiceExtension` JSON (the format described under [Checks](#checks)). A
+producer that serves `/metrics/stream` sends its own in the handshake, and
+`record` keeps it (cachecannon and llm-perf send theirs from their next
+releases). A scraped Prometheus endpoint has no handshake, so name a
+template file on its `--endpoint`:
+
+```bash
+rezolus record --endpoint http://gpu-01:8000/metrics,source=vllm,template=vllm.json -o run.dendro
+```
+
+In a `--config` file the same key is `template = "vllm.json"` in the
+endpoint's `[[endpoints]]` entry. A relative path on `--endpoint` is read from
+the working directory, and cannot contain a comma; a relative path in a
+config file is read from the config file's directory. The file is read and
+checked before the recording starts: one that cannot be read, is larger than
+1 MiB, is not a `ServiceExtension`, or has a `unit_system` the viewer does not
+know refuses the run (exit 2) and writes nothing, as `recording annotate
+--queries` refuses it. The file is stored as written.
+
+A template's queries select by `source` (`{source="vllm"}`), so give the
+endpoint the `source=` its template names. On a streamed endpoint `template=`
+replaces the template the producer sends, since the user's metadata outranks
+the handshake's, and the recorder logs a line saying so when it sees that
+handshake at startup. It also replaces a `--metadata service_queries=` value,
+which applies to every recording.
+
+The templates rezolus ships in `crates/dashboard/templates/` (cachecannon,
+llm-perf, vLLM, SGLang, Valkey and others) are a fallback: the viewer uses one
+only for a recording that carries no template, matched by source name, and
+`rezolus view --registry-templates` prefers them. For a producer that sends
+its own template, the producer's copy is the one that is maintained, and
+rezolus's copy serves recordings made before the producer sent one, so the two
+need not match. For vLLM, SGLang and Valkey, which send none, the files there
+are what `template=` is for.
 
 ### Several endpoints in one archive
 

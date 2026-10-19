@@ -2475,3 +2475,289 @@ fn a_pending_endpoint_is_detected_every_tick() {
     let asked = streams.load(std::sync::atomic::Ordering::SeqCst);
     assert!(asked >= 12, "the stream route was asked {asked} times");
 }
+
+/// A KPI template selecting the fake exporter's two series by `source="svc"`.
+const SVC_TEMPLATE: &str = r#"{
+  "service_name": "svc",
+  "kpis": [
+    {"role": "throughput", "title": "Request Rate", "query": "sum(irate(http_requests_total{source=\"svc\"}[5s]))", "type": "delta_counter", "unit_system": "rate"},
+    {"role": "load", "title": "Queue Depth", "query": "queue_depth{source=\"svc\"}", "type": "gauge", "unit_system": "count"}
+  ]
+}
+"#;
+
+/// `rezolus view` on `archive`, killed when dropped.
+struct Viewer {
+    child: std::process::Child,
+    port: u16,
+}
+
+impl Viewer {
+    fn start(archive: &std::path::Path) -> Self {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let child = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+            .arg("view")
+            .arg(archive)
+            .arg("--listen")
+            .arg(format!("127.0.0.1:{port}"))
+            .env("REZOLUS_NO_OPEN", "1")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("failed to run rezolus view");
+        let viewer = Self { child, port };
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while viewer.try_get("/api/v1/sections").is_none() {
+            assert!(Instant::now() < deadline, "the viewer did not come up");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        viewer
+    }
+
+    /// The body of a 200 answer to `GET path`, or `None`.
+    fn try_get(&self, path: &str) -> Option<String> {
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", self.port)).ok()?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .ok()?;
+        write!(stream, "GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n").ok()?;
+        let mut response = String::new();
+        stream.read_to_string(&mut response).ok()?;
+        let (head, body) = response.split_once("\r\n\r\n")?;
+        // HTTP/1.0, so the body is not chunked.
+        head.split_whitespace()
+            .nth(1)
+            .is_some_and(|status| status == "200")
+            .then(|| body.to_string())
+    }
+
+    fn get_json(&self, path: &str) -> serde_json::Value {
+        let body = self
+            .try_get(path)
+            .unwrap_or_else(|| panic!("GET {path} did not answer 200"));
+        serde_json::from_str(&body).unwrap_or_else(|e| panic!("GET {path}: {e}: {body}"))
+    }
+}
+
+impl Drop for Viewer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// `--endpoint url,template=FILE` on a scraped Prometheus endpoint writes
+/// FILE into that recording's metadata as `service_queries`, and `rezolus
+/// view` shows the service's KPI section from it. Without the option the
+/// recording carries no template and the viewer has no section for `svc`,
+/// which the built-in registry does not know.
+#[test]
+fn a_template_on_a_scraped_endpoint_becomes_its_kpi_section() {
+    use metriken_storage::Catalog;
+
+    let port = spawn_fake_exporter();
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let template = dir.path().join("svc.json");
+    std::fs::write(&template, SVC_TEMPLATE).unwrap();
+
+    let record = |output: &std::path::Path, option: &str| {
+        let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+            .arg("record")
+            .arg("--endpoint")
+            .arg(format!(
+                "http://127.0.0.1:{port}/metrics,source=svc{option}"
+            ))
+            .arg("-o")
+            .arg(output)
+            .arg("--interval")
+            .arg("100ms")
+            .arg("--duration")
+            .arg("1s")
+            .output()
+            .expect("failed to run rezolus record");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let catalog = metriken_storage::DendroCatalog::open(output).expect("the archive opens");
+        let sources = catalog.sources().expect("the catalog reads");
+        assert_eq!(sources.len(), 1, "{sources:?}");
+        sources[0].metadata.get("service_queries").cloned()
+    };
+
+    let with = dir.path().join("with.dendro");
+    assert_eq!(
+        record(&with, &format!(",template={}", template.display())).as_deref(),
+        Some(SVC_TEMPLATE),
+        "the recording carries the file verbatim"
+    );
+    let without = dir.path().join("without.dendro");
+    assert_eq!(record(&without, ""), None);
+
+    let viewer = Viewer::start(&with);
+    let sections = viewer.get_json("/api/v1/sections");
+    let routes: Vec<&str> = sections["data"]["sections"]
+        .as_array()
+        .expect("sections is a list")
+        .iter()
+        .filter_map(|s| s["route"].as_str())
+        .collect();
+    assert!(routes.contains(&"/service/svc"), "{routes:?}");
+    let section = viewer.get_json("/data/service/svc.json");
+    let text = section.to_string();
+    for title in ["Request Rate", "Queue Depth"] {
+        assert!(
+            text.contains(title),
+            "{title} is not in the section: {text}"
+        );
+    }
+    drop(viewer);
+
+    let viewer = Viewer::start(&without);
+    let sections = viewer.get_json("/api/v1/sections").to_string();
+    assert!(!sections.contains("/service/svc"), "{sections}");
+}
+
+/// A template that cannot be read, is not a `ServiceExtension`, or names a
+/// unit system the viewer does not know refuses the run before anything is
+/// recorded: exit 2, as any other refused configuration, the file named, and
+/// no archive.
+#[test]
+fn a_bad_template_refuses_the_run_before_recording() {
+    let port = spawn_fake_exporter();
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let unknown_unit = dir.path().join("unit.json");
+    std::fs::write(
+        &unknown_unit,
+        SVC_TEMPLATE.replace("\"unit_system\": \"rate\"", "\"unit_system\": \"rps\""),
+    )
+    .unwrap();
+    let not_a_template = dir.path().join("shape.json");
+    std::fs::write(&not_a_template, r#"{"kpis": "none"}"#).unwrap();
+    let missing = dir.path().join("missing.json");
+
+    for (file, expect) in [
+        (&unknown_unit, "unknown unit_system \"rps\""),
+        (&not_a_template, "invalid service extension JSON"),
+        (&missing, "failed to read"),
+    ] {
+        let output = dir.path().join("refused.dendro");
+        let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+            .arg("record")
+            .arg("--endpoint")
+            .arg(format!(
+                "http://127.0.0.1:{port}/metrics,source=svc,template={}",
+                file.display()
+            ))
+            .arg("-o")
+            .arg(&output)
+            .arg("--duration")
+            .arg("1s")
+            .output()
+            .expect("failed to run rezolus record");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{stderr}");
+        assert!(stderr.contains(expect), "{stderr}");
+        assert!(
+            stderr.contains(&file.display().to_string()),
+            "the refusal names the file: {stderr}"
+        );
+        assert!(!output.exists(), "nothing is recorded: {stderr}");
+    }
+}
+
+/// On a streamed producer whose handshake sends its own `service_queries`,
+/// that template is what the recording keeps, unless `template=` names a
+/// file: then the file replaces it, and the recorder says so at startup.
+#[test]
+fn a_template_replaces_the_one_a_producers_handshake_sends() {
+    const PRODUCER_TEMPLATE: &str = r#"{"service_name":"cachecannon","kpis":[]}"#;
+    let port = spawn_fixture(
+        Streams::Always,
+        None,
+        Names::Metriken,
+        Fixture {
+            labels: &[("source", "cachecannon")],
+            metadata: &[("service_queries", PRODUCER_TEMPLATE)],
+            ..Fixture::default()
+        },
+    );
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let template = dir.path().join("mine.json");
+    std::fs::write(&template, SVC_TEMPLATE).unwrap();
+
+    let record = |name: &str, option: &str| {
+        let output = dir.path().join(name);
+        let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+            .arg("record")
+            .arg("--endpoint")
+            .arg(format!("http://127.0.0.1:{port}{option}"))
+            .arg("-o")
+            .arg(&output)
+            .arg("--interval")
+            .arg("100ms")
+            .arg("--duration")
+            .arg("1s")
+            .output()
+            .expect("failed to run rezolus record");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(out.status.success(), "{stderr}");
+        let (_, metadata, _) = the_recording(&output, "fake/ops");
+        (metadata.get("service_queries").cloned(), stderr)
+    };
+
+    let (kept, stderr) = record("producer.dendro", "");
+    assert_eq!(kept.as_deref(), Some(PRODUCER_TEMPLATE));
+    assert!(!stderr.contains("replaces the KPI template"), "{stderr}");
+
+    let (replaced, stderr) = record("mine.dendro", &format!(",template={}", template.display()));
+    assert_eq!(replaced.as_deref(), Some(SVC_TEMPLATE));
+    assert!(
+        stderr.contains(&format!(
+            "template={} replaces the KPI template its handshake sent",
+            template.display()
+        )),
+        "{stderr}"
+    );
+
+    // A producer that sends no template: template= is the recording's, and
+    // there is nothing for it to replace, so no line.
+    let bare = spawn_fixture(
+        Streams::Always,
+        None,
+        Names::Metriken,
+        Fixture {
+            labels: &[("source", "cachecannon")],
+            ..Fixture::default()
+        },
+    );
+    let output = dir.path().join("bare.dendro");
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!(
+            "http://127.0.0.1:{bare},template={}",
+            template.display()
+        ))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    let (_, metadata, _) = the_recording(&output, "fake/ops");
+    assert_eq!(
+        metadata.get("service_queries").map(String::as_str),
+        Some(SVC_TEMPLATE)
+    );
+    assert!(!stderr.contains("replaces the KPI template"), "{stderr}");
+}

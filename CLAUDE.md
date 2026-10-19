@@ -60,6 +60,14 @@ target/release/rezolus record --url http://localhost:4241 -o out.dendro --label 
 target/release/rezolus record --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.dendro  # one recording per endpoint
 target/release/rezolus record --url http://host:9090/metrics -o out.dendro --metadata source=llm-perf
 target/release/rezolus record --endpoint http://agent:4241 --endpoint http://svc:9090/metrics,source=svc -o run.dendro  # agent streamed, Prometheus scraped, one archive
+target/release/rezolus record --endpoint http://gpu:8000/metrics,source=vllm,template=vllm.json -o run.dendro  # KPI template into that recording's service_queries
+#   template= (TOML: template = "FILE") is read and checked in RecordingConfig::from_args (EndpointConfig::load_template ->
+#   parquet_tools::annotate::load_queries: ServiceExtension + check_unit_systems), refused with exit 2 before recording;
+#   endpoint_spec puts it in the spec's metadata, which outranks a streamed producer's handshake service_queries.
+#   A producer can send its own template in the handshake (cachecannon and llm-perf do from their next releases);
+#   crates/dashboard/templates is the fallback for recordings without one and the source of template= files for
+#   vLLM/SGLang/Valkey. A config file's relative template = is read from the config file's directory; load_queries
+#   refuses a file over 1 MiB (MAX_DASHBOARD_BYTES), for annotate --queries too.
 target/release/rezolus record -o bench.dendro -- ./bench.sh   # record for the command's lifetime; writes run_start/run_end events
 #   (program name only; --record-command-line adds the full argument list)
 # Detection by stream (metriken_recorder::detect, the generic half; src/recorder/agent_probe.rs,
@@ -73,7 +81,7 @@ target/release/rezolus record -o bench.dendro -- ./bench.sh   # record for the c
 # protocol=prometheus scrapes only. /metrics/binary is not read. Identity (metriken-recorder's):
 # labels user --label > hook (`enrich`: source=rezolus and host from /systeminfo for an agent) >
 # handshake labels; source = user source= > handshake source label > hook's > inferred from URL;
-# metadata user --metadata and role= > recorder keys (sampling_interval_ms, producer_epoch) > hook
+# metadata endpoint role=/template= > user --metadata > recorder keys (sampling_interval_ms, producer_epoch) > hook
 # (version, systeminfo, descriptions) > handshake metadata; --metadata producer_epoch(s)= is
 # refused (config.rs), and a pinned key survives a restart and a scrape's HELP text. The startup enrich runs concurrently
 # per streamed endpoint, bounded by the scrape timeout (warning on fallback); a late activation's

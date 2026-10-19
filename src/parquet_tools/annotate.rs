@@ -194,23 +194,43 @@ fn run_undo(path: &Path) {
 /// `ServiceExtension` and that every KPI's `unit_system` is one the viewer
 /// knows (`ServiceExtension::check_unit_systems`). Exits 1 otherwise. `run`
 /// calls this before any edit, so a refusal writes nothing.
+/// The largest KPI template [`load_queries`] accepts: the limit the viewers
+/// put on a source's `dashboard` template, 1 MiB. Every shipped template is
+/// under 9 KB.
+pub(crate) const MAX_QUERIES_BYTES: usize = ::dashboard::source_templates::MAX_DASHBOARD_BYTES;
+
 fn read_queries(path: &Path) -> String {
-    let content = std::fs::read_to_string(path).unwrap_or_else(|e| {
-        eprintln!("error: failed to read {}: {e}", path.display());
+    load_queries(path).unwrap_or_else(|e| {
+        eprintln!("error: {e}");
         std::process::exit(1);
-    });
-    let ext: ServiceExtension = serde_json::from_str(&content).unwrap_or_else(|e| {
-        eprintln!(
-            "error: invalid service extension JSON in {}: {e}",
+    })
+}
+
+/// Read a KPI template file and check it: it must be at most
+/// [`MAX_QUERIES_BYTES`], parse as a [`ServiceExtension`] and name only unit
+/// systems the viewer knows ([`ServiceExtension::check_unit_systems`]).
+/// Returns the file's text as written, which is what goes into a recording's
+/// `service_queries`. Shared with `rezolus record --endpoint
+/// url,template=FILE`.
+pub(crate) fn load_queries(path: &Path) -> Result<String, String> {
+    use std::io::Read;
+    let file =
+        std::fs::File::open(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let mut content = String::new();
+    file.take(MAX_QUERIES_BYTES as u64 + 1)
+        .read_to_string(&mut content)
+        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    if content.len() > MAX_QUERIES_BYTES {
+        return Err(format!(
+            "{} is larger than {MAX_QUERIES_BYTES} bytes, the most a KPI template may be",
             path.display()
-        );
-        std::process::exit(1);
-    });
-    if let Err(e) = ext.check_unit_systems() {
-        eprintln!("error: {}: {e}", path.display());
-        std::process::exit(1);
+        ));
     }
-    content
+    let ext: ServiceExtension = serde_json::from_str(&content)
+        .map_err(|e| format!("invalid service extension JSON in {}: {e}", path.display()))?;
+    ext.check_unit_systems()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(content)
 }
 
 /// Validate that each KPI query returns data from the parquet file.
@@ -876,6 +896,29 @@ fn unannotate_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
+    /// A template over [`super::MAX_QUERIES_BYTES`] is refused, however
+    /// valid, and one at the limit is read.
+    #[test]
+    fn load_queries_refuses_a_template_over_the_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = r#"{"service_name":"s","kpis":[]}"#;
+        let write = |name: &str, len: usize| {
+            let path = dir.path().join(name);
+            // Trailing whitespace keeps the JSON valid at any length.
+            std::fs::write(&path, format!("{body}{}", " ".repeat(len - body.len()))).unwrap();
+            path
+        };
+        let at = write("at.json", super::MAX_QUERIES_BYTES);
+        assert_eq!(
+            super::load_queries(&at).unwrap().len(),
+            super::MAX_QUERIES_BYTES
+        );
+        let over = write("over.json", super::MAX_QUERIES_BYTES + 1);
+        let err = super::load_queries(&over).unwrap_err();
+        assert!(err.contains("larger than 1048576 bytes"), "{err}");
+        assert!(err.contains("over.json"), "{err}");
+    }
+
     use super::*;
 
     #[test]

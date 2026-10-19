@@ -1331,6 +1331,71 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
             }
         }
 
+        // Carry this input's KPI template into its source's entry, where the
+        // viewers read a combined parquet's templates
+        // (`dashboard::source_templates`): a combined file's top-level
+        // `service_queries` would be keyed by the template's own
+        // `service_name`, and each input's would overwrite the last. A
+        // single-source input's template is that source's. An already-combined
+        // input's top-level one (annotated after combining) goes to the
+        // source its `service_name` names, and is dropped with a warning when
+        // that is none of the input's sources. It replaces a template already
+        // nested there: annotate wrote it after the combine that nested the
+        // other, and the viewer prefers it in that input too.
+        if let Some(raw) = input
+            .kv_metadata
+            .iter()
+            .find(|kv| kv.key == KEY_SERVICE_QUERIES)
+            .and_then(|kv| kv.value.as_deref())
+        {
+            match serde_json::from_str::<serde_json::Value>(raw) {
+                Ok(template) => {
+                    let named = template
+                        .get("service_name")
+                        .and_then(|n| n.as_str())
+                        .map(str::to_string);
+                    let combined_input = source_names.len() > 1;
+                    let target = match source_names.as_slice() {
+                        [only] => Some(only.clone()),
+                        many => named.filter(|n| many.contains(n)),
+                    };
+                    match target {
+                        Some(source_name) => {
+                            let sub_key = if source_name == "rezolus" {
+                                input.node.as_deref().unwrap_or("unknown").to_string()
+                            } else {
+                                input.instance.as_deref().unwrap_or("0").to_string()
+                            };
+                            if let Some(entry) = per_source
+                                .get_mut(&source_name)
+                                .and_then(|g| g.as_object_mut())
+                                .and_then(|g| g.get_mut(&sub_key))
+                                .and_then(|e| e.as_object_mut())
+                            {
+                                if combined_input {
+                                    entry.insert(NESTED_SERVICE_QUERIES.to_string(), template);
+                                } else {
+                                    entry
+                                        .entry(NESTED_SERVICE_QUERIES.to_string())
+                                        .or_insert(template);
+                                }
+                            }
+                        }
+                        None => eprintln!(
+                            "warning: {}: its service_queries names none of its sources; \
+                             not carried into the combined file",
+                            input.path.display()
+                        ),
+                    }
+                }
+                Err(e) => eprintln!(
+                    "warning: {}: service_queries is not JSON ({e}); not carried into the \
+                     combined file",
+                    input.path.display()
+                ),
+            }
+        }
+
         // Nest this input's top-level descriptions at the source group level
         // (sibling of the node/instance sub-keys) so each source keeps its
         // own help text rather than losing collisions in a union-merge.
@@ -2688,6 +2753,27 @@ mod tests {
         sampling_interval_ms: &str,
         descriptions: serde_json::Value,
     ) -> (NamedTempFile, PathBuf) {
+        make_test_file_with_kv(
+            timestamps,
+            metric_name,
+            metric_values,
+            source,
+            sampling_interval_ms,
+            KEY_DESCRIPTIONS,
+            &serde_json::to_string(&descriptions).unwrap(),
+        )
+    }
+
+    /// Like `make_test_file` but also writes the top-level KV `key=value`.
+    fn make_test_file_with_kv(
+        timestamps: &[u64],
+        metric_name: &str,
+        metric_values: &[Option<i64>],
+        source: &str,
+        sampling_interval_ms: &str,
+        key: &str,
+        value: &str,
+    ) -> (NamedTempFile, PathBuf) {
         let ts_field =
             Field::new("timestamp", DataType::UInt64, false).with_metadata(HashMap::from([
                 ("metric_type".to_string(), "timestamp".to_string()),
@@ -2699,7 +2785,11 @@ mod tests {
                 ("unit".to_string(), "nanoseconds".to_string()),
             ]));
         let metric_field = Field::new(metric_name, DataType::Int64, true).with_metadata(
-            HashMap::from([("metric_type".to_string(), "gauge".to_string())]),
+            // `metric` names the series once combine prefixes the column.
+            HashMap::from([
+                ("metric_type".to_string(), "gauge".to_string()),
+                ("metric".to_string(), metric_name.to_string()),
+            ]),
         );
         let schema = Arc::new(Schema::new(vec![ts_field, dur_field, metric_field]));
         let ts_array = UInt64Array::from(timestamps.to_vec());
@@ -2724,8 +2814,8 @@ mod tests {
                 value: Some(sampling_interval_ms.to_string()),
             },
             KeyValue {
-                key: KEY_DESCRIPTIONS.to_string(),
-                value: Some(serde_json::to_string(&descriptions).unwrap()),
+                key: key.to_string(),
+                value: Some(value.to_string()),
             },
         ];
         let props = WriterProperties::builder()
@@ -2738,6 +2828,121 @@ mod tests {
         writer.write(&batch).unwrap();
         writer.close().unwrap();
         (tmp, path)
+    }
+
+    /// Each input's `service_queries` is carried into its source's entry in
+    /// `per_source_metadata`, which the viewers read, and the combined file
+    /// renders it: the template resolves for its source and its query reads
+    /// that source's series.
+    #[test]
+    fn combine_carries_each_inputs_kpi_template() {
+        let template = r#"{"service_name":"widgetd","kpis":[{"role":"load","title":"Depth","query":"m{source=\"widgetd\"}","type":"gauge","unit_system":"count"}]}"#;
+        let (_ta, pa) = make_test_file_with_kv(
+            &[SEC, 2 * SEC],
+            "m",
+            &[Some(1), Some(2)],
+            "widgetd",
+            "1000",
+            KEY_SERVICE_QUERIES,
+            template,
+        );
+        let (_tb, pb) = make_test_file(&[SEC, 2 * SEC], "n", &[Some(3), Some(4)], "b", "1000");
+
+        let out_tmp = NamedTempFile::new().unwrap();
+        let out_path = out_tmp.path().to_path_buf();
+        let mut inputs = vec![load(&pa), load(&pb)];
+        validate_labels(&mut inputs).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
+
+        let reader = metriken_query::ParquetReader::open(&out_path).unwrap();
+        let metadata = metriken_query::MetricsSource::file_metadata(&reader);
+        let psm: serde_json::Value =
+            serde_json::from_str(&metadata[KEY_PER_SOURCE_METADATA]).unwrap();
+        assert_eq!(
+            psm["widgetd"]["0"][NESTED_SERVICE_QUERIES],
+            serde_json::from_str::<serde_json::Value>(template).unwrap()
+        );
+        assert!(psm["b"]["0"].get(NESTED_SERVICE_QUERIES).is_none(), "{psm}");
+
+        // widgetd is not in the built-in registry, so what resolves is the
+        // carried template.
+        let registry = ::dashboard::TemplateRegistry::embedded().unwrap();
+        let resolved = ::dashboard::source_templates::resolve_source_templates(
+            &metadata,
+            &registry,
+            ::dashboard::source_templates::TemplatePreference::Archive,
+        );
+        let (source, ext) = resolved
+            .service_exts
+            .iter()
+            .find(|(s, _)| s == "widgetd")
+            .unwrap_or_else(|| panic!("{:?}", resolved.service_exts));
+        assert_eq!(source, "widgetd");
+        let (start, end) = reader.time_range().unwrap();
+        let result = reader
+            .query_range(&ext.kpis[0].query, start, end, 1.0)
+            .unwrap();
+        let metriken_query::QueryResult::Matrix { result } = result else {
+            panic!("not a matrix: {result:?}");
+        };
+        assert!(
+            result.iter().any(|s| !s.values.is_empty()),
+            "the KPI's query reads no data from the combined file"
+        );
+    }
+
+    /// A combined input annotated after combining carries a newer top-level
+    /// template beside the nested one: the top-level one is what that input
+    /// renders, so re-combining keeps it. It goes to the source its
+    /// `service_name` names; one naming none of the input's sources is
+    /// dropped and the nested one kept.
+    #[test]
+    fn recombining_keeps_a_combined_inputs_newer_template() {
+        let old = serde_json::json!({"service_name": "vllm", "kpis": [], "service_metadata": {"v": "old"}});
+        let new = serde_json::json!({"service_name": "vllm", "kpis": [], "service_metadata": {"v": "new"}});
+        let stray = serde_json::json!({"service_name": "sglang", "kpis": []});
+        let psm = serde_json::json!({"vllm": {"0": {"service_queries": old}}}).to_string();
+        let combined = |top: &serde_json::Value| {
+            let top = top.to_string();
+            make_test_file_with_metadata(
+                &[SEC, 2 * SEC],
+                "m1",
+                &[Some(1), Some(2)],
+                "[\"llm-perf\",\"vllm\"]",
+                "1000",
+                vec![
+                    (KEY_PER_SOURCE_METADATA, psm.as_str()),
+                    (KEY_SERVICE_QUERIES, top.as_str()),
+                ],
+            )
+        };
+        let (_t2, p2) = make_test_file(&[SEC, 2 * SEC], "m2", &[Some(3), Some(4)], "c", "1000");
+        let nested = |p1: &PathBuf| {
+            let kv = merge_metadata(&[load(p1), load(&p2)]).unwrap();
+            let psm_str = kv
+                .iter()
+                .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
+                .and_then(|kv| kv.value.clone())
+                .unwrap();
+            let psm: serde_json::Value = serde_json::from_str(&psm_str).unwrap();
+            (
+                psm["vllm"]["0"][NESTED_SERVICE_QUERIES].clone(),
+                psm["llm-perf"]["0"].get(NESTED_SERVICE_QUERIES).cloned(),
+            )
+        };
+
+        let (_t1, p1) = combined(&new);
+        let (vllm, llm_perf) = nested(&p1);
+        assert_eq!(vllm, new, "the top-level template replaces the nested one");
+        assert_eq!(llm_perf, None, "it goes to the source it names only");
+
+        let (_t3, p3) = combined(&stray);
+        let (vllm, llm_perf) = nested(&p3);
+        assert_eq!(
+            vllm, old,
+            "a template naming none of the sources is dropped"
+        );
+        assert_eq!(llm_perf, None);
     }
 
     #[test]

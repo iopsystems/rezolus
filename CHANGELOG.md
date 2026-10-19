@@ -9,6 +9,22 @@
 
 ### Fixed
 
+- **`recording combine … -o out.parquet` keeps each input's KPI template.**
+  It copied a fixed list of keys and dropped a top-level `service_queries`,
+  so a combined parquet showed only the built-in registry's KPIs. Each
+  input's template now goes into its source's entry in
+  `per_source_metadata`, where both viewers read it. An already-combined
+  input's top-level template goes to the source its `service_name` names,
+  and is dropped with a warning when that is none of its sources. A
+  `dashboard` section template is not carried: a parquet input never has
+  one, since only stream recordings (`.dendro`) keep it.
+- **`recording filter` and the viewer's Metadata section read a combined
+  parquet's templates where combine writes them**,
+  `per_source_metadata.<source>.<entry>.service_queries`. Both looked one
+  level up, so `filter` kept only the registry's KPIs' columns for a
+  combined file and the Metadata section listed no templates. Re-combining
+  a combined file that was annotated after combining keeps its newer
+  top-level template, which replaces the one nested by the earlier combine.
 - **The viewer escapes recording text it puts into chart HTML.** Chart
   tooltips, the heatmap tooltips and the embed demo's status line inserted
   strings from the recording as markup: plot titles from section templates
@@ -109,6 +125,12 @@
   last focal release; `install.sh` still installs it there, with a warning.
 
 ### Changed
+
+- **An endpoint's `role=` outranks `--metadata role=`.** `record
+  --endpoint url,role=service --metadata role=x` now records `role=service`,
+  where the run-wide `--metadata` value won before. A per-endpoint key
+  (`role=`, `template=`) beats the same key from `--metadata`, which applies
+  to every recording.
 
 - **The `/metrics/stream` interval is negotiated** (metriken-exposition
   0.23.1, metriken-recorder 0.3). The agent serves a stream at the larger of
@@ -790,6 +812,20 @@
 
 ### Added
 
+- **`record --endpoint url,template=FILE` attaches a KPI template to an
+  endpoint's recording.** The file, a `ServiceExtension` JSON as `recording
+  annotate --queries` takes, is written into that recording's metadata as
+  `service_queries`, so the viewer shows the service's KPI section for a
+  scraped Prometheus endpoint, which has no handshake to carry one. A config
+  file's `[[endpoints]]` entry takes `template = "FILE"`, relative to the
+  config file's directory. The file is read and checked before recording:
+  an unreadable file, one over 1 MiB, JSON that is not a `ServiceExtension`,
+  or an unknown `unit_system` refuses the run (exit 2) and writes nothing.
+  `recording annotate --queries` refuses a file over 1 MiB too. On a streamed producer, `template=` replaces the
+  template its handshake sends, and the recorder logs that at startup.
+  cachecannon and llm-perf send their own from their next releases; the files in
+  `crates/dashboard/templates/` stay as the fallback for recordings that
+  carry none (docs/usage.md, "KPI templates").
 - **The agent sends its section template, and both viewers render the
   built-in sections from a template.** A Rezolus agent's `/metrics/stream`
   handshake carries the Rezolus section template under the metadata key

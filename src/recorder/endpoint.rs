@@ -1,5 +1,6 @@
 use reqwest::Url;
 use serde::Deserialize;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -47,6 +48,30 @@ pub struct EndpointConfig {
     pub role: Option<String>,
     #[serde(default)]
     pub protocol: Option<Protocol>,
+    /// `template=FILE`: a KPI template (a `ServiceExtension` JSON file)
+    /// written into this endpoint's recording as `service_queries`. Relative
+    /// to the working directory on `--endpoint`, and to the config file's
+    /// directory in a `--config` file (resolved by `from_args`).
+    #[serde(default)]
+    pub template: Option<PathBuf>,
+    /// The template's text, read and checked by
+    /// [`EndpointConfig::load_template`] before anything is recorded.
+    #[serde(skip)]
+    pub template_json: Option<String>,
+}
+
+impl EndpointConfig {
+    /// Read and check `template` (see `parquet_tools::annotate::load_queries`)
+    /// into `template_json`. An error names the endpoint, and the file
+    /// through `load_queries`.
+    pub fn load_template(&mut self) -> Result<(), String> {
+        if let Some(path) = &self.template {
+            let json = crate::parquet_tools::annotate::load_queries(path)
+                .map_err(|e| format!("endpoint {}: template: {e}", self.url))?;
+            self.template_json = Some(json);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
