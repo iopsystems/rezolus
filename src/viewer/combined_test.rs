@@ -1060,6 +1060,20 @@ async fn report_round_trip(dir: &Path, path: &Path, ext: &str) {
     .unwrap();
     assert_eq!(marked(&old), ["rezolus"], "{ext}");
     reopen("old", &old);
+
+    // Saved again from that report: only svcA carries a report.
+    let old_path = dir.join(format!("old-source.{ext}"));
+    std::fs::write(&old_path, &old).unwrap();
+    let state = std::sync::Arc::new(view(&old_path, &[]));
+    let response = super::actions::save_with_selection(
+        axum::extract::State(std::sync::Arc::clone(&state)),
+        body.to_string(),
+    )
+    .await;
+    let again = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(marked(&again), ["svcA"], "{ext}");
 }
 
 /// Agents compared with the `cpu_usage` sampler off: the baseline is still

@@ -345,6 +345,15 @@ impl Viewer {
                 )
             })
             .collect();
+        // A report's selection, marker and events from whichever recording
+        // carries the selection: one saved from a comparison of this archive
+        // sits on its baseline, not necessarily the first recording.
+        let markers = dashboard::combined::report_markers(
+            &recordings
+                .iter()
+                .map(|(_, r)| r as &dyn MetricsSource)
+                .collect::<Vec<_>>(),
+        );
         let filename = recordings.first().and_then(|(_, r)| r.filename());
         let (reader, series) = rez::reader::RezReader::combine(recordings, filename);
         let (members, systeminfo) = dashboard::combined::assemble_members(
@@ -357,6 +366,9 @@ impl Viewer {
         let mut viewer = Self::from_source_bytes(Arc::new(reader), pool, Bytes::new());
         viewer.members = members;
         viewer.combined_systeminfo = systeminfo;
+        for (key, value) in markers {
+            viewer.file_metadata.insert(key.to_string(), value);
+        }
         if !is_trimmed_report(&viewer.file_metadata) {
             viewer.context = viewer
                 .combined_context(&dashboard::TemplateRegistry::empty())
@@ -1011,19 +1023,17 @@ impl WasmCaptureRegistry {
         let labels: Vec<std::collections::BTreeMap<String, String>> =
             recordings.iter().map(|(l, _)| l.clone()).collect();
         let identities = dashboard::capture_alias::assign_capture_identities(&labels, &labels);
-        // A report's selection and marker: the baseline's, else whichever
-        // recording carries them (`dashboard::combined::carried`); a report
-        // saved before the baseline was chosen by arm sits on the first.
-        let carried: Vec<(&str, String)> = {
+        // A report's selection, marker and events: the baseline's, else
+        // those of the first recording with a selection
+        // (`dashboard::combined::report_markers`); a report saved before the
+        // baseline was chosen by arm sits on the first.
+        let carried = {
             let shown: Vec<&dyn MetricsSource> = recordings
                 .iter()
                 .map(|(_, r)| r as &dyn MetricsSource)
                 .chain(beside.iter().map(|b| b.data.as_ref()))
                 .collect();
-            [::report_save::KEY_SELECTION, ::report_save::KEY_REPORT]
-                .into_iter()
-                .filter_map(|k| dashboard::combined::carried(&shown, k).map(|v| (k, v)))
-                .collect()
+            dashboard::combined::report_markers(&shown)
         };
 
         let mut beside = Some(beside);

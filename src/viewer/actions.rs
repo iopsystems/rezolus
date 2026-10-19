@@ -229,13 +229,13 @@ fn ingest_rez_from_path(
     // --baseline/--experiment to ask for a comparison.
     if super::opens_combined(&readers, false) {
         let combined = super::combine_recordings(readers);
-        let file_meta = super::file_meta_json(&combined.reader);
-        let selection = combined
-            .reader
-            .metadata_get(crate::parquet_metadata::KEY_SELECTION);
-        let report_marker = combined
-            .reader
-            .metadata_get(crate::parquet_metadata::KEY_REPORT);
+        let markers = combined.markers.clone();
+        let file_meta = super::file_meta_json(&combined.reader)
+            .map(|meta| ::dashboard::combined::with_report_markers(&meta, &markers));
+        let selection =
+            ::dashboard::combined::marker(&markers, crate::parquet_metadata::KEY_SELECTION);
+        let report_marker =
+            ::dashboard::combined::marker(&markers, crate::parquet_metadata::KEY_REPORT);
         state.replace_baseline(Arc::new(combined.reader) as Arc<dyn MetricsSource>);
         *state.parquet_path.write() = Some(rez_path.clone());
         *state.experiment_parquet_path.write() = None;
@@ -322,17 +322,22 @@ fn ingest_rez_from_path(
 
     let (b_systeminfo, b_file_meta) = describe(&b_reader);
     let b_alias = alias_of(&b_labels, "baseline");
-    // A report's selection and marker: the baseline's, else whichever
-    // recording carries them (as `super::init_file_mode_rez` reads them).
-    let carried = |key: &str| {
+    // A report's selection, marker and events: the baseline's, else those
+    // of the first recording with a selection (as `super::init_file_mode_rez`
+    // reads them).
+    let markers = {
         let shown: Vec<&dyn MetricsSource> = std::iter::once(&b_reader as &dyn MetricsSource)
             .chain(experiment.iter().map(|(_, r)| r as &dyn MetricsSource))
             .chain(beside.iter().map(|b| b.data.as_ref()))
             .collect();
-        ::dashboard::combined::carried(&shown, key)
+        ::dashboard::combined::report_markers(&shown)
     };
-    *state.selection.write() = carried(crate::parquet_metadata::KEY_SELECTION);
-    *state.trimmed_report_marker.write() = carried(crate::parquet_metadata::KEY_REPORT);
+    let b_file_meta =
+        b_file_meta.map(|meta| ::dashboard::combined::with_report_markers(&meta, &markers));
+    *state.selection.write() =
+        ::dashboard::combined::marker(&markers, crate::parquet_metadata::KEY_SELECTION);
+    *state.trimmed_report_marker.write() =
+        ::dashboard::combined::marker(&markers, crate::parquet_metadata::KEY_REPORT);
     let primary = Arc::new(b_reader) as Arc<dyn MetricsSource>;
     let baseline: Arc<dyn MetricsSource> = if beside.is_empty() {
         primary
@@ -1187,6 +1192,144 @@ mod tests {
             state.trimmed_report_marker.read().as_deref(),
             Some("trimmed")
         );
+    }
+
+    /// Save as Report through the handler; the report's bytes.
+    async fn save(state: &Arc<AppState>, body: &str) -> Vec<u8> {
+        let response = save_with_selection(State(Arc::clone(state)), body.to_string()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec()
+    }
+
+    /// The `source` of each recording of a `.rez` that carries a selection.
+    fn marked(bytes: &[u8]) -> Vec<String> {
+        crate::recorder::rez_sqlite::RezDb::open_bytes(bytes.to_vec())
+            .unwrap()
+            .read_recordings()
+            .unwrap()
+            .into_iter()
+            .filter(|r| {
+                r.meta
+                    .metadata
+                    .contains_key(crate::parquet_metadata::KEY_SELECTION)
+            })
+            .map(|r| r.meta.labels["source"].clone())
+            .collect()
+    }
+
+    /// An uploaded comparison saves its report onto its baseline's
+    /// recording, and replacing the baseline forgets which that was.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn an_uploaded_comparison_saves_its_report_on_the_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = crate::viewer::combined_test::concurrent_ab(dir.path());
+        let state = upload_only_state();
+        let _ = ingest_rez_from_path(&state, path.clone(), "conc.rez".to_string());
+        *state.parquet_path.write() = Some(path);
+        let bytes = save(&state, r#"{"entries":[],"trim_columns":false}"#).await;
+        assert_eq!(marked(&bytes), ["svcA"]);
+        state.replace_baseline(state.baseline_data());
+        assert!(state.anchor_labels.read().is_none());
+    }
+
+    /// A report saved from a comparison chosen by --baseline/--experiment of
+    /// an archive without arms sits on svcA, not the first recording; the
+    /// archive reopens combined, and the selection, marker and events are
+    /// found there, in file mode, an upload and the WASM viewer. Saving
+    /// again strips an earlier report's keys from every other recording.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_report_of_a_selected_comparison_reopens_combined() {
+        use crate::parquet_metadata::{KEY_EVENTS, KEY_REPORT};
+        use rez::fixtures::{one_run, Recording};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("unarmed.rez");
+        let rec = |labels: &'static [(&'static str, &'static str)], cpus| Recording {
+            labels,
+            metadata: &[("source", "rezolus")],
+            cpus,
+            busy_ns: 250_000_000,
+            counter: None,
+        };
+        one_run(
+            &path,
+            &[
+                rec(&[("source", "rezolus"), ("host", "h")], 1),
+                rec(&[("source", "svcA"), ("host", "h")], 1),
+                rec(&[("source", "svcB"), ("host", "h")], 1),
+            ],
+        );
+        let state = Arc::new(crate::viewer::combined_test::view(
+            &path,
+            &["--baseline", "source=svcA", "--experiment", "source=svcB"],
+        ));
+        let body = r#"{"entries":[],"trim_columns":true,"events":[{"timestamp":1700000002000000000,"description":"rollout"}]}"#;
+        let bytes = save(&state, body).await;
+        assert_eq!(marked(&bytes), ["svcA"]);
+        let report = dir.path().join("report.rez");
+        std::fs::write(&report, &bytes).unwrap();
+
+        let check = |state: &AppState, how: &str| {
+            assert_eq!(state.selection.read().as_deref(), Some(body), "{how}");
+            assert_eq!(
+                state.trimmed_report_marker.read().as_deref(),
+                Some("trimmed"),
+                "{how}"
+            );
+            let meta: serde_json::Value =
+                serde_json::from_str(&state.captures.file_metadata_by_id("baseline").unwrap())
+                    .unwrap();
+            assert_eq!(
+                meta[KEY_EVENTS]["events"][0]["description"], "rollout",
+                "{how}: {meta}"
+            );
+        };
+        let reopened = crate::viewer::combined_test::view(&report, &[]);
+        assert!(!reopened.members.read().is_empty(), "opens combined");
+        check(&reopened, "file mode");
+        let uploaded = upload_only_state();
+        let _ = ingest_rez_from_path(&uploaded, report.clone(), "report.rez".to_string());
+        check(&uploaded, "upload");
+
+        let mut reg = viewer::WasmCaptureRegistry::new();
+        reg.attach("baseline", &bytes, "report.rez").unwrap();
+        assert_eq!(reg.selection("baseline").as_deref(), Some(body));
+        let meta: serde_json::Value =
+            serde_json::from_str(&reg.file_metadata_json("baseline").unwrap()).unwrap();
+        assert_eq!(meta[KEY_REPORT], "trimmed");
+        assert_eq!(meta[KEY_EVENTS]["events"][0]["description"], "rollout");
+
+        // An earlier report saved onto the first recording, then a new one
+        // from the comparison: only svcA carries a report.
+        let keep: std::collections::BTreeSet<String> =
+            ["cpu_usage".to_string()].into_iter().collect();
+        let old = ::report_save::build_rez_report_from_rez(
+            &std::fs::read(&path).unwrap(),
+            None,
+            Some(&keep),
+            None,
+            r#"{"entries":[]}"#,
+            Some(r#"{"events":[]}"#),
+        )
+        .unwrap();
+        assert_eq!(marked(&old), ["rezolus"]);
+        let old_path = dir.path().join("old.rez");
+        std::fs::write(&old_path, &old).unwrap();
+        let state = Arc::new(crate::viewer::combined_test::view(
+            &old_path,
+            &["--baseline", "source=svcA", "--experiment", "source=svcB"],
+        ));
+        let again = save(&state, body).await;
+        assert_eq!(marked(&again), ["svcA"]);
+        let db = crate::recorder::rez_sqlite::RezDb::open_bytes(again).unwrap();
+        for r in db.read_recordings().unwrap() {
+            let has = |k: &str| r.meta.metadata.contains_key(k);
+            let anchor = r.meta.labels["source"] == "svcA";
+            assert_eq!(has(KEY_EVENTS), anchor, "{:?}", r.meta.labels);
+            assert_eq!(has(KEY_REPORT), anchor, "{:?}", r.meta.labels);
+        }
     }
 
     /// An uploaded beside recording no label names is named by its archive

@@ -1057,6 +1057,74 @@ mod tests {
         assert!(state.following());
     }
 
+    /// The agent recorded 30 s beside two arms recorded for 10 s from 10 s
+    /// in: the baseline capture spans its own arm's rows, as the
+    /// experiment does, so the two line up; the agent's longer span does
+    /// not move the baseline's.
+    #[test]
+    fn a_longer_beside_recording_does_not_move_the_baselines_span() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("offset.dendro");
+        let (mut writer, mut sources) = two_sources(&path, Some(["baseline", "experiment"]));
+        let labels: BTreeMap<String, String> = [
+            ("source".to_string(), "rezolus".to_string()),
+            ("host".to_string(), "c".to_string()),
+        ]
+        .into();
+        sources.push(writer.add_source(labels, BTreeMap::new(), ANCHOR).unwrap());
+        // A tick carrying its groups' schemas, as a source's first row must.
+        let with_schema = |i: u64| {
+            let mut snap = tick(i);
+            if let (
+                metriken_exposition::Snapshot::V3(v),
+                metriken_exposition::Snapshot::V3(first),
+            ) = (&mut snap, tick(0))
+            {
+                for (g, f) in v.groups.iter_mut().zip(first.groups) {
+                    g.schema = f.schema;
+                }
+            }
+            snap
+        };
+        for i in 0..30u64 {
+            let staged = sources
+                .iter_mut()
+                .enumerate()
+                .filter(|(n, _)| *n == 2 || (10..20).contains(&i))
+                .map(|(n, s)| {
+                    let snap = if n < 2 && i == 10 {
+                        with_schema(i)
+                    } else {
+                        tick(i)
+                    };
+                    s.stage(&snap, ANCHOR + i * SECOND, 0).unwrap()
+                })
+                .collect();
+            writer.commit(staged).unwrap();
+        }
+        for s in &mut sources {
+            s.sync().unwrap();
+        }
+        let state = view(&path);
+        let span = |id| {
+            state
+                .captures
+                .get_by_id(id)
+                .unwrap()
+                .time_range_ns()
+                .unwrap()
+        };
+        assert_eq!(span("baseline"), span("experiment"));
+        assert_eq!(span("baseline").0, ANCHOR + 10 * SECOND);
+        let beside = state.beside.read();
+        assert_eq!(
+            beside[0].data.time_range_ns().unwrap(),
+            (ANCHOR, ANCHOR + 29 * SECOND)
+        );
+        let experiment = state.captures.get_by_id("experiment").unwrap();
+        assert_eq!(state.baseline_data().time_range(), experiment.time_range());
+    }
+
     /// A recording shown beside a comparison is followed with the slots: its
     /// new rows reach its sections.
     #[test]

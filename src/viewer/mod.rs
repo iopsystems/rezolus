@@ -914,6 +914,11 @@ pub(super) struct CombinedRecordings {
     pub labels: Vec<std::collections::BTreeMap<String, String>>,
     /// The recordings' systeminfo (`dashboard::combined::assemble_members`).
     pub systeminfo: Option<String>,
+    /// A report's selection, marker and events, from whichever recording
+    /// carries the selection (`dashboard::combined::report_markers`): a
+    /// report saved from a comparison of this archive sits on its baseline,
+    /// which need not be the first recording the joined reader reads.
+    pub markers: Vec<(&'static str, String)>,
 }
 
 /// Join `readers` into the combined source. A recording without rows is
@@ -937,6 +942,12 @@ pub(super) fn combine_recordings(
             reader.file_metadata(),
         ));
     }
+    let markers = ::dashboard::combined::report_markers(
+        &readers
+            .iter()
+            .map(|(_, r)| r as &dyn MetricsSource)
+            .collect::<Vec<_>>(),
+    );
     let filename = readers.first().and_then(|(_, r)| r.filename());
     let (reader, series) = crate::rez_reader::RezReader::combine(readers, filename);
     let (members, systeminfo) = ::dashboard::combined::assemble_members(
@@ -951,6 +962,7 @@ pub(super) fn combine_recordings(
         members,
         labels,
         systeminfo,
+        markers,
     }
 }
 
@@ -963,7 +975,6 @@ fn init_file_mode_combined(
     pool: Arc<metriken_storage::BufferPool>,
     readers: crate::rez_reader::LabeledRecordings,
 ) -> AppState {
-    use metriken_query::MetricsSource;
     let combined = combine_recordings(readers);
     info!(
         "{} holds {} recordings of one run; opening them as one view (--baseline/--experiment \
@@ -971,13 +982,12 @@ fn init_file_mode_combined(
         path.display(),
         combined.labels.len()
     );
-    let file_meta = file_meta_json(&combined.reader);
-    let selection = combined
-        .reader
-        .metadata_get(crate::parquet_metadata::KEY_SELECTION);
-    let report_marker = combined
-        .reader
-        .metadata_get(crate::parquet_metadata::KEY_REPORT);
+    let markers = combined.markers.clone();
+    let file_meta = file_meta_json(&combined.reader)
+        .map(|meta| ::dashboard::combined::with_report_markers(&meta, &markers));
+    let selection = ::dashboard::combined::marker(&markers, crate::parquet_metadata::KEY_SELECTION);
+    let report_marker =
+        ::dashboard::combined::marker(&markers, crate::parquet_metadata::KEY_REPORT);
     let growable = crate::recorder::rez::detect_rez_format(path).ok()
         == Some(crate::recorder::rez::RezFormat::V3Sqlite);
     let following = growable && !combined.reader.complete();
@@ -1186,24 +1196,28 @@ fn init_file_mode_rez(
         }
     };
 
-    // A report's selection and marker: the baseline's, else whichever
-    // recording carries them (`dashboard::combined::carried`).
-    let carried = |key: &str| {
-        let shown: Vec<&dyn metriken_query::MetricsSource> = std::iter::once(order[0])
-            .chain(order.iter().skip(1).copied())
-            .chain(beside_idx.iter().copied())
-            .filter_map(|i| slots[i].as_ref())
+    // A report's selection, marker and events: the baseline's, else those
+    // of the first recording with a selection
+    // (`dashboard::combined::report_markers`).
+    let markers = {
+        let shown: Vec<&dyn metriken_query::MetricsSource> = order
+            .iter()
+            .chain(&beside_idx)
+            .filter_map(|&i| slots[i].as_ref())
             .map(|(_, r)| r as &dyn metriken_query::MetricsSource)
             .collect();
-        ::dashboard::combined::carried(&shown, key)
+        ::dashboard::combined::report_markers(&shown)
     };
-    let b_selection = carried(crate::parquet_metadata::KEY_SELECTION);
-    let b_report_marker = carried(crate::parquet_metadata::KEY_REPORT);
+    let b_selection =
+        ::dashboard::combined::marker(&markers, crate::parquet_metadata::KEY_SELECTION);
+    let b_report_marker =
+        ::dashboard::combined::marker(&markers, crate::parquet_metadata::KEY_REPORT);
     // The anchor (order[0]) becomes the AppState's baseline capture.
     let (b_labels, b_reader) = slots[order[0]].take().expect("anchor index is in range");
     warn_if_empty(&b_labels, &b_reader);
     let b_systeminfo = b_reader.metadata_get("systeminfo");
-    let b_file_meta = file_meta_json(&b_reader);
+    let b_file_meta = file_meta_json(&b_reader)
+        .map(|meta| ::dashboard::combined::with_report_markers(&meta, &markers));
     // A CLI --baseline-alias still wins over the label-derived one.
     let b_alias = config
         .baseline_alias

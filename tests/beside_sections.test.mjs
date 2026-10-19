@@ -13,6 +13,8 @@ import {
 
 // The components touch the DOM at import; a vnode-returning `m` and a few
 // stubs are enough to render them in node.
+// These globals are safe only because `node --test` runs each file in its own
+// process.
 const isVnode = (x) => x != null && typeof x === 'object' && 'tag' in x;
 globalThis.m = (tag, ...rest) => {
     const attrs = rest.length && rest[0] != null && typeof rest[0] === 'object'

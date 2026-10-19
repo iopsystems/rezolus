@@ -928,6 +928,54 @@ pub fn generate_section(
 mod tests {
     use super::*;
 
+    /// An agent is known by its source, whichever samplers it ran; another
+    /// source by the agent's `cpu_usage` among its metrics.
+    #[test]
+    fn system_metrics_by_source_or_cpu_usage() {
+        let agent = metriken_query::MemoryStore::builder()
+            .source("rezolus")
+            .build();
+        assert!(has_system_metrics(&agent));
+        let service = metriken_query::MemoryStore::builder().source("svc").build();
+        assert!(!has_system_metrics(&service));
+        let joined = metriken_query::MemoryStore::builder().source("svc").build();
+        joined
+            .insert_counter_series(
+                "cpu_usage",
+                BTreeMap::<String, String>::new(),
+                vec![0],
+                vec![0],
+                None,
+            )
+            .unwrap();
+        assert!(has_system_metrics(&joined));
+    }
+
+    /// The baseline's systeminfo is one node unless every value is a node's
+    /// object; a beside recording's is added under its name.
+    #[test]
+    fn beside_systeminfo_keeps_a_one_node_baseline_whole() {
+        let agent = metriken_query::MemoryStore::builder().build();
+        agent.set_metadata("systeminfo", r#"{"hostname":"h"}"#);
+        let beside = [Beside {
+            key: "h".into(),
+            name: "h".into(),
+            data: Arc::new(agent),
+        }];
+        let one = r#"{"hostname":"a","cpus":[],"memory":{"total":1}}"#.to_string();
+        let got: serde_json::Value =
+            serde_json::from_str(&with_beside_systeminfo(Some(one), "svcA", &beside).unwrap())
+                .unwrap();
+        assert_eq!(got["svcA"]["hostname"], "a");
+        assert_eq!(got["h"]["hostname"], "h");
+        let nodes = r#"{"a":{"hostname":"a"},"b":{"hostname":"b"}}"#.to_string();
+        let got: serde_json::Value =
+            serde_json::from_str(&with_beside_systeminfo(Some(nodes), "svcA", &beside).unwrap())
+                .unwrap();
+        assert_eq!(got.as_object().unwrap().len(), 3, "{got}");
+        assert_eq!(with_beside_systeminfo(None, "svcA", &[]), None);
+    }
+
     /// A beside recording no label tells apart is named by its host, then
     /// its source, then its archive position; several are told apart by
     /// the labels that differ.

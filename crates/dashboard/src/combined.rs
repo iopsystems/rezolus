@@ -62,11 +62,6 @@ impl Routed {
         Self { primary, beside }
     }
 
-    /// The baseline's source, then each beside recording's.
-    fn sources(&self) -> impl Iterator<Item = &dyn MetricsSource> {
-        std::iter::once(self.primary.as_ref()).chain(self.beside.iter().map(|(_, s)| s.as_ref()))
-    }
-
     /// The source a query names and the query without its
     /// `__capture__` matchers.
     fn route(&self, query: &str) -> (&dyn MetricsSource, String) {
@@ -121,18 +116,25 @@ impl MetricsSource for Routed {
         let (source, query) = self.route(query);
         source.columns(&query)
     }
-    // The span of every recording it answers for: a report trimmed to
-    // charts of a beside recording keeps no rows of the baseline's, and the
-    // page draws over this span.
+    // The baseline's span, which the experiment's is aligned against. Only
+    // a baseline with no rows (a report trimmed to charts of a beside
+    // recording) takes the span of the recordings beside it, so the page
+    // does not draw over 0..0.
     fn time_range(&self) -> Option<(f64, f64)> {
-        self.sources()
-            .filter_map(|s| s.time_range())
-            .reduce(|(a, b), (c, d)| (a.min(c), b.max(d)))
+        self.primary.time_range().or_else(|| {
+            self.beside
+                .iter()
+                .filter_map(|(_, s)| s.time_range())
+                .reduce(|(a, b), (c, d)| (a.min(c), b.max(d)))
+        })
     }
     fn time_range_ns(&self) -> Option<(u64, u64)> {
-        self.sources()
-            .filter_map(|s| s.time_range_ns())
-            .reduce(|(a, b), (c, d)| (a.min(c), b.max(d)))
+        self.primary.time_range_ns().or_else(|| {
+            self.beside
+                .iter()
+                .filter_map(|(_, s)| s.time_range_ns())
+                .reduce(|(a, b), (c, d)| (a.min(c), b.max(d)))
+        })
     }
     fn interval(&self) -> f64 {
         self.primary.interval()
@@ -175,15 +177,56 @@ impl MetricsSource for Routed {
     }
 }
 
-/// The first of `sources` whose file metadata carries `key`, and its value:
-/// where a report's selection or marker is read from in an archive of
-/// several recordings. A report is saved onto the baseline's recording, but
-/// one saved before the baseline was chosen by arm sits on the archive's
-/// first, which need not be the baseline any more.
-pub fn carried(sources: &[&dyn MetricsSource], key: &str) -> Option<String> {
-    sources
+/// The file-metadata keys of a saved report: its selection, its report
+/// marker and its events (`report_save::{KEY_SELECTION, KEY_REPORT,
+/// KEY_EVENTS}`).
+pub const REPORT_KEYS: [&str; 3] = ["selection", "report", "events"];
+
+/// A report's [`REPORT_KEYS`] in an archive of several recordings, all
+/// from the first of `sources` whose metadata carries a selection (the
+/// baseline first, so its own wins), with the keys that recording has. A
+/// report is saved onto the baseline's recording, but one saved before the
+/// baseline was chosen by arm, or from a comparison of an archive that now
+/// opens combined, sits on another. Empty when none carries a selection.
+pub fn report_markers(sources: &[&dyn MetricsSource]) -> Vec<(&'static str, String)> {
+    let Some(meta) = sources
         .iter()
-        .find_map(|s| s.file_metadata().get(key).cloned())
+        .map(|s| s.file_metadata())
+        .find(|m| m.contains_key(REPORT_KEYS[0]))
+    else {
+        return Vec::new();
+    };
+    REPORT_KEYS
+        .iter()
+        .filter_map(|k| meta.get(*k).map(|v| (*k, v.clone())))
+        .collect()
+}
+
+/// The value of `key` among `markers` ([`report_markers`]).
+pub fn marker(markers: &[(&'static str, String)], key: &str) -> Option<String> {
+    markers
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| v.clone())
+}
+
+/// `metadata` (a capture's file metadata, a JSON object) with `markers`
+/// set in it, each value embedded as JSON when it parses: the page reads a
+/// report's events from the baseline's metadata. Unchanged when `markers`
+/// is empty or `metadata` is not an object.
+pub fn with_report_markers(metadata: &str, markers: &[(&'static str, String)]) -> String {
+    let Ok(serde_json::Value::Object(mut map)) = serde_json::from_str(metadata) else {
+        return metadata.to_string();
+    };
+    if markers.is_empty() {
+        return metadata.to_string();
+    }
+    for (k, v) in markers {
+        let value =
+            serde_json::from_str(v).unwrap_or_else(|_| serde_json::Value::String(v.clone()));
+        map.insert(k.to_string(), value);
+    }
+    serde_json::to_string(&map).unwrap_or_else(|_| metadata.to_string())
 }
 
 /// How an archive of several recordings opens.
@@ -1137,6 +1180,75 @@ pub fn label_parquet_by_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    /// A store whose rows span `ticks` seconds and whose metadata is `meta`.
+    fn store(ticks: std::ops::Range<u64>, meta: &[(&str, &str)]) -> metriken_query::MemoryStore {
+        let store = metriken_query::MemoryStore::builder().build();
+        if !ticks.is_empty() {
+            let ts: Vec<u64> = ticks.clone().map(|t| t * 1_000_000_000).collect();
+            let values: Vec<u64> = ticks.map(|t| t * 10).collect();
+            store
+                .insert_counter_series("x", BTreeMap::<String, String>::new(), ts, values, None)
+                .unwrap();
+        }
+        for (k, v) in meta {
+            store.set_metadata(*k, *v);
+        }
+        store
+    }
+
+    /// The baseline capture spans its own rows, which the experiment's are
+    /// aligned against; only a baseline with none takes the span of the
+    /// recordings beside it.
+    #[test]
+    fn routed_spans_the_baseline_unless_it_is_empty() {
+        let s = 1_000_000_000;
+        let beside: Vec<(String, Arc<dyn MetricsSource>)> =
+            vec![("h".into(), Arc::new(store(0..30, &[])))];
+        let routed = Routed::new(Arc::new(store(10..20, &[])), beside.clone());
+        assert_eq!(routed.time_range_ns(), Some((10 * s, 19 * s)));
+        assert_eq!(routed.time_range(), Some((10.0, 19.0)));
+        let empty = Routed::new(Arc::new(store(0..0, &[])), beside);
+        assert_eq!(empty.time_range_ns(), Some((0, 29 * s)));
+        assert_eq!(empty.time_range(), Some((0.0, 29.0)));
+    }
+
+    /// A report's selection, marker and events come together from the first
+    /// recording that carries a selection: the baseline's own first.
+    #[test]
+    fn report_markers_come_from_one_recording_baseline_first() {
+        let baseline = store(0..2, &[("selection", "B"), ("report", "trimmed")]);
+        let agent = store(
+            0..2,
+            &[("selection", "A"), ("events", "{}"), ("report", "trimmed")],
+        );
+        let none = store(0..2, &[("events", "stray")]);
+        let markers = report_markers(&[&none, &baseline, &agent]);
+        assert_eq!(
+            markers,
+            [
+                ("selection", "B".to_string()),
+                ("report", "trimmed".to_string())
+            ]
+        );
+        assert_eq!(report_markers(&[&baseline, &agent]), markers);
+        assert_eq!(
+            report_markers(&[&agent, &baseline]),
+            [
+                ("selection", "A".to_string()),
+                ("report", "trimmed".to_string()),
+                ("events", "{}".to_string())
+            ]
+        );
+        assert!(report_markers(&[&none]).is_empty());
+        assert_eq!(marker(&markers, "selection").as_deref(), Some("B"));
+        assert_eq!(marker(&markers, "events"), None);
+        let meta = with_report_markers(r#"{"source":"s"}"#, &report_markers(&[&agent]));
+        let meta: serde_json::Value = serde_json::from_str(&meta).unwrap();
+        assert_eq!(meta["events"], serde_json::json!({}));
+        assert_eq!(meta["selection"], "A");
+    }
 
     fn m(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs

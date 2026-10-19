@@ -523,7 +523,26 @@ fn embed_rez_report_markers(
             metadata.remove(KEY_EVENTS);
         }
     }
-    db.update_recording_metadata(anchor.id, &metadata)
+    db.update_recording_metadata(anchor.id, &metadata)?;
+    // Only the anchor carries a report: one copied from an earlier report
+    // onto another recording would be read instead on reload.
+    for other in recordings.iter().filter(|r| r.id != anchor.id) {
+        let mut metadata = other.meta.metadata.clone();
+        if strip_report_keys(&mut metadata) {
+            db.update_recording_metadata(other.id, &metadata)?;
+        }
+    }
+    Ok(())
+}
+
+/// Remove a report's selection, marker and events from `metadata`; whether
+/// any was there.
+fn strip_report_keys(metadata: &mut BTreeMap<String, String>) -> bool {
+    let before = metadata.len();
+    for key in [KEY_SELECTION, KEY_REPORT, KEY_EVENTS] {
+        metadata.remove(key);
+    }
+    metadata.len() != before
 }
 
 /// The item of `items` whose labels are `anchor`, else the first.
@@ -720,6 +739,14 @@ fn build_dendro_report(
     }
     dst.update_source_metadata(anchor.id, &metadata)
         .map_err(err)?;
+    // Only the anchor carries a report (as in `embed_rez_report_markers`).
+    for other in sources.iter().filter(|s| s.id != anchor.id) {
+        let mut metadata = other.meta.metadata.clone();
+        if strip_report_keys(&mut metadata) {
+            dst.update_source_metadata(other.id, &metadata)
+                .map_err(err)?;
+        }
+    }
     dst.serialize().map_err(err)
 }
 
