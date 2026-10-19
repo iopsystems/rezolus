@@ -166,9 +166,13 @@
   armed recording is the baseline and the viewer says so. Recordings
   without an arm, and with `--baseline`/`--experiment` every recording they
   do not name, are shown beside the comparison: each in its own sections
-  (routes ending in `@<host>`, grouped under its name in the sidebar),
-  drawn as a single capture that reads only that recording, and named in
-  the badge after the arms ("also: …"), never as a third arm. So `record
+  (routes ending in `@<key>`: its host, or the labels that tell it apart;
+  grouped under its name in the sidebar), drawn as a single capture that
+  reads only that recording, charts pinned from them included, and named
+  in the badge after the arms ("also: …"), never as a third arm. Their
+  system info and metadata are listed with the baseline's, and a
+  comparison whose baseline has no system metrics opens on its first
+  service section. So `record
   --endpoint svcA,arm=baseline --endpoint svcB,arm=experiment --endpoint
   agent` compares the two services and shows the agent's sections beside
   them. One recording per arm is the limit for now: one arm among unarmed
