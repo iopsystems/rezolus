@@ -87,7 +87,8 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         registry.set_compare_requested(true);
         registry.attach('baseline', fixture('three.rez', 3), 'fleet.rez');
 
-        assert.equal(JSON.parse(registry.notices()).length, 0);
+        assert.deepEqual(JSON.parse(registry.notices()),
+            ['beside the comparison, each in its own sections: web-01']);
         const captures = JSON.parse(registry.captures());
         assert.deepEqual(captures.map((c) => c.id), ['baseline', 'experiment']);
         assert.match(registry.file_metadata_json('baseline'), /redis/);

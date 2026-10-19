@@ -18,7 +18,7 @@ import { canonicalQuantileLabel, composeScatterLabel } from './charts/util/compa
 import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
 import { heatmapTriplesMinMax } from './charts/util/heatmap_data.js';
 import { pairedSeriesNamer } from './labels.js';
-import { baseRoute } from './features/group_utils.js';
+import { baseRoute, groupCompares, pinCompareMeta } from './features/group_utils.js';
 
 // Normalization helpers for compare-mode captures.
 
@@ -751,7 +751,7 @@ export function createGroupComponent(getState) {
                 baselineAlias, experimentAlias,
             } = state;
             // A recording beside a comparison draws as one capture.
-            const compareMode = state.compareMode && !(attrs.singleCapture === true);
+            const compareMode = groupCompares(state.compareMode, attrs);
             const captureLabels = {
                 baseline: baselineAlias || 'baseline',
                 experiment: experimentAlias || 'experiment',
@@ -864,11 +864,13 @@ export function createGroupComponent(getState) {
                         chartHeader(renderSpec.opts, renderSpec),
                         chartBody(renderSpec, spec),
                         expandLink(spec, sectionRoute),
-                        selectButton(spec, sectionRoute, sectionName, attrs.name, compareMode ? {
-                            baselineAlias: captureLabels.baseline,
-                            experimentAlias: captureLabels.experiment,
-                            categoryMembers,
-                        } : null),
+                        selectButton(spec, sectionRoute, sectionName, attrs.name, pinCompareMeta(
+                            state.compareMode, compareMode, {
+                                baselineAlias: captureLabels.baseline,
+                                experimentAlias: captureLabels.experiment,
+                                categoryMembers,
+                            },
+                        )),
                     ]),
                 ]);
             };

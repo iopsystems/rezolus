@@ -120,9 +120,11 @@ pub fn command() -> Command {
              neither, the archive's first armed recording is the baseline. Every other\n\
              recording (one without an arm, such as an agent recorded beside two arms of a\n\
              service, or one --baseline/--experiment did not name) is shown beside the\n\
-             comparison in its own sections, at routes ending in @<host>, as a single\n\
-             capture. One recording per arm: one arm alone, an arm two recordings share, or\n\
-             more than two arms is refused with a listing; name two with\n\
+             comparison in its own sections, at routes ending in @<key> (its host, or the\n\
+             labels that tell it apart), as a single capture; when the baseline has no\n\
+             system metrics the page opens on the comparison's first service section. One\n\
+             recording per arm: one arm among unarmed recordings, an arm two recordings\n\
+             share, or more than two arms is refused with a listing; name two with\n\
              --baseline/--experiment.\n\
              `rezolus mcp describe-recording FILE` lists an archive's recordings.\n\n\
              Either positional may be given as alias=path (e.g. redis=./a.parquet) to set the\n\
@@ -1045,11 +1047,8 @@ fn init_file_mode_rez(
     use std::collections::BTreeMap;
     info!("Loading data from .rez archive...");
 
-    // One reader per recording (labels preserved). A 2-recording .rez maps onto
-    // the baseline/experiment A/B slots; >2 shows two of them, chosen by
-    // --baseline/--experiment or defaulting to the first two (simultaneous
-    // N-way faceting is a separate future effort). Manifest recording metadata
-    // stands in for the parquet footer.
+    // One reader per recording (labels preserved). Manifest recording
+    // metadata stands in for the parquet footer.
     let readers = crate::rez_reader::RezReader::open_recordings(path, Arc::clone(&pool))
         .unwrap_or_else(|e| {
             eprintln!("failed to load .rez archive: {e}");
@@ -1091,14 +1090,6 @@ fn init_file_mode_rez(
         std::process::exit(1);
     });
 
-    // Display order: the anchor (baseline) first, its conventional A/B partner
-    // (experiment) second, and — when no recording was explicitly selected —
-    // every other recording after, in manifest order.
-    //
-    // `--baseline`/`--experiment` are SELECTORS: giving them shows exactly the
-    // chosen recordings (the subset-view #1120 introduced, when only two could
-    // show). Giving NEITHER shows the whole archive, which is the N-way
-    // default. The two-slot ids stay wire-stable for the A/B path either way.
     // The slots, then every other recording beside the comparison: one
     // without an arm, or one --baseline/--experiment did not name. Each is
     // shown in its own sections, as a single capture
@@ -1111,6 +1102,7 @@ fn init_file_mode_rez(
             .iter()
             .map(|&i| all_labels[i].clone())
             .collect::<Vec<_>>(),
+        &beside_idx,
     );
     if !beside_idx.is_empty() {
         info!(
@@ -1236,6 +1228,10 @@ fn init_file_mode_rez(
         config.template_preference,
         Arc::clone(&pool),
     );
+    let b_systeminfo =
+        ::dashboard::dashboard::with_beside_systeminfo(b_systeminfo, &b_alias, &beside);
+    let b_file_meta =
+        b_file_meta.map(|meta| ::dashboard::dashboard::with_beside_metadata(&meta, &beside));
     *state.beside.write() = beside;
     *state.parquet_path.write() = Some(path.to_path_buf());
     *state.selection.write() = b_selection;
@@ -2472,11 +2468,13 @@ mod tests {
                     name: "Overview".to_string(),
                     route: "/overview".to_string(),
                     instance: None,
+                    landing: false,
                 },
                 Section {
                     name: "CPU".to_string(),
                     route: "/cpu".to_string(),
                     instance: None,
+                    landing: false,
                 },
             ],
             ..DashboardContext::default()

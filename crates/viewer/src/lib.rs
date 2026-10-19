@@ -544,7 +544,17 @@ impl Viewer {
     /// For multi-node combined files (>1 node in per_source_metadata), returns
     /// an object keyed by node name with each node's systeminfo.  For single-node
     /// files, returns the flat systeminfo string.
+    /// This capture's systeminfo, with that of the recordings shown beside
+    /// it (`dashboard::dashboard::with_beside_systeminfo`).
     pub fn systeminfo(&self) -> Option<String> {
+        dashboard::dashboard::with_beside_systeminfo(
+            self.own_systeminfo(),
+            self.alias.as_deref().unwrap_or("baseline"),
+            &self.beside,
+        )
+    }
+
+    fn own_systeminfo(&self) -> Option<String> {
         // Try multi-node first
         if let Some(psm_str) = self.file_metadata.get("per_source_metadata")
             && let Ok(psm) =
@@ -601,7 +611,9 @@ impl Viewer {
             map.insert(key.clone(), json_val);
         }
         enrich_with_multi_node_info(&mut map);
-        serde_json::to_string(&serde_json::Value::Object(map)).unwrap_or_else(|_| "{}".into())
+        let own =
+            serde_json::to_string(&serde_json::Value::Object(map)).unwrap_or_else(|_| "{}".into());
+        dashboard::dashboard::with_beside_metadata(&own, &self.beside)
     }
 
     /// Execute a PromQL range query. Returns JSON compatible with
@@ -742,6 +754,7 @@ impl Viewer {
             );
             notices.extend(dashboard::dashboard::add_beside_sections(
                 &mut context,
+                self.reader.as_ref(),
                 &self.beside,
                 &registry,
                 self.template_preference,
@@ -962,7 +975,10 @@ impl WasmCaptureRegistry {
         let beside_labels: Vec<_> = beside_idx.iter().map(|&i| labels[i].clone()).collect();
         let beside: Vec<dashboard::dashboard::Beside> = beside_idx
             .iter()
-            .zip(dashboard::dashboard::beside_names(&beside_labels))
+            .zip(dashboard::dashboard::beside_names(
+                &beside_labels,
+                &beside_idx,
+            ))
             .map(|(&i, (key, name))| {
                 let (_, reader) = picked[i].take().expect("each index once");
                 dashboard::dashboard::Beside {
@@ -972,6 +988,17 @@ impl WasmCaptureRegistry {
                 }
             })
             .collect();
+        if !beside.is_empty() {
+            // The server viewer logs the same line.
+            self.notices.push(format!(
+                "beside the comparison, each in its own sections: {}",
+                beside
+                    .iter()
+                    .map(|b| b.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
         let recordings: rez::reader::LabeledRecordings = slots
             .iter()
             .map(|&i| picked[i].take().expect("each index once"))
@@ -1269,12 +1296,14 @@ impl WasmCaptureRegistry {
                 &sources,
             );
             if let Some(b) = self.baseline.as_ref() {
-                dashboard::dashboard::add_beside_sections(
+                let beside_notices = dashboard::dashboard::add_beside_sections(
                     &mut context,
+                    b.reader.as_ref(),
                     &b.beside,
                     &registry,
                     preference,
                 );
+                self.notices.extend(beside_notices);
             }
             context
         };
@@ -2012,6 +2041,10 @@ mod tests {
         let captures: Vec<serde_json::Value> = serde_json::from_str(&reg.captures()).unwrap();
         let ids: Vec<&str> = captures.iter().map(|c| c["id"].as_str().unwrap()).collect();
         assert_eq!(ids, vec!["baseline", "experiment"]);
+        assert_eq!(
+            reg.notices(),
+            r#"["beside the comparison, each in its own sections: web-01"]"#
+        );
         assert!(
             reg.file_metadata_json("baseline")
                 .unwrap()

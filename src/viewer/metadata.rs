@@ -543,9 +543,13 @@ pub fn regenerate_dashboards(state: &AppState) {
     // The recordings beside a comparison, each in its own sections.
     let beside = state.beside.read();
     if !beside.is_empty() {
-        for notice in
-            ::dashboard::dashboard::add_beside_sections(&mut context, &beside, registry, preference)
-        {
+        for notice in ::dashboard::dashboard::add_beside_sections(
+            &mut context,
+            state.baseline_data().as_ref(),
+            &beside,
+            registry,
+            preference,
+        ) {
             warn_once(notice);
         }
     }

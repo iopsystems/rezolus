@@ -302,9 +302,11 @@ fn ingest_rez_from_path(
     let experiment = slots
         .experiment
         .map(|e| picked[e].take().expect("in range"));
+    let positions: Vec<usize> = (0..picked.len()).filter(|&i| picked[i].is_some()).collect();
     let rest: Vec<_> = picked.into_iter().flatten().collect();
     let names = ::dashboard::dashboard::beside_names(
         &rest.iter().map(|(l, _)| l.clone()).collect::<Vec<_>>(),
+        &positions,
     );
     let beside: Vec<::dashboard::dashboard::Beside> = rest
         .into_iter()
@@ -333,6 +335,10 @@ fn ingest_rez_from_path(
         ))
     };
     state.replace_baseline(baseline);
+    let b_systeminfo =
+        ::dashboard::dashboard::with_beside_systeminfo(b_systeminfo, &b_alias, &beside);
+    let b_file_meta =
+        b_file_meta.map(|meta| ::dashboard::dashboard::with_beside_metadata(&meta, &beside));
     *state.beside.write() = beside;
     *state.parquet_path.write() = Some(rez_path.clone());
     *state.experiment_parquet_path.write() = None;

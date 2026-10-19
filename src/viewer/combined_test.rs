@@ -594,30 +594,35 @@ fn the_arms_fill_the_slots_in_both_viewers() {
     // its JsValue error aborts outside wasm32.
 }
 
-/// The owner's concurrent A/B: two services with `arm=` and a Rezolus agent
-/// without one on the same host, recorded in one run.
+/// The owner's concurrent A/B: two services with `arm=`, each carrying
+/// [`svc_template`], and a Rezolus agent without one on the same host (with
+/// systeminfo), recorded in one run.
 pub(crate) fn concurrent_ab(dir: &Path) -> PathBuf {
     let path = dir.join("conc.rez");
+    let template = svc_template();
     one_run(
         &path,
         &[
             Recording {
                 labels: &[("source", "rezolus"), ("host", "h")],
-                metadata: &[("source", "rezolus")],
+                metadata: &[
+                    ("source", "rezolus"),
+                    ("systeminfo", r#"{"hostname":"h","cpus":[]}"#),
+                ],
                 cpus: 2,
                 busy_ns: 500_000_000,
                 counter: None,
             },
             Recording {
                 labels: &[("source", "svcB"), ("host", "h"), ("arm", "experiment")],
-                metadata: &[("source", "svcB")],
+                metadata: &[("source", "svcB"), ("service_queries", &template)],
                 cpus: 0,
                 busy_ns: 0,
                 counter: Some(("svc_requests", 20)),
             },
             Recording {
                 labels: &[("source", "svcA"), ("host", "h"), ("arm", "baseline")],
-                metadata: &[("source", "svcA")],
+                metadata: &[("source", "svcA"), ("service_queries", &template)],
                 cpus: 0,
                 busy_ns: 0,
                 counter: Some(("svc_requests", 10)),
@@ -664,6 +669,32 @@ fn a_concurrent_ab_shows_the_unarmed_agent_beside_it() {
             .all(|(_, i)| i.is_none()),
         "the comparison's sections keep their routes: {sections:?}"
     );
+    // A beside recording gets no query explorer or `/source/` entry of its
+    // own.
+    assert!(
+        !sections.iter().any(|(r, _)| r.starts_with("/query@")),
+        "{sections:?}"
+    );
+    // The baseline (svcA) has no system metrics: the page opens on the
+    // comparison's first service section.
+    let landing: Vec<String> = state
+        .sections
+        .read()
+        .sections()
+        .iter()
+        .filter(|s| s.landing)
+        .map(|s| s.route.clone())
+        .collect();
+    assert_eq!(landing, ["/service/svcA"]);
+    // The agent's system info and metadata are listed with the baseline's.
+    let info: serde_json::Value =
+        serde_json::from_str(&state.captures.systeminfo_by_id("baseline").unwrap()).unwrap();
+    assert_eq!(
+        info,
+        serde_json::json!({"h": {"hostname": "h", "cpus": []}})
+    );
+    let file_meta: serde_json::Value = serde_json::from_str(&meta("baseline")).unwrap();
+    assert_eq!(file_meta["beside_recordings"]["h"]["source"], "rezolus");
     let cpu = section(&state, "/cpu@h");
     assert_eq!(cpu["metadata"]["single_capture"], "h");
     let (_, busy) = plot_queries(&cpu)
@@ -704,6 +735,80 @@ fn a_concurrent_ab_shows_the_unarmed_agent_beside_it() {
     let wasm_cpu: serde_json::Value =
         serde_json::from_str(&reg.get_section("baseline", "cpu@h").unwrap()).unwrap();
     assert_eq!(wasm_cpu["metadata"]["single_capture"], "h");
+    let wasm_landing: Vec<&serde_json::Value> = wasm_sections
+        .iter()
+        .filter(|s| s["landing"] == true)
+        .map(|s| &s["route"])
+        .collect();
+    assert_eq!(wasm_landing, ["/service/svcA"]);
+    let wasm_info: serde_json::Value =
+        serde_json::from_str(&reg.systeminfo("baseline").unwrap()).unwrap();
+    assert_eq!(wasm_info, info);
+    let wasm_meta: serde_json::Value =
+        serde_json::from_str(&reg.file_metadata_json("baseline").unwrap()).unwrap();
+    assert_eq!(wasm_meta["beside_recordings"]["h"]["source"], "rezolus");
+}
+
+/// Without a service template the comparison has no service section, so a
+/// baseline without system metrics opens on the first beside recording's
+/// overview; a beside service with no template of its own adds no
+/// `/source/` entry.
+#[test]
+fn a_comparison_without_services_lands_on_the_agent_overview() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("plain.rez");
+    let svc = |labels: &'static [(&'static str, &'static str)],
+               metadata: &'static [(&'static str, &'static str)],
+               n: u64| Recording {
+        labels,
+        metadata,
+        cpus: 0,
+        busy_ns: 0,
+        counter: Some(("svc_requests", n)),
+    };
+    one_run(
+        &path,
+        &[
+            Recording {
+                labels: &[("source", "rezolus"), ("host", "h")],
+                metadata: &[("source", "rezolus")],
+                cpus: 1,
+                busy_ns: 500_000_000,
+                counter: None,
+            },
+            svc(
+                &[("source", "svcA"), ("host", "h"), ("arm", "baseline")],
+                &[("source", "svcA")],
+                10,
+            ),
+            svc(
+                &[("source", "svcB"), ("host", "h"), ("arm", "experiment")],
+                &[("source", "svcB")],
+                20,
+            ),
+            svc(
+                &[("source", "svcC"), ("host", "h")],
+                &[("source", "svcC")],
+                30,
+            ),
+        ],
+    );
+    let state = view(&path, &[]);
+    let store = state.sections.read();
+    let sections = store.sections();
+    let routes: Vec<&str> = sections.iter().map(|s| s.route.as_str()).collect();
+    assert!(
+        !routes
+            .iter()
+            .any(|r| r.starts_with("/source/") && r.contains('@')),
+        "{routes:?}"
+    );
+    let landing: Vec<&str> = sections
+        .iter()
+        .filter(|s| s.landing)
+        .map(|s| s.route.as_str())
+        .collect();
+    assert_eq!(landing, ["/overview@rezolus"], "{routes:?}");
 }
 
 /// `--baseline`/`--experiment` choose the slots; every other recording is
@@ -743,4 +848,87 @@ fn one_arm_among_unarmed_recordings_is_refused() {
     let none = crate::mcp::RecordingSelector::default();
     let err = super::resolve_ab_slots(&labels, &none, &none).unwrap_err();
     assert!(err.contains("one recording carries an `arm`"), "{err}");
+}
+
+/// Agents compared, a third beside: the baseline has system metrics, so the
+/// page keeps its usual landing, in both viewers.
+#[test]
+fn a_comparison_of_agents_keeps_the_usual_landing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("agents.rez");
+    let agent = |labels: &'static [(&'static str, &'static str)]| Recording {
+        labels,
+        metadata: &[("source", "rezolus")],
+        cpus: 1,
+        busy_ns: 250_000_000,
+        counter: None,
+    };
+    one_run(
+        &path,
+        &[
+            agent(&[("source", "rezolus"), ("host", "h1"), ("arm", "baseline")]),
+            agent(&[("source", "rezolus"), ("host", "h2"), ("arm", "experiment")]),
+            agent(&[("source", "rezolus"), ("host", "h3")]),
+        ],
+    );
+    let state = view(&path, &[]);
+    let store = state.sections.read();
+    let sections = store.sections();
+    assert!(sections.iter().any(|s| s.route == "/cpu@h3"));
+    assert!(!sections.iter().any(|s| s.landing));
+    drop(store);
+
+    let mut reg = viewer::WasmCaptureRegistry::new();
+    reg.attach("baseline", &std::fs::read(&path).unwrap(), "agents.rez")
+        .unwrap();
+    reg.init_templates("baseline", "[]").unwrap();
+    let wasm: Vec<serde_json::Value> =
+        serde_json::from_str(&reg.get_sections("baseline").unwrap()).unwrap();
+    assert!(wasm.iter().any(|s| s["route"] == "/cpu@h3"));
+    assert!(!wasm.iter().any(|s| s.get("landing").is_some()));
+}
+
+/// What the template lookup says about a beside recording reaches the
+/// page's notices from the combined regeneration too.
+#[test]
+fn a_beside_recordings_template_notice_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bad.rez");
+    let svc = |labels: &'static [(&'static str, &'static str)],
+               metadata: &'static [(&'static str, &'static str)]| Recording {
+        labels,
+        metadata,
+        cpus: 0,
+        busy_ns: 0,
+        counter: Some(("svc_requests", 10)),
+    };
+    one_run(
+        &path,
+        &[
+            Recording {
+                labels: &[("source", "rezolus"), ("host", "h")],
+                metadata: &[("source", "rezolus"), ("service_queries", "{not json")],
+                cpus: 1,
+                busy_ns: 250_000_000,
+                counter: None,
+            },
+            svc(
+                &[("source", "svcA"), ("host", "h"), ("arm", "baseline")],
+                &[("source", "svcA")],
+            ),
+            svc(
+                &[("source", "svcB"), ("host", "h"), ("arm", "experiment")],
+                &[("source", "svcB")],
+            ),
+        ],
+    );
+    let mut reg = viewer::WasmCaptureRegistry::new();
+    reg.attach("baseline", &std::fs::read(&path).unwrap(), "bad.rez")
+        .unwrap();
+    reg.init_templates("baseline", "[]").unwrap();
+    reg.init_templates("experiment", "[]").unwrap();
+    let before: Vec<String> = serde_json::from_str(&reg.notices()).unwrap();
+    reg.regenerate_combined("[]", None).unwrap();
+    let after: Vec<String> = serde_json::from_str(&reg.notices()).unwrap();
+    assert!(after.len() > before.len(), "{before:?} -> {after:?}");
 }

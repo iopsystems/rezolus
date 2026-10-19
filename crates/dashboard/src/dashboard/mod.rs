@@ -143,11 +143,13 @@ pub fn build_dashboard_context(
         name: "Overview".to_string(),
         route: "/overview".to_string(),
         instance: None,
+        landing: false,
     }];
     builtins.extend(SECTION_META.iter().map(|(name, route, _)| Section {
         name: (*name).to_string(),
         route: (*route).to_string(),
         instance: None,
+        landing: false,
     }));
     build_context(builtins, None, filesize, service_exts, category, sources)
 }
@@ -228,6 +230,7 @@ fn build_context(
                 name: category_name.to_string(),
                 route: format!("/service/{category_name}"),
                 instance: None,
+                landing: false,
             },
         );
     } else {
@@ -238,6 +241,7 @@ fn build_context(
                     name: source_name.to_string(),
                     route: format!("/service/{source_name}"),
                     instance: None,
+                    landing: false,
                 },
             );
         }
@@ -249,6 +253,7 @@ fn build_context(
             name: format!("source: {}", s.name),
             route: format!("/source/{}", s.name),
             instance: None,
+            landing: false,
         });
     }
 
@@ -505,6 +510,7 @@ pub fn build_combined_context(
                 name: name.clone(),
                 route,
                 instance: (idx.len() > 1).then(|| names[n].clone()),
+                landing: false,
             });
             service_exts.push((route_name, ext));
         }
@@ -522,6 +528,7 @@ pub fn build_combined_context(
                     name: format!("source: {}", s.name),
                     route: format!("/source/{}", s.name),
                     instance: None,
+                    landing: false,
                 });
             }
         }
@@ -654,9 +661,19 @@ pub struct Beside {
 
 /// The keys and names of recordings shown beside a comparison, from their
 /// labels, told apart among themselves as instances are
-/// ([`combined::instance_names`]).
-pub fn beside_names(labels: &[BTreeMap<String, String>]) -> Vec<(String, String)> {
-    let names = combined::instance_names(labels);
+/// ([`combined::instance_names`]). One that no label tells apart (a lone
+/// beside recording, or twins) is named by its `host`, else its `source`,
+/// else `recording N` from its archive position (`positions`, 0-based).
+pub fn beside_names(
+    labels: &[BTreeMap<String, String>],
+    positions: &[usize],
+) -> Vec<(String, String)> {
+    let names = combined::names_or(labels, |i, l| {
+        l.get("host")
+            .or_else(|| l.get("source"))
+            .cloned()
+            .unwrap_or_else(|| format!("recording {}", positions.get(i).copied().unwrap_or(i) + 1))
+    });
     let keys = combined::instance_keys(&names);
     keys.into_iter().zip(names).collect()
 }
@@ -671,8 +688,14 @@ pub fn beside_names(labels: &[BTreeMap<String, String>]) -> Vec<(String, String)
 /// [`combined::SINGLE_CAPTURE_KEY`], so the page draws it without the
 /// experiment. A simple capture's `/source/` entry is not added (the page
 /// lists its metrics from the baseline). Returns the template notices.
+///
+/// When `baseline` holds no system metrics ([`has_system_metrics`]; two
+/// services compared, their agent beside), its built-in sections are
+/// empty, so the page opens on the comparison's first service section,
+/// else the first beside recording's overview ([`Section::landing`]).
 pub fn add_beside_sections(
     ctx: &mut DashboardContext,
+    baseline: &dyn MetricsSource,
     beside: &[Beside],
     registry: &TemplateRegistry,
     preference: TemplatePreference,
@@ -714,13 +737,118 @@ pub fn add_beside_sections(
                 name: section.name,
                 route,
                 instance: Some(b.name.clone()),
+                landing: false,
             });
         }
         for (name, ext) in sub.service_exts {
             ctx.service_exts.push((suffix(&name), ext));
         }
     }
+    if let Some(first) = beside.first()
+        && !has_system_metrics(baseline)
+    {
+        let overview = format!("/overview{}{}", combined::INSTANCE_SEPARATOR, first.key);
+        let at = ctx
+            .sections
+            .iter()
+            .position(|s| s.route.starts_with("/service/") && s.instance.is_none())
+            .or_else(|| ctx.sections.iter().position(|s| s.route == overview));
+        if let Some(at) = at {
+            ctx.sections[at].landing = true;
+        }
+    }
     notices
+}
+
+/// Whether `data` holds a Rezolus agent's system metrics, judged by
+/// `cpu_usage`, which every agent records.
+pub fn has_system_metrics(data: &dyn MetricsSource) -> bool {
+    data.counter_names().iter().any(|n| n == "cpu_usage")
+}
+
+/// The file-metadata key under which a comparison's baseline lists the
+/// recordings shown beside it: an object of each one's metadata by its
+/// name ([`with_beside_metadata`]).
+pub const BESIDE_METADATA_KEY: &str = "beside_recordings";
+
+/// `metadata` (a capture's file metadata, a JSON object) with the metadata
+/// of each recording in `beside` under [`BESIDE_METADATA_KEY`], by name,
+/// leaving out its section template (`dashboard`). Unchanged when `beside`
+/// is empty or `metadata` is not an object.
+pub fn with_beside_metadata(metadata: &str, beside: &[Beside]) -> String {
+    let Ok(serde_json::Value::Object(mut map)) = serde_json::from_str(metadata) else {
+        return metadata.to_string();
+    };
+    if beside.is_empty() {
+        return metadata.to_string();
+    }
+    let mut each = serde_json::Map::new();
+    for b in beside {
+        let meta: serde_json::Map<String, serde_json::Value> = b
+            .data
+            .file_metadata()
+            .into_iter()
+            .filter(|(k, _)| k != crate::source_templates::KEY_DASHBOARD)
+            .map(|(k, v)| {
+                let value =
+                    serde_json::from_str(&v).unwrap_or(serde_json::Value::String(v.clone()));
+                (k, value)
+            })
+            .collect();
+        each.insert(b.name.clone(), serde_json::Value::Object(meta));
+    }
+    map.insert(
+        BESIDE_METADATA_KEY.to_string(),
+        serde_json::Value::Object(each),
+    );
+    serde_json::to_string(&map).unwrap_or_else(|_| metadata.to_string())
+}
+
+/// A comparison's baseline systeminfo with that of each recording in
+/// `beside` that has one, as the System Info page's per-node object: the
+/// baseline's under `baseline_name` (its entries, when it is already
+/// per-node), each beside recording's under its name. `baseline` unchanged
+/// when no beside recording has systeminfo.
+pub fn with_beside_systeminfo(
+    baseline: Option<String>,
+    baseline_name: &str,
+    beside: &[Beside],
+) -> Option<String> {
+    let parse = |raw: &str| {
+        serde_json::from_str(raw).unwrap_or_else(|_| serde_json::Value::String(raw.to_string()))
+    };
+    let infos: Vec<(&str, serde_json::Value)> = beside
+        .iter()
+        .filter_map(|b| {
+            b.data
+                .file_metadata()
+                .get("systeminfo")
+                .map(|raw| (b.name.as_str(), parse(raw)))
+        })
+        .collect();
+    if infos.is_empty() {
+        return baseline;
+    }
+    let mut nodes = serde_json::Map::new();
+    if let Some(raw) = &baseline {
+        match parse(raw) {
+            serde_json::Value::Object(map)
+                if !map.contains_key("hostname")
+                    && !map.contains_key("cpus")
+                    && !map.is_empty()
+                    && map.values().all(serde_json::Value::is_object) =>
+            {
+                nodes.extend(map);
+            }
+            one => {
+                nodes.insert(baseline_name.to_string(), one);
+            }
+        }
+    }
+    for (name, info) in infos {
+        nodes.insert(name.to_string(), info);
+    }
+    serde_json::to_string(&nodes).ok()
 }
 
 /// Expand `route` of `template` against `data`, with the viewer parameter
@@ -798,6 +926,38 @@ pub fn generate_section(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A beside recording no label tells apart is named by its host, then
+    /// its source, then its archive position; several are told apart by
+    /// the labels that differ.
+    #[test]
+    fn beside_names_fall_back_to_host_source_position() {
+        let l = |kv: &[(&str, &str)]| -> BTreeMap<String, String> {
+            kv.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let name = |labels: &[BTreeMap<String, String>], pos: &[usize]| beside_names(labels, pos);
+        assert_eq!(
+            name(&[l(&[("source", "rezolus"), ("host", "h")])], &[0]),
+            [("h".to_string(), "h".to_string())]
+        );
+        assert_eq!(
+            name(&[l(&[("source", "rezolus")])], &[0]),
+            [("rezolus".to_string(), "rezolus".to_string())]
+        );
+        assert_eq!(
+            name(&[l(&[])], &[2]),
+            [("recording-3".to_string(), "recording 3".to_string())]
+        );
+        assert_eq!(
+            name(&[l(&[("source", "a")]), l(&[("source", "b")])], &[0, 2]),
+            [
+                ("a".to_string(), "a".to_string()),
+                ("b".to_string(), "b".to_string())
+            ]
+        );
+    }
 
     #[test]
     fn simple_only_file_has_no_builtins_and_one_source_section() {

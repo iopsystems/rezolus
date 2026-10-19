@@ -8,6 +8,7 @@ import { compareToggle } from '../ui/chart_controls.js';
 import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, getRangeOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
 import { notify, showSaveModal } from '../ui/overlays.js';
 import { isHistogramPlot } from '../charts/metric_types.js';
+import { pinnedCompares } from '../features/group_utils.js';
 import { migrateSelection, normalizeAnchor, normalizeFamily, SELECTION_SCHEMA_VERSION } from './selection_migration.js';
 import { composeAbReportPrefix } from './ab_filename.js';
 import { writeViewState } from '../ui/url_state.js';
@@ -147,6 +148,7 @@ const entriesFromPayload = (entries) => (entries || []).map(e => ({
     // Optional on pre-fix payloads; null degrades to single-query compare.
     promql_query_experiment: e.promql_query_experiment || null,
     category_members: e.category_members || null,
+    single_capture: e.single_capture === true || undefined,
     note: e.note || '',
     // Optional inline-Markdown title override; '' = use derived title.
     titleOverride: e.titleOverride || '',
@@ -275,6 +277,7 @@ const persistStore = (key, store) => {
                 promql_query: e.promql_query,
                 promql_query_experiment: e.promql_query_experiment || undefined,
                 category_members: e.category_members || undefined,
+                single_capture: e.single_capture || undefined,
                 note: e.note,
                 titleOverride: e.titleOverride || undefined,
                 chartOpts: e.chartOpts,
@@ -491,6 +494,9 @@ const toggleSelection = (spec, sectionKey, sectionName, groupName, compareMeta =
         // wrong query and returns no data).
         promql_query_experiment: spec.promql_query_experiment || null,
         category_members: compareMeta?.categoryMembers || null,
+        // Pinned from a recording shown beside a comparison: draws as one
+        // capture wherever the entry is rendered.
+        single_capture: compareMeta?.singleCapture === true || undefined,
         note: '',
         chartOpts: JSON.parse(JSON.stringify(spec.opts)),
     });
@@ -498,7 +504,7 @@ const toggleSelection = (spec, sectionKey, sectionName, groupName, compareMeta =
     // overwrite later pins so the first author's intent wins (e.g.,
     // the user pinned a chart, attached a different experiment, then
     // pinned more — the original baseline_alias stands).
-    if (compareMeta && !notebookStore.compare) {
+    if (compareMeta && !compareMeta.singleCapture && !notebookStore.compare) {
         notebookStore.compare = {
             baseline_alias: compareMeta.baselineAlias || null,
             experiment_alias: compareMeta.experimentAlias || null,
@@ -656,6 +662,7 @@ const buildPayload = (store, attrs, { includeNotes = true } = {}) => ({
         promql_query: e.promql_query,
         promql_query_experiment: e.promql_query_experiment || undefined,
         category_members: e.category_members || undefined,
+        single_capture: e.single_capture || undefined,
         note: includeNotes ? e.note : '',
         titleOverride: e.titleOverride || undefined,
         chartOpts: e.chartOpts,
@@ -1117,7 +1124,7 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                 // — otherwise the baseline's hostname gets injected
                 // into bridge queries and returns zero matches.
                 const originalSectionRoute = entry.section ? `/${entry.section}` : '/notebook';
-                const chartBody = (attrs.compareMode && spec.promql_query)
+                const chartBody = pinnedCompares(attrs.compareMode, entry, spec)
                     ? m(CompareChartWrapper, {
                         spec,
                         chartsState: attrs.chartsState,
@@ -1140,7 +1147,7 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                         m('div.chart-header', [
                             m('div.chart-title-row', [
                                 cardTitle(entry, spec, { editable: true }),
-                                attrs.compareMode && compareToggle(spec, {
+                                pinnedCompares(attrs.compareMode, entry, spec) && compareToggle(spec, {
                                     compareMode: attrs.compareMode,
                                     toggles: attrs.toggles,
                                     setChartToggle: attrs.setChartToggle,
@@ -1260,7 +1267,7 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
                     experiment: attrs.experimentAlias || 'experiment',
                 };
                 const originalSectionRoute = entry.section ? `/${entry.section}` : '/report';
-                const chartBody = (attrs.compareMode && spec.promql_query)
+                const chartBody = pinnedCompares(attrs.compareMode, entry, spec)
                     ? m(CompareChartWrapper, {
                         spec,
                         chartsState: attrs.chartsState,
@@ -1280,7 +1287,7 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
                         m('div.chart-header', [
                             m('div.chart-title-row', [
                                 cardTitle(entry, spec),
-                                attrs.compareMode && compareToggle(spec, {
+                                pinnedCompares(attrs.compareMode, entry, spec) && compareToggle(spec, {
                                     compareMode: attrs.compareMode,
                                     toggles: reportStore.chartToggles,
                                     setChartToggle: setReportChartToggle,
@@ -1343,7 +1350,7 @@ Object.assign(LoadedSelectionView, chartLoaderMixin(loadedSelectionStore, Loaded
                     experiment: attrs.experimentAlias || 'experiment',
                 };
                 const originalSectionRoute = entry.section ? `/${entry.section}` : '/selection';
-                const chartBody = (attrs.compareMode && spec.promql_query)
+                const chartBody = pinnedCompares(attrs.compareMode, entry, spec)
                     ? m(CompareChartWrapper, {
                         spec,
                         chartsState: attrs.chartsState,
@@ -1363,7 +1370,7 @@ Object.assign(LoadedSelectionView, chartLoaderMixin(loadedSelectionStore, Loaded
                         m('div.chart-header', [
                             m('div.chart-title-row', [
                                 cardTitle(entry, spec),
-                                attrs.compareMode && compareToggle(spec, {
+                                pinnedCompares(attrs.compareMode, entry, spec) && compareToggle(spec, {
                                     compareMode: attrs.compareMode,
                                     toggles: loadedSelectionStore.chartToggles,
                                     setChartToggle: setLoadedSelectionChartToggle,

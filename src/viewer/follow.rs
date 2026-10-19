@@ -1057,6 +1057,32 @@ mod tests {
         assert!(state.following());
     }
 
+    /// A recording shown beside a comparison is followed with the slots: its
+    /// new rows reach its sections.
+    #[test]
+    fn a_recording_beside_a_comparison_is_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.dendro");
+        let (mut writer, mut sources) = two_sources(&path, Some(["baseline", "experiment"]));
+        let labels: BTreeMap<String, String> = [
+            ("source".to_string(), "rezolus".to_string()),
+            ("host".to_string(), "c".to_string()),
+        ]
+        .into();
+        sources.push(writer.add_source(labels, BTreeMap::new(), ANCHOR).unwrap());
+        write_both(&mut writer, &mut sources, 0..3);
+        let state = view(&path);
+        assert_eq!(
+            state.follow.lock().as_ref().unwrap().captures(),
+            ["baseline", "beside:c", "experiment"]
+        );
+        write_both(&mut writer, &mut sources, 3..6);
+        assert!(state.follow.lock().as_ref().unwrap().refresh_now());
+        let beside = state.beside.read();
+        let (_, end) = beside[0].data.time_range().unwrap();
+        assert_eq!((end * 1e9).round() as u64, ANCHOR + 5 * SECOND);
+    }
+
     /// Recordings of one run that share a label set are followed: a reopen
     /// joins every recording again rather than finding one by its labels.
     #[test]

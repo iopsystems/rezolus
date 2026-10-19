@@ -189,6 +189,11 @@ pub struct Section {
     /// sidebar groups entries by it. Absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance: Option<String>,
+    /// The section the page opens on, when it is not the usual one: set by
+    /// [`crate::dashboard::add_beside_sections`] for a comparison whose
+    /// baseline has no system metrics. Absent otherwise.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub landing: bool,
 }
 
 #[derive(Serialize, Default)]

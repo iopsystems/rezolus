@@ -1260,11 +1260,13 @@ impl SectionTemplate {
                     name: "Query Explorer".to_string(),
                     route: "/query".to_string(),
                     instance: None,
+                    landing: false,
                 },
                 SectionDef::Section(body) => Section {
                     name: body.name.clone(),
                     route: body.route.clone(),
                     instance: None,
+                    landing: false,
                 },
             })
             .collect()

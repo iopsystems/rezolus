@@ -199,8 +199,9 @@ pub struct ArmSlots {
     pub baseline: usize,
     pub experiment: Option<usize>,
     /// What the viewer should say about the choice: which arm is the
-    /// baseline when the arms do not say, and which recordings without an
-    /// arm are attached beside the comparison.
+    /// baseline when the arms do not say. (The recordings shown beside the
+    /// comparison are named by the viewer, which also counts the ones
+    /// `--baseline`/`--experiment` did not name.)
     pub note: Option<String>,
 }
 
@@ -214,8 +215,8 @@ pub struct ArmSlots {
 ///   slot (`arm=control` beside `arm=baseline` is the experiment);
 /// - with two arms of which neither is, they fill the slots in the
 ///   archive's order, and the note says which is the baseline;
-/// - recordings without an arm attach beside the comparison (an agent
-///   recorded with two arms of a service), and the note names them;
+/// - recordings without an arm are shown beside the comparison (an agent
+///   recorded with two arms of a service);
 /// - with no recording carrying an arm (a comparison asked for with
 ///   `?compare=1`), the first two recordings fill the slots.
 ///
@@ -275,25 +276,6 @@ pub fn arm_slots(labels: &[BTreeMap<String, String>]) -> Result<ArmSlots, String
         }
         _ => unreachable!("one or two arms"),
     };
-    let extras: Vec<usize> = (0..labels.len())
-        .filter(|i| !armed.iter().any(|(j, _)| j == i))
-        .collect();
-    if !extras.is_empty() {
-        let names: Vec<String> = extras
-            .iter()
-            .map(|&i| {
-                labels[i]
-                    .iter()
-                    .map(|(k, v)| format!("{k}={v}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .collect();
-        notes.push(format!(
-            "attached beside the comparison, without an arm: {}",
-            names.join("; ")
-        ));
-    }
     Ok(ArmSlots {
         baseline,
         experiment,
@@ -424,6 +406,15 @@ fn discriminating_keys(labels: &[BTreeMap<String, String>]) -> Vec<&str> {
 /// value when every one has a host and no two share it, else the differing
 /// values joined by `/`, else `recording N` (1-based).
 pub fn instance_names(labels: &[BTreeMap<String, String>]) -> Vec<String> {
+    names_or(labels, |i, _| format!("recording {}", i + 1))
+}
+
+/// [`instance_names`] with `fallback` naming a recording that no label
+/// tells apart from the others (given its index and labels).
+pub fn names_or(
+    labels: &[BTreeMap<String, String>],
+    fallback: impl Fn(usize, &BTreeMap<String, String>) -> String,
+) -> Vec<String> {
     let keys = discriminating_keys(labels);
     let hosts: Vec<Option<&String>> = labels.iter().map(|l| l.get("host")).collect();
     let unique_hosts = hosts.iter().all(Option::is_some)
@@ -441,7 +432,7 @@ pub fn instance_names(labels: &[BTreeMap<String, String>]) -> Vec<String> {
                 .filter_map(|k| l.get(*k).map(String::as_str))
                 .collect();
             if values.is_empty() {
-                format!("recording {}", i + 1)
+                fallback(i, l)
             } else {
                 values.join("/")
             }
@@ -1209,10 +1200,11 @@ mod tests {
                 .note
                 .is_none()
         );
-        // Two arms of a service and an agent without one: the agent attaches.
+        // Two arms of a service and an agent without one: the arms fill the
+        // slots, and the note says nothing (the viewer names the agent).
         let concurrent = slots(&[Some("baseline"), Some("experiment"), None]).unwrap();
         assert_eq!((concurrent.baseline, concurrent.experiment), (0, Some(1)));
-        assert!(concurrent.note.unwrap().contains("n=2"));
+        assert_eq!(concurrent.note, None);
         let agent_first = slots(&[None, Some("experiment"), Some("baseline")]).unwrap();
         assert_eq!((agent_first.baseline, agent_first.experiment), (2, Some(1)));
         for refused in [
