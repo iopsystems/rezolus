@@ -313,6 +313,11 @@ pub struct AppState {
     /// (`dashboard::dashboard::add_beside_sections`); the baseline source is
     /// a `dashboard::combined::Routed` over them. Empty otherwise.
     pub beside: RwLock<Vec<::dashboard::dashboard::Beside>>,
+    /// The labels of the archive recording the baseline capture reads, when
+    /// it reads one recording of several: a report is saved onto it
+    /// (`report_save::build_rez_report_from_rez`'s `anchor`). `None` saves
+    /// onto the archive's first.
+    pub anchor_labels: RwLock<Option<std::collections::BTreeMap<String, String>>>,
 }
 
 /// The default number of queries the viewer runs at once: half the CPUs,
@@ -364,6 +369,7 @@ impl AppState {
             members: RwLock::new(Vec::new()),
             combined_live: Mutex::new(None),
             beside: RwLock::new(Vec::new()),
+            anchor_labels: RwLock::new(None),
         }
     }
 
@@ -417,6 +423,7 @@ impl AppState {
         self.members.write().clear();
         self.combined_live.lock().take();
         self.beside.write().clear();
+        *self.anchor_labels.write() = None;
         self.captures.set_baseline_data(data);
     }
 

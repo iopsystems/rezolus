@@ -757,6 +757,9 @@ fn a_concurrent_ab_shows_the_unarmed_agent_beside_it() {
 fn a_comparison_without_services_lands_on_the_agent_overview() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("plain.rez");
+    let template: &'static str = Box::leak(svc_template().into_boxed_str());
+    let svc_d: &'static [(&'static str, &'static str)] =
+        Box::leak(vec![("source", "svcD"), ("service_queries", template)].into_boxed_slice());
     let svc = |labels: &'static [(&'static str, &'static str)],
                metadata: &'static [(&'static str, &'static str)],
                n: u64| Recording {
@@ -791,6 +794,9 @@ fn a_comparison_without_services_lands_on_the_agent_overview() {
                 &[("source", "svcC")],
                 30,
             ),
+            // A beside service with a template has a service section of its
+            // own, which is not where the page opens.
+            svc(&[("source", "svcD"), ("host", "h")], svc_d, 40),
         ],
     );
     let state = view(&path, &[]);
@@ -808,6 +814,12 @@ fn a_comparison_without_services_lands_on_the_agent_overview() {
         .filter(|s| s.landing)
         .map(|s| s.route.as_str())
         .collect();
+    assert!(
+        routes
+            .iter()
+            .any(|r| r.starts_with("/service/") && r.contains('@')),
+        "{routes:?}"
+    );
     assert_eq!(landing, ["/overview@rezolus"], "{routes:?}");
 }
 
@@ -907,7 +919,13 @@ fn a_beside_recordings_template_notice_is_reported() {
         &[
             Recording {
                 labels: &[("source", "rezolus"), ("host", "h")],
-                metadata: &[("source", "rezolus"), ("service_queries", "{not json")],
+                metadata: &[
+                    ("source", "rezolus"),
+                    ("service_queries", "{not json"),
+                    // A section template, which the baseline's metadata does
+                    // not repeat for a beside recording.
+                    ("dashboard", "{not json either"),
+                ],
                 cpus: 1,
                 busy_ns: 250_000_000,
                 counter: None,
@@ -931,4 +949,147 @@ fn a_beside_recordings_template_notice_is_reported() {
     reg.regenerate_combined("[]", None).unwrap();
     let after: Vec<String> = serde_json::from_str(&reg.notices()).unwrap();
     assert!(after.len() > before.len(), "{before:?} -> {after:?}");
+    let wasm: serde_json::Value =
+        serde_json::from_str(&reg.file_metadata_json("baseline").unwrap()).unwrap();
+    let state = view(&path, &[]);
+    let server: serde_json::Value =
+        serde_json::from_str(&state.captures.file_metadata_by_id("baseline").unwrap()).unwrap();
+    for meta in [wasm, server] {
+        let agent = &meta["beside_recordings"]["h"];
+        assert_eq!(agent["source"], "rezolus", "{meta}");
+        assert!(agent.get("dashboard").is_none(), "{meta}");
+    }
+}
+
+/// A report saved from the concurrent A/B (the agent first in the archive,
+/// unarmed) lands on the baseline's recording, svcA's, and a fresh viewer
+/// of it opens in report mode with the pins; in both viewers, from a `.rez`
+/// and from a dendro archive (`report_save`'s dendro path). A report saved
+/// before that, onto the archive's first recording, reopens the same.
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn a_report_of_the_concurrent_ab_reopens_with_its_pins() {
+    let dir = tempfile::tempdir().unwrap();
+    let rez = concurrent_ab(dir.path());
+    let dendro = dir.path().join("conc.dendro");
+    rez::to_dendro::convert_v3_to_dendro(&rez, &dendro).unwrap();
+    report_round_trip(dir.path(), &rez, "rez").await;
+    report_round_trip(dir.path(), &dendro, "dendro").await;
+}
+
+async fn report_round_trip(dir: &Path, path: &Path, ext: &str) {
+    use crate::parquet_metadata::{KEY_REPORT, KEY_SELECTION};
+    let body = r#"{"entries":[{"chartId":"busy-pct","section":"cpu@h","promql_query":"irate(cpu_usage{__capture__=\"h\"}[5m])","single_capture":true}],"trim_columns":true}"#;
+
+    // What a reload finds: selection and report mode, server and WASM.
+    let reopen = |name: &str, bytes: &[u8]| {
+        let name = format!("{name}.{ext}");
+        let report = dir.join(&name);
+        std::fs::write(&report, bytes).unwrap();
+        let state = view(&report, &[]);
+        assert_eq!(state.selection.read().as_deref(), Some(body), "{name}");
+        assert_eq!(
+            state.trimmed_report_marker.read().as_deref(),
+            Some("trimmed"),
+            "{name}"
+        );
+        // The report keeps only the agent's pinned columns, so svcA holds
+        // no rows: the page's span is the agent's.
+        assert!(state.baseline_data().time_range().is_some(), "{name}");
+        let mut reg = viewer::WasmCaptureRegistry::new();
+        reg.attach("baseline", bytes, &name).unwrap();
+        assert_eq!(reg.selection("baseline").as_deref(), Some(body), "{name}");
+        let info: serde_json::Value = serde_json::from_str(&reg.info("baseline").unwrap()).unwrap();
+        assert!(info["maxTime"].as_f64().unwrap() > 0.0, "{name}: {info}");
+        let meta: serde_json::Value =
+            serde_json::from_str(&reg.file_metadata_json("baseline").unwrap()).unwrap();
+        assert_eq!(meta[KEY_REPORT], "trimmed", "{name}");
+    };
+    // The `source` of each recording a report's markers are on.
+    let marked = |bytes: &[u8]| -> Vec<String> {
+        if ext == "dendro" {
+            let archive = dendro::archive::Archive::open_bytes(bytes.to_vec()).unwrap();
+            archive
+                .read_sources()
+                .unwrap()
+                .into_iter()
+                .filter(|s| s.meta.metadata.contains_key(KEY_SELECTION))
+                .map(|s| s.meta.labels["source"].clone())
+                .collect()
+        } else {
+            let db = crate::recorder::rez_sqlite::RezDb::open_bytes(bytes.to_vec()).unwrap();
+            db.read_recordings()
+                .unwrap()
+                .into_iter()
+                .filter(|r| r.meta.metadata.contains_key(KEY_SELECTION))
+                .map(|r| r.meta.labels["source"].clone())
+                .collect()
+        }
+    };
+
+    let state = std::sync::Arc::new(view(path, &[]));
+    let response = super::actions::save_with_selection(
+        axum::extract::State(std::sync::Arc::clone(&state)),
+        body.to_string(),
+    )
+    .await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let server = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(marked(&server), ["svcA"], "{ext}");
+    reopen("server", &server);
+
+    let mut reg = viewer::WasmCaptureRegistry::new();
+    let name = path.file_name().unwrap().to_str().unwrap();
+    reg.attach("baseline", &std::fs::read(path).unwrap(), name)
+        .unwrap();
+    let wasm = reg.save_with_selection(body).unwrap();
+    assert_eq!(marked(&wasm), ["svcA"], "{ext}");
+    reopen("wasm", &wasm);
+
+    // Saved onto the archive's first recording, as before the fix.
+    let keep: std::collections::BTreeSet<String> = ["cpu_usage".to_string()].into_iter().collect();
+    let old = ::report_save::build_rez_report_from_rez(
+        &std::fs::read(path).unwrap(),
+        None,
+        Some(&keep),
+        None,
+        body,
+        None,
+    )
+    .unwrap();
+    assert_eq!(marked(&old), ["rezolus"], "{ext}");
+    reopen("old", &old);
+}
+
+/// Agents compared with the `cpu_usage` sampler off: the baseline is still
+/// an agent, so the page keeps its own overview rather than a beside one.
+#[test]
+fn an_agent_baseline_without_cpu_usage_keeps_the_usual_landing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nocpu.rez");
+    let agent = |labels: &'static [(&'static str, &'static str)]| Recording {
+        labels,
+        metadata: &[("source", "rezolus")],
+        cpus: 0,
+        busy_ns: 0,
+        counter: Some(("memory_total", 1)),
+    };
+    one_run(
+        &path,
+        &[
+            agent(&[("source", "rezolus"), ("host", "h1"), ("arm", "baseline")]),
+            agent(&[("source", "rezolus"), ("host", "h2"), ("arm", "experiment")]),
+            agent(&[("source", "rezolus"), ("host", "h3")]),
+        ],
+    );
+    let state = view(&path, &[]);
+    assert!(!state
+        .baseline_data()
+        .counter_names()
+        .contains(&"cpu_usage".to_string()));
+    let store = state.sections.read();
+    let sections = store.sections();
+    assert!(sections.iter().any(|s| s.route == "/overview@h3"));
+    assert!(!sections.iter().any(|s| s.landing));
 }

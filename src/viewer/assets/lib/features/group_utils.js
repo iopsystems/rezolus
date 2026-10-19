@@ -29,6 +29,12 @@ export const defaultLandingRoute = ({ reportMode, categoryName, serviceNames = [
     return sections.find((s) => s.route && s.route.startsWith('/source/'))?.route || '/overview';
 };
 
+// The route an upload opens on, from the `/api/v1/sections` response that
+// follows it (`{ data: { sections } }`): the landing rule of
+// `defaultLandingRoute`, with no service names or category known yet.
+export const uploadLandingRoute = (sectionsResponse) =>
+    defaultLandingRoute({ sections: sectionsResponse?.data?.sections || [] });
+
 // Whether a section draws A/B: compare mode, unless it belongs to a
 // recording shown beside the comparison.
 export const sectionCompares = (compareMode, metadata) =>

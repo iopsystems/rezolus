@@ -1764,4 +1764,4 @@ const noteRecordingExtent = async (meta) => {
     }
 };
 
-export { initDashboard, sectionResponseCache, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, resetLinkedViewState, reapplyFileMetadata, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, stopRefreshing, noteRecordingExtent, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };
+export { initDashboard, SectionContent, sectionResponseCache, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, resetLinkedViewState, reapplyFileMetadata, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, stopRefreshing, noteRecordingExtent, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };

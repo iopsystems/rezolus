@@ -1186,17 +1186,24 @@ fn init_file_mode_rez(
         }
     };
 
+    // A report's selection and marker: the baseline's, else whichever
+    // recording carries them (`dashboard::combined::carried`).
+    let carried = |key: &str| {
+        let shown: Vec<&dyn metriken_query::MetricsSource> = std::iter::once(order[0])
+            .chain(order.iter().skip(1).copied())
+            .chain(beside_idx.iter().copied())
+            .filter_map(|i| slots[i].as_ref())
+            .map(|(_, r)| r as &dyn metriken_query::MetricsSource)
+            .collect();
+        ::dashboard::combined::carried(&shown, key)
+    };
+    let b_selection = carried(crate::parquet_metadata::KEY_SELECTION);
+    let b_report_marker = carried(crate::parquet_metadata::KEY_REPORT);
     // The anchor (order[0]) becomes the AppState's baseline capture.
     let (b_labels, b_reader) = slots[order[0]].take().expect("anchor index is in range");
     warn_if_empty(&b_labels, &b_reader);
     let b_systeminfo = b_reader.metadata_get("systeminfo");
     let b_file_meta = file_meta_json(&b_reader);
-    // Selection is the anchor's, matching the parquet A/B path (mod.rs where
-    // only the baseline's selection fills `state.selection`). The WASM backend
-    // reads it per-capture from `file_metadata`; the server keeps one global
-    // slot, so the anchor is the one that fills it.
-    let b_selection = b_reader.metadata_get(crate::parquet_metadata::KEY_SELECTION);
-    let b_report_marker = b_reader.metadata_get(crate::parquet_metadata::KEY_REPORT);
     // A CLI --baseline-alias still wins over the label-derived one.
     let b_alias = config
         .baseline_alias
@@ -1233,6 +1240,7 @@ fn init_file_mode_rez(
     let b_file_meta =
         b_file_meta.map(|meta| ::dashboard::dashboard::with_beside_metadata(&meta, &beside));
     *state.beside.write() = beside;
+    *state.anchor_labels.write() = Some(b_labels.clone());
     *state.parquet_path.write() = Some(path.to_path_buf());
     *state.selection.write() = b_selection;
     // A `.rez` report stamps `KEY_REPORT=trimmed` on its anchor recording, the

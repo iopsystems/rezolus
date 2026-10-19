@@ -10,7 +10,7 @@
 //! server reads its parquet from disk into bytes before calling
 //! through, and the WASM viewer reuses the bytes it already holds.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use arrow::datatypes::Field;
 use bytes::Bytes;
@@ -493,18 +493,20 @@ fn append_tar_entry<W: std::io::Write>(
 // derived from the selection (via [`resolve_kept_columns`]); the caller owns
 // column resolution because only it has the `MetricsSource`.
 
-/// Embed the selection / events / report marker onto the anchor recording (the
-/// first in catalog order — the baseline slot). `trimmed` stamps `KEY_REPORT`
+/// Embed the selection / events / report marker onto the anchor recording:
+/// the one labelled `anchor` (the baseline capture's recording), else the
+/// first in catalog order. `trimmed` stamps `KEY_REPORT`
 /// so a reloaded archive opens straight to the Report view; an untrimmed save
 /// carries the selection but no marker, matching the parquet footer path.
 fn embed_rez_report_markers(
     db: &rez::rez_sqlite::RezDb,
+    anchor: Option<&BTreeMap<String, String>>,
     trimmed: bool,
     selection_json: &str,
     events_json: Option<&str>,
 ) -> Result<(), String> {
     let recordings = db.read_recordings()?;
-    let anchor = recordings.first().ok_or_else(|| {
+    let anchor = anchored(&recordings, anchor, |r| &r.meta.labels).ok_or_else(|| {
         "report has no recordings (source was empty or fully trimmed)".to_string()
     })?;
     let mut metadata = anchor.meta.metadata.clone();
@@ -524,9 +526,21 @@ fn embed_rez_report_markers(
     db.update_recording_metadata(anchor.id, &metadata)
 }
 
+/// The item of `items` whose labels are `anchor`, else the first.
+fn anchored<'a, T>(
+    items: &'a [T],
+    anchor: Option<&BTreeMap<String, String>>,
+    labels: impl Fn(&T) -> &BTreeMap<String, String>,
+) -> Option<&'a T> {
+    anchor
+        .and_then(|a| items.iter().find(|i| labels(i) == a))
+        .or_else(|| items.first())
+}
+
 /// Build a `.rez` report from a `.rez` source's bytes: copy every recording
-/// (trimming to `keep_metrics` when `Some`) and embed the selection. Returns
-/// the new archive's bytes.
+/// (trimming to `keep_metrics` when `Some`) and embed the selection on the
+/// recording labelled `anchor` (the baseline capture's; else the first).
+/// Returns the new archive's bytes.
 ///
 /// `range` keeps the segments overlapping it. A segment is copied whole, so
 /// the report holds rows up to a segment's span beyond each end of `range`.
@@ -534,6 +548,7 @@ fn embed_rez_report_markers(
 /// before `range`. An error when `range` keeps no segment.
 pub fn build_rez_report_from_rez(
     source_bytes: &[u8],
+    anchor: Option<&BTreeMap<String, String>>,
     keep_metrics: Option<&BTreeSet<String>>,
     range: Option<TimeRange>,
     selection_json: &str,
@@ -545,6 +560,7 @@ pub fn build_rez_report_from_rez(
     if metriken_storage::DendroCatalog::is_archive_bytes(source_bytes) {
         return build_dendro_report(
             source_bytes,
+            anchor,
             keep_metrics,
             range,
             selection_json,
@@ -584,7 +600,13 @@ pub fn build_rez_report_from_rez(
             return Err("the time range holds no rows".to_string());
         }
     }
-    embed_rez_report_markers(&dst, keep_metrics.is_some(), selection_json, events_json)?;
+    embed_rez_report_markers(
+        &dst,
+        anchor,
+        keep_metrics.is_some(),
+        selection_json,
+        events_json,
+    )?;
     dst.serialize()
 }
 
@@ -605,6 +627,7 @@ pub fn build_rez_report_from_rez(
 /// `keep_metrics` keeps one.
 fn build_dendro_report(
     source_bytes: &[u8],
+    anchor: Option<&BTreeMap<String, String>>,
     keep_metrics: Option<&BTreeSet<String>>,
     range: Option<TimeRange>,
     selection_json: &str,
@@ -679,7 +702,7 @@ fn build_dendro_report(
         }
     }
 
-    let anchor = sources.first().ok_or_else(|| {
+    let anchor = anchored(&sources, anchor, |s| &s.meta.labels).ok_or_else(|| {
         "report has no recordings (source was empty or fully trimmed)".to_string()
     })?;
     let mut metadata = anchor.meta.metadata.clone();
@@ -742,7 +765,7 @@ pub fn build_rez_report_from_parquets(
         }
         Ok(())
     })?;
-    embed_rez_report_markers(&dst, trimmed, selection_json, events_json)?;
+    embed_rez_report_markers(&dst, None, trimmed, selection_json, events_json)?;
     dst.serialize()
 }
 
@@ -1309,8 +1332,9 @@ mod tests {
         }
 
         let keep: BTreeSet<String> = ["cpu_cycles".to_string()].into_iter().collect();
-        let out = build_rez_report_from_rez(&source, Some(&keep), None, r#"{"entries":[1]}"#, None)
-            .unwrap();
+        let out =
+            build_rez_report_from_rez(&source, None, Some(&keep), None, r#"{"entries":[1]}"#, None)
+                .unwrap();
         let db = RezDb::open_bytes(out).unwrap();
         let md = &db.read_recordings().unwrap()[0].meta.metadata;
         assert_eq!(

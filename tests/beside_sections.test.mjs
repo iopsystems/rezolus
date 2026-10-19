@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
     isSingleCapture, besideNames, sectionCompares, groupCompares, pinCompareMeta, pinnedCompares,
-    defaultLandingRoute,
+    defaultLandingRoute, uploadLandingRoute,
 } from '../src/viewer/assets/lib/features/group_utils.js';
 
 // The components touch the DOM at import; a vnode-returning `m` and a few
@@ -19,23 +19,49 @@ globalThis.m = (tag, ...rest) => {
         && !Array.isArray(rest[0]) && !isVnode(rest[0]) ? rest.shift() : {};
     return { tag, attrs, children: rest.length === 1 ? rest[0] : rest };
 };
-globalThis.m.route = { get: () => '/' };
+// `m.route(root, default, routes)` records the page's default route; an
+// upload's `m.route.set` records where it went.
+const routed = { default: null, set: [] };
+globalThis.m.route = Object.assign((root, def) => { routed.default = def; }, {
+    get: () => '/', set: (r) => routed.set.push(r), prefix: '#!',
+});
+globalThis.m.request = async () => ({ status: 'success', data: [] });
+globalThis.m.mount = () => {};
+globalThis.requestAnimationFrame = () => 0;
 globalThis.m.trust = (s) => s;
 globalThis.m.redraw = () => {};
 globalThis.window = {
-    addEventListener() {}, location: { search: '', hash: '' },
+    addEventListener() {}, removeEventListener() {}, location: { search: '', hash: '', pathname: '/' },
+    history: { replaceState() {} }, scrollTo() {},
     matchMedia: () => ({ matches: false, addEventListener() {} }),
 };
 globalThis.document = {
     documentElement: { dataset: {}, getAttribute() {}, setAttribute() {} },
-    addEventListener() {},
+    addEventListener() {}, body: { appendChild() {} }, getElementById: () => null, querySelector: () => null,
+    createElement: () => ({
+        style: {}, classList: { add() {}, remove() {} }, appendChild() {}, remove() {},
+        setAttribute() {}, addEventListener() {}, querySelector: () => null,
+    }),
+    querySelectorAll: () => [], title: '',
 };
-globalThis.localStorage = { getItem: () => null, setItem() {} };
+const storage = new Map();
+globalThis.localStorage = {
+    getItem: (k) => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v), removeItem: (k) => storage.delete(k),
+};
+globalThis.sessionStorage = globalThis.localStorage;
+globalThis.fetch = async () => ({ ok: false, status: 404, json: async () => ({}), text: async () => '' });
 globalThis.getComputedStyle = () => ({ getPropertyValue: () => '' });
 
 const { createGroupComponent, CompareChartWrapper } = await import('../src/viewer/assets/lib/viewer_core.js');
 const { TopNav } = await import('../src/viewer/assets/lib/ui/layout.js');
-const { notebookStore } = await import('../src/viewer/assets/lib/selection/selection.js');
+const {
+    notebookStore, reportStore, persistNotebook, loadPayloadIntoStore, buildPayload, pinnedChart,
+    SELECTION_SCHEMA_VERSION,
+} = await import('../src/viewer/assets/lib/selection/selection.js');
+const { Chart } = await import('../src/viewer/assets/lib/charts/chart.js');
+const app = await import('../src/viewer/assets/lib/app.js');
+const { uploadParquet } = await import('../src/viewer/assets/lib/script.js');
+const { ViewerApi } = await import('../src/viewer/assets/lib/viewer_api.js');
 const { renderServiceSection } = await import('../src/viewer/assets/lib/features/service.js');
 const { createMetadataView, besideRows } = await import('../src/viewer/assets/lib/sections/section_views.js');
 
@@ -76,6 +102,8 @@ test('a pinned chart of a beside recording does not draw A/B', () => {
     assert.equal(pinnedCompares(true, { single_capture: true }, spec), false);
     // Saved before `single_capture` existed: the query names the recording.
     assert.equal(pinnedCompares(true, { promql_query: 'irate(x{__capture__="h"}[5m])' }, spec), false);
+    // An entry with no query of its own falls back to the spec's.
+    assert.equal(pinnedCompares(true, {}, { promql_query: 'irate(x{__capture__="h"}[5m])' }), false);
 });
 
 test('the badge names each beside recording once, in nav order', () => {
@@ -136,20 +164,6 @@ test('the compare badge lists beside recordings after the arms', () => {
     assert.doesNotMatch(text(summary(nav([{ route: '/cpu' }]))), /also:/);
 });
 
-// SectionContent (app.js) and the pinned-chart views (selection.js) run
-// their module's start-up at import, so their wiring is checked in the
-// source: each must take its decision from the helper above.
-test('SectionContent and the pinned views call the helpers', () => {
-    const app = readFileSync(new URL('../src/viewer/assets/lib/app.js', import.meta.url), 'utf8');
-    assert.match(app, /const sectionCompare = sectionCompares\(compareMode, attrs\.metadata\);/);
-    assert.match(app, /singleCapture: !sectionCompare,/);
-    assert.match(app, /!sectionCompare && m\('button\.section-action-btn'/);
-    const sel = readFileSync(new URL('../src/viewer/assets/lib/selection/selection.js', import.meta.url), 'utf8');
-    assert.equal((sel.match(/const chartBody = pinnedCompares\(attrs\.compareMode, entry, spec\)/g) || []).length, 3);
-    assert.equal((sel.match(/pinnedCompares\(attrs\.compareMode, entry, spec\) && compareToggle/g) || []).length, 3);
-    assert.doesNotMatch(sel, /attrs\.compareMode && spec\.promql_query/);
-});
-
 test('the page opens on the section the backend marked landing', () => {
     const sections = [
         { route: '/overview' }, { route: '/service/svcA', landing: true }, { route: '/overview@h', instance: 'h' },
@@ -177,9 +191,83 @@ test('Metadata lists the recordings shown beside the comparison', () => {
     assert.match(text(view), /source rezolus, version 6\.0\.0, 1000 ms/);
 });
 
-test('both start-up paths take the landing rule from the helper', () => {
-    const app = readFileSync(new URL('../src/viewer/assets/lib/app.js', import.meta.url), 'utf8');
-    assert.match(app, /const defaultRoute = defaultLandingRoute\(\{/);
-    const script = readFileSync(new URL('../src/viewer/assets/lib/script.js', import.meta.url), 'utf8');
-    assert.match(script, /const target = defaultLandingRoute\(\{ sections: processed\.sections \|\| \[\] \}\);/);
+test('an upload opens on the landing in the sections response', () => {
+    const response = { status: 'success', data: { sections: [
+        { route: '/overview' }, { route: '/service/svcA', landing: true },
+    ] } };
+    assert.equal(uploadLandingRoute(response), '/service/svcA');
+    assert.equal(uploadLandingRoute({ data: { sections: [{ route: '/overview' }] } }), '/overview');
+    assert.equal(uploadLandingRoute(undefined), '/overview');
+});
+
+test('uploadParquet routes to the landing the sections response names', async () => {
+    const sections = [{ route: '/overview', name: 'Overview' }, { route: '/service/svcA', name: 'svcA', landing: true }];
+    const stubs = {
+        uploadParquet: async () => ({}),
+        getMetadata: async () => ({ status: 'success', data: {} }),
+        getSystemInfo: async () => null,
+        getSelection: async () => null,
+        getFileMetadata: async () => ({}),
+        getMode: async () => ({ compare_mode: true }),
+        getSections: async () => ({ status: 'success', data: { sections } }),
+        // A section body carries no sections: the server strips them.
+        getSection: async () => ({ groups: [], metadata: {} }),
+    };
+    const saved = {};
+    for (const [k, f] of Object.entries(stubs)) { saved[k] = ViewerApi[k]; ViewerApi[k] = f; }
+    try {
+        routed.set.length = 0;
+        await uploadParquet({ name: 'conc.rez', size: 1 });
+        assert.deepEqual(routed.set, ['/service/svcA']);
+    } finally {
+        Object.assign(ViewerApi, saved);
+    }
+});
+
+test('the first load opens on the landing, and SectionContent asks for one capture', () => {
+    app.bootstrapSharedSections([
+        { route: '/overview', name: 'Overview' },
+        { route: '/service/svcA', name: 'svcA', landing: true },
+        { route: '/cpu@h', name: 'CPU', instance: 'h' },
+    ]);
+    app.initDashboard({ compareMode: true });
+    assert.equal(routed.default, '/service/svcA');
+    const plot = { opts: { id: 'p', title: 'P' }, promql_query: 'x', data: [[1], [2]] };
+    const render = (metadata) => app.SectionContent.view({ attrs: {
+        section: { route: '/cpu@h', name: 'CPU' }, groups: [{ id: 'g', name: 'G', plots: [plot] }],
+        metadata, interval: 1,
+    } });
+    const asks = (tree) => walk(tree).filter((n) => n.attrs && 'singleCapture' in n.attrs)
+        .map((n) => n.attrs.singleCapture);
+    assert.deepEqual(asks(render({ single_capture: 'h' })), [true]);
+    assert.deepEqual(asks(render({})), [false]);
+});
+
+test('a pinned chart draws one capture when its entry says so, A/B otherwise', () => {
+    const spec = { opts: { id: 'p' }, promql_query: 'irate(x[5m])' };
+    const opts = { interval: 1, sectionRoute: '/cpu', captureLabels: {}, anchors: {}, toggles: {}, setChartToggle() {} };
+    const attrs = { compareMode: true, chartsState: {} };
+    const single = pinnedChart({ single_capture: true }, spec, attrs, opts);
+    assert.equal(single.body.tag, Chart);
+    assert.equal(single.toggle, false);
+    const both = pinnedChart({}, spec, attrs, opts);
+    assert.equal(both.body.tag, CompareChartWrapper);
+    assert.notEqual(both.toggle, false);
+    // An entry saved before `single_capture`, whose own query names the
+    // recording, though the spec it renders from does not.
+    const legacy = pinnedChart({ promql_query: 'irate(x{__capture__="h"}[5m])' }, spec, attrs, opts);
+    assert.equal(legacy.body.tag, Chart);
+});
+
+test('single_capture survives the notebook, a loaded report and a saved payload', () => {
+    const entry = { chartId: 'c', section: 'cpu@h', promql_query: 'q', single_capture: true, chartOpts: {} };
+    notebookStore.entries.length = 0;
+    notebookStore.entries.push({ ...entry, note: '' });
+    persistNotebook();
+    const stored = [...storage.values()].map((v) => JSON.parse(v)).find((d) => Array.isArray(d.entries));
+    assert.equal(stored.entries[0].single_capture, true);
+    assert.ok(loadPayloadIntoStore(reportStore, { version: SELECTION_SCHEMA_VERSION, entries: [entry] }));
+    assert.equal(reportStore.entries[0].single_capture, true);
+    assert.equal(buildPayload(reportStore, {}).entries[0].single_capture, true);
+    notebookStore.entries.length = 0;
 });

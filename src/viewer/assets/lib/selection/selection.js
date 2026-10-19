@@ -473,6 +473,44 @@ const unavailableCard = (entry, spec, controls = null, dropAttrs = null) =>
         ]),
     ]);
 
+// ── Pinned charts ─────────────────────────────────────────────────
+
+// A pinned chart's body and compare toggle in the notebook, report and
+// selection views: A/B in compare mode (`CompareChartWrapper`, its anchors
+// and toggles from the view's store), else one capture, which is also how
+// an entry pinned from a recording beside a comparison draws
+// (`pinnedCompares`).
+export const pinnedChart = (entry, spec, attrs, {
+    interval, sectionRoute, captureLabels, anchors, toggles, setChartToggle,
+}) => {
+    const compare = pinnedCompares(attrs.compareMode, entry, spec);
+    return {
+        body: compare
+            ? m(CompareChartWrapper, {
+                spec,
+                chartsState: attrs.chartsState,
+                interval,
+                anchors,
+                toggles,
+                setChartToggle,
+                sectionRoute,
+                step: interval,
+                experimentQueryRange: attrs.experimentQueryRange,
+                captureLabels,
+                // Stored on the pinned entry so the bridge survives even
+                // though /notebook has no category_members metadata of its
+                // own.
+                categoryMembers: entry.category_members,
+            })
+            : m(Chart, { spec, chartsState: attrs.chartsState, interval }),
+        toggle: compare && compareToggle(spec, {
+            compareMode: attrs.compareMode,
+            toggles,
+            setChartToggle,
+        }),
+    };
+};
+
 // ── Selection API (write mode) ───────────────────────────────────
 
 const toggleSelection = (spec, sectionKey, sectionName, groupName, compareMeta = null) => {
@@ -1124,34 +1162,20 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                 // — otherwise the baseline's hostname gets injected
                 // into bridge queries and returns zero matches.
                 const originalSectionRoute = entry.section ? `/${entry.section}` : '/notebook';
-                const chartBody = pinnedCompares(attrs.compareMode, entry, spec)
-                    ? m(CompareChartWrapper, {
-                        spec,
-                        chartsState: attrs.chartsState,
-                        interval,
-                        anchors: attrs.anchors,
-                        toggles: attrs.toggles,
-                        setChartToggle: attrs.setChartToggle,
-                        sectionRoute: originalSectionRoute,
-                        step: interval,
-                        experimentQueryRange: attrs.experimentQueryRange,
-                        captureLabels,
-                        // Stored on the pinned entry so the bridge
-                        // survives even though /notebook has no
-                        // category_members metadata of its own.
-                        categoryMembers: entry.category_members,
-                    })
-                    : m(Chart, { spec, chartsState: attrs.chartsState, interval });
+                const { body: chartBody, toggle: chartToggle } = pinnedChart(entry, spec, attrs, {
+                    interval,
+                    sectionRoute: originalSectionRoute,
+                    captureLabels,
+                    anchors: attrs.anchors,
+                    toggles: attrs.toggles,
+                    setChartToggle: attrs.setChartToggle,
+                });
                 return m('div.selection-card', dropAttrs, [
                     m('div.chart-wrapper', [
                         m('div.chart-header', [
                             m('div.chart-title-row', [
                                 cardTitle(entry, spec, { editable: true }),
-                                pinnedCompares(attrs.compareMode, entry, spec) && compareToggle(spec, {
-                                    compareMode: attrs.compareMode,
-                                    toggles: attrs.toggles,
-                                    setChartToggle: attrs.setChartToggle,
-                                }),
+                                chartToggle,
                             ]),
                             spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                         ]),
@@ -1267,31 +1291,20 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
                     experiment: attrs.experimentAlias || 'experiment',
                 };
                 const originalSectionRoute = entry.section ? `/${entry.section}` : '/report';
-                const chartBody = pinnedCompares(attrs.compareMode, entry, spec)
-                    ? m(CompareChartWrapper, {
-                        spec,
-                        chartsState: attrs.chartsState,
-                        interval,
-                        anchors: reportStore.anchors,
-                        toggles: reportStore.chartToggles,
-                        setChartToggle: setReportChartToggle,
-                        sectionRoute: originalSectionRoute,
-                        step: interval,
-                        experimentQueryRange: attrs.experimentQueryRange,
-                        captureLabels,
-                        categoryMembers: entry.category_members,
-                    })
-                    : m(Chart, { spec, chartsState: attrs.chartsState, interval });
+                const { body: chartBody, toggle: chartToggle } = pinnedChart(entry, spec, attrs, {
+                    interval,
+                    sectionRoute: originalSectionRoute,
+                    captureLabels,
+                    anchors: reportStore.anchors,
+                    toggles: reportStore.chartToggles,
+                    setChartToggle: setReportChartToggle,
+                });
                 return m('div.selection-card', [
                     m('div.chart-wrapper', [
                         m('div.chart-header', [
                             m('div.chart-title-row', [
                                 cardTitle(entry, spec),
-                                pinnedCompares(attrs.compareMode, entry, spec) && compareToggle(spec, {
-                                    compareMode: attrs.compareMode,
-                                    toggles: reportStore.chartToggles,
-                                    setChartToggle: setReportChartToggle,
-                                }),
+                                chartToggle,
                             ]),
                             spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                         ]),
@@ -1350,31 +1363,20 @@ Object.assign(LoadedSelectionView, chartLoaderMixin(loadedSelectionStore, Loaded
                     experiment: attrs.experimentAlias || 'experiment',
                 };
                 const originalSectionRoute = entry.section ? `/${entry.section}` : '/selection';
-                const chartBody = pinnedCompares(attrs.compareMode, entry, spec)
-                    ? m(CompareChartWrapper, {
-                        spec,
-                        chartsState: attrs.chartsState,
-                        interval,
-                        anchors: loadedSelectionStore.anchors,
-                        toggles: loadedSelectionStore.chartToggles,
-                        setChartToggle: setLoadedSelectionChartToggle,
-                        sectionRoute: originalSectionRoute,
-                        step: interval,
-                        experimentQueryRange: attrs.experimentQueryRange,
-                        captureLabels,
-                        categoryMembers: entry.category_members,
-                    })
-                    : m(Chart, { spec, chartsState: attrs.chartsState, interval });
+                const { body: chartBody, toggle: chartToggle } = pinnedChart(entry, spec, attrs, {
+                    interval,
+                    sectionRoute: originalSectionRoute,
+                    captureLabels,
+                    anchors: loadedSelectionStore.anchors,
+                    toggles: loadedSelectionStore.chartToggles,
+                    setChartToggle: setLoadedSelectionChartToggle,
+                });
                 return m('div.selection-card', [
                     m('div.chart-wrapper', [
                         m('div.chart-header', [
                             m('div.chart-title-row', [
                                 cardTitle(entry, spec),
-                                pinnedCompares(attrs.compareMode, entry, spec) && compareToggle(spec, {
-                                    compareMode: attrs.compareMode,
-                                    toggles: loadedSelectionStore.chartToggles,
-                                    setChartToggle: setLoadedSelectionChartToggle,
-                                }),
+                                chartToggle,
                             ]),
                             spec.opts.description && m('span.chart-subtitle', spec.opts.description),
                         ]),
@@ -1387,6 +1389,7 @@ Object.assign(LoadedSelectionView, chartLoaderMixin(loadedSelectionStore, Loaded
 });
 
 export {
+    buildPayload,
     notebookStore,
     reportStore,
     loadedSelectionStore,

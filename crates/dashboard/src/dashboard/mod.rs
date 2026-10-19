@@ -689,7 +689,7 @@ pub fn beside_names(
 /// experiment. A simple capture's `/source/` entry is not added (the page
 /// lists its metrics from the baseline). Returns the template notices.
 ///
-/// When `baseline` holds no system metrics ([`has_system_metrics`]; two
+/// When `baseline` is not an agent's recording ([`has_system_metrics`]; two
 /// services compared, their agent beside), its built-in sections are
 /// empty, so the page opens on the comparison's first service section,
 /// else the first beside recording's overview ([`Section::landing`]).
@@ -760,10 +760,12 @@ pub fn add_beside_sections(
     notices
 }
 
-/// Whether `data` holds a Rezolus agent's system metrics, judged by
-/// `cpu_usage`, which every agent records.
+/// Whether the built-in sections can show `data`: it is a Rezolus agent's
+/// recording (its `source` is `rezolus`), whichever samplers it ran, or it
+/// carries the agent's `cpu_usage` under another source (a combined
+/// recording). A service's recording is neither.
 pub fn has_system_metrics(data: &dyn MetricsSource) -> bool {
-    data.counter_names().iter().any(|n| n == "cpu_usage")
+    data.source() == "rezolus" || data.counter_names().iter().any(|n| n == "cpu_usage")
 }
 
 /// The file-metadata key under which a comparison's baseline lists the
@@ -832,11 +834,10 @@ pub fn with_beside_systeminfo(
     let mut nodes = serde_json::Map::new();
     if let Some(raw) = &baseline {
         match parse(raw) {
+            // Already per node: every value a node's object (one node's
+            // systeminfo has string and array fields, `hostname`, `cpus`).
             serde_json::Value::Object(map)
-                if !map.contains_key("hostname")
-                    && !map.contains_key("cpus")
-                    && !map.is_empty()
-                    && map.values().all(serde_json::Value::is_object) =>
+                if !map.is_empty() && map.values().all(serde_json::Value::is_object) =>
             {
                 nodes.extend(map);
             }

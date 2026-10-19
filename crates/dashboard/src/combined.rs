@@ -62,6 +62,11 @@ impl Routed {
         Self { primary, beside }
     }
 
+    /// The baseline's source, then each beside recording's.
+    fn sources(&self) -> impl Iterator<Item = &dyn MetricsSource> {
+        std::iter::once(self.primary.as_ref()).chain(self.beside.iter().map(|(_, s)| s.as_ref()))
+    }
+
     /// The source a query names and the query without its
     /// `__capture__` matchers.
     fn route(&self, query: &str) -> (&dyn MetricsSource, String) {
@@ -116,11 +121,18 @@ impl MetricsSource for Routed {
         let (source, query) = self.route(query);
         source.columns(&query)
     }
+    // The span of every recording it answers for: a report trimmed to
+    // charts of a beside recording keeps no rows of the baseline's, and the
+    // page draws over this span.
     fn time_range(&self) -> Option<(f64, f64)> {
-        self.primary.time_range()
+        self.sources()
+            .filter_map(|s| s.time_range())
+            .reduce(|(a, b), (c, d)| (a.min(c), b.max(d)))
     }
     fn time_range_ns(&self) -> Option<(u64, u64)> {
-        self.primary.time_range_ns()
+        self.sources()
+            .filter_map(|s| s.time_range_ns())
+            .reduce(|(a, b), (c, d)| (a.min(c), b.max(d)))
     }
     fn interval(&self) -> f64 {
         self.primary.interval()
@@ -161,6 +173,17 @@ impl MetricsSource for Routed {
     fn sample_timestamps(&self) -> Vec<u64> {
         self.primary.sample_timestamps()
     }
+}
+
+/// The first of `sources` whose file metadata carries `key`, and its value:
+/// where a report's selection or marker is read from in an archive of
+/// several recordings. A report is saved onto the baseline's recording, but
+/// one saved before the baseline was chosen by arm sits on the archive's
+/// first, which need not be the baseline any more.
+pub fn carried(sources: &[&dyn MetricsSource], key: &str) -> Option<String> {
+    sources
+        .iter()
+        .find_map(|s| s.file_metadata().get(key).cloned())
 }
 
 /// How an archive of several recordings opens.
@@ -220,9 +243,11 @@ pub struct ArmSlots {
 /// - with no recording carrying an arm (a comparison asked for with
 ///   `?compare=1`), the first two recordings fill the slots.
 ///
-/// One recording per arm is the current limit: an arm two recordings share,
-/// or more than two arms, is an error, for the caller to list the
-/// recordings and point at `--baseline`/`--experiment`.
+/// One recording per arm is the current limit: one armed recording among
+/// unarmed ones, an arm two recordings share, or more than two arms is an
+/// error, for the caller to list the recordings and point at
+/// `--baseline`/`--experiment`. A single recording, armed or not, is the
+/// baseline alone.
 pub fn arm_slots(labels: &[BTreeMap<String, String>]) -> Result<ArmSlots, String> {
     let armed: Vec<(usize, &str)> = labels
         .iter()

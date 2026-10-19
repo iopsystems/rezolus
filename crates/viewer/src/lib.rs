@@ -241,6 +241,10 @@ pub struct Viewer {
     /// (`dashboard::dashboard::add_beside_sections`); `reader` is then a
     /// `dashboard::combined::Routed` over them. Empty otherwise.
     beside: Vec<dashboard::dashboard::Beside>,
+    /// The labels of the archive recording this capture reads, when it is a
+    /// comparison's baseline: a report is saved onto it
+    /// (`report_save::build_rez_report_from_rez`'s `anchor`).
+    anchor_labels: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Serialize)]
@@ -432,6 +436,7 @@ impl Viewer {
             members: Vec::new(),
             combined_systeminfo: None,
             beside: Vec::new(),
+            anchor_labels: None,
         }
     }
 
@@ -1006,9 +1011,23 @@ impl WasmCaptureRegistry {
         let labels: Vec<std::collections::BTreeMap<String, String>> =
             recordings.iter().map(|(l, _)| l.clone()).collect();
         let identities = dashboard::capture_alias::assign_capture_identities(&labels, &labels);
+        // A report's selection and marker: the baseline's, else whichever
+        // recording carries them (`dashboard::combined::carried`); a report
+        // saved before the baseline was chosen by arm sits on the first.
+        let carried: Vec<(&str, String)> = {
+            let shown: Vec<&dyn MetricsSource> = recordings
+                .iter()
+                .map(|(_, r)| r as &dyn MetricsSource)
+                .chain(beside.iter().map(|b| b.data.as_ref()))
+                .collect();
+            [::report_save::KEY_SELECTION, ::report_save::KEY_REPORT]
+                .into_iter()
+                .filter_map(|k| dashboard::combined::carried(&shown, k).map(|v| (k, v)))
+                .collect()
+        };
 
         let mut beside = Some(beside);
-        for ((_, reader), identity) in recordings.into_iter().zip(identities) {
+        for ((labels, reader), identity) in recordings.into_iter().zip(identities) {
             let primary: Arc<dyn MetricsSource> = Arc::new(reader);
             // The baseline answers the beside recordings' queries too.
             let beside = if identity.id == BASELINE_ID {
@@ -1029,6 +1048,12 @@ impl WasmCaptureRegistry {
             };
             let mut viewer = Viewer::from_source(source, Arc::clone(&pool), Bytes::new(), filename);
             viewer.beside = beside;
+            if identity.id == BASELINE_ID {
+                viewer.anchor_labels = Some(labels);
+                for (key, value) in &carried {
+                    viewer.file_metadata.insert(key.to_string(), value.clone());
+                }
+            }
             viewer.set_alias(Some(identity.alias));
             self.set_capture(&identity.id, viewer);
         }
@@ -1371,6 +1396,7 @@ impl WasmCaptureRegistry {
             });
             return ::report_save::build_rez_report_from_rez(
                 rez_bytes,
+                baseline.anchor_labels.as_ref(),
                 keep.as_ref(),
                 range,
                 payload_json,
