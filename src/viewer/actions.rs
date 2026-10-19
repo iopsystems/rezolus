@@ -280,10 +280,36 @@ fn ingest_rez_from_path(
                 .unwrap_or_else(|| fallback.to_string())
         };
 
+    // The arms say which recording is which (`dashboard::combined::arm_slots`).
+    let labels: Vec<_> = readers.iter().map(|(l, _)| l.clone()).collect();
+    let slots = match ::dashboard::combined::arm_slots(&labels) {
+        Ok(slots) => slots,
+        Err(why) => {
+            let _ = std::fs::remove_file(&rez_path);
+            return ApiResponse::err(
+                format!("{why}; open it with `rezolus view FILE --baseline k=v --experiment k=v`"),
+                "invalid_parquet",
+            );
+        }
+    };
+    if let Some(note) = &slots.note {
+        tracing::info!("{note}");
+    }
+    let mut readers = readers;
+    if let Some(e) = slots.experiment {
+        let mut picked: Vec<Option<_>> = readers.into_iter().map(Some).collect();
+        let b = picked[slots.baseline].take().expect("in range");
+        let x = picked[e].take().expect("in range");
+        readers = std::iter::once(b)
+            .chain(std::iter::once(x))
+            .chain(picked.into_iter().flatten())
+            .collect();
+    }
+
     let n = readers.len();
     let mut readers = readers.into_iter();
 
-    // Baseline = recording 0.
+    // Baseline = the `baseline` arm, or recording 0.
     let (b_labels, b_reader) = readers.next().expect("non-empty checked above");
     let (b_systeminfo, b_file_meta) = describe(&b_reader);
     let b_alias = alias_of(&b_labels, "baseline");

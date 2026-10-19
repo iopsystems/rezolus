@@ -128,6 +128,42 @@ fn opens_combined(recordings: &rez::reader::LabeledRecordings, compare_requested
             == dashboard::combined::Layout::Combined
 }
 
+/// The order a comparison's recordings attach in: the baseline arm, the
+/// experiment arm, then the rest in the archive's order
+/// (`dashboard::combined::arm_slots`, as the server viewer fills its
+/// slots), and what to say about the choice. An error naming the
+/// recordings when their arms cannot fill two slots.
+fn comparison_order(
+    labels: &[std::collections::BTreeMap<String, String>],
+    filename: &str,
+) -> Result<(Vec<usize>, Option<String>), String> {
+    let slots = dashboard::combined::arm_slots(labels).map_err(|why| {
+        let listing: Vec<String> = labels
+            .iter()
+            .map(|l| {
+                l.iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .collect();
+        format!(
+            "{filename}: {why}; it holds: {}. Open it with `rezolus view` and \
+             --baseline/--experiment",
+            listing.join("; ")
+        )
+    })?;
+    let first: Vec<usize> = std::iter::once(slots.baseline)
+        .chain(slots.experiment)
+        .collect();
+    let order = first
+        .iter()
+        .copied()
+        .chain((0..labels.len()).filter(|i| !first.contains(i)))
+        .collect();
+    Ok((order, slots.note))
+}
+
 /// What to say about an archive that was never cleanly finalized, or `None`
 /// when every recording in it was.
 ///
@@ -904,9 +940,19 @@ impl WasmCaptureRegistry {
         // Attach EVERY recording, each under the shared id/alias scheme — the
         // same one the server viewer uses, so an archive names its captures
         // identically wherever it is opened. The browser has no `--baseline`/
-        // `--experiment` selectors, so the whole archive is always shown, in
-        // manifest order: recording 0 is `baseline`, 1 is `experiment`, the
-        // rest are named-or-positional.
+        // `--experiment` selectors: the arms fill the two slots as the server
+        // viewer fills them (`dashboard::combined::arm_slots`), and the rest
+        // are named-or-positional.
+        let labels: Vec<std::collections::BTreeMap<String, String>> =
+            recordings.iter().map(|(l, _)| l.clone()).collect();
+        let (order, note) =
+            comparison_order(&labels, filename).map_err(|e| JsValue::from_str(&e))?;
+        self.notices.extend(note);
+        let mut picked: Vec<Option<_>> = recordings.into_iter().map(Some).collect();
+        let recordings: rez::reader::LabeledRecordings = order
+            .iter()
+            .map(|&i| picked[i].take().expect("each index once"))
+            .collect();
         let labels: Vec<std::collections::BTreeMap<String, String>> =
             recordings.iter().map(|(l, _)| l.clone()).collect();
         let identities = dashboard::capture_alias::assign_capture_identities(&labels, &labels);
@@ -1871,6 +1917,24 @@ mod tests {
         compare.set_compare_requested(true);
         compare.attach("baseline", &bytes, "run.rez").unwrap();
         assert!(compare.has("experiment"));
+    }
+
+    /// The arms order a comparison's captures; arms that cannot fill two
+    /// slots are refused with the recordings listed.
+    #[test]
+    fn a_comparison_attaches_in_arm_order() {
+        let l = |arm: &str| -> std::collections::BTreeMap<String, String> {
+            [("arm".to_string(), arm.to_string())].into()
+        };
+        assert_eq!(
+            comparison_order(&[l("experiment"), l("baseline")], "f").unwrap(),
+            (vec![1, 0], None)
+        );
+        let err = comparison_order(&[l("baseline"), l("baseline")], "f.rez").unwrap_err();
+        assert!(
+            err.contains("f.rez") && err.contains("arm=baseline"),
+            "{err}"
+        );
     }
 
     /// Above two, the archive holds recordings the browser is not showing.

@@ -1057,30 +1057,6 @@ mod tests {
         assert!(state.following());
     }
 
-    /// A reopen finds each recording of a comparison by its label set, so a
-    /// comparison whose shown recordings share one is not followed.
-    #[test]
-    fn compared_recordings_that_share_a_label_set_are_not_followed() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("twins.dendro");
-        let mut writer = ArchiveWriter::create(&path, WriterConfig::default()).unwrap();
-        for _ in 0..2 {
-            let labels = [
-                ("source".to_string(), "rezolus".to_string()),
-                ("arm".to_string(), "a".to_string()),
-            ]
-            .into();
-            let mut source = writer.add_source(labels, BTreeMap::new(), ANCHOR).unwrap();
-            let staged = source.stage(&tick(0), ANCHOR, 0).unwrap();
-            writer.commit(vec![staged]).unwrap();
-            source.sync().unwrap();
-        }
-        let state = view(&path);
-        assert!(!state.following());
-        assert!(state.follow.lock().is_none());
-        drop(writer);
-    }
-
     /// Recordings of one run that share a label set are followed: a reopen
     /// joins every recording again rather than finding one by its labels.
     #[test]

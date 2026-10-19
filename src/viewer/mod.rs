@@ -806,7 +806,22 @@ fn resolve_ab_slots(
     experiment: &crate::mcp::RecordingSelector,
 ) -> Result<(usize, Option<usize>), String> {
     if baseline.is_empty() && experiment.is_empty() {
-        return Ok((0, (all.len() >= 2).then_some(1)));
+        // The arms say which is which (`dashboard::combined::arm_slots`, as
+        // the WASM viewer reads them).
+        return match ::dashboard::combined::arm_slots(all) {
+            Ok(slots) => {
+                if let Some(note) = &slots.note {
+                    info!("{note}");
+                }
+                Ok((slots.baseline, slots.experiment))
+            }
+            Err(why) => Err(format!(
+                "{why}. Name the two with {BASELINE_FLAG}/{EXPERIMENT_FLAG}.\nArchive holds {} \
+                 recording(s):\n{}",
+                all.len(),
+                crate::mcp::describe_candidates(all, &[], BASELINE_SYNTAX),
+            )),
+        };
     }
 
     // `--experiment` alone would leave the baseline slot to fall back on
@@ -2274,57 +2289,19 @@ mod tests {
             .collect()
     }
 
-    /// Without flags, a 3-recording comparison (its recordings carry `arm`)
-    /// loads recordings 0 and 1 into the A/B slots and attaches the third.
-    /// This also drives the warning that lists the archive, which only runs
-    /// on this path.
+    /// Without flags, a comparison of three recordings carrying `arm` has
+    /// more arms than slots: refused, listing the recordings and naming the
+    /// flags that choose two.
     #[test]
-    fn without_flags_a_three_recording_archive_attaches_every_recording() {
-        let dir = tempfile::tempdir().unwrap();
-        let rez_path = dir.path().join("fleet.rez");
-        crate::mcp::tests::multi_recording_rez_with_labels(
-            &rez_path,
-            &["redis", "valkey", "envoy"]
-                .map(|s| label_map(&[("source", s), ("host", "web-01"), ("arm", s)])),
+    fn without_flags_three_armed_recordings_are_refused() {
+        let all = ["redis", "valkey", "envoy"]
+            .map(|s| label_map(&[("source", s), ("host", "web-01"), ("arm", s)]));
+        let err = super::resolve_ab_slots(&all, &none(), &none()).unwrap_err();
+        assert!(err.contains("3 recordings carry an `arm`"), "{err}");
+        assert!(
+            err.contains("--baseline") && err.contains("source=envoy"),
+            "{err}"
         );
-
-        let matches = super::command().get_matches_from(["view", rez_path.to_str().unwrap()]);
-        let config = super::Config::try_from(matches).unwrap();
-        let registry = ::dashboard::TemplateRegistry::empty();
-        let pool = metriken_storage::BufferPool::new(8 * 1024 * 1024);
-        let state = super::init_file_mode(&config, &rez_path, &registry, pool);
-
-        assert!(state.captures.experiment_attached());
-        assert_eq!(
-            state
-                .captures
-                .alias_by_id(crate::viewer::capture_registry::BASELINE_ID)
-                .as_deref(),
-            Some("redis"),
-        );
-        assert_eq!(
-            state
-                .captures
-                .alias_by_id(crate::viewer::capture_registry::EXPERIMENT_ID)
-                .as_deref(),
-            Some("valkey"),
-        );
-        // The third recording is no longer dropped: it attaches under its own
-        // named id (the discriminating `source` value), so the whole archive
-        // is available for an N-way overlay.
-        assert_eq!(
-            state.captures.capture_ids(),
-            vec![
-                "baseline".to_string(),
-                "experiment".to_string(),
-                "envoy".to_string(),
-            ],
-        );
-        assert_eq!(
-            state.captures.alias_by_id("envoy").as_deref(),
-            Some("envoy")
-        );
-        assert!(state.captures.get_by_id("envoy").is_some());
     }
 
     /// A label that cannot tell the whole archive apart can still tell the

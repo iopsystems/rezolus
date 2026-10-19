@@ -536,3 +536,60 @@ fn a_recording_without_a_label_two_others_carry_reads_only_its_series() {
     assert_eq!(values.len(), 1, "{query} -> {values:?}");
     assert!((values[0] - 0.1).abs() < 1e-9, "{values:?}");
 }
+
+/// An archive whose arms are in reverse order, and one whose arms cannot
+/// fill two slots.
+fn armed(dir: &Path, name: &str, arms: &[&str]) -> PathBuf {
+    let path = dir.join(name);
+    let labels: Vec<std::collections::BTreeMap<String, String>> = arms
+        .iter()
+        .enumerate()
+        .map(|(i, arm)| {
+            [
+                ("source".to_string(), format!("s{i}")),
+                ("host".to_string(), "web-01".to_string()),
+                ("arm".to_string(), arm.to_string()),
+            ]
+            .into()
+        })
+        .collect();
+    crate::mcp::tests::multi_recording_rez_with_labels(&path, &labels);
+    path
+}
+
+/// The baseline slot holds the `arm=baseline` recording whatever the
+/// archive's order, in both viewers; arms that cannot fill two slots are
+/// refused by both.
+#[test]
+fn the_arms_fill_the_slots_in_both_viewers() {
+    let dir = tempfile::tempdir().unwrap();
+    let reversed = armed(dir.path(), "rev.rez", &["experiment", "baseline"]);
+    let state = view(&reversed, &[]);
+    let meta = |id: &str| state.captures.file_metadata_by_id(id).unwrap();
+    assert!(meta("baseline").contains("s1"), "{}", meta("baseline"));
+    assert!(meta("experiment").contains("s0"), "{}", meta("experiment"));
+
+    let mut reg = viewer::WasmCaptureRegistry::new();
+    reg.attach("baseline", &std::fs::read(&reversed).unwrap(), "rev.rez")
+        .unwrap();
+    assert!(reg.file_metadata_json("baseline").unwrap().contains("s1"));
+    assert!(reg.file_metadata_json("experiment").unwrap().contains("s0"));
+
+    let shared = armed(dir.path(), "shared.rez", &["baseline", "baseline"]);
+    let labels: Vec<_> = crate::rez_reader::RezReader::open_recordings(
+        &shared,
+        metriken_storage::BufferPool::new(1 << 24),
+    )
+    .unwrap()
+    .into_iter()
+    .map(|(l, _)| l)
+    .collect();
+    let none = crate::mcp::RecordingSelector::default();
+    let err = super::resolve_ab_slots(&labels, &none, &none).unwrap_err();
+    assert!(
+        err.contains("same `arm`") && err.contains("--baseline"),
+        "{err}"
+    );
+    // The WASM viewer's refusal is `comparison_order`'s (crates/viewer):
+    // its JsValue error aborts outside wasm32.
+}
