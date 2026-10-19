@@ -155,15 +155,27 @@
   (new for `.rez` and `.dendro` outputs and for parquet inputs into a
   `.rez`: each value names an input by its path or file name, every recording
   of it is labelled `arm=baseline` or `arm=experiment`, and an input
-  recording that already carries another arm is refused); and `rezolus view
+  recording that already carries another arm is refused before anything is
+  copied, naming the input; `--ab` never replaces an arm); and `rezolus view
   ab.rez --baseline host=web-01 --experiment host=web-02`
   (`WasmCaptureRegistry::set_compare_requested`, or `?compare=1` on the static
-  site). **An archive assembled by `recording combine` before this release
-  carries no `arm` and now opens combined;** `rezolus view ab.rez --baseline
-  source=redis --experiment source=valkey` (any labels that name the two
-  recordings; `rezolus mcp describe-recording ab.rez` lists them) opens it A/B
-  as before, and `rezolus recording combine` of its inputs with `--ab`
-  rebuilds it with arms.
+  site). The arm values fill the slots, whatever the archive's order:
+  `arm=baseline` is the baseline (matched ignoring case, so `Baseline`
+  counts); two other arm values fill them in the archive's order, and the
+  viewer says which is the baseline; arms on only some recordings, an arm two
+  share, or more than two are refused with a listing of the recordings and
+  `--baseline`/`--experiment` to name them. **An archive assembled by
+  `recording combine` before this release
+  carries no `arm` and now opens combined.** When its recordings' labels
+  differ, `rezolus view ab.rez --baseline source=redis --experiment
+  source=valkey` (any labels that name the two; `rezolus mcp
+  describe-recording ab.rez` lists them) opens it A/B as before. When they
+  are identical (two agents recorded as `source=rezolus` on one host), no
+  selector can name either one; label them by position instead: `rezolus
+  recording combine ab.rez --ab baseline=0 experiment=1 -o ab-arms.rez`
+  (positions in the order `describe-recording` lists them, from 0), which
+  copies the archive with the two arms and opens A/B. `combine` takes one
+  input only in this form.
 - **A combined archive that is still being written is followed as one
   capture,** recordings with identical
   label sets included; a recording whose rows have not arrived at the open

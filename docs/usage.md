@@ -172,12 +172,18 @@ endpoint's HELP text as `descriptions`, and is kept when an agent restarts.
 `producer_epoch` and `producer_epochs` are written by the recorder and are
 refused (exit 2).
 `-l/--label k=v` tags the recordings inside the archive (`source` and `host` are
-filled in for you). Recordings that carry an `arm` label open in the viewer as
-an A/B comparison, which is what `--label arm=redis` is for:
+filled in for you), every recording of the run alike:
 
 ```bash
-rezolus record --url http://localhost:4241 -o out.dendro --label arm=redis
+rezolus record --url http://localhost:4241 -o out.dendro --label run=42
 ```
+
+An A/B comparison is said with an `arm` label per recording, never with a
+run-wide `--label arm=`, which would give an agent and a service of one run
+the same arm. Give each endpoint of a concurrent A/B its own `arm=`
+(`--endpoint http://a:4241,arm=baseline --endpoint http://b:4241,arm=experiment`),
+or label two separate recordings when combining them (`recording combine
+a.dendro b.dendro --ab baseline=a.dendro experiment=b.dendro -o ab.dendro`).
 
 `--label` applies to *every* recording the run produces, so in a multi-endpoint
 run it cannot tell two endpoints apart — see below. An endpoint's `role=`
