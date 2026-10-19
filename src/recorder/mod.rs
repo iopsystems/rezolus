@@ -234,7 +234,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("CONFIG_FILE")
                 .long("config")
-                .help("Record endpoints defined in a TOML file: a [recording] table (output, interval) plus [[endpoints]] entries mirroring the --endpoint fields (url, source, role, protocol, template)")
+                .help("Record endpoints defined in a TOML file: a [recording] table (output, interval) plus [[endpoints]] entries mirroring the --endpoint fields (url, source, role, arm, protocol, template)")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(PathBuf))
                 .conflicts_with_all(["URL"]),
@@ -242,7 +242,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("ENDPOINT")
                 .long("endpoint")
-                .help("Add an endpoint as url[,source=name][,role=label][,protocol=stream|prometheus][,template=FILE]; role is a free-form tag (conventionally service or loadgen); template is a KPI template file (a ServiceExtension JSON, as `recording annotate --queries` takes) written into this endpoint's recording as service_queries, so the viewer shows that service's KPI section: it is checked before recording starts, an unreadable file, one over 1 MiB, JSON that is not a ServiceExtension or an unknown unit_system refuses the run (exit 2), and it replaces any template a streamed producer sends in its handshake; protocol skips detection: stream records it from its replication stream only, never scraping it (rezolus and msgpack are accepted for it too), prometheus scrapes it as text exposition (at /metrics for a URL whose path is /); without protocol, a URL whose path is / or /metrics/stream is asked for its stream first and any other URL is scraped (see DETECTION); repeat for several (e.g. http://host:9090/metrics,source=svc,role=service,protocol=prometheus)")
+                .help("Add an endpoint as url[,source=name][,role=label][,arm=name][,protocol=stream|prometheus][,template=FILE]; role is a free-form tag (conventionally service or loadgen); arm labels the endpoint's recording as one arm of an A/B comparison (conventionally baseline or experiment; recordings carrying arm open in `rezolus view` as a comparison, the others as one combined view); template is a KPI template file (a ServiceExtension JSON, as `recording annotate --queries` takes) written into this endpoint's recording as service_queries, so the viewer shows that service's KPI section: it is checked before recording starts, an unreadable file, one over 1 MiB, JSON that is not a ServiceExtension or an unknown unit_system refuses the run (exit 2), and it replaces any template a streamed producer sends in its handshake; protocol skips detection: stream records it from its replication stream only, never scraping it (rezolus and msgpack are accepted for it too), prometheus scrapes it as text exposition (at /metrics for a URL whose path is /); without protocol, a URL whose path is / or /metrics/stream is asked for its stream first and any other URL is scraped (see DETECTION); repeat for several (e.g. http://host:9090/metrics,source=svc,role=service,protocol=prometheus)")
                 .action(clap::ArgAction::Append)
                 .conflicts_with_all(["URL", "CONFIG_FILE"]),
         )
@@ -1099,6 +1099,10 @@ fn endpoint_spec(config: &RecordingConfig, ep: &endpoint::EndpointConfig) -> mr:
         labels.insert("source".to_string(), source.clone());
     }
     labels.extend(config.labels.iter().cloned());
+    // The endpoint's own arm over a run-wide `--label arm=`.
+    if let Some(arm) = &ep.arm {
+        labels.insert("arm".to_string(), arm.clone());
+    }
     let mut metadata: BTreeMap<String, String> = config.metadata.iter().cloned().collect();
     if let Some(role) = &ep.role {
         metadata.insert(
@@ -1253,6 +1257,7 @@ mod tests {
             protocol: Some(Protocol::Prometheus),
             template: None,
             template_json: None,
+            arm: None,
         };
         let spec = endpoint_spec(&config, &ep);
         assert_eq!(spec.labels["source"], "web");
@@ -1284,6 +1289,22 @@ mod tests {
             endpoint_spec(&config, &ep).metadata["service_queries"],
             r#"{"service_name":"vllm","kpis":[]}"#
         );
+    }
+
+    /// An endpoint's `arm=` labels its recording, over a run-wide
+    /// `--label arm=`.
+    #[test]
+    fn an_endpoints_arm_labels_its_recording() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config(&dir.path().join("out.dendro"));
+        let ep = config::parse_endpoint_str("http://localhost:4241,arm=experiment").unwrap();
+        assert_eq!(ep.arm.as_deref(), Some("experiment"));
+        assert_eq!(endpoint_spec(&config, &ep).labels["arm"], "experiment");
+        assert!(config::parse_endpoint_str("http://localhost:4241,arm=").is_err());
+        let plain = config::parse_endpoint_str("http://localhost:4241").unwrap();
+        // `test_config` carries `--label arm=redis`, which the endpoint's
+        // own arm overrides and a plain endpoint keeps.
+        assert_eq!(endpoint_spec(&config, &plain).labels["arm"], "redis");
     }
 
     /// An endpoint the run ends without recording is named by its URL, and

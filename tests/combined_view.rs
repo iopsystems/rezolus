@@ -479,3 +479,58 @@ fn a_parquets_template_selecting_its_source_renders() {
         "sum(cpu_cores{source=\"rezolus\"})"
     );
 }
+
+/// Record two endpoints in one run; `arms` gives each an `arm=`.
+fn record_two(dir: &std::path::Path, name: &str, arms: Option<[&str; 2]>) -> std::path::PathBuf {
+    let (a, b) = (spawn_exporter(), spawn_exporter());
+    let archive = dir.join(name);
+    let spec = |port: u16, source: &str, arm: Option<&str>| {
+        let mut s = format!("http://127.0.0.1:{port}/metrics,source={source}");
+        if let Some(arm) = arm {
+            s.push_str(&format!(",arm={arm}"));
+        }
+        s
+    };
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(spec(a, "redis", arms.map(|a| a[0])))
+        .arg("--endpoint")
+        .arg(spec(b, "valkey", arms.map(|a| a[1])))
+        .arg("-o")
+        .arg(&archive)
+        .args(["--interval", "100ms", "--duration", "1s"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "record: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    archive
+}
+
+/// A/B is opt-in: two endpoints recorded in one run with `arm=` open as a
+/// comparison, and the same run without it as one combined view.
+#[test]
+fn a_one_run_ab_is_a_comparison_only_with_arm() {
+    let dir = tempfile::tempdir().unwrap();
+    let ab = record_two(dir.path(), "ab.dendro", Some(["baseline", "experiment"]));
+    let viewer = spawn_viewer(&ab);
+    let captures = get(&viewer, "/api/v1/captures");
+    assert_eq!(
+        captures.to_string().matches("\"id\"").count(),
+        2,
+        "{captures}"
+    );
+    drop(viewer);
+
+    let one = record_two(dir.path(), "one.dendro", None);
+    let viewer = spawn_viewer(&one);
+    let captures = get(&viewer, "/api/v1/captures");
+    assert_eq!(
+        captures.to_string().matches("\"id\"").count(),
+        1,
+        "{captures}"
+    );
+}

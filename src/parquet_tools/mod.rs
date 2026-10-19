@@ -401,16 +401,18 @@ pub fn command() -> Command {
                     clap::Arg::new("ab")
                         .long("ab")
                         .help(
-                            "Legacy A/B form: package two captures into a \
-                             combined-A/B tarball instead of row-merging into one \
-                             parquet. Prefer assembling a 2-recording `.rez` \
-                             (`combine baseline.rez experiment.rez -o ab.rez`) for \
-                             rezolus captures; use `--ab` only for parquet inputs \
-                             with no `.rez` form. The output path should end in \
-                             `.parquet.ab.tar`. Requires exactly two input files. \
-                             Pass `baseline=<src> experiment=<src>` mapping each \
-                             side to one of the inputs' source names; the captures \
-                             are stored unmodified next to an `ab.json` manifest.",
+                            "Mark the two inputs as the two arms of an A/B comparison: \
+                             `--ab baseline=<input> experiment=<input>`. Into a .rez or \
+                             .dendro output, each value names one input (the path as \
+                             typed, or its file name), and every recording of that input \
+                             is labelled arm=baseline or arm=experiment, so the viewer \
+                             opens the archive as a comparison. An input recording that \
+                             already carries a different arm is refused; the same arm is \
+                             kept. Without --ab the archive opens as one combined view. \
+                             Into a `.parquet.ab.tar` output (legacy, parquet inputs \
+                             only), each value names one of the inputs' source names, and \
+                             the captures are stored unmodified next to an `ab.json` \
+                             manifest. Requires exactly two input files.",
                         )
                         .value_parser(value_parser!(String))
                         .num_args(2)

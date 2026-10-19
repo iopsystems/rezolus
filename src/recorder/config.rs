@@ -369,6 +369,7 @@ impl RecordingConfig {
             protocol: None,
             template: None,
             template_json: None,
+            arm: None,
         };
 
         Ok(RecordingConfig {
@@ -401,6 +402,7 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
     let mut role: Option<String> = None;
     let mut protocol: Option<Protocol> = None;
     let mut template: Option<PathBuf> = None;
+    let mut arm: Option<String> = None;
 
     if let Some(opts) = rest {
         for pair in opts.split(',') {
@@ -420,6 +422,8 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
                     }
                     template = Some(PathBuf::from(value));
                 }
+                "arm" if value.is_empty() => return Err("arm= needs a value".to_string()),
+                "arm" => arm = Some(value.to_string()),
                 "protocol" => {
                     protocol = Some(match value {
                         "stream" | "rezolus" | "msgpack" => Protocol::Stream,
@@ -439,6 +443,7 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
         protocol,
         template,
         template_json: None,
+        arm,
     })
 }
 
