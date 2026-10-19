@@ -345,9 +345,11 @@ mod tests {
     use metriken::group::UID_LABEL;
 
     fn task_info(pid: u32, comm: &str) -> Vec<u8> {
-        let mut info = bpf::types::task_info::default();
-        info.pid = pid;
-        info.tgid = pid;
+        let mut info = bpf::types::task_info {
+            pid,
+            tgid: pid,
+            ..Default::default()
+        };
         info.comm[..comm.len()].copy_from_slice(comm.as_bytes());
         unsafe { plain::as_bytes(&info) }.to_vec()
     }
