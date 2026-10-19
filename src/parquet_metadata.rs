@@ -72,24 +72,30 @@ pub const KEY_DESCRIPTIONS: &str = "descriptions";
 /// JSON-serialised user selection/filter state saved by the viewer.
 pub const KEY_SELECTION: &str = "selection";
 
-/// Service KPI query definitions (ServiceExtension JSON). Top-level key
-/// used in single-source parquet files written by `parquet annotate`.
-/// When files are combined, this is moved under
-/// `per_source_metadata.<source>.service_queries`.
+/// Service KPI query definitions (ServiceExtension JSON). Top-level key in a
+/// single-source parquet (`recording annotate`, a producer's own parquet), a
+/// `.rez` recording's or a dendro source's metadata. When files are combined,
+/// each input's is moved under
+/// `per_source_metadata.<source>.<entry>.service_queries`.
 pub const KEY_SERVICE_QUERIES: &str = "service_queries";
 
 /// Per-source metadata map (used in combined files). Value is a JSON
-/// object keyed by source name:
+/// object keyed by source name, then by entry: the node name for a rezolus
+/// source, the instance id (`"0"` by default) for any other. A source's
+/// `descriptions` sit beside its entries:
 ///
 /// ```json
 /// {
-///   "llm-perf": { "version": "0.1.0", "role": "loadgen", "service_queries": { ... } },
-///   "rezolus":  { "version": "5.8.3", "role": "service" }
+///   "llm-perf": {
+///     "0": { "version": "0.1.0", "role": "loadgen", "service_queries": { ... } },
+///     "descriptions": { ... }
+///   },
+///   "rezolus":  { "web01": { "version": "5.8.3", "node": "web01" } }
 /// }
 /// ```
 pub const KEY_PER_SOURCE_METADATA: &str = "per_source_metadata";
 
-// ── Keys nested under `per_source_metadata.<source>` ─────────────────
+// ── Keys nested under `per_source_metadata.<source>.<entry>` ─────────
 
 /// Per-source version string.
 pub const NESTED_VERSION: &str = "version";

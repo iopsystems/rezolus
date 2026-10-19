@@ -492,7 +492,9 @@ fn filter_descriptions_metadata(
 /// Resolution order:
 /// 1. Custom file (if provided via `--file`)
 /// 2. Top-level `service_queries` key in parquet metadata
-/// 3. `per_source_metadata.<source>.service_queries` (combined files)
+/// 3. `per_source_metadata.<source>.<entry>.service_queries` (combined
+///    files; one template per source, from its first entry that has one, as
+///    the viewers read it in `dashboard::source_templates`)
 /// 4. Built-in template looked up by source name
 fn resolve_service_extension(
     path: &Path,
@@ -548,13 +550,19 @@ fn resolve_service_extension(
     {
         if let Ok(psm) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
         {
-            for (_source_name, source_meta) in &psm {
-                if let Some(sq) = source_meta.get(NESTED_SERVICE_QUERIES) {
-                    if let Ok(ext) = serde_json::from_value::<ServiceExtension>(sq.clone()) {
-                        all_kpis.extend(ext.kpis.clone());
-                        if first_ext.is_none() {
-                            first_ext = Some(ext);
-                        }
+            for source_group in psm.values() {
+                let Some(entries) = source_group.as_object() else {
+                    continue;
+                };
+                let ext = entries.values().find_map(|entry| {
+                    entry
+                        .get(NESTED_SERVICE_QUERIES)
+                        .and_then(|sq| serde_json::from_value::<ServiceExtension>(sq.clone()).ok())
+                });
+                if let Some(ext) = ext {
+                    all_kpis.extend(ext.kpis.clone());
+                    if first_ext.is_none() {
+                        first_ext = Some(ext);
                     }
                 }
             }
@@ -639,6 +647,35 @@ mod tests {
             .iter()
             .map(|f| f.name().clone())
             .collect()
+    }
+
+    /// A combined parquet's templates are read from each source's entries,
+    /// `per_source_metadata.<source>.<entry>.service_queries`, where
+    /// `recording combine` writes them, and every source's KPIs are kept.
+    #[test]
+    fn combined_templates_are_read_from_each_sources_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("combined.parquet");
+        let kpi =
+            |q: &str| serde_json::json!({"role": "r", "title": q, "query": q, "type": "gauge"});
+        let psm = serde_json::json!({
+            "widgetd": {"0": {"service_queries": {"service_name": "widgetd", "kpis": [kpi("widgets")]}}},
+            "gadgetd": {"0": {"version": "1"}, "1": {"service_queries": {"service_name": "gadgetd", "kpis": [kpi("gadgets")]}}},
+        })
+        .to_string();
+        write_parquet(
+            &path,
+            &[("timestamp", &[])],
+            &[
+                ("source", r#"["gadgetd","widgetd"]"#),
+                ("per_source_metadata", psm.as_str()),
+            ],
+        );
+        let registry = TemplateRegistry::embedded().unwrap();
+        let ext = resolve_service_extension(&path, None, &registry).unwrap();
+        let mut queries: Vec<&str> = ext.kpis.iter().map(|k| k.query.as_str()).collect();
+        queries.sort();
+        assert_eq!(queries, ["gadgets", "widgets"]);
     }
 
     /// The recorder no longer writes `source` into every column, so the rule

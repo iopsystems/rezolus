@@ -18,6 +18,13 @@
   and is dropped with a warning when that is none of its sources. A
   `dashboard` section template is not carried: a parquet input never has
   one, since only stream recordings (`.dendro`) keep it.
+- **`recording filter` and the viewer's Metadata section read a combined
+  parquet's templates where combine writes them**,
+  `per_source_metadata.<source>.<entry>.service_queries`. Both looked one
+  level up, so `filter` kept only the registry's KPIs' columns for a
+  combined file and the Metadata section listed no templates. Re-combining
+  a combined file that was annotated after combining keeps its newer
+  top-level template, which replaces the one nested by the earlier combine.
 - **The viewer escapes recording text it puts into chart HTML.** Chart
   tooltips, the heatmap tooltips and the embed demo's status line inserted
   strings from the recording as markup: plot titles from section templates

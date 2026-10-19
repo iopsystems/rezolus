@@ -1,6 +1,24 @@
 import { expandLink, selectButton } from '../ui/chart_controls.js';
 import { collectGroupPlots } from '../features/group_utils.js';
 
+// The KPI templates a recording's metadata carries, one per source:
+// `per_source_metadata.<source>.<entry>.service_queries` (a combined parquet;
+// the first entry with one, as dashboard::source_templates reads it), else
+// the top-level `service_queries`.
+const collectServiceQueries = (meta) => {
+    const out = [];
+    for (const [source, group] of Object.entries(meta.per_source_metadata || {})) {
+        if (!group || typeof group !== 'object') continue;
+        const entry = Object.values(group)
+            .find((e) => e && typeof e === 'object' && e.service_queries);
+        if (entry) out.push({ source, queries: entry.service_queries });
+    }
+    if (meta.service_queries && out.length === 0) {
+        out.push({ source: meta.source || 'unknown', queries: meta.service_queries });
+    }
+    return out;
+};
+
 const createSystemInfoView = ({ CpuTopology, formatBytes }) => ({
     view({ attrs }) {
         const info = attrs.data;
@@ -150,16 +168,7 @@ const createMetadataView = () => {
                 .filter(([k]) => !descFilter || k.toLowerCase().includes(descFilter.toLowerCase()))
                 .sort(([a], [b]) => a.localeCompare(b));
 
-            const serviceQueries = [];
-            for (const [key, value] of Object.entries(psm)) {
-                if (value.service_queries) {
-                    serviceQueries.push({ source: key, queries: value.service_queries });
-                }
-            }
-
-            if (meta.service_queries && serviceQueries.length === 0) {
-                serviceQueries.push({ source: meta.source || 'unknown', queries: meta.service_queries });
-            }
+            const serviceQueries = collectServiceQueries(meta);
 
             return m('div.metadata-section', [
                 m('h1.section-title', 'Metadata'),
@@ -362,4 +371,4 @@ const renderCgroupSection = ({
     ]);
 };
 
-export { createSystemInfoView, createMetadataView, renderCgroupSection };
+export { createSystemInfoView, createMetadataView, renderCgroupSection, collectServiceQueries };

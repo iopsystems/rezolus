@@ -1339,7 +1339,9 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
         // single-source input's template is that source's. An already-combined
         // input's top-level one (annotated after combining) goes to the
         // source its `service_name` names, and is dropped with a warning when
-        // that is none of the input's sources.
+        // that is none of the input's sources. It replaces a template already
+        // nested there: annotate wrote it after the combine that nested the
+        // other, and the viewer prefers it in that input too.
         if let Some(raw) = input
             .kv_metadata
             .iter()
@@ -1352,6 +1354,7 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
                         .get("service_name")
                         .and_then(|n| n.as_str())
                         .map(str::to_string);
+                    let combined_input = source_names.len() > 1;
                     let target = match source_names.as_slice() {
                         [only] => Some(only.clone()),
                         many => named.filter(|n| many.contains(n)),
@@ -1369,9 +1372,13 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
                                 .and_then(|g| g.get_mut(&sub_key))
                                 .and_then(|e| e.as_object_mut())
                             {
-                                entry
-                                    .entry(NESTED_SERVICE_QUERIES.to_string())
-                                    .or_insert(template);
+                                if combined_input {
+                                    entry.insert(NESTED_SERVICE_QUERIES.to_string(), template);
+                                } else {
+                                    entry
+                                        .entry(NESTED_SERVICE_QUERIES.to_string())
+                                        .or_insert(template);
+                                }
                             }
                         }
                         None => eprintln!(
@@ -2882,6 +2889,60 @@ mod tests {
             result.iter().any(|s| !s.values.is_empty()),
             "the KPI's query reads no data from the combined file"
         );
+    }
+
+    /// A combined input annotated after combining carries a newer top-level
+    /// template beside the nested one: the top-level one is what that input
+    /// renders, so re-combining keeps it. It goes to the source its
+    /// `service_name` names; one naming none of the input's sources is
+    /// dropped and the nested one kept.
+    #[test]
+    fn recombining_keeps_a_combined_inputs_newer_template() {
+        let old = serde_json::json!({"service_name": "vllm", "kpis": [], "service_metadata": {"v": "old"}});
+        let new = serde_json::json!({"service_name": "vllm", "kpis": [], "service_metadata": {"v": "new"}});
+        let stray = serde_json::json!({"service_name": "sglang", "kpis": []});
+        let psm = serde_json::json!({"vllm": {"0": {"service_queries": old}}}).to_string();
+        let combined = |top: &serde_json::Value| {
+            let top = top.to_string();
+            make_test_file_with_metadata(
+                &[SEC, 2 * SEC],
+                "m1",
+                &[Some(1), Some(2)],
+                "[\"llm-perf\",\"vllm\"]",
+                "1000",
+                vec![
+                    (KEY_PER_SOURCE_METADATA, psm.as_str()),
+                    (KEY_SERVICE_QUERIES, top.as_str()),
+                ],
+            )
+        };
+        let (_t2, p2) = make_test_file(&[SEC, 2 * SEC], "m2", &[Some(3), Some(4)], "c", "1000");
+        let nested = |p1: &PathBuf| {
+            let kv = merge_metadata(&[load(p1), load(&p2)]).unwrap();
+            let psm_str = kv
+                .iter()
+                .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
+                .and_then(|kv| kv.value.clone())
+                .unwrap();
+            let psm: serde_json::Value = serde_json::from_str(&psm_str).unwrap();
+            (
+                psm["vllm"]["0"][NESTED_SERVICE_QUERIES].clone(),
+                psm["llm-perf"]["0"].get(NESTED_SERVICE_QUERIES).cloned(),
+            )
+        };
+
+        let (_t1, p1) = combined(&new);
+        let (vllm, llm_perf) = nested(&p1);
+        assert_eq!(vllm, new, "the top-level template replaces the nested one");
+        assert_eq!(llm_perf, None, "it goes to the source it names only");
+
+        let (_t3, p3) = combined(&stray);
+        let (vllm, llm_perf) = nested(&p3);
+        assert_eq!(
+            vllm, old,
+            "a template naming none of the sources is dropped"
+        );
+        assert_eq!(llm_perf, None);
     }
 
     #[test]
