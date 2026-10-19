@@ -184,6 +184,10 @@ the same arm. Give each endpoint of a concurrent A/B its own `arm=`
 (`--endpoint http://a:4241,arm=baseline --endpoint http://b:4241,arm=experiment`),
 or label two separate recordings when combining them (`recording combine
 a.dendro b.dendro --ab baseline=a.dendro experiment=b.dendro -o ab.dendro`).
+One recording per arm: two recordings with the same arm, or more than two
+arms, are refused by the viewer. A recording without an arm in such an
+archive (an agent recorded beside two arms of a service) is shown beside the
+comparison, in its own sections and as a single capture.
 
 `--label` applies to *every* recording the run produces, so in a multi-endpoint
 run it cannot tell two endpoints apart — see below. An endpoint's `role=`
@@ -270,6 +274,10 @@ recordings that carry an `arm` label open as a comparison, so a concurrent
 A/B run records with intent,
 `--endpoint http://a:4241,arm=baseline --endpoint http://b:4241,arm=experiment`
 (`arm=` labels that endpoint's recording, over a run-wide `--label arm=`).
+The comparison takes one recording per arm; every recording without an arm
+(or, with `--baseline`/`--experiment`, every recording they do not name) is
+shown beside it, its sections at routes ending in `@<host>`, drawn as a
+single capture rather than a third arm.
 Concurrent captures share the same time period; captures taken sequentially
 can also differ in background load, not just the experimental change.
 

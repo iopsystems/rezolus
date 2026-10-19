@@ -187,7 +187,9 @@ target/release/rezolus recording snapshot live.rez -o incident.rez     # complet
 #   existing arm is refused before copying, naming the input; .rez/.dendro outputs and parquet inputs to .rez);
 #   one archive input: --ab baseline=0 experiment=1 labels its recordings by position (an old archive's twins);
 #   the viewer fills the slots by arm value (dashboard::combined::arm_slots), not archive order: one recording
-#   per arm, unarmed recordings attach beside; combine refuses an --ab result arm_slots would refuse;
+#   per arm; every other recording is shown beside (dashboard::dashboard::add_beside_sections: its own sections at
+#   <route>@<key>, single capture, queries carrying __capture__="<key>" that combined::Routed, the baseline's
+#   source, answers from it); combine refuses an --ab result arm_slots would refuse;
 #   v1/v2 tar inputs are upgraded to v3 on the way in, so containers can be mixed freely;
 #   combine a.parquet b.parquet -o out.rez ingests parquet inputs too (one recording each, split by
 #   sampler); a parquet has no acquisition windows, so those recordings are WINDOWLESS (no rate band).

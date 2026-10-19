@@ -125,8 +125,10 @@ pub fn command() -> Command {
              #   source = \"svc\"           # optional, as are role =, protocol = and template =\n\n\
              TAGGING: -m/--metadata k=v writes metadata on every recording in the archive.\n\
              -l/--label k=v tags the recordings inside the archive; source and host are\n\
-             auto-populated, and a two-recording archive drives the viewer\'s A/B comparison,\n\
-             which aliases the arms off each recording\'s arm/host labels.\n\n\
+             auto-populated. Recordings that carry an `arm` label (--endpoint url,arm=NAME)\n\
+             open in the viewer as an A/B comparison, aliased by those labels, with the\n\
+             recordings without one shown beside it in their own sections; an archive without\n\
+             arms opens as one combined view.\n\n\
              A recording\'s source is, first found: source= on its --endpoint (or\n\
              --metadata source= with --url), the source label in its stream handshake,\n\
              rezolus for a Rezolus agent, or a name made from the URL\'s host, port and\n\
@@ -242,7 +244,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("ENDPOINT")
                 .long("endpoint")
-                .help("Add an endpoint as url[,source=name][,role=label][,arm=name][,protocol=stream|prometheus][,template=FILE]; role is a free-form tag (conventionally service or loadgen); arm labels the endpoint's recording as one arm of an A/B comparison (conventionally baseline or experiment; recordings carrying arm open in `rezolus view` as a comparison, the others as one combined view); template is a KPI template file (a ServiceExtension JSON, as `recording annotate --queries` takes) written into this endpoint's recording as service_queries, so the viewer shows that service's KPI section: it is checked before recording starts, an unreadable file, one over 1 MiB, JSON that is not a ServiceExtension or an unknown unit_system refuses the run (exit 2), and it replaces any template a streamed producer sends in its handshake; protocol skips detection: stream records it from its replication stream only, never scraping it (rezolus and msgpack are accepted for it too), prometheus scrapes it as text exposition (at /metrics for a URL whose path is /); without protocol, a URL whose path is / or /metrics/stream is asked for its stream first and any other URL is scraped (see DETECTION); repeat for several (e.g. http://host:9090/metrics,source=svc,role=service,protocol=prometheus)")
+                .help("Add an endpoint as url[,source=name][,role=label][,arm=name][,protocol=stream|prometheus][,template=FILE]; role is a free-form tag (conventionally service or loadgen); arm labels the endpoint's recording as one arm of an A/B comparison (conventionally baseline or experiment): an archive whose recordings carry arm opens in `rezolus view` as a comparison (one recording per arm), with unarmed recordings' sections beside it; one without arms opens as one combined view; template is a KPI template file (a ServiceExtension JSON, as `recording annotate --queries` takes) written into this endpoint's recording as service_queries, so the viewer shows that service's KPI section: it is checked before recording starts, an unreadable file, one over 1 MiB, JSON that is not a ServiceExtension or an unknown unit_system refuses the run (exit 2), and it replaces any template a streamed producer sends in its handshake; protocol skips detection: stream records it from its replication stream only, never scraping it (rezolus and msgpack are accepted for it too), prometheus scrapes it as text exposition (at /metrics for a URL whose path is /); without protocol, a URL whose path is / or /metrics/stream is asked for its stream first and any other URL is scraped (see DETECTION); repeat for several (e.g. http://host:9090/metrics,source=svc,role=service,protocol=prometheus)")
                 .action(clap::ArgAction::Append)
                 .conflicts_with_all(["URL", "CONFIG_FILE"]),
         )

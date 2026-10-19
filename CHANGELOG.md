@@ -164,12 +164,17 @@
   (matched ignoring case, so `Baseline` counts); with only one of the two,
   the other arm fills the other slot; with neither, the archive's first
   armed recording is the baseline and the viewer says so. Recordings
-  without an arm attach beside the comparison, named in the log or notice:
-  `record --endpoint svcA,arm=baseline --endpoint svcB,arm=experiment
-  --endpoint agent` opens the two services as the comparison and the agent
-  beside them. One recording per arm is the limit for now: an arm two
-  recordings share, or more than two arms, is refused with a listing of the
-  recordings and `--baseline`/`--experiment` to name two. `record` and a
+  without an arm, and with `--baseline`/`--experiment` every recording they
+  do not name, are shown beside the comparison: each in its own sections
+  (routes ending in `@<host>`, grouped under its name in the sidebar),
+  drawn as a single capture that reads only that recording, and named in
+  the badge after the arms ("also: …"), never as a third arm. So `record
+  --endpoint svcA,arm=baseline --endpoint svcB,arm=experiment --endpoint
+  agent` compares the two services and shows the agent's sections beside
+  them. One recording per arm is the limit for now: one arm among unarmed
+  recordings, an arm two recordings share, or more than two arms is
+  refused with a listing of the recordings and `--baseline`/`--experiment`
+  to name two. `record` and a
   config file refuse an `arm` value with whitespace around it; `recording
   combine --ab` refuses a result whose arms would be refused, and warns
   without `--ab` when the inputs' own arms would be. **An archive assembled by
