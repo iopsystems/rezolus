@@ -1284,6 +1284,7 @@ mod tests {
             protocol: None,
             template: Some(PathBuf::from("vllm.json")),
             template_json: Some(r#"{"service_name":"vllm","kpis":[]}"#.to_string()),
+            arm: None,
         };
         assert_eq!(
             endpoint_spec(&config, &ep).metadata["service_queries"],
@@ -1301,6 +1302,7 @@ mod tests {
         assert_eq!(ep.arm.as_deref(), Some("experiment"));
         assert_eq!(endpoint_spec(&config, &ep).labels["arm"], "experiment");
         assert!(config::parse_endpoint_str("http://localhost:4241,arm=").is_err());
+        assert!(config::parse_endpoint_str("http://localhost:4241,arm= baseline").is_err());
         let plain = config::parse_endpoint_str("http://localhost:4241").unwrap();
         // `test_config` carries `--label arm=redis`, which the endpoint's
         // own arm overrides and a plain endpoint keeps.

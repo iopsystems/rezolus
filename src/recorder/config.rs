@@ -277,13 +277,13 @@ impl RecordingConfig {
             if toml_cfg.endpoints.is_empty() {
                 return Err("config file must define at least one endpoint".to_string());
             }
-            if let Some(ep) = toml_cfg
-                .endpoints
-                .iter()
-                .find(|ep| ep.arm.as_deref() == Some(""))
-            {
+            if let Some(ep) = toml_cfg.endpoints.iter().find(|ep| {
+                ep.arm
+                    .as_deref()
+                    .is_some_and(|a| a.is_empty() || a.trim() != a)
+            }) {
                 return Err(format!(
-                    "in {}: endpoint {}: arm needs a value",
+                    "in {}: endpoint {}: arm needs a value with no whitespace around it",
                     config_path.display(),
                     ep.url
                 ));
@@ -434,6 +434,9 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
                     template = Some(PathBuf::from(value));
                 }
                 "arm" if value.is_empty() => return Err("arm= needs a value".to_string()),
+                "arm" if value.trim() != value => {
+                    return Err(format!("arm={value:?} has whitespace around it"));
+                }
                 "arm" => arm = Some(value.to_string()),
                 "protocol" => {
                     protocol = Some(match value {
@@ -602,6 +605,10 @@ mod tests {
             .err()
             .unwrap();
         assert!(err.contains("arm needs a value"), "{err}");
+        let err = parse(&["--config", &write("spaced.toml", " baseline")])
+            .err()
+            .unwrap();
+        assert!(err.contains("whitespace"), "{err}");
     }
 
     /// A config file is held to the same rules: its output must be a
