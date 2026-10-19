@@ -299,7 +299,7 @@ pub fn command() -> Command {
             clap::Arg::new("LABEL")
                 .long("label")
                 .short('l')
-                .help("Tag the recording with a label as key=value (e.g. arm=redis, role=server); repeat for multiple. A value without `=` is ignored. `source` and `host` are auto-populated. Applies to EVERY recording in the run, so it cannot tell two endpoints apart — use --endpoint url,source=name for that")
+                .help("Tag the recording with a label as key=value (e.g. run=42, role=server); repeat for multiple. A value without `=` is ignored. `source` and `host` are auto-populated. Applies to EVERY recording in the run, so it cannot tell two endpoints apart — use --endpoint url,source=name for that, and --endpoint url,arm=name for the arms of an A/B")
                 .action(clap::ArgAction::Append),
         )
         .arg(

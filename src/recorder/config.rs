@@ -277,6 +277,17 @@ impl RecordingConfig {
             if toml_cfg.endpoints.is_empty() {
                 return Err("config file must define at least one endpoint".to_string());
             }
+            if let Some(ep) = toml_cfg
+                .endpoints
+                .iter()
+                .find(|ep| ep.arm.as_deref() == Some(""))
+            {
+                return Err(format!(
+                    "in {}: endpoint {}: arm needs a value",
+                    config_path.display(),
+                    ep.url
+                ));
+            }
 
             let (output, origin) = match explicit_output {
                 Some(p) => (p, explicit_origin),
@@ -566,6 +577,31 @@ mod tests {
             assert!(err.contains("--separate"), "{err}");
             assert!(err.contains("5.x recorder"), "{err}");
         }
+    }
+
+    /// A config file's `[[endpoints]]` entry takes `arm`, and refuses an
+    /// empty one as `--endpoint url,arm=` does.
+    #[test]
+    fn a_config_endpoint_takes_an_arm() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |name: &str, arm: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(
+                &path,
+                format!(
+                    "[recording]\noutput = \"run.dendro\"\n\n[[endpoints]]\n\
+                     url = \"http://localhost:4241\"\narm = \"{arm}\"\n"
+                ),
+            )
+            .unwrap();
+            path.to_str().unwrap().to_string()
+        };
+        let cfg = parse(&["--config", &write("ok.toml", "baseline")]).unwrap();
+        assert_eq!(cfg.endpoints[0].arm.as_deref(), Some("baseline"));
+        let err = parse(&["--config", &write("empty.toml", "")])
+            .err()
+            .unwrap();
+        assert!(err.contains("arm needs a value"), "{err}");
     }
 
     /// A config file is held to the same rules: its output must be a
