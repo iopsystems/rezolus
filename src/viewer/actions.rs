@@ -236,7 +236,10 @@ fn ingest_rez_from_path(
             ::dashboard::combined::marker(&markers, crate::parquet_metadata::KEY_SELECTION);
         let report_marker =
             ::dashboard::combined::marker(&markers, crate::parquet_metadata::KEY_REPORT);
-        state.replace_baseline(Arc::new(combined.reader) as Arc<dyn MetricsSource>);
+        let reader = Arc::new(combined.reader);
+        state.replace_baseline(Arc::clone(&reader) as Arc<dyn MetricsSource>);
+        *state.combined_catalog.write() =
+            Some(Arc::new(::dashboard::combined::FixedCatalog(reader)));
         *state.parquet_path.write() = Some(rez_path.clone());
         *state.experiment_parquet_path.write() = None;
         *state.cli_experiment_path.write() = None;
@@ -1292,6 +1295,9 @@ mod tests {
         let uploaded = upload_only_state();
         let _ = ingest_rez_from_path(&uploaded, report.clone(), "report.rez".to_string());
         check(&uploaded, "upload");
+        assert!(uploaded.combined_catalog.read().is_some());
+        uploaded.replace_baseline(uploaded.baseline_data());
+        assert!(uploaded.combined_catalog.read().is_none());
 
         let mut reg = viewer::WasmCaptureRegistry::new();
         reg.attach("baseline", &bytes, "report.rez").unwrap();

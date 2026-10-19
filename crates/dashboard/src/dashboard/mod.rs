@@ -338,9 +338,14 @@ pub fn validate_service_extensions(
 /// host's. `DashboardContext::throughput_query` is the first instance's (or,
 /// with no built-in instance, the first service's).
 ///
+/// `catalog`, when the shell has the archive `data` reads, answers each
+/// recording's names and label sets without opening other recordings'
+/// tables ([`combined::ScopeCatalog`]); it must read what `data` reads.
+///
 /// Returns the context and what the template lookups had to say.
 pub fn build_combined_context(
     data: &dyn MetricsSource,
+    catalog: Option<Arc<dyn combined::ScopeCatalog>>,
     members: &[Member],
     registry: &TemplateRegistry,
     preference: TemplatePreference,
@@ -366,6 +371,7 @@ pub fn build_combined_context(
                 matchers,
                 header: member.header.clone(),
                 metadata: member.metadata.clone(),
+                catalog: catalog.clone(),
             };
             let scoped = Scoped::new(data, &scope);
             let resolved = crate::source_templates::resolve_source_templates(
@@ -709,6 +715,7 @@ pub fn add_beside_sections(
         };
         let (sub, sub_notices) = build_combined_context(
             b.data.as_ref(),
+            None,
             std::slice::from_ref(&member),
             registry,
             preference,
@@ -1091,6 +1098,7 @@ mod tests {
         let data = metriken_query::MemoryStore::builder().build();
         let (ctx, notices) = build_combined_context(
             &data,
+            None,
             &[member("h1"), member("h2")],
             &TemplateRegistry::empty(),
             TemplatePreference::Archive,

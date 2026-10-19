@@ -318,6 +318,10 @@ pub struct AppState {
     /// (`report_save::build_rez_report_from_rez`'s `anchor`). `None` saves
     /// onto the archive's first.
     pub anchor_labels: RwLock<Option<std::collections::BTreeMap<String, String>>>,
+    /// For an archive opened combined, the archive the baseline reads, which
+    /// answers each recording's catalog without opening other recordings'
+    /// tables (`dashboard::combined::ScopeCatalog`). `None` otherwise.
+    pub combined_catalog: RwLock<Option<Arc<dyn ::dashboard::combined::ScopeCatalog>>>,
 }
 
 /// The default number of queries the viewer runs at once: half the CPUs,
@@ -370,6 +374,7 @@ impl AppState {
             combined_live: Mutex::new(None),
             beside: RwLock::new(Vec::new()),
             anchor_labels: RwLock::new(None),
+            combined_catalog: RwLock::new(None),
         }
     }
 
@@ -424,6 +429,7 @@ impl AppState {
         self.combined_live.lock().take();
         self.beside.write().clear();
         *self.anchor_labels.write() = None;
+        *self.combined_catalog.write() = None;
         self.captures.set_baseline_data(data);
     }
 

@@ -483,6 +483,7 @@ pub fn regenerate_dashboards(state: &AppState) {
             .map(|s| s.trim_end_matches(".parquet").to_string());
         let (context, notices) = ::dashboard::dashboard::build_combined_context(
             state.baseline_data().as_ref(),
+            state.combined_catalog.read().clone(),
             &members,
             registry,
             preference,

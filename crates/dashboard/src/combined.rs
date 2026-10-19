@@ -18,10 +18,12 @@
 //!   each template the recording renders.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 use metriken_query::{
     DisplayOptions, DisplayResult, MetricsSource, QueryError, QueryOptions, QueryResult,
 };
+use metriken_storage::ArchiveReader;
 
 /// The recording label that names a comparison's arm.
 pub const ARM_LABEL: &str = "arm";
@@ -989,12 +991,160 @@ pub fn assemble_members(recordings: Vec<RecordingParts>) -> (Vec<Member>, Option
 
 /// One recording's part of a combined source: its matchers, header and
 /// metadata.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct Scope {
     /// What selects the recording's series; see [`scope_matchers`].
     pub matchers: Vec<Matcher>,
     pub header: Header,
     pub metadata: HashMap<String, String>,
+    /// The archive the combined source reads, when the shell has it: the
+    /// recording's names and label sets are then answered from its
+    /// in-memory catalog and that recording's tables, rather than from
+    /// every recording's ([`ScopeCatalog`]). `None` lists through the
+    /// source and filters, which is exact but opens every table holding a
+    /// name.
+    pub catalog: Option<Arc<dyn ScopeCatalog>>,
+}
+
+impl std::fmt::Debug for Scope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Scope")
+            .field("matchers", &self.matchers)
+            .field("header", &self.header)
+            .field("metadata", &self.metadata)
+            .field("catalog", &self.catalog.is_some())
+            .finish()
+    }
+}
+
+/// A metric kind, for [`ScopeCatalog`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Counter,
+    Gauge,
+    Histogram,
+}
+
+/// The archive behind a combined source, for answering one recording's
+/// catalog questions ([`Scoped`]) without opening other recordings' tables.
+///
+/// A combined source's series carry their recording's labels
+/// (`ArchiveReader::series_labels`), and a series' own label under one of
+/// those keys is moved to `exported_<key>`, so a matcher on such a key is
+/// decided by the recording's labels alone. A table whose recording fails one
+/// is skipped unopened; one whose recording passes every matcher answers a
+/// name from its in-memory catalog; only a matcher on a key the recording
+/// lacks (a series' own label may then decide it) opens the table to look.
+pub trait ScopeCatalog: Send + Sync {
+    /// The archive as it reads now (a live archive's current reader).
+    fn archive(&self) -> Arc<dyn std::ops::Deref<Target = ArchiveReader> + Send + Sync>;
+}
+
+/// A [`ScopeCatalog`] over a reader that does not change.
+pub struct FixedCatalog<T>(pub Arc<T>);
+
+impl<T> ScopeCatalog for FixedCatalog<T>
+where
+    T: std::ops::Deref<Target = ArchiveReader> + Send + Sync + 'static,
+{
+    fn archive(&self) -> Arc<dyn std::ops::Deref<Target = ArchiveReader> + Send + Sync> {
+        Arc::clone(&self.0) as Arc<dyn std::ops::Deref<Target = ArchiveReader> + Send + Sync>
+    }
+}
+
+/// Whether `table`'s series can pass `matchers`: `Some(true)` when its
+/// recording's labels pass every one, `Some(false)` when they fail one,
+/// `None` when a matcher names a key the recording lacks.
+fn table_passes(extra: &BTreeMap<String, String>, matchers: &[Matcher]) -> Option<bool> {
+    let mut undecided = false;
+    for m in matchers {
+        if extra.contains_key(&m.label) {
+            if !m.matches(extra) {
+                return Some(false);
+            }
+        } else {
+            undecided = true;
+        }
+    }
+    (!undecided).then_some(true)
+}
+
+fn holds(table: &metriken_storage::reader::SamplerReader, kind: Kind, name: &str) -> bool {
+    match kind {
+        Kind::Counter => table.holds_counter(name),
+        Kind::Gauge => table.holds_gauge(name),
+        Kind::Histogram => table.holds_histogram(name),
+    }
+}
+
+/// The label sets of `name` in `table`, with its recording's labels.
+fn table_labels(
+    table: &metriken_storage::reader::SamplerReader,
+    extra: &metriken_storage::Labels,
+    kind: Kind,
+    name: &str,
+) -> Vec<BTreeMap<String, String>> {
+    let Some(reader) = table.reader() else {
+        return Vec::new();
+    };
+    let source = reader.source();
+    let mut sets = match kind {
+        Kind::Counter => source.counter_labels(name),
+        Kind::Gauge => source.gauge_labels(name),
+        Kind::Histogram => source.histogram_labels(name),
+    };
+    for set in &mut sets {
+        metriken_storage::labeled::add_labels_map(set, extra);
+    }
+    sets
+}
+
+/// The names of `kind` with a series passing `matchers` ([`ScopeCatalog`]),
+/// in `names`' order.
+fn scoped_names(
+    archive: &ArchiveReader,
+    kind: Kind,
+    names: Vec<String>,
+    matchers: &[Matcher],
+) -> Vec<String> {
+    let extras = archive.series_labels();
+    names
+        .into_iter()
+        .filter(|name| {
+            archive
+                .owners_of(std::slice::from_ref(name))
+                .into_iter()
+                .filter(|t| holds(t, kind, name))
+                .any(|t| {
+                    let extra = extras.of(t);
+                    match table_passes(&extra.inner, matchers) {
+                        Some(pass) => pass,
+                        None => table_labels(t, extra, kind, name)
+                            .iter()
+                            .any(|l| matchers.iter().all(|m| m.matches(l))),
+                    }
+                })
+        })
+        .collect()
+}
+
+/// The label sets of `name` passing `matchers` ([`ScopeCatalog`]), in the
+/// order the archive lists them.
+fn scoped_labels(
+    archive: &ArchiveReader,
+    kind: Kind,
+    name: &str,
+    matchers: &[Matcher],
+) -> Vec<BTreeMap<String, String>> {
+    let extras = archive.series_labels();
+    archive
+        .owners_of(&[name.to_string()])
+        .into_iter()
+        .filter(|t| holds(t, kind, name))
+        .filter(|t| table_passes(&extras.of(t).inner, matchers) != Some(false))
+        .flat_map(|t| table_labels(t, extras.of(t), kind, name))
+        .filter(|l| matchers.iter().all(|m| m.matches(l)))
+        .collect()
 }
 
 /// A combined source read as one recording of it: the catalog lists only
@@ -1021,18 +1171,40 @@ impl<'a> Scoped<'a> {
             .collect()
     }
 
-    fn names(
-        &self,
-        names: Vec<String>,
-        labels: impl Fn(&str) -> Vec<BTreeMap<String, String>>,
-    ) -> Vec<String> {
+    fn names(&self, kind: Kind) -> Vec<String> {
+        let names = match kind {
+            Kind::Counter => self.inner.counter_names(),
+            Kind::Gauge => self.inner.gauge_names(),
+            Kind::Histogram => self.inner.histogram_names(),
+        };
         if self.scope.matchers.is_empty() {
             return names;
         }
+        if let Some(catalog) = &self.scope.catalog {
+            return scoped_names(&catalog.archive(), kind, names, &self.scope.matchers);
+        }
         names
             .into_iter()
-            .filter(|n| !self.keep(labels(n)).is_empty())
+            .filter(|n| !self.keep(self.listing(kind, n)).is_empty())
             .collect()
+    }
+
+    /// The unfiltered listing of `name` from the source.
+    fn listing(&self, kind: Kind, name: &str) -> Vec<BTreeMap<String, String>> {
+        match kind {
+            Kind::Counter => self.inner.counter_labels(name),
+            Kind::Gauge => self.inner.gauge_labels(name),
+            Kind::Histogram => self.inner.histogram_labels(name),
+        }
+    }
+
+    fn labels(&self, kind: Kind, name: &str) -> Vec<BTreeMap<String, String>> {
+        match &self.scope.catalog {
+            Some(catalog) if !self.scope.matchers.is_empty() => {
+                scoped_labels(&catalog.archive(), kind, name, &self.scope.matchers)
+            }
+            _ => self.keep(self.listing(kind, name)),
+        }
     }
 }
 
@@ -1100,24 +1272,22 @@ impl MetricsSource for Scoped<'_> {
         self.scope.metadata.clone()
     }
     fn counter_names(&self) -> Vec<String> {
-        self.names(self.inner.counter_names(), |n| self.inner.counter_labels(n))
+        self.names(Kind::Counter)
     }
     fn gauge_names(&self) -> Vec<String> {
-        self.names(self.inner.gauge_names(), |n| self.inner.gauge_labels(n))
+        self.names(Kind::Gauge)
     }
     fn histogram_names(&self) -> Vec<String> {
-        self.names(self.inner.histogram_names(), |n| {
-            self.inner.histogram_labels(n)
-        })
+        self.names(Kind::Histogram)
     }
     fn counter_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
-        self.keep(self.inner.counter_labels(name))
+        self.labels(Kind::Counter, name)
     }
     fn gauge_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
-        self.keep(self.inner.gauge_labels(name))
+        self.labels(Kind::Gauge, name)
     }
     fn histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
-        self.keep(self.inner.histogram_labels(name))
+        self.labels(Kind::Histogram, name)
     }
     fn sample_timestamps(&self) -> Vec<u64> {
         self.inner.sample_timestamps()
@@ -1180,7 +1350,6 @@ pub fn label_parquet_by_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     /// A store whose rows span `ticks` seconds and whose metadata is `meta`.
     fn store(ticks: std::ops::Range<u64>, meta: &[(&str, &str)]) -> metriken_query::MemoryStore {

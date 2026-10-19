@@ -245,6 +245,10 @@ pub struct Viewer {
     /// comparison's baseline: a report is saved onto it
     /// (`report_save::build_rez_report_from_rez`'s `anchor`).
     anchor_labels: Option<std::collections::BTreeMap<String, String>>,
+    /// For a combined capture, the archive its reader joins, which answers
+    /// each recording's catalog without opening other recordings' tables
+    /// (`dashboard::combined::ScopeCatalog`).
+    catalog: Option<Arc<dyn dashboard::combined::ScopeCatalog>>,
 }
 
 #[derive(Serialize)]
@@ -363,7 +367,11 @@ impl Viewer {
                 .map(|((l, header, metadata), series)| (l, series, header, metadata))
                 .collect(),
         );
-        let mut viewer = Self::from_source_bytes(Arc::new(reader), pool, Bytes::new());
+        let reader = Arc::new(reader);
+        let catalog: Arc<dyn dashboard::combined::ScopeCatalog> =
+            Arc::new(dashboard::combined::FixedCatalog(Arc::clone(&reader)));
+        let mut viewer = Self::from_source_bytes(reader, pool, Bytes::new());
+        viewer.catalog = Some(catalog);
         viewer.members = members;
         viewer.combined_systeminfo = systeminfo;
         for (key, value) in markers {
@@ -391,6 +399,7 @@ impl Viewer {
             .unwrap_or(&filename);
         dashboard::dashboard::build_combined_context(
             self.reader.as_ref(),
+            self.catalog.clone(),
             &self.members,
             registry,
             self.template_preference,
@@ -449,6 +458,7 @@ impl Viewer {
             combined_systeminfo: None,
             beside: Vec::new(),
             anchor_labels: None,
+            catalog: None,
         }
     }
 
@@ -2009,6 +2019,9 @@ mod tests {
         let mut reg = WasmCaptureRegistry::new();
         reg.attach("baseline", &bytes, "run.rez").unwrap();
         assert!(!reg.has("experiment"));
+        // The archive answers each recording's catalog questions.
+        assert!(single.catalog.is_some());
+        assert!(reg.baseline.as_ref().unwrap().catalog.is_some());
         for sections in [single.get_sections(), reg.get_sections("baseline").unwrap()] {
             let sections: Vec<serde_json::Value> = serde_json::from_str(&sections).unwrap();
             let routes: Vec<&str> = sections

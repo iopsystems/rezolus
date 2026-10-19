@@ -143,6 +143,8 @@ fn each_hosts_cpu_section_reads_only_that_host() {
     let dir = tempfile::tempdir().unwrap();
     let state = view(&two_hosts(dir.path()), &[]);
     assert!(state.captures.get_by_id("experiment").is_none());
+    // The archive answers each recording's catalog questions.
+    assert!(state.combined_catalog.read().is_some());
 
     let sections = state.sections_metadata()["sections"].clone();
     let entries: Vec<(&str, &str, Option<&str>)> = sections
@@ -1106,4 +1108,289 @@ fn an_agent_baseline_without_cpu_usage_keeps_the_usual_landing() {
     let sections = store.sections();
     assert!(sections.iter().any(|s| s.route == "/overview@h3"));
     assert!(!sections.iter().any(|s| s.landing));
+}
+
+/// A combined context built with the archive as its scopes' catalog opens
+/// no table, and rendering one recording's section opens only that
+/// recording's tables; built without it, the same context opens every
+/// recording's.
+#[test]
+fn a_recordings_catalog_opens_only_its_own_tables() {
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hosts.rez");
+    let agent = |labels: &'static [(&'static str, &'static str)]| Recording {
+        labels,
+        metadata: &[("source", "rezolus")],
+        cpus: 2,
+        busy_ns: 250_000_000,
+        counter: None,
+    };
+    one_run(
+        &path,
+        &[
+            agent(&[("source", "rezolus"), ("host", "h1")]),
+            agent(&[("source", "rezolus"), ("host", "h2")]),
+            agent(&[("source", "rezolus"), ("host", "h3")]),
+        ],
+    );
+    let open = || {
+        let pool = metriken_storage::BufferPool::new(64 << 20);
+        let readers = crate::rez_reader::RezReader::open_recordings(&path, pool).unwrap();
+        let combined = super::combine_recordings(readers);
+        (Arc::new(combined.reader), combined.members)
+    };
+    let registry = dashboard::TemplateRegistry::empty();
+    let pref = Default::default();
+    let tables = |r: &crate::rez_reader::RezReader| r.owners_of(&r.all_names()).len();
+
+    let (reader, members) = open();
+    let per_recording = tables(&reader) / 3;
+    let catalog: Arc<dyn dashboard::combined::ScopeCatalog> =
+        Arc::new(dashboard::combined::FixedCatalog(Arc::clone(&reader)));
+    let (ctx, _) = dashboard::dashboard::build_combined_context(
+        reader.as_ref(),
+        Some(catalog),
+        &members,
+        &registry,
+        pref,
+        None,
+        None,
+    );
+    assert!(
+        reader.opened_tables().is_empty(),
+        "{:?}",
+        reader.opened_tables()
+    );
+    let cpu = dashboard::dashboard::render_section(reader.as_ref(), "/cpu@h2", &ctx).unwrap();
+    let view = serde_json::to_value(&cpu.view).unwrap();
+    assert!(!view["groups"].as_array().unwrap().is_empty(), "{view}");
+    let opened = reader.opened_tables().len();
+    assert!(
+        (1..=per_recording).contains(&opened),
+        "{opened} tables opened, {per_recording} per recording"
+    );
+
+    let (reader, members) = open();
+    let _ = dashboard::dashboard::build_combined_context(
+        reader.as_ref(),
+        None,
+        &members,
+        &registry,
+        pref,
+        None,
+        None,
+    );
+    assert!(reader.opened_tables().len() > per_recording);
+}
+
+/// A dendro archive of `sources`, each a label set and the snapshot it
+/// records at tick `i`, three ticks each.
+fn dendro_of(
+    path: &Path,
+    sources: &[(
+        &[(&str, &str)],
+        &dyn Fn(u64) -> metriken_exposition::Snapshot,
+    )],
+) {
+    use crate::dendro_copy::fixtures::{ANCHOR, SECOND};
+    use metriken_storage::{ArchiveWriter, WriterConfig};
+    let mut writer = ArchiveWriter::create(path, WriterConfig::default()).unwrap();
+    let mut recs: Vec<_> = sources
+        .iter()
+        .map(|(labels, _)| {
+            let labels = labels
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            writer
+                .add_source(labels, Default::default(), ANCHOR)
+                .unwrap()
+        })
+        .collect();
+    for i in 0..3u64 {
+        let staged = recs
+            .iter_mut()
+            .zip(sources)
+            .map(|(r, (_, snap))| r.stage(&snap(i), ANCHOR + i * SECOND, 0).unwrap())
+            .collect();
+        writer.commit(staged).unwrap();
+    }
+    for r in recs {
+        r.finalize((ANCHOR + 2 * SECOND, 0)).unwrap();
+    }
+    writer.join().unwrap();
+}
+
+/// One group `g/x` holding `dual` as a counter or as a gauge.
+fn dual(i: u64, counter: bool) -> metriken_exposition::Snapshot {
+    use crate::dendro_copy::fixtures::{ANCHOR, SECOND};
+    use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, Snapshot, SnapshotV3};
+    let ts = ANCHOR + i * SECOND;
+    let desc = MetricDesc {
+        name: "0".to_string(),
+        metadata: [("metric".to_string(), "dual".to_string())].into(),
+    };
+    let schema = if counter {
+        GroupSchema {
+            counters: vec![desc],
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        }
+    } else {
+        GroupSchema {
+            counters: Vec::new(),
+            gauges: vec![desc],
+            histograms: Vec::new(),
+        }
+    };
+    Snapshot::V3(SnapshotV3 {
+        systemtime: std::time::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
+        duration: std::time::Duration::ZERO,
+        metadata: Default::default(),
+        groups: vec![GroupSnapshot {
+            name: "g/x".to_string(),
+            schema_hash: schema.hash(),
+            schema: (i == 0).then(|| std::sync::Arc::new(schema)),
+            window: Some(metriken::Window::new(ts - SECOND / 2, ts)),
+            counters: if counter { vec![Some(i)] } else { Vec::new() },
+            gauges: if counter {
+                Vec::new()
+            } else {
+                vec![Some(i as i64)]
+            },
+            histograms: Vec::new(),
+        }],
+    })
+}
+
+/// Each recording's names and label sets under the archive's catalog
+/// ([`dashboard::combined::ScopeCatalog`]) equal those listed through the
+/// source and filtered: a matcher on a key the recording lacks is decided
+/// by its series' own labels (`comm`, which the third recording carries
+/// natively), and a name held under another kind by another recording is
+/// not this recording's.
+#[test]
+fn the_catalog_answers_as_the_filtered_listing_does() {
+    use crate::dendro_copy::fixtures::tick;
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("native.dendro");
+    let counter = |i| dual(i, true);
+    let gauge = |i| dual(i, false);
+    dendro_of(
+        &path,
+        &[
+            (&[("source", "rezolus"), ("comm", "nginx")], &tick),
+            (&[("source", "rezolus"), ("comm", "redis")], &tick),
+            (&[("source", "rezolus")], &tick),
+            (&[("source", "svc"), ("host", "h1")], &counter),
+            (&[("source", "svc"), ("host", "h2")], &gauge),
+        ],
+    );
+    let pool = metriken_storage::BufferPool::new(64 << 20);
+    let readers = crate::rez_reader::RezReader::open_recordings(&path, pool).unwrap();
+    let combined = super::combine_recordings(readers);
+    let reader = Arc::new(combined.reader);
+    let catalog: Arc<dyn dashboard::combined::ScopeCatalog> =
+        Arc::new(dashboard::combined::FixedCatalog(Arc::clone(&reader)));
+    let labels: Vec<_> = combined
+        .members
+        .iter()
+        .map(|m| m.series_labels.clone())
+        .collect();
+    let mut asked = 0;
+    for (member, matchers) in combined
+        .members
+        .iter()
+        .zip(dashboard::combined::scope_matchers(&labels))
+    {
+        let scope = |catalog| dashboard::combined::Scope {
+            matchers: matchers.clone(),
+            header: member.header.clone(),
+            metadata: member.metadata.clone(),
+            catalog,
+        };
+        let (with, without) = (scope(Some(Arc::clone(&catalog))), scope(None));
+        let fast = dashboard::combined::Scoped::new(reader.as_ref(), &with);
+        let slow = dashboard::combined::Scoped::new(reader.as_ref(), &without);
+        assert_eq!(fast.counter_names(), slow.counter_names(), "{matchers:?}");
+        assert_eq!(fast.gauge_names(), slow.gauge_names(), "{matchers:?}");
+        for name in ["task_ops", "mem_free", "dual"] {
+            assert_eq!(
+                fast.counter_labels(name),
+                slow.counter_labels(name),
+                "{name}"
+            );
+            assert_eq!(fast.gauge_labels(name), slow.gauge_labels(name), "{name}");
+            asked += 1;
+        }
+    }
+    assert_eq!(asked, 15);
+    // The third recording lacks `comm`; both of its threads carry one of
+    // the others' values natively, so it has no `task_ops` series.
+    let third = &combined.members[2];
+    let matchers = dashboard::combined::scope_matchers(&labels)[2].clone();
+    let scope = dashboard::combined::Scope {
+        matchers,
+        header: third.header.clone(),
+        metadata: third.metadata.clone(),
+        catalog: Some(Arc::clone(&catalog)),
+    };
+    let scoped = dashboard::combined::Scoped::new(reader.as_ref(), &scope);
+    assert!(!scoped.counter_names().contains(&"task_ops".to_string()));
+    assert!(scoped.counter_labels("task_ops").is_empty());
+    assert!(scoped.gauge_names().contains(&"mem_free".to_string()));
+    // Of two services, the second holds `dual` as a gauge only (every
+    // matcher decided by the recordings' labels).
+    let path = dir.path().join("dual.dendro");
+    dendro_of(
+        &path,
+        &[
+            (&[("source", "svc"), ("host", "h1")], &counter),
+            (&[("source", "svc"), ("host", "h2")], &gauge),
+        ],
+    );
+    let pool = metriken_storage::BufferPool::new(64 << 20);
+    let readers = crate::rez_reader::RezReader::open_recordings(&path, pool).unwrap();
+    let combined = super::combine_recordings(readers);
+    let reader = Arc::new(combined.reader);
+    let labels: Vec<_> = combined
+        .members
+        .iter()
+        .map(|m| m.series_labels.clone())
+        .collect();
+    let h2 = &combined.members[1];
+    let scope = dashboard::combined::Scope {
+        matchers: dashboard::combined::scope_matchers(&labels)[1].clone(),
+        header: h2.header.clone(),
+        metadata: h2.metadata.clone(),
+        catalog: Some(Arc::new(dashboard::combined::FixedCatalog(Arc::clone(
+            &reader,
+        )))),
+    };
+    let scoped = dashboard::combined::Scoped::new(reader.as_ref(), &scope);
+    assert_eq!(h2.series_labels["host"], "h2");
+    assert!(
+        scoped.counter_names().is_empty(),
+        "{:?}",
+        scoped.counter_names()
+    );
+    assert_eq!(scoped.gauge_names(), ["dual"]);
+    let h1 = &combined.members[0];
+    let scope = dashboard::combined::Scope {
+        matchers: dashboard::combined::scope_matchers(&labels)[0].clone(),
+        header: h1.header.clone(),
+        metadata: h1.metadata.clone(),
+        catalog: Some(Arc::new(dashboard::combined::FixedCatalog(Arc::clone(
+            &reader,
+        )))),
+    };
+    let scoped = dashboard::combined::Scoped::new(reader.as_ref(), &scope);
+    assert_eq!(scoped.counter_names(), ["dual"]);
+    assert!(
+        scoped.gauge_names().is_empty(),
+        "{:?}",
+        scoped.gauge_names()
+    );
 }

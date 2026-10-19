@@ -966,6 +966,18 @@ pub(super) fn combine_recordings(
     }
 }
 
+/// A followed combined archive's [`::dashboard::combined::ScopeCatalog`]:
+/// the archive as the live reader reads it now.
+pub(super) struct LiveCatalog(pub Arc<rez::live::LiveReader>);
+
+impl ::dashboard::combined::ScopeCatalog for LiveCatalog {
+    fn archive(
+        &self,
+    ) -> Arc<dyn std::ops::Deref<Target = metriken_storage::ArchiveReader> + Send + Sync> {
+        self.0.current()
+    }
+}
+
 /// File mode for an archive that opens combined: one capture, the
 /// recordings joined, followed as one when the archive is not finalized.
 fn init_file_mode_combined(
@@ -992,7 +1004,10 @@ fn init_file_mode_combined(
         == Some(crate::recorder::rez::RezFormat::V3Sqlite);
     let following = growable && !combined.reader.complete();
     let mut live = None;
-    let source: Arc<dyn metriken_query::MetricsSource> = if following {
+    let (source, catalog): (
+        Arc<dyn metriken_query::MetricsSource>,
+        Arc<dyn ::dashboard::combined::ScopeCatalog>,
+    ) = if following {
         let reader = Arc::new(rez::live::LiveReader::combined(
             path,
             combined.labels.clone(),
@@ -1000,9 +1015,13 @@ fn init_file_mode_combined(
             Arc::clone(&pool),
         ));
         live = Some(Arc::clone(&reader));
-        reader
+        (reader.clone(), Arc::new(LiveCatalog(reader)))
     } else {
-        Arc::new(combined.reader)
+        let reader = Arc::new(combined.reader);
+        (
+            reader.clone(),
+            Arc::new(::dashboard::combined::FixedCatalog(reader)),
+        )
     };
     let state = AppState::with_pool(
         source,
@@ -1019,6 +1038,7 @@ fn init_file_mode_combined(
         .captures
         .set_baseline_alias(config.baseline_alias.clone());
     *state.members.write() = combined.members;
+    *state.combined_catalog.write() = Some(catalog);
     if let Some(live) = live {
         *state.combined_live.lock() = Some((Arc::clone(&live), 0));
         let followed = vec![(capture_registry::BASELINE_ID.to_string(), live)];
