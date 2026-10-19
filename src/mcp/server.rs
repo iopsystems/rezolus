@@ -119,7 +119,7 @@ fn read_tools() -> Vec<Value> {
                     "recording": {
                         "type": "object",
                         "additionalProperties": {"type": "string"},
-                        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`, or of different runs) needs one, and so does extract_features. Call describe_recording without it first to list them."
+                        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them."
                     }
                 },
                 "required": ["parquet_file"]
@@ -138,7 +138,7 @@ fn read_tools() -> Vec<Value> {
                     "recording": {
                         "type": "object",
                         "additionalProperties": {"type": "string"},
-                        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`, or of different runs) needs one, and so does extract_features. Call describe_recording without it first to list them."
+                        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them."
                     },
                     "metric1": {
                         "type": "string",
@@ -165,7 +165,7 @@ fn read_tools() -> Vec<Value> {
                     "recording": {
                         "type": "object",
                         "additionalProperties": {"type": "string"},
-                        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`, or of different runs) needs one, and so does extract_features. Call describe_recording without it first to list them."
+                        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them."
                     }
                 },
                 "required": ["parquet_file"]
@@ -184,7 +184,7 @@ fn read_tools() -> Vec<Value> {
                     "recording": {
                         "type": "object",
                         "additionalProperties": {"type": "string"},
-                        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`, or of different runs) needs one, and so does extract_features. Call describe_recording without it first to list them."
+                        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them."
                     },
                     "query": {
                         "type": "string",
@@ -207,7 +207,7 @@ fn read_tools() -> Vec<Value> {
                     "recording": {
                         "type": "object",
                         "additionalProperties": {"type": "string"},
-                        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`, or of different runs) needs one, and so does extract_features. Call describe_recording without it first to list them."
+                        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them."
                     },
                     "query": {
                         "type": "string",
@@ -230,7 +230,7 @@ fn read_tools() -> Vec<Value> {
                     "recording": {
                         "type": "object",
                         "additionalProperties": {"type": "string"},
-                        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`, or of different runs) needs one, and so does extract_features. Call describe_recording without it first to list them."
+                        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them."
                     }
                 },
                 "required": ["parquet_file"]
@@ -247,7 +247,7 @@ fn recording_property() -> Value {
     json!({
         "type": "object",
         "additionalProperties": {"type": "string"},
-        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`, or of different runs) needs one, and so does extract_features. Call describe_recording without it first to list them."
+        "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them."
     })
 }
 

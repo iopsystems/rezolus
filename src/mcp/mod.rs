@@ -146,7 +146,7 @@ pub(crate) fn open_source_with_pool(
 ///
 /// `combined_ok`: with no selector, an archive of several recordings of one
 /// run is opened combined ([`Opened::combined`]) rather than refused. A
-/// comparison (recordings carrying `arm`, or of different runs) is refused
+/// comparison (recordings carrying `arm`) is refused
 /// either way. `extract-features`, whose record describes one recording,
 /// passes false.
 pub(crate) fn open_source_with_pool_labeled(
@@ -1439,7 +1439,7 @@ fn recording_arg() -> clap::Arg {
              recording. Matching none or several is an error, never a guess.\n\
              Without it, the recordings of one run are read together, each series\n\
              under its recording's labels; extract-features, and any tool on a\n\
-             comparison (recordings carrying `arm`, or of different runs), need it.\n\
+             comparison (recordings carrying `arm`), need it.\n\
              Run `rezolus mcp describe-recording FILE` with no --recording to list\n\
              an archive's recordings and the selector that picks each one.\n\
              Not accepted for a .parquet file, which holds one recording and so has\n\

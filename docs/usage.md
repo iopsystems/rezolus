@@ -259,8 +259,11 @@ show the built-in sections once per host, the second host's at routes ending
 in `@<host>`), and every query in a recording's sections is restricted to that
 recording's series by those labels. `rezolus view fleet.dendro --baseline
 host=web-01 --experiment host=web-02` opens the same archive as an A/B
-comparison; so do recordings that carry an `arm` label, and recordings whose
-time ranges do not overlap (separate runs, as `recording combine` assembles).
+comparison. A/B is opt-in, never inferred from when recordings were taken:
+recordings that carry an `arm` label open as a comparison, so a concurrent
+A/B run records with intent,
+`--endpoint http://a:4241,arm=baseline --endpoint http://b:4241,arm=experiment`
+(`arm=` labels that endpoint's recording, over a run-wide `--label arm=`).
 Concurrent captures share the same time period; captures taken sequentially
 can also differ in background load, not just the experimental change.
 
@@ -408,9 +411,9 @@ and quantile heatmaps. A remote agent must be reachable from the viewer server.
 ```bash
 # open a recording
 rezolus view run.dendro
-# A/B compare two runs: combine them into one archive, then view it (their
-# time ranges do not overlap, so it opens as a comparison)
-rezolus recording combine baseline.dendro experiment.dendro -o ab.dendro
+# A/B compare two runs: combine them into one archive with each input's arm
+rezolus recording combine baseline.dendro experiment.dendro \
+    --ab baseline=baseline.dendro experiment=experiment.dendro -o ab.dendro
 rezolus view ab.dendro
 # one run of several endpoints opens as one combined view; name two
 # recordings to compare them instead
@@ -546,8 +549,8 @@ for the file, and `compare=1`, which opens an archive of several
 recordings of one run as an A/B comparison of its first two (the static
 site's form of `rezolus view --baseline .. --experiment ..`; without it such
 an archive is one combined view). Otherwise compare mode comes from what
-was opened (two files, or an archive whose recordings carry `arm` or are of
-different runs), and the `anchor.*` keys only apply then.
+was opened (two files, or an archive whose recordings carry `arm`), and the
+`anchor.*` keys only apply then.
 
 ```text
 http://127.0.0.1:4200/?from=2026-09-28T14:03:11.250Z&to=2026-09-28T14:05:40Z#/cpu
@@ -912,8 +915,8 @@ the recordings of one run together, as the viewer does: every series carries
 its recording's labels, so `sum by (host) (irate(cpu_usage[1m]))` answers per
 host and a matcher (`cpu_usage{host="web-01"}`) selects one recording's series.
 `extract-features`, whose record describes one recording, needs a selector,
-and so does every tool on a comparison (recordings carrying `arm`, or of runs
-whose time ranges do not overlap). `describe-recording` with no selector lists
+and so does every tool on a comparison (recordings carrying `arm`).
+`describe-recording` with no selector lists
 what the archive holds and the flag that picks each one:
 
 ```

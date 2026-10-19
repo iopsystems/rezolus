@@ -47,7 +47,7 @@ Rules that hold on every recording:
   one: each series carries its recording's labels, so `sum by (host)`
   answers per host and `{host="web-01"}` selects one. `extract_features`
   needs a selector, and so does every tool on a comparison (recordings
-  carrying `arm`, or of different runs). Matching none or several is an
+  carrying `arm`). Matching none or several is an
   error that lists the candidates; it never guesses. `run_checks` without
   a selector evaluates every recording and gives each its own verdicts.
 

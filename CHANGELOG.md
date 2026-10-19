@@ -143,17 +143,29 @@
   restricted to that recording by its labels (`{host="web-02"}`, or
   `{role!="x"}` for a recording that lacks a label another carries), the
   section's header (interval, source, version, time range) is the
-  recording's, and its charts are chosen from its own metrics. It opens as an
-  A/B comparison, as before, when `--baseline`/`--experiment` name its
-  recordings, when they carry an `arm` label, or when their time ranges do
-  not overlap: separate runs, which is what `recording combine a.rez b.rez`
-  assembles, so archives combined from separate runs, before this release or
-  after it, still open A/B. An archive combined from recordings that overlap
-  in time (two hosts recorded by separate `record` processes in one run) now
-  opens combined; `--baseline`/`--experiment` still open it A/B. In the
-  static viewer, `WasmCaptureRegistry::set_compare_requested(true)` asks for
-  the comparison (the static site: `?compare=1`). A combined archive that is
-  still being written is followed as one capture, recordings with identical
+  recording's, and its charts are chosen from its own metrics.
+- **A/B is opt-in: an `arm` label, or `--baseline`/`--experiment`.** An
+  archive opens as a comparison only when its recordings carry `arm` or the
+  viewer is asked for one; nothing is inferred from when the recordings were
+  taken, since an A/B can be recorded in one run. There are three ways to say
+  it: `rezolus record --endpoint http://a:4241,arm=baseline --endpoint
+  http://b:4241,arm=experiment` (new: `arm=` labels that endpoint's
+  recording, over a run-wide `--label arm=`); `rezolus recording combine
+  a.dendro b.dendro --ab baseline=a.dendro experiment=b.dendro -o ab.dendro`
+  (new for `.rez` and `.dendro` outputs and for parquet inputs into a
+  `.rez`: each value names an input by its path or file name, every recording
+  of it is labelled `arm=baseline` or `arm=experiment`, and an input
+  recording that already carries another arm is refused); and `rezolus view
+  ab.rez --baseline host=web-01 --experiment host=web-02`
+  (`WasmCaptureRegistry::set_compare_requested`, or `?compare=1` on the static
+  site). **An archive assembled by `recording combine` before this release
+  carries no `arm` and now opens combined;** `rezolus view ab.rez --baseline
+  source=redis --experiment source=valkey` (any labels that name the two
+  recordings; `rezolus mcp describe-recording ab.rez` lists them) opens it A/B
+  as before, and `rezolus recording combine` of its inputs with `--ab`
+  rebuilds it with arms.
+- **A combined archive that is still being written is followed as one
+  capture,** recordings with identical
   label sets included; a recording whose rows have not arrived at the open
   has its sections from the start, and one added while followed gets them
   when found, with a warning to reload the page. Each host's Overview shows
@@ -183,7 +195,7 @@
   (irate(cpu_usage[5m])) / on (host) cpu_cores`, a matcher
   (`cpu_cores{host="web-01"}`), or `--recording host=web-01`.
   `extract-features`, whose record describes one recording, and every tool
-  on a comparison (recordings carrying `arm`, or of different runs) still
+  on a comparison (recordings carrying `arm`) still
   need a selector. `recording check` is unchanged: it evaluates each
   recording's own KPIs against that recording.
 

@@ -110,7 +110,7 @@ The macOS installer does not install Linux systemd services.
 | Capture a benchmark | `rezolus record -o run.dendro -- ./benchmark` | An existing agent; records for the command's lifetime. Then `rezolus view run.dendro`. |
 | Explain a past incident | [Hindsight](docs/usage.md#hindsight) | A buffer running before the incident; save recent history to a recording. |
 | Feed Prometheus | [Exporter](docs/usage.md#exporter) | A running agent; set the exporter interval to match the scrape interval. |
-| Compare a change | `rezolus recording combine baseline.dendro experiment.dendro -o ab.dendro`, then `rezolus view ab.dendro` | Two recordings in one archive; browser A/B comparison. |
+| Compare a change | `rezolus recording combine baseline.dendro experiment.dendro --ab baseline=baseline.dendro experiment=experiment.dendro -o ab.dendro`, then `rezolus view ab.dendro` | Two recordings in one archive; browser A/B comparison. |
 | Capture service and system metrics together | [Multiple endpoints](docs/usage.md#several-endpoints-in-one-archive) | Agent and/or Prometheus endpoints; one recording per endpoint in a `.dendro` archive. |
 | Investigate with an AI assistant | [MCP workflow](#analyze-with-an-agent) | A recording; discovery, feature extraction, and targeted queries. |
 | Inspect or transform captures | `rezolus recording --help` | [Recording tools](docs/usage.md#recording-tools) for metadata, annotation, combination, filtering, conversion, and snapshots. |
