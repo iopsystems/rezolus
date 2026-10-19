@@ -386,7 +386,39 @@ fn check_ab_plan(
         counts.push(recordings.len());
         labels.extend(recordings.into_iter().map(|(l, _)| l));
     }
-    stamped_labels(&labels, &plan.per_recording(&counts, files)?).map(|_| ())
+    let stamped = stamped_labels(&labels, &plan.per_recording(&counts, files)?)?;
+    check_slots(&labels, &stamped, plan)
+}
+
+/// Whether the labels an assembly ends with (`stamped`, else the
+/// recording's own) fill a comparison's two slots
+/// (`dashboard::combined::arm_slots`). With `--ab`, an error when they do
+/// not, since the output would not open as the comparison asked for;
+/// without, a warning when the inputs' own arms would be refused.
+fn check_slots(
+    labels: &[Labels],
+    stamped: &[Option<Labels>],
+    plan: &AbPlan,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let last: Vec<Labels> = labels
+        .iter()
+        .zip(stamped)
+        .map(|(l, s)| s.clone().unwrap_or_else(|| l.clone()))
+        .collect();
+    if let Err(why) = ::dashboard::combined::arm_slots(&last) {
+        if *plan == AbPlan::Nothing {
+            eprintln!(
+                "warning: the assembled recordings' arms do not fill a comparison ({why}); \
+                 `rezolus view` refuses it without --baseline/--experiment"
+            );
+        } else {
+            return Err(format!(
+                "with these arms the output would not open as a comparison: {why}"
+            )
+            .into());
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -405,17 +437,15 @@ fn stamp_rez_arms(
     files: &[PathBuf],
 ) -> Result<usize, Box<dyn std::error::Error>> {
     use crate::recorder::rez_sqlite::RezDb;
-    if *plan == AbPlan::Nothing {
-        return Ok(0);
-    }
     #[cfg(test)]
-    if FAIL_STAMP.with(|f| f.get()) {
+    if *plan != AbPlan::Nothing && FAIL_STAMP.with(|f| f.get()) {
         return Err("injected relabel failure".into());
     }
     let db = RezDb::open(path)?;
     let recordings = db.read_recordings()?;
     let labels: Vec<_> = recordings.iter().map(|r| r.meta.labels.clone()).collect();
     let stamped = stamped_labels(&labels, &plan.per_recording(counts, files)?)?;
+    check_slots(&labels, &stamped, plan)?;
     let mut n = 0;
     for (rec, new) in recordings.iter().zip(stamped) {
         if let Some(new) = new {
@@ -439,11 +469,12 @@ fn staged_output(
         )
         .into());
     }
-    let dir = output.parent().filter(|p| !p.as_os_str().is_empty());
-    let staging = match dir {
-        Some(dir) => tempfile::tempdir_in(dir),
-        None => tempfile::tempdir(),
-    }?;
+    // Beside the output, never in $TMPDIR: a rename across filesystems fails.
+    let dir = output
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    let staging = tempfile::tempdir_in(dir)?;
     let staged = staging.path().join("combined.rez");
     Ok((staging, staged))
 }
@@ -713,11 +744,12 @@ fn combine_dendro(
         )
         .into());
     }
-    let dir = output.parent().filter(|p| !p.as_os_str().is_empty());
-    let staging = match dir {
-        Some(dir) => tempfile::tempdir_in(dir),
-        None => tempfile::tempdir(),
-    }?;
+    // Beside the output, never in $TMPDIR: a rename across filesystems fails.
+    let dir = output
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    let staging = tempfile::tempdir_in(dir)?;
 
     let mut inputs: Vec<PathBuf> = Vec::with_capacity(files.len());
     let mut converted = 0usize;
@@ -779,11 +811,13 @@ fn combine_dendro(
     })?;
     // Stamped on the staged copy, so a refusal leaves no output.
     let mut stamped = 0;
-    if *plan != AbPlan::Nothing {
+    {
         let rows = dst.read_sources()?;
         let labels: Vec<_> = rows.iter().map(|r| r.meta.labels.clone()).collect();
         let per = plan.per_recording(&counts, files)?;
-        for (row, new) in rows.iter().zip(stamped_labels(&labels, &per)?) {
+        let new_labels = stamped_labels(&labels, &per)?;
+        check_slots(&labels, &new_labels, plan)?;
+        for (row, new) in rows.iter().zip(new_labels) {
             if let Some(new) = new {
                 dst.update_source_labels(row.id, &new)?;
                 stamped += 1;
@@ -791,9 +825,9 @@ fn combine_dendro(
         }
     }
     drop(dst);
-    report_arms(stamped, files, plan);
     drop(archives);
     std::fs::rename(&staged, output)?;
+    report_arms(stamped, files, plan);
     println!(
         "wrote {} with {} recording(s) from {} input(s)",
         output.display(),
@@ -3841,6 +3875,52 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("holds 2 recording(s)"), "{err}");
+    }
+
+    /// An input arm that differs from the one `--ab` gives only in case is
+    /// kept, not refused; a plan whose result has more arms than slots is
+    /// refused before anything is written.
+    #[test]
+    fn combine_ab_keeps_a_case_variant_and_refuses_three_arms() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.rez"), dir.path().join("b.rez"));
+        agent_rez(
+            &a,
+            &[("source", "rezolus"), ("host", "a"), ("arm", "Baseline")],
+        );
+        agent_rez(&b, &[("source", "rezolus"), ("host", "b")]);
+        let out = dir.path().join("ab.rez");
+        run_combine_ab(
+            &[a.clone(), b.clone()],
+            &out,
+            &["baseline=a.rez", "experiment=b.rez"],
+        )
+        .unwrap();
+        let arms: Vec<_> = archive_labels(&out)
+            .into_iter()
+            .map(|l| l["arm"].clone())
+            .collect();
+        assert_eq!(arms, ["Baseline", "experiment"]);
+
+        let three = dir.path().join("three.rez");
+        let c = dir.path().join("c.rez");
+        agent_rez(
+            &c,
+            &[("source", "rezolus"), ("host", "c"), ("arm", "control")],
+        );
+        let (d, e) = (dir.path().join("d.rez"), dir.path().join("e.rez"));
+        agent_rez(&d, &[("source", "rezolus"), ("host", "d")]);
+        agent_rez(&e, &[("source", "rezolus"), ("host", "e")]);
+        run_combine_ab(&[d, e, c.clone()], &three, &[]).unwrap();
+        let err = run_combine_ab(
+            std::slice::from_ref(&three),
+            &dir.path().join("x.rez"),
+            &["baseline=0", "experiment=1"],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("would not open as a comparison"), "{err}");
+        assert!(!dir.path().join("x.rez").exists());
     }
 
     /// A failure after the copy (here, the relabel) leaves nothing at the

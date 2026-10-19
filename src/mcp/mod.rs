@@ -5,7 +5,8 @@ use std::path::PathBuf;
 
 mod recording_selector;
 pub(crate) use recording_selector::{
-    describe_candidates, render_labels, RecordingSelector, SelectError, SelectorSyntax,
+    describe_candidates, describe_candidates_at, render_labels, RecordingSelector, SelectError,
+    SelectorSyntax,
 };
 
 pub mod anomaly_detection;
@@ -51,6 +52,8 @@ pub(crate) struct Opened {
     /// one run and no selector named one (`viewer::opens_combined`): every
     /// series carries its recording's labels. Empty otherwise.
     pub combined: Vec<std::collections::BTreeMap<String, String>>,
+    /// Each of `combined`'s position in the archive (`--ab baseline=N`).
+    pub combined_positions: Vec<usize>,
 }
 
 impl Opened {
@@ -80,6 +83,8 @@ pub(crate) enum OpenError {
     NeedsSelection {
         message: String,
         candidates: Vec<std::collections::BTreeMap<String, String>>,
+        /// Each candidate's position in the archive (`--ab baseline=N`).
+        positions: Vec<usize>,
     },
     Other(Box<dyn std::error::Error>),
 }
@@ -203,6 +208,7 @@ pub(crate) fn open_source_with_pool_labeled(
             // plain parquet file.
             rezolus_native: false,
             combined: Vec::new(),
+            combined_positions: Vec::new(),
         });
     }
 
@@ -280,6 +286,7 @@ pub(crate) fn open_source_with_pool_labeled(
             all_empty_recordings,
             rezolus_native: true,
             combined: Vec::new(),
+            combined_positions: Vec::new(),
         });
     }
 
@@ -301,6 +308,7 @@ pub(crate) fn open_source_with_pool_labeled(
             all_empty_recordings: Vec::new(),
             rezolus_native: true,
             combined: candidates,
+            combined_positions: candidate_idx,
         });
     }
 
@@ -361,7 +369,7 @@ pub(crate) fn open_source_with_pool_labeled(
             };
             return Err(OpenError::other(format!(
                 "{lead}. {listing_lead}\n{}",
-                describe_candidates(&universe, &[], syntax)
+                describe_candidates_at(&universe, &universe_idx, &[], syntax)
             )));
         }
         Err(SelectError::Ambiguous(hits)) => {
@@ -388,7 +396,10 @@ pub(crate) fn open_source_with_pool_labeled(
                     file.display()
                 )
             };
-            let message = format!("{lead}\n{}", describe_candidates(&universe, &hits, syntax));
+            let message = format!(
+                "{lead}\n{}",
+                describe_candidates_at(&universe, &universe_idx, &hits, syntax)
+            );
             // Only the NO-SELECTOR case is `NeedsSelection`: it is the one a
             // caller may legitimately render as something other than a
             // failure (`describe-recording` answers with the listing). A
@@ -398,6 +409,7 @@ pub(crate) fn open_source_with_pool_labeled(
                 OpenError::NeedsSelection {
                     message,
                     candidates: universe,
+                    positions: universe_idx,
                 }
             } else {
                 OpenError::other(message)
@@ -412,6 +424,7 @@ pub(crate) fn open_source_with_pool_labeled(
         all_empty_recordings: Vec::new(),
         rezolus_native: true,
         combined: Vec::new(),
+        combined_positions: Vec::new(),
     })
 }
 
@@ -696,6 +709,7 @@ pub(crate) fn describe_recording_output(
                 opened.combined.len()
             ),
             &opened.combined,
+            Some(&opened.combined_positions),
             syntax,
             Some("Run any tool with one of the selectors above to read that recording alone."),
         )),
@@ -713,6 +727,7 @@ pub(crate) fn describe_recording_output(
                         opened.all_empty_recordings.len()
                     ),
                     &opened.all_empty_recordings,
+                    None,
                     syntax,
                     // No invitation to analyze one: there is nothing in any
                     // of them to analyze. The selectors are still printed —
@@ -732,7 +747,11 @@ pub(crate) fn describe_recording_output(
         // so making the first tool an agent calls the one that explains what
         // to call next is the whole point — the analysis tools render this
         // same case as the failure it is for them.
-        Err(OpenError::NeedsSelection { candidates, .. }) => Ok(listing(
+        Err(OpenError::NeedsSelection {
+            candidates,
+            positions,
+            ..
+        }) => Ok(listing(
             // "recordings WITH DATA", not bare "recordings". `candidates`
             // already excludes arms that produced no rows, and
             // `open_source_with_pool`'s own NoMatch message names a dead arm
@@ -746,6 +765,7 @@ pub(crate) fn describe_recording_output(
                 candidates.len()
             ),
             &candidates,
+            Some(&positions),
             syntax,
             Some("Run any tool with one of the selectors above to analyze that recording."),
         )),
@@ -763,6 +783,7 @@ pub(crate) fn describe_recording_output(
 fn listing(
     lead: String,
     recordings: &[std::collections::BTreeMap<String, String>],
+    positions: Option<&[usize]>,
     syntax: SelectorSyntax,
     invite: Option<&str>,
 ) -> String {
@@ -771,7 +792,10 @@ fn listing(
     } else {
         Some("No recording in this archive can be selected by labels.")
     };
-    let body = describe_candidates(recordings, &[], syntax);
+    let body = match positions {
+        Some(positions) => describe_candidates_at(recordings, positions, &[], syntax),
+        None => describe_candidates(recordings, &[], syntax),
+    };
     match close {
         Some(close) => format!("{lead}\n{body}\n{close}"),
         // `body` ends in a newline (one entry per line), so trim rather than

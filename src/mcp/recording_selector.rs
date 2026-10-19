@@ -284,6 +284,20 @@ pub(crate) fn describe_candidates(
     highlight: &[usize],
     syntax: SelectorSyntax,
 ) -> String {
+    let positions: Vec<usize> = (0..all.len()).collect();
+    describe_candidates_at(all, &positions, highlight, syntax)
+}
+
+/// [`describe_candidates`], where `positions[i]` is recording `i`'s position
+/// in its archive (`RezReader::open_recordings` order, which `recording
+/// combine FILE --ab baseline=N experiment=M` takes): `all` may leave out
+/// recordings with no rows.
+pub(crate) fn describe_candidates_at(
+    all: &[BTreeMap<String, String>],
+    positions: &[usize],
+    highlight: &[usize],
+    syntax: SelectorSyntax,
+) -> String {
     let indices: Vec<usize> = if highlight.is_empty() {
         (0..all.len()).collect()
     } else {
@@ -301,16 +315,35 @@ pub(crate) fn describe_candidates(
             // re-wraps, and one 300-column line is what an agent then quotes
             // back at a user.
             const IND: &str = "    ";
+            // It and the recordings every selector for it also names, by
+            // their archive positions.
+            let group: Vec<usize> = (0..all.len())
+                .filter(|&j| j == i || labels.iter().all(|(k, v)| all[j].get(k) == Some(v)))
+                .map(|j| positions[j])
+                .collect();
+            let (p, q) = (group[0], *group.get(1).unwrap_or(&group[0]));
+            let others = if group.len() > 2 {
+                format!(
+                    " (positions {})",
+                    group
+                        .iter()
+                        .map(|p| p.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            } else {
+                String::new()
+            };
             out.push_str(&format!(
-                "  - {rendered}\n\
+                "  - {rendered} (position {})\n\
                  {IND}cannot be selected by labels — every selector that names it also \
                  names another\n\
                  {IND}recording in this archive. To compare them, label them by position: \
                  `rezolus recording\n\
-                 {IND}combine FILE --ab baseline=0 experiment=1 -o ab.rez` (positions in \
-                 this listing's order,\n\
-                 {IND}from 0); for a new capture, give each --endpoint its own source=NAME \
-                 or arm=NAME.\n"
+                 {IND}combine FILE --ab baseline={p} experiment={q} -o ab.rez`{others};\n\
+                 {IND}for a new capture, give each --endpoint its own source=NAME or \
+                 arm=NAME.\n",
+                positions[i]
             ));
             continue;
         };
@@ -936,6 +969,24 @@ mod tests {
             out.contains("combine FILE --ab baseline=0 experiment=1"),
             "must give the fix for the archive at hand: {out}"
         );
+    }
+
+    /// The advice for twins names their own positions in the archive, the
+    /// ones `recording combine FILE --ab` takes, also when the listing leaves
+    /// out an empty recording before them.
+    #[test]
+    fn twin_advice_names_their_archive_positions() {
+        let all = vec![
+            labels(&[("source", "c16")]),
+            labels(&[("source", "demo")]),
+            labels(&[("source", "demo")]),
+        ];
+        let out = describe_candidates(&all, &[], SelectorSyntax::Flag("--recording"));
+        assert!(out.contains("--ab baseline=1 experiment=2"), "{out}");
+        assert!(!out.contains("baseline=0"), "{out}");
+        let out =
+            describe_candidates_at(&all, &[0, 2, 3], &[], SelectorSyntax::Flag("--recording"));
+        assert!(out.contains("--ab baseline=2 experiment=3"), "{out}");
     }
 
     /// A recording whose labels are a SUBSET of another's is just as
