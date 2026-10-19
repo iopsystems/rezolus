@@ -370,12 +370,27 @@ per-cgroup deltas are computed from each thread's `utime`/`stime` whether
 or not per-task series are exported, so turning the export off does not
 change the host or cgroup totals. Exporting that per-task accounting as
 `task_cpu_usage` is the option `task_attribution`, **off by default**. On, it
-costs a task-metadata event per new thread (comm and three cgroup names),
-an exit event per thread, a walk of the per-pid map's populated slots each
-time a snapshot is served, and one series per thread in every recording,
-which on a host with thread
-churn is most of the recording. Set `task_attribution = true` in
-`[samplers.cpu_usage]` (or `[defaults]`) to get it.
+costs a task-metadata event per new thread (comm and three cgroup names)
+and per rename, an exit event per thread, a walk of the per-pid map's
+populated slots each time a snapshot is served, and one series per thread
+plus one per rename in every recording, which on a host with thread churn
+or frequent renames is most of the recording. Set `task_attribution = true`
+in `[samplers.cpu_usage]` (or `[defaults]`) to get it.
+
+`comm` follows renames. A thread whose name changes (`pthread_setname_np`,
+`prctl(PR_SET_NAME)`, a write to `/proc/<pid>/task/<tid>/comm`, or exec) is
+relabelled with the new name, and from then on it is a new series. The new
+series continues the thread's cumulative counter rather than starting from
+zero, so read it with `rate()` or `increase()`, not as raw values. A rename
+also re-reads `cgroup`, so a thread that has moved cgroups since it was
+first seen gets its current one. The kernel keeps 15 bytes of a thread's
+name, so a longer name arrives truncated.
+
+The Prometheus exporter drops the internal `__uid__` label, so in its output
+a thread that returns to an earlier name (A, then B, then A) with the same
+cgroup continues the first A series after a gap. `rate()` or `increase()` over a range that
+spans the gap counts the CPU used under B in the A series as well. Rezolus
+recordings keep the two A series apart.
 
 ## Drive
 

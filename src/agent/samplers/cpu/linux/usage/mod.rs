@@ -3,6 +3,7 @@
 //! * `softirq_entry`
 //! * `softirq_exit`
 //! * `sched_process_exit`
+//! * `task_rename` — only with `task_attribution = true`
 //!
 //! And produces these stats:
 //! * `cpu_usage`
@@ -171,6 +172,32 @@ fn init(config: Arc<Config>) -> SamplerResult {
     let cgroup_attribution = config.cgroup_attribution_or(NAME, true);
 
     let fentry = kernel_can_fentry("cpuacct_account_field");
+    let btf = kernel_has_btf();
+
+    // BTF present: the tp_btf twin of each tracepoint program, else its
+    // raw_tp twin. cpuacct_account_field: the fentry twin (cheaper dispatch)
+    // where fentry can attach to it (`kernel_can_fentry`), else the kprobe.
+    // task_rename relabels per-task series, so neither twin loads without
+    // task_attribution.
+    let mut disabled = vec![
+        if btf {
+            "handle__sched_process_exit_raw"
+        } else {
+            "handle__sched_process_exit_btf"
+        },
+        if fentry {
+            "cpuacct_account_field_kprobe"
+        } else {
+            "cpuacct_account_field_fentry"
+        },
+    ];
+    if !task_attribution {
+        disabled.extend(["handle__task_rename_btf", "handle__task_rename_raw"]);
+    } else if btf {
+        disabled.push("handle__task_rename_raw");
+    } else {
+        disabled.push("handle__task_rename_btf");
+    }
 
     let mut builder = BpfBuilder::new(
         &config,
@@ -184,21 +211,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .cpu_counters("cpu_usage", cpu_usage, &CPU_USAGE_ACQ)
     .cpu_counters("softirq", softirq, &SOFTIRQ_ACQ)
     .cpu_counters("softirq_time", softirq_time, &SOFTIRQ_TIME_ACQ)
-    // BTF present: the tp_btf twin of sched_process_exit, else its raw_tp
-    // twin. cpuacct_account_field: the fentry twin (cheaper dispatch) where
-    // fentry can attach to it (`kernel_can_fentry`), else the kprobe.
-    .disabled_programs(&[
-        if kernel_has_btf() {
-            "handle__sched_process_exit_raw"
-        } else {
-            "handle__sched_process_exit_btf"
-        },
-        if fentry {
-            "cpuacct_account_field_kprobe"
-        } else {
-            "cpuacct_account_field_fentry"
-        },
-    ])
+    .disabled_programs(&disabled)
     // Losing this probe (e.g. CONFIG_TICK_CPU_ACCOUNTING kernels) drops the
     // entire CPU-time-by-category breakdown; label it so the health reason is
     // legible. Require whichever variant is the active one.
@@ -315,5 +328,54 @@ impl OpenSkelExt for ModSkel<'_> {
             "{NAME} handle__sched_process_exit_raw() BPF instruction count: {}",
             self.progs.handle__sched_process_exit_raw.insn_cnt()
         );
+        debug!(
+            "{NAME} handle__task_rename_btf() BPF instruction count: {}",
+            self.progs.handle__task_rename_btf.insn_cnt()
+        );
+        debug!(
+            "{NAME} handle__task_rename_raw() BPF instruction count: {}",
+            self.progs.handle__task_rename_raw.insn_cnt()
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use metriken::group::UID_LABEL;
+
+    fn task_info(pid: u32, comm: &str) -> Vec<u8> {
+        let mut info = bpf::types::task_info {
+            pid,
+            tgid: pid,
+            ..Default::default()
+        };
+        info.comm[..comm.len()].copy_from_slice(comm.as_bytes());
+        unsafe { plain::as_bytes(&info) }.to_vec()
+    }
+
+    /// The BPF side sends task_info again when a thread is renamed. This is
+    /// the userspace half: the same labels keep the occupant, new labels on
+    /// the live slot replace it.
+    #[test]
+    fn a_rename_is_a_new_occupant_of_the_same_slot() {
+        // TASK_IDENTITY is process-global; no other test uses this pid.
+        let pid = 4_000_001;
+        let slot = pid_slot(pid as usize);
+
+        handle_task_info(&task_info(pid, "bash"));
+        let first = TASK_CPU_USAGE.load_metadata(slot).unwrap();
+        assert_eq!(first["comm"], "bash");
+
+        handle_task_info(&task_info(pid, "bash"));
+        let again = TASK_CPU_USAGE.load_metadata(slot).unwrap();
+        assert_eq!(again[UID_LABEL], first[UID_LABEL]);
+
+        handle_task_info(&task_info(pid, "yes"));
+        let renamed = TASK_CPU_USAGE.load_metadata(slot).unwrap();
+        assert_eq!(renamed["comm"], "yes");
+        assert_ne!(renamed[UID_LABEL], first[UID_LABEL]);
+
+        TASK_IDENTITY.release(slot);
     }
 }

@@ -237,10 +237,11 @@ u64 attach_ns = 0;
  * are computed from each task's utime/stime baseline, and exited tasks' CPU
  * is folded from task_cpu_usage into the exited counters -- so what the
  * switch removes is only what exists for the per-task series: the task_info
- * event (a ringbuf reserve and four string reads per new task) and the
- * task_exit event. Userspace does not read task_cpu_usage or drain either
- * ringbuf when it is off. Written into read-only data before load, so the
- * verifier removes the sends rather than testing a flag per event.
+ * event (a ringbuf reserve and four string reads per new task), the
+ * task_exit event, and the task_rename program, which is not loaded.
+ * Userspace does not read task_cpu_usage or drain either ringbuf when it is
+ * off. Written into read-only data before load, so the verifier removes the
+ * sends rather than testing a flag per event.
  */
 const volatile __u8 task_attribution = 0;
 
@@ -553,6 +554,72 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
     }
 
     return 0;
+}
+
+/*
+ * A live task's comm changed: pthread_setname_np, prctl(PR_SET_NAME), a write
+ * to /proc/<pid>/task/<tid>/comm, or exec. Send its task_info again so its
+ * series is relabelled; handle_new_task reads comm only when the task is
+ * first seen. The tracepoint fires in __set_task_comm before the new name is
+ * copied into task->comm, so the name is taken from the `comm` argument.
+ *
+ * Only for the instance whose first task_info has been submitted: marker
+ * equal to start_time, METADATA_PENDING clear. One with METADATA_PENDING set
+ * gets its first send from a later handle_new_task, which reads task->comm.
+ * A rename whose send finds the ringbuf full sets METADATA_PENDING, and
+ * handle_new_task's retry reads task->comm.
+ *
+ * Two windows can leave the old name in place until the next rename: a
+ * handle_new_task (first send or retry) that runs between this tracepoint
+ * and the copy reads the old task->comm; and from 6.14, which no longer
+ * takes task_lock in __set_task_comm, two concurrent renames of one thread
+ * can be traced in one order and copied in the other.
+ *
+ * Loaded only with task_attribution on (see disabled_programs in mod.rs).
+ */
+static __always_inline int account__task_rename(u64* ctx, bool btf) {
+    /* TP_PROTO(struct task_struct *task, const char *comm) */
+    struct task_struct* task = (struct task_struct*)ctx[0];
+    const char* comm = (const char*)ctx[1];
+
+    u32 pid = BTF_READ(btf, task, pid);
+    if (pid == 0 || pid >= MAX_PID)
+        return 0;
+
+    u32 slot = pid_slot(pid);
+
+    u64* marker = bpf_map_lookup_elem(&task_start_times, &slot);
+    if (!marker)
+        return 0;
+
+    u64 start_time = BTF_READ(btf, task, start_time);
+    if (*marker != start_time)
+        return 0;
+
+    struct task_info* info = bpf_ringbuf_reserve(&task_info, sizeof(struct task_info), 0);
+    if (!info) {
+        u64 pending = start_time | METADATA_PENDING;
+        bpf_map_update_elem(&task_start_times, &slot, &pending, BPF_ANY);
+        return 0;
+    }
+
+    __builtin_memset(info, 0, sizeof(struct task_info));
+    populate_task_info(task, info);
+    __builtin_memset(&info->comm, 0, TASK_COMM_LEN);
+    bpf_probe_read_kernel_str(&info->comm, TASK_COMM_LEN, comm);
+    bpf_ringbuf_submit(info, 0);
+
+    return 0;
+}
+
+SEC("tp_btf/task_rename")
+int handle__task_rename_btf(u64* ctx) {
+    return account__task_rename(ctx, true);
+}
+
+SEC("raw_tp/task_rename")
+int handle__task_rename_raw(u64* ctx) {
+    return account__task_rename(ctx, false);
 }
 
 SEC("tracepoint/irq/softirq_entry")

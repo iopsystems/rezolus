@@ -14,7 +14,7 @@
 #define MAX_PID 4194304
 #define TASK_RINGBUF_CAPACITY 262144
 
-// Task info sent when a new task is observed
+// Task info sent when a task is first observed, and again when it is renamed
 struct task_info {
     u32 pid;
     u32 tgid;
