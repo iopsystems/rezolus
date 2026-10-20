@@ -596,6 +596,10 @@ fn the_arms_fill_the_slots_in_both_viewers() {
     // its JsValue error aborts outside wasm32.
 }
 
+/// The experiment's own events in [`concurrent_ab`].
+pub(crate) const SVC_B_EVENTS: &str =
+    r#"{"events":[{"timestamp":1700000001000000000,"kind":"run_start","description":"bench"}]}"#;
+
 /// The owner's concurrent A/B: two services with `arm=`, each carrying
 /// [`svc_template`], and a Rezolus agent without one on the same host (with
 /// systeminfo), recorded in one run.
@@ -617,7 +621,12 @@ pub(crate) fn concurrent_ab(dir: &Path) -> PathBuf {
             },
             Recording {
                 labels: &[("source", "svcB"), ("host", "h"), ("arm", "experiment")],
-                metadata: &[("source", "svcB"), ("service_queries", &template)],
+                metadata: &[
+                    ("source", "svcB"),
+                    ("service_queries", &template),
+                    // Its own events (`record -- cmd`), not a report's.
+                    ("events", SVC_B_EVENTS),
+                ],
                 cpus: 0,
                 busy_ns: 0,
                 counter: Some(("svc_requests", 20)),
@@ -979,7 +988,7 @@ async fn a_report_of_the_concurrent_ab_reopens_with_its_pins() {
 }
 
 async fn report_round_trip(dir: &Path, path: &Path, ext: &str) {
-    use crate::parquet_metadata::{KEY_REPORT, KEY_SELECTION};
+    use crate::parquet_metadata::{KEY_EVENTS, KEY_REPORT, KEY_SELECTION};
     let body = r#"{"entries":[{"chartId":"busy-pct","section":"cpu@h","promql_query":"irate(cpu_usage{__capture__=\"h\"}[5m])","single_capture":true}],"trim_columns":true}"#;
 
     // What a reload finds: selection and report mode, server and WASM.
@@ -1005,6 +1014,23 @@ async fn report_round_trip(dir: &Path, path: &Path, ext: &str) {
         let meta: serde_json::Value =
             serde_json::from_str(&reg.file_metadata_json("baseline").unwrap()).unwrap();
         assert_eq!(meta[KEY_REPORT], "trimmed", "{name}");
+    };
+    // The experiment's own events, in a report: kept by every save.
+    let svc_b_events = |bytes: &[u8]| -> Option<String> {
+        let events = |m: &std::collections::BTreeMap<String, String>| m.get(KEY_EVENTS).cloned();
+        if ext == "dendro" {
+            let archive = dendro::archive::Archive::open_bytes(bytes.to_vec()).unwrap();
+            let sources = archive.read_sources().unwrap();
+            let svc = sources.iter().find(|s| s.meta.labels["source"] == "svcB")?;
+            events(&svc.meta.metadata)
+        } else {
+            let db = crate::recorder::rez_sqlite::RezDb::open_bytes(bytes.to_vec()).unwrap();
+            let recordings = db.read_recordings().unwrap();
+            let svc = recordings
+                .iter()
+                .find(|r| r.meta.labels["source"] == "svcB")?;
+            events(&svc.meta.metadata)
+        }
     };
     // The `source` of each recording a report's markers are on.
     let marked = |bytes: &[u8]| -> Vec<String> {
@@ -1039,6 +1065,11 @@ async fn report_round_trip(dir: &Path, path: &Path, ext: &str) {
         .await
         .unwrap();
     assert_eq!(marked(&server), ["svcA"], "{ext}");
+    assert_eq!(
+        svc_b_events(&server).as_deref(),
+        Some(SVC_B_EVENTS),
+        "{ext}"
+    );
     reopen("server", &server);
 
     let mut reg = viewer::WasmCaptureRegistry::new();
@@ -1047,6 +1078,7 @@ async fn report_round_trip(dir: &Path, path: &Path, ext: &str) {
         .unwrap();
     let wasm = reg.save_with_selection(body).unwrap();
     assert_eq!(marked(&wasm), ["svcA"], "{ext}");
+    assert_eq!(svc_b_events(&wasm).as_deref(), Some(SVC_B_EVENTS), "{ext}");
     reopen("wasm", &wasm);
 
     // Saved onto the archive's first recording, as before the fix.
@@ -1057,11 +1089,26 @@ async fn report_round_trip(dir: &Path, path: &Path, ext: &str) {
         Some(&keep),
         None,
         body,
-        None,
+        Some(r#"{"events":[{"timestamp":1700000002000000000,"description":"old"}]}"#),
     )
     .unwrap();
     assert_eq!(marked(&old), ["rezolus"], "{ext}");
     reopen("old", &old);
+    // The old report's events, on the agent beside the comparison, reach
+    // the baseline's metadata, where the page reads them.
+    let old_report = dir.join(format!("old-events.{ext}"));
+    std::fs::write(&old_report, &old).unwrap();
+    let meta: serde_json::Value = serde_json::from_str(
+        &view(&old_report, &[])
+            .captures
+            .file_metadata_by_id("baseline")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        meta["events"]["events"][0]["description"], "old",
+        "{ext}: {meta}"
+    );
 
     // Saved again from that report: only svcA carries a report.
     let old_path = dir.join(format!("old-source.{ext}"));
@@ -1076,6 +1123,7 @@ async fn report_round_trip(dir: &Path, path: &Path, ext: &str) {
         .await
         .unwrap();
     assert_eq!(marked(&again), ["svcA"], "{ext}");
+    assert_eq!(svc_b_events(&again).as_deref(), Some(SVC_B_EVENTS), "{ext}");
 }
 
 /// Agents compared with the `cpu_usage` sampler off: the baseline is still
@@ -1184,15 +1232,16 @@ fn a_recordings_catalog_opens_only_its_own_tables() {
     assert!(reader.opened_tables().len() > per_recording);
 }
 
+/// A source of [`dendro_of`]: its labels, and the snapshot it records at a
+/// tick.
+type FixtureSource<'a> = (
+    &'a [(&'a str, &'a str)],
+    &'a dyn Fn(u64) -> metriken_exposition::Snapshot,
+);
+
 /// A dendro archive of `sources`, each a label set and the snapshot it
 /// records at tick `i`, three ticks each.
-fn dendro_of(
-    path: &Path,
-    sources: &[(
-        &[(&str, &str)],
-        &dyn Fn(u64) -> metriken_exposition::Snapshot,
-    )],
-) {
+fn dendro_of(path: &Path, sources: &[FixtureSource<'_>]) {
     use crate::dendro_copy::fixtures::{ANCHOR, SECOND};
     use metriken_storage::{ArchiveWriter, WriterConfig};
     let mut writer = ArchiveWriter::create(path, WriterConfig::default()).unwrap();

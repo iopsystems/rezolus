@@ -172,7 +172,9 @@
   in the badge after the arms ("also: …"), never as a third arm. Their
   system info and metadata are listed with the baseline's, and a
   comparison whose baseline has no system metrics opens on its first
-  service section. So `record
+  service section. A beside recording's charts are drawn over the
+  comparison's time range, not its own: an agent recorded longer than the
+  arms shows only the rows inside the arms' span. So `record
   --endpoint svcA,arm=baseline --endpoint svcB,arm=experiment --endpoint
   agent` compares the two services and shows the agent's sections beside
   them. One recording per arm is the limit for now: one arm among unarmed

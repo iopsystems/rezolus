@@ -1183,7 +1183,7 @@ mod tests {
             Some(&keep),
             None,
             r#"{"entries":[]}"#,
-            None,
+            Some(r#"{"events":[{"timestamp":1700000002000000000,"description":"old"}]}"#),
         )
         .unwrap();
         let report = dir.path().join("report.rez");
@@ -1195,6 +1195,10 @@ mod tests {
             state.trimmed_report_marker.read().as_deref(),
             Some("trimmed")
         );
+        // Its events reach the baseline's metadata, where the page reads them.
+        let meta: serde_json::Value =
+            serde_json::from_str(&state.captures.file_metadata_by_id("baseline").unwrap()).unwrap();
+        assert_eq!(meta["events"]["events"][0]["description"], "old", "{meta}");
     }
 
     /// Save as Report through the handler; the report's bytes.

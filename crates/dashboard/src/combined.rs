@@ -1393,7 +1393,9 @@ mod tests {
             &[("selection", "A"), ("events", "{}"), ("report", "trimmed")],
         );
         let none = store(0..2, &[("events", "stray")]);
-        let markers = report_markers(&[&none, &baseline, &agent]);
+        // A marker without a selection is not a report's.
+        let marker_only = store(0..2, &[("report", "trimmed"), ("events", "own")]);
+        let markers = report_markers(&[&none, &marker_only, &baseline, &agent]);
         assert_eq!(
             markers,
             [

@@ -525,7 +525,8 @@ fn embed_rez_report_markers(
     }
     db.update_recording_metadata(anchor.id, &metadata)?;
     // Only the anchor carries a report: one copied from an earlier report
-    // onto another recording would be read instead on reload.
+    // onto another recording would be read instead on reload. A recording's
+    // own events stay ([`strip_report_keys`]).
     for other in recordings.iter().filter(|r| r.id != anchor.id) {
         let mut metadata = other.meta.metadata.clone();
         if strip_report_keys(&mut metadata) {
@@ -535,14 +536,16 @@ fn embed_rez_report_markers(
     Ok(())
 }
 
-/// Remove a report's selection, marker and events from `metadata`; whether
-/// any was there.
+/// Remove an earlier report's keys from `metadata`. A recording without a
+/// selection keeps its events: they are its own (`recording annotate
+/// --event`, `record -- cmd`'s run_start/run_end), not a report's.
 fn strip_report_keys(metadata: &mut BTreeMap<String, String>) -> bool {
-    let before = metadata.len();
-    for key in [KEY_SELECTION, KEY_REPORT, KEY_EVENTS] {
-        metadata.remove(key);
+    if metadata.remove(KEY_SELECTION).is_none() {
+        return false;
     }
-    metadata.len() != before
+    metadata.remove(KEY_REPORT);
+    metadata.remove(KEY_EVENTS);
+    true
 }
 
 /// The item of `items` whose labels are `anchor`, else the first.
