@@ -2,6 +2,8 @@
 
 ### Security
 
+- rustls-webpki 0.103.16 and webpki-root-certs 1.0.10, for RUSTSEC-2026-0382
+  and RUSTSEC-2026-0383. (#1510)
 - rustls 0.23.46, for RUSTSEC-2026-0346 through 0349. (#1467)
 - No `thrift` (GHSA-2f9f-gq7v-9h6m), through parquet 60, and no `lru` 0.12
   (GHSA-rhfx-m35p-ff5j), through metriken-query 0.37, metriken-storage 0.3
