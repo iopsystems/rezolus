@@ -348,14 +348,14 @@ pub fn dump(buffer: &Path, dest: &Path, range: &TimeRange) -> Result<Summary, St
 
     // A second connection, deliberately: the writer thread owns its own.
     let src = Archive::open(buffer).map_err(err)?;
-    // One snapshot for the stream list the lead is decided from and for the
-    // copy, so a long table the writer adds meanwhile is in both or neither.
-    src.read_snapshot(|src| {
-        let streams = crate::dendro_copy::streams(src).map_err(dendro::Error::Message)?;
-        let spec = match (range.start_ns(), range.end_ns()) {
+    // The spec is decided in the copy's own read snapshot, so a long table
+    // the writer adds meanwhile is in both the stream list the lead is
+    // decided from and the copy, or in neither.
+    crate::dendro_copy::copy_with(&src, &staged, |src| {
+        Ok(match (range.start_ns(), range.end_ns()) {
             (None, None) => CopySpec::everything(),
             (start, end) => {
-                let long = streams
+                let long = crate::dendro_copy::streams(src)?
                     .iter()
                     .any(|s| ::rez::occupants::table_of(s).is_some());
                 let lead = if long { restate_every_ns() } else { 0 };
@@ -366,10 +366,8 @@ pub fn dump(buffer: &Path, dest: &Path, range: &TimeRange) -> Result<Summary, St
                     ..CopySpec::everything()
                 }
             }
-        };
-        crate::dendro_copy::copy(src, &staged, &spec).map_err(dendro::Error::Message)
-    })
-    .map_err(err)?;
+        })
+    })?;
     drop(src);
 
     // The buffer's source is still running and so is never complete; this

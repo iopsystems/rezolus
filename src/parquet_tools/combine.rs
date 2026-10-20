@@ -4241,6 +4241,55 @@ mod tests {
         assert!(spans.contains(&7.0) && spans.contains(&5.0), "{spans:?}");
     }
 
+    /// Inputs still being recorded have their long tables' last rows in the
+    /// WAL, and combine seals that tail with an encoder built from each
+    /// input's own streams. The two inputs name their long table differently,
+    /// so an encoder that knew no long stream, or only the first input's,
+    /// would encode a tail as wide and the occupants would not be found by
+    /// their labels.
+    #[test]
+    fn combine_seals_each_input_s_long_tail_as_long() {
+        use metriken_query::MetricsSource;
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.dendro"), dir.path().join("b.dendro"));
+        crate::dendro_copy::fixtures::recorded_in(&a, 10, false, "threads/tasks");
+        crate::dendro_copy::fixtures::recorded_in(&b, 10, false, "procs/tasks");
+        for (input, table) in [(&a, "threads/tasks"), (&b, "procs/tasks")] {
+            let db = dendro::archive::Archive::open(input).unwrap();
+            let id = db.read_sources().unwrap()[0].id;
+            assert!(
+                db.live_wal_span(id, table).unwrap().rows > 0,
+                "{table}: the fixture leaves long rows in the WAL"
+            );
+        }
+        let out = dir.path().join("ab.dendro");
+        run_combine(&[a, b], &out).unwrap();
+
+        let readers = crate::rez_reader::RezReader::open_recordings(
+            &out,
+            metriken_storage::BufferPool::new(64 * 1024 * 1024),
+        )
+        .unwrap();
+        assert_eq!(readers.len(), 2);
+        for (_, reader) in &readers {
+            let (start, end) = reader.time_range().unwrap();
+            let metriken_query::QueryResult::Matrix { result } = reader
+                .query_range("irate(task_ops{comm=\"nginx\"}[3s])", start, end, 1.0)
+                .unwrap()
+            else {
+                panic!("a matrix");
+            };
+            assert_eq!(result.len(), 1, "the occupant is found by its label");
+            let last = result[0].values.last().unwrap();
+            assert_eq!(
+                (last.0, last.1),
+                (end, 10.0),
+                "through the last row, which came from the WAL: {:?}",
+                result[0].values
+            );
+        }
+    }
+
     /// The same source twice would count every value twice: refused, and
     /// nothing is left at the output.
     #[test]

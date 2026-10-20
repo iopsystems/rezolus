@@ -687,10 +687,13 @@ fn build_dendro_report(
     let mut dst = ArchiveMut::create_in_memory().map_err(err)?;
     // The source is bytes in memory, so nothing can write it during the
     // copy; the encoder is built in the copy's snapshot all the same, as
-    // metriken-storage documents for a source that could be live.
-    src.read_snapshot(|src| {
-        let encoder = metriken_storage::Encoder::for_archive(src)?;
-        dst.transaction(|tx| copy_sources_into(src, tx, &spec, &encoder))
+    // metriken-storage documents for a source that could be live, and the
+    // destination commits outside it, the order rezolus's `dendro_copy` uses.
+    dst.transaction(|tx| {
+        src.read_snapshot(|src| {
+            let encoder = metriken_storage::Encoder::for_archive(src)?;
+            copy_sources_into(src, tx, &spec, &encoder)
+        })
     })
     .map_err(err)?;
 
