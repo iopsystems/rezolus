@@ -809,6 +809,10 @@ mod btf_tests {
             })
             .collect();
 
+        // Shadowed names compared, reported so a run shows whether that
+        // branch was reached on this host.
+        let shadowed = std::cell::Cell::new(0usize);
+
         // `earlier`: the module indexes `find` searches before this object's,
         // with their BTF.
         let check = |raw: &RawBtf,
@@ -824,6 +828,7 @@ mod btf_tests {
                             .then(|| earlier.iter().find(|(i, _)| i.funcs.contains(&name)))
                             .flatten();
                         if let Some((_, first_raw)) = first {
+                            shadowed.set(shadowed.get() + 1);
                             assert_eq!(
                                 index.funcs.get(&name).flatten(),
                                 raw.func_arg_count(&name),
@@ -850,6 +855,7 @@ mod btf_tests {
                             })
                             .flatten();
                         if let Some((_, first_raw)) = first {
+                            shadowed.set(shadowed.get() + 1);
                             assert_eq!(
                                 index.tracepoints.get(tracepoint).flatten(),
                                 raw.tracepoint_arg_count(tracepoint),
@@ -888,10 +894,16 @@ mod btf_tests {
             let earlier: Vec<(&BtfIndex, &RawBtf)> = btf.modules[..position]
                 .iter()
                 .zip(&module_raws)
-                .filter_map(|((_, index), raw)| Some((index.as_ref()?, raw.as_ref()?)))
+                .filter_map(|((_, index), raw)| {
+                    Some((
+                        index.as_ref()?,
+                        raw.as_ref().expect("indexed module BTF parses"),
+                    ))
+                })
                 .collect();
             check(&raw, index, 13, &earlier);
         }
+        eprintln!("{} shadowed module names checked", shadowed.get());
 
         // Function names vmlinux defines more than once with different
         // arities (static functions in different translation units), where
