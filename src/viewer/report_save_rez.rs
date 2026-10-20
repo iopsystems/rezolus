@@ -7,8 +7,8 @@
 //! file into bytes, since the server has a path and the shared crate works on
 //! bytes. A v2 (tar) source is not supported here — `open_bytes` needs a v3
 //! SQLite image; upgrade the archive first. A dendro source saves to a dendro
-//! report, the same copy `recording filter` makes, with the markers stamped on
-//! its first source.
+//! report, the same copy `recording filter` makes. The markers are stamped on
+//! the baseline's recording (`anchor`), else the first.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -19,6 +19,7 @@ use std::path::Path;
 /// selection/events, stamp the report marker).
 pub fn build_rez_report(
     source_path: &Path,
+    anchor: Option<&std::collections::BTreeMap<String, String>>,
     keep_metrics: Option<&BTreeSet<String>>,
     range: Option<::report_save::TimeRange>,
     selection_json: &str,
@@ -28,6 +29,7 @@ pub fn build_rez_report(
         .map_err(|e| format!("failed to read {}: {e}", source_path.display()))?;
     ::report_save::build_rez_report_from_rez(
         &bytes,
+        anchor,
         keep_metrics,
         range,
         selection_json,
@@ -53,7 +55,8 @@ mod tests {
         populated_v3_rez(&src, "baseline", &["cpu_usage", "scheduler"], 6);
 
         let keep: BTreeSet<String> = ["0".to_string()].into_iter().collect();
-        let bytes = build_rez_report(&src, Some(&keep), None, r#"{"entries":[]}"#, None).unwrap();
+        let bytes =
+            build_rez_report(&src, None, Some(&keep), None, r#"{"entries":[]}"#, None).unwrap();
 
         let out = dir.path().join("report.rez");
         std::fs::write(&out, &bytes).unwrap();
@@ -85,7 +88,7 @@ mod tests {
         let src = dir.path().join("src.rez");
         populated_v3_rez(&src, "baseline", &["cpu_usage", "scheduler"], 6);
 
-        let bytes = build_rez_report(&src, None, None, r#"{"entries":[]}"#, None).unwrap();
+        let bytes = build_rez_report(&src, None, None, None, r#"{"entries":[]}"#, None).unwrap();
         let out = dir.path().join("report.rez");
         std::fs::write(&out, &bytes).unwrap();
         let db = RezDb::open(&out).unwrap();
@@ -121,7 +124,7 @@ mod tests {
             db.update_recording_metadata(recs[0].id, &md).unwrap();
         }
 
-        let bytes = build_rez_report(&src, None, None, "{}", None).unwrap();
+        let bytes = build_rez_report(&src, None, None, None, "{}", None).unwrap();
         let out = dir.path().join("report.rez");
         std::fs::write(&out, &bytes).unwrap();
         let db = RezDb::open(&out).unwrap();
@@ -186,6 +189,7 @@ mod tests {
 
         let bytes = build_rez_report(
             &src,
+            None,
             Some(&set(&["task_ops"])),
             None,
             r#"{"entries":[]}"#,
@@ -233,7 +237,8 @@ mod tests {
         let src = dir.path().join("src.dendro");
         crate::dendro_copy::fixtures::recorded(&src, 10, true);
 
-        let bytes = build_rez_report(&src, Some(&set(&["mem_free"])), None, "{}", None).unwrap();
+        let bytes =
+            build_rez_report(&src, None, Some(&set(&["mem_free"])), None, "{}", None).unwrap();
         let (streams, _) = dendro_report(&bytes);
         assert_eq!(streams, vec!["memory/meminfo".to_string()]);
     }
@@ -246,7 +251,8 @@ mod tests {
         let src = dir.path().join("src.dendro");
         crate::dendro_copy::fixtures::recorded(&src, 10, true);
 
-        let bytes = build_rez_report(&src, None, None, "{}", Some(r#"{"events":[]}"#)).unwrap();
+        let bytes =
+            build_rez_report(&src, None, None, None, "{}", Some(r#"{"events":[]}"#)).unwrap();
         let (streams, md) = dendro_report(&bytes);
         assert_eq!(
             streams,
@@ -288,7 +294,7 @@ mod tests {
             start_ns: ANCHOR + 605 * SECOND,
             end_ns: ANCHOR + 650 * SECOND,
         };
-        let bytes = build_rez_report(&src, None, Some(range), "{}", None).unwrap();
+        let bytes = build_rez_report(&src, None, None, Some(range), "{}", None).unwrap();
         let out = dir.path().join("report.dendro");
         std::fs::write(&out, &bytes).unwrap();
 
@@ -342,10 +348,10 @@ mod tests {
             start_ns: ANCHOR + 2_000_000_000,
             end_ns: ANCHOR + 3_000_000_000,
         };
-        let err = build_rez_report(&src, None, Some(after), "{}", None).unwrap_err();
+        let err = build_rez_report(&src, None, None, Some(after), "{}", None).unwrap_err();
         assert!(err.contains("no rows"), "{err}");
         let rows = |range| {
-            let bytes = build_rez_report(&src, None, Some(range), "{}", None).unwrap();
+            let bytes = build_rez_report(&src, None, None, Some(range), "{}", None).unwrap();
             let db = RezDb::open_bytes(bytes).unwrap();
             let id = db.read_recordings().unwrap()[0].id;
             db.segments_overlapping(id, "cpu_usage", 0, u64::MAX)

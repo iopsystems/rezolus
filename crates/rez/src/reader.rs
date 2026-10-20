@@ -38,10 +38,11 @@ fn wrap(readers: metriken_storage::LabeledRecordings) -> LabeledRecordings {
 impl RezReader {
     /// Open an archive at `path`, flattening every recording into one view.
     ///
-    /// No production caller: the viewer and `mcp` open recordings
-    /// individually. A query over the flattened view is answered from every
-    /// recording, each series under its recording's labels; the tests below
-    /// pin that, and that composing such a view is refused.
+    /// A query over the flattened view is answered from every recording,
+    /// each series under its recording's labels; the tests below pin that,
+    /// and that composing such a view is refused. The viewer and `mcp` open
+    /// the recordings and join them with [`combine`](Self::combine), which
+    /// also says which labels each recording's series carry.
     #[allow(dead_code)]
     pub fn open_with_pool(
         path: &Path,
@@ -74,6 +75,49 @@ impl RezReader {
         Ok(wrap(metriken_storage::rez::open::open_recordings(
             path, pool,
         )?))
+    }
+}
+
+impl RezReader {
+    /// Join `recordings` into one reader, the combined view of an archive
+    /// that holds several recordings of one run: a query is answered from
+    /// every recording, each series under its recording's labels (and
+    /// `__recording__` for recordings whose label sets are equal;
+    /// `ArchiveReader::series_labels`). Its metadata is the first
+    /// recording's, and it is complete when every recording is.
+    ///
+    /// Returns, for each of `recordings` in order, the labels its series
+    /// carry in the joined reader, or `None` for a recording with no tables,
+    /// whose series there are none.
+    pub fn combine(
+        recordings: LabeledRecordings,
+        filename: Option<String>,
+    ) -> (RezReader, Vec<Option<BTreeMap<String, String>>>) {
+        // A recording's tables share one label map; its address identifies
+        // the recording in the joined reader, whose tables are the same.
+        let identity = |reader: &ArchiveReader| -> Option<usize> {
+            let names = reader.all_names();
+            reader
+                .owners_of(&names)
+                .first()
+                .map(|t| t.recording_labels() as *const BTreeMap<String, String> as usize)
+        };
+        let ids: Vec<Option<usize>> = recordings.iter().map(|(_, r)| identity(&r.0)).collect();
+        let joined =
+            ArchiveReader::flatten(recordings.into_iter().map(|(_, r)| r.0).collect(), filename);
+        let names = joined.all_names();
+        let tables = joined.owners_of(&names);
+        let labels = ids
+            .iter()
+            .map(|id| {
+                let id = (*id)?;
+                let table = tables.iter().find(|t| {
+                    t.recording_labels() as *const BTreeMap<String, String> as usize == id
+                })?;
+                Some(joined.series_labels().of(table).inner.clone())
+            })
+            .collect();
+        (RezReader(joined), labels)
     }
 }
 

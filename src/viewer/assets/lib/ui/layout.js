@@ -1,7 +1,7 @@
 import { TimeRangeBar, GranularitySelector } from './controls.js';
 import { notebookStore, reportStore, loadedSelectionStore, importSelection } from '../selection/selection.js';
 import { toggleTheme, currentTheme } from './theme.js';
-import { collectGroupPlots } from '../features/group_utils.js';
+import { collectGroupPlots, besideNames } from '../features/group_utils.js';
 import { groupSections } from './section_groups.js';
 import { compareBadgeRows, splitBadgeRows } from '../charts/compare.js';
 import { setAlignmentKind, setFamily } from '../selection/selection.js';
@@ -154,6 +154,12 @@ const TopNav = {
             compareMode && (() => {
                 const baselineLabel = attrs.baselineAlias || 'baseline';
                 const experimentLabel = attrs.experimentAlias || 'experiment';
+                // Recordings shown beside the comparison, in their own
+                // sections: named after the arms, never as an arm.
+                const also = besideNames(attrs.sections);
+                const alsoChip = also.length > 0 && m('span.compare-badge-also', {
+                    title: `Also shown, each in its own sections: ${also.join(', ')}`,
+                }, `also: ${also.join(', ')}`);
 
                 // N-way (> 2 captures, from a multi-recording `.rez`): a static
                 // strip listing every capture, each dot colored to match its
@@ -216,7 +222,9 @@ const TopNav = {
                 // unpredictable and would crowd the navbar.
                 return m('details.compare-badge', [
                     m('summary.compare-badge-summary', {
-                        title: `Show ${baselineLabel} / ${experimentLabel} details`,
+                        title: also.length > 0
+                            ? `Comparing ${baselineLabel}, ${experimentLabel}; also: ${also.join(', ')}`
+                            : `Show ${baselineLabel} / ${experimentLabel} details`,
                     }, [
                         m('span.compare-badge-chip', [
                             m('span.compare-dot.compare-baseline-dot', '\u25CF'),
@@ -226,6 +234,7 @@ const TopNav = {
                             m('span.compare-dot.compare-experiment-dot', '\u25CF'),
                             m('span.compare-badge-label', experimentLabel),
                         ]),
+                        alsoChip,
                     ]),
                     m('div.compare-capture-list', [
                         row('compare-baseline-dot', baselineLabel, attrs.filename, attrs.onLoadBaseline),
@@ -369,7 +378,32 @@ const Sidebar = {
             services: serviceSections,
             metrics: metricSections,
             samplers: samplerSections,
+            instances,
         } = groupSections(attrs.sections, attrs.compareMode);
+
+        // A sampler section's link, its chart count once loaded.
+        const samplerLink = (section) => {
+            const sectionKey = section.route.replace(/^\//, '');
+            const cached = sectionResponseCache[sectionKey];
+            const count = cached ? countCharts(cached.groups) : null;
+            const label = count ? `${section.name} (${count.withData})` : section.name;
+            return m(
+                m.route.Link,
+                {
+                    class: attrs.activeSection === section ? 'selected' : '',
+                    href: section.route,
+                },
+                label,
+            );
+        };
+        const plainLink = (section) => section && m(
+            m.route.Link,
+            {
+                class: attrs.activeSection === section ? 'selected' : '',
+                href: section.route,
+            },
+            section.name,
+        );
 
         return [
         m('div.sidebar-backdrop', {
@@ -431,7 +465,8 @@ const Sidebar = {
                 const sectionKey = section.route.replace(/^\//, '');
                 const cached = sectionResponseCache[sectionKey];
                 const count = cached ? countCharts(cached.groups) : null;
-                const label = count ? `${section.name} (${count.withData})` : section.name;
+                const name = section.instance ? `${section.name} (${section.instance})` : section.name;
+                const label = count ? `${name} (${count.withData})` : name;
                 return m(
                     m.route.Link,
                     {
@@ -453,6 +488,15 @@ const Sidebar = {
                 },
                 exceptionsSection.name,
             ),
+
+            // One group per recording of a combined archive, named by it:
+            // its Overview, Exceptions and samplers.
+            instances.map((instance) => [
+                m('div.sidebar-label', instance.name),
+                plainLink(instance.overview),
+                plainLink(instance.exceptions),
+                instance.samplers.map(samplerLink),
+            ]),
 
             samplerSections.length > 0 && m('div.sidebar-label', 'Samplers'),
 

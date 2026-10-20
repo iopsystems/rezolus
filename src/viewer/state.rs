@@ -301,6 +301,27 @@ pub struct AppState {
     /// experiment, or detaching the experiment. See
     /// [`default_query_concurrency`] and `--query-concurrency`.
     pub queries: Arc<tokio::sync::Semaphore>,
+    /// The recordings of the baseline when it is an archive opened
+    /// combined (`dashboard::combined`), which the sections are built from
+    /// (`dashboard::dashboard::build_combined_context`). Empty otherwise.
+    pub members: RwLock<Vec<::dashboard::combined::Member>>,
+    /// The followed reader of a combined archive, and the count of its
+    /// recording-set changes the sections were last built for
+    /// (`metadata::refresh_combined_members`).
+    pub combined_live: Mutex<Option<(Arc<rez::live::LiveReader>, u64)>>,
+    /// The recordings shown beside a comparison
+    /// (`dashboard::dashboard::add_beside_sections`); the baseline source is
+    /// a `dashboard::combined::Routed` over them. Empty otherwise.
+    pub beside: RwLock<Vec<::dashboard::dashboard::Beside>>,
+    /// The labels of the archive recording the baseline capture reads, when
+    /// it reads one recording of several: a report is saved onto it
+    /// (`report_save::build_rez_report_from_rez`'s `anchor`). `None` saves
+    /// onto the archive's first.
+    pub anchor_labels: RwLock<Option<std::collections::BTreeMap<String, String>>>,
+    /// For an archive opened combined, the archive the baseline reads, which
+    /// answers each recording's catalog without opening other recordings'
+    /// tables (`dashboard::combined::ScopeCatalog`). `None` otherwise.
+    pub combined_catalog: RwLock<Option<Arc<dyn ::dashboard::combined::ScopeCatalog>>>,
 }
 
 /// The default number of queries the viewer runs at once: half the CPUs,
@@ -349,6 +370,11 @@ impl AppState {
             trimmed_report_marker: RwLock::new(None),
             pool,
             queries: Arc::new(tokio::sync::Semaphore::new(default_query_concurrency())),
+            members: RwLock::new(Vec::new()),
+            combined_live: Mutex::new(None),
+            beside: RwLock::new(Vec::new()),
+            anchor_labels: RwLock::new(None),
+            combined_catalog: RwLock::new(None),
         }
     }
 
@@ -399,6 +425,11 @@ impl AppState {
     /// archive stops being followed: it is no longer what the page shows.
     pub fn replace_baseline(&self, data: Arc<dyn MetricsSource>) {
         self.follow.lock().take();
+        self.members.write().clear();
+        self.combined_live.lock().take();
+        self.beside.write().clear();
+        *self.anchor_labels.write() = None;
+        *self.combined_catalog.write() = None;
         self.captures.set_baseline_data(data);
     }
 

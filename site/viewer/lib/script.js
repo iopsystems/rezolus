@@ -79,6 +79,13 @@ const initWasmViewer = async (data, filename) => {
     if (!ViewerApi.registry()) {
         ViewerApi.setRegistry(new wasmModule.WasmCaptureRegistry());
     }
+    // `?compare=1` opens an archive of several recordings of one run as an
+    // A/B comparison of its first two, as `rezolus view --baseline ..
+    // --experiment ..` does; without it such an archive is one combined
+    // capture.
+    ViewerApi.registry().set_compare_requested(
+        new URLSearchParams(window.location.search).get('compare') === '1',
+    );
     await ViewerApi.attachBaseline(data, filename);
     await loadTemplates();
 

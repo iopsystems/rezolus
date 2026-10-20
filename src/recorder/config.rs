@@ -277,6 +277,17 @@ impl RecordingConfig {
             if toml_cfg.endpoints.is_empty() {
                 return Err("config file must define at least one endpoint".to_string());
             }
+            if let Some(ep) = toml_cfg.endpoints.iter().find(|ep| {
+                ep.arm
+                    .as_deref()
+                    .is_some_and(|a| a.is_empty() || a.trim() != a)
+            }) {
+                return Err(format!(
+                    "in {}: endpoint {}: arm needs a value with no whitespace around it",
+                    config_path.display(),
+                    ep.url
+                ));
+            }
 
             let (output, origin) = match explicit_output {
                 Some(p) => (p, explicit_origin),
@@ -369,6 +380,7 @@ impl RecordingConfig {
             protocol: None,
             template: None,
             template_json: None,
+            arm: None,
         };
 
         Ok(RecordingConfig {
@@ -401,6 +413,7 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
     let mut role: Option<String> = None;
     let mut protocol: Option<Protocol> = None;
     let mut template: Option<PathBuf> = None;
+    let mut arm: Option<String> = None;
 
     if let Some(opts) = rest {
         for pair in opts.split(',') {
@@ -420,6 +433,11 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
                     }
                     template = Some(PathBuf::from(value));
                 }
+                "arm" if value.is_empty() => return Err("arm= needs a value".to_string()),
+                "arm" if value.trim() != value => {
+                    return Err(format!("arm={value:?} has whitespace around it"));
+                }
+                "arm" => arm = Some(value.to_string()),
                 "protocol" => {
                     protocol = Some(match value {
                         "stream" | "rezolus" | "msgpack" => Protocol::Stream,
@@ -439,6 +457,7 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
         protocol,
         template,
         template_json: None,
+        arm,
     })
 }
 
@@ -561,6 +580,35 @@ mod tests {
             assert!(err.contains("--separate"), "{err}");
             assert!(err.contains("5.x recorder"), "{err}");
         }
+    }
+
+    /// A config file's `[[endpoints]]` entry takes `arm`, and refuses an
+    /// empty one as `--endpoint url,arm=` does.
+    #[test]
+    fn a_config_endpoint_takes_an_arm() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |name: &str, arm: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(
+                &path,
+                format!(
+                    "[recording]\noutput = \"run.dendro\"\n\n[[endpoints]]\n\
+                     url = \"http://localhost:4241\"\narm = \"{arm}\"\n"
+                ),
+            )
+            .unwrap();
+            path.to_str().unwrap().to_string()
+        };
+        let cfg = parse(&["--config", &write("ok.toml", "baseline")]).unwrap();
+        assert_eq!(cfg.endpoints[0].arm.as_deref(), Some("baseline"));
+        let err = parse(&["--config", &write("empty.toml", "")])
+            .err()
+            .unwrap();
+        assert!(err.contains("arm needs a value"), "{err}");
+        let err = parse(&["--config", &write("spaced.toml", " baseline")])
+            .err()
+            .unwrap();
+        assert!(err.contains("whitespace"), "{err}");
     }
 
     /// A config file is held to the same rules: its output must be a

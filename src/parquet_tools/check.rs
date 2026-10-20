@@ -566,6 +566,7 @@ pub(crate) fn open_targets(
             ));
         }
         let reader = metriken_query::ParquetReader::open_with_pool(path, pool)
+            .map(::dashboard::combined::label_parquet_by_source)
             .map_err(|e| format!("failed to load {}: {e}", path.display()))?;
         return Ok((
             format,

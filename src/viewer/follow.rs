@@ -327,11 +327,8 @@ impl Followed {
             Ok(mut recordings) => {
                 let mut missing = None;
                 for (_, reader) in &readers {
-                    match recordings.iter().position(|(l, _)| l == reader.labels()) {
-                        Some(at) => reader.replace(recordings.swap_remove(at).1, file),
-                        None => {
-                            missing = Some(format!("no recording labelled {:?}", reader.labels()))
-                        }
+                    if let Err(e) = reader.take_from(&mut recordings, file) {
+                        missing = Some(e);
                     }
                 }
                 missing
@@ -420,7 +417,8 @@ impl Followed {
         }
     }
 
-    /// Each followed recording's writer, judged from its heartbeat. Reads
+    /// Each followed recording's writer, judged from its heartbeat; every
+    /// recording of a combined reader counts. Reads
     /// the catalog's sources once; a recording is matched to the source with
     /// its exact label set. Every recording of a `.rez`, of a dendro archive
     /// whose sources cannot be read, or without a matching source is
@@ -454,16 +452,17 @@ impl Followed {
         };
         readers
             .iter()
-            .map(|(_, reader)| {
+            .flat_map(|(_, reader)| reader.label_sets())
+            .map(|labels| {
                 let source = sources
                     .as_ref()
-                    .and_then(|s| s.iter().find(|s| s.meta.labels == *reader.labels()));
+                    .and_then(|s| s.iter().find(|s| s.meta.labels == *labels));
                 let Some(source) = source else {
                     return Writer::Unknown;
                 };
                 let state = progress
                     .watches
-                    .entry(reader.labels().clone())
+                    .entry(labels.clone())
                     .or_default()
                     .observe(source, now);
                 match state {
@@ -844,24 +843,184 @@ mod tests {
         assert_eq!(follow.wait(), Duration::from_secs(4));
     }
 
-    /// Two recordings fill the A/B slots. Each is followed, from one reopen
-    /// per tick, and detaching the experiment stops reopening it.
-    #[test]
-    fn both_slots_of_an_ab_archive_are_followed_until_detached() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.dendro");
-        let mut writer = ArchiveWriter::create(&path, WriterConfig::default()).unwrap();
-        let mut sources: Vec<SourceRecorder> = ["a", "b"]
+    /// A growing archive of two recordings, each labelled `source=rezolus`,
+    /// `host=<host>`, and `arm=<arm>` when `arms` names one, with three
+    /// ticks written; the closure writes more ticks to both.
+    fn two_sources(path: &Path, arms: Option<[&str; 2]>) -> (ArchiveWriter, Vec<SourceRecorder>) {
+        let mut writer = ArchiveWriter::create(path, WriterConfig::default()).unwrap();
+        let sources: Vec<SourceRecorder> = ["a", "b"]
             .into_iter()
-            .map(|host| {
-                let labels = [
+            .enumerate()
+            .map(|(i, host)| {
+                let mut labels: BTreeMap<String, String> = [
                     ("source".to_string(), "rezolus".to_string()),
                     ("host".to_string(), host.to_string()),
                 ]
                 .into();
+                if let Some(arms) = arms {
+                    labels.insert("arm".to_string(), arms[i].to_string());
+                }
                 writer.add_source(labels, BTreeMap::new(), ANCHOR).unwrap()
             })
             .collect();
+        (writer, sources)
+    }
+
+    fn write_both(
+        writer: &mut ArchiveWriter,
+        sources: &mut [SourceRecorder],
+        ticks: std::ops::Range<u64>,
+    ) {
+        for i in ticks {
+            let staged = sources
+                .iter_mut()
+                .map(|s| s.stage(&tick(i), ANCHOR + i * SECOND, 0).unwrap())
+                .collect();
+            writer.commit(staged).unwrap();
+        }
+        for s in sources {
+            s.sync().unwrap();
+        }
+    }
+
+    /// Two recordings of one run open as one combined capture, followed as
+    /// one: a reopen joins both again, so each recording's new rows are read.
+    #[test]
+    fn a_combined_archive_is_followed_as_one_capture() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.dendro");
+        let (mut writer, mut sources) = two_sources(&path, None);
+        write_both(&mut writer, &mut sources, 0..3);
+        let state = view(&path);
+        assert_eq!(
+            state.follow.lock().as_ref().unwrap().captures(),
+            ["baseline"]
+        );
+        assert!(state.captures.get_by_id("experiment").is_none());
+        let end = || state.baseline_data().time_range_ns().unwrap().1;
+        assert_eq!(end(), ANCHOR + 2 * SECOND);
+        write_both(&mut writer, &mut sources, 3..6);
+        assert!(state.follow.lock().as_ref().unwrap().refresh_now());
+        assert_eq!(end(), ANCHOR + 5 * SECOND);
+        for host in ["a", "b"] {
+            let series = state.baseline_data().counter_labels("task_ops");
+            assert!(
+                series
+                    .iter()
+                    .any(|l| l.get("host").map(String::as_str) == Some(host)),
+                "{host} after the reopen: {series:?}"
+            );
+        }
+        drop(writer);
+    }
+
+    /// A Rezolus source of a growing archive on `host`.
+    fn agent(writer: &mut ArchiveWriter, host: &str) -> SourceRecorder {
+        let labels: BTreeMap<String, String> = [
+            ("source".to_string(), "rezolus".to_string()),
+            ("host".to_string(), host.to_string()),
+        ]
+        .into();
+        let metadata: BTreeMap<String, String> =
+            [("source".to_string(), "rezolus".to_string())].into();
+        writer.add_source(labels, metadata, ANCHOR).unwrap()
+    }
+
+    /// The routes of the sections `state` lists.
+    fn routes(state: &AppState) -> Vec<String> {
+        state
+            .sections
+            .read()
+            .sections()
+            .iter()
+            .map(|s| s.route.clone())
+            .collect()
+    }
+
+    /// A recording present at the open whose rows have not arrived yet (an
+    /// endpoint still starting) has its own sections from the start, so its
+    /// rows, once they arrive, are not read by the other host's sections.
+    #[test]
+    fn a_recording_without_rows_at_the_open_has_its_own_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.dendro");
+        let mut writer = ArchiveWriter::create(&path, WriterConfig::default()).unwrap();
+        let mut a = agent(&mut writer, "a");
+        let mut b = agent(&mut writer, "b");
+        for i in 0..3 {
+            let staged = a.stage(&tick(i), ANCHOR + i * SECOND, 0).unwrap();
+            writer.commit(vec![staged]).unwrap();
+        }
+        a.sync().unwrap();
+        b.sync().unwrap();
+        let state = view(&path);
+        assert_eq!(state.members.read().len(), 2);
+        assert!(
+            routes(&state).contains(&"/cpu@b".to_string()),
+            "{:?}",
+            routes(&state)
+        );
+        let sections = state.sections.read();
+        let scope = &sections.context().scopes["/cpu"].scope;
+        assert!(
+            scope
+                .matchers
+                .contains(&::dashboard::combined::Matcher::eq("host", "a")),
+            "{:?}",
+            scope.matchers
+        );
+        drop(sections);
+        drop(writer);
+    }
+
+    /// A recording added after the open (an endpoint that came up later)
+    /// gets its sections once a reopen finds it.
+    #[test]
+    fn a_recording_added_while_followed_gets_its_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.dendro");
+        let mut writer = ArchiveWriter::create(&path, WriterConfig::default()).unwrap();
+        let mut a = agent(&mut writer, "a");
+        let mut b = agent(&mut writer, "b");
+        let write = |writer: &mut ArchiveWriter,
+                     sources: &mut [&mut SourceRecorder],
+                     ticks: std::ops::Range<u64>| {
+            for i in ticks {
+                let staged = sources
+                    .iter_mut()
+                    .map(|s| s.stage(&tick(i), ANCHOR + i * SECOND, 0).unwrap())
+                    .collect();
+                writer.commit(staged).unwrap();
+            }
+            for s in sources.iter_mut() {
+                s.sync().unwrap();
+            }
+        };
+        write(&mut writer, &mut [&mut a, &mut b], 0..3);
+        let state = view(&path);
+        assert!(!routes(&state).contains(&"/cpu@c".to_string()));
+
+        let mut c = agent(&mut writer, "c");
+        write(&mut writer, &mut [&mut a, &mut b, &mut c], 3..6);
+        assert!(state.follow.lock().as_ref().unwrap().refresh_now());
+        super::super::metadata::refresh_combined_members(&state);
+        assert_eq!(state.members.read().len(), 3);
+        assert!(
+            routes(&state).contains(&"/cpu@c".to_string()),
+            "{:?}",
+            routes(&state)
+        );
+        drop(writer);
+    }
+
+    /// Two recordings carrying `arm` fill the A/B slots. Each is followed,
+    /// from one reopen per tick, and detaching the experiment stops
+    /// reopening it.
+    #[test]
+    fn both_slots_of_an_ab_archive_are_followed_until_detached() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.dendro");
+        let (mut writer, mut sources) = two_sources(&path, Some(["baseline", "experiment"]));
         let mut write_both = |ticks: std::ops::Range<u64>| {
             for i in ticks {
                 let staged = sources
@@ -898,10 +1057,104 @@ mod tests {
         assert!(state.following());
     }
 
-    /// A reopen finds each recording by its label set, so an archive whose
-    /// shown recordings share one is not followed.
+    /// The agent recorded 30 s beside two arms recorded for 10 s from 10 s
+    /// in: the baseline capture spans its own arm's rows, as the
+    /// experiment does, so the two line up; the agent's longer span does
+    /// not move the baseline's.
     #[test]
-    fn recordings_that_share_a_label_set_are_not_followed() {
+    fn a_longer_beside_recording_does_not_move_the_baselines_span() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("offset.dendro");
+        let (mut writer, mut sources) = two_sources(&path, Some(["baseline", "experiment"]));
+        let labels: BTreeMap<String, String> = [
+            ("source".to_string(), "rezolus".to_string()),
+            ("host".to_string(), "c".to_string()),
+        ]
+        .into();
+        sources.push(writer.add_source(labels, BTreeMap::new(), ANCHOR).unwrap());
+        // A tick carrying its groups' schemas, as a source's first row must.
+        let with_schema = |i: u64| {
+            let mut snap = tick(i);
+            if let (
+                metriken_exposition::Snapshot::V3(v),
+                metriken_exposition::Snapshot::V3(first),
+            ) = (&mut snap, tick(0))
+            {
+                for (g, f) in v.groups.iter_mut().zip(first.groups) {
+                    g.schema = f.schema;
+                }
+            }
+            snap
+        };
+        for i in 0..30u64 {
+            let staged = sources
+                .iter_mut()
+                .enumerate()
+                .filter(|(n, _)| *n == 2 || (10..20).contains(&i))
+                .map(|(n, s)| {
+                    let snap = if n < 2 && i == 10 {
+                        with_schema(i)
+                    } else {
+                        tick(i)
+                    };
+                    s.stage(&snap, ANCHOR + i * SECOND, 0).unwrap()
+                })
+                .collect();
+            writer.commit(staged).unwrap();
+        }
+        for s in &mut sources {
+            s.sync().unwrap();
+        }
+        let state = view(&path);
+        let span = |id| {
+            state
+                .captures
+                .get_by_id(id)
+                .unwrap()
+                .time_range_ns()
+                .unwrap()
+        };
+        assert_eq!(span("baseline"), span("experiment"));
+        assert_eq!(span("baseline").0, ANCHOR + 10 * SECOND);
+        let beside = state.beside.read();
+        assert_eq!(
+            beside[0].data.time_range_ns().unwrap(),
+            (ANCHOR, ANCHOR + 29 * SECOND)
+        );
+        let experiment = state.captures.get_by_id("experiment").unwrap();
+        assert_eq!(state.baseline_data().time_range(), experiment.time_range());
+    }
+
+    /// A recording shown beside a comparison is followed with the slots: its
+    /// new rows reach its sections.
+    #[test]
+    fn a_recording_beside_a_comparison_is_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.dendro");
+        let (mut writer, mut sources) = two_sources(&path, Some(["baseline", "experiment"]));
+        let labels: BTreeMap<String, String> = [
+            ("source".to_string(), "rezolus".to_string()),
+            ("host".to_string(), "c".to_string()),
+        ]
+        .into();
+        sources.push(writer.add_source(labels, BTreeMap::new(), ANCHOR).unwrap());
+        write_both(&mut writer, &mut sources, 0..3);
+        let state = view(&path);
+        assert_eq!(
+            state.follow.lock().as_ref().unwrap().captures(),
+            ["baseline", "beside:c", "experiment"]
+        );
+        write_both(&mut writer, &mut sources, 3..6);
+        assert!(state.follow.lock().as_ref().unwrap().refresh_now());
+        let beside = state.beside.read();
+        let (_, end) = beside[0].data.time_range().unwrap();
+        assert_eq!((end * 1e9).round() as u64, ANCHOR + 5 * SECOND);
+    }
+
+    /// Recordings of one run that share a label set are followed: a reopen
+    /// joins every recording again rather than finding one by its labels.
+    #[test]
+    fn combined_recordings_that_share_a_label_set_are_followed() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("twins.dendro");
         let mut writer = ArchiveWriter::create(&path, WriterConfig::default()).unwrap();
@@ -913,8 +1166,7 @@ mod tests {
             source.sync().unwrap();
         }
         let state = view(&path);
-        assert!(!state.following());
-        assert!(state.follow.lock().is_none());
+        assert!(state.following());
         drop(writer);
     }
 

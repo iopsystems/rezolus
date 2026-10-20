@@ -263,6 +263,7 @@ async fn selection_handler(State(state): State<Arc<AppState>>) -> Response {
 
 /// Navigation list + global capture params; no section bodies.
 async fn sections_handler(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    super::metadata::refresh_combined_members(&state);
     Json(serde_json::json!({
         "status": "success",
         "data": state.sections_metadata(),
@@ -567,6 +568,7 @@ async fn metadata(
     State(state): State<Arc<AppState>>,
     Query(p): Query<CaptureParam>,
 ) -> Json<ApiResponse<serde_json::Value>> {
+    super::metadata::refresh_combined_members(&state);
     let capture = p.capture_str();
     let Some(data) = state.captures.get_by_id(capture) else {
         return ApiResponse::err(

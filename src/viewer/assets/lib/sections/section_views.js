@@ -148,6 +148,18 @@ const renderNodeInfo = (nodeName, info, CpuTopology, formatBytes) => {
     ]);
 };
 
+// One row per recording shown beside a comparison: its name, and its source,
+// version and sampling interval where its metadata has them.
+export const besideRows = (meta) => Object.entries(meta?.beside_recordings || {})
+    .map(([name, m_]) => {
+        const parts = [
+            m_?.source && `source ${Array.isArray(m_.source) ? m_.source.join(', ') : m_.source}`,
+            m_?.version && `version ${m_.version}`,
+            m_?.sampling_interval_ms && `${m_.sampling_interval_ms} ms`,
+        ].filter(Boolean);
+        return [name, parts.join(', ') || '—'];
+    });
+
 const createMetadataView = () => {
     let rawExpanded = false;
     let descFilter = '';
@@ -189,6 +201,17 @@ const createMetadataView = () => {
                             m('td.sysinfo-value', String(meta.version)),
                         ]),
                     ].filter(Boolean))),
+                ]),
+
+                // The recordings shown beside a comparison, each with its own
+                // sections (`beside_recordings`, dashboard::with_beside_metadata).
+                besideRows(meta).length > 0 && m('div.sysinfo-group', [
+                    m('h2.sysinfo-group-title', 'Shown beside the comparison'),
+                    m('table.sysinfo-table', m('tbody', besideRows(meta).map(([name, summary]) =>
+                        m('tr', [
+                            m('td.sysinfo-label', name),
+                            m('td.sysinfo-value', summary),
+                        ])))),
                 ]),
 
                 // Sources (from per_source_metadata — nested: source -> subkey -> entry)
@@ -290,7 +313,9 @@ const renderCgroupSection = ({
     setActiveCgroupPattern,
     globalColorMapper,
 }) => {
-    const sectionRoute = '/cgroups';
+    // `/cgroups`, or `/cgroups@<key>` for another recording of a combined
+    // archive: the expand link and the selection name this section's route.
+    const sectionRoute = attrs.section?.route || '/cgroups';
     const sectionName = 'Cgroups';
 
     const leftGroups = attrs.groups.filter((g) => g.metadata?.side === 'left');

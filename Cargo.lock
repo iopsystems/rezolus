@@ -1154,9 +1154,9 @@ checksum = "5729f5117e208430e437df2f4843f5e5952997175992d1414f94c57d61e270b4"
 
 [[package]]
 name = "dendro"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f229f61b56b797b5468155ed829a44a7049f19cc75954eea387b277124f8bf19"
+checksum = "b97f12678dcda6d582e6ccf5ee939c4a163b88cd323a1ae482491f63f87b1155"
 dependencies = [
  "arrow",
  "bytes",
@@ -2593,9 +2593,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-storage"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3d1ece8f7badb7cb39d9bfa7eeba2a8e877ab9ce92b40e9d525952a2d63d0f4"
+checksum = "b44084e4230c3d927a3748f1c952526dacecd96778b22f2bdc735f3e8070023b"
 dependencies = [
  "arrow",
  "bytes",
@@ -3681,6 +3681,7 @@ dependencies = [
  "tracing-appender",
  "tracing-log",
  "tracing-subscriber",
+ "viewer",
  "walkdir",
  "zstd 0.13.3",
 ]

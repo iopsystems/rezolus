@@ -137,6 +137,104 @@
   where the run-wide `--metadata` value won before. A per-endpoint key
   (`role=`, `template=`) beats the same key from `--metadata`, which applies
   to every recording.
+- **An archive of several recordings of one run opens as one combined
+  view.** `rezolus view run.dendro` on `record --endpoint a --endpoint b`'s
+  archive, and the static viewer given it, show one capture: every series
+  carries its recording's labels (`source`, `host`, `--label`s), and each
+  template renders once per recording that carries it. Two agents show the
+  built-in sections once per host, the second host's at routes ending in
+  `@<host>` (`#/cpu@web-02`), grouped by host in the sidebar; an agent and a
+  service show the agent's sections next to the service's dashboard from the
+  template in its recording. Every query of a recording's sections is
+  restricted to that recording by its labels (`{host="web-02"}`, or
+  `{role!="x"}` for a recording that lacks a label another carries), the
+  section's header (interval, source, version, time range) is the
+  recording's, and its charts are chosen from its own metrics.
+- **A/B is opt-in: an `arm` label, or `--baseline`/`--experiment`.** An
+  archive opens as a comparison only when its recordings carry `arm` or the
+  viewer is asked for one; nothing is inferred from when the recordings were
+  taken, since an A/B can be recorded in one run. There are three ways to say
+  it: `rezolus record --endpoint http://a:4241,arm=baseline --endpoint
+  http://b:4241,arm=experiment` (new: `arm=` labels that endpoint's
+  recording, over a run-wide `--label arm=`); `rezolus recording combine
+  a.dendro b.dendro --ab baseline=a.dendro experiment=b.dendro -o ab.dendro`
+  (new for `.rez` and `.dendro` outputs and for parquet inputs into a
+  `.rez`: each value names an input by its path or file name, every recording
+  of it is labelled `arm=baseline` or `arm=experiment`, and an input
+  recording that already carries another arm is refused before anything is
+  copied, naming the input; `--ab` never replaces an arm); and `rezolus view
+  ab.rez --baseline host=web-01 --experiment host=web-02`
+  (`WasmCaptureRegistry::set_compare_requested`, or `?compare=1` on the static
+  site). The arm values fill the slots, whatever the archive's order:
+  `arm=baseline` is the baseline and `arm=experiment` the experiment
+  (matched ignoring case, so `Baseline` counts); with only one of the two,
+  the other arm fills the other slot; with neither, the archive's first
+  armed recording is the baseline and the viewer says so. Recordings
+  without an arm, and with `--baseline`/`--experiment` every recording they
+  do not name, are shown beside the comparison: each in its own sections
+  (routes ending in `@<key>`: its host, or the labels that tell it apart;
+  grouped under its name in the sidebar), drawn as a single capture that
+  reads only that recording, charts pinned from them included, and named
+  in the badge after the arms ("also: …"), never as a third arm. Their
+  system info and metadata are listed with the baseline's, and a
+  comparison whose baseline has no system metrics opens on its first
+  service section. A beside recording's charts are drawn over the
+  comparison's time range, not its own: an agent recorded longer than the
+  arms shows only the rows inside the arms' span. So `record
+  --endpoint svcA,arm=baseline --endpoint svcB,arm=experiment --endpoint
+  agent` compares the two services and shows the agent's sections beside
+  them. One recording per arm is the limit for now: one arm among unarmed
+  recordings, an arm two recordings share, or more than two arms is
+  refused with a listing of the recordings and `--baseline`/`--experiment`
+  to name two. `record` and a
+  config file refuse an `arm` value with whitespace around it; `recording
+  combine --ab` refuses a result whose arms would be refused, and warns
+  without `--ab` when the inputs' own arms would be. **An archive assembled by
+  `recording combine` before this release
+  carries no `arm` and now opens combined.** When its recordings' labels
+  differ, `rezolus view ab.rez --baseline source=redis --experiment
+  source=valkey` (any labels that name the two; `rezolus mcp
+  describe-recording ab.rez` lists them) opens it A/B as before. When they
+  are identical (two agents recorded as `source=rezolus` on one host), no
+  selector can name either one; label them by position instead: `rezolus
+  recording combine ab.rez --ab baseline=0 experiment=1 -o ab-arms.rez`
+  (positions in the order `describe-recording` lists them, from 0), which
+  copies the archive with the two arms and opens A/B. `combine` takes one
+  input only in this form.
+- **A combined archive that is still being written is followed as one
+  capture,** recordings with identical
+  label sets included; a recording whose rows have not arrived at the open
+  has its sections from the start, and one added while followed gets them
+  when found, with a warning to reload the page. Each host's Overview shows
+  the throughput of a service recorded on that host (none for a host with
+  no service), and System Info lists each recording's hardware under its
+  host.
+- **A single-source parquet's `source` is a series label.** Its series
+  carry the file's `source`, as an archive recording's series carry its
+  recording's labels, so a KPI template carried in the parquet (llm-perf's,
+  or one written by `recording annotate`) whose queries select
+  `{source="llm-perf"}` matches them: `rezolus view run.parquet` draws those
+  KPIs where it listed them all as unavailable, and `rezolus mcp query`,
+  `recording check` and the static viewer read the same series. A combined
+  parquet, whose columns carry their own `source`, and a parquet any of
+  whose series already carry a `source` label are read as before. A series
+  that had no visible label now has `source`, so a chart of one such series
+  can be named by it (a lone series named "rezolus" where it was unnamed).
+- **`rezolus mcp` reads an archive of one run combined.** Without
+  `--recording` (or the stdio server's `recording` object), `query`,
+  `describe-metrics`, `detect-anomalies` and `analyze-correlation` read every
+  recording together, each series under its recording's labels, and exit 0
+  with the merged result, where before they exited 1 with a listing of the
+  recordings; `describe-recording` lists the recordings and says so. A query
+  written for one host can now match nothing: `sum(irate(cpu_usage[5m])) /
+  cpu_cores` over two hosts divides one series by two (`cpu_cores` has one
+  per host) and answers "No series matched". Use `sum by (host)
+  (irate(cpu_usage[5m])) / on (host) cpu_cores`, a matcher
+  (`cpu_cores{host="web-01"}`), or `--recording host=web-01`.
+  `extract-features`, whose record describes one recording, and every tool
+  on a comparison (recordings carrying `arm`) still
+  need a selector. `recording check` is unchanged: it evaluates each
+  recording's own KPIs against that recording.
 
 - **The `/metrics/stream` interval is negotiated** (metriken-exposition
   0.23.1, metriken-recorder 0.3). The agent serves a stream at the larger of

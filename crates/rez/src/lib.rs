@@ -3,6 +3,8 @@
 //! implements `metriken_query::MetricsSource`: [`reader::RezReader`] and
 //! [`live::LiveReader`].
 
+#[cfg(feature = "test-support")]
+pub mod fixtures;
 pub mod live;
 pub mod reader;
 

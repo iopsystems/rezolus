@@ -81,6 +81,8 @@ const createMainComponent = ({
                     start_time,
                     end_time,
                     compareMode: !!compareMode,
+                    // The badge names the recordings shown beside a comparison.
+                    sections,
                     experimentFilename: badgeAttrs?.experimentFilename,
                     baselineAlias: badgeAttrs?.baselineAlias,
                     experimentAlias: badgeAttrs?.experimentAlias,

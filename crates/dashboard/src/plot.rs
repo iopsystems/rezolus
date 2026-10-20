@@ -137,12 +137,63 @@ impl View {
         self.groups.push(group);
         self
     }
+
+    /// Replace every query of every plot (`promql_query` and its
+    /// experiment and total alternatives) with `f` of it.
+    pub fn map_queries(&mut self, mut f: impl FnMut(&str) -> String) {
+        for plot in self
+            .groups
+            .iter_mut()
+            .flat_map(|g| g.subgroups.iter_mut())
+            .flat_map(|sg| sg.plots.iter_mut())
+        {
+            for query in [
+                &mut plot.promql_query,
+                &mut plot.promql_query_experiment,
+                &mut plot.promql_query_total,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                *query = f(query);
+            }
+        }
+    }
+
+    /// Every query of every plot, in order: what [`map_queries`] visits.
+    ///
+    /// [`map_queries`]: Self::map_queries
+    pub fn queries(&self) -> Vec<&str> {
+        self.groups
+            .iter()
+            .flat_map(|g| g.subgroups.iter())
+            .flat_map(|sg| sg.plots.iter())
+            .flat_map(|p| {
+                [
+                    p.promql_query.as_deref(),
+                    p.promql_query_experiment.as_deref(),
+                    p.promql_query_total.as_deref(),
+                ]
+            })
+            .flatten()
+            .collect()
+    }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct Section {
     pub name: String,
     pub route: String,
+    /// The recording this entry renders for, when a template renders once
+    /// per recording of a combined source and more than once: the
+    /// sidebar groups entries by it. Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
+    /// The section the page opens on, when it is not the usual one: set by
+    /// [`crate::dashboard::add_beside_sections`] for a comparison whose
+    /// baseline has no system metrics. Absent otherwise.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub landing: bool,
 }
 
 #[derive(Serialize, Default)]

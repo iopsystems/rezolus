@@ -3,6 +3,7 @@
 // Delegates all UI/routing to app.js via initDashboard().
 
 import { ViewerApi } from './viewer_api.js';
+import { uploadLandingRoute } from './features/group_utils.js';
 import { FileUpload, CompareLanding, splitAlias } from './ui/landing.js';
 import { notify, showSaveModal } from './ui/overlays.js';
 import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore, seedEventsFromMetadata } from './selection/selection.js';
@@ -185,8 +186,12 @@ const uploadParquet = async (file) => {
         cacheSectionResponse('overview', processed);
         if (processed.sections) preloadSections(processed.sections);
 
-        if (m.route.get() !== '/overview') {
-            m.route.set('/overview');
+        // The landing rule the first load follows (a comparison whose
+        // baseline has no system metrics opens on its service section),
+        // from the sections response: a section body carries none.
+        const target = uploadLandingRoute(sectionsResponse);
+        if (m.route.get() !== target) {
+            m.route.set(target);
         }
         m.redraw();
     } catch (e) {
@@ -512,3 +517,6 @@ const bootstrap = async () => {
 };
 
 bootstrap();
+
+// For the node tests, which drive an upload with a stubbed ViewerApi.
+export { uploadParquet };

@@ -58,6 +58,10 @@ pub struct EndpointConfig {
     /// [`EndpointConfig::load_template`] before anything is recorded.
     #[serde(skip)]
     pub template_json: Option<String>,
+    /// The endpoint's A/B arm (`arm=`), a label on its recording: recordings
+    /// that carry one open in the viewer as a comparison.
+    #[serde(default)]
+    pub arm: Option<String>,
 }
 
 impl EndpointConfig {

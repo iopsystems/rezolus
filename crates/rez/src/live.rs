@@ -24,12 +24,21 @@ use crate::reader::RezReader;
 
 type Error = Box<dyn std::error::Error>;
 
-/// One recording of an archive at a path, reopened on [`refresh`](Self::refresh).
+/// One recording of an archive at a path, or several joined
+/// ([`combined`](Self::combined)), reopened on [`refresh`](Self::refresh).
 pub struct LiveReader {
     path: PathBuf,
     pool: Arc<BufferPool>,
-    /// Which recording: the full label set of the one first opened.
-    labels: BTreeMap<String, String>,
+    /// Which recordings: the full label set of each one first opened. One,
+    /// unless `combined`.
+    labels: Vec<BTreeMap<String, String>>,
+    /// Whether the reader joins every recording of the archive
+    /// ([`RezReader::combine`]) rather than reading one.
+    combined: bool,
+    /// For a combined reader, the label sets of the recordings the current
+    /// reader joins, in the archive's order, and how many times that set
+    /// has changed since the open ([`recordings`](Self::recordings)).
+    joined: std::sync::Mutex<(Vec<BTreeMap<String, String>>, u64)>,
     current: RwLock<Arc<RezReader>>,
     /// The file the current reader is known to read; `None` when that is
     /// not known.
@@ -62,7 +71,9 @@ impl LiveReader {
         Ok(Self {
             path: path.to_path_buf(),
             pool,
-            labels,
+            labels: vec![labels],
+            combined: false,
+            joined: Default::default(),
             current: RwLock::new(Arc::new(reader)),
             file: std::sync::Mutex::new(file),
             name: None,
@@ -89,13 +100,75 @@ impl LiveReader {
         Self {
             path: path.to_path_buf(),
             pool,
-            labels,
+            labels: vec![labels],
+            combined: false,
+            joined: Default::default(),
             current: RwLock::new(Arc::new(reader)),
             // Which file `reader` read is not known, so the first refresh
             // does not reuse it.
             file: std::sync::Mutex::new(None),
             name: None,
         }
+    }
+
+    /// Wrap `reader`, the recordings labelled `labels` of the archive at
+    /// `path` joined by [`RezReader::combine`]. A refresh joins every
+    /// recording of the archive again, in the archive's order, and keeps
+    /// the current reader when one of `labels` is no longer there.
+    pub fn combined(
+        path: &Path,
+        labels: Vec<BTreeMap<String, String>>,
+        reader: RezReader,
+        pool: Arc<BufferPool>,
+    ) -> Self {
+        reader.keep_handover();
+        Self {
+            path: path.to_path_buf(),
+            pool,
+            joined: std::sync::Mutex::new((labels.clone(), 0)),
+            labels,
+            combined: true,
+            current: RwLock::new(Arc::new(reader)),
+            file: std::sync::Mutex::new(None),
+            name: None,
+        }
+    }
+
+    /// Take this reader's recordings out of `recordings`, a newer open of
+    /// the archive at [`path`](Self::path) that read `file`, and make them
+    /// the ones queries go to: the recording labelled
+    /// [`labels`](Self::labels), or for a [`combined`](Self::combined)
+    /// reader every recording, joined. An error, leaving the current reader,
+    /// when a recording this reader reads is not among them.
+    pub fn take_from(
+        &self,
+        recordings: &mut crate::reader::LabeledRecordings,
+        file: Option<FileId>,
+    ) -> Result<(), String> {
+        if let Some(missing) = self
+            .labels
+            .iter()
+            .find(|l| !recordings.iter().any(|(r, _)| r == *l))
+        {
+            return Err(format!("no recording labelled {missing:?}"));
+        }
+        if self.combined {
+            let all = std::mem::take(recordings);
+            let now: Vec<BTreeMap<String, String>> = all.iter().map(|(l, _)| l.clone()).collect();
+            let (reader, _) = RezReader::combine(all, self.current().filename());
+            self.replace(reader, file);
+            let mut joined = self.joined.lock().unwrap_or_else(|e| e.into_inner());
+            if joined.0 != now {
+                *joined = (now, joined.1 + 1);
+            }
+        } else {
+            let at = recordings
+                .iter()
+                .position(|(l, _)| *l == self.labels[0])
+                .expect("checked above");
+            self.replace(recordings.swap_remove(at).1, file);
+        }
+        Ok(())
     }
 
     /// Report `name` as the filename: for a temporary archive whose own name
@@ -116,8 +189,14 @@ impl LiveReader {
     /// refreshing several readers of one archive can open it once and hand
     /// each its recording with [`replace`](Self::replace).
     pub fn refresh(&self) -> Result<(), Error> {
+        if self.combined {
+            let (opened, file) = open_file(&self.path, || {
+                quiet(|| RezReader::open_recordings(&self.path, Arc::clone(&self.pool)))
+            });
+            return Ok(self.take_from(&mut opened?, file)?);
+        }
         let (picked, file) = open_file(&self.path, || {
-            quiet(|| pick_exact(&self.path, &self.labels, &self.pool))
+            quiet(|| pick_exact(&self.path, &self.labels[0], &self.pool))
         });
         self.replace(picked?.1, file);
         Ok(())
@@ -143,8 +222,28 @@ impl LiveReader {
         *self.current.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(reader);
     }
 
-    /// The full label set of the recording this reader reads.
+    /// The full label set of the recording this reader reads: the first
+    /// one, for a [`combined`](Self::combined) reader.
     pub fn labels(&self) -> &BTreeMap<String, String> {
+        &self.labels[0]
+    }
+
+    /// For a [`combined`](Self::combined) reader, the label sets of the
+    /// recordings the current reader joins, and a count that grows each
+    /// time a refresh finds a different set (a recording added by an
+    /// endpoint that came up after the open). `(labels, 0)` otherwise.
+    pub fn recordings(&self) -> (Vec<BTreeMap<String, String>>, u64) {
+        if !self.combined {
+            return (self.labels.clone(), 0);
+        }
+        self.joined
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// The full label set of every recording this reader reads.
+    pub fn label_sets(&self) -> &[BTreeMap<String, String>] {
         &self.labels
     }
 

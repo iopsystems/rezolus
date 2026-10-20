@@ -1,6 +1,6 @@
 import { ViewerApi } from './viewer_api.js';
 import { resolveStyle, buildHistogramQuery, isHistogramPlot } from './charts/metric_types.js';
-import { collectGroupPlots } from './features/group_utils.js';
+import { collectGroupPlots, baseRoute } from './features/group_utils.js';
 import { firstVisibleLabelValue, seriesNamer } from './labels.js';
 
 // Capture-id constants. Typos become grep-able; use these in place of
@@ -780,6 +780,18 @@ const injectLabel = (query, labelName, labelValue, op = '=') => {
     });
 };
 
+// A query restricted to one recording of a combined archive: each matcher of
+// a section's `metadata.scope` (`[{ label, op, value }]`, op `=`, `!=` or
+// `!~`) injected into every metric reference. Unchanged without a scope.
+const applyScope = (query, scope) => {
+    if (!Array.isArray(scope)) return query;
+    let q = query;
+    for (const m of scope) {
+        if (m && m.label && m.value) q = injectLabel(q, m.label, m.value, m.op || '=');
+    }
+    return q;
+};
+
 // Inject a regex label selector (label=~"a|b"). Used for selecting a subset of
 // GPU ids.
 const injectLabelRegex = (query, labelName, regexValue) =>
@@ -1274,7 +1286,7 @@ const createDataApi = ({
         // Per-GPU charts group by id (and by vendor, since an id is only
         // unique within one vendor) to draw one line per GPU; they must show
         // every GPU regardless of the selection, so they are exempt.
-        if (_selectedGpus.length > 0 && sectionRoute === '/gpu'
+        if (_selectedGpus.length > 0 && baseRoute(sectionRoute) === '/gpu'
             && !/by\s*\(\s*id\s*[,)]/.test(q)) {
             q = applyGpuSelection(q, _selectedGpus);
         }
@@ -1676,6 +1688,7 @@ export {
     setSelectedInstance,
     getSelectedInstance,
     injectLabel,
+    applyScope,
     injectLabelRegex,
     buildEffectiveQuery,
     plotUsesDisplay,

@@ -11,7 +11,7 @@ build = "build.rs"
 
 [dependencies]
 metriken-query.workspace = true
-metriken-storage.workspace = true
+metriken-storage = { workspace = true, features = ["archive"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 

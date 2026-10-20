@@ -117,6 +117,51 @@ fn open_rez(data: &[u8], pool: Arc<BufferPool>) -> Result<rez::reader::LabeledRe
     Ok(recordings)
 }
 
+/// Whether an archive's recordings open as one combined view: more than one
+/// recording, and `dashboard::combined::layout` says combined. The server
+/// viewer's `opens_combined`.
+fn opens_combined(recordings: &rez::reader::LabeledRecordings, compare_requested: bool) -> bool {
+    let labels: Vec<std::collections::BTreeMap<String, String>> =
+        recordings.iter().map(|(l, _)| l.clone()).collect();
+    recordings.len() > 1
+        && dashboard::combined::layout(&labels, compare_requested)
+            == dashboard::combined::Layout::Combined
+}
+
+/// Which recordings of a comparison fill its slots (the baseline arm, then
+/// the experiment arm) and which are shown beside it, in the archive's
+/// order (`dashboard::combined::arm_slots`, as the server viewer fills its
+/// slots), and what to say about the choice. An error naming the
+/// recordings when their arms cannot fill two slots.
+type ComparisonOrder = (Vec<usize>, Vec<usize>, Option<String>);
+
+fn comparison_order(
+    labels: &[std::collections::BTreeMap<String, String>],
+    filename: &str,
+) -> Result<ComparisonOrder, String> {
+    let slots = dashboard::combined::arm_slots(labels).map_err(|why| {
+        let listing: Vec<String> = labels
+            .iter()
+            .map(|l| {
+                l.iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .collect();
+        format!(
+            "{filename}: {why}; it holds: {}. Open it with `rezolus view` and \
+             --baseline/--experiment",
+            listing.join("; ")
+        )
+    })?;
+    let first: Vec<usize> = std::iter::once(slots.baseline)
+        .chain(slots.experiment)
+        .collect();
+    let beside = (0..labels.len()).filter(|i| !first.contains(i)).collect();
+    Ok((first, beside, slots.note))
+}
+
 /// What to say about an archive that was never cleanly finalized, or `None`
 /// when every recording in it was.
 ///
@@ -184,6 +229,26 @@ pub struct Viewer {
     /// and the registry knows the source too. The server's
     /// `--registry-templates` flag; see `dashboard::source_templates`.
     template_preference: TemplatePreference,
+    /// The recordings of an archive opened combined (`dashboard::combined`),
+    /// which the sections are built from
+    /// (`dashboard::dashboard::build_combined_context`). Empty otherwise.
+    members: Vec<dashboard::combined::Member>,
+    /// A combined archive's systeminfo, one recording's or each recording's
+    /// by name (`dashboard::combined::assemble_members`); its metadata is
+    /// the first recording's.
+    combined_systeminfo: Option<String>,
+    /// The recordings shown beside a comparison, in their own sections
+    /// (`dashboard::dashboard::add_beside_sections`); `reader` is then a
+    /// `dashboard::combined::Routed` over them. Empty otherwise.
+    beside: Vec<dashboard::dashboard::Beside>,
+    /// The labels of the archive recording this capture reads, when it is a
+    /// comparison's baseline: a report is saved onto it
+    /// (`report_save::build_rez_report_from_rez`'s `anchor`).
+    anchor_labels: Option<std::collections::BTreeMap<String, String>>,
+    /// For a combined capture, the archive its reader joins, which answers
+    /// each recording's catalog without opening other recordings' tables
+    /// (`dashboard::combined::ScopeCatalog`).
+    catalog: Option<Arc<dyn dashboard::combined::ScopeCatalog>>,
 }
 
 #[derive(Serialize)]
@@ -235,6 +300,10 @@ impl Viewer {
         // sniffs the container the same way.
         if rez::rez::detect_rez_format_bytes(data) != rez::rez::RezFormat::NotRez {
             let mut recordings = open_rez(data, Arc::clone(&pool))?;
+            // An archive of one run is one capture: its recordings joined.
+            if opens_combined(&recordings, false) {
+                return Ok(Self::combined(recordings, pool));
+            }
             if recordings.len() > 1 {
                 // One `Viewer` is one capture. Silently taking the first
                 // recording would show one arm of an A/B under the whole
@@ -242,8 +311,8 @@ impl Viewer {
                 // everywhere else. `WasmCaptureRegistry::attach` is the entry
                 // point that can fill both slots.
                 return Err(JsValue::from_str(&format!(
-                    "{filename} holds {} recordings; open it as a comparison rather than a \
-                     single capture",
+                    "{filename} holds {} recordings of a comparison; open it as a comparison \
+                     rather than a single capture",
                     recordings.len()
                 )));
             }
@@ -260,10 +329,83 @@ impl Viewer {
         let source_bytes = bytes.clone();
         let reader: Arc<dyn MetricsSource> = Arc::new(
             ParquetReader::open_bytes_with_pool(bytes, Arc::clone(&pool))
+                .map(dashboard::combined::label_parquet_by_source)
                 .map_err(|e| JsValue::from_str(&format!("Failed to load parquet: {}", e)))?
                 .with_filename(filename.to_string()),
         );
         Ok(Self::from_source_bytes(reader, pool, source_bytes))
+    }
+
+    /// One capture over every recording of an archive that opens
+    /// combined: the server viewer's `init_file_mode_combined`.
+    fn combined(recordings: rez::reader::LabeledRecordings, pool: Arc<BufferPool>) -> Viewer {
+        let parts: Vec<_> = recordings
+            .iter()
+            .map(|(labels, reader)| {
+                (
+                    labels.clone(),
+                    dashboard::combined::Header::of(reader),
+                    reader.file_metadata(),
+                )
+            })
+            .collect();
+        // A report's selection, marker and events from whichever recording
+        // carries the selection: one saved from a comparison of this archive
+        // sits on its baseline, not necessarily the first recording.
+        let markers = dashboard::combined::report_markers(
+            &recordings
+                .iter()
+                .map(|(_, r)| r as &dyn MetricsSource)
+                .collect::<Vec<_>>(),
+        );
+        let filename = recordings.first().and_then(|(_, r)| r.filename());
+        let (reader, series) = rez::reader::RezReader::combine(recordings, filename);
+        let (members, systeminfo) = dashboard::combined::assemble_members(
+            parts
+                .into_iter()
+                .zip(series)
+                .map(|((l, header, metadata), series)| (l, series, header, metadata))
+                .collect(),
+        );
+        let reader = Arc::new(reader);
+        let catalog: Arc<dyn dashboard::combined::ScopeCatalog> =
+            Arc::new(dashboard::combined::FixedCatalog(Arc::clone(&reader)));
+        let mut viewer = Self::from_source_bytes(reader, pool, Bytes::new());
+        viewer.catalog = Some(catalog);
+        viewer.members = members;
+        viewer.combined_systeminfo = systeminfo;
+        for (key, value) in markers {
+            viewer.file_metadata.insert(key.to_string(), value);
+        }
+        if !is_trimmed_report(&viewer.file_metadata) {
+            viewer.context = viewer
+                .combined_context(&dashboard::TemplateRegistry::empty())
+                .0;
+        }
+        viewer
+    }
+
+    /// The section context of a combined capture against `registry`, and
+    /// the template lookups' notices.
+    fn combined_context(
+        &self,
+        registry: &dashboard::TemplateRegistry,
+    ) -> (dashboard::dashboard::DashboardContext, Vec<String>) {
+        let filename = self.reader.filename_or_default();
+        let stem = filename
+            .strip_suffix(".parquet")
+            .or_else(|| filename.strip_suffix(".rez"))
+            .or_else(|| filename.strip_suffix(".dendro"))
+            .unwrap_or(&filename);
+        dashboard::dashboard::build_combined_context(
+            self.reader.as_ref(),
+            self.catalog.clone(),
+            &self.members,
+            registry,
+            self.template_preference,
+            Some(stem),
+            None,
+        )
     }
 
     /// Build a capture around an already-open source.
@@ -312,6 +454,11 @@ impl Viewer {
             alias: None,
             source_bytes,
             template_preference: TemplatePreference::Archive,
+            members: Vec::new(),
+            combined_systeminfo: None,
+            beside: Vec::new(),
+            anchor_labels: None,
+            catalog: None,
         }
     }
 
@@ -424,7 +571,17 @@ impl Viewer {
     /// For multi-node combined files (>1 node in per_source_metadata), returns
     /// an object keyed by node name with each node's systeminfo.  For single-node
     /// files, returns the flat systeminfo string.
+    /// This capture's systeminfo, with that of the recordings shown beside
+    /// it (`dashboard::dashboard::with_beside_systeminfo`).
     pub fn systeminfo(&self) -> Option<String> {
+        dashboard::dashboard::with_beside_systeminfo(
+            self.own_systeminfo(),
+            self.alias.as_deref().unwrap_or("baseline"),
+            &self.beside,
+        )
+    }
+
+    fn own_systeminfo(&self) -> Option<String> {
         // Try multi-node first
         if let Some(psm_str) = self.file_metadata.get("per_source_metadata")
             && let Ok(psm) =
@@ -447,6 +604,9 @@ impl Viewer {
             if nodes.len() > 1 {
                 return serde_json::to_string(&serde_json::Value::Object(nodes)).ok();
             }
+        }
+        if !self.members.is_empty() {
+            return self.combined_systeminfo.clone();
         }
         // Fall back to flat systeminfo
         self.file_metadata.get("systeminfo").cloned()
@@ -478,7 +638,9 @@ impl Viewer {
             map.insert(key.clone(), json_val);
         }
         enrich_with_multi_node_info(&mut map);
-        serde_json::to_string(&serde_json::Value::Object(map)).unwrap_or_else(|_| "{}".into())
+        let own =
+            serde_json::to_string(&serde_json::Value::Object(map)).unwrap_or_else(|_| "{}".into());
+        dashboard::dashboard::with_beside_metadata(&own, &self.beside)
     }
 
     /// Execute a PromQL range query. Returns JSON compatible with
@@ -585,6 +747,13 @@ impl Viewer {
         let templates = parse_service_templates(templates_json)?;
         let registry = dashboard::TemplateRegistry::from_templates(templates);
 
+        if !self.members.is_empty() && !is_trimmed_report(&self.file_metadata) {
+            let (context, notices) = self.combined_context(&registry);
+            self.context = context;
+            self.cached_bodies.borrow_mut().clear();
+            return Ok(serde_json::to_string(&notices).unwrap_or_else(|_| "[]".to_string()));
+        }
+
         let (service_exts, mut notices) =
             self.detect_and_validate_service_exts(&registry, self.template_preference);
 
@@ -603,13 +772,21 @@ impl Viewer {
             let (template, notice) =
                 dashboard_template(&self.file_metadata, self.template_preference);
             notices.extend(notice);
-            dashboard::dashboard::build_template_context(
+            let mut context = dashboard::dashboard::build_template_context(
                 template,
                 None,
                 &service_refs,
                 None, // single-capture: no category
                 &sources,
-            )
+            );
+            notices.extend(dashboard::dashboard::add_beside_sections(
+                &mut context,
+                self.reader.as_ref(),
+                &self.beside,
+                &registry,
+                self.template_preference,
+            ));
+            context
         };
         self.context = context;
         self.cached_bodies.borrow_mut().clear();
@@ -725,6 +902,9 @@ pub struct WasmCaptureRegistry {
     /// Applied to every capture's template lookup; see
     /// [`WasmCaptureRegistry::set_prefer_registry_templates`].
     template_preference: TemplatePreference,
+    /// Whether a multi-recording archive attaches as a comparison whatever
+    /// its recordings say; see [`WasmCaptureRegistry::set_compare_requested`].
+    compare_requested: bool,
 }
 
 #[wasm_bindgen]
@@ -737,7 +917,16 @@ impl WasmCaptureRegistry {
             notices: Vec::new(),
             rez_source: None,
             template_preference: TemplatePreference::Archive,
+            compare_requested: false,
         }
+    }
+
+    /// Attach the next multi-recording archive as a comparison of its
+    /// recordings even when they are of one run: the server viewer's
+    /// `--baseline`/`--experiment`. Off by default, when such an archive
+    /// attaches as one combined capture (`dashboard::combined::layout`).
+    pub fn set_compare_requested(&mut self, requested: bool) {
+        self.compare_requested = requested;
     }
 
     /// Attach a capture under the given slot ("baseline" or "experiment").
@@ -758,6 +947,12 @@ impl WasmCaptureRegistry {
             let recordings = open_rez(data, Arc::clone(&pool))?;
             self.notices
                 .extend(incomplete_notice(&recordings, filename));
+            if opens_combined(&recordings, self.compare_requested) {
+                let viewer = Viewer::combined(recordings, pool);
+                self.others.clear();
+                self.set_capture(capture, viewer);
+                return Ok(());
+            }
             if recordings.len() >= 2 {
                 return self.attach_rez_comparison(recordings, pool, filename);
             }
@@ -795,16 +990,90 @@ impl WasmCaptureRegistry {
         // Attach EVERY recording, each under the shared id/alias scheme — the
         // same one the server viewer uses, so an archive names its captures
         // identically wherever it is opened. The browser has no `--baseline`/
-        // `--experiment` selectors, so the whole archive is always shown, in
-        // manifest order: recording 0 is `baseline`, 1 is `experiment`, the
-        // rest are named-or-positional.
+        // `--experiment` selectors: the arms fill the two slots as the server
+        // viewer fills them (`dashboard::combined::arm_slots`), and the rest
+        // are named-or-positional.
+        let labels: Vec<std::collections::BTreeMap<String, String>> =
+            recordings.iter().map(|(l, _)| l.clone()).collect();
+        let (slots, beside_idx, note) =
+            comparison_order(&labels, filename).map_err(|e| JsValue::from_str(&e))?;
+        self.notices.extend(note);
+        let mut picked: Vec<Option<_>> = recordings.into_iter().map(Some).collect();
+        let beside_labels: Vec<_> = beside_idx.iter().map(|&i| labels[i].clone()).collect();
+        let beside: Vec<dashboard::dashboard::Beside> = beside_idx
+            .iter()
+            .zip(dashboard::dashboard::beside_names(
+                &beside_labels,
+                &beside_idx,
+            ))
+            .map(|(&i, (key, name))| {
+                let (_, reader) = picked[i].take().expect("each index once");
+                dashboard::dashboard::Beside {
+                    key,
+                    name,
+                    data: Arc::new(reader) as Arc<dyn MetricsSource>,
+                }
+            })
+            .collect();
+        if !beside.is_empty() {
+            // The server viewer logs the same line.
+            self.notices.push(format!(
+                "beside the comparison, each in its own sections: {}",
+                beside
+                    .iter()
+                    .map(|b| b.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        let recordings: rez::reader::LabeledRecordings = slots
+            .iter()
+            .map(|&i| picked[i].take().expect("each index once"))
+            .collect();
         let labels: Vec<std::collections::BTreeMap<String, String>> =
             recordings.iter().map(|(l, _)| l.clone()).collect();
         let identities = dashboard::capture_alias::assign_capture_identities(&labels, &labels);
+        // A report's selection, marker and events: the baseline's, else
+        // those of the first recording with a selection
+        // (`dashboard::combined::report_markers`); a report saved before the
+        // baseline was chosen by arm sits on the first.
+        let carried = {
+            let shown: Vec<&dyn MetricsSource> = recordings
+                .iter()
+                .map(|(_, r)| r as &dyn MetricsSource)
+                .chain(beside.iter().map(|b| b.data.as_ref()))
+                .collect();
+            dashboard::combined::report_markers(&shown)
+        };
 
-        for ((_, reader), identity) in recordings.into_iter().zip(identities) {
-            let mut viewer =
-                Viewer::from_source(Arc::new(reader), Arc::clone(&pool), Bytes::new(), filename);
+        let mut beside = Some(beside);
+        for ((labels, reader), identity) in recordings.into_iter().zip(identities) {
+            let primary: Arc<dyn MetricsSource> = Arc::new(reader);
+            // The baseline answers the beside recordings' queries too.
+            let beside = if identity.id == BASELINE_ID {
+                beside.take().unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let source: Arc<dyn MetricsSource> = if beside.is_empty() {
+                primary
+            } else {
+                Arc::new(dashboard::combined::Routed::new(
+                    primary,
+                    beside
+                        .iter()
+                        .map(|b| (b.key.clone(), Arc::clone(&b.data)))
+                        .collect(),
+                ))
+            };
+            let mut viewer = Viewer::from_source(source, Arc::clone(&pool), Bytes::new(), filename);
+            viewer.beside = beside;
+            if identity.id == BASELINE_ID {
+                viewer.anchor_labels = Some(labels);
+                for (key, value) in &carried {
+                    viewer.file_metadata.insert(key.to_string(), value.clone());
+                }
+            }
             viewer.set_alias(Some(identity.alias));
             self.set_capture(&identity.id, viewer);
         }
@@ -1064,13 +1333,24 @@ impl WasmCaptureRegistry {
                 .as_ref()
                 .map(|b| dashboard_template(&b.file_metadata, preference))
                 .expect("both captures are attached");
-            dashboard::dashboard::build_template_context(
+            let mut context = dashboard::dashboard::build_template_context(
                 template,
                 None,
                 &service_refs,
                 category,
                 &sources,
-            )
+            );
+            if let Some(b) = self.baseline.as_ref() {
+                let beside_notices = dashboard::dashboard::add_beside_sections(
+                    &mut context,
+                    b.reader.as_ref(),
+                    &b.beside,
+                    &registry,
+                    preference,
+                );
+                self.notices.extend(beside_notices);
+            }
+            context
         };
         if let Some(baseline) = self.baseline.as_mut() {
             baseline.context = context.clone();
@@ -1136,6 +1416,7 @@ impl WasmCaptureRegistry {
             });
             return ::report_save::build_rez_report_from_rez(
                 rez_bytes,
+                baseline.anchor_labels.as_ref(),
                 keep.as_ref(),
                 range,
                 payload_json,
@@ -1666,13 +1947,15 @@ mod tests {
         );
     }
 
-    /// A `.rez` carrying two recordings IS a comparison, so it fills both
-    /// slots — the same mapping `rezolus view` makes for the same file.
-    /// Loading one arm into one slot would show an A/B archive as a single
-    /// capture with nothing on screen saying half of it is missing.
+    /// A `.rez` of two recordings attached as a comparison fills both slots
+    /// — the same mapping `rezolus view --baseline .. --experiment ..` makes
+    /// for the same file. Loading one arm into one slot would show an A/B
+    /// archive as a single capture with nothing on screen saying half of it
+    /// is missing.
     #[test]
     fn a_two_recording_rez_fills_both_capture_slots() {
         let mut reg = WasmCaptureRegistry::new();
+        reg.set_compare_requested(true);
         reg.attach(
             "baseline",
             &rez_bytes(&[("redis", "web-01"), ("valkey", "web-01")]),
@@ -1707,13 +1990,93 @@ mod tests {
         assert_eq!(reg.notices(), "[]");
     }
 
-    /// Above two, the archive holds recordings the browser is not showing.
-    /// The server viewer says so on a terminal; here it has to reach the UI,
-    /// because an archive whose third arm is silently missing looks exactly
-    /// like an archive with two arms.
+    /// An archive of two hosts of one run, from either entry point, is one
+    /// combined capture: the built-in sections once per host, the second
+    /// host's routes keyed `@h2`, each section's queries restricted to its
+    /// host. `set_compare_requested` attaches it as a comparison instead.
     #[test]
-    fn every_recording_of_a_multi_recording_rez_attaches() {
+    fn a_one_run_archive_is_one_combined_capture() {
+        use rez::fixtures::{Recording, one_run};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.rez");
+        let host = |labels, cpus| Recording {
+            labels,
+            metadata: &[("source", "rezolus")],
+            cpus,
+            busy_ns: 500_000_000,
+            counter: None,
+        };
+        one_run(
+            &path,
+            &[
+                host(&[("source", "rezolus"), ("host", "h1")], 1),
+                host(&[("source", "rezolus"), ("host", "h2")], 2),
+            ],
+        );
+        let bytes = std::fs::read(&path).unwrap();
+
+        let single = Viewer::new(&bytes, "run.rez").expect("one run opens as one capture");
         let mut reg = WasmCaptureRegistry::new();
+        reg.attach("baseline", &bytes, "run.rez").unwrap();
+        assert!(!reg.has("experiment"));
+        // The archive answers each recording's catalog questions.
+        assert!(single.catalog.is_some());
+        assert!(reg.baseline.as_ref().unwrap().catalog.is_some());
+        for sections in [single.get_sections(), reg.get_sections("baseline").unwrap()] {
+            let sections: Vec<serde_json::Value> = serde_json::from_str(&sections).unwrap();
+            let routes: Vec<&str> = sections
+                .iter()
+                .map(|s| s["route"].as_str().unwrap())
+                .collect();
+            assert!(
+                routes.contains(&"/cpu") && routes.contains(&"/cpu@h2"),
+                "{routes:?}"
+            );
+            assert_eq!(routes.iter().filter(|r| **r == "/query").count(), 1);
+        }
+        let cpu: serde_json::Value =
+            serde_json::from_str(&reg.get_section("baseline", "cpu@h2").unwrap()).unwrap();
+        assert_eq!(cpu["metadata"]["scope"][0]["value"], "h2");
+        assert!(
+            cpu.to_string().contains(r#"cpu_usage{host=\"h2\"}"#),
+            "{cpu}"
+        );
+
+        let mut compare = WasmCaptureRegistry::new();
+        compare.set_compare_requested(true);
+        compare.attach("baseline", &bytes, "run.rez").unwrap();
+        assert!(compare.has("experiment"));
+    }
+
+    /// The arms order a comparison's captures; arms that cannot fill two
+    /// slots are refused with the recordings listed.
+    #[test]
+    fn a_comparison_attaches_in_arm_order() {
+        let l = |arm: &str| -> std::collections::BTreeMap<String, String> {
+            [("arm".to_string(), arm.to_string())].into()
+        };
+        assert_eq!(
+            comparison_order(&[l("experiment"), l("baseline")], "f").unwrap(),
+            (vec![1, 0], vec![], None)
+        );
+        let unarmed: std::collections::BTreeMap<String, String> =
+            [("source".to_string(), "x".to_string())].into();
+        let one = comparison_order(&[l("baseline"), unarmed], "f.rez").unwrap_err();
+        assert!(one.contains("one recording carries"), "{one}");
+        let err = comparison_order(&[l("baseline"), l("baseline")], "f.rez").unwrap_err();
+        assert!(
+            err.contains("f.rez") && err.contains("arm=baseline"),
+            "{err}"
+        );
+    }
+
+    /// Above two, a comparison takes the first two recordings into its
+    /// slots and shows the rest beside it, not as further arms: the
+    /// baseline's source answers a query naming one of them by its key.
+    #[test]
+    fn recordings_past_the_two_slots_are_beside_not_arms() {
+        let mut reg = WasmCaptureRegistry::new();
+        reg.set_compare_requested(true);
         reg.attach(
             "baseline",
             &rez_bytes(&[
@@ -1724,14 +2087,13 @@ mod tests {
             "fleet.rez",
         )
         .unwrap();
-
-        // No "some recordings not shown" notice any more — every recording is
-        // attached under the shared id scheme, ready for an N-way overlay.
-        assert_eq!(reg.notices(), "[]");
         let captures: Vec<serde_json::Value> = serde_json::from_str(&reg.captures()).unwrap();
         let ids: Vec<&str> = captures.iter().map(|c| c["id"].as_str().unwrap()).collect();
-        assert_eq!(ids, vec!["baseline", "experiment", "envoy"]);
-        // Each is its own capture with its own metadata, identity intact.
+        assert_eq!(ids, vec!["baseline", "experiment"]);
+        assert_eq!(
+            reg.notices(),
+            r#"["beside the comparison, each in its own sections: web-01"]"#
+        );
         assert!(
             reg.file_metadata_json("baseline")
                 .unwrap()
@@ -1742,7 +2104,14 @@ mod tests {
                 .unwrap()
                 .contains("valkey")
         );
-        assert!(reg.file_metadata_json("envoy").unwrap().contains("envoy"));
+        let beside = &reg.baseline.as_ref().unwrap().beside;
+        assert_eq!(beside.len(), 1);
+        let (start, end) = beside[0].data.time_range().unwrap();
+        let q = format!("irate(cpu_cycles{{__capture__=\"{}\"}}[2s])", beside[0].key);
+        let got = reg
+            .query_range("baseline", &q, start, end, 1.0, "grid")
+            .unwrap();
+        assert!(got.contains("envoy"), "{got}");
     }
 
     /// An archive that was never finalized must SAY so.

@@ -224,6 +224,37 @@ fn ingest_rez_from_path(
             }
         };
 
+    // An archive of one run opens as one combined view, as it does from the
+    // command line (`super::init_file_mode_combined`); an upload has no
+    // --baseline/--experiment to ask for a comparison.
+    if super::opens_combined(&readers, false) {
+        let combined = super::combine_recordings(readers);
+        let markers = combined.markers.clone();
+        let file_meta = super::file_meta_json(&combined.reader)
+            .map(|meta| ::dashboard::combined::with_report_markers(&meta, &markers));
+        let selection =
+            ::dashboard::combined::marker(&markers, crate::parquet_metadata::KEY_SELECTION);
+        let report_marker =
+            ::dashboard::combined::marker(&markers, crate::parquet_metadata::KEY_REPORT);
+        let reader = Arc::new(combined.reader);
+        state.replace_baseline(Arc::clone(&reader) as Arc<dyn MetricsSource>);
+        *state.combined_catalog.write() =
+            Some(Arc::new(::dashboard::combined::FixedCatalog(reader)));
+        *state.parquet_path.write() = Some(rez_path.clone());
+        *state.experiment_parquet_path.write() = None;
+        *state.cli_experiment_path.write() = None;
+        *state.selection.write() = selection;
+        *state.trimmed_report_marker.write() = report_marker;
+        state.captures.set_baseline_systeminfo(combined.systeminfo);
+        state.captures.set_baseline_file_metadata(file_meta);
+        *state.file_checksum.write() = compute_file_checksum(&rez_path);
+        state.captures.set_baseline_alias(None);
+        state.captures.detach_experiment();
+        *state.members.write() = combined.members;
+        regenerate_dashboards(state);
+        return ApiResponse::ok(serde_json::json!({ "filename": display_filename }));
+    }
+
     fn describe(reader: &crate::rez_reader::RezReader) -> (Option<String>, Option<String>) {
         use metriken_query::MetricsSource;
         let systeminfo = reader.metadata_get("systeminfo");
@@ -252,14 +283,83 @@ fn ingest_rez_from_path(
                 .unwrap_or_else(|| fallback.to_string())
         };
 
-    let n = readers.len();
-    let mut readers = readers.into_iter();
+    // The arms say which recording is which (`dashboard::combined::arm_slots`).
+    let labels: Vec<_> = readers.iter().map(|(l, _)| l.clone()).collect();
+    let slots = match ::dashboard::combined::arm_slots(&labels) {
+        Ok(slots) => slots,
+        Err(why) => {
+            let _ = std::fs::remove_file(&rez_path);
+            return ApiResponse::err(
+                format!("{why}; open it with `rezolus view FILE --baseline k=v --experiment k=v`"),
+                "invalid_parquet",
+            );
+        }
+    };
+    if let Some(note) = &slots.note {
+        tracing::info!("{note}");
+    }
+    // The slots, then every other recording beside the comparison, each in
+    // its own sections (`super::init_file_mode_rez` does the same).
+    let mut picked: Vec<Option<_>> = readers.into_iter().map(Some).collect();
+    let (b_labels, b_reader) = picked[slots.baseline].take().expect("in range");
+    let experiment = slots
+        .experiment
+        .map(|e| picked[e].take().expect("in range"));
+    let positions: Vec<usize> = (0..picked.len()).filter(|&i| picked[i].is_some()).collect();
+    let rest: Vec<_> = picked.into_iter().flatten().collect();
+    let names = ::dashboard::dashboard::beside_names(
+        &rest.iter().map(|(l, _)| l.clone()).collect::<Vec<_>>(),
+        &positions,
+    );
+    let beside: Vec<::dashboard::dashboard::Beside> = rest
+        .into_iter()
+        .zip(names)
+        .map(
+            |((_, reader), (key, name))| ::dashboard::dashboard::Beside {
+                key,
+                name,
+                data: Arc::new(reader) as Arc<dyn MetricsSource>,
+            },
+        )
+        .collect();
 
-    // Baseline = recording 0.
-    let (b_labels, b_reader) = readers.next().expect("non-empty checked above");
     let (b_systeminfo, b_file_meta) = describe(&b_reader);
     let b_alias = alias_of(&b_labels, "baseline");
-    state.replace_baseline(Arc::new(b_reader) as Arc<dyn MetricsSource>);
+    // A report's selection, marker and events: the baseline's, else those
+    // of the first recording with a selection (as `super::init_file_mode_rez`
+    // reads them).
+    let markers = {
+        let shown: Vec<&dyn MetricsSource> = std::iter::once(&b_reader as &dyn MetricsSource)
+            .chain(experiment.iter().map(|(_, r)| r as &dyn MetricsSource))
+            .chain(beside.iter().map(|b| b.data.as_ref()))
+            .collect();
+        ::dashboard::combined::report_markers(&shown)
+    };
+    let b_file_meta =
+        b_file_meta.map(|meta| ::dashboard::combined::with_report_markers(&meta, &markers));
+    *state.selection.write() =
+        ::dashboard::combined::marker(&markers, crate::parquet_metadata::KEY_SELECTION);
+    *state.trimmed_report_marker.write() =
+        ::dashboard::combined::marker(&markers, crate::parquet_metadata::KEY_REPORT);
+    let primary = Arc::new(b_reader) as Arc<dyn MetricsSource>;
+    let baseline: Arc<dyn MetricsSource> = if beside.is_empty() {
+        primary
+    } else {
+        Arc::new(::dashboard::combined::Routed::new(
+            primary,
+            beside
+                .iter()
+                .map(|b| (b.key.clone(), Arc::clone(&b.data)))
+                .collect(),
+        ))
+    };
+    state.replace_baseline(baseline);
+    let b_systeminfo =
+        ::dashboard::dashboard::with_beside_systeminfo(b_systeminfo, &b_alias, &beside);
+    let b_file_meta =
+        b_file_meta.map(|meta| ::dashboard::dashboard::with_beside_metadata(&meta, &beside));
+    *state.beside.write() = beside;
+    *state.anchor_labels.write() = Some(b_labels.clone());
     *state.parquet_path.write() = Some(rez_path.clone());
     *state.experiment_parquet_path.write() = None;
     *state.cli_experiment_path.write() = None;
@@ -268,25 +368,18 @@ fn ingest_rez_from_path(
     *state.file_checksum.write() = compute_file_checksum(&rez_path);
     state.captures.set_baseline_alias(Some(b_alias));
 
-    // Experiment = recording 1, if present.
-    if n >= 2 {
-        let (e_labels, e_reader) = readers.next().expect("n >= 2");
-        let (e_systeminfo, e_file_meta) = describe(&e_reader);
-        let e_alias = alias_of(&e_labels, "experiment");
-        state.captures.attach_experiment(
-            Arc::new(e_reader) as Arc<dyn MetricsSource>,
-            e_systeminfo,
-            e_file_meta,
-            Some(e_alias),
-        );
-        if n > 2 {
-            warn!(
-                "{n}-recording .rez uploaded: showing recordings 0 and 1 as \
-                 baseline/experiment; N-way faceting is not yet supported"
+    match experiment {
+        Some((e_labels, e_reader)) => {
+            let (e_systeminfo, e_file_meta) = describe(&e_reader);
+            let e_alias = alias_of(&e_labels, "experiment");
+            state.captures.attach_experiment(
+                Arc::new(e_reader) as Arc<dyn MetricsSource>,
+                e_systeminfo,
+                e_file_meta,
+                Some(e_alias),
             );
         }
-    } else {
-        state.captures.detach_experiment();
+        None => state.captures.detach_experiment(),
     }
 
     regenerate_dashboards(state);
@@ -318,6 +411,7 @@ fn ingest_combined_ab_from_path(
 
     let open = |label: &str, path: &std::path::Path| -> Result<Arc<dyn MetricsSource>, String> {
         ParquetReader::open_with_pool(path, Arc::clone(&state.pool))
+            .map(::dashboard::combined::label_parquet_by_source)
             .map(|r| Arc::new(r.with_filename(display_filename.clone())) as Arc<dyn MetricsSource>)
             .map_err(|e| format!("failed to load {label} parquet from tarball: {e}"))
     };
@@ -390,7 +484,9 @@ pub fn ingest_baseline_from_path(
     temp_path: PathBuf,
     filename: String,
 ) -> Json<ApiResponse<serde_json::Value>> {
-    let reader = match ParquetReader::open_with_pool(&temp_path, Arc::clone(&state.pool)) {
+    let reader = match ParquetReader::open_with_pool(&temp_path, Arc::clone(&state.pool))
+        .map(::dashboard::combined::label_parquet_by_source)
+    {
         Ok(r) => r.with_filename(filename),
         Err(e) => {
             let _ = std::fs::remove_file(&temp_path);
@@ -514,7 +610,9 @@ fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
             .into_response();
     }
 
-    let exp_reader = match ParquetReader::open_with_pool(&temp_path, Arc::clone(&state.pool)) {
+    let exp_reader = match ParquetReader::open_with_pool(&temp_path, Arc::clone(&state.pool))
+        .map(::dashboard::combined::label_parquet_by_source)
+    {
         Ok(r) => r.with_filename(filename),
         Err(e) => {
             let _ = std::fs::remove_file(&temp_path);
@@ -813,6 +911,9 @@ struct ReportSources {
     baseline: Arc<dyn MetricsSource>,
     /// The experiment parquet's path and data, when one is attached.
     experiment: Option<(PathBuf, Arc<dyn MetricsSource>)>,
+    /// The labels of the archive recording the baseline reads
+    /// (`AppState::anchor_labels`): the report's markers go on it.
+    anchor: Option<std::collections::BTreeMap<String, String>>,
 }
 
 impl ReportSources {
@@ -828,6 +929,7 @@ impl ReportSources {
             experiment: state
                 .resolve_experiment_parquet_path()
                 .zip(state.captures.get(CaptureId::Experiment)),
+            anchor: state.anchor_labels.read().clone(),
         }
     }
 }
@@ -879,6 +981,7 @@ fn build_report(
         });
         let result = super::report_save_rez::build_rez_report(
             path,
+            sources.anchor.as_ref(),
             keep.as_ref(),
             range,
             selection_json,
@@ -990,6 +1093,297 @@ mod tests {
         let store: Arc<dyn MetricsSource> =
             Arc::new(metriken_query::MemoryStore::builder().build());
         Arc::new(AppState::new(store, TemplateRegistry::empty()))
+    }
+
+    /// An uploaded comparison fills its slots by arm, as file mode does.
+    #[test]
+    fn an_uploaded_comparison_fills_its_slots_by_arm() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rev.rez");
+        let labels: Vec<std::collections::BTreeMap<String, String>> =
+            [("s0", "experiment"), ("s1", "baseline")]
+                .iter()
+                .map(|(s, arm)| {
+                    [("source", *s), ("host", "h"), ("arm", *arm)]
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect()
+                })
+                .collect();
+        crate::mcp::tests::multi_recording_rez_with_labels(&path, &labels);
+        let state = upload_only_state();
+        let _ = ingest_rez_from_path(&state, path, "rev.rez".to_string());
+        let meta = |id: &str| state.captures.file_metadata_by_id(id).unwrap();
+        assert!(meta("baseline").contains("s1"), "{}", meta("baseline"));
+        assert!(meta("experiment").contains("s0"), "{}", meta("experiment"));
+    }
+
+    /// An upload with one armed recording among unarmed ones is refused, and
+    /// the view is left as it was.
+    #[test]
+    fn an_upload_with_one_arm_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one.rez");
+        let labels: Vec<std::collections::BTreeMap<String, String>> = vec![
+            [("source".to_string(), "a".to_string())].into(),
+            [
+                ("source".to_string(), "b".to_string()),
+                ("arm".to_string(), "baseline".to_string()),
+            ]
+            .into(),
+        ];
+        crate::mcp::tests::multi_recording_rez_with_labels(&path, &labels);
+        let state = upload_only_state();
+        let Json(reply) = ingest_rez_from_path(&state, path, "one.rez".to_string());
+        let reply = serde_json::to_value(&reply).unwrap();
+        assert_eq!(reply["status"], "error", "{reply}");
+        assert!(state.captures.get_by_id("experiment").is_none());
+    }
+
+    /// An upload of the concurrent A/B keeps the agent beside the
+    /// comparison, as file mode does.
+    #[test]
+    fn an_uploaded_comparison_keeps_the_unarmed_recordings_beside() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = crate::viewer::combined_test::concurrent_ab(dir.path());
+        let state = upload_only_state();
+        let _ = ingest_rez_from_path(&state, path, "conc.rez".to_string());
+        let meta = |id: &str| state.captures.file_metadata_by_id(id).unwrap();
+        assert!(meta("baseline").contains("svcA"), "{}", meta("baseline"));
+        assert!(
+            meta("experiment").contains("svcB"),
+            "{}",
+            meta("experiment")
+        );
+        assert_eq!(state.captures.capture_ids(), ["baseline", "experiment"]);
+        let routes: Vec<String> = state
+            .sections
+            .read()
+            .sections()
+            .iter()
+            .map(|s| s.route.clone())
+            .collect();
+        assert!(routes.contains(&"/cpu@h".to_string()), "{routes:?}");
+        let info = state.captures.systeminfo_by_id("baseline").unwrap();
+        assert!(info.contains(r#""h":{"#), "{info}");
+    }
+
+    /// An uploaded report of the concurrent A/B, its selection on the
+    /// archive's first recording (the unarmed agent, as reports were saved
+    /// before the baseline's), opens with its pins and in report mode.
+    #[test]
+    fn an_uploaded_report_finds_its_selection_on_any_recording() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = crate::viewer::combined_test::concurrent_ab(dir.path());
+        let keep: std::collections::BTreeSet<String> =
+            ["cpu_usage".to_string()].into_iter().collect();
+        let bytes = ::report_save::build_rez_report_from_rez(
+            &std::fs::read(&path).unwrap(),
+            None,
+            Some(&keep),
+            None,
+            r#"{"entries":[]}"#,
+            Some(r#"{"events":[{"timestamp":1700000002000000000,"description":"old"}]}"#),
+        )
+        .unwrap();
+        let report = dir.path().join("report.rez");
+        std::fs::write(&report, bytes).unwrap();
+        let state = upload_only_state();
+        let _ = ingest_rez_from_path(&state, report, "report.rez".to_string());
+        assert_eq!(state.selection.read().as_deref(), Some(r#"{"entries":[]}"#));
+        assert_eq!(
+            state.trimmed_report_marker.read().as_deref(),
+            Some("trimmed")
+        );
+        // Its events reach the baseline's metadata, where the page reads them.
+        let meta: serde_json::Value =
+            serde_json::from_str(&state.captures.file_metadata_by_id("baseline").unwrap()).unwrap();
+        assert_eq!(meta["events"]["events"][0]["description"], "old", "{meta}");
+    }
+
+    /// Save as Report through the handler; the report's bytes.
+    async fn save(state: &Arc<AppState>, body: &str) -> Vec<u8> {
+        let response = save_with_selection(State(Arc::clone(state)), body.to_string()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec()
+    }
+
+    /// The `source` of each recording of a `.rez` that carries a selection.
+    fn marked(bytes: &[u8]) -> Vec<String> {
+        crate::recorder::rez_sqlite::RezDb::open_bytes(bytes.to_vec())
+            .unwrap()
+            .read_recordings()
+            .unwrap()
+            .into_iter()
+            .filter(|r| {
+                r.meta
+                    .metadata
+                    .contains_key(crate::parquet_metadata::KEY_SELECTION)
+            })
+            .map(|r| r.meta.labels["source"].clone())
+            .collect()
+    }
+
+    /// An uploaded comparison saves its report onto its baseline's
+    /// recording, and replacing the baseline forgets which that was.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn an_uploaded_comparison_saves_its_report_on_the_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = crate::viewer::combined_test::concurrent_ab(dir.path());
+        let state = upload_only_state();
+        let _ = ingest_rez_from_path(&state, path.clone(), "conc.rez".to_string());
+        *state.parquet_path.write() = Some(path);
+        let bytes = save(&state, r#"{"entries":[],"trim_columns":false}"#).await;
+        assert_eq!(marked(&bytes), ["svcA"]);
+        state.replace_baseline(state.baseline_data());
+        assert!(state.anchor_labels.read().is_none());
+    }
+
+    /// A report saved from a comparison chosen by --baseline/--experiment of
+    /// an archive without arms sits on svcA, not the first recording; the
+    /// archive reopens combined, and the selection, marker and events are
+    /// found there, in file mode, an upload and the WASM viewer. Saving
+    /// again strips an earlier report's keys from every other recording.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_report_of_a_selected_comparison_reopens_combined() {
+        use crate::parquet_metadata::{KEY_EVENTS, KEY_REPORT};
+        use rez::fixtures::{one_run, Recording};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("unarmed.rez");
+        let rec = |labels: &'static [(&'static str, &'static str)], cpus| Recording {
+            labels,
+            metadata: &[("source", "rezolus")],
+            cpus,
+            busy_ns: 250_000_000,
+            counter: None,
+        };
+        one_run(
+            &path,
+            &[
+                rec(&[("source", "rezolus"), ("host", "h")], 1),
+                rec(&[("source", "svcA"), ("host", "h")], 1),
+                rec(&[("source", "svcB"), ("host", "h")], 1),
+            ],
+        );
+        let state = Arc::new(crate::viewer::combined_test::view(
+            &path,
+            &["--baseline", "source=svcA", "--experiment", "source=svcB"],
+        ));
+        let body = r#"{"entries":[],"trim_columns":true,"events":[{"timestamp":1700000002000000000,"description":"rollout"}]}"#;
+        let bytes = save(&state, body).await;
+        assert_eq!(marked(&bytes), ["svcA"]);
+        let report = dir.path().join("report.rez");
+        std::fs::write(&report, &bytes).unwrap();
+
+        let check = |state: &AppState, how: &str| {
+            assert_eq!(state.selection.read().as_deref(), Some(body), "{how}");
+            assert_eq!(
+                state.trimmed_report_marker.read().as_deref(),
+                Some("trimmed"),
+                "{how}"
+            );
+            let meta: serde_json::Value =
+                serde_json::from_str(&state.captures.file_metadata_by_id("baseline").unwrap())
+                    .unwrap();
+            assert_eq!(
+                meta[KEY_EVENTS]["events"][0]["description"], "rollout",
+                "{how}: {meta}"
+            );
+        };
+        let reopened = crate::viewer::combined_test::view(&report, &[]);
+        assert!(!reopened.members.read().is_empty(), "opens combined");
+        check(&reopened, "file mode");
+        let uploaded = upload_only_state();
+        let _ = ingest_rez_from_path(&uploaded, report.clone(), "report.rez".to_string());
+        check(&uploaded, "upload");
+        assert!(uploaded.combined_catalog.read().is_some());
+        uploaded.replace_baseline(uploaded.baseline_data());
+        assert!(uploaded.combined_catalog.read().is_none());
+
+        let mut reg = viewer::WasmCaptureRegistry::new();
+        reg.attach("baseline", &bytes, "report.rez").unwrap();
+        assert_eq!(reg.selection("baseline").as_deref(), Some(body));
+        let meta: serde_json::Value =
+            serde_json::from_str(&reg.file_metadata_json("baseline").unwrap()).unwrap();
+        assert_eq!(meta[KEY_REPORT], "trimmed");
+        assert_eq!(meta[KEY_EVENTS]["events"][0]["description"], "rollout");
+
+        // An earlier report saved onto the first recording, then a new one
+        // from the comparison: only svcA carries a report.
+        let keep: std::collections::BTreeSet<String> =
+            ["cpu_usage".to_string()].into_iter().collect();
+        let old = ::report_save::build_rez_report_from_rez(
+            &std::fs::read(&path).unwrap(),
+            None,
+            Some(&keep),
+            None,
+            r#"{"entries":[]}"#,
+            Some(r#"{"events":[]}"#),
+        )
+        .unwrap();
+        assert_eq!(marked(&old), ["rezolus"]);
+        let old_path = dir.path().join("old.rez");
+        std::fs::write(&old_path, &old).unwrap();
+        let state = Arc::new(crate::viewer::combined_test::view(
+            &old_path,
+            &["--baseline", "source=svcA", "--experiment", "source=svcB"],
+        ));
+        let again = save(&state, body).await;
+        assert_eq!(marked(&again), ["svcA"]);
+        let db = crate::recorder::rez_sqlite::RezDb::open_bytes(again).unwrap();
+        for r in db.read_recordings().unwrap() {
+            let has = |k: &str| r.meta.metadata.contains_key(k);
+            let anchor = r.meta.labels["source"] == "svcA";
+            assert_eq!(has(KEY_EVENTS), anchor, "{:?}", r.meta.labels);
+            assert_eq!(has(KEY_REPORT), anchor, "{:?}", r.meta.labels);
+        }
+    }
+
+    /// An uploaded beside recording no label names is named by its archive
+    /// position, as in file mode.
+    #[test]
+    fn an_uploaded_beside_recording_without_labels_is_named_by_position() {
+        use rez::fixtures::{one_run, Recording};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pos.rez");
+        let rec = |labels: &'static [(&'static str, &'static str)]| Recording {
+            labels,
+            metadata: &[("source", "rezolus")],
+            cpus: 1,
+            busy_ns: 250_000_000,
+            counter: None,
+        };
+        one_run(
+            &path,
+            &[
+                rec(&[("host", "a"), ("arm", "baseline")]),
+                rec(&[("host", "b"), ("arm", "experiment")]),
+                rec(&[("zone", "z")]),
+            ],
+        );
+        for state in [
+            {
+                let state = upload_only_state();
+                let _ = ingest_rez_from_path(&state, path.clone(), "pos.rez".to_string());
+                state
+            },
+            Arc::new(crate::viewer::combined_test::view(&path, &[])),
+        ] {
+            let routes: Vec<String> = state
+                .sections
+                .read()
+                .sections()
+                .iter()
+                .map(|s| s.route.clone())
+                .collect();
+            assert!(
+                routes.contains(&"/cpu@recording-3".to_string()),
+                "{routes:?}"
+            );
+        }
     }
 
     /// Save as Report of a `.rez` source returns a `.rez` report carrying the

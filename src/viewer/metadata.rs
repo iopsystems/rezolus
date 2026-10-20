@@ -398,6 +398,52 @@ pub fn lookup_category<'a>(
     Some((category.service_name.as_str(), category))
 }
 
+/// Rebuild the sections of a followed combined archive whose recording set
+/// changed since they were built (an endpoint that came up after the open
+/// added a recording), and say so: the page lists sections when it loads,
+/// so the new recording's appear on a reload. A no-op otherwise.
+pub fn refresh_combined_members(state: &AppState) {
+    let Some((live, built)) = state.combined_live.lock().clone() else {
+        return;
+    };
+    let (labels, changes) = live.recordings();
+    if changes == built {
+        return;
+    }
+    let readers = match crate::rez_reader::RezReader::open_recordings(
+        live.path(),
+        std::sync::Arc::clone(&state.pool),
+    ) {
+        Ok(readers) => readers,
+        Err(e) => {
+            warn!(
+                "{}: could not reread its recordings: {e}",
+                live.path().display()
+            );
+            return;
+        }
+    };
+    let before = state.members.read().len();
+    let combined = super::combine_recordings(readers);
+    warn!(
+        "{} now holds {} recordings (was {before}): {}; its sections were rebuilt, reload \
+         the page to see them",
+        live.path().display(),
+        labels.len(),
+        labels
+            .iter()
+            .map(crate::mcp::render_labels)
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
+    *state.members.write() = combined.members;
+    state.captures.set_baseline_systeminfo(combined.systeminfo);
+    if let Some(slot) = state.combined_live.lock().as_mut() {
+        slot.1 = changes;
+    }
+    regenerate_dashboards(state);
+}
+
 /// Regenerate the section map from the currently attached captures.
 /// Called at CLI startup after the experiment attaches, and on every
 /// HTTP attach/detach so the section list stays in sync.
@@ -421,6 +467,35 @@ pub fn regenerate_dashboards(state: &AppState) {
     let registry = &state.templates;
     let preference = state.template_preference;
     let baseline_path = state.parquet_path.read().clone();
+
+    // An archive opened combined: one context over every recording, each
+    // template once per recording that carries it. A comparison attached
+    // over it later renders as the captures' path below does.
+    let members = state.members.read().clone();
+    if members.len() > 1 && state.captures.get(CaptureId::Experiment).is_none() {
+        let filesize = baseline_path
+            .as_ref()
+            .and_then(|p| std::fs::metadata(p).ok().map(|m| m.len()));
+        let stem = baseline_path
+            .as_deref()
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str())
+            .map(|s| s.trim_end_matches(".parquet").to_string());
+        let (context, notices) = ::dashboard::dashboard::build_combined_context(
+            state.baseline_data().as_ref(),
+            state.combined_catalog.read().clone(),
+            &members,
+            registry,
+            preference,
+            stem.as_deref(),
+            filesize,
+        );
+        for notice in notices {
+            warn_once(notice);
+        }
+        *state.sections.write() = LazySectionStore::new(context);
+        return;
+    }
 
     // Each capture's templates come from its own metadata (a parquet footer,
     // a `.rez` recording's manifest, a dendro source), and each is validated
@@ -459,13 +534,27 @@ pub fn regenerate_dashboards(state: &AppState) {
     // The built-in sections render from the baseline's template: the
     // sections are generated against the baseline's data alone.
     let template = capture_dashboard_template(state.baseline_data().as_ref(), preference);
-    let context = dashboard::dashboard::build_template_context(
+    let mut context = dashboard::dashboard::build_template_context(
         template,
         filesize,
         &service_refs,
         category,
         &sources,
     );
+    // The recordings beside a comparison, each in its own sections.
+    let beside = state.beside.read();
+    if !beside.is_empty() {
+        for notice in ::dashboard::dashboard::add_beside_sections(
+            &mut context,
+            state.baseline_data().as_ref(),
+            &beside,
+            registry,
+            preference,
+        ) {
+            warn_once(notice);
+        }
+    }
+    drop(beside);
     *state.sections.write() = LazySectionStore::new(context);
 }
 
