@@ -206,7 +206,7 @@ mod tests {
         impl SegmentEncoder for NoSegments {
             fn encode(
                 &self,
-                _: &str,
+                _: &dendro::segment::EncodeContext<'_>,
                 _: &[dendro::archive::WalRow],
             ) -> dendro::segment::EncodeResult {
                 Ok(None)
@@ -431,7 +431,11 @@ mod archive_as_a_source {
 
     struct NoSegments;
     impl SegmentEncoder for NoSegments {
-        fn encode(&self, _: &str, _: &[dendro::archive::WalRow]) -> dendro::segment::EncodeResult {
+        fn encode(
+            &self,
+            _: &dendro::segment::EncodeContext<'_>,
+            _: &[dendro::archive::WalRow],
+        ) -> dendro::segment::EncodeResult {
             Ok(None)
         }
         fn version(&self) -> Option<&str> {

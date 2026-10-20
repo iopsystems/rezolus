@@ -4,9 +4,11 @@
 //! dendro's `copy_sources_into` copies sealed segments as they are, the
 //! clock offsets and caller rows, and encodes each stream's live WAL tail
 //! into a final segment, all in one read snapshot of the source. The tail is
-//! encoded with metriken-storage's `Encoder`, built from the source's stream
-//! list, since a copy runs outside the writer that knows which streams are
-//! long. The copy is therefore fully sealed.
+//! encoded with metriken-storage's `Encoder`, built from each source's
+//! stream list, since a copy runs outside the writer that knows which
+//! streams are long. The encoder is built inside the snapshot the copy
+//! reads, so a long stream a live writer adds meanwhile is either in both or
+//! in neither. The copy is therefore fully sealed.
 
 use std::path::Path;
 
@@ -31,11 +33,12 @@ pub(crate) fn streams(src: &Archive) -> Result<Vec<String>, String> {
 /// handle is closed before this returns, so `dest` is one file with no
 /// sidecars.
 pub(crate) fn copy(src: &Archive, dest: &Path, spec: &CopySpec<'_>) -> Result<usize, String> {
-    let names = streams(src)?;
-    let encoder = metriken_storage::writer::Encoder::for_streams(names.iter().map(String::as_str));
     let mut dst = ArchiveMut::create(dest).map_err(err)?;
-    let copied = dst
-        .transaction(|tx| copy_sources_into(src, tx, spec, &encoder))
+    let copied = src
+        .read_snapshot(|src| {
+            let encoder = metriken_storage::writer::Encoder::for_archive(src)?;
+            dst.transaction(|tx| copy_sources_into(src, tx, spec, &encoder))
+        })
         .map_err(err)?;
     drop(dst);
     Ok(copied)
