@@ -1271,8 +1271,16 @@ fn dendro_of(path: &Path, sources: &[FixtureSource<'_>]) {
     writer.join().unwrap();
 }
 
-/// One group `g/x` holding `dual` as a counter or as a gauge.
-fn dual(i: u64, counter: bool) -> metriken_exposition::Snapshot {
+/// The kind a [`dual`] snapshot holds `dual` under.
+#[derive(Clone, Copy, PartialEq)]
+enum Held {
+    Counter,
+    Gauge,
+    Histogram,
+}
+
+/// One group `g/x` holding `dual` as a counter, a gauge or a histogram.
+fn dual(i: u64, kind: Held) -> metriken_exposition::Snapshot {
     use crate::dendro_copy::fixtures::{ANCHOR, SECOND};
     use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, Snapshot, SnapshotV3};
     let ts = ANCHOR + i * SECOND;
@@ -1280,19 +1288,20 @@ fn dual(i: u64, counter: bool) -> metriken_exposition::Snapshot {
         name: "0".to_string(),
         metadata: [("metric".to_string(), "dual".to_string())].into(),
     };
-    let schema = if counter {
-        GroupSchema {
-            counters: vec![desc],
-            gauges: Vec::new(),
-            histograms: Vec::new(),
-        }
-    } else {
-        GroupSchema {
-            counters: Vec::new(),
-            gauges: vec![desc],
-            histograms: Vec::new(),
+    let only = |k: Held| {
+        if kind == k {
+            vec![desc.clone()]
+        } else {
+            Vec::new()
         }
     };
+    let schema = GroupSchema {
+        counters: only(Held::Counter),
+        gauges: only(Held::Gauge),
+        histograms: only(Held::Histogram),
+    };
+    let mut histogram = ::histogram::Histogram::new(7, 64).unwrap();
+    histogram.increment(1_000 + i).unwrap();
     Snapshot::V3(SnapshotV3 {
         systemtime: std::time::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
         duration: std::time::Duration::ZERO,
@@ -1302,13 +1311,18 @@ fn dual(i: u64, counter: bool) -> metriken_exposition::Snapshot {
             schema_hash: schema.hash(),
             schema: (i == 0).then(|| std::sync::Arc::new(schema)),
             window: Some(metriken::Window::new(ts - SECOND / 2, ts)),
-            counters: if counter { vec![Some(i)] } else { Vec::new() },
-            gauges: if counter {
-                Vec::new()
-            } else {
-                vec![Some(i as i64)]
+            counters: match kind {
+                Held::Counter => vec![Some(i)],
+                _ => Vec::new(),
             },
-            histograms: Vec::new(),
+            gauges: match kind {
+                Held::Gauge => vec![Some(i as i64)],
+                _ => Vec::new(),
+            },
+            histograms: match kind {
+                Held::Histogram => vec![Some(histogram)],
+                _ => Vec::new(),
+            },
         }],
     })
 }
@@ -1325,8 +1339,9 @@ fn the_catalog_answers_as_the_filtered_listing_does() {
     use std::sync::Arc;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("native.dendro");
-    let counter = |i| dual(i, true);
-    let gauge = |i| dual(i, false);
+    let counter = |i| dual(i, Held::Counter);
+    let gauge = |i| dual(i, Held::Gauge);
+    let histogram = |i| dual(i, Held::Histogram);
     dendro_of(
         &path,
         &[
@@ -1390,14 +1405,16 @@ fn the_catalog_answers_as_the_filtered_listing_does() {
     assert!(!scoped.counter_names().contains(&"task_ops".to_string()));
     assert!(scoped.counter_labels("task_ops").is_empty());
     assert!(scoped.gauge_names().contains(&"mem_free".to_string()));
-    // Of two services, the second holds `dual` as a gauge only (every
-    // matcher decided by the recordings' labels).
+    // Of three services, each holds `dual` under one kind only: a counter,
+    // a gauge, a histogram (every matcher decided by the recordings'
+    // labels).
     let path = dir.path().join("dual.dendro");
     dendro_of(
         &path,
         &[
             (&[("source", "svc"), ("host", "h1")], &counter),
             (&[("source", "svc"), ("host", "h2")], &gauge),
+            (&[("source", "svc"), ("host", "h3")], &histogram),
         ],
     );
     let pool = metriken_storage::BufferPool::new(64 << 20);
@@ -1442,4 +1459,28 @@ fn the_catalog_answers_as_the_filtered_listing_does() {
         "{:?}",
         scoped.gauge_names()
     );
+    assert!(
+        scoped.histogram_names().is_empty(),
+        "{:?}",
+        scoped.histogram_names()
+    );
+    // The third holds it as a histogram only.
+    let h3 = &combined.members[2];
+    assert_eq!(h3.series_labels["host"], "h3");
+    let scope = dashboard::combined::Scope {
+        matchers: dashboard::combined::scope_matchers(&labels)[2].clone(),
+        header: h3.header.clone(),
+        metadata: h3.metadata.clone(),
+        catalog: Some(Arc::new(dashboard::combined::FixedCatalog(Arc::clone(
+            &reader,
+        )))),
+    };
+    let scoped = dashboard::combined::Scoped::new(reader.as_ref(), &scope);
+    assert_eq!(scoped.histogram_names(), ["dual"]);
+    assert!(
+        scoped.counter_names().is_empty(),
+        "{:?}",
+        scoped.counter_names()
+    );
+    assert_eq!(scoped.histogram_labels("dual").len(), 1);
 }
