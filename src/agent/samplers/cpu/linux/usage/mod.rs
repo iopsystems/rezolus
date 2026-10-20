@@ -63,6 +63,24 @@ fn handle_cgroup_info(data: &[u8]) -> i32 {
     process_cgroup_info::<bpf::types::cgroup_info>(data, &CGROUP_IDENTITY)
 }
 
+/// The newest `ts` of the `task_info` events applied to each labelled task
+/// slot.
+///
+/// `task_info` and `task_exit` arrive on separate ringbufs, and one drain
+/// applies every `task_info` before any `task_exit`. When a pid's old
+/// occupant exits and its new occupant's `task_info` is sent in the same
+/// snapshot interval (nearly always so for a thread that execs from outside
+/// the group leader), the old occupant's exit is applied after the new
+/// labels.
+/// An exit older than the slot's last assignment must not release it.
+///
+/// A `task_info` for the exiting task itself stamped after its exit (a
+/// rename issued from another CPU as the task exits) also holds the slot:
+/// the exited task's labels stay, reading 0, until the pid is reused, as
+/// after a dropped `task_exit`.
+static ASSIGNED_AT: std::sync::Mutex<std::collections::BTreeMap<usize, u64>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
 fn handle_task_info(data: &[u8]) -> i32 {
     let mut info = bpf::types::task_info::default();
 
@@ -117,7 +135,11 @@ fn handle_task_info(data: &[u8]) -> i32 {
             labels.insert("comm".to_string(), comm);
         }
         labels.insert("cgroup".to_string(), cgroup);
+
+        let mut assigned = ASSIGNED_AT.lock().unwrap_or_else(|e| e.into_inner());
         TASK_IDENTITY.assign(slot, labels);
+        let at = assigned.entry(slot).or_insert(info.ts);
+        *at = (*at).max(info.ts);
     }
 
     0
@@ -127,9 +149,16 @@ fn handle_task_exit(data: &[u8]) -> i32 {
     let mut exit = bpf::types::task_exit::default();
 
     if plain::copy_from_bytes(&mut exit, data).is_ok() {
-        let pid = exit.pid as usize;
+        let slot = pid_slot(exit.pid as usize);
 
-        TASK_IDENTITY.release(pid_slot(pid));
+        let mut assigned = ASSIGNED_AT.lock().unwrap_or_else(|e| e.into_inner());
+        if assigned.get(&slot).is_some_and(|&at| at > exit.ts) {
+            // A task_info sent after this exit holds the slot; normally
+            // the pid's next occupant's (see ASSIGNED_AT).
+            return 0;
+        }
+        assigned.remove(&slot);
+        TASK_IDENTITY.release(slot);
     }
 
     0
@@ -358,14 +387,24 @@ mod tests {
     use super::*;
     use metriken::group::UID_LABEL;
 
-    fn task_info(pid: u32, comm: &str) -> Vec<u8> {
+    fn task_info(pid: u32, comm: &str, ts: u64) -> Vec<u8> {
         let mut info = bpf::types::task_info {
             pid,
             tgid: pid,
+            ts,
             ..Default::default()
         };
         info.comm[..comm.len()].copy_from_slice(comm.as_bytes());
         unsafe { plain::as_bytes(&info) }.to_vec()
+    }
+
+    fn task_exit(pid: u32, ts: u64) -> Vec<u8> {
+        let exit = bpf::types::task_exit {
+            pid,
+            ts,
+            ..Default::default()
+        };
+        unsafe { plain::as_bytes(&exit) }.to_vec()
     }
 
     /// The BPF side sends task_info again when a thread is renamed. This is
@@ -377,19 +416,38 @@ mod tests {
         let pid = 4_000_001;
         let slot = pid_slot(pid as usize);
 
-        handle_task_info(&task_info(pid, "bash"));
+        handle_task_info(&task_info(pid, "bash", 1));
         let first = TASK_CPU_USAGE.load_metadata(slot).unwrap();
         assert_eq!(first["comm"], "bash");
 
-        handle_task_info(&task_info(pid, "bash"));
+        handle_task_info(&task_info(pid, "bash", 2));
         let again = TASK_CPU_USAGE.load_metadata(slot).unwrap();
         assert_eq!(again[UID_LABEL], first[UID_LABEL]);
 
-        handle_task_info(&task_info(pid, "yes"));
+        handle_task_info(&task_info(pid, "yes", 3));
         let renamed = TASK_CPU_USAGE.load_metadata(slot).unwrap();
         assert_eq!(renamed["comm"], "yes");
         assert_ne!(renamed[UID_LABEL], first[UID_LABEL]);
 
-        TASK_IDENTITY.release(slot);
+        handle_task_exit(&task_exit(pid, 4));
+        assert!(TASK_CPU_USAGE.load_metadata(slot).is_none());
+    }
+
+    /// A non-leader exec queues the old leader's exit before the new
+    /// occupant's task_info for the same pid, and a drain applies the
+    /// task_info first. The older exit must leave the new labels alone.
+    #[test]
+    fn an_exit_older_than_the_slots_labels_does_not_release_them() {
+        let pid = 4_000_002;
+        let slot = pid_slot(pid as usize);
+
+        handle_task_info(&task_info(pid, "python3", 10));
+        handle_task_info(&task_info(pid, "true", 30));
+        handle_task_exit(&task_exit(pid, 20));
+        let labels = TASK_CPU_USAGE.load_metadata(slot).unwrap();
+        assert_eq!(labels["comm"], "true");
+
+        handle_task_exit(&task_exit(pid, 40));
+        assert!(TASK_CPU_USAGE.load_metadata(slot).is_none());
     }
 }
