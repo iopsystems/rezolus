@@ -4,6 +4,8 @@
 
 - rustls 0.23.46, for RUSTSEC-2026-0346 through 0349. Backported from 6.0
   (#1467) in #1479.
+- rustls-webpki 0.103.16 and webpki-root-certs 1.0.10, for RUSTSEC-2026-0382
+  and RUSTSEC-2026-0383. Backported from 6.0 (#1510).
 
 ### Added
 
