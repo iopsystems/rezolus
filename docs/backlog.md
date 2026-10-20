@@ -886,10 +886,10 @@ separate mechanisms account for the rest:
 - **Fix 2 — stop losing task events silently** — Open.
   - Count `task_info`, `task_exit` and `cgroup_info` ring buffer drops in
     BPF and surface them in `rezolus status`.
-  - Shrink `task_info`: 192 of its 220 bytes are three 64-byte cgroup path
-    names (`src/agent/bpf/task.h:18-26`) that the cgroup identity already
-    carries. Sending the cgroup id instead fits about six times the events per
-    drain.
+  - Shrink `task_info`: 192 of its 232 bytes are three 64-byte cgroup path
+    names (`src/agent/bpf/task.h:26-28`) that the cgroup identity already
+    carries. Sending the cgroup id instead fits about four times the events
+    per drain.
   - Handle a dropped exit. `sched_process_exit` fires once, so a dropped
     `task_exit` leaves a phantom metadata-presence member
     (`mod.bpf.c:434-442`): 1,573 series from workload C were still exported

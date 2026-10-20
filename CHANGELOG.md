@@ -11,6 +11,13 @@
 
 ### Fixed
 
+- **A process that execs from a thread other than its leader keeps its
+  `task_cpu_usage` series.** `task_info` and `task_exit` travel on separate
+  ringbufs, and each drain applied every `task_info` first. The old leader's
+  exit therefore removed the labels the exec'd thread had just been given
+  for the same pid, and the process had no per-task series until it was
+  renamed or the pid was reused. Both events now carry a timestamp, and an
+  exit older than the slot's last labels leaves them in place. (#1512)
 - **`cpu_usage` and `cgroup_cpu_usage` no longer count an exiting task's CPU
   twice.** `sched_process_exit` fires partway through `do_exit`, and the
   sampler cleared the task's slot there. A tick in the rest of `do_exit`

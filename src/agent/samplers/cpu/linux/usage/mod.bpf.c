@@ -94,7 +94,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
     __uint(key_size, 0);
     __uint(value_size, 0);
-    __uint(max_entries, TASK_RINGBUF_CAPACITY);
+    __uint(max_entries, TASK_EXIT_RINGBUF_CAPACITY);
 } task_exit SEC(".maps");
 
 // holds task start times to detect new or reused PIDs, at pid_slot(pid)
@@ -278,6 +278,7 @@ static __always_inline int send_task_info(struct task_struct* task) {
 
     __builtin_memset(info, 0, sizeof(struct task_info));
     populate_task_info(task, info);
+    info->ts = bpf_ktime_get_ns();
     bpf_ringbuf_submit(info, 0);
     return 1;
 }
@@ -305,8 +306,9 @@ static __always_inline int send_task_info(struct task_struct* task) {
  * the ringbuf stayed full, which is up to one snapshot interval, since
  * userspace drains it only when a snapshot is taken. Under heavy thread churn
  * (about 17,900 threads/s, a 262 KiB ringbuf holding about 1,130 task_info
- * events) system time came out 69% short against the kernel's cpu.stat; see
- * docs/backlog.md, "Agent — per-task CPU usage completeness".
+ * events at the 220 bytes they were then) system time came out 69% short
+ * against the kernel's cpu.stat; see docs/backlog.md, "Agent — per-task CPU
+ * usage completeness".
  *
  * The new instance's utime/stime baseline is set here too, once: zero for a
  * task that started after `attach_ns`, so every tick it runs is counted,
@@ -583,7 +585,9 @@ static __always_inline void retire_task(struct task_struct* task, bool btf, u32 
 
     struct task_exit* exit_event = bpf_ringbuf_reserve(&task_exit, sizeof(struct task_exit), 0);
     if (exit_event) {
+        __builtin_memset(exit_event, 0, sizeof(struct task_exit));
         exit_event->pid = pid;
+        exit_event->ts = bpf_ktime_get_ns();
         bpf_ringbuf_submit(exit_event, 0);
     }
 }
@@ -599,8 +603,6 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
     u32 slot = pid_slot(pid);
     u64 start_time = BTF_READ(btf, task, start_time);
 
-    retire_task(task, btf, pid, slot);
-
     // Mark the instance exited rather than clearing the slot; see
     // INSTANCE_EXITED. The baselines stay as the last event left them, so
     // CPU the task uses in the rest of do_exit is counted once. For a task
@@ -611,8 +613,10 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
     // leader's pid with the leader's exited marker in place. Its CPU so far
     // was counted under its own pid.
     u64* marker = bpf_map_lookup_elem(&task_start_times, &slot);
-    if (!marker)
+    if (!marker) {
+        retire_task(task, btf, pid, slot);
         return 0;
+    }
 
     u64 m = *marker;
     if ((m & ~METADATA_PENDING) != start_time) {
@@ -627,6 +631,11 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
 
     u64 exited = start_time | INSTANCE_EXITED;
     bpf_map_update_elem(&task_start_times, &slot, &exited, BPF_ANY);
+
+    // After the marker: an event nested in this program on this CPU then
+    // finds the instance exited, so it neither adds to the per-task counter
+    // after the fold nor sends a task_info stamped after the task_exit.
+    retire_task(task, btf, pid, slot);
 
     return 0;
 }
@@ -732,6 +741,11 @@ static __always_inline int account__task_rename(u64* ctx, bool btf) {
 
     u32 slot = pid_slot(pid);
 
+    // Stamped before the marker is read, so an exit on another CPU that
+    // marks the instance after this check is, in most interleavings, also
+    // stamped after this event (see ASSIGNED_AT in mod.rs).
+    u64 ts = bpf_ktime_get_ns();
+
     u64* marker = bpf_map_lookup_elem(&task_start_times, &slot);
     if (!marker)
         return 0;
@@ -751,6 +765,7 @@ static __always_inline int account__task_rename(u64* ctx, bool btf) {
     populate_task_info(task, info);
     __builtin_memset(&info->comm, 0, TASK_COMM_LEN);
     bpf_probe_read_kernel_str(&info->comm, TASK_COMM_LEN, comm);
+    info->ts = ts;
     bpf_ringbuf_submit(info, 0);
 
     return 0;

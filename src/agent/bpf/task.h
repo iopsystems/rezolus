@@ -13,6 +13,9 @@
 #define TASK_CGROUP_NAME_LEN 64
 #define MAX_PID 4194304
 #define TASK_RINGBUF_CAPACITY 262144
+// A task_exit record is 24 bytes with its header, so the exit ring is twice
+// TASK_RINGBUF_CAPACITY: 21,845 exits per drain.
+#define TASK_EXIT_RINGBUF_CAPACITY (2 * TASK_RINGBUF_CAPACITY)
 
 // Task info sent when a task is first observed, and again when it is renamed
 struct task_info {
@@ -23,11 +26,16 @@ struct task_info {
     u8 cgroup_name[TASK_CGROUP_NAME_LEN];
     u8 cgroup_pname[TASK_CGROUP_NAME_LEN];
     u8 cgroup_gpname[TASK_CGROUP_NAME_LEN];
+    // bpf_ktime_get_ns() when sent. task_info and task_exit travel on
+    // separate ringbufs, so userspace orders the two by this.
+    u64 ts;
 };
 
 // Task exit notification
 struct task_exit {
     u32 pid;
+    // bpf_ktime_get_ns() when sent; see task_info.ts
+    u64 ts;
 };
 
 /**
