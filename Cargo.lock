@@ -1154,14 +1154,15 @@ checksum = "5729f5117e208430e437df2f4843f5e5952997175992d1414f94c57d61e270b4"
 
 [[package]]
 name = "dendro"
-version = "0.5.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b97f12678dcda6d582e6ccf5ee939c4a163b88cd323a1ae482491f63f87b1155"
+checksum = "dc41a9db544dd17270120f0dbfe06c434caa56c12c09655dd4949333b73aebd7"
 dependencies = [
  "arrow",
  "bytes",
  "parquet",
  "rusqlite",
+ "serde_core",
  "serde_json",
  "tracing",
 ]
@@ -2514,9 +2515,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-exposition"
-version = "0.23.2"
+version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2935df75dcc438b6e3296b9300dd8dc918921bc2f7467b7173b58913dff38f41"
+checksum = "c0f8e0bc77f4731c83a931026a50b5da154728de9cdbb29ec6f63abe36176b58"
 dependencies = [
  "bytes",
  "chrono",
@@ -2550,9 +2551,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.40.0"
+version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a45cb18c51a89463a01bdd5afd85d7b032e9214fff3fc21673c605a15a647325"
+checksum = "d36e47b2db78b5999030d67e820bc0aba05ef8bb5385c438a811e29dfd6b15de"
 dependencies = [
  "arrow",
  "bytes",
@@ -2571,9 +2572,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-recorder"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9fca8c67b228503ca7d65739edd69268c1ffd41c4af03dffa01b44cb4441935"
+checksum = "7cf828d34352cea848703d453d2e199a761e1957fd62ba096cd86b8da9e79d6d"
 dependencies = [
  "async-trait",
  "dendro",
@@ -2593,9 +2594,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-storage"
-version = "0.3.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b44084e4230c3d927a3748f1c952526dacecd96778b22f2bdc735f3e8070023b"
+checksum = "5e543e54861123b1ac6bb6074a8cab763dd4383b6f8d62818661561bf1cf600c"
 dependencies = [
  "arrow",
  "bytes",

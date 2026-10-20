@@ -665,7 +665,6 @@ fn build_dendro_report(
     for s in src.read_sources().map_err(err)? {
         names.extend(src.all_streams(s.id).map_err(err)?);
     }
-    let encoder = metriken_storage::Encoder::for_streams(names.iter().map(String::as_str));
     let keep = keep_metrics.map(metriken_storage::KeepMetrics::new);
     let (start, end) = match range {
         Some(r) => {
@@ -686,8 +685,14 @@ fn build_dendro_report(
         ..CopySpec::everything()
     };
     let mut dst = ArchiveMut::create_in_memory().map_err(err)?;
-    dst.transaction(|tx| copy_sources_into(&src, tx, &spec, &encoder))
-        .map_err(err)?;
+    // The source is bytes in memory, so nothing can write it during the
+    // copy; the encoder is built in the copy's snapshot all the same, as
+    // metriken-storage documents for a source that could be live.
+    src.read_snapshot(|src| {
+        let encoder = metriken_storage::Encoder::for_archive(src)?;
+        dst.transaction(|tx| copy_sources_into(src, tx, &spec, &encoder))
+    })
+    .map_err(err)?;
 
     let sources = dst.read_sources().map_err(err)?;
     if range.is_some() {

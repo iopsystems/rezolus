@@ -9,6 +9,14 @@
 
 ### Fixed
 
+- **A multi-endpoint `.dendro` recording no longer stops when two sources
+  record a group of the same name, one long and one wide.** The writer kept
+  one set of long stream names for every source, so the wide source's rows
+  were sealed as long, the seal failed with `failed to decode a WAL long
+  row: array had incorrect length`, and that source stopped recording. A
+  copy of such an archive (a hindsight dump, `recording snapshot`, filter or
+  combine, Save-as-Report) failed the same way on its unsealed rows. Fixed
+  in metriken-storage 0.4.
 - **`task_cpu_usage` follows thread renames.** `comm` was read once, when
   the sampler first accounted the thread, so a thread that renamed itself
   afterwards (`pthread_setname_np`, `prctl(PR_SET_NAME)`, exec) kept its
@@ -132,6 +140,15 @@
 
 ### Changed
 
+- **Archives written are dendro schema 5** (dendro 0.6, metriken-storage
+  0.4, metriken-query 0.41, metriken-exposition 0.24, metriken-recorder
+  0.4). Every `.dendro` this release creates (`record`, hindsight buffers
+  and dumps, the live viewer's save, `recording` combine, filter, snapshot
+  and `upgrade --to dendro`, and the viewers' Save-as-Report) has dendro's
+  `documents` and `segment_indexes` tables. Rezolus 5.28.0 and earlier, and
+  6.0 builds before this change, refuse such a file with `unsupported
+  archive schema version 5`. Schema 4 archives still open and read the same;
+  `recording annotate` edits one in place and leaves it at schema 4.
 - **An endpoint's `role=` outranks `--metadata role=`.** `record
   --endpoint url,role=service --metadata role=x` now records `role=service`,
   where the run-wide `--metadata` value won before. A per-endpoint key

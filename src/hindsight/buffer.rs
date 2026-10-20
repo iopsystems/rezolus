@@ -348,23 +348,28 @@ pub fn dump(buffer: &Path, dest: &Path, range: &TimeRange) -> Result<Summary, St
 
     // A second connection, deliberately: the writer thread owns its own.
     let src = Archive::open(buffer).map_err(err)?;
-    let streams = crate::dendro_copy::streams(&src)?;
-    let spec = match (range.start_ns(), range.end_ns()) {
-        (None, None) => CopySpec::everything(),
-        (start, end) => {
-            let long = streams
-                .iter()
-                .any(|s| ::rez::occupants::table_of(s).is_some());
-            let lead = if long { restate_every_ns() } else { 0 };
-            let start = start.unwrap_or(0).saturating_sub(lead);
-            CopySpec {
-                start: i64::try_from(start).unwrap_or(i64::MAX),
-                end: end.map_or(i64::MAX, |e| i64::try_from(e).unwrap_or(i64::MAX)),
-                ..CopySpec::everything()
+    // One snapshot for the stream list the lead is decided from and for the
+    // copy, so a long table the writer adds meanwhile is in both or neither.
+    src.read_snapshot(|src| {
+        let streams = crate::dendro_copy::streams(src).map_err(dendro::Error::Message)?;
+        let spec = match (range.start_ns(), range.end_ns()) {
+            (None, None) => CopySpec::everything(),
+            (start, end) => {
+                let long = streams
+                    .iter()
+                    .any(|s| ::rez::occupants::table_of(s).is_some());
+                let lead = if long { restate_every_ns() } else { 0 };
+                let start = start.unwrap_or(0).saturating_sub(lead);
+                CopySpec {
+                    start: i64::try_from(start).unwrap_or(i64::MAX),
+                    end: end.map_or(i64::MAX, |e| i64::try_from(e).unwrap_or(i64::MAX)),
+                    ..CopySpec::everything()
+                }
             }
-        }
-    };
-    crate::dendro_copy::copy(&src, &staged, &spec)?;
+        };
+        crate::dendro_copy::copy(src, &staged, &spec).map_err(dendro::Error::Message)
+    })
+    .map_err(err)?;
     drop(src);
 
     // The buffer's source is still running and so is never complete; this

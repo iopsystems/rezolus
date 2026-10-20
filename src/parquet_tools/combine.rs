@@ -800,10 +800,13 @@ fn combine_dendro(
     let mut counts: Vec<usize> = Vec::with_capacity(archives.len());
     dst.transaction(|tx| {
         for src in &archives {
-            let names = crate::dendro_copy::streams(src).map_err(dendro::Error::Message)?;
-            let encoder =
-                metriken_storage::writer::Encoder::for_streams(names.iter().map(String::as_str));
-            let n = copy_sources_into(src, tx, &CopySpec::everything(), &encoder)?;
+            // The encoder is built in the snapshot the copy reads, so an
+            // input still being recorded cannot gain a long stream between
+            // the two.
+            let n = src.read_snapshot(|src| {
+                let encoder = metriken_storage::writer::Encoder::for_archive(src)?;
+                copy_sources_into(src, tx, &CopySpec::everything(), &encoder)
+            })?;
             counts.push(n);
             sources += n;
         }
