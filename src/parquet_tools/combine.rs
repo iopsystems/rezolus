@@ -4245,8 +4245,9 @@ mod tests {
     /// WAL, and combine seals that tail with an encoder built from each
     /// input's own streams. The two inputs name their long table differently,
     /// so an encoder that knew no long stream, or only the first input's,
-    /// would encode a tail as wide and the occupants would not be found by
-    /// their labels.
+    /// would seal a long tail as wide and combine would fail. The names
+    /// differ because the encoder keys long streams by (source id, stream)
+    /// and both inputs' source id is 1.
     #[test]
     fn combine_seals_each_input_s_long_tail_as_long() {
         use metriken_query::MetricsSource;

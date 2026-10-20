@@ -13,9 +13,9 @@
 //! The destination transaction is opened outside the source's read snapshot
 //! and commits after it ends. A read snapshot on a live source holds the
 //! writer's checkpoint back, so its `-wal` grows for as long as the snapshot
-//! is open. Committing the copy inside it made the hold about 1.5x longer on
-//! a 1.28 GB archive (3.9-4.4 s against 2.6-2.8 s) and gained nothing, since
-//! the commit reads nothing from the source.
+//! is open. The commit reads nothing from the source. On a 1.28 GB archive it
+//! takes about a third of the copy: the snapshot is held 2.6-2.9 s of a
+//! 3.9-4.5 s copy.
 
 use std::path::Path;
 
