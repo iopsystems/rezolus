@@ -9,6 +9,21 @@
 
 ### Fixed
 
+- **`cpu_usage` and `cgroup_cpu_usage` no longer count an exiting task's CPU
+  twice.** `sched_process_exit` fires partway through `do_exit`, and the
+  sampler cleared the task's slot there. A tick in the rest of `do_exit`
+  (closing files, task work, `exit_notify`, and from Linux 6.16 `exit_mm`)
+  found the slot empty, took the task for a new one and, when it had started
+  after the agent, counted its whole lifetime CPU again. Measured on Linux
+  6.12, a process that burned 2 s and exited holding 200k open files was
+  counted at 1.99 times the cgroup's `cpu.stat`. A thread that execs from
+  outside the group leader, which takes the leader's pid and start time, had
+  its CPU before the exec counted twice the same way (1.66 times `cpu.stat`
+  for a thread that burned 2 s, exec'd and burned 1 s), and its own thread id
+  kept its labels and a frozen value until the pid was reused. The exit now
+  marks the slot exited and keeps the baselines; `sched_process_exec` starts
+  the exec'd thread under the leader's pid from its own baselines and retires
+  its old thread id. (#1508)
 - **A multi-endpoint `.dendro` recording no longer stops when two sources
   record a group of the same name, one long and one wide.** The writer kept
   one set of long stream names for every source, so the wide source's rows

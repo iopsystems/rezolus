@@ -3,6 +3,7 @@
 //! * `softirq_entry`
 //! * `softirq_exit`
 //! * `sched_process_exit`
+//! * `sched_process_exec`
 //! * `task_rename` — only with `task_attribution = true`
 //!
 //! And produces these stats:
@@ -185,6 +186,11 @@ fn init(config: Arc<Config>) -> SamplerResult {
         } else {
             "handle__sched_process_exit_btf"
         },
+        if btf {
+            "handle__sched_process_exec_raw"
+        } else {
+            "handle__sched_process_exec_btf"
+        },
         if fentry {
             "cpuacct_account_field_kprobe"
         } else {
@@ -327,6 +333,14 @@ impl OpenSkelExt for ModSkel<'_> {
         debug!(
             "{NAME} handle__sched_process_exit_raw() BPF instruction count: {}",
             self.progs.handle__sched_process_exit_raw.insn_cnt()
+        );
+        debug!(
+            "{NAME} handle__sched_process_exec_btf() BPF instruction count: {}",
+            self.progs.handle__sched_process_exec_btf.insn_cnt()
+        );
+        debug!(
+            "{NAME} handle__sched_process_exec_raw() BPF instruction count: {}",
+            self.progs.handle__sched_process_exec_raw.insn_cnt()
         );
         debug!(
             "{NAME} handle__task_rename_btf() BPF instruction count: {}",
