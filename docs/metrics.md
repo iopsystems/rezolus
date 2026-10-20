@@ -361,7 +361,7 @@ optimizing workloads.
 | `cgroup_cpu_usage` | The amount of CPU time spent in different CPU states on a per-cgroup basis | `state={user,nice,system,softirq,irq,steal,guest,guest_nice}`, `name`: the name of the cgroup |
 | `softirq` | The count of softirqs | `kind={hi,timer,net_tx,net_rx,block,irq_poll,tasklet,sched,hrtimer,rcu}` |
 | `softirq_time` | The time spent in softirq handlers | `kind={hi,timer,net_tx,net_rx,block,irq_poll,tasklet,sched,hrtimer,rcu}` |
-| `cpu_usage_exited_tasks` | CPU time of tasks that have exited, per CPU the exit ran on | `id` |
+| `cpu_usage_exited_tasks` | CPU time of tasks that have exited, per CPU the exit ran on; includes the CPU a thread used under its own thread id before it exec'd from outside the group leader | `id` |
 | `cgroup_cpu_usage_exited_tasks` | CPU time of a cgroup's tasks that have exited | `name` |
 | `task_cpu_usage` | CPU time (user and system) per thread; only with `task_attribution = true` | `pid`, `tgid`, `comm`, `cgroup` |
 

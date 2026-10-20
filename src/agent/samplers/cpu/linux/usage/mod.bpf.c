@@ -216,10 +216,25 @@ struct {
  * task_start_times holds, per pid, the start_time of the task instance whose
  * counters are live, with METADATA_PENDING set until that instance's
  * task_info has reached userspace. `task->start_time` is nanoseconds of
- * CLOCK_MONOTONIC since boot, so bit 63 is never part of a real value. 0 is
- * "no instance": the map's initial value, and what exit writes back.
+ * CLOCK_MONOTONIC since boot, so bits 63 and 62 are never part of a real
+ * value. 0 is "no instance", the map's initial value.
+ *
+ * sched_process_exit writes the exiting instance's start_time with
+ * INSTANCE_EXITED set and leaves its utime/stime baselines in place. Either
+ * of two tasks can then reach handle_new_task with that pid and start_time:
+ * the exited task itself, still running the rest of do_exit, or a thread
+ * that exec'd from outside the group leader, which de_thread gives the
+ * leader's pid and start_time. Neither is a new task whose CPU can be counted
+ * from zero (see handle_new_task).
  */
 #define METADATA_PENDING (1ULL << 63)
+#define INSTANCE_EXITED (1ULL << 62)
+#define PF_EXITING 0x00000004
+
+// handle_new_task's returns for the exited instance itself, and for a task
+// past exit_notify whose pid changed (see handle_new_task)
+#define EXITED_INSTANCE 2
+#define SKIP_TASK 3
 
 /*
  * CLOCK_MONOTONIC when these programs first ran, the clock
@@ -273,7 +288,8 @@ static __always_inline int send_task_info(struct task_struct* task) {
  * @task: The task_struct to check
  *
  * Returns 0 if this is a new task (or a reused pid), 1 if it is a task
- * already seen, -1 on error.
+ * already seen, EXITED_INSTANCE for a task after its own sched_process_exit,
+ * SKIP_TASK for a task whose events must not be accounted, -1 on error.
  *
  * Accounting and metadata delivery are separate. A new instance has its
  * counters zeroed exactly once, and its start_time committed at the same
@@ -300,6 +316,34 @@ static __always_inline int send_task_info(struct task_struct* task) {
  * that lives about one tick (most of a thread-churn workload's), and each
  * field's first non-zero value for any task whose utime or stime was still
  * zero when first seen.
+ *
+ * A marker of this pid and start_time with INSTANCE_EXITED set is not a new
+ * task. If the task has PF_EXITING, it is the exited task in the rest of
+ * do_exit: EXITED_INSTANCE is returned, its CPU since the last event is
+ * still credited to the per-CPU and per-cgroup totals from the baseline the
+ * exit left, and no instance is started. Otherwise a thread has exec'd from
+ * outside the group leader and taken the leader's pid and start_time, and
+ * this event came before sched_process_exec, which normally starts that
+ * instance. Its CPU up to its last event under its own pid was counted
+ * there, so its baseline is its current utime/stime, and the CPU accounted
+ * in this event is not counted.
+ *
+ * A thread whose exec fails after de_thread gets no sched_process_exec and
+ * exits under the leader's pid with the leader's exited marker in place.
+ * Its events between PF_EXITING and its own sched_process_exit are taken for
+ * the exited leader's, measured from the leader's baselines; that counts the
+ * difference between its utime/stime and the leader's again when positive.
+ * Its sched_process_exit then sets the baselines to its own utime/stime. Its
+ * old pid's slot is never retired:
+ * it keeps its labels, and its per-task total is not folded into the exited
+ * counters, until the pid is reused.
+ *
+ * A task past exit_notify (exit_state set) whose marker is neither its live
+ * nor its exited one is not the slot's instance. Usually it is the old group
+ * leader, which de_thread gives the exec'ing thread's pid while it finishes
+ * do_exit; it can also be a task whose sched_process_exit ran before the
+ * agent attached, or one whose freed pid was reused. SKIP_TASK is returned
+ * and the event is not accounted.
  *
  * What a failed send still costs: the task is not exported while its
  * metadata is pending, since group membership follows metadata presence
@@ -332,13 +376,22 @@ static __noinline int handle_new_task(struct task_struct* task, u32 pid, u64 sta
         return 1;
     }
 
+    bool exec_takeover = false;
+    if (marker == (start_time | INSTANCE_EXITED)) {
+        if (BPF_CORE_READ(task, flags) & PF_EXITING)
+            return EXITED_INSTANCE;
+        exec_takeover = true;
+    } else if (BPF_CORE_READ(task, exit_state)) {
+        return SKIP_TASK;
+    }
+
     // New task or PID reuse: start its counters, once.
     u64 now = bpf_ktime_get_ns();
     if (attach_ns == 0)
         attach_ns = now;
 
     u64 zero = 0;
-    if (start_time >= attach_ns) {
+    if (start_time >= attach_ns && !exec_takeover) {
         bpf_map_update_elem(&task_utime, &slot, &zero, BPF_ANY);
         bpf_map_update_elem(&task_stime, &slot, &zero, BPF_ANY);
     } else {
@@ -386,7 +439,9 @@ static __always_inline int handle_cpuacct_account_field(struct task_struct* task
 
     u32 slot = pid_slot(pid);
 
-    handle_new_task(task, pid, BTF_READ(btf, task, start_time));
+    int seen = handle_new_task(task, pid, BTF_READ(btf, task, start_time));
+    if (seen == SKIP_TASK)
+        return 0;
 
     curr_utime = BTF_READ(btf, task, utime);
     curr_stime = BTF_READ(btf, task, stime);
@@ -438,8 +493,10 @@ static __always_inline int handle_cpuacct_account_field(struct task_struct* task
         }
     }
 
+    // An exited instance's per-task total was folded into the exited
+    // counters at its exit; what it runs afterwards is in the totals only.
     u64 delta_total = delta_utime + delta_stime;
-    if (delta_total > 0) {
+    if (delta_total > 0 && seen != EXITED_INSTANCE) {
         array_add(&task_cpu_usage, slot, delta_total);
     }
 
@@ -482,23 +539,21 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index
     return handle_cpuacct_account_field(task, false);
 }
 
-static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
-    /* TP_PROTO(struct task_struct *p) */
-    struct task_struct* task = (struct task_struct*)ctx[0];
-
-    u32 pid = BTF_READ(btf, task, pid);
-    if (pid == 0 || pid >= MAX_PID)
-        return 0;
-
-    u32 slot = pid_slot(pid);
-
-    // Fold this task's total into the exited-task aggregates before dropping it.
-    // The per-task counter and its metadata are released together below, so
-    // without this the time is simply gone: the cgroup and host totals still
-    // include it, but no per-task series accounts for it, and a consumer cannot
-    // tell how much of the task view is missing. These aggregates let the books
-    // be reconciled -- sum(live tasks) + exited ~= cgroup total -- at O(1) cost
-    // and with no additional cardinality.
+/*
+ * Retire a task instance's per-task counter: fold its total into the exited
+ * counters, zero it, and tell userspace the slot is free.
+ *
+ * The fold keeps the books reconcilable -- sum(live tasks) + exited ~=
+ * cgroup total -- at O(1) cost and with no additional cardinality. Without
+ * it the time would be gone from the task view: the cgroup and host totals
+ * still include it, but no per-task series accounts for it.
+ *
+ * The counter is zeroed whether or not the task_exit event fits in the
+ * ringbuf. A dropped event leaves the slot's old labels in userspace with an
+ * unchanging 0 until the pid is reused and handle_new_task sends the new
+ * task's labels.
+ */
+static __always_inline void retire_task(struct task_struct* task, bool btf, u32 pid, u32 slot) {
     u64* usage = bpf_map_lookup_elem(&task_cpu_usage, &slot);
     if (usage && *usage) {
         u32 cpu = bpf_get_smp_processor_id();
@@ -518,40 +573,129 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
         }
     }
 
-    // Zero the exported counter FIRST to prevent exporting values without metadata
+    // Zero the exported counter before the exit event, so no value is
+    // exported without metadata.
     u64 zero = 0;
     bpf_map_update_elem(&task_cpu_usage, &slot, &zero, BPF_ANY);
 
-    bpf_map_update_elem(&task_utime, &slot, &zero, BPF_ANY);
-    bpf_map_update_elem(&task_stime, &slot, &zero, BPF_ANY);
-    bpf_map_update_elem(&task_start_times, &slot, &zero, BPF_ANY);
-
-    // Unlike handle_new_task above, there is no cheap retry available here
-    // if the reserve fails: `sched_process_exit` fires exactly once per
-    // task's lifetime, so there is no "next event" for this task to retry
-    // on the way `cpuacct_account_field`'s frequent firing gives
-    // handle_new_task one. A dropped exit event means userspace never
-    // releases the task's slot (see handle_task_exit in mod.rs), so the
-    // task's OLD metadata (comm, tgid, cgroup) lingers as a phantom
-    // metadata-presence member after the task is actually gone. The
-    // residual is bounded and self-healing, not unbounded staleness: the
-    // counter itself was already zeroed above (regardless of whether this
-    // send succeeds), and task_start_times is zeroed too, so the moment
-    // this pid is reused by a genuinely new task, handle_new_task sees a
-    // start_time mismatch, retries its own (now-fixed) send, and the stale
-    // metadata gets overwritten with the new task's real labels. Until
-    // that reuse happens, the phantom entry reports an honest, unchanging
-    // 0 (the value stays zeroed, never re-incremented for a pid that no
-    // longer exists) — stale labels attached to a dead value, not a wrong
-    // value.
     if (!task_attribution)
-        return 0;
+        return;
 
     struct task_exit* exit_event = bpf_ringbuf_reserve(&task_exit, sizeof(struct task_exit), 0);
     if (exit_event) {
         exit_event->pid = pid;
         bpf_ringbuf_submit(exit_event, 0);
     }
+}
+
+static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
+    /* TP_PROTO(struct task_struct *p), and from 6.16 (p, bool group_dead) */
+    struct task_struct* task = (struct task_struct*)ctx[0];
+
+    u32 pid = BTF_READ(btf, task, pid);
+    if (pid == 0 || pid >= MAX_PID)
+        return 0;
+
+    u32 slot = pid_slot(pid);
+    u64 start_time = BTF_READ(btf, task, start_time);
+
+    retire_task(task, btf, pid, slot);
+
+    // Mark the instance exited rather than clearing the slot; see
+    // INSTANCE_EXITED. The baselines stay as the last event left them, so
+    // CPU the task uses in the rest of do_exit is counted once. For a task
+    // never seen live they belong to an earlier instance, so set them as
+    // handle_new_task would have for this one. That earlier instance can be
+    // the old group leader, with this start_time: a thread whose exec fails
+    // after de_thread gets no sched_process_exec and exits under the
+    // leader's pid with the leader's exited marker in place. Its CPU so far
+    // was counted under its own pid.
+    u64* marker = bpf_map_lookup_elem(&task_start_times, &slot);
+    if (!marker)
+        return 0;
+
+    u64 m = *marker;
+    if ((m & ~METADATA_PENDING) != start_time) {
+        u64 utime = 0, stime = 0;
+        if (attach_ns == 0 || start_time < attach_ns || m == (start_time | INSTANCE_EXITED)) {
+            utime = BTF_READ(btf, task, utime);
+            stime = BTF_READ(btf, task, stime);
+        }
+        bpf_map_update_elem(&task_utime, &slot, &utime, BPF_ANY);
+        bpf_map_update_elem(&task_stime, &slot, &stime, BPF_ANY);
+    }
+
+    u64 exited = start_time | INSTANCE_EXITED;
+    bpf_map_update_elem(&task_start_times, &slot, &exited, BPF_ANY);
+
+    return 0;
+}
+
+/*
+ * A thread that execs from outside the group leader takes the leader's pid
+ * and start_time in de_thread; its own pid, `old_pid` here, is released with
+ * the old leader and gets no sched_process_exit.
+ *
+ * Start the thread's instance under the leader's pid, carrying the baselines
+ * from its old slot, so its CPU is counted once and none is skipped. This is
+ * done only when the leader's slot still holds the leader's exited marker;
+ * an event that reached handle_new_task first has already started it. Then
+ * retire the old slot as an exit would.
+ *
+ * old_pid can be reused between de_thread and this tracepoint only after
+ * pid_max further allocations. The new task's slot is then retired instead:
+ * its labels are released, its CPU so far is folded into the exec'ing task's
+ * cgroup, its next event restarts it, counting that CPU again in the totals
+ * when it started after attach_ns, and the exec'd thread's baselines are
+ * copied from the new task's slot.
+ */
+static __always_inline int account__sched_process_exec(u64* ctx, bool btf) {
+    /* TP_PROTO(struct task_struct *p, pid_t old_pid, struct linux_binprm *bprm) */
+    struct task_struct* task = (struct task_struct*)ctx[0];
+    u32 old_pid = (u32)ctx[1];
+
+    u32 pid = BTF_READ(btf, task, pid);
+    if (old_pid == pid || old_pid == 0 || old_pid >= MAX_PID)
+        return 0;
+
+    u32 slot = pid_slot(old_pid);
+    u32 new_slot = pid_slot(pid);
+    u64 start_time = BTF_READ(btf, task, start_time);
+
+    u64* marker = bpf_map_lookup_elem(&task_start_times, &new_slot);
+    if (marker && *marker == (start_time | INSTANCE_EXITED)) {
+        u64 utime = BTF_READ(btf, task, utime);
+        u64 stime = BTF_READ(btf, task, stime);
+
+        // The old slot's baselines are this thread's last event under its
+        // own pid, when that slot holds a live instance. One started with
+        // this start_time is the old leader's, not this thread's (see
+        // SKIP_TASK in handle_new_task).
+        u64* old_marker = bpf_map_lookup_elem(&task_start_times, &slot);
+        u64* old_utime = bpf_map_lookup_elem(&task_utime, &slot);
+        u64* old_stime = bpf_map_lookup_elem(&task_stime, &slot);
+        if (old_marker && old_utime && old_stime && *old_marker != 0 &&
+            !(*old_marker & INSTANCE_EXITED) &&
+            (*old_marker & ~METADATA_PENDING) != start_time) {
+            utime = *old_utime;
+            stime = *old_stime;
+        }
+
+        u64 zero = 0;
+        bpf_map_update_elem(&task_utime, &new_slot, &utime, BPF_ANY);
+        bpf_map_update_elem(&task_stime, &new_slot, &stime, BPF_ANY);
+        bpf_map_update_elem(&task_cpu_usage, &new_slot, &zero, BPF_ANY);
+
+        u64 live = start_time;
+        if (!send_task_info(task))
+            live |= METADATA_PENDING;
+        bpf_map_update_elem(&task_start_times, &new_slot, &live, BPF_ANY);
+    }
+
+    retire_task(task, btf, old_pid, slot);
+
+    u64 zero = 0;
+    bpf_map_update_elem(&task_start_times, &slot, &zero, BPF_ANY);
 
     return 0;
 }
@@ -675,6 +819,16 @@ int handle__sched_process_exit_btf(u64* ctx) {
 SEC("raw_tp/sched_process_exit")
 int handle__sched_process_exit_raw(u64* ctx) {
     return account__sched_process_exit(ctx, false);
+}
+
+SEC("tp_btf/sched_process_exec")
+int handle__sched_process_exec_btf(u64* ctx) {
+    return account__sched_process_exec(ctx, true);
+}
+
+SEC("raw_tp/sched_process_exec")
+int handle__sched_process_exec_raw(u64* ctx) {
+    return account__sched_process_exec(ctx, false);
 }
 
 char LICENSE[] SEC("license") = "GPL";
