@@ -778,6 +778,15 @@ mod btf_tests {
     /// answer `KernelBtf::find` gives equals libbpf's (`btf__find_by_name_kind`,
     /// which on split BTF searches vmlinux first, as `find` does). Skipped
     /// where there is no kernel BTF.
+    ///
+    /// libbpf on a module's split BTF searches vmlinux and that module;
+    /// `find` searches vmlinux and then every module in order. For a name
+    /// vmlinux does not define and a module earlier in that order does (a
+    /// static function in two modules, such as `fill_res_mr_entry` in
+    /// ib_core, 4 arguments, and mlx5_ib, 2), the two answer for different
+    /// modules. The module's own index entry is then compared with libbpf on
+    /// its BTF, and `find` with libbpf on the BTF of the first earlier module
+    /// that defines the name.
     #[test]
     fn the_index_agrees_with_libbpf_lookups() {
         let vmlinux_path = Path::new("/sys/kernel/btf/vmlinux");
@@ -791,13 +800,44 @@ mod btf_tests {
         };
         btf.refresh(vmlinux_path, Path::new("/sys/kernel/btf"));
 
-        let check = |raw: &RawBtf, index: &BtfIndex, step: u32| {
+        // Each listed module's BTF, parsed once, in `btf.modules` order.
+        let module_raws: Vec<Option<RawBtf>> = btf
+            .modules
+            .iter()
+            .map(|(name, _)| {
+                RawBtf::parse(&Path::new("/sys/kernel/btf").join(name), Some(&vmlinux))
+            })
+            .collect();
+
+        // Shadowed names compared, reported so a run shows whether that
+        // branch was reached on this host.
+        let shadowed = std::cell::Cell::new(0usize);
+
+        // `earlier`: the module indexes `find` searches before this object's,
+        // with their BTF.
+        let check = |raw: &RawBtf,
+                     index: &BtfIndex,
+                     step: u32,
+                     earlier: &[(&BtfIndex, &RawBtf)]| {
             for (id, kind, name) in own_types(raw) {
                 if kind == libbpf_sys::BTF_KIND_FUNC {
                     assert!(index.funcs.contains(&name), "function {name} not indexed");
                     if id % step == 0 {
-                        let indexed = btf.find(|i| i.funcs.get(&name)).flatten();
-                        assert_eq!(indexed, raw.func_arg_count(&name), "function {name}");
+                        let found = btf.find(|i| i.funcs.get(&name)).flatten();
+                        let first = (!btf.vmlinux.funcs.contains(&name))
+                            .then(|| earlier.iter().find(|(i, _)| i.funcs.contains(&name)))
+                            .flatten();
+                        if let Some((_, first_raw)) = first {
+                            shadowed.set(shadowed.get() + 1);
+                            assert_eq!(
+                                index.funcs.get(&name).flatten(),
+                                raw.func_arg_count(&name),
+                                "function {name}, own entry"
+                            );
+                            assert_eq!(found, first_raw.func_arg_count(&name), "function {name}");
+                        } else {
+                            assert_eq!(found, raw.func_arg_count(&name), "function {name}");
+                        }
                     }
                 } else {
                     let tracepoint = &name["btf_trace_".len()..];
@@ -806,29 +846,64 @@ mod btf_tests {
                         "tracepoint {tracepoint} not indexed"
                     );
                     if id % step == 0 {
-                        let indexed = btf.find(|i| i.tracepoints.get(tracepoint)).flatten();
-                        assert_eq!(
-                            indexed,
-                            raw.tracepoint_arg_count(tracepoint),
-                            "tracepoint {tracepoint}"
-                        );
+                        let found = btf.find(|i| i.tracepoints.get(tracepoint)).flatten();
+                        let first = (!btf.vmlinux.tracepoints.contains(tracepoint))
+                            .then(|| {
+                                earlier
+                                    .iter()
+                                    .find(|(i, _)| i.tracepoints.contains(tracepoint))
+                            })
+                            .flatten();
+                        if let Some((_, first_raw)) = first {
+                            shadowed.set(shadowed.get() + 1);
+                            assert_eq!(
+                                index.tracepoints.get(tracepoint).flatten(),
+                                raw.tracepoint_arg_count(tracepoint),
+                                "tracepoint {tracepoint}, own entry"
+                            );
+                            assert_eq!(
+                                found,
+                                first_raw.tracepoint_arg_count(tracepoint),
+                                "tracepoint {tracepoint}"
+                            );
+                        } else {
+                            assert_eq!(
+                                found,
+                                raw.tracepoint_arg_count(tracepoint),
+                                "tracepoint {tracepoint}"
+                            );
+                        }
                     }
                 }
             }
         };
 
-        check(&vmlinux, &btf.vmlinux, 97);
+        check(&vmlinux, &btf.vmlinux, 97, &[]);
         for path in module_btf_paths(Path::new("/sys/kernel/btf")) {
             let name = path.file_name().unwrap();
             let raw = RawBtf::parse(&path, Some(&vmlinux)).expect("module BTF parses");
-            let index = btf
+            let position = btf
                 .modules
                 .iter()
-                .find(|(n, _)| n == name)
-                .and_then(|(_, index)| index.as_ref())
+                .position(|(n, _)| n == name)
+                .unwrap_or_else(|| panic!("module {} not listed", path.display()));
+            let index = btf.modules[position]
+                .1
+                .as_ref()
                 .unwrap_or_else(|| panic!("module {} not indexed", path.display()));
-            check(&raw, index, 13);
+            let earlier: Vec<(&BtfIndex, &RawBtf)> = btf.modules[..position]
+                .iter()
+                .zip(&module_raws)
+                .filter_map(|((_, index), raw)| {
+                    Some((
+                        index.as_ref()?,
+                        raw.as_ref().expect("indexed module BTF parses"),
+                    ))
+                })
+                .collect();
+            check(&raw, index, 13, &earlier);
         }
+        eprintln!("{} shadowed module names checked", shadowed.get());
 
         // Function names vmlinux defines more than once with different
         // arities (static functions in different translation units), where
