@@ -20,6 +20,39 @@ import { buildBandSeries } from './line.js';
 import { buildBoxplotSeries } from './boxplot.js';
 
 /**
+ * How a multi-series chart draws its lines: the spacing, in seconds, past
+ * which consecutive points count as a gap, and the echarts `step` mode.
+ *
+ * A decimated response holds one point per display bucket, and the bucket is
+ * wider than the recording interval once the range outgrows the point budget.
+ * Judged against the interval, every pair of buckets is a gap, which drew each
+ * point as a dash. So a decimated chart measures gaps against the bucket
+ * spacing, taken as the median step between points: a hole widens one step
+ * and a partial bucket at the range's edge narrows one, and neither moves the
+ * median. It draws unstepped like the single-series decimated median, which
+ * also keeps it on the unstepped min/max envelope drawn behind it.
+ *
+ * @param {number[]} timeData - point timestamps, seconds
+ * @param {number} interval - the recording interval, seconds
+ * @param {boolean} decimated - whether the plot holds decimated buckets
+ * @returns {{ gapInterval: number, step: string|false }}
+ */
+export function multiLineGeometry(timeData, interval, decimated) {
+    if (!decimated) return { gapInterval: interval, step: 'start' };
+    const steps = [];
+    for (let i = 1; i < timeData.length; i++) {
+        const d = timeData[i] - timeData[i - 1];
+        if (d > 0) steps.push(d);
+    }
+    steps.sort((a, b) => a - b);
+    const spacing = steps.length ? steps[Math.floor(steps.length / 2)] : 0;
+    return {
+        gapInterval: Math.max(interval, spacing),
+        step: false,
+    };
+}
+
+/**
  * Configures the Chart based on Chart.spec
  * Responsible for calling setOption on the echart instance, and for setting up any
  * chart-specific dynamic behavior.
@@ -73,6 +106,8 @@ export function configureMultiSeriesChart(chart) {
     // absent for non-rate/non-histogram queries.
     const seriesIntervals = chart.spec.series_intervals;
 
+    const geometry = multiLineGeometry(timeData, chart.interval, Boolean(chart.spec.boxplotDecimated));
+
     for (let i = 1; i < data.length; i++) {
         const name = seriesNames[i - 1];
         const isOtherCategory = name === "Other";
@@ -82,7 +117,7 @@ export function configureMultiSeriesChart(chart) {
             const [v, raw] = clampToRange(data[i][j], range);
             return [t * 1000, v, raw];
         });
-        zippedData = insertGapNulls(zippedData, chart.interval);
+        zippedData = insertGapNulls(zippedData, geometry.gapInterval);
 
         // z controls draw order: higher z draws on top.
         // Percentile charts: reverse so lower quantiles (earlier in array) draw on top.
@@ -102,7 +137,7 @@ export function configureMultiSeriesChart(chart) {
             itemStyle: {
                 color,
             },
-            step: 'start',
+            step: geometry.step,
             lineStyle: {
                 color,
                 width: isOtherCategory ? 1 : 1.5,
