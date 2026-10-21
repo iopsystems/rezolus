@@ -15,11 +15,12 @@
   range holds more samples than the chart's point budget, the viewer fetches
   one point per bucket, and the bucket is wider than the recording interval.
   The gap check compared consecutive points with the interval, so each point
-  was drawn as a short dash followed by a gap, and the min/max envelope
-  behind the lines filled the gaps with slanted bands. The gap check now
-  uses the spacing between buckets, and decimated lines are drawn unstepped
-  like the single-series decimated median. Charts at native resolution are
-  unchanged. (#1516)
+  was drawn as a short dash followed by a gap, percentile uncertainty bands
+  were not drawn at all, and the min/max envelope behind the lines joined the
+  dashes with slanted fills. The gap check now uses the spacing between
+  buckets, and decimated lines are drawn unstepped like the single-series
+  decimated median. Charts at native resolution are unchanged. The envelope
+  still spans a bucket that is actually missing. (#1516)
 - **A process that execs from a thread other than its leader keeps its
   `task_cpu_usage` series.** `task_info` and `task_exit` travel on separate
   ringbufs, and each drain applied every `task_info` first. The old leader's
