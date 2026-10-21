@@ -797,14 +797,21 @@ const applyScope = (query, scope) => {
 const injectLabelRegex = (query, labelName, regexValue) =>
     injectLabel(query, labelName, regexValue, '=~');
 
+// Fill a cgroup query's `__SELECTED_CGROUPS__` placeholder with the
+// selection's pattern. The aggregate plots exclude the selection
+// (`name!~"__SELECTED_CGROUPS__"`) and the individual plots select it
+// (`name=~`), so both take the same pattern. With nothing selected the
+// exclusion is removed, leaving the aggregate over every cgroup; other
+// matchers in the selector are kept. The pattern is the selected names joined
+// by `|`, unescaped: the engine compares a regex matcher's value with each
+// `|`-separated alternative as a literal string (metriken-storage
+// `match_pattern`), so a `.` in a name matches only a `.`.
 const substituteCgroupPattern = (query, pattern) => {
-    query = query.replace(/,?\s*name!~"[^"]*"/g, '');
-    query = query.replace(/\{\s*\}/g, '');
-
-    if (pattern) {
-        query = query.replace(/__SELECTED_CGROUPS__/g, pattern);
-    }
-    return query;
+    if (pattern) return query.replace(/__SELECTED_CGROUPS__/g, pattern);
+    return query
+        .replace(/,?\s*name!~"__SELECTED_CGROUPS__"/g, '')
+        .replace(/\{\s*,\s*/g, '{')
+        .replace(/\{\s*\}/g, '');
 };
 
 // PromQL result → plot-data shape helpers. Same transforms the baseline
