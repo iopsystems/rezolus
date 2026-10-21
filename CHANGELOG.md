@@ -16,6 +16,15 @@
   viewer removed their `name!~` exclusion before every query, so a cgroup
   moved to the individual side was still counted on the left. The exclusion is now filled with the selection and removed only when
   nothing is selected. (#1289)
+- **A per-entity heatmap redraws in one frame.** Above 3000 cells the
+  heatmap was drawn progressively: each redraw cleared the series and
+  repainted it in 8000-cell chunks over several frames, which a live view
+  showed as a flash on every refresh. The threshold is now 60000 cells, and
+  the heatmap already merges columns to stay under about 50000, so an
+  unzoomed heatmap draws in one frame; a zoom to a finer resolution can still
+  exceed the threshold and draw progressively. 57600 cells took 169 ms in one
+  frame against 270 ms over 6 frames progressively, in headless Chrome.
+  Bucket and quantile heatmaps are unchanged. (#1525)
 - **A decimated multi-series line chart draws continuous lines.** Once a
   range holds more samples than the chart's point budget, the viewer fetches
   one point per bucket, and the bucket is wider than the recording interval.
