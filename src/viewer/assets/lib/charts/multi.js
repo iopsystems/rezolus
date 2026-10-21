@@ -23,14 +23,15 @@ import { buildBoxplotSeries } from './boxplot.js';
  * How a multi-series chart draws its lines: the spacing, in seconds, past
  * which consecutive points count as a gap, and the echarts `step` mode.
  *
- * A decimated response holds one point per display bucket, and the bucket is
- * wider than the recording interval once the range outgrows the point budget.
- * Judged against the interval, every pair of buckets is a gap, which drew each
- * point as a dash. So a decimated chart measures gaps against the bucket
- * spacing, taken as the median step between points: a hole widens one step
- * and a partial bucket at the range's edge narrows one, and neither moves the
- * median. It draws unstepped like the single-series decimated median, which
- * also keeps it on the unstepped min/max envelope drawn behind it.
+ * At native resolution that is the recording interval, with stepped lines. A
+ * decimated response holds one point per display bucket, and the bucket can
+ * be wider than the interval, so a decimated chart uses the bucket spacing,
+ * taken as the median positive step between points. Isolated holes and a
+ * short bucket at the edge of the range do not move the median. When more
+ * than half the steps are holes the median is a hole's width, and those holes
+ * are drawn as continuous line. Decimated lines are unstepped, as are the
+ * single-series decimated median (boxplot.js) and the min/max envelope drawn
+ * behind them.
  *
  * @param {number[]} timeData - point timestamps, seconds
  * @param {number} interval - the recording interval, seconds
@@ -168,7 +169,7 @@ export function configureMultiSeriesChart(chart) {
                         { name, intervals, timeData, color },
                         i - 1,
                         range,
-                        chart.interval,
+                        geometry.gapInterval,
                     ),
                 );
             }

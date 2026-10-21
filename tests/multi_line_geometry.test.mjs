@@ -5,7 +5,7 @@ import { insertGapNulls } from '../src/viewer/assets/lib/charts/util/utils.js';
 // multi.js pulls in colormap.js, which reads CSS custom properties at module
 // load; the same two-line DOM shim compare_bands.test.mjs uses, then a
 // dynamic import so it runs after the shim.
-globalThis.document = globalThis.document || { documentElement: {} };
+globalThis.document = globalThis.document || { documentElement: { getAttribute: () => null } };
 globalThis.getComputedStyle = globalThis.getComputedStyle || (() => ({ getPropertyValue: () => '' }));
 const { multiLineGeometry } = await import('../src/viewer/assets/lib/charts/multi.js');
 
@@ -50,4 +50,60 @@ test('a short bucket at the edge of the range does not set the spacing', () => {
 
 test('a decimated response of one point falls back to the interval', () => {
     assert.deepEqual(multiLineGeometry([1_700_000_000], 1, true), { gapInterval: 1, step: false });
+});
+
+// Through the chart entry point: the option handed to echarts.
+const { configureMultiSeriesChart } = await import('../src/viewer/assets/lib/charts/multi.js');
+
+const fakeChart = (spec) => {
+    const captured = {};
+    return {
+        captured,
+        interval: 1,
+        spec,
+        domNode: { classList: { add() {}, remove() {} } },
+        echart: {
+            setOption: (option) => { captured.option = option; },
+            dispatchAction() {},
+            clear() {},
+        },
+    };
+};
+
+const decimatedSpec = (extra = {}) => {
+    const ts = Array.from({ length: 20 }, (_, i) => 1_700_000_000 + i * 5);
+    return {
+        data: [ts, ts.map((_, i) => i), ts.map((_, i) => 2 * i)],
+        opts: {},
+        series_names: ['a', 'b'],
+        boxplotDecimated: true,
+        ...extra,
+    };
+};
+
+const lineNulls = (option) => option.series
+    .filter((s) => s.name && !s.stack)
+    .map((s) => s.data.filter((d) => (Array.isArray(d) ? d[1] : d.value[1]) === null).length);
+
+test('configureMultiSeriesChart: decimated lines carry no gap nulls and are unstepped', () => {
+    const chart = fakeChart(decimatedSpec());
+    configureMultiSeriesChart(chart);
+    const lines = chart.captured.option.series.filter((s) => s.name && !s.stack);
+    assert.equal(lines.length, 2);
+    assert.deepEqual(lineNulls(chart.captured.option), [0, 0]);
+    assert.ok(lines.every((s) => s.step === false));
+});
+
+test('configureMultiSeriesChart: decimated percentile bands carry no gap nulls', () => {
+    const spec = decimatedSpec({
+        promql_query: 'histogram_quantiles([0.5, 0.99], x)',
+    });
+    spec.series_intervals = spec.data.slice(1).map((col) => col.map((v) => [v - 0.5, v + 0.5]));
+    const chart = fakeChart(spec);
+    configureMultiSeriesChart(chart);
+    const bands = chart.captured.option.series.filter((s) => s.stack && String(s.stack).startsWith('band-'));
+    assert.ok(bands.length > 0, 'percentile bands were drawn');
+    for (const b of bands) {
+        assert.equal(b.data.filter((d) => d[1] === null).length, 0);
+    }
 });
