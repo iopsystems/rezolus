@@ -32,9 +32,10 @@
   range holds more samples than the chart's point budget, each point was
   drawn as a short dash followed by a gap, and percentile uncertainty bands
   were not drawn, because the gap check compared buckets with the recording
-  interval. It now uses the spacing between buckets. The min/max envelope
-  still spans a bucket that is actually missing (#1519). Backported from 6.0
-  (#1520) in #1521.
+  interval. It now uses the spacing between buckets, and decimated lines are
+  drawn unstepped, like the single-series decimated median. The min/max
+  envelope still spans a bucket that is actually missing (#1519). Backported
+  from 6.0 (#1520) in #1521.
 - `cpu_perf`: `cgroup_cpu_cycles` and `cgroup_cpu_instructions` no longer
   credit a failed counter read as a count. The `sched_switch` program read
   the counters with `bpf_perf_event_read`, which returns a negative errno
