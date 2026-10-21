@@ -35,7 +35,7 @@
   progressively above 3000, which cleared and repainted it over several
   frames on every live refresh. Per-entity heatmaps are still fetched at
   the recording's interval on 5.x. Backported from 6.0 (#1421, #1525) in
-  #BACKPORT.
+  #1528.
 - Viewer: a decimated multi-series line chart draws continuous lines. Once a
   range holds more samples than the chart's point budget, each point was
   drawn as a short dash followed by a gap, and percentile uncertainty bands
