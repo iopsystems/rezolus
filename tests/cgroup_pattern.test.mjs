@@ -3,9 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { substituteCgroupPattern } from '../src/viewer/assets/lib/data.js';
 
-// #1289: the aggregate ("Available Cgroups") plots are the sum over the
-// cgroups NOT selected. The placeholder exclusion used to be stripped
-// whatever the selection, so selected cgroups stayed in the aggregate.
+// #1289: the aggregate plots are the sum over the cgroups not selected.
 
 // Every cgroup query the dashboard generates, so a new query shape is covered.
 const section = JSON.parse(readFileSync(new URL('../crates/dashboard/sections/rezolus/cgroups.json', import.meta.url)));

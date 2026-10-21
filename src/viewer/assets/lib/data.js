@@ -803,9 +803,11 @@ const injectLabelRegex = (query, labelName, regexValue) =>
 // (`name=~`), so both take the same pattern. With nothing selected the
 // exclusion is removed, leaving the aggregate over every cgroup; other
 // matchers in the selector are kept. The pattern is the selected names joined
-// by `|`, unescaped: the engine compares a regex matcher's value with each
-// `|`-separated alternative as a literal string (metriken-storage
-// `match_pattern`), so a `.` in a name matches only a `.`.
+// by `|`, unescaped. promql-parser unquotes the string and requires a valid
+// regex, then metriken-storage `match_pattern` compares each `|`-separated
+// alternative literally, so a `.` in a name matches only a `.`. A name
+// containing `\`, `"`, `|`, `[` or an unbalanced parenthesis is not matched
+// correctly.
 const substituteCgroupPattern = (query, pattern) => {
     if (pattern) return query.replace(/__SELECTED_CGROUPS__/g, pattern);
     return query
