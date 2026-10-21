@@ -15,8 +15,9 @@
   heatmap was drawn progressively: each redraw cleared the series and
   repainted it in 8000-cell chunks over several frames, which a live view
   showed as a flash on every refresh. The threshold is now 60000 cells, and
-  the heatmap already merges columns to stay near 50000, so it draws in one
-  frame; 57600 cells took 169 ms in one frame against 270 ms over 6 frames
+  the heatmap already merges columns to stay under about 50000, so an
+  unzoomed heatmap draws in one frame; a zoom to a finer resolution can still
+  exceed the threshold and draw progressively; 57600 cells took 169 ms in one frame against 270 ms over 6 frames
   progressively, in headless Chrome. Bucket and quantile heatmaps are
   unchanged.
 - **A decimated multi-series line chart draws continuous lines.** Once a

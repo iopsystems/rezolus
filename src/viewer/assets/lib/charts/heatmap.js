@@ -349,12 +349,13 @@ export function configureHeatmap(chart) {
                 }
             },
             // The series holds at most about MAX_DATA_POINT_DISPLAY cells plus
-            // one column of rows, so it is drawn in one frame. Progressive
-            // rendering, which clears the series and repaints it in
-            // `progressive`-cell chunks over several frames (a flash on every
-            // live refresh), applies only to the full-resolution data a zoom
-            // sets when it exceeds `progressiveThreshold`. The custom series
-            // reads the same options as the heatmap series:
+            // one column of rows, so unzoomed it is drawn in one frame.
+            // Progressive rendering, which clears the series and repaints it
+            // in `progressive`-cell chunks over several frames (a flash on
+            // every live refresh), applies only after a zoom selects a finer
+            // resolution (a smaller merge factor, down to none), whose cells
+            // cover the whole range and can exceed `progressiveThreshold`.
+            // The custom series reads the same options as the heatmap series:
             // https://echarts.apache.org/en/option.html#series-heatmap.progressive
             progressive: 8000,
             progressiveThreshold: 60000,
