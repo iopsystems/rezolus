@@ -886,15 +886,10 @@ separate mechanisms account for the rest:
 - **Fix 2 — stop losing task events silently** — Open.
   - Count `task_info`, `task_exit` and `cgroup_info` ring buffer drops in
     BPF and surface them in `rezolus status`.
-  - Shrink `task_info`: 192 of its 232 bytes are three 64-byte cgroup path
-    names (`src/agent/bpf/task.h:26-28`) that the cgroup identity already
-    carries. Sending the cgroup id instead fits about four times the events
-    per drain.
-  - Handle a dropped exit. `sched_process_exit` fires once, so a dropped
-    `task_exit` leaves a phantom metadata-presence member
-    (`mod.bpf.c:434-442`): 1,573 series from workload C were still exported
-    more than five minutes after their threads exited. Untested: whether a
-    phantom clears when its TID is reused and relabelled.
+  - Shrink `task_info`: 192 of its 240 bytes are three 64-byte cgroup path
+    names (`src/agent/bpf/task.h`) that the cgroup identity already carries.
+    Sending the cgroup id instead fits about four times the events per
+    drain.
 - **Fix 3 — optionally export only tasks above a CPU threshold per
   interval** — Idea. The churn threads carry little per-thread meaning, and
   their CPU stays exact in the cgroup and exited totals. A threshold keeps the
@@ -1682,10 +1677,12 @@ zstd-3, removing unchanged readings saved 25.0% on the busy host and cost
   the `CompactSpec` sort key (below, "dendro archives (6.0)") lands and
   segments sorted by occupant still carry long runs of repeated values that
   their encoding does not already collapse.
-- **Liveness without a lost event** — Open, useful without the rest. A
-  dropped `task_exit` leaves a phantom member at 0 until PID reuse
-  (`account__sched_process_exit`). Detect it at read time from
-  `task_start_times`. Cgroups have no removal event at all.
+- **Cgroup liveness without a removal event** — Open. A removed cgroup's
+  labels stay until its id is reused: there is no removal event. A sweep
+  like the one for tasks (`sweep_task_slots` in
+  `src/agent/samplers/cpu/linux/usage/mod.rs`, which checks each labelled
+  task slot against `task_start_times` after every drain) could check
+  labelled cgroup ids against `cgroup_serial_numbers`.
 
 ## Tooling / skills
 

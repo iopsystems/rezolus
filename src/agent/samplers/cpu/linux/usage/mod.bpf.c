@@ -336,9 +336,9 @@ static __always_inline int send_task_info(struct task_struct* task) {
  * the exited leader's, measured from the leader's baselines; that counts the
  * difference between its utime/stime and the leader's again when positive.
  * Its sched_process_exit then sets the baselines to its own utime/stime. Its
- * old pid's slot is never retired:
- * it keeps its labels, and its per-task total is not folded into the exited
- * counters, until the pid is reused.
+ * old pid's slot is never retired: its per-task total is not folded into the
+ * exited counters, and its labels stay until the group's last exit releases
+ * every slot of the group (task_exit.dead_tgid) or the pid is reused.
  *
  * A task past exit_notify (exit_state set) whose marker is neither its live
  * nor its exited one is not the slot's instance. Usually it is the old group
@@ -404,10 +404,14 @@ static __noinline int handle_new_task(struct task_struct* task, u32 pid, u64 sta
     }
     bpf_map_update_elem(&task_cpu_usage, &slot, &zero, BPF_ANY);
 
-    marker = start_time;
-    if (!send_task_info(task))
-        marker |= METADATA_PENDING;
+    // The marker is committed, pending, before the send: userspace's sweep
+    // releases labels whose instance the marker does not hold, so a
+    // task_info drained before the marker named this instance would be
+    // released, and nothing would send it again.
+    marker = start_time | METADATA_PENDING;
     bpf_map_update_elem(&task_start_times, &slot, &marker, BPF_ANY);
+    if (send_task_info(task))
+        bpf_map_update_elem(&task_start_times, &slot, &start_time, BPF_ANY);
 
     return 0;
 }
@@ -552,10 +556,13 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index
  *
  * The counter is zeroed whether or not the task_exit event fits in the
  * ringbuf. A dropped event leaves the slot's old labels in userspace with an
- * unchanging 0 until the pid is reused and handle_new_task sends the new
- * task's labels.
+ * unchanging 0 until userspace's next sweep of task_start_times, after the
+ * next drain, finds the instance exited (sweep_task_slots in mod.rs).
  */
-static __always_inline void retire_task(struct task_struct* task, bool btf, u32 pid, u32 slot) {
+// `dead_tgid`: the tgid of the thread group this retirement leaves with no
+// live thread, else 0 (see task_exit.dead_tgid).
+static __always_inline void retire_task(struct task_struct* task, bool btf, u32 pid, u32 slot,
+                                        u32 dead_tgid) {
     u64* usage = bpf_map_lookup_elem(&task_cpu_usage, &slot);
     if (usage && *usage) {
         u32 cpu = bpf_get_smp_processor_id();
@@ -587,6 +594,7 @@ static __always_inline void retire_task(struct task_struct* task, bool btf, u32 
     if (exit_event) {
         __builtin_memset(exit_event, 0, sizeof(struct task_exit));
         exit_event->pid = pid;
+        exit_event->dead_tgid = dead_tgid;
         exit_event->ts = bpf_ktime_get_ns();
         bpf_ringbuf_submit(exit_event, 0);
     }
@@ -603,6 +611,17 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
     u32 slot = pid_slot(pid);
     u64 start_time = BTF_READ(btf, task, start_time);
 
+    // do_exit decrements signal->live before this tracepoint, so 0 means every
+    // thread of the group has entered do_exit (with concurrent exits, more
+    // than one sees 0). A slot labelled with its tgid before this exit is a
+    // thread that has exited or is exiting. The only such slot nothing else
+    // releases is the old pid's slot of a thread that exec'd from outside
+    // the leader and failed after de_thread, which gets no exit and keeps a
+    // live marker.
+    u32 dead_tgid = 0;
+    if (BPF_CORE_READ(task, signal, live.counter) == 0)
+        dead_tgid = BTF_READ(btf, task, tgid);
+
     // Mark the instance exited rather than clearing the slot; see
     // INSTANCE_EXITED. The baselines stay as the last event left them, so
     // CPU the task uses in the rest of do_exit is counted once. For a task
@@ -614,7 +633,7 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
     // was counted under its own pid.
     u64* marker = bpf_map_lookup_elem(&task_start_times, &slot);
     if (!marker) {
-        retire_task(task, btf, pid, slot);
+        retire_task(task, btf, pid, slot, dead_tgid);
         return 0;
     }
 
@@ -635,7 +654,7 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
     // After the marker: an event nested in this program on this CPU then
     // finds the instance exited, so it neither adds to the per-task counter
     // after the fold nor sends a task_info stamped after the task_exit.
-    retire_task(task, btf, pid, slot);
+    retire_task(task, btf, pid, slot, dead_tgid);
 
     return 0;
 }
@@ -695,13 +714,14 @@ static __always_inline int account__sched_process_exec(u64* ctx, bool btf) {
         bpf_map_update_elem(&task_stime, &new_slot, &stime, BPF_ANY);
         bpf_map_update_elem(&task_cpu_usage, &new_slot, &zero, BPF_ANY);
 
-        u64 live = start_time;
-        if (!send_task_info(task))
-            live |= METADATA_PENDING;
-        bpf_map_update_elem(&task_start_times, &new_slot, &live, BPF_ANY);
+        // Committed, pending, before the send, as in handle_new_task.
+        u64 pending = start_time | METADATA_PENDING;
+        bpf_map_update_elem(&task_start_times, &new_slot, &pending, BPF_ANY);
+        if (send_task_info(task))
+            bpf_map_update_elem(&task_start_times, &new_slot, &start_time, BPF_ANY);
     }
 
-    retire_task(task, btf, old_pid, slot);
+    retire_task(task, btf, old_pid, slot, 0);
 
     u64 zero = 0;
     bpf_map_update_elem(&task_start_times, &slot, &zero, BPF_ANY);

@@ -11,6 +11,17 @@
 
 ### Fixed
 
+- **`task_cpu_usage` drops a series within one snapshot interval of its thread
+  exiting, even when the exit event is lost.** A `task_exit` dropped because
+  its ringbuf was full left the thread's labels exported at 0 until the pid
+  was reused; measured earlier, 1,573 such series under heavy thread churn
+  more than five minutes after their threads exited. After each drain the
+  sampler now checks every labelled task slot against the BPF side's
+  `task_start_times` and releases the ones whose instance has exited or been
+  replaced, and every slot of a thread group whose last thread has exited
+  (when that exit's event is delivered). This also covers a rename that races
+  its thread's exit (#1514), and the old thread id of a thread whose exec
+  failed after taking the leader's pid.
 - **A decimated multi-series line chart draws continuous lines.** Once a
   range holds more samples than the chart's point budget, the viewer fetches
   one point per bucket, and the bucket is wider than the recording interval.
