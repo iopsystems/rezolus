@@ -28,6 +28,14 @@
 
 ### Fixed
 
+- Viewer: a display-mode line chart asks for one bucket per 4 px of its
+  width instead of one per pixel, so a long range is drawn in a quarter as
+  many buckets, and their min/max envelope no longer fills the chart. A
+  per-entity heatmap draws in one frame up to 60000 cells; it was drawn
+  progressively above 3000, which cleared and repainted it over several
+  frames on every live refresh. Per-entity heatmaps are still fetched at
+  the recording's interval on 5.x. Backported from 6.0 (#1421, #1525) in
+  #BACKPORT.
 - Viewer: a decimated multi-series line chart draws continuous lines. Once a
   range holds more samples than the chart's point budget, each point was
   drawn as a short dash followed by a gap, and percentile uncertainty bands

@@ -267,11 +267,10 @@ let _displayMode = false;
 export const setDisplayMode = (on) => { _displayMode = on; };
 export const getDisplayMode = () => _displayMode;
 
-// Point/column budget for decimation (display-mode series and histogram bucket
-// heatmaps): ~1 point per CSS pixel of a chart's PLOT AREA. Sending more points
-// than the chart is wide adds no visible line detail — it only turns the min/max
-// band into a noisy over-dense fill on high-variance signals (and bloats the
-// payload). Charts render two per row, so measure an actual chart cell when one
+// Width, in CSS pixels, of a chart's PLOT AREA: the column budget for histogram
+// bucket heatmaps (one column per pixel) and, over BUCKET_PX, the bucket budget
+// for display-mode series (displayBudget). Charts render two per row, so
+// measure an actual chart cell when one
 // exists (exact on a zoom refetch — it handles full- vs half-width) and fall
 // back to half the viewport on first load. devicePixelRatio is intentionally NOT
 // applied: sub-CSS-pixel detail isn't distinguishable in the envelope, and
@@ -288,8 +287,13 @@ const pixelBudget = () => {
     return Math.max(BUDGET_MIN, Math.min(BUDGET_MAX, Math.round(w)));
 };
 
+// Display buckets per chart: one per BUCKET_PX of the chart's width. A bucket
+// draws its median, its typical band and its min/max envelope, and narrower
+// buckets make the envelope an over-dense fill without adding visible detail.
+const BUCKET_PX = 4;
+
 // Budget for a display-series fetch over [start,end]. Starts from the pixel
-// budget, but ALSO caps it so each bucket aggregates at least
+// budget over BUCKET_PX, but ALSO caps it so each bucket aggregates at least
 // MIN_SAMPLES_PER_BUCKET native samples once the window is wide enough — so the
 // median+band engages and SMOOTHS jittery per-second signals (e.g. CPU%) at
 // moderate windows instead of drawing every raw sample as a dense zigzag. The
@@ -299,9 +303,9 @@ const pixelBudget = () => {
 const MIN_SAMPLES_PER_BUCKET = 5;
 const MIN_DISPLAY_BUCKETS = 48;
 const displayBudget = (meta, start, end) => {
-    const px = pixelBudget();
+    const buckets = Math.round(pixelBudget() / BUCKET_PX);
     const native = Math.max(1, Math.round((end - start) / nativeInterval(meta)));
-    return Math.min(px, Math.max(MIN_DISPLAY_BUCKETS, Math.ceil(native / MIN_SAMPLES_PER_BUCKET)));
+    return Math.min(buckets, Math.max(MIN_DISPLAY_BUCKETS, Math.ceil(native / MIN_SAMPLES_PER_BUCKET)));
 };
 
 // Which plots use display mode: line-ish charts (gauge / counter) and
@@ -1458,7 +1462,8 @@ export {
     injectLabelRegex,
     buildEffectiveQuery,
     plotUsesDisplay,
-    // LOD tile cache internals (exported for tests)
+    // Display budget and LOD tile cache internals (exported for tests)
+    displayBudget,
     clipDecoded,
     tileLookup,
     tileStore,

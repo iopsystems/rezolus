@@ -345,13 +345,17 @@ export function configureHeatmap(chart) {
                     shadowColor: COLORS.shadowStrong
                 }
             },
+            // The series holds at most about MAX_DATA_POINT_DISPLAY cells plus
+            // one column of rows, so unzoomed it is drawn in one frame.
+            // Progressive rendering, which clears the series and repaints it
+            // in `progressive`-cell chunks over several frames (a flash on
+            // every live refresh), applies only after a zoom selects a finer
+            // resolution (a smaller merge factor, down to none), whose cells
+            // cover the whole range and can exceed `progressiveThreshold`.
+            // The custom series reads the same options as the heatmap series:
             // https://echarts.apache.org/en/option.html#series-heatmap.progressive
-            // Bigger numbers mean more data is rendered at once.
-            // Rendering smaller pieces at a time has a bigger perf impact than you
-            // might think as every progressive render also requires reevaluating the
-            // existing rendered stuff, so it's a quadratic cost to some extent.
             progressive: 8000,
-            progressiveThreshold: 3000,
+            progressiveThreshold: 60000,
             animation: false
         }]
     };
