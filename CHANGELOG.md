@@ -11,6 +11,14 @@
 
 ### Fixed
 
+- **A per-entity heatmap redraws in one frame.** Above 3000 cells the
+  heatmap was drawn progressively: each redraw cleared the series and
+  repainted it in 8000-cell chunks over several frames, which a live view
+  showed as a flash on every refresh. The threshold is now 60000 cells, and
+  the heatmap already merges columns to stay near 50000, so it draws in one
+  frame; 57600 cells took 169 ms in one frame against 270 ms over 6 frames
+  progressively, in headless Chrome. Bucket and quantile heatmaps are
+  unchanged.
 - **A decimated multi-series line chart draws continuous lines.** Once a
   range holds more samples than the chart's point budget, the viewer fetches
   one point per bucket, and the bucket is wider than the recording interval.
