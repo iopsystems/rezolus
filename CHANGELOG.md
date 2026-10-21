@@ -11,6 +11,11 @@
 
 ### Fixed
 
+- **The cgroups section's aggregate charts leave out the selected cgroups.**
+  The aggregate charts are the sum over the cgroups not selected, but the
+  viewer removed their `name!~` exclusion before every query, so a cgroup
+  moved to the individual side was still counted on the left. The exclusion is now filled with the selection and removed only when
+  nothing is selected. (#1289)
 - **A decimated multi-series line chart draws continuous lines.** Once a
   range holds more samples than the chart's point budget, the viewer fetches
   one point per bucket, and the bucket is wider than the recording interval.
