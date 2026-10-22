@@ -423,3 +423,11 @@ When working on code under `src/agent/samplers/` or `src/agent/bpf/`, read `docs
 ## Git Conventions
 
 Do not append claude.ai session links to commit messages.
+
+In the commands below, `<remote>` is the remote that points at iopsystems/rezolus: `upstream` in a fork checkout, otherwise `origin`.
+
+Before committing on any PR, run `git fetch --tags <remote>` and then `./scripts/sync-docs-version.sh`. The script sets the sidebar version label in `site/docs/*.html` to the newest stable `v*` tag; when it changes a file, that change goes in the same commit.
+
+Every PR to `main` other than a release PR bumps the pre-release revision in `Cargo.toml` (and `Cargo.lock`) by one from `<remote>/main`'s, including docs-only and dependency-only PRs: run `git fetch <remote> && git show <remote>/main:Cargo.toml | grep '^version'`, then, for example, `6.0.0-alpha.62` becomes `6.0.0-alpha.63`. Only release PRs change the major, minor or patch version.
+
+Commit subjects and PR titles are conventional, `type(scope): description`. Open every PR other than a release PR as a draft.
