@@ -431,3 +431,13 @@ Before committing on any PR, run `git fetch --tags <remote>` and then `./scripts
 Every PR to `main` other than a release PR bumps the pre-release revision in `Cargo.toml` (and `Cargo.lock`) by one from `<remote>/main`'s, including docs-only and dependency-only PRs: run `git fetch <remote> && git show <remote>/main:Cargo.toml | grep '^version'`, then, for example, `6.0.0-alpha.62` becomes `6.0.0-alpha.63`. Only release PRs change the major, minor or patch version.
 
 Commit subjects and PR titles are conventional, `type(scope): description`. Open every PR other than a release PR as a draft.
+
+## Releases
+
+Cut stable releases with `/cs:release`. What it cannot read from the repository:
+
+- `main` carries 6.x. `release/5.x` carries 5.x; a 5.x patch release is a release PR into `release/5.x`. A 5.x release is recorded only in `release/5.x`'s `CHANGELOG.md`; `main`'s changelog has no 5.x sections after 5.22.1.
+- Check the base against `<remote>/main` or `<remote>/release/5.x`, push the release branch to the fork in a fork checkout, and open the PR with `gh pr create --repo iopsystems/rezolus --base <base>`.
+- `release.toml` sets the commit message to `release: prepare v{{version}}`, `publish = false`, and leaves tagging and pushing to the workflow. `tag-release.yml` calls `brayniac/rust-workflows` `tag-release.yml@v1` on pushes to `main` and `release/5.x`. After tagging from `main` it pushes the next development version (`X.Y.(Z+1)-alpha.0`) straight to `main`; after tagging from `release/5.x` it does no bump, and that branch keeps the released version until its next release PR.
+- `release.yml` runs on every `v*` tag pushed to iopsystems/rezolus. It builds the .deb and .rpm packages and the static viewer tarball, and creates the GitHub release. A tag containing `-` or `+` is marked as a pre-release and skips the package-registry uploads. A stable tag goes to the apt and yum registries; it becomes the GitHub "Latest" release and updates the Homebrew formula only when it is the highest stable tag, so a 5.x patch cut after 6.0 does neither. Nothing is published to crates.io.
+- A prerelease tags the current `main` version by hand, with no release PR: run `git fetch <remote>` and check `git rev-parse HEAD` equals `git rev-parse <remote>/main`, with a clean tree and a `Cargo.toml` version ending in `-alpha.N`, `-beta.N` or `-rc.N` (the rpm step handles only those); check `git ls-remote --tags <remote> v<version>` returns nothing, then `git tag -a v<version> -m "Prerelease v<version>"` and `git push <remote> v<version>`. Do not tag a stable version by hand; that goes through a release PR.
