@@ -10,8 +10,8 @@
 # Dry run (recommended first):
 #   cargo release version patch --dry-run
 #
-# This configuration is used by the /release Claude skill and
-# the tag-release.yml GitHub workflow.
+# This configuration is used by /cs:release and the tag-release.yml
+# GitHub workflow.
 
 # The rezolus crate is not published to crates.io; releases ship as deb/rpm
 # packages and a GitHub release via the release.yml workflow on tag push.
@@ -22,7 +22,7 @@ tag = false
 tag-prefix = "v"
 tag-name = "{{prefix}}{{version}}"
 
-# Don't push (we handle this in the skill/workflow)
+# Don't push (the release PR and tag-release.yml do)
 push = false
 
 # Commit message format
