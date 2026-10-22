@@ -493,12 +493,7 @@ mod tests {
     }
 
     fn task_exit_of(pid: u32, dead_tgid: u32, ts: u64) -> Vec<u8> {
-        let exit = bpf::types::task_exit {
-            pid,
-            dead_tgid,
-            ts,
-            ..Default::default()
-        };
+        let exit = bpf::types::task_exit { pid, dead_tgid, ts };
         unsafe { plain::as_bytes(&exit) }.to_vec()
     }
 

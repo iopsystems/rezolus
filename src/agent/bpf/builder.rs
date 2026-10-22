@@ -484,6 +484,10 @@ impl PerfEvent {
     }
 }
 
+/// A sampler callback run by [`Builder::map_sweep`] after every ringbuf
+/// drain, over an atomic view of a map's values.
+type MapSweep = fn(&[std::sync::atomic::AtomicU64]);
+
 pub struct Builder<T: 'static + SkelBuilder<'static>> {
     name: &'static str,
     skel: fn() -> T,
@@ -535,8 +539,7 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     )>,
     #[allow(clippy::type_complexity)]
     ringbuf_handler: Vec<(&'static str, fn(&[u8]) -> i32)>,
-    #[allow(clippy::type_complexity)]
-    map_sweeps: Vec<(&'static str, fn(&[std::sync::atomic::AtomicU64]))>,
+    map_sweeps: Vec<(&'static str, MapSweep)>,
     btf_path: Option<String>,
     /// Optional list of program names to enable. If None, all programs are
     /// enabled (default behavior). If Some, only the listed programs will have
@@ -1146,7 +1149,7 @@ where
 
             // Mapped through the map's borrowed fd, so nothing here closes
             // the fd libbpf owns.
-            let map_sweeps: Vec<(memmap2::Mmap, fn(&[std::sync::atomic::AtomicU64]))> = self
+            let map_sweeps: Vec<(memmap2::Mmap, MapSweep)> = self
                 .map_sweeps
                 .into_iter()
                 .map(|(name, sweep)| {
@@ -1536,11 +1539,7 @@ where
     /// against the BPF side's state. The map must be `BPF_F_MMAPABLE` with
     /// 8-byte values; the BPF side keeps writing it, so `sweep` reads each
     /// value with an atomic load.
-    pub fn map_sweep(
-        mut self,
-        name: &'static str,
-        sweep: fn(&[std::sync::atomic::AtomicU64]),
-    ) -> Self {
+    pub fn map_sweep(mut self, name: &'static str, sweep: MapSweep) -> Self {
         self.map_sweeps.push((name, sweep));
         self
     }
