@@ -381,6 +381,7 @@ impl RecordingConfig {
             template: None,
             template_json: None,
             arm: None,
+            host: None,
         };
 
         Ok(RecordingConfig {
@@ -397,7 +398,7 @@ impl RecordingConfig {
     }
 }
 
-/// Parse `"http://host:port/path,source=name,role=agent,protocol=prometheus,template=kpis.json"`.
+/// Parse `"http://host:port/path,source=name,role=agent,host=web-01,protocol=prometheus,template=kpis.json"`.
 /// URL is everything before the first comma. Key=value pairs after. The
 /// template file is only named here; [`EndpointConfig::load_template`] reads
 /// it.
@@ -414,6 +415,7 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
     let mut protocol: Option<Protocol> = None;
     let mut template: Option<PathBuf> = None;
     let mut arm: Option<String> = None;
+    let mut host: Option<String> = None;
 
     if let Some(opts) = rest {
         for pair in opts.split(',') {
@@ -438,6 +440,8 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
                     return Err(format!("arm={value:?} has whitespace around it"));
                 }
                 "arm" => arm = Some(value.to_string()),
+                "host" if value.is_empty() => return Err("host= needs a name".to_string()),
+                "host" => host = Some(value.to_string()),
                 "protocol" => {
                     protocol = Some(match value {
                         "stream" | "rezolus" | "msgpack" => Protocol::Stream,
@@ -458,6 +462,7 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
         template,
         template_json: None,
         arm,
+        host,
     })
 }
 

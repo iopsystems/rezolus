@@ -152,10 +152,9 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
     });
 
     // Save as Report writes a .dendro whatever the source, built in the
-    // browser: a tar `.rez` and a parquet are converted in memory
+    // browser: a `.rez` (tar or v3) and a parquet are converted in memory
     // (`ArchiveMut::create_in_memory`), which is what this checks in the
-    // shipped WASM. A v3 `.rez` converts by path only, so it is refused,
-    // naming the command that can save it.
+    // shipped WASM.
     const SQLITE_MAGIC = 'SQLite format 3\0';
     const saved = (bytes, name) => {
         const registry = new WasmCaptureRegistry();
@@ -182,7 +181,13 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         );
     });
 
-    test('Save as Report of a v3 .rez is refused, naming rezolus view', () => {
-        assert.throws(() => saved(committedRez('v3.rez'), 'one.rez'), /rezolus view/);
+    test('Save as Report of a v3 .rez is a .dendro', () => {
+        assert.deepEqual(reopened(saved(committedRez('v3.rez'), 'one.rez')).counter_names, ['ops']);
+        // Two recordings: the report holds both, the selection on the first.
+        const registry = new WasmCaptureRegistry();
+        registry.attach('baseline', saved(committedRez('v3-multi.rez'), 'multi.rez'), 'r.dendro');
+        assert.match(registry.file_metadata_json('baseline'), /selection/);
+        // The live archive's rows still in its WAL table come across.
+        assert.deepEqual(reopened(saved(committedRez('v3-live.rez'), 'live.rez')).counter_names, ['ops']);
     });
 }

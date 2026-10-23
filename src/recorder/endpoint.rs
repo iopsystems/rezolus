@@ -62,6 +62,11 @@ pub struct EndpointConfig {
     /// that carry one open in the viewer as a comparison.
     #[serde(default)]
     pub arm: Option<String>,
+    /// The endpoint's `host` label (`host=`), over the one a Rezolus agent's
+    /// systeminfo would give it: the way to set it when that arrives too late
+    /// to label the recording (`Event::LabelsNotApplied`).
+    #[serde(default)]
+    pub host: Option<String>,
 }
 
 impl EndpointConfig {

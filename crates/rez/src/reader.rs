@@ -28,13 +28,6 @@ impl std::ops::Deref for RezReader {
 /// One `RezReader` per recording, paired with that recording's label set.
 pub type LabeledRecordings = Vec<(BTreeMap<String, String>, RezReader)>;
 
-/// Every metric name `reader` lists, gauge histograms included.
-fn every_name(reader: &ArchiveReader) -> Vec<String> {
-    let mut names = reader.all_names();
-    names.extend(reader.gauge_histogram_names());
-    names
-}
-
 /// The metadata key a recording's timeline events are stored under
 /// (`parquet_metadata::KEY_EVENTS` in the binary).
 const KEY_EVENTS: &str = "events";
@@ -128,7 +121,7 @@ fn read_groups(recordings: metriken_storage::LabeledRecordings) -> LabeledRecord
             .collect();
         let tables: Vec<Vec<&metriken_storage::reader::SamplerReader>> = recordings
             .iter()
-            .map(|(_, r)| r.owners_of(&every_name(r)))
+            .map(|(_, r)| r.owners_of(&r.all_names()))
             .collect();
         // As `ArchiveReader::process_groups` asks: a source holds a row in
         // the range when any of its tables does, and cannot tell when none

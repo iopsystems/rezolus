@@ -161,11 +161,14 @@ pub fn resolve_kept_columns(
 
 /// What a report is built from.
 pub enum ReportSource<'a> {
-    /// A dendro archive's bytes. The server converts a v3 `.rez` to one by
-    /// path before it calls.
+    /// A dendro archive's bytes.
     Dendro(&'a [u8]),
     /// A v1 or v2 (tar) `.rez`'s bytes.
     RezTar(&'a [u8]),
+    /// A v3 (SQLite) `.rez`'s bytes, its own WAL table included. The server
+    /// converts a v3 `.rez` by path instead, which also reads SQLite's
+    /// `-wal` sidecar beside the file.
+    RezV3(&'a [u8]),
     /// Standalone parquet files' bytes, a recording each, baseline first.
     /// Two files are a compare: the report labels them `arm=baseline` and
     /// `arm=experiment`, so it reopens as the comparison it was saved from.
@@ -212,6 +215,19 @@ pub fn build_report(
                 &metriken_storage::WriterConfig::default(),
             )
             .map_err(err)?;
+            build_dendro_report(
+                &converted,
+                anchor,
+                keep_metrics,
+                range,
+                selection_json,
+                events_json,
+            )
+        }
+        ReportSource::RezV3(bytes) => {
+            let db = metriken_storage::rez::rez_sqlite::RezDb::open_bytes(bytes.to_vec())?;
+            let mut converted = ArchiveMut::create_in_memory().map_err(|e| e.to_string())?;
+            metriken_storage::rez::to_dendro::convert_v3_into(&db, &mut converted).map_err(err)?;
             build_dendro_report(
                 &converted,
                 anchor,
@@ -943,6 +959,46 @@ mod tests {
             .map(|s| s.0["source"].as_str())
             .collect();
         assert_eq!(marked, ["valkey"]);
+    }
+
+    /// A v3 `.rez` converts into the report in memory, as the browser saves
+    /// one: the committed `v3-multi.rez`'s two recordings, with their labels,
+    /// and `v3-live.rez`'s rows still in its WAL table.
+    #[test]
+    fn a_v3_rez_saves_a_dendro_report() {
+        let fixture = |name: &str| {
+            std::fs::read(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../rez/tests/fixtures/rez")
+                    .join(name),
+            )
+            .unwrap()
+        };
+        let out = build_report(
+            ReportSource::RezV3(&fixture("v3-multi.rez")),
+            None,
+            None,
+            None,
+            "{}",
+            None,
+        )
+        .unwrap();
+        let sources = sources_of(out);
+        assert_eq!(sources.len(), 2);
+        assert_eq!(
+            sources[0].1.get(KEY_SELECTION).map(String::as_str),
+            Some("{}")
+        );
+        let live = build_report(
+            ReportSource::RezV3(&fixture("v3-live.rez")),
+            None,
+            None,
+            None,
+            "{}",
+            None,
+        )
+        .unwrap();
+        assert_eq!(sources_of(live).len(), 1);
     }
 
     /// A tar `.rez` source converts into the report in memory, as the

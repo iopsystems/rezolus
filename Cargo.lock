@@ -2551,9 +2551,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.42.0"
+version = "0.42.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f030a37ec11efb61f65506d691992482394e2750438ac70d8e2ff2cc21f07f7"
+checksum = "9c8d7538aa61aaa71a14e6c1044415ea9899fef4771b13e670412ee296e19cdf"
 dependencies = [
  "arrow",
  "bytes",
@@ -2572,9 +2572,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-recorder"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83564eeea8c838262754f62b64d0200314f54e2bd2d81c7b68396bb1cc0754ff"
+checksum = "0db41cfadb93210a6cc3d39791901a18853d56864e0a8cb77f51358f8577b886"
 dependencies = [
  "async-trait",
  "dendro",
@@ -2594,9 +2594,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-storage"
-version = "0.5.1"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbe80af30398abeb25c01056e6f9fd9eaa5b3c45f3e93de1dc08e63b9e25da18"
+checksum = "249e5921a9fafebfbdf67f872f1dab14b919d8c0f217281ec9d9e314c31ce2e1"
 dependencies = [
  "arrow",
  "bytes",

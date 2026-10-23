@@ -389,6 +389,16 @@ pub fn run(config: Config) {
                             Ordering::SeqCst,
                         );
                     }
+                    Some(mr::Event::LabelsNotApplied { labels, .. }) => warn!(
+                        "{url}: its {} label(s) arrived late and are not on the buffer's \
+                         recording, so a dump does not carry them; hindsight takes no labels \
+                         of its own",
+                        labels
+                            .iter()
+                            .map(|(k, v)| format!("{k}={v}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
                     Some(mr::Event::Failed { error }) => fatal(&error, &buffer_path),
                     Some(_) => {}
                     // The recorder stopped without saying why; what it wrote

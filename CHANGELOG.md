@@ -172,8 +172,9 @@
 - **Save as Report writes a `.dendro`**, in the server viewer and the static
   site, from a `.dendro`, a `.rez` or one or two parquet files. A two-file
   parquet compare is saved with `arm=baseline`/`arm=experiment`, so it
-  reopens as the comparison. The static site refuses a report of a v3 `.rez`,
-  which converts by path only, and names `rezolus view`.
+  reopens as the comparison. The static site converts a `.rez` in memory; an
+  uploaded v3 `.rez` has no SQLite `-wal` sidecar, so a copy taken from under
+  a running recorder can be shorter than `rezolus view` reads from the file.
 - **`record` refuses every Rezolus agent that cannot stream.** An agent older
   than 5.21.0, a v2 agent, or a stream route that answers 404, 409 or a
   foreign content type is refused at startup (exit 1, nothing written) or,
@@ -232,7 +233,7 @@
   empty header, is skipped. `[samplers.hw_sensors] enabled = false` turns it off, and an
   existing config that sets it keeps the sampler off.
 - **metriken 0.11.4, metriken-exposition 0.25, metriken-model 0.2,
-  metriken-storage 0.5.1, metriken-query 0.42, metriken-recorder 0.5.** The
+  metriken-storage 0.5.2, metriken-query 0.42.1, metriken-recorder 0.5.1.** The
   counting histogram types are named for their kind (`AtomicCounterHistogram`,
   `RwLockCounterHistogram`, `CounterHistogramGroup`).
 - **A recording and its copies are read once.** metriken-query 0.42 forms
@@ -1040,6 +1041,13 @@
 
 ### Added
 
+- **`record --endpoint url,host=NAME` sets the recording's `host` label.**
+  `record` names labels that a Rezolus agent's metadata brought too late to
+  put on the recording (metriken-recorder's `LabelsNotApplied`), with the
+  `--endpoint` (and `--label`) that sets them on the next run, e.g. `warn:
+  rezolus: its host label arrived late and is not on the recording; record
+  again with --endpoint http://agent:4241,host=web-01`. Hindsight and the
+  live viewer log the same.
 - **Gauge histograms are listed.** A `.dendro` holding gauge histograms
   (metriken 0.11.4's `GaugeHistogram`) shows them in the viewer's metric
   browser (as histograms, charted through the histogram functions) and in

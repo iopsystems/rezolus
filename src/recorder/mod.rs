@@ -235,7 +235,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("ENDPOINT")
                 .long("endpoint")
-                .help("Add an endpoint as url[,source=name][,role=label][,arm=name][,protocol=stream|prometheus][,template=FILE]; role is a free-form tag (conventionally service or loadgen); arm labels the endpoint's recording as one arm of an A/B comparison (conventionally baseline or experiment): an archive whose recordings carry arm opens in `rezolus view` as a comparison (one recording per arm), with unarmed recordings' sections beside it; one without arms opens as one combined view; template is a KPI template file (a ServiceExtension JSON, as `recording annotate --queries` takes) written into this endpoint's recording as service_queries, so the viewer shows that service's KPI section: it is checked before recording starts, an unreadable file, one over 1 MiB, JSON that is not a ServiceExtension or an unknown unit_system refuses the run (exit 2), and it replaces any template a streamed producer sends in its handshake; protocol skips detection: stream records it from its replication stream only, never scraping it (rezolus and msgpack are accepted for it too), prometheus scrapes it as text exposition (at /metrics for a URL whose path is /); without protocol, a URL whose path is / or /metrics/stream is asked for its stream first and any other URL is scraped (see DETECTION); repeat for several (e.g. http://host:9090/metrics,source=svc,role=service,protocol=prometheus)")
+                .help("Add an endpoint as url[,source=name][,role=label][,arm=name][,host=name][,protocol=stream|prometheus][,template=FILE]; host labels the recording's host (a Rezolus agent's own hostname otherwise); role is a free-form tag (conventionally service or loadgen); arm labels the endpoint's recording as one arm of an A/B comparison (conventionally baseline or experiment): an archive whose recordings carry arm opens in `rezolus view` as a comparison (one recording per arm), with unarmed recordings' sections beside it; one without arms opens as one combined view; template is a KPI template file (a ServiceExtension JSON, as `recording annotate --queries` takes) written into this endpoint's recording as service_queries, so the viewer shows that service's KPI section: it is checked before recording starts, an unreadable file, one over 1 MiB, JSON that is not a ServiceExtension or an unknown unit_system refuses the run (exit 2), and it replaces any template a streamed producer sends in its handshake; protocol skips detection: stream records it from its replication stream only, never scraping it (rezolus and msgpack are accepted for it too), prometheus scrapes it as text exposition (at /metrics for a URL whose path is /); without protocol, a URL whose path is / or /metrics/stream is asked for its stream first and any other URL is scraped (see DETECTION); repeat for several (e.g. http://host:9090/metrics,source=svc,role=service,protocol=prometheus)")
                 .action(clap::ArgAction::Append)
                 .conflicts_with_all(["URL", "CONFIG_FILE"]),
         )
@@ -664,6 +664,14 @@ impl Watch {
                 self.label(source),
                 version.as_deref().unwrap_or("not reported")
             ),
+            mr::Event::LabelsNotApplied { source, labels } => {
+                let i = source.0 as usize;
+                let url = self.urls.get(i).cloned().unwrap_or_default();
+                eprintln!(
+                    "warn: {}",
+                    labels_not_applied(&self.label(source), &url, &labels)
+                );
+            }
             mr::Event::Failed { error } => {
                 eprintln!("error: recording failed: {error}");
                 eprintln!(
@@ -675,6 +683,38 @@ impl Watch {
             _ => {}
         }
     }
+}
+
+/// The line for labels a late probe reply carried that could not be put on
+/// the recording (`Event::LabelsNotApplied`), naming how to set them on the
+/// next run: the labels `--endpoint` takes (`source=`, `arm=`, `host=`) on
+/// the endpoint, any other as a run-wide `--label`.
+pub(crate) fn labels_not_applied(
+    name: &str,
+    url: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let keys: Vec<&str> = labels.keys().map(String::as_str).collect();
+    let mut endpoint = url.to_string();
+    let mut run_wide = Vec::new();
+    for (k, v) in labels {
+        match k.as_str() {
+            "source" | "arm" | "host" => endpoint.push_str(&format!(",{k}={v}")),
+            _ => run_wide.push(format!("--label {k}={v}")),
+        }
+    }
+    let mut again = format!("--endpoint {endpoint}");
+    for flag in run_wide {
+        again.push(' ');
+        again.push_str(&flag);
+    }
+    format!(
+        "{name}: its {} label{} arrived late and {} not on the recording; record again \
+         with {again}",
+        keys.join("/"),
+        if keys.len() == 1 { "" } else { "s" },
+        if keys.len() == 1 { "is" } else { "are" },
+    )
 }
 
 /// Runs the Rezolus `recorder`, which records one or more endpoints into one
@@ -1092,9 +1132,12 @@ fn endpoint_spec(config: &RecordingConfig, ep: &endpoint::EndpointConfig) -> mr:
         labels.insert("source".to_string(), source.clone());
     }
     labels.extend(config.labels.iter().cloned());
-    // The endpoint's own arm over a run-wide `--label arm=`.
+    // The endpoint's own arm and host over a run-wide `--label`.
     if let Some(arm) = &ep.arm {
         labels.insert("arm".to_string(), arm.clone());
+    }
+    if let Some(host) = &ep.host {
+        labels.insert("host".to_string(), host.clone());
     }
     let mut metadata: BTreeMap<String, String> = config.metadata.iter().cloned().collect();
     if let Some(role) = &ep.role {
@@ -1251,6 +1294,7 @@ mod tests {
             template: None,
             template_json: None,
             arm: None,
+            host: None,
         };
         let spec = endpoint_spec(&config, &ep);
         assert_eq!(spec.labels["source"], "web");
@@ -1278,11 +1322,44 @@ mod tests {
             template: Some(PathBuf::from("vllm.json")),
             template_json: Some(r#"{"service_name":"vllm","kpis":[]}"#.to_string()),
             arm: None,
+            host: None,
         };
         assert_eq!(
             endpoint_spec(&config, &ep).metadata["service_queries"],
             r#"{"service_name":"vllm","kpis":[]}"#
         );
+    }
+
+    /// The line for labels that arrived too late names them and the run
+    /// that sets them: `source`/`arm`/`host` on the endpoint, which
+    /// `--endpoint` parses back, any other as `--label`.
+    #[test]
+    fn late_labels_name_the_flags_that_set_them() {
+        let labels: BTreeMap<String, String> = [
+            ("host".to_string(), "web-01".to_string()),
+            ("zone".to_string(), "a".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let line = labels_not_applied("rezolus", "http://agent:4241", &labels);
+        assert_eq!(
+            line,
+            "rezolus: its host/zone labels arrived late and are not on the recording; \
+             record again with --endpoint http://agent:4241,host=web-01 --label zone=a"
+        );
+        let one: BTreeMap<String, String> = [("host".to_string(), "web-01".to_string())]
+            .into_iter()
+            .collect();
+        let line = labels_not_applied("rezolus", "http://agent:4241", &one);
+        assert!(
+            line.contains("its host label arrived late and is not"),
+            "{line}"
+        );
+        let ep =
+            crate::recorder::config::parse_endpoint_str("http://agent:4241,host=web-01").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config(&dir.path().join("out.dendro"));
+        assert_eq!(endpoint_spec(&config, &ep).labels["host"], "web-01");
     }
 
     /// An endpoint's `arm=` labels its recording, over a run-wide

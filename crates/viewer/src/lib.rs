@@ -1372,9 +1372,11 @@ impl WasmCaptureRegistry {
 
     /// Produce the bytes that the server's `/api/v1/save_with_selection`
     /// would return: a `.dendro` report of the loaded recordings
-    /// (`report_save::build_report`), converted in the browser from a tar
-    /// `.rez` or parquet source. A v3 `.rez` converts by path only, so its
-    /// report is refused here, naming the way to save one. The JS caller
+    /// (`report_save::build_report`), converted in the browser from a `.rez`
+    /// (tar or v3) or parquet source. A v3 `.rez` upload carries its own WAL
+    /// table but not SQLite's `-wal` sidecar, so a copy taken from under a
+    /// running recorder can hold fewer rows than `rezolus view` reads from
+    /// the file. The JS caller
     /// wraps the bytes in a Blob and triggers a download — no HTTP needed.
     pub fn save_with_selection(&self, payload_json: &str) -> Result<Vec<u8>, JsValue> {
         use std::collections::BTreeSet;
@@ -1417,11 +1419,7 @@ impl WasmCaptureRegistry {
             if metriken_storage::DendroCatalog::is_archive_bytes(archive) {
                 ::report_save::ReportSource::Dendro(archive)
             } else if rez::rez::looks_like_v3(archive) {
-                return Err(JsValue::from_str(
-                    "a v3 .rez is converted to a .dendro report by path, which the browser \
-                     cannot do; save the report from `rezolus view`, or convert the file \
-                     with `rezolus recording upgrade` and open the .dendro",
-                ));
+                ::report_save::ReportSource::RezV3(archive)
             } else {
                 ::report_save::ReportSource::RezTar(archive)
             }
@@ -2264,12 +2262,11 @@ mod tests {
         assert_eq!(json, "[]");
     }
 
-    /// Every report is a `.dendro`. A dendro source, a tar `.rez` and a
-    /// parquet save one in the browser (no filesystem), the selection
-    /// embedded on the anchor. (A v3 `.rez`, which converts by path only, is
-    /// refused with a JS error, which cannot be built outside wasm32.)
+    /// Every report is a `.dendro`. A dendro source, a tar or v3 `.rez` and
+    /// a parquet save one in the browser (no filesystem), the selection
+    /// embedded on the anchor.
     #[test]
-    fn a_dendro_tar_or_parquet_source_saves_a_dendro_report() {
+    fn every_source_saves_a_dendro_report() {
         use metriken_query::MetricsSource;
         let body = r#"{"entries":[],"trim_columns":false}"#;
         let saved = |bytes: &[u8], name: &str| {
@@ -2293,6 +2290,10 @@ mod tests {
             "the selection is embedded on the anchor"
         );
         assert_eq!(saved(&committed_rez_bytes("v2.rez"), "old.rez").len(), 1);
+        assert_eq!(
+            saved(&committed_rez_bytes("v3-multi.rez"), "multi.rez").len(),
+            2
+        );
         assert_eq!(saved(&parquet_bytes(), "capture.parquet").len(), 1);
     }
 
