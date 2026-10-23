@@ -4,8 +4,8 @@
 //! Vulkan or graphics workload usually does not have. This sampler reads the
 //! firmware's metrics from `/sys/class/drm/card*/device/gpu_metrics` and needs
 //! only the kernel driver. These values have no BPF or perf source, so each
-//! read parses a sysfs file. It does not read `hwmon`, which `hw_sensors`
-//! (opt-in) reads.
+//! read parses a sysfs file. It does not read `hwmon`: `hw_sensors` already
+//! publishes amdgpu's voltages, temperature and power from there.
 //!
 //! ## Scope
 //!
