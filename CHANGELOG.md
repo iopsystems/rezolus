@@ -188,6 +188,19 @@
 
 ### Changed
 
+- **`hw_sensors` is on by default.** It follows `[defaults]` like other
+  samplers. On five lab hosts at the 5 second default it cost at most 0.08% of
+  a core. Sweeps took 22 to 27 ms median on two x86 hosts, 323 ms on a board
+  whose embedded-controller driver (`asusec`) waits about 300 ms a refresh,
+  and under 1 ms on a Raspberry Pi; reads run on a blocking worker, not the
+  scrape path. It no
+  longer reads ACPI `Processor` cooling devices, one per logical CPU, or
+  `nvme` or `drivetemp` hwmon chips, whose reads send the drive a
+  command; `drivehealth` reads each drive's temperature at its own interval
+  (it needs root), and NVMe per-sensor temperatures are no longer collected.
+  An `asusec` temperature channel reading -40 °C, the driver's value for an
+  empty header, is skipped. `[samplers.hw_sensors] enabled = false` turns it off, and an
+  existing config that sets it keeps the sampler off.
 - **Archives written are dendro schema 5** (dendro 0.6, metriken-storage
   0.4, metriken-query 0.41, metriken-exposition 0.24, metriken-recorder
   0.4). Every `.dendro` this release creates (`record`, hindsight buffers
