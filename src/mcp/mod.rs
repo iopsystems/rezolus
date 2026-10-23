@@ -1784,11 +1784,9 @@ pub fn command() -> Command {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::recorder::rez::RezRecorder;
     use metriken::Window;
-    use metriken_exposition::{Counter, Snapshot, SnapshotV2};
-    use std::collections::HashMap;
-    use std::time::SystemTime;
+    use metriken_exposition::{Counter, Snapshot};
+    use std::collections::{BTreeMap, HashMap};
 
     #[test]
     fn format_query_result_shows_rate_bounds() {
@@ -1814,86 +1812,102 @@ pub(crate) mod tests {
     }
 
     fn counter(name: &str, sampler: &str, v: u64, w: Option<Window>) -> Counter {
-        Counter::new(
-            name.to_string(),
-            v,
-            [
-                ("metric".to_string(), name.to_string()),
-                ("sampler".to_string(), sampler.to_string()),
-            ]
-            .into_iter()
-            .collect(),
-        )
-        .with_window(w)
+        ::rez::fixtures::counter(name, sampler, v, w)
     }
 
     fn snap(ts: u64, counters: Vec<Counter>) -> Snapshot {
-        Snapshot::V2(SnapshotV2 {
-            systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
-            duration: std::time::Duration::ZERO,
-            metadata: HashMap::new(),
-            counters,
-            gauges: Vec::new(),
-            histograms: Vec::new(),
-        })
+        ::rez::fixtures::snap_counters(ts, counters)
     }
 
-    /// Populate a recorder with a few rows of a single-sampler counter.
-    fn build_recorder() -> RezRecorder {
-        let mut r = RezRecorder::new(
-            [("source".to_string(), "rezolus".to_string())]
-                .into_iter()
-                .collect(),
-            [("source".to_string(), "rezolus".to_string())]
-                .into_iter()
-                .collect(),
-            "rezolus".to_string(),
-        );
-        for i in 0..3u64 {
-            let ts = 1_000_000_000 * (i + 1);
-            let w = Some(Window::new(ts - 50_000_000, ts));
-            r.ingest(
-                &snap(ts, vec![counter("cpu_cycles", "cpu_usage", i, w)]),
-                ts,
-            );
-        }
-        r
+    /// Three rows of a `cpu_usage` counter `cpu_cycles`, 1 s apart from 1 s.
+    fn three_rows() -> Vec<(Snapshot, u64)> {
+        (0..3u64)
+            .map(|t| {
+                let ts = 1_000_000_000 * (t + 1);
+                let w = Some(Window::new(ts - 50_000_000, ts));
+                (snap(ts, vec![counter("cpu_cycles", "cpu_usage", t, w)]), ts)
+            })
+            .collect()
+    }
+
+    /// A finalized dendro archive at `path` of one recording per label set,
+    /// its `source` (if any) mirrored into its metadata, holding
+    /// [`three_rows`] when `with_rows` says so (default yes).
+    fn write_recordings(
+        path: &std::path::Path,
+        recordings: &[BTreeMap<String, String>],
+        with_rows: &[bool],
+    ) {
+        let sources: Vec<::rez::fixtures::Source> = recordings
+            .iter()
+            .enumerate()
+            .map(|(i, labels)| ::rez::fixtures::Source {
+                labels: labels.clone(),
+                // Mirrors what `record` puts in each recording's metadata:
+                // the same `source` as in the labels. Tests identify which
+                // arm came back by reading it, so a helper that left it
+                // empty would make that check vacuous.
+                metadata: labels
+                    .get("source")
+                    .map(|s| [("source".to_string(), s.clone())].into_iter().collect())
+                    .unwrap_or_default(),
+                rows: if with_rows.get(i).copied().unwrap_or(true) {
+                    three_rows()
+                } else {
+                    Vec::new()
+                },
+            })
+            .collect();
+        ::rez::fixtures::write_dendro(path, &sources, None, ::rez::fixtures::Finish::Finalized);
     }
 
     #[test]
-    fn open_source_reads_rez_and_parquet() {
+    fn open_source_reads_archives_and_parquet() {
         let dir = tempfile::tempdir().unwrap();
 
-        // Build a .rez archive and open it via open_source.
-        let rez_path = dir.path().join("rec.rez");
-        build_recorder().finalize(&rez_path).unwrap();
-        let rez_source = open_source(&rez_path).unwrap();
-        assert!(
-            !rez_source.counter_names().is_empty(),
-            ".rez source should expose counter names"
-        );
+        // A dendro archive and a `.rez`, opened via open_source.
+        let dendro_path = dir.path().join("rec.dendro");
+        multi_recording(&dendro_path, &["rezolus"], &[true]);
+        let rez_path = ::rez::fixtures::committed_rez("v2.rez", dir.path());
+        for path in [&dendro_path, &rez_path] {
+            let source = open_source(path).unwrap();
+            assert!(
+                !source.counter_names().is_empty(),
+                "{} should expose counter names",
+                path.display()
+            );
+        }
 
-        // Build a bare parquet table and open it via open_source.
+        // A bare parquet table, opened via open_source.
         let parquet_path = dir.path().join("rec.parquet");
-        let tables = build_recorder().finalize_tables();
-        let bytes = crate::recorder::rez::write_table_parquet(&tables[0]).unwrap();
-        std::fs::write(&parquet_path, bytes).unwrap();
+        bare_parquet(&parquet_path);
         assert!(
             open_source(&parquet_path).is_ok(),
             "bare parquet should open as a MetricsSource"
         );
     }
 
-    /// Build a v3 archive holding one recording per `source`, each with rows.
-    pub(crate) fn multi_recording_rez(
-        path: &std::path::Path,
-        sources: &[&str],
-        with_rows: &[bool],
-    ) {
-        multi_recording_rez_with_arms(path, sources, &vec![None; sources.len()], with_rows)
+    /// A bare parquet table at `path`: the one sealed segment of a dendro
+    /// archive of [`three_rows`], labelled `source=rezolus`.
+    fn bare_parquet(path: &std::path::Path) {
+        use metriken_storage::Catalog;
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("rec.dendro");
+        multi_recording(&archive, &["rezolus"], &[true]);
+        let catalog = metriken_storage::DendroCatalog::open(&archive).unwrap();
+        let source = catalog.sources().unwrap()[0].id;
+        let table = catalog.tables(source).unwrap().remove(0);
+        let (seq, _) = catalog.segment_meta(source, &table).unwrap()[0];
+        let bytes = catalog.segment_bytes(source, &table, seq).unwrap().unwrap();
+        std::fs::write(path, bytes).unwrap();
     }
 
-    /// As `multi_recording_rez`, plus an optional `arm` label per recording.
+    /// Build an archive holding one recording per `source`, each with rows.
+    pub(crate) fn multi_recording(path: &std::path::Path, sources: &[&str], with_rows: &[bool]) {
+        multi_recording_with_arms(path, sources, &vec![None; sources.len()], with_rows)
+    }
+
+    /// As `multi_recording`, plus an optional `arm` label per recording.
     ///
     /// `source` is unique per recording and `host` is shared by all of them,
     /// so with those two alone every selector either names one recording or
@@ -1901,63 +1915,35 @@ pub(crate) mod tests {
     /// a partial match possible, which is the only way to tell a listing that
     /// renders the recordings a selector matched from one that renders every
     /// recording it could have matched.
-    pub(crate) fn multi_recording_rez_with_arms(
+    pub(crate) fn multi_recording_with_arms(
         path: &std::path::Path,
         sources: &[&str],
         arms: &[Option<&str>],
         with_rows: &[bool],
     ) {
-        use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
-        let mut archive = RezArchive::create(path).unwrap();
-        let mut recs: Vec<StreamRecorderV3> = Vec::new();
-        for (i, source) in sources.iter().enumerate() {
-            let mut labels: std::collections::BTreeMap<String, String> = [
-                ("source".to_string(), source.to_string()),
-                ("host".to_string(), "web-01".to_string()),
-            ]
-            .into_iter()
-            .collect();
-            if let Some(arm) = arms.get(i).copied().flatten() {
-                labels.insert("arm".to_string(), arm.to_string());
-            }
-            let seed = ManifestSeed {
+        let labels: Vec<BTreeMap<String, String>> = sources
+            .iter()
+            .enumerate()
+            .map(|(i, source)| {
                 // `host` is shared across the arms on purpose: with `source`
                 // as the only label, no selector could ever match two
                 // recordings, and the ambiguous path — the one that must not
                 // silently fall through to the first arm — would be
                 // untestable through this helper. A real multi-endpoint
                 // capture of one host's two services looks exactly like this.
-                labels,
-                // Mirrors `recorder::build_rez_metadata`, which puts the same
-                // `source` in the per-recording metadata as in the labels.
-                // Tests identify which arm came back by reading it, so a
-                // helper that left it empty would make that check vacuous.
-                metadata: [("source".to_string(), source.to_string())]
-                    .into_iter()
-                    .collect(),
-                clock_anchor_wall_ns: 1_000_000_000,
-            };
-            recs.push(StreamRecorderV3::new(archive.add_recording(seed).unwrap()));
-        }
-        for (i, rec) in recs.iter_mut().enumerate() {
-            if !with_rows.get(i).copied().unwrap_or(true) {
-                continue;
-            }
-            for t in 0..3u64 {
-                let ts = 1_000_000_000 * (t + 1);
-                let w = Some(Window::new(ts - 50_000_000, ts));
-                rec.ingest(
-                    &snap(ts, vec![counter("cpu_cycles", "cpu_usage", t, w)]),
-                    ts,
-                    0,
-                )
-                .unwrap();
-            }
-        }
-        for rec in recs {
-            rec.finalize((4_000_000_000, 0)).unwrap();
-        }
-        archive.join().unwrap();
+                let mut labels: BTreeMap<String, String> = [
+                    ("source".to_string(), source.to_string()),
+                    ("host".to_string(), "web-01".to_string()),
+                ]
+                .into_iter()
+                .collect();
+                if let Some(arm) = arms.get(i).copied().flatten() {
+                    labels.insert("arm".to_string(), arm.to_string());
+                }
+                labels
+            })
+            .collect();
+        write_recordings(path, &labels, with_rows);
     }
 
     /// Build a multi-recording archive from arbitrary label maps.
@@ -1967,41 +1953,11 @@ pub(crate) mod tests {
     /// `\u{1}`-joined renders COLLIDE while the maps differ, which is what the
     /// cache-identity aliasing test needs. Each recording gets three rows of a
     /// counter and its `source` (if any) mirrored into its metadata.
-    pub(crate) fn multi_recording_rez_with_labels(
+    pub(crate) fn multi_recording_with_labels(
         path: &std::path::Path,
-        recordings: &[std::collections::BTreeMap<String, String>],
+        recordings: &[BTreeMap<String, String>],
     ) {
-        use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
-        let mut archive = RezArchive::create(path).unwrap();
-        let mut recs: Vec<StreamRecorderV3> = Vec::new();
-        for labels in recordings {
-            let metadata = labels
-                .get("source")
-                .map(|s| [("source".to_string(), s.clone())].into_iter().collect())
-                .unwrap_or_default();
-            let seed = ManifestSeed {
-                labels: labels.clone(),
-                metadata,
-                clock_anchor_wall_ns: 1_000_000_000,
-            };
-            recs.push(StreamRecorderV3::new(archive.add_recording(seed).unwrap()));
-        }
-        for rec in recs.iter_mut() {
-            for t in 0..3u64 {
-                let ts = 1_000_000_000 * (t + 1);
-                let w = Some(Window::new(ts - 50_000_000, ts));
-                rec.ingest(
-                    &snap(ts, vec![counter("cpu_cycles", "cpu_usage", t, w)]),
-                    ts,
-                    0,
-                )
-                .unwrap();
-            }
-        }
-        for rec in recs {
-            rec.finalize((4_000_000_000, 0)).unwrap();
-        }
-        archive.join().unwrap();
+        write_recordings(path, recordings, &[]);
     }
 
     /// A multi-recording archive with no selector is refused here, with a
@@ -2018,9 +1974,9 @@ pub(crate) mod tests {
     #[test]
     fn open_source_refuses_a_multi_recording_archive_with_a_message() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
+        let path = dir.path().join("ab.dendro");
         // `arm` makes it a comparison; one run is read combined.
-        multi_recording_rez_with_arms(
+        multi_recording_with_arms(
             &path,
             &["redis", "valkey"],
             &[Some("ab"), Some("ab")],
@@ -2060,8 +2016,8 @@ pub(crate) mod tests {
     #[test]
     fn open_source_accepts_an_archive_whose_second_arm_is_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("one-empty.rez");
-        multi_recording_rez(&path, &["redis", "valkey"], &[true, false]);
+        let path = dir.path().join("one-empty.dendro");
+        multi_recording(&path, &["redis", "valkey"], &[true, false]);
 
         let source = open_source(&path).expect("an empty second arm must not refuse");
         assert_eq!(
@@ -2079,8 +2035,7 @@ pub(crate) mod tests {
     #[test]
     fn open_source_reads_v3_sqlite_rez() {
         let dir = tempfile::tempdir().unwrap();
-        let rez_path = dir.path().join("rec.rez");
-        crate::recorder::rez::recorder_tests_support::empty_v3_rez(&rez_path);
+        let rez_path = ::rez::fixtures::committed_rez("v3.rez", dir.path());
 
         assert_eq!(
             crate::recorder::rez::detect_rez_format(&rez_path).unwrap(),
@@ -2098,8 +2053,8 @@ pub(crate) mod tests {
     #[test]
     fn a_selector_picks_the_named_recording() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
-        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let path = dir.path().join("ab.dendro");
+        multi_recording(&path, &["redis", "valkey"], &[true, true]);
 
         let sel = RecordingSelector::parse("--recording", ["source=valkey".to_string()]).unwrap();
         let src = open_source_selected(&path, &sel).expect("the selector names one recording");
@@ -2120,9 +2075,9 @@ pub(crate) mod tests {
     #[test]
     fn no_selector_on_a_multi_recording_archive_lists_them() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
+        let path = dir.path().join("ab.dendro");
         // `arm` makes it a comparison; one run is read combined.
-        multi_recording_rez_with_arms(
+        multi_recording_with_arms(
             &path,
             &["redis", "valkey"],
             &[Some("ab"), Some("ab")],
@@ -2197,8 +2152,8 @@ pub(crate) mod tests {
     #[test]
     fn a_selector_matching_nothing_lists_the_candidates() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
-        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let path = dir.path().join("ab.dendro");
+        multi_recording(&path, &["redis", "valkey"], &[true, true]);
 
         let sel = RecordingSelector::parse("--recording", ["source=nope".to_string()]).unwrap();
         let msg = match open_source_selected(&path, &sel) {
@@ -2215,8 +2170,8 @@ pub(crate) mod tests {
     #[test]
     fn an_ambiguous_selector_lists_the_ones_it_matched() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
-        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let path = dir.path().join("ab.dendro");
+        multi_recording(&path, &["redis", "valkey"], &[true, true]);
 
         // Both arms carry host=web-01, so selecting on it matches two. This
         // must NOT fall through to the first.
@@ -2234,9 +2189,7 @@ pub(crate) mod tests {
     fn a_selector_against_a_parquet_file_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let parquet_path = dir.path().join("rec.parquet");
-        let tables = build_recorder().finalize_tables();
-        let bytes = crate::recorder::rez::write_table_parquet(&tables[0]).unwrap();
-        std::fs::write(&parquet_path, bytes).unwrap();
+        bare_parquet(&parquet_path);
 
         let sel = RecordingSelector::parse("--recording", ["source=redis".to_string()]).unwrap();
         let msg = match open_source_selected(&parquet_path, &sel) {
@@ -2265,8 +2218,8 @@ pub(crate) mod tests {
     #[test]
     fn a_single_recording_archive_is_unaffected() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("one.rez");
-        build_recorder().finalize(&path).unwrap();
+        let path = dir.path().join("one.dendro");
+        multi_recording(&path, &["rezolus"], &[true]);
         assert!(open_source(&path).is_ok(), "no selector needed");
     }
 
@@ -2291,8 +2244,8 @@ pub(crate) mod tests {
     #[test]
     fn an_all_empty_archive_still_honors_the_selector() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("both-empty.rez");
-        multi_recording_rez(&path, &["redis", "valkey"], &[false, false]);
+        let path = dir.path().join("both-empty.dendro");
+        multi_recording(&path, &["redis", "valkey"], &[false, false]);
 
         let sel = RecordingSelector::parse("--recording", ["source=valkey".to_string()]).unwrap();
         let src = open_source_selected(&path, &sel).expect("the named arm still opens");
@@ -2310,8 +2263,8 @@ pub(crate) mod tests {
     #[test]
     fn an_all_empty_archive_opens_without_a_selector() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("both-empty.rez");
-        multi_recording_rez(&path, &["redis", "valkey"], &[false, false]);
+        let path = dir.path().join("both-empty.dendro");
+        multi_recording(&path, &["redis", "valkey"], &[false, false]);
 
         let src = open_source(&path).expect("an all-empty archive must still open");
         assert!(src.counter_names().is_empty());
@@ -2320,8 +2273,8 @@ pub(crate) mod tests {
     #[test]
     fn a_selector_matching_nothing_in_an_all_empty_archive_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("both-empty.rez");
-        multi_recording_rez(&path, &["redis", "valkey"], &[false, false]);
+        let path = dir.path().join("both-empty.dendro");
+        multi_recording(&path, &["redis", "valkey"], &[false, false]);
 
         let sel = RecordingSelector::parse("--recording", ["source=nope".to_string()]).unwrap();
         let msg = match open_source_selected(&path, &sel) {
@@ -2347,8 +2300,8 @@ pub(crate) mod tests {
     #[test]
     fn naming_an_empty_recording_says_it_produced_no_rows() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("one-empty.rez");
-        multi_recording_rez(&path, &["redis", "valkey"], &[true, false]);
+        let path = dir.path().join("one-empty.dendro");
+        multi_recording(&path, &["redis", "valkey"], &[true, false]);
 
         let sel = RecordingSelector::parse("--recording", ["source=valkey".to_string()]).unwrap();
         let msg = match open_source_selected(&path, &sel) {
@@ -2379,8 +2332,8 @@ pub(crate) mod tests {
     #[test]
     fn an_echoed_selector_is_in_the_repeatable_flag_form() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
-        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let path = dir.path().join("ab.dendro");
+        multi_recording(&path, &["redis", "valkey"], &[true, true]);
 
         let sel = RecordingSelector::parse(
             "--recording",
@@ -2410,8 +2363,8 @@ pub(crate) mod tests {
     #[test]
     fn an_ambiguity_listing_renders_only_the_matched_recordings() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("three.rez");
-        multi_recording_rez_with_arms(
+        let path = dir.path().join("three.dendro");
+        multi_recording_with_arms(
             &path,
             &["redis", "valkey", "memcached"],
             &[Some("a"), Some("a"), Some("b")],
@@ -2438,8 +2391,8 @@ pub(crate) mod tests {
     #[test]
     fn an_empty_arm_with_the_same_labels_does_not_shadow_the_one_with_data() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("dup.rez");
-        multi_recording_rez(&path, &["redis", "redis"], &[false, true]);
+        let path = dir.path().join("dup.dendro");
+        multi_recording(&path, &["redis", "redis"], &[false, true]);
 
         let src = open_source(&path).expect("only one arm has data, so no selector is needed");
         assert_eq!(
@@ -2452,8 +2405,8 @@ pub(crate) mod tests {
     #[test]
     fn describe_recording_lists_the_arms_instead_of_erroring() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
-        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let path = dir.path().join("ab.dendro");
+        multi_recording(&path, &["redis", "valkey"], &[true, true]);
 
         let out = describe_recording_output(
             &path,
@@ -2477,8 +2430,8 @@ pub(crate) mod tests {
     #[test]
     fn cli_listings_render_the_flag_selector_not_the_json_object() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
-        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let path = dir.path().join("ab.dendro");
+        multi_recording(&path, &["redis", "valkey"], &[true, true]);
 
         let out = describe_recording_output(
             &path,
@@ -2508,8 +2461,8 @@ pub(crate) mod tests {
     #[test]
     fn describe_recording_with_a_selector_describes_that_one() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
-        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let path = dir.path().join("ab.dendro");
+        multi_recording(&path, &["redis", "valkey"], &[true, true]);
 
         let sel = RecordingSelector::parse("--recording", ["source=redis".to_string()]).unwrap();
         let out =
@@ -2533,8 +2486,8 @@ pub(crate) mod tests {
     #[test]
     fn describe_recording_does_not_count_a_dead_arm_as_a_recording() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("triple.rez");
-        multi_recording_rez_with_arms(
+        let path = dir.path().join("triple.dendro");
+        multi_recording_with_arms(
             &path,
             &["redis", "valkey", "memcached"],
             &[Some("ab"), Some("ab"), Some("ab")],
@@ -2572,8 +2525,8 @@ pub(crate) mod tests {
     #[test]
     fn describe_recording_with_a_single_live_arm_describes_it_directly() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("one-live.rez");
-        multi_recording_rez(&path, &["redis", "valkey"], &[true, false]);
+        let path = dir.path().join("one-live.dendro");
+        multi_recording(&path, &["redis", "valkey"], &[true, false]);
 
         let out = describe_recording_output(
             &path,
@@ -2604,8 +2557,8 @@ pub(crate) mod tests {
     #[test]
     fn describe_recording_reports_an_archive_whose_arms_are_all_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("both-empty.rez");
-        multi_recording_rez(&path, &["redis", "valkey"], &[false, false]);
+        let path = dir.path().join("both-empty.dendro");
+        multi_recording(&path, &["redis", "valkey"], &[false, false]);
 
         let out = describe_recording_output(
             &path,
@@ -2643,8 +2596,8 @@ pub(crate) mod tests {
     #[test]
     fn a_listing_with_no_selectors_does_not_promise_one() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("dup.rez");
-        multi_recording_rez(&path, &["redis", "redis"], &[true, true]);
+        let path = dir.path().join("dup.dendro");
+        multi_recording(&path, &["redis", "redis"], &[true, true]);
 
         let out = describe_recording_output(
             &path,
@@ -2681,8 +2634,8 @@ pub(crate) mod tests {
     #[test]
     fn a_selected_rez_arm_is_known_rezolus_native_whatever_its_source_says() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
-        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let path = dir.path().join("ab.dendro");
+        multi_recording(&path, &["redis", "valkey"], &[true, true]);
 
         let sel = RecordingSelector::parse("--recording", ["source=redis".to_string()]).unwrap();
         let opened =
@@ -2705,9 +2658,7 @@ pub(crate) mod tests {
     fn a_parquet_file_still_decides_provenance_from_its_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let parquet_path = dir.path().join("rec.parquet");
-        let tables = build_recorder().finalize_tables();
-        let bytes = crate::recorder::rez::write_table_parquet(&tables[0]).unwrap();
-        std::fs::write(&parquet_path, bytes).unwrap();
+        bare_parquet(&parquet_path);
 
         let opened = open_selected_labeled(
             &parquet_path,

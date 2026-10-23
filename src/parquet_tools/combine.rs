@@ -3613,19 +3613,9 @@ mod tests {
         run(sub)
     }
 
-    /// A one-recording `.rez` of a Rezolus agent on `host`, its labels plus
-    /// `extra`.
+    /// A one-recording `.rez` labelled `labels`.
     fn agent_rez(path: &std::path::Path, labels: &[(&str, &str)]) {
-        rez::fixtures::one_run(
-            path,
-            &[rez::fixtures::Recording {
-                labels,
-                metadata: &[("source", "rezolus")],
-                cpus: 1,
-                busy_ns: 1,
-                counter: None,
-            }],
-        );
+        rez::fixtures::rez_with_identity(path, labels, &[("source", "rezolus")]);
     }
 
     /// The labels of an archive's recordings, in catalog order.
@@ -3814,25 +3804,15 @@ mod tests {
     fn combine_ab_relabels_one_archive_by_position() {
         let dir = tempfile::tempdir().unwrap();
         let (a, b) = (dir.path().join("a.rez"), dir.path().join("b.rez"));
-        rez::fixtures::one_run(
+        rez::fixtures::rez_with_identity(
             &a,
-            &[rez::fixtures::Recording {
-                labels: &[("source", "rezolus")],
-                metadata: &[("source", "rezolus"), ("version", "first")],
-                cpus: 1,
-                busy_ns: 1,
-                counter: None,
-            }],
+            &[("source", "rezolus")],
+            &[("source", "rezolus"), ("version", "first")],
         );
-        rez::fixtures::one_run(
+        rez::fixtures::rez_with_identity(
             &b,
-            &[rez::fixtures::Recording {
-                labels: &[("source", "rezolus")],
-                metadata: &[("source", "rezolus"), ("version", "second")],
-                cpus: 1,
-                busy_ns: 1,
-                counter: None,
-            }],
+            &[("source", "rezolus")],
+            &[("source", "rezolus"), ("version", "second")],
         );
         let old = dir.path().join("old.rez");
         run_combine_ab(&[a, b], &old, &[]).unwrap();
@@ -4311,10 +4291,8 @@ mod tests {
     /// refused before anything is created.
     #[test]
     fn combine_into_dendro_converts_a_rez_and_refuses_the_rest() {
-        use crate::recorder::rez::recorder_tests_support::populated_v3_rez;
         let dir = tempfile::tempdir().unwrap();
-        let rez = dir.path().join("a.rez");
-        populated_v3_rez(&rez, "baseline", &["cpu_usage"], 6);
+        let rez = rez::fixtures::committed_rez("v3.rez", dir.path());
         let d = dir.path().join("b.dendro");
         crate::dendro_copy::fixtures::recorded(&d, 4, true);
 

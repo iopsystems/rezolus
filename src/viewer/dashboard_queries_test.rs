@@ -30,8 +30,8 @@ use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, Snapshot, Snap
 use metriken_query::MetricsSource;
 
 use crate::hindsight::buffer::HindsightBuffer;
-use crate::recorder::rez_v3_writer::ManifestSeed;
-use crate::recorder::seal_policy::SealPolicy;
+use crate::hindsight::buffer::Seed;
+use dendro::seal::SealPolicy;
 
 const ANCHOR: u64 = 1_700_000_000_000_000_000;
 const SECOND: u64 = 1_000_000_000;
@@ -540,7 +540,7 @@ fn learn_gates(fixture: &mut Fixture, probe: &Probe) {
 fn archive(fixture: &Fixture) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dashboards.dendro");
-    let seed = ManifestSeed {
+    let seed = Seed {
         // No recording labels: a template's selectors name their own
         // `source`, which the series carry.
         labels: BTreeMap::new(),
@@ -553,6 +553,7 @@ fn archive(fixture: &Fixture) -> (tempfile::TempDir, std::path::PathBuf) {
         max_bytes: usize::MAX,
         max_rows: 10,
         max_age: Duration::from_secs(3600),
+        ..SealPolicy::default()
     };
     let mut buf =
         HindsightBuffer::create_dendro(&path, seed, Duration::from_secs(3600), policy).unwrap();

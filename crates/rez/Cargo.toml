@@ -68,9 +68,9 @@ test-support = ["write", "metriken-storage/test-support"]
 # that is otherwise fine, and it fails for a reason that looks like a broken
 # crate rather than a missing feature.
 [[example]]
-name = "write_rez_fixture"
+name = "write_fixture"
 required-features = ["test-support"]
 
 [dev-dependencies]
-metriken-storage = { workspace = true, features = ["rez", "test-support"] }
+metriken-storage = { workspace = true, features = ["rez"] }
 tempfile = "3"

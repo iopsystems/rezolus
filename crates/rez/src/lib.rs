@@ -3,12 +3,12 @@
 //! implements `metriken_query::MetricsSource`: [`reader::RezReader`] and
 //! [`live::LiveReader`].
 
-#[cfg(feature = "test-support")]
+#[cfg(any(all(test, feature = "write"), feature = "test-support"))]
 pub mod fixtures;
 pub mod live;
 pub mod reader;
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(feature = "test-support")]
 pub use metriken_storage::rez::rez_stream;
 pub use metriken_storage::rez::{
     catalog, parquet_ingest, rez, rez_sqlite, rez_v3_rewrite, seal_policy, wal, wire,

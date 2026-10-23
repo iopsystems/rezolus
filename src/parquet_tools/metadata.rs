@@ -897,60 +897,29 @@ mod rez_tests {
 #[cfg(test)]
 mod rez_v3_tests {
     use super::*;
-    use crate::recorder::rez_sqlite::{RecordingMeta, RezDb, SegmentMeta, WalRow};
+    use ::rez::fixtures::edited_rez;
 
     const ANCHOR: u64 = 1_700_000_000_000_000_000;
     const SECOND: u64 = 1_000_000_000;
-    const NOT_PARQUET: &[u8] = b"if this were ever decoded, these tests would fail";
 
-    fn meta(labels: &[(&str, &str)]) -> RecordingMeta {
-        RecordingMeta {
-            labels: labels
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-            metadata: [("sampling_interval_ms".to_string(), "1000".to_string())]
-                .into_iter()
-                .collect(),
-            clock_anchor_wall_ns: ANCHOR,
-        }
-    }
+    /// Every segment's bytes replaced by bytes that are not parquet, so a
+    /// describer that decoded a segment instead of reading the catalog fails.
+    const NOT_PARQUET: &str =
+        "UPDATE segments SET bytes = CAST('if this were ever decoded, these tests would fail' AS BLOB);";
 
-    /// A segment covering `rows` ticks starting at tick `from`, one per second.
-    fn seg(from: u64, rows: u64) -> SegmentMeta {
-        SegmentMeta {
-            rows,
-            first_ts: ANCHOR + from * SECOND,
-            last_ts: ANCHOR + (from + rows - 1) * SECOND,
-        }
-    }
-
-    fn wal_row(sampler: &str, tick: u64) -> WalRow {
-        WalRow {
-            sampler: sampler.to_string(),
-            ts: ANCHOR + tick * SECOND,
-            wall_offset: 0,
-            row: b"opaque".to_vec(),
-        }
-    }
+    /// The recording's labels set to `source=rezolus,arm=baseline`.
+    const ARMED: &str =
+        r#"UPDATE recordings SET labels = '{"arm":"baseline","source":"rezolus"}';"#;
 
     #[test]
     fn describe_v3_names_the_container_and_summarizes_each_table() {
         // Dispatch is by content: this file has a `.rez` name and a SQLite
         // body, so a describer that assumed the tar container fails outright
-        // rather than mis-rendering.
+        // rather than mis-rendering. `v3.rez`: finalized, tables `a` and `b`
+        // of 12 rows in 3 segments each, 1 s apart.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.rez");
-        let mut db = RezDb::create(&path).unwrap();
-        let rid = db
-            .insert_recording(&meta(&[("source", "rezolus"), ("arm", "baseline")]))
-            .unwrap();
-        db.insert_segment(rid, "cpu_usage", 0, &seg(0, 3), NOT_PARQUET)
-            .unwrap();
-        db.insert_segment(rid, "cpu_usage", 1, &seg(3, 2), NOT_PARQUET)
-            .unwrap();
-        db.transaction(|tx| tx.mark_complete(rid)).unwrap();
-        drop(db);
+        edited_rez("v3.rez", &path, &format!("{NOT_PARQUET}{ARMED}"));
 
         let s = describe_rez_string_at(&path).unwrap();
         assert!(s.contains(".rez archive v3"), "the container is named: {s}");
@@ -958,9 +927,11 @@ mod rez_v3_tests {
         // v3 has no `dir`; the display name is the slug that produced it.
         assert!(s.contains("recording rezolus"), "{s}");
         assert!(s.contains("arm=baseline"), "{s}");
-        assert!(s.contains("cpu_usage"), "{s}");
-        assert!(s.contains("5 rows"), "rows are summed across segments: {s}");
-        assert!(s.contains("2 segments"), "{s}");
+        assert!(
+            s.contains("12 rows"),
+            "rows are summed across segments: {s}"
+        );
+        assert!(s.contains("3 segments"), "{s}");
         assert!(s.contains("~1.000s"), "cadence from the catalog span: {s}");
         assert!(
             !s.contains("not cleanly finalized"),
@@ -980,27 +951,22 @@ mod rez_v3_tests {
         // depth is what makes that claim checkable — how many rows are
         // recoverable but not yet in a segment, which v2 could not report at
         // all because it had nowhere to keep them.
+        //
+        // `v3-live.rez` was copied while its writer held it: tables `a/g` and
+        // `b/g` with 10 rows sealed in 2 segments, ticks 10 and 11 in the WAL.
+        // Tick 9 is added to `a/g`'s WAL as the straddle a deferred prune
+        // leaves behind: it is NOT recoverable data, being inside a segment.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.rez");
-        let mut db = RezDb::create(&path).unwrap();
-        let rid = db
-            .insert_recording(&meta(&[("source", "rezolus")]))
-            .unwrap();
-        db.insert_segment(rid, "cpu_usage", 0, &seg(0, 3), NOT_PARQUET)
-            .unwrap();
-        // Ticks 3 and 4 are committed to the WAL but never sealed; tick 2 is
-        // the straddle the deferred prune leaves behind, and is NOT recoverable
-        // data — it is already inside the segment above.
-        db.insert_wal_rows(
-            rid,
-            &[
-                wal_row("cpu_usage", 2),
-                wal_row("cpu_usage", 3),
-                wal_row("cpu_usage", 4),
-            ],
-        )
-        .unwrap();
-        drop(db); // killed: `complete` stays 0
+        edited_rez(
+            "v3-live.rez",
+            &path,
+            &format!(
+                "{NOT_PARQUET}INSERT INTO wal (recording_id, sampler, ts, wall_offset, row) \
+                 VALUES (1, 'a/g', {}, 0, CAST('opaque' AS BLOB));",
+                ANCHOR + 9 * SECOND
+            ),
+        );
 
         let s = describe_rez_string_at(&path).unwrap();
         assert!(s.contains("not cleanly finalized"), "{s}");
@@ -1017,8 +983,12 @@ mod rez_v3_tests {
             "only the rows past the sealed watermark are recoverable: {s}"
         );
         assert!(
-            s.contains("5 rows"),
-            "3 sealed + 2 live is what a reader will see: {s}"
+            !s.contains("3 unsealed in WAL"),
+            "the straddling row is not counted: {s}"
+        );
+        assert!(
+            s.contains("12 rows"),
+            "10 sealed + 2 live is what a reader will see: {s}"
         );
     }
 
@@ -1027,33 +997,23 @@ mod rez_v3_tests {
         // The 16-of-26 case. A quiet table still inside its first seal period
         // has no `segments` row at all, so a listing built from `samplers()`
         // would not mention it — and the whole point of v3 is that its rows are
-        // there to be read.
+        // there to be read. `b/g`'s segments are removed from `v3-live.rez`,
+        // leaving its two WAL rows.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.rez");
-        let mut db = RezDb::create(&path).unwrap();
-        let rid = db
-            .insert_recording(&meta(&[("source", "rezolus")]))
-            .unwrap();
-        db.insert_segment(rid, "cpu_usage", 0, &seg(0, 3), NOT_PARQUET)
-            .unwrap();
-        db.insert_wal_rows(
-            rid,
-            &[
-                wal_row("drivehealth", 0),
-                wal_row("drivehealth", 1),
-                wal_row("drivehealth", 2),
-            ],
-        )
-        .unwrap();
-        drop(db);
+        edited_rez(
+            "v3-live.rez",
+            &path,
+            &format!("{NOT_PARQUET}DELETE FROM segments WHERE sampler = 'b/g';"),
+        );
 
         let s = describe_rez_string_at(&path).unwrap();
         assert!(
-            s.contains("drivehealth"),
+            s.contains("b/g"),
             "a never-sealed sampler must still be listed: {s}"
         );
         assert!(
-            s.contains("(0 segments, 3 unsealed in WAL)"),
+            s.contains("(0 segments, 2 unsealed in WAL)"),
             "and every one of its rows is recoverable from the WAL: {s}"
         );
         assert!(
@@ -1070,25 +1030,25 @@ mod rez_v3_tests {
         // `clock_offsets` ROW — and why a killed recording has drift to report
         // at all. The segment bytes here are not parquet, so an implementation
         // that reached into them to answer this fails.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("out.rez");
-        let mut db = RezDb::create(&path).unwrap();
-        let rid = db
-            .insert_recording(&meta(&[("source", "rezolus")]))
-            .unwrap();
-        db.insert_segment(rid, "cpu_usage", 0, &seg(0, 3), NOT_PARQUET)
-            .unwrap();
+        //
         // Deliberately out of order: the series is a per-batch maximum, so an
         // age-sealed slow sampler can append a timestamp older than one a
         // fast-sampler batch already contributed. The reported offset is the
         // newest observation, not the last row.
-        db.transaction(|tx| {
-            tx.insert_clock_offset(rid, ANCHOR + 3 * SECOND, 1_500_000)?;
-            tx.insert_clock_offset(rid, ANCHOR + 5 * SECOND, -2_250_000)?;
-            tx.insert_clock_offset(rid, ANCHOR + 4 * SECOND, 9)
-        })
-        .unwrap();
-        drop(db);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.rez");
+        edited_rez(
+            "v3.rez",
+            &path,
+            &format!(
+                "{NOT_PARQUET}DELETE FROM clock_offsets; \
+                 INSERT INTO clock_offsets (recording_id, ts, offset_ns) VALUES \
+                 (1, {}, 1500000), (1, {}, -2250000), (1, {}, 9);",
+                ANCHOR + 3 * SECOND,
+                ANCHOR + 5 * SECOND,
+                ANCHOR + 4 * SECOND
+            ),
+        );
 
         let s = describe_rez_string_at(&path).unwrap();
         assert!(s.contains("clock anchor 2023-11-14T22:13:20"), "{s}");
@@ -1100,14 +1060,7 @@ mod rez_v3_tests {
     fn describe_v3_json_carries_the_same_facts_as_the_text_form() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.rez");
-        let mut db = RezDb::create(&path).unwrap();
-        let rid = db
-            .insert_recording(&meta(&[("source", "rezolus"), ("arm", "baseline")]))
-            .unwrap();
-        db.insert_segment(rid, "cpu_usage", 0, &seg(0, 3), NOT_PARQUET)
-            .unwrap();
-        db.insert_wal_rows(rid, &[wal_row("cpu_usage", 3)]).unwrap();
-        drop(db);
+        edited_rez("v3-live.rez", &path, &format!("{NOT_PARQUET}{ARMED}"));
 
         let v = v3_json(&read_v3_summary(&path).unwrap(), "sqlite");
         assert_eq!(v["version"], 3);
@@ -1121,10 +1074,10 @@ mod rez_v3_tests {
         );
         assert_eq!(v["recordings"][0]["complete"], false);
         let table = &v["recordings"][0]["tables"][0];
-        assert_eq!(table["sampler"], "cpu_usage");
-        assert_eq!(table["rows"], 4);
-        assert_eq!(table["segments"], 1);
-        assert_eq!(table["live_wal_rows"], 1);
+        assert_eq!(table["sampler"], "a/g");
+        assert_eq!(table["rows"], 12);
+        assert_eq!(table["segments"], 2);
+        assert_eq!(table["live_wal_rows"], 2);
         assert_eq!(table["cadence_ns"], SECOND);
     }
 

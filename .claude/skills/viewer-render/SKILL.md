@@ -124,7 +124,7 @@ there gets executed as a test and fails the suite.
 `rez`'s fixture writer caps at four recordings:
 
 ```bash
-cargo run -p rez --features test-support --example write_rez_fixture -- /tmp/four.rez 4
+cargo run -p rez --features test-support --example write_fixture -- /tmp/four.dendro 4
 ```
 
 For more arms — worth doing, since layout problems only appear at scale —

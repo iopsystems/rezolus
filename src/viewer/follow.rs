@@ -802,26 +802,13 @@ mod tests {
     #[test]
     fn a_rez_backs_off_while_idle_and_resets_on_growth() {
         // A `.rez` still being written, as a 5.x recorder or hindsight
-        // leaves one; 6.x writes none, so the fixture uses the v3 writer
-        // directly.
-        use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
+        // leaves one. 6.x writes none, so the fixture is the committed
+        // `v3-live.rez` (12 ticks to 11 s, the newest in its WAL), grown by
+        // a tick at a time the way a 5.x recorder appended one.
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("buffer.rez");
-        let seed = ManifestSeed {
-            labels: [("source".to_string(), "rezolus".to_string())]
-                .into_iter()
-                .collect(),
-            metadata: Default::default(),
-            clock_anchor_wall_ns: ANCHOR,
-        };
-        let mut archive = RezArchive::create(&path).unwrap();
-        let mut rec = StreamRecorderV3::new(archive.add_recording(seed).unwrap());
-        let mut record = |i: u64| {
-            rec.ingest(&tick(i), ANCHOR + i * 60 * SECOND, 0).unwrap();
-            rec.maybe_seal().unwrap();
-            rec.sync().unwrap();
-        };
-        record(0);
+        let path = ::rez::fixtures::committed_rez("v3-live.rez", dir.path());
+        const LAST: u64 = 1_700_000_011_000_000_000;
+        let record = |i: u64| ::rez::fixtures::append_rez_wal_tick(&path, LAST + i * 60 * SECOND);
         let state = view(&path);
         let guard = state.follow.lock();
         let follow = guard.as_ref().unwrap();
@@ -837,7 +824,7 @@ mod tests {
         clock += follow.wait();
         assert!(follow.refresh_at(clock));
         assert_eq!(follow.wait(), FOLLOW_INTERVAL);
-        assert_eq!(end_ms(&state), (ANCHOR + 60 * SECOND) / 1_000_000);
+        assert_eq!(end_ms(&state), (LAST + 60 * SECOND) / 1_000_000);
         clock += follow.wait();
         assert!(follow.refresh_at(clock));
         assert_eq!(follow.wait(), Duration::from_secs(4));
@@ -1188,14 +1175,14 @@ mod tests {
         use crate::hindsight::buffer::HindsightBuffer;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hindsight.dendro");
-        let seed = crate::recorder::rez_v3_writer::ManifestSeed {
+        let seed = crate::hindsight::buffer::Seed {
             labels: [("source".to_string(), "rezolus".to_string())]
                 .into_iter()
                 .collect(),
             metadata: Default::default(),
             clock_anchor_wall_ns: ANCHOR,
         };
-        let policy = crate::recorder::seal_policy::SealPolicy {
+        let policy = dendro::seal::SealPolicy {
             max_rows: 2,
             ..Default::default()
         };

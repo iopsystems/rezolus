@@ -30,10 +30,10 @@ PARQUET_AB_B=site/viewer/data/AB_base_pin.parquet
 LOGDIR=$(mktemp -d -t rezolus-smoke-XXXXXX)
 echo "logs: $LOGDIR"
 
-# A 3-recording `.rez` for the N-way (N > 2) section: redis / valkey / envoy,
+# A 3-recording archive for the N-way (N > 2) section: redis / valkey / envoy,
 # so `/api/v1/captures` should enumerate three named captures, not just the
 # two A/B slots. Built by the rez crate's fixture example.
-NWAY_REZ="$LOGDIR/three.rez"
+NWAY_REZ="$LOGDIR/three.dendro"
 
 # Build before launching anything so a compile failure surfaces early.
 # Examples include `gen_ab_fixtures`, the AB smoke section's fixture
@@ -42,7 +42,7 @@ cargo build --bin rezolus --example gen_ab_fixtures 2>&1 | tail -3
 
 # Generate the N-way fixture (3 recordings). The example lives in the rez
 # crate behind `test-support` so it never ships in the binary.
-cargo run -q -p rez --features test-support --example write_rez_fixture -- "$NWAY_REZ" 3 2>&1 | tail -1
+cargo run -q -p rez --features test-support --example write_fixture -- "$NWAY_REZ" 3 2>&1 | tail -1
 
 # Don't pop browser tabs during the smoke test.
 export REZOLUS_NO_OPEN=1

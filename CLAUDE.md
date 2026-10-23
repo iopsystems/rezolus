@@ -340,11 +340,18 @@ The binary re-exports the modules under the paths call sites already use
 (`crate::recorder::rez`, `crate::rez_reader`, …), so `.rez` code reads the same
 from inside `rezolus`.
 
-Fixture builders (`rez::rez::recorder_tests_support`, and the tar writer
-`rez_stream`) sit behind `test-support` (storage's, which `rez`'s turns on)
+Test fixtures are `rez::fixtures`, behind `rez`'s `test-support` feature
 rather than `#[cfg(test)]`: a `#[cfg(test)]` module in another crate is
-invisible to the binary crate's tests, which build most `.rez` fixtures in this
-repo. The binary enables that feature as a dev-dependency.
+invisible to the binary crate's tests. The binary and `crates/viewer` enable
+that feature as a dev-dependency. A test writes a `.dendro` through
+metriken-storage's `ArchiveWriter` (`write_dendro`, `one_run`,
+`multi_recording`); a test about reading a `.rez` reads one of the archives the
+last `.rez` writer produced, committed in `crates/rez/tests/fixtures/rez/`
+(`committed_rez`; `edited_rez`, `rez_with_identity`, `add_rez_metadata` and
+`append_rez_wal_tick` derive the catalog state a test needs from one with
+SQL, and `tar_rez` a multi-recording tar from `v2.rez`). Tests of the
+commands that still write `.rez` or parquet build their inputs with
+storage's `test-support` writers until those commands write `.dendro` only.
 
 **The `write` feature (default on) is what separates the two halves.** With it
 off, `crates/rez` is a *reader*: container, catalog, WAL-tail materialization,

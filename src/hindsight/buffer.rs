@@ -27,9 +27,16 @@ use std::time::Duration;
 
 use super::state::TimeRange;
 #[cfg(test)]
-use crate::recorder::rez_v3_writer::ManifestSeed;
+use dendro::seal::SealPolicy;
+
+/// A [`HindsightBuffer`]'s one source: its labels, its metadata, and the
+/// wall-clock time its timestamps anchor to.
 #[cfg(test)]
-use crate::recorder::seal_policy::SealPolicy;
+pub struct Seed {
+    pub labels: std::collections::BTreeMap<String, String>,
+    pub metadata: std::collections::BTreeMap<String, String>,
+    pub clock_anchor_wall_ns: u64,
+}
 
 /// A rolling buffer written directly, for tests that fill one without a
 /// stream. Hindsight itself records through `metriken-recorder` with
@@ -82,17 +89,12 @@ impl HindsightBuffer {
     /// the default 1 s interval and per ~90 seconds at 10 Hz.
     pub fn create_dendro(
         path: &Path,
-        seed: ManifestSeed,
+        seed: Seed,
         lookback: Duration,
         policy: SealPolicy,
     ) -> Result<Self, String> {
         let config = metriken_storage::WriterConfig {
-            seal: dendro::seal::SealPolicy {
-                max_bytes: policy.max_bytes,
-                max_rows: policy.max_rows,
-                max_age: policy.max_age,
-                align: None,
-            },
+            seal: policy,
             ..metriken_storage::WriterConfig::default()
         };
         let mut writer = metriken_storage::ArchiveWriter::create(path, config)
@@ -405,7 +407,7 @@ pub fn dump(buffer: &Path, dest: &Path, range: &TimeRange) -> Result<Summary, St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recorder::rez::recorder_tests_support::{counter, snap};
+    use ::rez::fixtures::{counter, snap_counters as snap};
     use metriken_exposition::Snapshot;
     use metriken_storage::Catalog;
     use std::collections::BTreeMap;
@@ -415,8 +417,8 @@ mod tests {
     const ANCHOR: u64 = 1_700_000_000_000_000_000;
     const SECOND: u64 = 1_000_000_000;
 
-    fn seed() -> ManifestSeed {
-        ManifestSeed {
+    fn seed() -> Seed {
+        Seed {
             labels: [("source".to_string(), "rezolus".to_string())]
                 .into_iter()
                 .collect(),
@@ -434,6 +436,7 @@ mod tests {
             max_bytes: usize::MAX,
             max_rows: rows,
             max_age: Duration::from_secs(3600),
+            ..SealPolicy::default()
         }
     }
 

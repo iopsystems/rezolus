@@ -973,8 +973,7 @@ mod tests {
     #[test]
     fn dispatch_format_recognizes_v3_sqlite_rez() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("rec.rez");
-        crate::recorder::rez::recorder_tests_support::empty_v3_rez(&path);
+        let path = ::rez::fixtures::committed_rez("v3.rez", dir.path());
         assert_eq!(dispatch_format(&path), RezFormat::V3Sqlite);
     }
 
@@ -983,18 +982,7 @@ mod tests {
     #[test]
     fn dispatch_format_recognizes_v2_tar_rez() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("rec.rez");
-        crate::recorder::rez::RezRecorder::new(
-            [("source".to_string(), "rezolus".to_string())]
-                .into_iter()
-                .collect(),
-            [("source".to_string(), "rezolus".to_string())]
-                .into_iter()
-                .collect(),
-            "rezolus".to_string(),
-        )
-        .finalize(&path)
-        .unwrap();
+        let path = ::rez::fixtures::committed_rez("v2.rez", dir.path());
         assert_eq!(dispatch_format(&path), RezFormat::V2Tar);
     }
 

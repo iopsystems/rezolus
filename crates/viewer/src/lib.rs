@@ -1728,34 +1728,31 @@ mod tests {
         assert_eq!(value["groups"], serde_json::json!([]));
     }
 
-    /// Build a multi-recording `.rez` and hand back its bytes, the way a
-    /// browser receives one: a blob, with no file behind it.
-    fn rez_bytes(recordings: &[(&str, &str)]) -> Vec<u8> {
+    /// Build a multi-recording dendro archive and hand back its bytes, the
+    /// way a browser receives one: a blob, with no file behind it.
+    fn archive_bytes(recordings: &[(&str, &str)]) -> Vec<u8> {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("fleet.rez");
-        rez::rez::recorder_tests_support::multi_recording_v3_rez(&path, recordings);
+        let path = dir.path().join("fleet.dendro");
+        rez::fixtures::multi_recording(&path, recordings);
         std::fs::read(&path).unwrap()
     }
 
+    /// The committed `.rez` archive `name`, as bytes
+    /// (`rez::fixtures::committed_rez`).
+    fn committed_rez_bytes(name: &str) -> Vec<u8> {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::read(rez::fixtures::committed_rez(name, dir.path())).unwrap()
+    }
+
     /// A one-recording `.dendro`, as bytes, whose source is `source` and whose
-    /// source metadata also holds `extra`. Built as a `.rez` and converted,
-    /// which carries the recording's metadata into the dendro source's.
+    /// source metadata also holds `extra`.
     fn dendro_bytes(source: &str, extra: &[(&str, &str)]) -> Vec<u8> {
         let dir = tempfile::tempdir().unwrap();
-        let rez_path = dir.path().join("rec.rez");
-        rez::rez::recorder_tests_support::multi_recording_v3_rez(&rez_path, &[(source, "web-01")]);
-        {
-            let db = rez::rez_sqlite::RezDb::open(&rez_path).unwrap();
-            let recs = db.read_recordings().unwrap();
-            let mut md = recs[0].meta.metadata.clone();
-            for (k, v) in extra {
-                md.insert(k.to_string(), v.to_string());
-            }
-            db.update_recording_metadata(recs[0].id, &md).unwrap();
-        }
-        let dendro_path = dir.path().join("rec.dendro");
-        rez::to_dendro::convert_v3_to_dendro(&rez_path, &dendro_path).unwrap();
-        std::fs::read(&dendro_path).unwrap()
+        let path = dir.path().join("rec.dendro");
+        let mut sources = rez::fixtures::multi_recording_sources(&[(source, "web-01")]);
+        sources[0].metadata.extend(rez::fixtures::map(extra));
+        rez::fixtures::write_dendro(&path, &sources, None, rez::fixtures::Finish::Finalized);
+        std::fs::read(&path).unwrap()
     }
 
     fn titled_template(service: &str, title: &str) -> serde_json::Value {
@@ -1910,26 +1907,19 @@ mod tests {
     #[test]
     fn a_rez_with_manifest_selection_and_events_surfaces_them() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("fleet.rez");
-        rez::rez::recorder_tests_support::multi_recording_v3_rez(
-            &path,
-            &[("redis", "web-01"), ("valkey", "web-01")],
-        );
+        let path = rez::fixtures::committed_rez("v3-multi.rez", dir.path());
         // Embed into the anchor recording's manifest (id order is stable).
-        {
-            let db = rez::rez_sqlite::RezDb::open(&path).unwrap();
-            let recs = db.read_recordings().unwrap();
-            let mut md = recs[0].meta.metadata.clone();
-            md.insert(
-                "selection".to_string(),
-                r#"{"entries":[{"query":"cpu_usage"}]}"#.to_string(),
-            );
-            md.insert(
-                "events".to_string(),
-                r#"{"events":[{"timestamp":1000000000,"description":"rollout"}]}"#.to_string(),
-            );
-            db.update_recording_metadata(recs[0].id, &md).unwrap();
-        }
+        rez::fixtures::add_rez_metadata(
+            &path,
+            0,
+            &[
+                ("selection", r#"{"entries":[{"query":"cpu_usage"}]}"#),
+                (
+                    "events",
+                    r#"{"events":[{"timestamp":1000000000,"description":"rollout"}]}"#,
+                ),
+            ],
+        );
         let bytes = std::fs::read(&path).unwrap();
 
         let mut reg = WasmCaptureRegistry::new();
@@ -1947,19 +1937,19 @@ mod tests {
         );
     }
 
-    /// A `.rez` of two recordings attached as a comparison fills both slots
-    /// — the same mapping `rezolus view --baseline .. --experiment ..` makes
-    /// for the same file. Loading one arm into one slot would show an A/B
-    /// archive as a single capture with nothing on screen saying half of it
-    /// is missing.
+    /// An archive of two recordings attached as a comparison fills both
+    /// slots — the same mapping `rezolus view --baseline .. --experiment ..`
+    /// makes for the same file. Loading one arm into one slot would show an
+    /// A/B archive as a single capture with nothing on screen saying half of
+    /// it is missing.
     #[test]
-    fn a_two_recording_rez_fills_both_capture_slots() {
+    fn a_two_recording_archive_fills_both_capture_slots() {
         let mut reg = WasmCaptureRegistry::new();
         reg.set_compare_requested(true);
         reg.attach(
             "baseline",
-            &rez_bytes(&[("redis", "web-01"), ("valkey", "web-01")]),
-            "fleet.rez",
+            &archive_bytes(&[("redis", "web-01"), ("valkey", "web-01")]),
+            "fleet.dendro",
         )
         .unwrap();
 
@@ -1990,6 +1980,30 @@ mod tests {
         assert_eq!(reg.notices(), "[]");
     }
 
+    /// A two-recording `.rez` fills both slots too, each recording named by
+    /// the label that tells them apart.
+    #[test]
+    fn a_two_recording_rez_fills_both_capture_slots() {
+        let mut reg = WasmCaptureRegistry::new();
+        reg.set_compare_requested(true);
+        reg.attach(
+            "baseline",
+            &committed_rez_bytes("v3-multi.rez"),
+            "fleet.rez",
+        )
+        .unwrap();
+        assert!(reg.has("baseline") && reg.has("experiment"));
+        assert_eq!(
+            reg.slot("baseline").unwrap().alias.as_deref(),
+            Some("web-01")
+        );
+        assert_eq!(
+            reg.slot("experiment").unwrap().alias.as_deref(),
+            Some("web-02")
+        );
+        assert_eq!(reg.notices(), "[]");
+    }
+
     /// An archive of two hosts of one run, from either entry point, is one
     /// combined capture: the built-in sections once per host, the second
     /// host's routes keyed `@h2`, each section's queries restricted to its
@@ -1998,7 +2012,7 @@ mod tests {
     fn a_one_run_archive_is_one_combined_capture() {
         use rez::fixtures::{Recording, one_run};
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("run.rez");
+        let path = dir.path().join("run.dendro");
         let host = |labels, cpus| Recording {
             labels,
             metadata: &[("source", "rezolus")],
@@ -2015,9 +2029,9 @@ mod tests {
         );
         let bytes = std::fs::read(&path).unwrap();
 
-        let single = Viewer::new(&bytes, "run.rez").expect("one run opens as one capture");
+        let single = Viewer::new(&bytes, "run.dendro").expect("one run opens as one capture");
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &bytes, "run.rez").unwrap();
+        reg.attach("baseline", &bytes, "run.dendro").unwrap();
         assert!(!reg.has("experiment"));
         // The archive answers each recording's catalog questions.
         assert!(single.catalog.is_some());
@@ -2044,7 +2058,7 @@ mod tests {
 
         let mut compare = WasmCaptureRegistry::new();
         compare.set_compare_requested(true);
-        compare.attach("baseline", &bytes, "run.rez").unwrap();
+        compare.attach("baseline", &bytes, "run.dendro").unwrap();
         assert!(compare.has("experiment"));
     }
 
@@ -2079,12 +2093,12 @@ mod tests {
         reg.set_compare_requested(true);
         reg.attach(
             "baseline",
-            &rez_bytes(&[
+            &archive_bytes(&[
                 ("redis", "web-01"),
                 ("valkey", "web-01"),
                 ("envoy", "web-01"),
             ]),
-            "fleet.rez",
+            "fleet.dendro",
         )
         .unwrap();
         let captures: Vec<serde_json::Value> = serde_json::from_str(&reg.captures()).unwrap();
@@ -2124,41 +2138,13 @@ mod tests {
     /// early.
     #[test]
     fn an_unfinalized_archive_says_it_is_unfinalized() {
-        use rez::rez::recorder_tests_support::{counter, snap};
-        use rez::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("live.rez");
-        let seed = ManifestSeed {
-            labels: [("source".to_string(), "rezolus".to_string())]
-                .into_iter()
-                .collect(),
-            metadata: Default::default(),
-            clock_anchor_wall_ns: 1_000_000_000,
-        };
-        let (archive, writer) = RezArchive::single(&path, seed).unwrap();
-        let mut rec = StreamRecorderV3::new(writer);
-        rec.ingest(
-            &snap(
-                1_000_000_000,
-                vec![counter("cpu_cycles", "cpu_usage", 1, None)],
-            ),
-            1_000_000_000,
-            0,
-        )
-        .unwrap();
-        rec.sync().unwrap();
-        // A consistent single file, the way `hindsight` takes one — the copy a
-        // browser can actually be handed. Still not finalized.
-        let snapshot = dir.path().join("snapshot.rez");
-        rez::rez_sqlite::RezDb::open(&path)
-            .unwrap()
-            .vacuum_into(&snapshot)
-            .unwrap();
+        // `v3-live.rez`: a consistent single file taken while its writer
+        // held it (`VACUUM INTO`, the way `hindsight` took one), the copy a
+        // browser can actually be handed. Not finalized.
+        let snapshot_bytes = committed_rez_bytes("v3-live.rez");
 
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &std::fs::read(&snapshot).unwrap(), "live.rez")
-            .unwrap();
+        reg.attach("baseline", &snapshot_bytes, "live.rez").unwrap();
         assert!(reg.has("baseline"));
 
         let notices: Vec<String> = serde_json::from_str(&reg.notices()).unwrap();
@@ -2173,9 +2159,6 @@ mod tests {
             "the notice must name what a single file cannot carry: {}",
             notices[0]
         );
-
-        drop(rec);
-        drop(archive);
     }
 
     /// And a finalized one says nothing — a notice on every ordinary recording
@@ -2183,8 +2166,12 @@ mod tests {
     #[test]
     fn a_finalized_archive_raises_no_notice() {
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &rez_bytes(&[("redis", "web-01")]), "one.rez")
-            .unwrap();
+        reg.attach(
+            "baseline",
+            &archive_bytes(&[("redis", "web-01")]),
+            "one.dendro",
+        )
+        .unwrap();
         assert_eq!(reg.notices(), "[]");
     }
 
@@ -2262,7 +2249,7 @@ mod tests {
     #[test]
     fn a_single_recording_rez_is_one_capture() {
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &rez_bytes(&[("redis", "web-01")]), "one.rez")
+        reg.attach("baseline", &committed_rez_bytes("v3.rez"), "one.rez")
             .unwrap();
         assert!(reg.has("baseline"));
         assert!(!reg.has("experiment"));
@@ -2285,28 +2272,25 @@ mod tests {
     /// an empty download.
     #[test]
     fn a_capture_from_an_archive_reports_that_it_cannot_be_saved() {
-        let rez = Viewer::new(&rez_bytes(&[("redis", "web-01")]), "one.rez").unwrap();
-        assert!(!rez.can_save());
+        let archive = Viewer::new(&archive_bytes(&[("redis", "web-01")]), "one.dendro").unwrap();
+        assert!(!archive.can_save());
         let parquet = Viewer::new(&parquet_bytes(), "capture.parquet").unwrap();
         assert!(parquet.can_save());
     }
 
-    /// One parquet table's bytes — a real parquet, produced by the same
-    /// writer that fills a `.rez` segment.
+    /// One parquet table's bytes — a real parquet: the one sealed segment
+    /// of a dendro archive's only stream.
     fn parquet_bytes() -> Vec<u8> {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("one.rez");
-        rez::rez::recorder_tests_support::multi_recording_v3_rez(&path, &[("redis", "web-01")]);
-        let readers =
-            rez::reader::RezReader::open_recordings(&path, BufferPool::new(8 * 1024 * 1024))
-                .unwrap();
-        // Pull the single table's segment bytes back out of the archive.
-        let db = rez::rez_sqlite::RezDb::open(&path).unwrap();
-        let rec = db.read_recordings().unwrap().remove(0);
-        let sampler = db.all_samplers(rec.id).unwrap().remove(0);
-        drop(readers);
-        let metas = db.read_segment_meta(rec.id, &sampler).unwrap();
-        db.read_segment_bytes(rec.id, &sampler, metas[0].0)
+        let path = dir.path().join("one.dendro");
+        rez::fixtures::multi_recording(&path, &[("redis", "web-01")]);
+        use metriken_storage::Catalog;
+        let catalog = metriken_storage::DendroCatalog::open(&path).unwrap();
+        let source = catalog.sources().unwrap().remove(0).id;
+        let stream = catalog.tables(source).unwrap().remove(0);
+        let metas = catalog.segment_meta(source, &stream).unwrap();
+        catalog
+            .segment_bytes(source, &stream, metas[0].0)
             .unwrap()
             .expect("the fixture seals one segment")
     }
@@ -2327,7 +2311,7 @@ mod tests {
         let mut reg = WasmCaptureRegistry::new();
         reg.attach(
             "baseline",
-            &rez_bytes(&[("redis", "web-01"), ("valkey", "web-01")]),
+            &committed_rez_bytes("v3-multi.rez"),
             "fleet.rez",
         )
         .unwrap();
@@ -2353,7 +2337,7 @@ mod tests {
     fn report_extension_tracks_the_source_kind() {
         // A 1-recording `.rez` is still a `.rez` source.
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &rez_bytes(&[("redis", "web-01")]), "one.rez")
+        reg.attach("baseline", &committed_rez_bytes("v3.rez"), "one.rez")
             .unwrap();
         assert_eq!(reg.report_extension(), ".rez");
     }

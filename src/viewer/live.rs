@@ -316,14 +316,14 @@ mod tests {
     use metriken_query::MetricsSource;
 
     fn buffer(path: &Path) -> HindsightBuffer {
-        let seed = crate::recorder::rez_v3_writer::ManifestSeed {
+        let seed = crate::hindsight::buffer::Seed {
             labels: [("source".to_string(), "rezolus".to_string())]
                 .into_iter()
                 .collect(),
             metadata: Default::default(),
             clock_anchor_wall_ns: ANCHOR,
         };
-        let policy = crate::recorder::seal_policy::SealPolicy {
+        let policy = dendro::seal::SealPolicy {
             max_rows: 4,
             ..Default::default()
         };
