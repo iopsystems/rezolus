@@ -148,6 +148,9 @@ pub(crate) struct AcquisitionGroup {
     // Members are the slots with metadata, as for a reader-stamped group,
     // while the sampler stamps the window. See `new_slotted`.
     slotted: bool,
+    cache_snapshots: bool,
+    snapshot_revision: AtomicU64,
+    snapshot_lock: tokio::sync::RwLock<()>,
 }
 
 impl AcquisitionGroup {
@@ -163,6 +166,9 @@ impl AcquisitionGroup {
             member_set: OnceLock::new(),
             reader_stamped: AtomicBool::new(false),
             slotted: false,
+            cache_snapshots: false,
+            snapshot_revision: AtomicU64::new(0),
+            snapshot_lock: tokio::sync::RwLock::const_new(()),
         }
     }
 
@@ -207,6 +213,9 @@ impl AcquisitionGroup {
             member_set: OnceLock::new(),
             reader_stamped: AtomicBool::new(true),
             slotted: false,
+            cache_snapshots: false,
+            snapshot_revision: AtomicU64::new(0),
+            snapshot_lock: tokio::sync::RwLock::const_new(()),
         }
     }
 
@@ -225,12 +234,46 @@ impl AcquisitionGroup {
             member_set: OnceLock::new(),
             reader_stamped: AtomicBool::new(false),
             slotted: true,
+            cache_snapshots: false,
+            snapshot_revision: AtomicU64::new(0),
+            snapshot_lock: tokio::sync::RwLock::const_new(()),
         }
     }
 
     /// Whether this group was declared with [`new_slotted`](Self::new_slotted).
     pub(crate) fn is_slotted(&self) -> bool {
         self.slotted
+    }
+
+    /// Opt into whole-snapshot reuse for a sparse, sampler-stamped group.
+    /// Acquisition runs on a blocking worker: its write lock may wait briefly
+    /// for an in-progress snapshot copy. Scrapes only try the read lock.
+    /// EVERY change to values, membership or metadata must be inside this
+    /// group's acquire/drop bracket, including failed reads and removals.
+    /// Reader-stamped/mmap groups cannot use this: their writers run outside
+    /// the acquisition bracket. Existing samplers keep the uncached behavior.
+    pub(crate) const fn new_cached_sparse(sampler: &'static str, name: &'static str) -> Self {
+        let mut group = Self::new_slotted(sampler, name);
+        group.cache_snapshots = true;
+        group
+    }
+
+    pub(crate) fn try_snapshot_read(&self) -> Option<tokio::sync::RwLockReadGuard<'_, ()>> {
+        self.snapshot_lock.try_read().ok()
+    }
+
+    pub(crate) fn caches_snapshots(&self) -> bool {
+        self.cache_snapshots && !self.is_reader_stamped()
+    }
+
+    /// Nonblocking: None while a writer is active. Reading before and after
+    /// copying a group proves its values/labels/window belong to one revision.
+    pub(crate) fn snapshot_revision(&self) -> Option<u64> {
+        // Keep previous metric loads before the final revision check, just
+        // as GroupWindowSlot::load does for its own seqlock payload.
+        std::sync::atomic::fence(Ordering::Acquire);
+        let revision = self.snapshot_revision.load(Ordering::Acquire);
+        (revision & 1 == 0).then_some(revision)
     }
 
     /// Limits the V3 member walk to `0..n`; zero declares an empty population.
@@ -352,7 +395,18 @@ impl AcquisitionGroup {
     /// task own the group and call `acquire()`/`finish()`, not `refresh()`
     /// as well.
     pub(crate) fn acquire(&self) -> AcquisitionGuard<'_> {
-        AcquisitionGuard::begin(&self.slot)
+        let snapshot_write = self
+            .caches_snapshots()
+            .then(|| self.snapshot_lock.blocking_write());
+        let revision = self.caches_snapshots().then_some(&self.snapshot_revision);
+        if let Some(revision) = revision {
+            let previous = revision.fetch_add(1, Ordering::AcqRel);
+            debug_assert_eq!(previous & 1, 0, "cached acquisition group has two writers");
+        }
+        let mut guard = AcquisitionGuard::begin(&self.slot);
+        guard.snapshot_revision = revision;
+        guard.snapshot_write = snapshot_write;
+        guard
     }
 
     /// Read the group's current window, if it has ever been stamped. Used
@@ -384,6 +438,8 @@ impl AcquisitionGroup {
 /// simply stops advancing, visibly, in the data — missing beats wrong.
 pub(crate) struct AcquisitionGuard<'a> {
     slot: &'a GroupWindowSlot,
+    snapshot_revision: Option<&'a AtomicU64>,
+    snapshot_write: Option<tokio::sync::RwLockWriteGuard<'a, ()>>,
     begin_ns: u64,
     begin_mono: Instant,
     // Set by `mark_end()`; when present, `finish()` publishes THIS end
@@ -397,6 +453,8 @@ impl<'a> AcquisitionGuard<'a> {
         let begin_mono = Instant::now();
         Self {
             slot,
+            snapshot_revision: None,
+            snapshot_write: None,
             // The source's timeline, the same one every row is stamped on.
             //
             // A window is stored in the archive as an OFFSET from its row's
@@ -473,9 +531,45 @@ impl<'a> AcquisitionGuard<'a> {
     pub(crate) fn discard(self) {}
 }
 
+impl Drop for AcquisitionGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(revision) = self.snapshot_revision {
+            // finish() publishes its window before this release; discard()
+            // still invalidates cached values while preserving the window.
+            revision.fetch_add(1, Ordering::Release);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_snapshot_revision_covers_success_discard_and_inflight_updates() {
+        let group = AcquisitionGroup::new_cached_sparse("test", "cached");
+        assert!(group.caches_snapshots());
+        assert_eq!(group.snapshot_revision(), Some(0));
+        let guard = group.acquire();
+        assert_eq!(group.snapshot_revision(), None);
+        assert!(group.try_snapshot_read().is_none());
+        assert_eq!(group.window(), None); // Never waits for the active writer.
+        guard.finish();
+        assert_eq!(group.snapshot_revision(), Some(2));
+        let window = group.window();
+        assert!(window.is_some());
+        {
+            let _failed = group.acquire();
+            assert_eq!(group.snapshot_revision(), None);
+        }
+        assert_eq!(group.snapshot_revision(), Some(4));
+        assert_eq!(group.window(), window);
+        group.acquire().discard();
+        assert_eq!(group.snapshot_revision(), Some(6));
+        assert_eq!(group.window(), window);
+        assert!(!AcquisitionGroup::new("test", "plain").caches_snapshots());
+        assert!(!AcquisitionGroup::new_reader_stamped("test", "reader").caches_snapshots());
+    }
 
     /// A window's begin is on the SOURCE's timeline, the same one rows are
     /// stamped on.

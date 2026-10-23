@@ -13,7 +13,10 @@
           "cgroup_cpu_cycles",
           "cgroup_cpu_instructions",
           "cgroup_cpu_tlb_flush",
-          "cgroup_syscall"
+          "cgroup_syscall",
+          "cgroup_memory_usage",
+          "cgroup_memory_swap_usage",
+          "cgroup_memory_stat"
         ]
       }
     }
@@ -197,6 +200,97 @@
       "subgroups": [
         {
           "plots": [
+            {
+              "kind": "gauge",
+              "title": "Memory (Including Descendants)",
+              "id": "individual-memory",
+              "unit": "bytes",
+              "query": "cgroup_memory_usage{name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Swap (Including Descendants)",
+              "id": "individual-memory-swap",
+              "unit": "bytes",
+              "query": "cgroup_memory_swap_usage{name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Anonymous Pages",
+              "id": "individual-memory-anon",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"anon\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "File Cache (Includes Shared Memory)",
+              "id": "individual-memory-file",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"file\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Shared Memory / tmpfs",
+              "id": "individual-memory-shmem",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"shmem\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Kernel Memory",
+              "id": "individual-memory-kernel",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"kernel\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Socket Buffers",
+              "id": "individual-memory-sock",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"sock\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Reclaimable Slab",
+              "id": "individual-memory-slab_reclaimable",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"slab_reclaimable\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Unreclaimable Slab",
+              "id": "individual-memory-slab_unreclaimable",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"slab_unreclaimable\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Page Tables",
+              "id": "individual-memory-pagetables",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"pagetables\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Kernel Stacks",
+              "id": "individual-memory-kernel_stack",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"kernel_stack\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Dirty File Pages",
+              "id": "individual-memory-file_dirty",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"file_dirty\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "File Pages Under Writeback",
+              "id": "individual-memory-file_writeback",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"file_writeback\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
             {
               "kind": "counter",
               "title": "Total CPU Cores",

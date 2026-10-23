@@ -349,6 +349,14 @@ enabled = false
 # Memory utilization from /proc/meminfo
 [samplers.memory_meminfo]
 
+# Per-cgroup v2 memory totals and type breakdown (includes descendants).
+# Reads cgroupfs off the scrape path, at most once per minute by default.
+# Opt-in: 30 series per cgroup still add export cost to every scrape, even
+# between reads. Suitable for memory trends; can miss short-lived spikes/groups.
+[samplers.memory_cgroup]
+enabled = false
+# interval = "60s"
+
 # Memory NUMA metrics from /proc/vmstat
 [samplers.memory_vmstat]
 

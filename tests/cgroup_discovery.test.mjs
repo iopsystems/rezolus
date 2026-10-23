@@ -30,7 +30,7 @@ test('cgroup_cpu_usage answers alone when the recording has it', async () => {
         cgroup_syscall: ['/c'],
     }, log));
     assert.deepEqual([...names].sort(), ['/a', '/b']);
-    assert.equal(log.length, 1, 'stops at the first query that finds names');
+    assert.equal(log.length, 2, 'checks memory and stops at the first CPU query that finds names');
 });
 
 test('without cgroup_cpu_usage the other per-cgroup series are unioned', async () => {

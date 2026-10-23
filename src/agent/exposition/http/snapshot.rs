@@ -5,10 +5,11 @@ use crate::agent::external_metrics::{
 use crate::agent::timing::{AcquisitionGroup, AcquisitionGuard};
 use crate::agent::*;
 
-use super::router::{group_registry, RezolusRouter};
+use super::acquisition_cache::{encode_snapshot, V3Builder};
+use super::router::group_registry;
 
 use metriken::{Value, Window};
-use metriken_exposition::group_builder::{ExtraGroup, GroupBuilder, Stamp};
+use metriken_exposition::group_builder::{ExtraGroup, Stamp};
 use metriken_exposition::{Counter, Gauge, Histogram, MetricDesc, Snapshot, SnapshotV2};
 
 use bytes::Bytes;
@@ -395,7 +396,7 @@ impl SnapshotBuilder {
             .msgpack
             .get_or_init(|| {
                 Bytes::from(
-                    rmp_serde::encode::to_vec(snapshot).expect("failed to serialize snapshot"),
+                    encode_snapshot(snapshot, &self.v3).expect("failed to serialize snapshot"),
                 )
             })
             .clone()
@@ -555,7 +556,7 @@ fn metric_metadata(
 /// than propagated, so a test that panics mid-build does not cascade-fail the
 /// rest. (See issue #1130.)
 #[cfg(test)]
-static BUILDER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(super) static BUILDER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn create(
     timestamp: SystemTime,
@@ -1170,10 +1171,8 @@ fn create(
 /// the group's membership and per-slot metadata version are unchanged, so it
 /// lives as long as the `SnapshotBuilder`. See metriken-exposition's
 /// `group_builder` for the cache's rules.
-pub(crate) type V3Builder = GroupBuilder<RezolusRouter>;
-
 pub(crate) fn v3_builder() -> V3Builder {
-    GroupBuilder::new(RezolusRouter::new())
+    V3Builder::new()
 }
 
 /// Build a `SnapshotV3` (acquisition-group snapshot) from the metriken
