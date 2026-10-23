@@ -1,6 +1,5 @@
-use clap::ArgMatches;
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use ::dashboard::keys::{
     KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE, NESTED_SERVICE_QUERIES,
@@ -9,62 +8,121 @@ use ::dashboard::{ServiceExtension, TemplateRegistry};
 
 use super::legacy::{self, Container};
 
-pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
-    let path = args.get_one::<PathBuf>("FILE").unwrap();
-    let output = args.get_one::<PathBuf>("output").map(PathBuf::as_path);
-    let csv = |name: &str| -> Option<BTreeSet<String>> {
-        args.get_one::<String>(name).map(|list| {
+/// What a filter keeps. `samplers` and `tables` select tables (a table is
+/// kept when either names it); `metrics` selects columns within the kept
+/// tables. `flag` is how the host spells the table selection in messages
+/// (`--samplers` for rezolus).
+pub(super) struct Keep<'a> {
+    pub(super) samplers: Option<&'a BTreeSet<String>>,
+    pub(super) tables: Option<&'a BTreeSet<String>>,
+    pub(super) metrics: Option<&'a BTreeSet<String>>,
+    pub(super) flag: &'a str,
+}
+
+impl Keep<'_> {
+    fn selects_tables(&self) -> bool {
+        self.samplers.is_some() || self.tables.is_some()
+    }
+
+    /// Whether the table `table` is kept: every table when neither
+    /// `samplers` nor `tables` is given, else one whose sampler (its name
+    /// before the first `/`) is in `samplers`, or which is in `tables` or
+    /// under a name there (`cpu` keeps `cpu/usage`).
+    fn keeps_table(&self, table: &str) -> bool {
+        if !self.selects_tables() {
+            return true;
+        }
+        self.samplers
+            .is_some_and(|keep| keep.contains(metriken_storage::table_sampler(table)))
+            || self
+                .tables
+                .is_some_and(|keep| keep.iter().any(|name| table_is_under(table, name)))
+    }
+}
+
+/// Whether `table` is `name` or a table under it (`name/...`).
+fn table_is_under(table: &str, name: &str) -> bool {
+    table
+        .strip_prefix(name)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// Returns the process exit status.
+pub(super) fn run(
+    host: &super::Host,
+    args: &super::cli::FilterArgs,
+    registry: &TemplateRegistry,
+) -> i32 {
+    match run_inner(host, args, registry) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
+    }
+}
+
+fn run_inner(
+    host: &super::Host,
+    args: &super::cli::FilterArgs,
+    registry: &TemplateRegistry,
+) -> Result<(), String> {
+    let path = &args.file;
+    let output = args.output.as_deref();
+    let csv = |list: &Option<String>| -> Option<BTreeSet<String>> {
+        list.as_ref().map(|list| {
             list.split(',')
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect()
         })
     };
-    let samplers = csv("samplers");
-    let mut metrics = csv("metrics");
+    let samplers = csv(&args.samplers);
+    let tables = csv(&args.tables);
+    let mut metrics = csv(&args.metrics);
+    let (flag, noun) = (host.table_flag.flag(), host.table_flag.noun());
     let container = Container::of(path);
+    let selects_tables = samplers.is_some() || tables.is_some();
 
     // A parquet file with neither flag keeps what its KPIs need, as the
     // parquet filter did: the metrics its KPI queries name, and every metric
     // of the agent's columns.
-    if container == Container::Parquet && samplers.is_none() && metrics.is_none() {
-        let custom = args.get_one::<PathBuf>("queries").map(PathBuf::as_path);
+    if container == Container::Parquet && !selects_tables && metrics.is_none() {
+        let custom = args.queries.as_deref();
         metrics = Some(
             resolve_service_extension(path, custom, registry)
-                .and_then(|ext| kpi_metrics(path, &ext))
-                .unwrap_or_else(|e| {
-                    eprintln!("error: {e}");
-                    std::process::exit(1);
-                }),
+                .and_then(|ext| kpi_metrics(path, &ext, host.agent))
+                .map_err(|e| e.to_string())?,
         );
-    } else if args.get_one::<PathBuf>("queries").is_some() {
+    } else if args.queries.is_some() {
         eprintln!(
-            "warning: --queries picks a parquet file's KPI metrics when neither --samplers \
+            "warning: --queries picks a parquet file's KPI metrics when neither {flag} \
              nor --metrics is given; it is ignored here"
         );
     }
 
-    if samplers.is_none() && metrics.is_none() {
-        eprintln!(
-            "error: filtering an archive requires --samplers <a,b,...> (samplers to keep) \
+    if !selects_tables && metrics.is_none() {
+        return Err(format!(
+            "filtering an archive requires {flag} <a,b,...> ({noun} to keep) \
              and/or --metrics <a,b,...> (metric columns to keep)"
-        );
-        std::process::exit(1);
+        ));
     }
 
-    if let Err(e) = filter(path, samplers.as_ref(), metrics.as_ref(), output) {
-        eprintln!("error: failed to filter {}: {e}", path.display());
-        std::process::exit(1);
-    }
+    let keep = Keep {
+        samplers: samplers.as_ref(),
+        tables: tables.as_ref(),
+        metrics: metrics.as_ref(),
+        flag,
+    };
+    filter(path, &keep, output).map_err(|e| format!("failed to filter {}: {e}", path.display()))
 }
 
-/// Filter the recording at `path` to `keep_samplers` and/or `keep_metrics`:
-/// a dendro archive in place or into `output` (a `.dendro`), a legacy one
-/// into `output`, which it needs.
+/// Filter the recording at `path` to what `keep` names: a dendro archive
+/// in place or into `output` (a `.dendro`), a legacy one into `output`,
+/// which it needs.
 fn filter(
     path: &Path,
-    keep_samplers: Option<&BTreeSet<String>>,
-    keep_metrics: Option<&BTreeSet<String>>,
+    keep: &Keep<'_>,
     output: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match Container::of(path) {
@@ -76,9 +134,9 @@ fn filter(
                 )
                 .into());
             }
-            filter_dendro(path, keep_samplers, keep_metrics, output)
+            filter_dendro(path, keep, output)
         }
-        c if c.is_legacy() => filter_legacy(path, c, keep_samplers, keep_metrics, output),
+        c if c.is_legacy() => filter_legacy(path, c, keep, output),
         _ => Err(format!(
             "{} is not a recording (.dendro, .rez or .parquet)",
             path.display()
@@ -93,8 +151,7 @@ fn filter(
 fn filter_legacy(
     path: &Path,
     container: Container,
-    keep_samplers: Option<&BTreeSet<String>>,
-    keep_metrics: Option<&BTreeSet<String>>,
+    keep: &Keep<'_>,
     output: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let Some(output) = output else {
@@ -111,16 +168,17 @@ fn filter_legacy(
     let staging = super::legacy::staging_dir(output)?;
     let converted = staging.path().join("converted.dendro");
     println!("{}", legacy::convert_for(path, &converted, output)?);
-    filter_dendro(&converted, keep_samplers, keep_metrics, Some(output))
+    filter_dendro(&converted, keep, Some(output))
 }
 
 /// The metrics a parquet file's KPI filter keeps: the base names of the
 /// metrics `ext`'s queries select, and the metric of every agent column (a
-/// column whose own `source`, else the file's, is `rezolus`). A column's
-/// metric is its `metric` metadata, else its name before `:`.
+/// column whose own `source`, else the file's, is `agent`, `Host::agent`).
+/// A column's metric is its `metric` metadata, else its name before `:`.
 fn kpi_metrics(
     path: &Path,
     ext: &ServiceExtension,
+    agent: &str,
 ) -> Result<BTreeSet<String>, Box<dyn std::error::Error>> {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     let builder = ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(path)?)?;
@@ -137,7 +195,7 @@ fn kpi_metrics(
             .get(KEY_SOURCE)
             .map(String::as_str)
             .or(file_source.as_deref());
-        if source == Some("rezolus") {
+        if source == Some(agent) {
             let metric = f
                 .metadata()
                 .get("metric")
@@ -189,8 +247,7 @@ fn extract_metric_selectors(query: &str) -> BTreeSet<String> {
 /// seals it.
 fn filter_dendro(
     path: &Path,
-    keep_samplers: Option<&std::collections::BTreeSet<String>>,
-    keep_metrics: Option<&std::collections::BTreeSet<String>>,
+    keep: &Keep<'_>,
     output: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use ::rez::occupants::table_of;
@@ -214,8 +271,24 @@ fn filter_dendro(
         .iter()
         .map(|t| table_sampler(t).to_string())
         .collect();
-    if let Some(keep) = keep_samplers {
-        let unmatched: Vec<&str> = keep
+    if let Some(names) = keep.tables {
+        let unmatched: Vec<&str> = names
+            .iter()
+            .map(String::as_str)
+            .filter(|n| !tables.iter().any(|t| table_is_under(t, n)))
+            .collect();
+        if !unmatched.is_empty() {
+            return Err(format!(
+                "no table named {} in {}; it holds: {}",
+                unmatched.join(", "),
+                path.display(),
+                tables.join(", "),
+            )
+            .into());
+        }
+    }
+    if let Some(names) = keep.samplers {
+        let unmatched: Vec<&str> = names
             .iter()
             .map(String::as_str)
             .filter(|s| !present.contains(*s))
@@ -239,11 +312,9 @@ fn filter_dendro(
     let staging = super::legacy::staging_dir(dest)?;
     let staged = staging.path().join("filtered.dendro");
 
-    let keep_stream = |stream: &str| -> bool {
-        keep_samplers
-            .is_none_or(|keep| keep.contains(table_sampler(table_of(stream).unwrap_or(stream))))
-    };
-    let keep_columns = keep_metrics.map(metriken_storage::KeepMetrics::new);
+    let keep_stream =
+        |stream: &str| -> bool { keep.keeps_table(table_of(stream).unwrap_or(stream)) };
+    let keep_columns = keep.metrics.map(metriken_storage::KeepMetrics::new);
     let spec = CopySpec {
         keep_streams: Some(&keep_stream),
         keep_columns: keep_columns
@@ -279,8 +350,9 @@ fn filter_dendro(
     if kept == 0 {
         return Err(format!(
             "filtering {} kept no tables — refusing to overwrite it with an empty archive; \
-             check the --metrics / --samplers names",
+             check the --metrics / {} names",
             path.display(),
+            keep.flag,
         )
         .into());
     }
@@ -419,6 +491,57 @@ fn resolve_service_extension(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--samplers` keeps a table by its name before the first `/`;
+    /// `--tables` keeps a table by its whole name or a `/`-prefix of it, so
+    /// it can select one group of a sampler. Given both, a table either
+    /// keeps is kept.
+    #[test]
+    fn tables_select_by_name_or_prefix_and_samplers_by_sampler() {
+        let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>();
+        let (cpu, cpu_usage) = (names(&["cpu"]), names(&["cpu/usage"]));
+        fn by<'a>(
+            samplers: Option<&'a BTreeSet<String>>,
+            tables: Option<&'a BTreeSet<String>>,
+        ) -> Keep<'a> {
+            Keep {
+                samplers,
+                tables,
+                metrics: None,
+                flag: "--samplers",
+            }
+        }
+        let all = by(None, None);
+        assert!(all.keeps_table("cpu/usage") && all.keeps_table("mem"));
+
+        let sampler = by(Some(&cpu), None);
+        assert!(sampler.keeps_table("cpu") && sampler.keeps_table("cpu/usage"));
+        assert!(!sampler.keeps_table("cpufreq") && !sampler.keeps_table("mem"));
+        assert!(!by(Some(&cpu_usage), None).keeps_table("cpu/usage"));
+
+        let table = by(None, Some(&cpu_usage));
+        assert!(table.keeps_table("cpu/usage") && table.keeps_table("cpu/usage/x"));
+        assert!(!table.keeps_table("cpu") && !table.keeps_table("cpu/usage2"));
+        assert!(by(None, Some(&cpu)).keeps_table("cpu/usage"));
+
+        let mem = names(&["mem"]);
+        let both = by(Some(&mem), Some(&cpu_usage));
+        assert!(both.keeps_table("mem/info") && both.keeps_table("cpu/usage"));
+        assert!(!both.keeps_table("cpu/freq"));
+    }
+
+    /// A [`Keep`] of `samplers` and `metrics`, spelled as rezolus spells it.
+    fn keep<'a>(
+        samplers: Option<&'a BTreeSet<String>>,
+        metrics: Option<&'a BTreeSet<String>>,
+    ) -> Keep<'a> {
+        Keep {
+            samplers,
+            tables: None,
+            metrics,
+            flag: "--samplers",
+        }
+    }
     use std::collections::HashMap;
 
     /// A one-row parquet with the given columns, each carrying the metadata
@@ -485,7 +608,7 @@ mod tests {
                 ("per_source_metadata", psm.as_str()),
             ],
         );
-        let registry = TemplateRegistry::embedded().unwrap();
+        let registry = ::dashboard::embedded_templates().unwrap();
         let ext = resolve_service_extension(&path, None, &registry).unwrap();
         let mut queries: Vec<&str> = ext.kpis.iter().map(|k| k.query.as_str()).collect();
         queries.sort();
@@ -511,7 +634,7 @@ mod tests {
         );
         // A KPI set that names neither column: only the rezolus rule can keep
         // them.
-        let kept = kpi_metrics(&path, &make_test_ext(&["something_else"])).unwrap();
+        let kept = kpi_metrics(&path, &make_test_ext(&["something_else"]), "rezolus").unwrap();
         assert!(
             kept.contains("cpu_usage"),
             "an agent column must survive on the file's source alone, got {kept:?}"
@@ -542,9 +665,9 @@ mod tests {
             ],
             &[("source", "llm-perf")],
         );
-        let kept = kpi_metrics(&path, &make_test_ext(&["wanted"])).unwrap();
+        let kept = kpi_metrics(&path, &make_test_ext(&["wanted"]), "rezolus").unwrap();
         assert_eq!(kept, set(&["wanted"]));
-        filter(&path, None, Some(&kept), Some(&out)).unwrap();
+        filter(&path, &keep(None, Some(&kept)), Some(&out)).unwrap();
         let readers = ::rez::reader::RezReader::open_recordings(
             &out,
             metriken_storage::BufferPool::new(8 * 1024 * 1024),
@@ -620,7 +743,7 @@ mod tests {
             let path = ::rez::fixtures::committed_rez(name, dir.path());
             let before = std::fs::read(&path).unwrap();
             let out = dir.path().join(format!("{name}.dendro"));
-            filter(&path, Some(&set(&["a"])), None, Some(&out)).unwrap();
+            filter(&path, &keep(Some(&set(&["a"])), None), Some(&out)).unwrap();
             assert_eq!(dendro_streams(&out), ["a"], "{name}");
             let db = dendro::archive::Archive::open(&out).unwrap();
             let id = db.read_sources().unwrap()[0].id;
@@ -638,7 +761,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = ::rez::fixtures::committed_rez("v3.rez", dir.path());
         let out = dir.path().join("slim.dendro");
-        filter(&path, None, Some(&set(&["mem_free"])), Some(&out)).unwrap();
+        filter(&path, &keep(None, Some(&set(&["mem_free"]))), Some(&out)).unwrap();
         assert_eq!(dendro_streams(&out), ["b"]);
     }
 
@@ -649,21 +772,20 @@ mod tests {
     fn a_legacy_filter_needs_a_new_dendro() {
         let dir = tempfile::tempdir().unwrap();
         let path = ::rez::fixtures::committed_rez("v3.rez", dir.path());
-        let err = filter(&path, Some(&set(&["a"])), None, None)
+        let err = filter(&path, &keep(Some(&set(&["a"])), None), None)
             .unwrap_err()
             .to_string();
         assert!(err.contains("-o") && err.contains("v3.dendro"), "{err}");
         let err = filter(
             &path,
-            Some(&set(&["a"])),
-            None,
+            &keep(Some(&set(&["a"])), None),
             Some(&dir.path().join("x.rez")),
         )
         .unwrap_err()
         .to_string();
         assert!(err.contains(".dendro archives only"), "{err}");
         let out = dir.path().join("typo.dendro");
-        let err = filter(&path, Some(&set(&["cpu_usge"])), None, Some(&out))
+        let err = filter(&path, &keep(Some(&set(&["cpu_usge"])), None), Some(&out))
             .unwrap_err()
             .to_string();
         assert!(err.contains("cpu_usge"), "{err}");
@@ -694,7 +816,7 @@ mod tests {
         assert!(all.len() > 2, "{all:?}");
         let taken = dir.path().join("taken.dendro");
         std::fs::write(&taken, b"theirs").unwrap();
-        let err = filter_dendro(&src, Some(&set(&["threads"])), None, Some(&taken))
+        let err = filter_dendro(&src, &keep(Some(&set(&["threads"])), None), Some(&taken))
             .unwrap_err()
             .to_string();
         assert!(err.contains("already exists"), "{err}");
@@ -703,7 +825,12 @@ mod tests {
 
         std::fs::create_dir(dir.path().join("sub")).unwrap();
         let respelled = dir.path().join("sub").join("..").join("rec.dendro");
-        filter_dendro(&src, Some(&set(&["threads"])), None, Some(&respelled)).unwrap();
+        filter_dendro(
+            &src,
+            &keep(Some(&set(&["threads"])), None),
+            Some(&respelled),
+        )
+        .unwrap();
         assert_eq!(
             dendro_streams(&src),
             vec![
@@ -720,7 +847,7 @@ mod tests {
         let src = dir.path().join("rec.dendro");
         crate::dendro_copy::fixtures::recorded(&src, 10, true);
         let out = dir.path().join("threads.dendro");
-        filter_dendro(&src, Some(&set(&["threads"])), None, Some(&out)).unwrap();
+        filter_dendro(&src, &keep(Some(&set(&["threads"])), None), Some(&out)).unwrap();
         assert_eq!(
             dendro_streams(&out),
             vec![
@@ -740,11 +867,11 @@ mod tests {
         crate::dendro_copy::fixtures::recorded(&src, 10, true);
 
         let mem = dir.path().join("mem.dendro");
-        filter_dendro(&src, None, Some(&set(&["mem_free"])), Some(&mem)).unwrap();
+        filter_dendro(&src, &keep(None, Some(&set(&["mem_free"]))), Some(&mem)).unwrap();
         assert_eq!(dendro_streams(&mem), vec!["memory/meminfo".to_string()]);
 
         let tasks = dir.path().join("tasks.dendro");
-        filter_dendro(&src, None, Some(&set(&["task_ops"])), Some(&tasks)).unwrap();
+        filter_dendro(&src, &keep(None, Some(&set(&["task_ops"]))), Some(&tasks)).unwrap();
         assert_eq!(
             dendro_streams(&tasks),
             vec![
@@ -791,9 +918,9 @@ mod tests {
         let src = dir.path().join("rec.dendro");
         crate::dendro_copy::fixtures::recorded(&src, 4, true);
         let before = std::fs::read(&src).unwrap();
-        let err = filter_dendro(&src, Some(&set(&["nope"])), None, None).unwrap_err();
+        let err = filter_dendro(&src, &keep(Some(&set(&["nope"])), None), None).unwrap_err();
         assert!(err.to_string().contains("no sampler named nope"), "{err}");
-        let err = filter_dendro(&src, None, Some(&set(&["absent"])), None).unwrap_err();
+        let err = filter_dendro(&src, &keep(None, Some(&set(&["absent"]))), None).unwrap_err();
         assert!(err.to_string().contains("kept no tables"), "{err}");
         assert_eq!(std::fs::read(&src).unwrap(), before);
     }

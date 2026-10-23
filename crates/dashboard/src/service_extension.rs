@@ -590,45 +590,62 @@ const DEFAULT_TEMPLATES_DIR: &str = "crates/dashboard/templates";
 #[cfg(not(target_arch = "wasm32"))]
 const TEMPLATES_ENV_VAR: &str = "REZOLUS_TEMPLATES";
 
-impl TemplateRegistry {
-    /// Resolve the template directory from (in priority order):
-    /// 1. Explicit CLI `--templates` path
-    /// 2. `REZOLUS_TEMPLATES` environment variable
-    /// 3. Default: `crates/dashboard/templates/`
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn resolve_and_load(cli_path: Option<&Path>) -> Self {
-        let dir = cli_path
-            .map(|p| p.to_path_buf())
-            .or_else(|| std::env::var(TEMPLATES_ENV_VAR).ok().map(Into::into))
-            .unwrap_or_else(|| DEFAULT_TEMPLATES_DIR.into());
+/// The registry `--templates` names, from (in priority order):
+/// 1. Explicit CLI `--templates` path
+/// 2. `REZOLUS_TEMPLATES` environment variable
+/// 3. Default: `crates/dashboard/templates/`
+///
+/// A directory that does not load is warned about on stderr and gives an
+/// empty registry.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn resolve_templates(cli_path: Option<&Path>) -> TemplateRegistry {
+    let dir = cli_path
+        .map(|p| p.to_path_buf())
+        .or_else(|| std::env::var(TEMPLATES_ENV_VAR).ok().map(Into::into))
+        .unwrap_or_else(|| DEFAULT_TEMPLATES_DIR.into());
 
-        match Self::load(&dir) {
-            Ok(registry) => registry,
-            Err(e) => {
-                eprintln!(
-                    "warning: failed to load templates from {}: {e}",
-                    dir.display()
-                );
-                Self::empty()
-            }
+    match TemplateRegistry::load(&dir) {
+        Ok(registry) => registry,
+        Err(e) => {
+            eprintln!(
+                "warning: failed to load templates from {}: {e}",
+                dir.display()
+            );
+            TemplateRegistry::empty()
         }
     }
+}
 
-    /// The registry of Rezolus's own service templates, baked in at compile
-    /// time.
-    ///
-    /// This lives here rather than in the binary crate so the templates travel
-    /// with `dashboard` itself: a consumer that depends on this crate (the wasm
-    /// viewer, or an external tool pulling it in as a git dependency) gets the
-    /// same ten services and one category the `rezolus` binary renders, with no
-    /// way for the two to drift.
-    ///
-    /// A template that fails to parse is a build-time authoring error, not a
-    /// runtime condition, so callers that want to keep going on a bad template
-    /// should use [`TemplateRegistry::from_embedded`] and handle the error.
+/// The registry of Rezolus's own service templates, baked in at compile
+/// time.
+///
+/// This lives in `dashboard` rather than in the binary crate so the templates
+/// travel with this crate: a consumer that depends on it (the wasm viewer, or
+/// an external tool pulling it in as a git dependency) gets the same ten
+/// services and one category the `rezolus` binary renders, with no way for
+/// the two to drift.
+///
+/// A template that fails to parse is a build-time authoring error, not a
+/// runtime condition, so callers that want to keep going on a bad template
+/// should use [`TemplateRegistry::from_embedded`] and handle the error.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn embedded_templates() -> Result<TemplateRegistry, Box<dyn std::error::Error>> {
+    TemplateRegistry::from_embedded(&EMBEDDED_TEMPLATES)
+}
+
+impl TemplateRegistry {
+    /// [`resolve_templates`].
     #[cfg(not(target_arch = "wasm32"))]
+    #[deprecated(note = "use `dashboard::resolve_templates`")]
+    pub fn resolve_and_load(cli_path: Option<&Path>) -> Self {
+        resolve_templates(cli_path)
+    }
+
+    /// [`embedded_templates`].
+    #[cfg(not(target_arch = "wasm32"))]
+    #[deprecated(note = "use `dashboard::embedded_templates`")]
     pub fn embedded() -> Result<Self, Box<dyn std::error::Error>> {
-        Self::from_embedded(&EMBEDDED_TEMPLATES)
+        embedded_templates()
     }
 
     /// Parse every `*.json` file in an embedded `include_dir::Dir` as
@@ -749,7 +766,7 @@ impl TemplateRegistry {
     /// dropping the collision here would make the two paths disagree about
     /// something worth knowing. An empty return means nothing was shadowed.
     ///
-    /// [`embedded`]: TemplateRegistry::embedded
+    /// [`embedded`]: embedded_templates
     #[must_use = "a non-empty result means this template shadowed an existing one"]
     pub fn insert_template(&mut self, ext: ServiceExtension) -> Vec<String> {
         let mut displaced = Vec::new();
@@ -1098,7 +1115,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn the_embedded_templates_all_parse() {
-        let registry = TemplateRegistry::embedded().expect("shipped templates must parse");
+        let registry = embedded_templates().expect("shipped templates must parse");
 
         // Named services, not just a non-empty map: these are the routes the
         // viewer offers, and losing one is a regression a count would hide.
@@ -1162,7 +1179,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_template_can_be_layered_over_the_embedded_set() {
-        let mut registry = TemplateRegistry::embedded().expect("shipped templates must parse");
+        let mut registry = embedded_templates().expect("shipped templates must parse");
 
         let displaced = registry.insert_template(ServiceExtension {
             service_name: "rpc-perf".to_string(),
@@ -1187,7 +1204,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn layering_over_an_existing_service_reports_what_it_displaced() {
-        let mut registry = TemplateRegistry::embedded().expect("shipped templates must parse");
+        let mut registry = embedded_templates().expect("shipped templates must parse");
 
         let displaced = registry.insert_template(ServiceExtension {
             service_name: "valkey".to_string(),

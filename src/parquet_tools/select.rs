@@ -1,8 +1,9 @@
 //! Selecting one recording out of a multi-recording `.rez` archive.
 //!
-//! Pure logic over label sets: no file access, no reader. Kept separate from
-//! `mcp/mod.rs` because this is the part most worth testing directly, and
-//! because `mod.rs` is already large.
+//! Pure logic over label sets: no file access, no reader. It lives with the
+//! `recording` tools, which use it for `check --recording` and the event
+//! writers, and is re-exported at `crate::mcp` for MCP and the viewer's
+//! `--baseline`/`--experiment`.
 //!
 //! `resolve`, `matches`, `is_empty`, `Display` and `describe_candidates` are
 //! all driven from `mcp::open_source_with_pool`, `parse` from the
@@ -283,9 +284,10 @@ pub(crate) fn describe_candidates(
     all: &[BTreeMap<String, String>],
     highlight: &[usize],
     syntax: SelectorSyntax,
+    program: &str,
 ) -> String {
     let positions: Vec<usize> = (0..all.len()).collect();
-    describe_candidates_at(all, &positions, highlight, syntax)
+    describe_candidates_at(all, &positions, highlight, syntax, program)
 }
 
 /// [`describe_candidates`], where `positions[i]` is recording `i`'s position
@@ -297,6 +299,7 @@ pub(crate) fn describe_candidates_at(
     positions: &[usize],
     highlight: &[usize],
     syntax: SelectorSyntax,
+    program: &str,
 ) -> String {
     let indices: Vec<usize> = if highlight.is_empty() {
         (0..all.len()).collect()
@@ -339,7 +342,7 @@ pub(crate) fn describe_candidates_at(
                  {IND}cannot be selected by labels — every selector that names it also \
                  names another\n\
                  {IND}recording in this archive. To compare them, label them by position: \
-                 `rezolus recording\n\
+                 `{program} recording\n\
                  {IND}combine FILE --ab baseline={p} experiment={q} -o ab.dendro`{others};\n\
                  {IND}for a new capture, give each --endpoint its own source=NAME or \
                  arm=NAME.\n",
@@ -900,7 +903,7 @@ mod tests {
         expect: &[usize],
     ) {
         for syntax in [SelectorSyntax::Flag("--recording"), SelectorSyntax::Json] {
-            let out = describe_candidates(all, highlight, syntax);
+            let out = describe_candidates(all, highlight, syntax, "rezolus");
             assert_listing_round_trips(all, &out, expect, syntax);
         }
     }
@@ -908,7 +911,7 @@ mod tests {
     #[test]
     fn the_candidate_listing_names_every_recording_and_its_selector() {
         let all = two_arms();
-        let out = describe_candidates(&all, &[], SelectorSyntax::Flag("--recording"));
+        let out = describe_candidates(&all, &[], SelectorSyntax::Flag("--recording"), "rezolus");
         assert!(out.contains("source=redis"), "{out}");
         assert!(out.contains("source=valkey"), "{out}");
         assert_listing_round_trips(&all, &out, &[0, 1], SelectorSyntax::Flag("--recording"));
@@ -954,7 +957,7 @@ mod tests {
             labels(&[("host", "web-01"), ("source", "redis")]),
             labels(&[("host", "web-01"), ("source", "redis")]),
         ];
-        let out = describe_candidates(&dup, &[], SelectorSyntax::Flag("--recording"));
+        let out = describe_candidates(&dup, &[], SelectorSyntax::Flag("--recording"), "rezolus");
         assert!(
             !out.contains("select with:"),
             "no selector can pick between identical label sets, so none should be offered: {out}"
@@ -981,15 +984,20 @@ mod tests {
             labels(&[("source", "demo")]),
             labels(&[("source", "demo")]),
         ];
-        let out = describe_candidates(&all, &[], SelectorSyntax::Flag("--recording"));
+        let out = describe_candidates(&all, &[], SelectorSyntax::Flag("--recording"), "rezolus");
         assert!(out.contains("--ab baseline=1 experiment=2"), "{out}");
         assert!(
             out.contains("source=demo (position 1)") && out.contains("source=demo (position 2)"),
             "{out}"
         );
         assert!(!out.contains("baseline=0"), "{out}");
-        let out =
-            describe_candidates_at(&all, &[0, 2, 3], &[], SelectorSyntax::Flag("--recording"));
+        let out = describe_candidates_at(
+            &all,
+            &[0, 2, 3],
+            &[],
+            SelectorSyntax::Flag("--recording"),
+            "rezolus",
+        );
         assert!(out.contains("--ab baseline=2 experiment=3"), "{out}");
     }
 
@@ -1012,7 +1020,7 @@ mod tests {
             labels(&[("arm", "baseline"), ("host", "h"), ("source", "rezolus")]),
             labels(&[("host", "h"), ("source", "rezolus")]),
         ];
-        let out = describe_candidates(&all, &[], SelectorSyntax::Flag("--recording"));
+        let out = describe_candidates(&all, &[], SelectorSyntax::Flag("--recording"), "rezolus");
         // Only recording 0 gets a selector (`arm=baseline`); recording 1 gets
         // the unselectable note. The round trip is what proves it: before the
         // fix, recording 1 was offered `--recording host=h --recording

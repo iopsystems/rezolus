@@ -208,6 +208,11 @@ pub(crate) struct ConvertOptions {
     pub metadata: Vec<(String, String)>,
     /// Overwrite an existing output.
     pub force: bool,
+    /// The `source` label and metadata a recording gets when `metadata`
+    /// names none (`Host::convert_source`); none when `None`.
+    pub default_source: Option<String>,
+    /// The program name the refusals spell commands with.
+    pub program: String,
 }
 
 /// What a successful conversion did, for the summary line.
@@ -225,11 +230,13 @@ pub(crate) struct Converted {
 #[derive(Debug)]
 pub(crate) enum ConvertError {
     /// The input is a parquet file, which `recording upgrade` converts.
-    InputIsParquet,
+    /// Each of these three carries the program name its message spells
+    /// `recording upgrade` with.
+    InputIsParquet(String),
     /// The input is a tar archive, most likely a `.rez`.
-    InputIsTar,
+    InputIsTar(String),
     /// The input is a SQLite archive: a v3 `.rez` or a dendro archive.
-    InputIsArchive,
+    InputIsArchive(String),
     /// The output exists and `--force` was not given.
     OutputExists(PathBuf),
     Io(io::Error),
@@ -253,20 +260,20 @@ pub(crate) enum ConvertError {
 impl std::fmt::Display for ConvertError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InputIsParquet => write!(
+            Self::InputIsParquet(program) => write!(
                 f,
                 "input is a parquet file, not a raw recording; convert it to .dendro \
-                 with `rezolus recording upgrade`"
+                 with `{program} recording upgrade`"
             ),
-            Self::InputIsTar => write!(
+            Self::InputIsTar(program) => write!(
                 f,
                 "input is a tar archive (a .rez?), not a raw recording; convert a .rez \
-                 to .dendro with `rezolus recording upgrade`"
+                 to .dendro with `{program} recording upgrade`"
             ),
-            Self::InputIsArchive => write!(
+            Self::InputIsArchive(program) => write!(
                 f,
                 "input is a .rez or dendro archive, not a raw recording; \
-                 convert takes raw recordings only (`rezolus recording upgrade` converts a .rez)"
+                 convert takes raw recordings only (`{program} recording upgrade` converts a .rez)"
             ),
             Self::NotDendro(p) => write!(
                 f,
@@ -379,21 +386,26 @@ fn interval_millis(interval: Duration) -> Result<u64, ConvertError> {
 }
 
 /// Assemble the converter with the keys a recording `record` writes carries:
-/// `sampling_interval_ms` in its metadata and `source=rezolus` as its label
-/// and in its metadata, `--metadata source=...` replacing both, the same
-/// precedence `record` gives.
+/// `sampling_interval_ms` in its metadata and the default source
+/// (`source=rezolus` for rezolus) as its label and in its metadata,
+/// `--metadata source=...` replacing both, the same precedence `record`
+/// gives.
 fn build_converter(interval_ms: u64, opts: &ConvertOptions) -> MsgpackToArchive {
     let source = opts
         .metadata
         .iter()
         .rev()
         .find(|(k, _)| k == KEY_SOURCE)
-        .map_or("rezolus", |(_, v)| v.as_str())
-        .to_string();
-    let mut converter = MsgpackToArchive::new()
-        .label(KEY_SOURCE, source.clone())
-        .metadata(KEY_SAMPLING_INTERVAL_MS, interval_ms.to_string())
-        .metadata(KEY_SOURCE, source);
+        .map(|(_, v)| v.clone())
+        .or_else(|| opts.default_source.clone());
+    let mut converter = MsgpackToArchive::new();
+    if let Some(source) = &source {
+        converter = converter.label(KEY_SOURCE, source.clone());
+    }
+    converter = converter.metadata(KEY_SAMPLING_INTERVAL_MS, interval_ms.to_string());
+    if let Some(source) = source {
+        converter = converter.metadata(KEY_SOURCE, source);
+    }
 
     for (key, value) in &opts.metadata {
         converter = converter.metadata(key.clone(), value.clone());
@@ -457,9 +469,9 @@ fn convert_file(
     }
 
     match sniff(input)? {
-        InputKind::Parquet => Err(ConvertError::InputIsParquet),
-        InputKind::Tar => Err(ConvertError::InputIsTar),
-        InputKind::Sqlite => Err(ConvertError::InputIsArchive),
+        InputKind::Parquet => Err(ConvertError::InputIsParquet(opts.program.clone())),
+        InputKind::Tar => Err(ConvertError::InputIsTar(opts.program.clone())),
+        InputKind::Sqlite => Err(ConvertError::InputIsArchive(opts.program.clone())),
         kind => {
             let out_dir = output
                 .parent()
@@ -521,40 +533,48 @@ fn convert_file(
 
 /// Gather the options from parsed arguments, validating everything that can be
 /// validated before the conversion starts reading.
-fn options_from_args(args: &clap::ArgMatches) -> Result<ConvertOptions, ConvertError> {
+fn options_from_args(
+    host: &super::Host,
+    args: &super::cli::ConvertArgs,
+) -> Result<ConvertOptions, ConvertError> {
     let metadata = args
-        .get_many::<String>("metadata")
-        .unwrap_or_default()
+        .metadata
+        .iter()
         .map(|s| parse_metadata(s))
         .collect::<Result<Vec<_>, _>>()?;
 
     let systeminfo = args
-        .get_one::<PathBuf>("systeminfo")
+        .systeminfo
+        .as_deref()
         .map(|p| load_json(p, JsonShape::Any, "systeminfo"))
         .transpose()?;
 
     let descriptions = args
-        .get_one::<PathBuf>("descriptions")
+        .descriptions
+        .as_deref()
         .map(|p| load_json(p, JsonShape::StringMap, "descriptions"))
         .transpose()?;
 
     Ok(ConvertOptions {
-        interval: args.get_one::<humantime::Duration>("interval").map(|d| **d),
+        interval: args.interval.map(|d| *d),
         systeminfo,
         descriptions,
         metadata,
-        force: args.get_flag("force"),
+        force: args.force,
+        default_source: Some(host.agent.to_string()),
+        program: host.program.to_string(),
     })
 }
 
-pub(crate) fn run(args: &clap::ArgMatches) {
-    let input = args.get_one::<PathBuf>("FILE").expect("FILE is required");
+/// Returns the process exit status.
+pub(crate) fn run(host: &super::Host, args: &super::cli::ConvertArgs) -> i32 {
+    let input = &args.file;
     let output = args
-        .get_one::<PathBuf>("output")
-        .cloned()
+        .output
+        .clone()
         .unwrap_or_else(|| default_output_path(input));
 
-    let result = options_from_args(args).and_then(|opts| {
+    let result = options_from_args(host, args).and_then(|opts| {
         let done = convert_file(input, &output, &opts)?;
         Ok((done, opts))
     });
@@ -609,10 +629,11 @@ pub(crate) fn run(args: &clap::ArgMatches) {
                     if missing.len() == 1 { "it" } else { "them" },
                 );
             }
+            0
         }
         Err(e) => {
             eprintln!("error: {e}");
-            std::process::exit(1);
+            1
         }
     }
 }
@@ -621,6 +642,16 @@ pub(crate) fn run(args: &clap::ArgMatches) {
 mod tests {
     use super::*;
     use std::io::{Cursor, Seek, Write};
+
+    /// The options rezolus's CLI starts from: `source=rezolus` unless
+    /// `--metadata` names one.
+    fn opts() -> ConvertOptions {
+        ConvertOptions {
+            default_source: Some("rezolus".to_string()),
+            program: "rezolus".to_string(),
+            ..Default::default()
+        }
+    }
 
     /// A SQLite archive, `.rez` v3 or dendro, is named as one rather than
     /// failing later as undecodable msgpack.
@@ -862,7 +893,7 @@ mod tests {
 
         let opts = ConvertOptions {
             interval: Some(Duration::from_millis(1000)),
-            ..Default::default()
+            ..opts()
         };
         let done = convert_file(&input, &output, &opts).unwrap();
 
@@ -877,7 +908,7 @@ mod tests {
         let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(5, 500_000)));
         let output = dir.path().join("out.dendro");
 
-        let done = convert_file(&input, &output, &ConvertOptions::default()).unwrap();
+        let done = convert_file(&input, &output, &opts()).unwrap();
 
         assert!(done.concern.is_some());
         assert_eq!(
@@ -921,7 +952,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(2, 1_000_000_000)));
         let output = dir.path().join("out.parquet");
-        let err = convert_file(&input, &output, &ConvertOptions::default()).unwrap_err();
+        let err = convert_file(&input, &output, &opts()).unwrap_err();
         assert!(matches!(err, ConvertError::NotDendro(_)), "got {err:?}");
         assert!(!output.exists());
     }
@@ -943,7 +974,7 @@ mod tests {
         );
         let output = dir.path().join("out.dendro");
 
-        let done = convert_file(&input, &output, &ConvertOptions::default()).unwrap();
+        let done = convert_file(&input, &output, &opts()).unwrap();
 
         assert_eq!(done.rows, 3);
         assert_eq!(done.interval, Duration::from_millis(1000));
@@ -973,7 +1004,7 @@ mod tests {
         let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(2, 1_000_000_000)));
         let output = dir.path().join("out.dendro");
 
-        convert_file(&input, &output, &ConvertOptions::default()).unwrap();
+        convert_file(&input, &output, &opts()).unwrap();
 
         let reference = dir.path().join("reference");
         std::fs::File::create(&reference).unwrap();
@@ -994,7 +1025,7 @@ mod tests {
         );
         let output = dir.path().join("out.dendro");
 
-        let done = convert_file(&input, &output, &ConvertOptions::default()).unwrap();
+        let done = convert_file(&input, &output, &opts()).unwrap();
 
         assert_eq!(done.rows, 4);
         assert_eq!(
@@ -1013,7 +1044,7 @@ mod tests {
             systeminfo: Some(r#"{"os":"linux"}"#.to_string()),
             descriptions: Some(r#"{"cpu_cycles":"CPU cycles"}"#.to_string()),
             metadata: vec![("run".to_string(), "boat-7".to_string())],
-            ..Default::default()
+            ..opts()
         };
         convert_file(&input, &output, &opts).unwrap();
 
@@ -1037,7 +1068,7 @@ mod tests {
 
         let opts = ConvertOptions {
             metadata: vec![("source".to_string(), "llm-perf".to_string())],
-            ..Default::default()
+            ..opts()
         };
         convert_file(&input, &output, &opts).unwrap();
 
@@ -1058,7 +1089,7 @@ mod tests {
 
         let opts = ConvertOptions {
             interval: Some(Duration::from_millis(5000)),
-            ..Default::default()
+            ..opts()
         };
         let done = convert_file(&input, &output, &opts).unwrap();
 
@@ -1083,7 +1114,7 @@ mod tests {
 
         let opts = ConvertOptions {
             interval: Some(Duration::from_micros(500)),
-            ..Default::default()
+            ..opts()
         };
         let err = convert_file(&input, &output, &opts).unwrap_err();
 
@@ -1103,7 +1134,7 @@ mod tests {
 
         let opts = ConvertOptions {
             interval: Some(Duration::from_micros(1500)),
-            ..Default::default()
+            ..opts()
         };
         convert_file(&input, &output, &opts).unwrap();
 
@@ -1121,7 +1152,7 @@ mod tests {
         let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(1, 1_000_000_000)));
         let output = dir.path().join("out.dendro");
 
-        let done = convert_file(&input, &output, &ConvertOptions::default()).unwrap();
+        let done = convert_file(&input, &output, &opts()).unwrap();
 
         assert_eq!(done.interval, Duration::from_millis(1000));
         assert!(done.interval_inferred);
@@ -1133,7 +1164,7 @@ mod tests {
         let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(2, 1_000_000_000)));
         let output = write_input(dir.path(), "out.dendro", b"precious");
 
-        let err = convert_file(&input, &output, &ConvertOptions::default()).unwrap_err();
+        let err = convert_file(&input, &output, &opts()).unwrap_err();
 
         assert!(matches!(err, ConvertError::OutputExists(_)), "got {err:?}");
         assert_eq!(std::fs::read(&output).unwrap(), b"precious");
@@ -1147,7 +1178,7 @@ mod tests {
 
         let opts = ConvertOptions {
             force: true,
-            ..Default::default()
+            ..opts()
         };
         convert_file(&input, &output, &opts).unwrap();
 
@@ -1161,13 +1192,11 @@ mod tests {
     fn rejects_a_parquet_input() {
         let dir = tempfile::tempdir().unwrap();
         let input = write_input(dir.path(), "already.parquet", b"PAR1\x00\x00");
-        let err = convert_file(
-            &input,
-            &dir.path().join("out.dendro"),
-            &ConvertOptions::default(),
-        )
-        .unwrap_err();
-        assert!(matches!(err, ConvertError::InputIsParquet), "got {err:?}");
+        let err = convert_file(&input, &dir.path().join("out.dendro"), &opts()).unwrap_err();
+        assert!(
+            matches!(err, ConvertError::InputIsParquet(_)),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -1178,13 +1207,8 @@ mod tests {
         tar[257..262].copy_from_slice(b"ustar");
         let input = write_input(dir.path(), "capture.rez", &tar);
 
-        let err = convert_file(
-            &input,
-            &dir.path().join("out.dendro"),
-            &ConvertOptions::default(),
-        )
-        .unwrap_err();
-        assert!(matches!(err, ConvertError::InputIsTar), "got {err:?}");
+        let err = convert_file(&input, &dir.path().join("out.dendro"), &opts()).unwrap_err();
+        assert!(matches!(err, ConvertError::InputIsTar(_)), "got {err:?}");
     }
 
     #[test]
@@ -1195,7 +1219,7 @@ mod tests {
         let input = write_input(dir.path(), "cut.raw", &bytes);
         let output = dir.path().join("out.dendro");
 
-        let err = convert_file(&input, &output, &ConvertOptions::default()).unwrap_err();
+        let err = convert_file(&input, &output, &opts()).unwrap_err();
 
         assert!(matches!(err, ConvertError::Stream(_)), "got {err:?}");
         assert!(

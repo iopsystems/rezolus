@@ -1205,6 +1205,7 @@ impl Server {
             output.as_deref().map(Path::new),
             &selector,
             vec![event],
+            env!("CARGO_BIN_NAME"),
         )?;
         self.evict(output.as_deref().unwrap_or(parquet_file));
         let outcome = if report.counts.new > 0 {
@@ -1258,6 +1259,7 @@ impl Server {
             output.as_deref().map(Path::new),
             &selector,
             &filter,
+            env!("CARGO_BIN_NAME"),
         )?;
         self.evict(output.as_deref().unwrap_or(parquet_file));
         Ok(serde_json::to_string_pretty(&json!({
@@ -1297,6 +1299,7 @@ impl Server {
             &selector,
             override_ext.as_ref(),
             &registry,
+            env!("CARGO_BIN_NAME"),
         )?;
         for notice in &run.notices {
             crate::viewer::metadata::warn_once(notice.clone());
@@ -1326,6 +1329,7 @@ impl Server {
                             suggested.display().to_string()
                         )
                     },
+                    env!("CARGO_BIN_NAME"),
                 )?;
                 self.evict(output.as_deref().unwrap_or(parquet_file));
                 line

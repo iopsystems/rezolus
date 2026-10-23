@@ -33,6 +33,24 @@ static STATE: AtomicUsize = AtomicUsize::new(RUNNING);
 static RUNNING: usize = 0;
 static TERMINATING: usize = 2;
 
+/// What `rezolus recording` is mounted with. `parquet` is kept as an alias
+/// of `recording` because it is what existing scripts type: the subcommands
+/// stopped being parquet-specific once `.rez` arrived, and renaming them was
+/// not worth breaking those scripts.
+fn recording_host() -> parquet_tools::Host<'static> {
+    parquet_tools::Host::new("rezolus", &viewer::load_template_registry)
+        .display_name("Rezolus")
+        .agent("rezolus")
+        .alias("parquet")
+        .table_flag(parquet_tools::TableFlag::Samplers)
+        .list_recordings("rezolus mcp describe-recording")
+        .record("rezolus record")
+        .hindsight("rezolus hindsight")
+        .view("rezolus view")
+        .mcp("rezolus mcp")
+        .buffer_path("/var/lib/rezolus/hindsight.dendro")
+}
+
 fn main() {
     // custom panic hook to terminate whole process after unwinding
     std::panic::set_hook(Box::new(|s| {
@@ -85,7 +103,7 @@ fn main() {
         .subcommand(exporter::command())
         .subcommand(hindsight::command())
         .subcommand(mcp::command())
-        .subcommand(parquet_tools::command())
+        .subcommand(recording_host().command())
         .subcommand(recorder::command())
         .subcommand(status_cli::command())
         .subcommand(viewer::command())
@@ -125,7 +143,9 @@ fn main() {
         }
         // Clap resolves the `parquet` alias to this name, so one arm serves both.
         Some(("recording", args)) => {
-            parquet_tools::run(args.clone());
+            use clap::FromArgMatches;
+            let cmd = parquet_tools::Recording::from_arg_matches(args).unwrap_or_else(|e| e.exit());
+            std::process::exit(recording_host().run(cmd));
         }
         Some(("record", args)) => {
             // A usage error here is the user's typo, not a bug: `expect` sent

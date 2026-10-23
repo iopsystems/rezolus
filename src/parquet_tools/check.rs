@@ -23,14 +23,13 @@
 //! defined the check changes. See
 //! `docs/journal/2026-09-28-checks-with-verdicts.md`.
 
-use clap::ArgMatches;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use metriken_query::{MatrixSample, MetricsSource, QueryResult};
 
-use crate::mcp::{
+use super::select::{
     describe_candidates, render_labels, RecordingSelector, SelectError, SelectorSyntax,
 };
 use ::dashboard::{Event, ServiceExtension, TemplateRegistry};
@@ -551,6 +550,7 @@ pub(crate) struct Target {
 pub(crate) fn open_targets(
     path: &Path,
     selector: &RecordingSelector,
+    program: &str,
 ) -> Result<(RezFormat, Vec<Target>, usize), String> {
     if !path.exists() {
         return Err(format!("Recording file not found: {}", path.display()));
@@ -597,7 +597,7 @@ pub(crate) fn open_targets(
                     "no recording in {} matches {}. It holds:\n{}",
                     path.display(),
                     selector.render(syntax),
-                    describe_candidates(&all, &[], syntax)
+                    describe_candidates(&all, &[], syntax, program)
                 ));
             }
             Err(SelectError::Ambiguous(hits)) => {
@@ -606,7 +606,7 @@ pub(crate) fn open_targets(
                     selector.render(syntax),
                     hits.len(),
                     path.display(),
-                    describe_candidates(&all, &hits, syntax)
+                    describe_candidates(&all, &hits, syntax, program)
                 ));
             }
         }
@@ -662,8 +662,12 @@ fn load_queries(path: &Path) -> Result<ServiceExtension, String> {
 }
 
 /// Returns the process exit status.
-pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) -> i32 {
-    match run_inner(args, registry) {
+pub(super) fn run(
+    host: &super::Host,
+    args: &super::cli::CheckArgs,
+    registry: &TemplateRegistry,
+) -> i32 {
+    match run_inner(host.program, args, registry) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("error: {e}");
@@ -747,8 +751,9 @@ pub(crate) fn run_checks(
     selector: &RecordingSelector,
     override_ext: Option<&ServiceExtension>,
     registry: &TemplateRegistry,
+    program: &str,
 ) -> Result<CheckRun, String> {
-    let (_, targets, total_recordings) = open_targets(path, selector)?;
+    let (_, targets, total_recordings) = open_targets(path, selector, program)?;
 
     let mut results: Vec<CheckResult> = Vec::new();
     let mut per_recording_events: Vec<Vec<Event>> = vec![Vec::new(); total_recordings];
@@ -775,22 +780,18 @@ pub(crate) fn run_checks(
     })
 }
 
-fn run_inner(args: &ArgMatches, registry: &TemplateRegistry) -> Result<i32, String> {
-    let path = args.get_one::<PathBuf>("FILE").expect("clap requires FILE");
-    let json = args.get_flag("json");
-    let annotate = args.get_flag("annotate");
-    let selector = RecordingSelector::parse(
-        "--recording",
-        args.get_many::<String>("RECORDING")
-            .map(|it| it.cloned().collect::<Vec<_>>())
-            .unwrap_or_default(),
-    )?;
-    let override_ext = args
-        .get_one::<PathBuf>("queries")
-        .map(|p| load_queries(p))
-        .transpose()?;
+fn run_inner(
+    program: &str,
+    args: &super::cli::CheckArgs,
+    registry: &TemplateRegistry,
+) -> Result<i32, String> {
+    let path = &args.file;
+    let json = args.json;
+    let annotate = args.annotate;
+    let selector = RecordingSelector::parse("--recording", args.recording.clone())?;
+    let override_ext = args.queries.as_deref().map(load_queries).transpose()?;
 
-    let run = run_checks(path, &selector, override_ext.as_ref(), registry)?;
+    let run = run_checks(path, &selector, override_ext.as_ref(), registry, program)?;
 
     if run.checks_seen == 0 {
         eprintln!(
@@ -831,12 +832,13 @@ fn run_inner(args: &ArgMatches, registry: &TemplateRegistry) -> Result<i32, Stri
             eprintln!("nothing to annotate: no violation windows");
         } else {
             // With --json, stdout is the array and nothing else.
-            let output = args.get_one::<PathBuf>("output").map(PathBuf::as_path);
+            let output = args.output.as_deref();
             let line = annotate_events(
                 path,
                 output,
                 run.per_recording_events.clone(),
                 super::legacy::command_with_output,
+                program,
             )
             .map_err(|e| e.to_string())?;
             if json {
@@ -862,9 +864,11 @@ pub(crate) fn annotate_events(
     output: Option<&Path>,
     per_recording: Vec<Vec<Event>>,
     refusal: impl FnOnce(&Path) -> String,
+    program: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let edit = super::legacy::edit_target(path, output, refusal)?;
     let annotation = super::annotate::RezAnnotation {
+        program,
         ext_json: None,
         events: None,
         per_recording_events: Some(per_recording),

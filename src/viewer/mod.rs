@@ -63,18 +63,18 @@ use state::AppState;
 /// edits don't require a rebuild.
 pub fn load_template_registry(cli_path: Option<&Path>) -> TemplateRegistry {
     if cli_path.is_some() {
-        return TemplateRegistry::resolve_and_load(cli_path);
+        return ::dashboard::resolve_templates(cli_path);
     }
     #[cfg(not(feature = "developer-mode"))]
     {
-        TemplateRegistry::embedded().unwrap_or_else(|e| {
+        ::dashboard::embedded_templates().unwrap_or_else(|e| {
             warn!("failed to parse embedded templates: {e}");
             TemplateRegistry::empty()
         })
     }
     #[cfg(feature = "developer-mode")]
     {
-        TemplateRegistry::resolve_and_load(None)
+        ::dashboard::resolve_templates(None)
     }
 }
 
@@ -781,13 +781,13 @@ fn resolve_slot(
             "{} matched no recording in this archive.\nArchive holds {} recording(s):\n{}",
             selector.render(syntax),
             all.len(),
-            crate::mcp::describe_candidates(all, &[], syntax),
+            crate::mcp::describe_candidates(all, &[], syntax, env!("CARGO_BIN_NAME")),
         ),
         crate::mcp::SelectError::Ambiguous(hits) => format!(
             "{} matched {} recordings; add labels until it names one:\n{}",
             selector.render(syntax),
             hits.len(),
-            crate::mcp::describe_candidates(all, &hits, syntax),
+            crate::mcp::describe_candidates(all, &hits, syntax, env!("CARGO_BIN_NAME")),
         ),
     })
 }
@@ -826,7 +826,7 @@ fn resolve_ab_slots(
                 "{why}. Name the two with {BASELINE_FLAG}/{EXPERIMENT_FLAG}.\nArchive holds {} \
                  recording(s):\n{}",
                 all.len(),
-                crate::mcp::describe_candidates(all, &[], BASELINE_SYNTAX),
+                crate::mcp::describe_candidates(all, &[], BASELINE_SYNTAX, env!("CARGO_BIN_NAME")),
             )),
         };
     }
@@ -843,7 +843,7 @@ fn resolve_ab_slots(
              first.\nArchive holds {} recording(s):\n{}",
             experiment.render(EXPERIMENT_SYNTAX),
             all.len(),
-            crate::mcp::describe_candidates(all, &[], BASELINE_SYNTAX),
+            crate::mcp::describe_candidates(all, &[], BASELINE_SYNTAX, env!("CARGO_BIN_NAME")),
         ));
     }
 
