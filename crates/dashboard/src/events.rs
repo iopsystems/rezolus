@@ -66,6 +66,29 @@ impl Events {
         Self { events }
     }
 
+    /// The events of several payloads as one, as a reader shows a
+    /// recording whose sources each hold some of them: an event with an
+    /// `id` once (the first payload's copy), one without unless an identical
+    /// one is already there, sorted by timestamp. `rez::reader`'s
+    /// `group_metadata` merges a read group's payloads by the same rule.
+    pub fn union(payloads: impl IntoIterator<Item = Events>) -> Self {
+        let mut out: Vec<Event> = Vec::new();
+        let mut ids = std::collections::HashSet::new();
+        for payload in payloads {
+            for event in payload.events {
+                let fresh = match &event.id {
+                    Some(id) if !id.is_empty() => ids.insert(id.clone()),
+                    _ => !out.contains(&event),
+                };
+                if fresh {
+                    out.push(event);
+                }
+            }
+        }
+        out.sort_by_key(|e| (e.timestamp, e.id.clone().unwrap_or_default()));
+        Self { events: out }
+    }
+
     /// Sort events by timestamp and drop later duplicates that share the
     /// same non-empty `id`. Stable: earlier occurrences of a given id win.
     pub fn normalize(&mut self) {

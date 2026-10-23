@@ -1061,8 +1061,8 @@ async fn report_round_trip(dir: &Path, path: &Path) {
 
     // Saved onto the archive's first recording, as before the fix.
     let keep: std::collections::BTreeSet<String> = ["cpu_usage".to_string()].into_iter().collect();
-    let old = ::report_save::build_rez_report_from_rez(
-        &std::fs::read(path).unwrap(),
+    let old = ::report_save::build_report(
+        ::report_save::ReportSource::Dendro(&std::fs::read(path).unwrap()),
         None,
         Some(&keep),
         None,
@@ -1277,6 +1277,7 @@ fn dual(i: u64, kind: Held) -> metriken_exposition::Snapshot {
         counters: only(Held::Counter),
         gauges: only(Held::Gauge),
         histograms: only(Held::Histogram),
+        gauge_histograms: Vec::new(),
     };
     let mut histogram = ::histogram::Histogram::new(7, 64).unwrap();
     histogram.increment(1_000 + i).unwrap();
@@ -1301,6 +1302,7 @@ fn dual(i: u64, kind: Held) -> metriken_exposition::Snapshot {
                 Held::Histogram => vec![Some(histogram)],
                 _ => Vec::new(),
             },
+            gauge_histograms: Vec::new(),
         }],
     })
 }

@@ -142,8 +142,39 @@
   the same `output`, `format` and `separate = true` in a `--config` file.
   The refusal quotes the path as it was given (`-o`, the positional OUTPUT,
   or the config file's `output`) and names a 5.x recorder (5.27.0 or later),
-  which still writes those formats; `rezolus recording upgrade --to dendro`
-  converts a `.rez`. Reading `.rez` and parquet is unchanged.
+  which still writes those formats; `rezolus recording upgrade` converts a
+  `.rez` or a parquet file. Reading `.rez` and parquet is unchanged.
+- **The `recording` tools write `.dendro` only, and never change a `.rez` or
+  a parquet file.** metriken-storage 0.5 has no `.rez` writer; legacy
+  recordings are converted with its converters (0.5.1).
+  - `combine` writes one `.dendro` from any mix of `.dendro`, `.rez` and
+    `.parquet` inputs, a recording per input recording; `--ab` is kept and
+    labels each input's recordings `arm=baseline`/`arm=experiment`. An
+    output ending in `.parquet` (the row-merge), `.parquet.ab.tar` or `.rez`
+    is refused, naming `-o <name>.dendro`, and so are `--pinned`,
+    `--category` and `--bypass-time-check`, which applied to those outputs.
+  - `filter`, `annotate` and `check --annotate` edit a `.dendro` in place,
+    or a copy given `-o`. A `.rez` or `.parquet` input needs `-o
+    <new>.dendro`; without it the command is refused (exit 1; `check`, exit
+    2) and the error prints the command line with `-o` added. A parquet
+    `filter` with neither `--samplers` nor `--metrics` keeps the metrics its
+    KPIs name, as before. `annotate`'s `--undo`, `--node`, `--source`,
+    `--systeminfo` and `--filter` edited a parquet footer; they are ignored
+    with a warning.
+  - `snapshot` of a `.rez` writes a `.dendro`.
+  - `upgrade` converts any `.rez` (v1, v2, v3) or `.parquet` into a
+    `.dendro` (the input's name with `.dendro` for its extension, without
+    `-o`; `upgrade x.dendro` says it is already one); `--to v3` is refused.
+  - `convert` turns a raw msgpack recording into a `.dendro`.
+  - The MCP server's `add_event`, `remove_events` and `run_checks`
+    (`annotate=true`) take an `output` path, required for a `.rez` or
+    parquet recording, as `-o` is. `export_query` is unchanged.
+- **Save as Report writes a `.dendro`**, in the server viewer and the static
+  site, from a `.dendro`, a `.rez` or one or two parquet files. A two-file
+  parquet compare is saved with `arm=baseline`/`arm=experiment`, so it
+  reopens as the comparison. The static site converts a `.rez` in memory; an
+  uploaded v3 `.rez` has no SQLite `-wal` sidecar, so a copy taken from under
+  a running recorder can be shorter than `rezolus view` reads from the file.
 - **`record` refuses every Rezolus agent that cannot stream.** An agent older
   than 5.21.0, a v2 agent, or a stream route that answers 404, 409 or a
   foreign content type is refused at startup (exit 1, nothing written) or,
@@ -201,6 +232,20 @@
   An `asusec` temperature channel reading -40 °C, the driver's value for an
   empty header, is skipped. `[samplers.hw_sensors] enabled = false` turns it off, and an
   existing config that sets it keeps the sampler off.
+- **metriken 0.11.4, metriken-exposition 0.25, metriken-model 0.2,
+  metriken-storage 0.5.2, metriken-query 0.42.1, metriken-recorder 0.5.1.** The
+  counting histogram types are named for their kind (`AtomicCounterHistogram`,
+  `RwLockCounterHistogram`, `CounterHistogramGroup`).
+- **A recording and its copies are read once.** metriken-query 0.42 forms
+  process groups: sources that share a uuid (a source and its snapshot or
+  hindsight dump), or share a `producer_epoch` and overlap in time (one agent
+  process recorded twice), are one recording; one epoch with disjoint spans
+  is two. `rezolus view`, `mcp` (its `--recording` selectors and
+  `describe-recording`), `recording check` and `annotate` list and select
+  these recordings, and an edit of one is written to each of its sources.
+  `recording combine` no longer refuses inputs that share a source uuid. A
+  query's `__recording__` is the archive index of a recording's first
+  source.
 - **Archives written are dendro schema 5** (dendro 0.6, metriken-storage
   0.4, metriken-query 0.41, metriken-exposition 0.24, metriken-recorder
   0.4). Every `.dendro` this release creates (`record`, hindsight buffers
@@ -289,11 +334,13 @@
   host.
 - **A single-source parquet's `source` is a series label.** Its series
   carry the file's `source`, as an archive recording's series carry its
-  recording's labels, so a KPI template carried in the parquet (llm-perf's,
-  or one written by `recording annotate`) whose queries select
-  `{source="llm-perf"}` matches them: `rezolus view run.parquet` draws those
-  KPIs where it listed them all as unavailable, and `rezolus mcp query`,
-  `recording check` and the static viewer read the same series. A combined
+  recording's labels, so a KPI template carried in the parquet (llm-perf's)
+  whose queries select `{source="llm-perf"}` matches them: `rezolus view
+  run.parquet` draws those KPIs where it listed them all as unavailable, and
+  `rezolus mcp query`, `recording check` and the static viewer read the same
+  series. The `.dendro` a parquet file is converted to (`recording annotate
+  run.parquet --queries kpis.json -o run.dendro`, `recording upgrade`) labels
+  its recording with the same `source`, so the template matches there too. A combined
   parquet, whose columns carry their own `source`, and a parquet any of
   whose series already carry a `source` label are read as before. A series
   that had no visible label now has `source`, so a chart of one such series
@@ -994,6 +1041,30 @@
 
 ### Added
 
+- **`record --endpoint url,host=NAME` sets the recording's `host` label.**
+  `record` names labels that a Rezolus agent's metadata brought too late to
+  put on the recording (metriken-recorder's `LabelsNotApplied`), with the
+  `--endpoint` that sets them on the next run: the argument as typed with
+  `host=` (and `source=`/`arm=`) added in place of any it gave, any other
+  label as `--label`, and with several endpoints the one it replaces, e.g.
+  `warn: svc: its host label arrived late and is not on the recording;
+  record again with --endpoint http://a:4241,source=svc,host=web-01`.
+  Hindsight and the live viewer log the labels.
+- **A new output never replaces a file.** The `recording` tools stage each
+  output in `.<output>.rezolus-staging.<pid>.<random>` beside it and link it
+  into place, refusing an output that appeared meanwhile (an in-place
+  `filter` and `convert --force` replace, as asked). `filter x.dendro -o y`
+  now refuses a `y` that exists before reading anything, where it replaced
+  it; `-o` naming the input itself (`./x.dendro`) filters in place. A killed
+  command leaves that directory behind. Save as Report in the static site
+  refuses a recording over 1 GiB (it holds about three copies in memory),
+  naming `rezolus view`.
+- **Gauge histograms are listed.** A `.dendro` holding gauge histograms
+  (metriken 0.11.4's `GaugeHistogram`) shows them in the viewer's metric
+  browser (as histograms, charted through the histogram functions) and in
+  `mcp describe-metrics` (their own section), through every reader the
+  viewers use (`RezReader`, `LiveReader`, and the combined and per-recording
+  views). `detect-anomalies` and `extract-features` do not cover them.
 - **`record --endpoint url,template=FILE` attaches a KPI template to an
   endpoint's recording.** The file, a `ServiceExtension` JSON as `recording
   annotate --queries` takes, is written into that recording's metadata as

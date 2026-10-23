@@ -237,7 +237,7 @@ fn json_str(s: &str) -> String {
 /// way double-quote escaping lets `$`, `` ` ``, `\` and `!` do. Left bare when
 /// the word is already shell-safe, so the common `source=redis` reads unchanged
 /// and existing captures' advice does not churn.
-fn shell_word(word: &str) -> String {
+pub(crate) fn shell_word(word: &str) -> String {
     // The set that never needs quoting in POSIX sh. `=` is here because the
     // token is `k=v`; the rest are the label-value characters that occur in
     // practice (paths, versions, hostports).
@@ -340,7 +340,7 @@ pub(crate) fn describe_candidates_at(
                  names another\n\
                  {IND}recording in this archive. To compare them, label them by position: \
                  `rezolus recording\n\
-                 {IND}combine FILE --ab baseline={p} experiment={q} -o ab.rez`{others};\n\
+                 {IND}combine FILE --ab baseline={p} experiment={q} -o ab.dendro`{others};\n\
                  {IND}for a new capture, give each --endpoint its own source=NAME or \
                  arm=NAME.\n",
                 positions[i]

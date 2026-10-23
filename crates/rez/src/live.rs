@@ -362,6 +362,12 @@ impl MetricsSource for LiveReader {
     fn histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
         self.current().histogram_labels(name)
     }
+    fn gauge_histogram_names(&self) -> Vec<String> {
+        self.current().gauge_histogram_names()
+    }
+    fn gauge_histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
+        self.current().gauge_histogram_labels(name)
+    }
     fn time_range(&self) -> Option<(f64, f64)> {
         self.current().time_range()
     }

@@ -593,6 +593,7 @@ pub(super) fn classify_sources(
     let mut metric_names: Vec<String> = baseline_data.counter_names();
     metric_names.extend(baseline_data.gauge_names());
     metric_names.extend(baseline_data.histogram_names());
+    metric_names.extend(baseline_data.gauge_histogram_names());
 
     let filename_stem = path
         .file_stem()

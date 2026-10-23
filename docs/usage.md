@@ -607,43 +607,59 @@ browser would.
 
 ## Recording tools
 
-`rezolus recording` inspects and transforms `.parquet` files and `.rez`
-archives. `parquet` remains a compatibility alias for the command. Operations
-and flags differ by format; check `rezolus recording <subcommand> --help`.
+`rezolus recording` inspects and transforms recordings: `.dendro` archives,
+and the `.rez` archives and `.parquet` files 5.x wrote. `parquet` remains a
+compatibility alias for the command. Check `rezolus recording <subcommand>
+--help` for each one's flags.
 
-- **Metadata** — inspect file-level and column-level metadata, geometry, and
-  schema.
+- **Metadata** — inspect a recording: an archive's recordings, labels,
+  metadata and tables, or a parquet file's metadata, geometry and schema.
 - **Annotate** — embed service extension KPI definitions for custom viewer
   dashboards.
 - **Check** — evaluate the checks a recording's KPIs carry and report a
   verdict per check. See [Checks](#checks) below.
-- **Combine** — merge a Rezolus parquet with service-level parquet files,
-  joining on timestamps to produce a unified multi-source recording, or package
-  captures as a multi-recording `.rez`. A/B tarballs are a legacy option.
-- **Convert** — turn a raw msgpack recording (from a 5.x `record -o out.raw`) into
-  parquet. The input may be plain or zstd-compressed; which one it is is
-  detected from the file's contents, not its name.
-- **Filter** — drop parquet columns not referenced by service KPIs, or select
-  samplers from a `.rez` archive.
-- **Upgrade** — convert older tar-based `.rez` archives to the SQLite container.
-  With `--to dendro`, write a copy as a dendro archive instead, the container
-  rezolus 6.0 is planned to write. No current rezolus reads the result, so it
-  is always a new file (`-o`, which must not exist), never a replacement.
-- **Snapshot** — copy a live `.rez` consistently, including committed data in
-  SQLite's sidecar. Prefer this over copying an active file with `cp`.
+- **Combine** — combine recordings (`.dendro`, `.rez` or `.parquet`, in any
+  mix) into one `.dendro`, a recording per input recording, which the viewer
+  opens as one combined view; `--ab` labels each input's recordings as the
+  baseline or experiment arm of a comparison.
+- **Convert** — turn a raw msgpack recording (from a 5.x `record -o out.raw`)
+  into a `.dendro`. The input may be plain or zstd-compressed; which one it is
+  is detected from the file's contents, not its name.
+- **Filter** — keep the named samplers (`--samplers`) or metrics
+  (`--metrics`); a parquet file with neither keeps the metrics its KPIs need.
+- **Upgrade** — convert a `.rez` archive (v1, v2 or v3) or a `.parquet` file
+  into a `.dendro` (`<name>.dendro` beside it without `-o`).
+- **Snapshot** — copy an archive that is still being written consistently,
+  including committed data in SQLite's sidecar, into a `.dendro`. Prefer this
+  over copying an active file with `cp`.
+
+6.x writes `.dendro` only and never changes a `.rez` or `.parquet` file.
+`annotate`, `filter` and `check --annotate` edit a `.dendro` in place (or a
+copy, given `-o`); for a `.rez` or `.parquet` input they need `-o
+<new>.dendro`, and without it they stop and print the command with `-o`
+added. A recording read from several sources (a recording and its snapshot,
+combined) takes each metadata key from the first source holding it, so
+removing KPIs from one copy with `--undo` does not remove them from a
+combined recording whose other source still has them: annotate the combined
+recording instead, which edits every source. A new output is written in a
+directory beside it,
+`.<output>.rezolus-staging.<pid>.<random>`, and appears only once it is
+complete; it never replaces a file that exists, except an in-place `filter`
+(which replaces its input) and `convert --force`. A command killed part way
+leaves that directory behind, safe to delete.
 
 ```bash
-rezolus recording metadata -i rezolus.parquet
-rezolus recording annotate rezolus.parquet --queries ext.json
-rezolus recording annotate run.rez --event 'time=2026-09-28T14:03:11Z,kind=deploy,description=rollout'
-rezolus recording annotate run.rez --event 'time=2026-09-28T14:00Z,duration=90s,kind=warmup,description=warm-up'
-rezolus recording check run.rez --annotate
-rezolus recording combine rezolus.parquet service.parquet -o combined.parquet
-rezolus recording convert rezolus.raw.zst              # writes rezolus.parquet
-rezolus recording filter rezolus.parquet -o slim.parquet
-rezolus recording snapshot live.rez -o incident.rez
-rezolus recording upgrade old.rez
-rezolus recording upgrade --to dendro capture.rez -o capture.dendro
+rezolus recording metadata -i run.dendro
+rezolus recording annotate run.dendro --queries ext.json
+rezolus recording annotate run.dendro --event 'time=2026-09-28T14:03:11Z,kind=deploy,description=rollout'
+rezolus recording annotate run.dendro --event 'time=2026-09-28T14:00Z,duration=90s,kind=warmup,description=warm-up'
+rezolus recording annotate old.rez --queries ext.json -o old.dendro
+rezolus recording check run.dendro --annotate
+rezolus recording combine rezolus.dendro service.parquet -o combined.dendro
+rezolus recording convert rezolus.raw.zst              # writes rezolus.dendro
+rezolus recording filter run.dendro --samplers cpu_usage -o slim.dendro
+rezolus recording snapshot live.dendro -o incident.dendro
+rezolus recording upgrade capture.rez -o capture.dendro
 ```
 
 `convert` infers the sampling interval from the median gap between snapshot
@@ -652,11 +668,9 @@ failing) when the sampled gaps have no dominant cadence, or when they are closer
 together than the whole milliseconds `sampling_interval_ms` can hold. A raw recording carries no
 `systeminfo` or metric descriptions — the recorder fetches those from the
 agent's `/systeminfo` and `/metrics/descriptions` endpoints while recording — so
-supply them with `--systeminfo` / `--descriptions` if you saved them. Afterwards
-`rezolus recording annotate --systeminfo` can still add the hardware summary, but there is
-no annotate route for descriptions. A `.rez` archive cannot be produced from a
-raw recording: it needs the per-sampler cadence and acquisition windows that a
-raw snapshot stream never carried.
+supply them with `--systeminfo` / `--descriptions` if you saved them. A raw
+snapshot stream never carried acquisition windows, so a converted recording
+has no rate bands.
 
 ### Checks
 
@@ -919,12 +933,15 @@ rezolus mcp --allow-mutating
   --clear-events`, typed by a person.
 
 Without the flag `remove_events` is neither listed nor callable; a call
-answers with the flag's name. On a multi-recording `.rez`, `add_event` and
+answers with the flag's name. On a multi-recording archive, `add_event` and
 `remove_events` need the `recording` selector below and refuse to write to
 every arm; `run_checks` without a selector evaluates every recording and
-gives each its own verdicts, as `recording check` does. The reply of a
-write carries the writer's report line, which is where a v1/v2 tar archive
-says it was upgraded to v3 on the way.
+gives each its own verdicts, as `recording check` does. A write edits a
+`.dendro` in place. A `.rez` or `.parquet` recording is not changed: the
+write needs `output`, a new `.dendro` the recording is converted to and the
+edit written into, and is refused without it. The reply of a write carries
+the writer's report line, and for a converted input the line saying what was
+converted.
 
 ### Multi-recording archives
 

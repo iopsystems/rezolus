@@ -1,7 +1,8 @@
-//! Event-annotation helpers for `rezolus parquet annotate`.
+//! Event-annotation helpers for `rezolus recording annotate`.
 //!
-//! Events are stored as a JSON blob in the parquet footer under
-//! [`KEY_EVENTS`](crate::parquet_metadata::KEY_EVENTS). On-disk shape:
+//! Events are stored as a JSON blob in each recording's metadata under
+//! [`KEY_EVENTS`](crate::parquet_metadata::KEY_EVENTS) (a parquet file
+//! written before 6.0 holds them in its footer). On-disk shape:
 //! `{"events":[ {"timestamp":<ns>, "description":..., ...} ]}`. Every
 //! event is self-describing — it carries its own optional
 //! `source`/`node`/`instance` scope rather than inheriting from
@@ -21,7 +22,6 @@
 //! humantime string (e.g. `30s`, `1m30s`).
 
 use chrono::DateTime;
-use parquet::file::metadata::KeyValue;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -29,9 +29,8 @@ use crate::parquet_metadata::KEY_EVENTS;
 use crate::viewer::{Event, Events};
 
 /// Fold event operations over an existing payload, in the order
-/// `clear → add file → add inline`, without any file I/O. This is the pure
-/// core of [`run`] so the parquet footer path and the `.rez` manifest path
-/// (`parquet_tools::annotate`) share one transform.
+/// `clear → add file → add inline`, without any file I/O: the transform
+/// `parquet_tools::annotate` applies to each recording.
 ///
 /// `existing` is the payload already attached (ignored when `clear`). Returns
 /// the normalized result plus `(added, dropped_by_id)` counts for reporting.
@@ -167,51 +166,38 @@ pub(crate) fn append_events(existing: Option<Events>, new: Vec<Event>) -> Append
     Appended { events, counts }
 }
 
-/// Append `new` to a parquet file's `events` payload.
-pub(crate) fn append_to_parquet(
-    path: &Path,
-    new: Vec<Event>,
-) -> Result<Appended, Box<dyn std::error::Error>> {
-    let appended = append_events(read_events(path)?, new);
-    write_events(path, &appended.events)?;
-    Ok(appended)
-}
-
 /// What a selector-scoped write did, for the caller's own report.
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct WriteReport {
-    /// The recording written, as its label set; `None` for a parquet file.
+    /// The recording written, as its label set.
     pub recording: Option<BTreeMap<String, String>>,
     pub counts: AppendCounts,
     /// Events the recording holds after the write.
     pub total: usize,
-    /// The annotation writer's own report, when there was one: it says,
-    /// among other things, when a v1/v2 tar archive was upgraded to v3 on
-    /// the way, which a caller must not hide.
+    /// The annotation writer's own report, when there was one, after the
+    /// line saying what was converted when the input was a legacy recording.
     pub report: Option<String>,
 }
 
-/// Append `new` to the recording `selector` names in `path`: a parquet
-/// file (the selector must then be empty), or one recording of a `.rez` or
-/// dendro archive. A multi-recording archive with no selector is refused
-/// with the listing the read tools give, never written to every recording:
-/// that is `recording annotate`'s behavior, and an agent adding a mark
-/// it saw in one arm must not stamp the other arms with it.
+/// Append `new` to the recording `selector` names in `path`, a dendro
+/// archive; with `output`, in a new `.dendro` there (a legacy `.rez` or
+/// parquet input needs one: it is converted there and the copy written). A
+/// multi-recording archive with no selector is refused with the listing the
+/// read tools give, never written to every recording: that is `recording
+/// annotate`'s behavior, and an agent adding a mark it saw in one arm must
+/// not stamp the other arms with it.
 pub(crate) fn add_events_selected(
     path: &Path,
+    output: Option<&Path>,
     selector: &crate::mcp::RecordingSelector,
     new: Vec<Event>,
 ) -> Result<WriteReport, Box<dyn std::error::Error>> {
-    let (format, target, total) = one_target(path, selector)?;
-    if format == crate::recorder::rez::RezFormat::NotRez {
-        let appended = append_to_parquet(path, new)?;
-        return Ok(WriteReport {
-            recording: None,
-            counts: appended.counts,
-            total: appended.events.events.len(),
-            report: None,
-        });
-    }
+    // Resolved on the input first, so a selector that names nothing is
+    // refused before anything is written.
+    one_target(path, selector)?;
+    let edit = super::legacy::edit_target(path, output, output_advice)?;
+    let target_path = edit.path().to_path_buf();
+    let (target, total) = one_target(&target_path, selector)?;
     // The same append the writer applies, run here first so the counts
     // and the resulting total can be reported; the writer repeats it
     // against what is stored, which is what was just read.
@@ -222,16 +208,38 @@ pub(crate) fn add_events_selected(
         ext_json: None,
         events: None,
         per_recording_events: Some(per),
-        per_recording_replace: None,
+        per_recording_remove: None,
+        undo_kpis: false,
+        systeminfo: None,
         report: super::annotate::ReportSink::capture(),
     };
-    super::annotate::annotate_rez_any(path, format, &annotation)?;
+    drop(target.reader);
+    super::annotate::annotate_archive_as(&target_path, edit.shown(), &annotation)?;
+    let note = edit.note();
+    edit.commit()?;
     Ok(WriteReport {
         recording: target.labels,
         counts: preview.counts,
         total: preview.events.events.len(),
-        report: annotation.report.captured(),
+        report: joined(note, annotation.report.captured()),
     })
+}
+
+/// How to write an MCP edit of the legacy recording at `path`: name a new
+/// archive in the tool's `output` argument.
+fn output_advice(suggested: &Path) -> String {
+    format!(
+        "pass \"output\": {:?} (a new .dendro the edit is written to)",
+        suggested.display().to_string()
+    )
+}
+
+/// `first` and `second`, each on its own line, when there are any.
+fn joined(first: Option<String>, second: Option<String>) -> Option<String> {
+    match (first, second) {
+        (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
+        (a, b) => a.or(b),
+    }
 }
 
 /// Which events `remove_events_selected` drops. Every given field must
@@ -248,7 +256,7 @@ impl RemoveFilter {
         self.ids.is_empty() && self.kind.is_none() && self.source.is_none()
     }
 
-    fn matches(&self, e: &Event) -> bool {
+    pub(crate) fn matches(&self, e: &Event) -> bool {
         (self.ids.is_empty()
             || e.id
                 .as_deref()
@@ -274,11 +282,13 @@ pub(crate) struct RemoveReport {
     pub report: Option<String>,
 }
 
-/// Drop every event matching `filter` from the recording `selector` names.
-/// An empty filter is refused: "remove everything" is `annotate
-/// --clear-events`, typed by a person.
+/// Drop every event matching `filter` from the recording `selector` names,
+/// in `path` or, with `output`, in a new `.dendro` there (as
+/// [`add_events_selected`]). An empty filter is refused: "remove everything"
+/// is `annotate --clear-events`, typed by a person.
 pub(crate) fn remove_events_selected(
     path: &Path,
+    output: Option<&Path>,
     selector: &crate::mcp::RecordingSelector,
     filter: &RemoveFilter,
 ) -> Result<RemoveReport, Box<dyn std::error::Error>> {
@@ -287,66 +297,54 @@ pub(crate) fn remove_events_selected(
                     clearing every event is `recording annotate --clear-events`"
             .into());
     }
-    let (format, target, total) = one_target(path, selector)?;
-    let existing = if format == crate::recorder::rez::RezFormat::NotRez {
-        read_events(path)?
-    } else {
-        stored_events(target.reader.as_ref())?
-    }
-    .unwrap_or_default();
-    let before = existing.events.len();
-    let kept: Vec<Event> = existing
-        .events
-        .into_iter()
-        .filter(|e| !filter.matches(e))
-        .collect();
-    // Every writer stores a normalized payload, so the kept subset already
-    // is one; normalizing again costs nothing and holds for a payload some
-    // other tool wrote unsorted. `removed` is counted after it so that
-    // `removed + total` is what was there before.
-    let mut payload = Events::new(kept);
-    payload.normalize();
-    let removed = before - payload.events.len();
-    if format == crate::recorder::rez::RezFormat::NotRez {
-        write_events(path, &payload)?;
-        return Ok(RemoveReport {
-            recording: None,
-            removed,
-            total: payload.events.len(),
-            report: None,
-        });
-    }
-    let remaining = payload.events.len();
-    let mut per: Vec<Option<Events>> = vec![None; total];
-    per[target.index] = Some(payload);
+    one_target(path, selector)?;
+    let edit = super::legacy::edit_target(path, output, output_advice)?;
+    let target_path = edit.path().to_path_buf();
+    let (target, total) = one_target(&target_path, selector)?;
+    // The recording's events as a reader shows them: every source's, as one
+    // (`rez::reader`'s `group_metadata`). Each source is then filtered from
+    // its own payload by `annotate_archive`, so no source is given another's
+    // events. `removed` is counted after normalizing so that `removed +
+    // total` is what was there before.
+    let existing = stored_events(target.reader.as_ref())?.unwrap_or_default();
+    let mut shown = existing.clone();
+    shown.normalize();
+    let before = shown.events.len();
+    let remaining = shown.events.iter().filter(|e| !filter.matches(e)).count();
+    let removed = before - remaining;
+    let mut per: Vec<Option<RemoveFilter>> = vec![None; total];
+    per[target.index] = Some(filter.clone());
     let annotation = super::annotate::RezAnnotation {
         ext_json: None,
         events: None,
         per_recording_events: None,
-        per_recording_replace: Some(per),
+        per_recording_remove: Some(per),
+        undo_kpis: false,
+        systeminfo: None,
         report: super::annotate::ReportSink::capture(),
     };
-    super::annotate::annotate_rez_any(path, format, &annotation)?;
+    drop(target.reader);
+    super::annotate::annotate_archive_as(&target_path, edit.shown(), &annotation)?;
+    let note = edit.note();
+    edit.commit()?;
     Ok(RemoveReport {
         recording: target.labels,
         removed,
         total: remaining,
-        report: annotation.report.captured(),
+        report: joined(note, annotation.report.captured()),
     })
 }
 
 /// The one recording a selector names, through the check runner's open
-/// (`ParquetReader` or `RezReader::open_recordings`, refusing a selector on
-/// a parquet file). Unlike `check`, an empty selector over a multi-recording
-/// archive is an error here, with the same listing the read tools give.
+/// (`RezReader::open_recordings`, or a parquet file's one recording, refusing
+/// a selector on it). Unlike `check`, an empty selector over a
+/// multi-recording archive is an error here, with the same listing the read
+/// tools give. Returns the recording and how many the archive holds.
 fn one_target(
     path: &Path,
     selector: &crate::mcp::RecordingSelector,
-) -> Result<
-    (crate::recorder::rez::RezFormat, super::check::Target, usize),
-    Box<dyn std::error::Error>,
-> {
-    let (format, mut targets, total) = super::check::open_targets(path, selector)?;
+) -> Result<(super::check::Target, usize), Box<dyn std::error::Error>> {
+    let (_format, mut targets, total) = super::check::open_targets(path, selector)?;
     if targets.len() != 1 {
         let all: Vec<BTreeMap<String, String>> =
             targets.iter().filter_map(|t| t.labels.clone()).collect();
@@ -358,7 +356,7 @@ fn one_target(
         )
         .into());
     }
-    Ok((format, targets.remove(0), total))
+    Ok((targets.remove(0), total))
 }
 
 /// A recording's stored events, as its reader reports them.
@@ -371,102 +369,6 @@ fn stored_events(
         .map(|s| serde_json::from_str::<Events>(s))
         .transpose()
         .map_err(|e| format!("recording has an invalid events payload: {e}").into())
-}
-
-/// Apply event-related operations to a parquet file in the order
-/// `clear → add file → add inline`.
-///
-/// Returns `Ok(true)` if anything changed (and the file was rewritten),
-/// `Ok(false)` if no event operations were requested.
-pub(super) fn run(
-    path: &Path,
-    add_files: &[&Path],
-    inline: &[String],
-    clear: bool,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    if !clear && add_files.is_empty() && inline.is_empty() {
-        return Ok(false);
-    }
-
-    let existing = if clear { None } else { read_events(path)? };
-    let original_existing_ids: std::collections::HashSet<String> = existing
-        .iter()
-        .flat_map(|e| e.events.iter())
-        .filter_map(|e| e.id.clone())
-        .filter(|id| !id.is_empty())
-        .collect();
-
-    let (events, added, dropped) = apply_event_ops(existing, add_files, inline, clear)?;
-
-    write_events(path, &events)?;
-
-    if clear {
-        println!("Cleared existing events from {:?}", path);
-    }
-    if added > 0 {
-        println!(
-            "Annotated {:?} with {} event(s) ({} total{})",
-            path,
-            added,
-            events.events.len(),
-            if dropped > 0 {
-                format!(", {dropped} deduped by id")
-            } else {
-                String::new()
-            },
-        );
-    } else if !clear {
-        println!("No events to add to {:?}", path);
-    }
-
-    // normalize() keeps the earlier entry on id collision, so warn loudly
-    // when a new CLI invocation tried to overwrite an existing event.
-    let new_ids: Vec<String> = add_files
-        .iter()
-        .filter_map(|p| read_input_file(p).ok())
-        .flatten()
-        .chain(inline.iter().filter_map(|s| parse_inline_event(s).ok()))
-        .filter_map(|e| e.id)
-        .filter(|id| !id.is_empty())
-        .collect();
-    for id in &new_ids {
-        if original_existing_ids.contains(id) {
-            eprintln!(
-                "warning: event id={id:?} already existed in file; kept original (use --clear-events to replace)"
-            );
-        }
-    }
-
-    Ok(true)
-}
-
-/// Read the existing `events` payload from a parquet file's footer.
-pub(crate) fn read_events(path: &Path) -> Result<Option<Events>, Box<dyn std::error::Error>> {
-    let kv_meta = super::read_file_metadata(path)?;
-    let Some(raw) = kv_meta
-        .iter()
-        .find(|kv| kv.key == KEY_EVENTS)
-        .and_then(|kv| kv.value.as_deref())
-    else {
-        return Ok(None);
-    };
-    let events: Events = serde_json::from_str(raw)
-        .map_err(|e| format!("invalid existing events payload in {path:?}: {e}"))?;
-    Ok(Some(events))
-}
-
-fn write_events(path: &Path, events: &Events) -> Result<(), Box<dyn std::error::Error>> {
-    let mut kv_meta = super::read_file_metadata(path)?;
-    kv_meta.retain(|kv| kv.key != KEY_EVENTS);
-    if !events.events.is_empty() {
-        kv_meta.push(KeyValue {
-            key: KEY_EVENTS.to_string(),
-            value: Some(serde_json::to_string(events)?),
-        });
-    }
-    let buf = super::rewrite_parquet(path, kv_meta, None)?;
-    std::fs::write(path, &buf)?;
-    Ok(())
 }
 
 /// Read events from `path`, or from stdin if `path == "-"`. Accepts:
@@ -954,127 +856,6 @@ mod tests {
         assert_eq!(parse_timestamp_str("2026-05-12T15:23").unwrap(), with);
     }
 
-    // ── end-to-end tests against a real parquet file ──
-
-    use arrow::array::UInt64Array;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use parquet::arrow::ArrowWriter;
-    use parquet::file::metadata::KeyValue;
-    use parquet::file::properties::WriterProperties;
-    use std::sync::Arc;
-    use tempfile::NamedTempFile;
-
-    fn make_minimal_parquet(initial_kv: Vec<(&str, &str)>) -> NamedTempFile {
-        let ts_field = Field::new("timestamp", DataType::UInt64, false);
-        let schema = Arc::new(Schema::new(vec![ts_field]));
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(UInt64Array::from(vec![1u64, 2, 3]))],
-        )
-        .unwrap();
-        let kv: Vec<KeyValue> = initial_kv
-            .into_iter()
-            .map(|(k, v)| KeyValue {
-                key: k.to_string(),
-                value: Some(v.to_string()),
-            })
-            .collect();
-        let props = WriterProperties::builder()
-            .set_key_value_metadata(Some(kv))
-            .build();
-        let tmp = NamedTempFile::new().unwrap();
-        let mut writer = ArrowWriter::try_new(
-            std::fs::File::create(tmp.path()).unwrap(),
-            schema,
-            Some(props),
-        )
-        .unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-        tmp
-    }
-
-    fn write_events_file(events_json: &str) -> NamedTempFile {
-        let tmp = NamedTempFile::new().unwrap();
-        std::fs::write(tmp.path(), events_json).unwrap();
-        tmp
-    }
-
-    #[test]
-    fn run_adds_events_from_file() {
-        let parquet = make_minimal_parquet(vec![("source", "rezolus")]);
-        let events_file =
-            write_events_file(r#"{"events":[{"timestamp":1,"description":"restart"}]}"#);
-
-        let changed = run(parquet.path(), &[events_file.path()], &[], false).unwrap();
-        assert!(changed);
-
-        let stored = read_events(parquet.path()).unwrap().unwrap();
-        assert_eq!(stored.events.len(), 1);
-        assert_eq!(stored.events[0].description, "restart");
-    }
-
-    #[test]
-    fn run_appends_to_existing_events() {
-        let parquet = make_minimal_parquet(vec![("source", "rezolus")]);
-        let first = write_events_file(r#"[{"timestamp":1,"description":"a"}]"#);
-        run(parquet.path(), &[first.path()], &[], false).unwrap();
-
-        let second = write_events_file(r#"[{"timestamp":2,"description":"b"}]"#);
-        run(parquet.path(), &[second.path()], &[], false).unwrap();
-
-        let stored = read_events(parquet.path()).unwrap().unwrap();
-        assert_eq!(stored.events.len(), 2);
-        assert_eq!(stored.events[0].description, "a");
-        assert_eq!(stored.events[1].description, "b");
-    }
-
-    #[test]
-    fn run_clear_then_add_replaces_events() {
-        let parquet = make_minimal_parquet(vec![("source", "rezolus")]);
-        let first = write_events_file(r#"[{"timestamp":1,"description":"old"}]"#);
-        run(parquet.path(), &[first.path()], &[], false).unwrap();
-
-        let second = write_events_file(r#"[{"timestamp":2,"description":"new"}]"#);
-        run(parquet.path(), &[second.path()], &[], true).unwrap();
-
-        let stored = read_events(parquet.path()).unwrap().unwrap();
-        assert_eq!(stored.events.len(), 1);
-        assert_eq!(stored.events[0].description, "new");
-    }
-
-    #[test]
-    fn run_clear_only_wipes_events() {
-        let parquet = make_minimal_parquet(vec![("source", "rezolus")]);
-        let first = write_events_file(r#"[{"timestamp":1,"description":"old"}]"#);
-        run(parquet.path(), &[first.path()], &[], false).unwrap();
-
-        run(parquet.path(), &[], &[], true).unwrap();
-
-        // Cleared: no key in metadata, read returns None.
-        assert!(read_events(parquet.path()).unwrap().is_none());
-    }
-
-    #[test]
-    fn run_inline_events_merge_with_file() {
-        let parquet = make_minimal_parquet(vec![("source", "rezolus")]);
-        let file = write_events_file(r#"[{"timestamp":1,"description":"file-event"}]"#);
-        run(
-            parquet.path(),
-            &[file.path()],
-            &["time=2,description=inline-event".to_string()],
-            false,
-        )
-        .unwrap();
-
-        let stored = read_events(parquet.path()).unwrap().unwrap();
-        assert_eq!(stored.events.len(), 2);
-        // Sorted by timestamp
-        assert_eq!(stored.events[0].description, "file-event");
-        assert_eq!(stored.events[1].description, "inline-event");
-    }
-
     #[test]
     fn inline_event_accepts_duration_in_both_spellings() {
         // Humantime form, the one the help text advertises.
@@ -1086,28 +867,6 @@ mod tests {
         // A point event carries no duration at all.
         let e = parse_inline_event("time=1,description=point").unwrap();
         assert_eq!(e.duration_ns, None);
-    }
-
-    #[test]
-    fn run_returns_false_when_no_event_args() {
-        let parquet = make_minimal_parquet(vec![("source", "rezolus")]);
-        let changed = run(parquet.path(), &[], &[], false).unwrap();
-        assert!(!changed);
-    }
-
-    #[test]
-    fn run_preserves_other_metadata() {
-        let parquet = make_minimal_parquet(vec![("source", "rezolus"), ("node", "web01")]);
-        let file = write_events_file(r#"[{"timestamp":1,"description":"d"}]"#);
-        run(parquet.path(), &[file.path()], &[], false).unwrap();
-
-        let kv = crate::parquet_tools::read_file_metadata(parquet.path()).unwrap();
-        assert!(kv
-            .iter()
-            .any(|kv| kv.key == "source" && kv.value.as_deref() == Some("rezolus")));
-        assert!(kv
-            .iter()
-            .any(|kv| kv.key == "node" && kv.value.as_deref() == Some("web01")));
     }
 
     fn check_event(id: &str, ts: u64, duration: u64) -> Event {
@@ -1193,18 +952,77 @@ mod tests {
         assert!(appended.counts.nothing_new());
     }
 
+    /// A recording of two sources (a source and its snapshot, each annotated
+    /// alone) shows both sources' events, and removing one event drops it
+    /// from each source's own payload: the copy keeps the event only it
+    /// holds.
     #[test]
-    fn run_dedupes_by_id_keeping_earlier() {
-        let parquet = make_minimal_parquet(vec![("source", "rezolus")]);
-        let first = write_events_file(r#"[{"timestamp":1,"description":"orig","id":"dup"}]"#);
-        run(parquet.path(), &[first.path()], &[], false).unwrap();
+    fn a_recordings_sources_keep_their_own_events() {
+        use ::rez::fixtures::{counter, map, snap_counters, write_dendro, Finish, Source, ANCHOR};
+        use metriken_query::MetricsSource;
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.dendro");
+        let rows = (0..4u64)
+            .map(|i| {
+                let ts = ANCHOR + i * 1_000_000_000;
+                let w = Some(::rez::window::Window::new(ts - 50_000_000, ts));
+                (snap_counters(ts, vec![counter("ops", "s", i, w)]), ts)
+            })
+            .collect();
+        let source = Source {
+            labels: map(&[("source", "rezolus")]),
+            metadata: map(&[]),
+            rows,
+        };
+        write_dendro(&a, &[source], None, Finish::Finalized);
+        let any = crate::mcp::RecordingSelector::default();
+        let event = |id: &str| {
+            parse_inline_event(&format!("time={},id={id},description={id}", ANCHOR + 1)).unwrap()
+        };
+        add_events_selected(&a, None, &any, vec![event("E1")]).unwrap();
+        let copy = dir.path().join("copy.dendro");
+        crate::parquet_tools::snapshot_rez(&a, &copy).unwrap();
+        add_events_selected(&copy, None, &any, vec![event("E2")]).unwrap();
+        let grp = dir.path().join("grp.dendro");
+        crate::parquet_tools::combine::run_combine_for_test(&[a, copy], &grp).unwrap();
 
-        let second = write_events_file(r#"[{"timestamp":2,"description":"new","id":"dup"}]"#);
-        run(parquet.path(), &[second.path()], &[], false).unwrap();
+        let shown = |path: &Path| -> Vec<String> {
+            let readers = crate::rez_reader::RezReader::open_recordings(
+                path,
+                metriken_storage::BufferPool::new(8 << 20),
+            )
+            .unwrap();
+            assert_eq!(readers.len(), 1, "a source and its copy are one recording");
+            readers[0]
+                .1
+                .file_metadata()
+                .get(crate::parquet_metadata::KEY_EVENTS)
+                .map(|s| serde_json::from_str::<Events>(s).unwrap().events)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|e| e.id)
+                .collect()
+        };
+        assert_eq!(shown(&grp), ["E1", "E2"]);
 
-        let stored = read_events(parquet.path()).unwrap().unwrap();
-        assert_eq!(stored.events.len(), 1);
-        // Earlier entry won (matches the "use --clear-events to replace" hint).
-        assert_eq!(stored.events[0].description, "orig");
+        let filter = RemoveFilter {
+            ids: vec!["E1".to_string()],
+            ..Default::default()
+        };
+        let report = remove_events_selected(&grp, None, &any, &filter).unwrap();
+        assert_eq!((report.removed, report.total), (1, 1));
+        assert_eq!(shown(&grp), ["E2"]);
+        let per_source: Vec<Vec<String>> = crate::parquet_tools::annotate::source_metadata(&grp)
+            .iter()
+            .map(|m| {
+                m.get(crate::parquet_metadata::KEY_EVENTS)
+                    .map(|s| serde_json::from_str::<Events>(s).unwrap().events)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|e| e.id)
+                    .collect()
+            })
+            .collect();
+        assert_eq!(per_source, [vec![], vec!["E2".to_string()]]);
     }
 }

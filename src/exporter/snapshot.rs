@@ -31,6 +31,7 @@ pub fn snapshot(
         counters: Vec::new(),
         gauges: Vec::new(),
         histograms: Vec::new(),
+        gauge_histograms: Vec::new(),
     };
 
     for curr in current.counters() {
@@ -165,6 +166,7 @@ mod tests {
             counters: Vec::new(),
             gauges: Vec::new(),
             histograms: vec![h],
+            gauge_histograms: Vec::new(),
         })
     }
 

@@ -16,7 +16,7 @@ use metriken_storage::BufferPool;
 /// [`ArchiveReader`], opened from a path or bytes by content. Derefs to it,
 /// so its methods (`composition_sources`, `metric_metadata`, `complete`, ...)
 /// are this type's.
-pub struct RezReader(pub ArchiveReader);
+pub struct RezReader(pub ArchiveReader, Option<HashMap<String, String>>);
 
 impl std::ops::Deref for RezReader {
     type Target = ArchiveReader;
@@ -28,10 +28,145 @@ impl std::ops::Deref for RezReader {
 /// One `RezReader` per recording, paired with that recording's label set.
 pub type LabeledRecordings = Vec<(BTreeMap<String, String>, RezReader)>;
 
-fn wrap(readers: metriken_storage::LabeledRecordings) -> LabeledRecordings {
-    readers
+/// The metadata key a recording's timeline events are stored under
+/// (`parquet_metadata::KEY_EVENTS` in the binary).
+const KEY_EVENTS: &str = "events";
+
+/// The metadata of a read group of several sources. `events` is the union
+/// of every source's events: events are records a source gains one at a
+/// time (an annotate of a copy, a check of the original), so the group
+/// shows each of them once, deduplicated by `id` (the first source's copy
+/// kept), an event with no `id` kept unless an identical one is already
+/// there, sorted by timestamp. Every other key (KPIs, systeminfo,
+/// descriptions, the agent version) is a whole value with no merge rule, and
+/// is taken from the first source (in archive order) that has it: the
+/// sources of a group are copies of one recording or recordings of one
+/// agent process, so they agree on a key both hold unless one was edited
+/// alone, and a key only one holds (KPIs annotated onto a snapshot before it
+/// was combined with its original) is the group's whichever order they were
+/// combined in. So removing KPIs from one copy (`recording annotate --undo`)
+/// does not remove them from a combined recording whose other source still
+/// has them; annotate the combined recording instead, which edits every
+/// source. A payload that does not parse is skipped, as a reader of one
+/// source would fail to read it.
+fn group_metadata(members: &[ArchiveReader]) -> HashMap<String, String> {
+    let mut metadata: HashMap<String, String> = HashMap::new();
+    for member in members {
+        for (key, value) in member.file_metadata() {
+            metadata.entry(key).or_insert(value);
+        }
+    }
+    let mut events: Vec<serde_json::Value> = Vec::new();
+    let mut ids = std::collections::HashSet::new();
+    let mut payloads = 0;
+    for member in members {
+        let Some(raw) = member.file_metadata().remove(KEY_EVENTS) else {
+            continue;
+        };
+        let Ok(serde_json::Value::Object(mut payload)) = serde_json::from_str(&raw) else {
+            continue;
+        };
+        payloads += 1;
+        let Some(serde_json::Value::Array(list)) = payload.remove(KEY_EVENTS) else {
+            continue;
+        };
+        for event in list {
+            let fresh = match event.get("id").and_then(|v| v.as_str()) {
+                Some(id) if !id.is_empty() => ids.insert(id.to_string()),
+                _ => !events.contains(&event),
+            };
+            if fresh {
+                events.push(event);
+            }
+        }
+    }
+    // One payload is already in `metadata` as it is.
+    if payloads > 1 {
+        events.sort_by_key(|e| {
+            (
+                e.get("timestamp").and_then(|t| t.as_u64()).unwrap_or(0),
+                e.get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            )
+        });
+        metadata.insert(
+            KEY_EVENTS.to_string(),
+            serde_json::json!({ KEY_EVENTS: events }).to_string(),
+        );
+    }
+    metadata
+}
+
+/// `recordings`, one reader per archive source, joined into one reader per
+/// read group (`metriken_storage::process::read_groups`): a source and its
+/// copies (one uuid), and sources of one producer epoch over overlapping
+/// time, are one recording, labelled with the group's labels. A source in no
+/// group stays a recording of its own. The grouping is the one
+/// `ArchiveReader::read_groups` makes over the same sources joined, so a
+/// group read here answers as it does inside a combined reader.
+///
+/// What a caller sees as "a recording" (the viewer's slots and members, the
+/// MCP and `recording check` selectors) is a read group; a writer that edits
+/// sources maps a group back to them through its reader's
+/// `ArchiveReader::sources`.
+fn read_groups(recordings: metriken_storage::LabeledRecordings) -> LabeledRecordings {
+    let one_each = recordings.iter().all(|(_, r)| r.sources().len() == 1);
+    if recordings.len() < 2 || !one_each {
+        return recordings
+            .into_iter()
+            .map(|(l, r)| (l, RezReader(r, None)))
+            .collect();
+    }
+    let groups = {
+        let infos: Vec<metriken_storage::process::SourceInfo> = recordings
+            .iter()
+            .map(|(_, r)| r.sources()[0].clone())
+            .collect();
+        let tables: Vec<Vec<&metriken_storage::reader::SamplerReader>> = recordings
+            .iter()
+            .map(|(_, r)| r.owners_of(&r.all_names()))
+            .collect();
+        // As `ArchiveReader::process_groups` asks: a source holds a row in
+        // the range when any of its tables does, and cannot tell when none
+        // does and one cannot tell.
+        let formed = metriken_storage::process::form(&infos, &mut |source, lo, hi| {
+            let mut unknown = false;
+            for t in &tables[source] {
+                match t.has_row_in(lo, hi) {
+                    Some(true) => return Some(true),
+                    Some(false) => {}
+                    None => unknown = true,
+                }
+            }
+            (!unknown).then_some(false)
+        });
+        metriken_storage::process::read_groups(&infos, &formed)
+    };
+    let mut slots: Vec<Option<ArchiveReader>> =
+        recordings.into_iter().map(|(_, r)| Some(r)).collect();
+    groups
         .into_iter()
-        .map(|(l, r)| (l, RezReader(r)))
+        .map(|group| {
+            let mut members: Vec<ArchiveReader> = group
+                .sources
+                .iter()
+                .map(|&i| slots[i].take().expect("a source is in one read group"))
+                .collect();
+            if members.len() == 1 {
+                return (
+                    group.labels,
+                    RezReader(members.pop().expect("one member"), None),
+                );
+            }
+            let metadata = group_metadata(&members);
+            let filename = members[0].filename();
+            (
+                group.labels,
+                RezReader(ArchiveReader::flatten(members, filename), Some(metadata)),
+            )
+        })
         .collect()
 }
 
@@ -48,9 +183,10 @@ impl RezReader {
         path: &Path,
         pool: Arc<BufferPool>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(RezReader(metriken_storage::rez::open::open_with_pool(
-            path, pool,
-        )?))
+        Ok(RezReader(
+            metriken_storage::rez::open::open_with_pool(path, pool)?,
+            None,
+        ))
     }
 
     /// [`open_recordings`](Self::open_recordings) for an archive that exists
@@ -60,7 +196,7 @@ impl RezReader {
         bytes: Vec<u8>,
         pool: Arc<BufferPool>,
     ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
-        Ok(wrap(
+        Ok(read_groups(
             metriken_storage::rez::open::open_recordings_from_bytes(bytes, pool)?,
         ))
     }
@@ -68,11 +204,14 @@ impl RezReader {
     /// Open an archive as one `RezReader` **per recording**, paired with that
     /// recording's labels. Used by the viewer to map a 2-recording archive
     /// onto baseline/experiment without cross-recording name collisions.
+    ///
+    /// A recording is a read group of the archive's sources (`read_groups`
+    /// above): a source and its copies are one.
     pub fn open_recordings(
         path: &Path,
         pool: Arc<BufferPool>,
     ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
-        Ok(wrap(metriken_storage::rez::open::open_recordings(
+        Ok(read_groups(metriken_storage::rez::open::open_recordings(
             path, pool,
         )?))
     }
@@ -103,6 +242,8 @@ impl RezReader {
                 .map(|t| t.recording_labels() as *const BTreeMap<String, String> as usize)
         };
         let ids: Vec<Option<usize>> = recordings.iter().map(|(_, r)| identity(&r.0)).collect();
+        // The first recording's metadata, its group's events merged.
+        let metadata = recordings.first().and_then(|(_, r)| r.1.clone());
         let joined =
             ArchiveReader::flatten(recordings.into_iter().map(|(_, r)| r.0).collect(), filename);
         let names = joined.all_names();
@@ -117,7 +258,7 @@ impl RezReader {
                 Some(joined.series_labels().of(table).inner.clone())
             })
             .collect();
-        (RezReader(joined), labels)
+        (RezReader(joined, metadata), labels)
     }
 }
 
@@ -168,6 +309,12 @@ impl MetricsSource for RezReader {
     fn histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
         self.0.histogram_labels(name)
     }
+    fn gauge_histogram_names(&self) -> Vec<String> {
+        self.0.gauge_histogram_names()
+    }
+    fn gauge_histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
+        self.0.gauge_histogram_labels(name)
+    }
     fn time_range(&self) -> Option<(f64, f64)> {
         self.0.time_range()
     }
@@ -190,7 +337,10 @@ impl MetricsSource for RezReader {
         self.0.metadata_get(key)
     }
     fn file_metadata(&self) -> HashMap<String, String> {
-        self.0.file_metadata()
+        match &self.1 {
+            Some(metadata) => metadata.clone(),
+            None => self.0.file_metadata(),
+        }
     }
     fn sample_timestamps(&self) -> Vec<u64> {
         self.0.sample_timestamps()
@@ -444,6 +594,88 @@ mod tests {
         );
     }
 
+    /// A read group's metadata takes each key from the first source, in
+    /// archive order, that has it: a key both hold is the first's, and a key
+    /// only the second holds is the group's.
+    #[test]
+    fn a_groups_metadata_is_the_first_source_holding_each_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("twice.dendro");
+        let source = |k: &str, only: Option<&str>| {
+            let mut metadata = fixtures::map(&[("producer_epoch", "E"), ("k", k)]);
+            if let Some(only) = only {
+                metadata.insert("only".to_string(), only.to_string());
+            }
+            Source {
+                labels: fixtures::map(&[("source", "rezolus")]),
+                metadata,
+                rows: (0..4u64)
+                    .map(|i| {
+                        let ts = fixtures::ANCHOR + i * 1_000_000_000;
+                        let w = Some(Window::new(ts - 50_000_000, ts));
+                        (
+                            fixtures::snap_counters(ts, vec![fixtures::counter("ops", "s", i, w)]),
+                            ts,
+                        )
+                    })
+                    .collect(),
+            }
+        };
+        fixtures::write_dendro(
+            &path,
+            &[source("first", None), source("second", Some("x"))],
+            None,
+            Finish::Finalized,
+        );
+        let readers = RezReader::open_recordings(&path, BufferPool::new(8 << 20)).unwrap();
+        assert_eq!(readers.len(), 1, "one epoch, overlapping: one recording");
+        let md = readers[0].1.file_metadata();
+        assert_eq!(md.get("k").map(String::as_str), Some("first"));
+        assert_eq!(md.get("only").map(String::as_str), Some("x"));
+    }
+
+    /// A gauge histogram shows through `RezReader` and `LiveReader`, which
+    /// forward the two gauge-histogram listings `MetricsSource` defaults to
+    /// empty, and its quantiles read.
+    #[test]
+    fn a_gauge_histogram_shows_through_rez_and_live_readers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gh.dendro");
+        let rows = (0..4u64)
+            .map(|i| {
+                let ts = fixtures::ANCHOR + i * 1_000_000_000;
+                (
+                    fixtures::snap_gauge_histogram(ts, "depth", "queue", 100 + i),
+                    ts,
+                )
+            })
+            .collect();
+        let source = Source {
+            labels: fixtures::map(&[("source", "rezolus")]),
+            metadata: fixtures::map(&[]),
+            rows,
+        };
+        fixtures::write_dendro(&path, &[source], None, Finish::Finalized);
+
+        let readers = RezReader::open_recordings(&path, BufferPool::new(8 << 20)).unwrap();
+        let live = crate::live::LiveReader::open(&path, None, BufferPool::new(8 << 20)).unwrap();
+        for (what, reader) in [
+            ("RezReader", &readers[0].1 as &dyn MetricsSource),
+            ("LiveReader", &live as &dyn MetricsSource),
+        ] {
+            assert_eq!(reader.gauge_histogram_names(), ["depth"], "{what}");
+            assert!(reader.histogram_names().is_empty(), "{what}");
+            let labels = reader.gauge_histogram_labels("depth");
+            assert_eq!(labels.len(), 1, "{what}: {labels:?}");
+            let (start, end) = reader.time_range().unwrap();
+            let q = reader
+                .query_range("histogram_quantile(0.5, depth)", start, end, 1.0)
+                .unwrap();
+            let json = serde_json::to_string(&q).unwrap();
+            assert!(json.contains("\"values\":[["), "{what}: {json}");
+        }
+    }
+
     /// A single-sampler archive holding one histogram, `n` rows, counts
     /// rising so a delta-based histogram scalar has something to report.
     /// Sealed every `max_rows` rows so the table is multi-segment and
@@ -480,6 +712,7 @@ mod tests {
                     counters: Vec::new(),
                     gauges: Vec::new(),
                     histograms: vec![hist],
+                    gauge_histograms: Vec::new(),
                 });
                 (snapshot, ts)
             })
@@ -1784,6 +2017,7 @@ mod tests {
                         counters: Vec::new(),
                         gauges: Vec::new(),
                         histograms: vec![hist],
+                        gauge_histograms: Vec::new(),
                     });
                     (s, ts)
                 })
@@ -1965,6 +2199,7 @@ mod tests {
                     .collect(),
                 gauges: Vec::new(),
                 histograms: Vec::new(),
+                gauge_histograms: Vec::new(),
             }
         }
 
@@ -1987,6 +2222,7 @@ mod tests {
                     })
                     .collect(),
                 histograms: Vec::new(),
+                gauge_histograms: Vec::new(),
             }
         }
 
@@ -2010,6 +2246,7 @@ mod tests {
                         .collect(),
                     })
                     .collect(),
+                gauge_histograms: Vec::new(),
             }
         }
 
@@ -2035,6 +2272,7 @@ mod tests {
                         counters: vec![Some(i)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
+                        gauge_histograms: Vec::new(),
                     };
                     let s = Snapshot::V3(SnapshotV3 {
                         systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2161,6 +2399,7 @@ mod tests {
                         counters: vec![Some(i * 1_000)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
+                        gauge_histograms: Vec::new(),
                     };
                     let softirq = GroupSnapshot {
                         name: "cpu_usage/softirq".to_string(),
@@ -2170,6 +2409,7 @@ mod tests {
                         counters: vec![Some(i * 10)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
+                        gauge_histograms: Vec::new(),
                     };
                     let s = Snapshot::V3(SnapshotV3 {
                         systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2325,6 +2565,7 @@ mod tests {
                     counters: vec![Some(i * 1_000)],
                     gauges: Vec::new(),
                     histograms: Vec::new(),
+                    gauge_histograms: Vec::new(),
                 };
                 let freq = GroupSnapshot {
                     name: "cpu_usage/freq".to_string(),
@@ -2334,6 +2575,7 @@ mod tests {
                     counters: Vec::new(),
                     gauges: vec![Some(2_000 + i as i64)],
                     histograms: Vec::new(),
+                    gauge_histograms: Vec::new(),
                 };
                 let sched = GroupSnapshot {
                     name: "cpu_usage/sched".to_string(),
@@ -2343,6 +2585,7 @@ mod tests {
                     counters: Vec::new(),
                     gauges: Vec::new(),
                     histograms: vec![Some(h)],
+                    gauge_histograms: Vec::new(),
                 };
                 let s = Snapshot::V3(SnapshotV3 {
                     systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2444,6 +2687,7 @@ mod tests {
                         counters: vec![Some(i * 1_000)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
+                        gauge_histograms: Vec::new(),
                     };
                     let softirq = GroupSnapshot {
                         name: "cpu_usage/softirq".to_string(),
@@ -2453,6 +2697,7 @@ mod tests {
                         counters: vec![Some(i * 10)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
+                        gauge_histograms: Vec::new(),
                     };
                     let s = Snapshot::V3(SnapshotV3 {
                         systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2566,6 +2811,7 @@ mod tests {
                         counters: vec![Some(i * 1_000)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
+                        gauge_histograms: Vec::new(),
                     };
                     let softirq = GroupSnapshot {
                         name: "cpu_usage/softirq".to_string(),
@@ -2575,6 +2821,7 @@ mod tests {
                         counters: vec![Some(i / 3)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
+                        gauge_histograms: Vec::new(),
                     };
                     let s = Snapshot::V3(SnapshotV3 {
                         systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2683,6 +2930,7 @@ mod tests {
                         counters: vec![Some(i * 1_000)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
+                        gauge_histograms: Vec::new(),
                     },
                     GroupSnapshot {
                         name: "cpu_usage/softirq".to_string(),
@@ -2692,6 +2940,7 @@ mod tests {
                         counters: vec![Some(i)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
+                        gauge_histograms: Vec::new(),
                     },
                 ];
                 let s = Snapshot::V3(SnapshotV3 {
@@ -3133,6 +3382,7 @@ mod tests {
                 counters: vec![member(0, slot0_comm(tick)), member(1, "nginx")],
                 gauges: Vec::new(),
                 histograms: Vec::new(),
+                gauge_histograms: Vec::new(),
             }
         }
 
@@ -3184,6 +3434,7 @@ mod tests {
                     ],
                     gauges: Vec::new(),
                     histograms: Vec::new(),
+                    gauge_histograms: Vec::new(),
                 };
                 let snap = Snapshot::V3(SnapshotV3 {
                     systemtime: SystemTime::UNIX_EPOCH + Duration::from_nanos(ts(tick)),

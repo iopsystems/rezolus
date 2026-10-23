@@ -841,16 +841,16 @@ const shownWindowMs = (cs, attrs) => {
 
 const saveToParquet = async (store, attrs) => {
     const isCompare = !!attrs.compareMode;
-    // Compare mode produces an A/B tarball — modal default uses both
-    // sides' labels so the user sees `<a>_vs_<b>.parquet.ab.tar`
-    // instead of `<baseline>-report.parquet.ab.tar`.
+    // A report is a .dendro archive. In compare mode the modal default uses
+    // both sides' labels so the user sees `<a>_vs_<b>.dendro` instead of
+    // `<baseline>-report.dendro`.
     const defaultPrefix = isCompare
         ? composeAbReportPrefix(
             attrs.baselineAlias || attrs.filename,
             attrs.experimentAlias || attrs.experimentFilename,
         )
-        : (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-report';
-    const defaultExt = isCompare ? '.parquet.ab.tar' : '.parquet';
+        : (attrs.filename || 'rezolus-capture').replace(/\.(parquet|rez|dendro)$/, '') + '-report';
+    const defaultExt = '.dendro';
     // Compare mode is not offered a time trim: the experiment's rows are at
     // its own times, which the baseline's window does not describe.
     const shown = isCompare ? null : shownWindowMs(attrs.chartsState, attrs);

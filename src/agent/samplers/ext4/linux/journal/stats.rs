@@ -92,40 +92,40 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
     description = "Distribution of the time, per journal commit, that the transaction was open and accumulating handles before the commit began. A commit is requested when the journal's commit interval (5 s by default) expires, or sooner by an fsync or other synchronous operation, a full transaction or a shortage of journal space, and starts once the previous commit has finished. In nanoseconds",
     metadata = { unit = "nanoseconds", phase = "running", acq_group = "ext4_journal_commit_latencies" }
 )]
-pub static EXT4_JOURNAL_COMMIT_RUNNING: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static EXT4_JOURNAL_COMMIT_RUNNING: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "ext4_journal_commit_latency",
     description = "Distribution of the time, per journal commit, that the transaction spent locked: waiting for its outstanding handles to finish, cleaning the checkpoint list and switching the revoke table. In nanoseconds",
     metadata = { unit = "nanoseconds", phase = "locked", acq_group = "ext4_journal_commit_latencies" }
 )]
-pub static EXT4_JOURNAL_COMMIT_LOCKED: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static EXT4_JOURNAL_COMMIT_LOCKED: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "ext4_journal_commit_latency",
     description = "Distribution of the time, per journal commit, spent submitting the transaction's data writes (ordered mode) and its revoke records. The wait for those writes is in the logging phase. In nanoseconds",
     metadata = { unit = "nanoseconds", phase = "flushing", acq_group = "ext4_journal_commit_latencies" }
 )]
-pub static EXT4_JOURNAL_COMMIT_FLUSHING: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static EXT4_JOURNAL_COMMIT_FLUSHING: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "ext4_journal_commit_latency",
     description = "Distribution of the time, per journal commit, spent writing the transaction's metadata blocks to the journal, waiting for its data writes, flushing the device cache and writing the commit record. This is where fsync waits on the device. In nanoseconds",
     metadata = { unit = "nanoseconds", phase = "logging", acq_group = "ext4_journal_commit_latencies" }
 )]
-pub static EXT4_JOURNAL_COMMIT_LOGGING: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static EXT4_JOURNAL_COMMIT_LOGGING: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "ext4_journal_handle_start_latency",
     description = "Distribution of the time a thread took to start a journal handle, from calling into jbd2 to the handle being granted. Includes waiting for the committing transaction to leave the locked state, for journal space and for credits. Handle restarts are not included. In nanoseconds",
     metadata = { unit = "nanoseconds", acq_group = "ext4_journal_handle_latencies" }
 )]
-pub static EXT4_JOURNAL_HANDLE_START_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static EXT4_JOURNAL_HANDLE_START_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 /*
  * checkpoint and lock stalls
@@ -136,16 +136,16 @@ pub static EXT4_JOURNAL_HANDLE_START_LATENCY: RwLockHistogram =
     description = "Distribution of the time from a checkpoint first working on a committed transaction to the transaction being dropped from the checkpoint list with its buffers at their final location. Transactions dropped without being checkpointed are not included. In nanoseconds",
     metadata = { unit = "nanoseconds", acq_group = "ext4_journal_checkpoint_latencies" }
 )]
-pub static EXT4_JOURNAL_CHECKPOINT_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static EXT4_JOURNAL_CHECKPOINT_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "ext4_journal_lock_buffer_stall_latency",
     description = "Distribution of the time the journal spent stalled on a locked buffer, as reported by jbd2 in whole milliseconds. In nanoseconds",
     metadata = { unit = "nanoseconds", acq_group = "ext4_journal_stall_latencies" }
 )]
-pub static EXT4_JOURNAL_LOCK_BUFFER_STALL_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static EXT4_JOURNAL_LOCK_BUFFER_STALL_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 /*
  * counters: one `counters` map, one bank per (CPU, filesystem slot), summed

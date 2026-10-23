@@ -47,7 +47,6 @@ mod follow;
 mod live;
 pub(crate) mod metadata;
 mod report_save;
-mod report_save_rez;
 mod routes;
 mod state;
 mod tui;

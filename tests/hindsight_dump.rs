@@ -205,6 +205,7 @@ fn serve_stream(
             .collect(),
         gauges: Vec::new(),
         histograms: Vec::new(),
+        gauge_histograms: Vec::new(),
     };
     for seq in 0u64.. {
         if frames.is_some_and(|n| seq >= n) {
@@ -221,6 +222,7 @@ fn serve_stream(
             counters: (0..width).map(|i| Some(seq + 1 + i as u64)).collect(),
             gauges: Vec::new(),
             histograms: Vec::new(),
+            gauge_histograms: Vec::new(),
         };
         let anchor = (seq == 0).then(|| (&schema).into());
         let row = rez::wal::encode_wal_group_row(&rez::wal::wal_group_row(&group, anchor)).unwrap();

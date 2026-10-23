@@ -150,4 +150,60 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         const info = JSON.parse(registry.info('baseline'));
         assert.deepEqual(info.counter_names, ['ops']);
     });
+
+    // Save as Report writes a .dendro whatever the source, built in the
+    // browser: a `.rez` (tar or v3) and a parquet are converted in memory
+    // (`ArchiveMut::create_in_memory`), which is what this checks in the
+    // shipped WASM.
+    const SQLITE_MAGIC = 'SQLite format 3\0';
+    const saved = (bytes, name) => {
+        const registry = new WasmCaptureRegistry();
+        registry.attach('baseline', bytes, name);
+        assert.equal(registry.report_extension(), '.dendro');
+        return registry.save_with_selection('{"entries":[],"trim_columns":false}');
+    };
+    const reopened = (report) => {
+        assert.equal(Buffer.from(report.slice(0, 16)).toString('latin1'), SQLITE_MAGIC);
+        const registry = new WasmCaptureRegistry();
+        registry.attach('baseline', report, 'rezolus-report.dendro');
+        assert.match(registry.file_metadata_json('baseline'), /selection/);
+        return JSON.parse(registry.info('baseline'));
+    };
+
+    test('Save as Report of a tar .rez, a parquet or a .dendro is a .dendro', () => {
+        assert.deepEqual(reopened(saved(committedRez('v2.rez'), 'one.rez')).counter_names, ['ops']);
+        const parquet = new Uint8Array(fs.readFileSync(
+            path.join(repoRoot, 'site/viewer/data/simple_capture.parquet')));
+        assert.ok(reopened(saved(parquet, 'simple.parquet')).gauge_names.includes('queue_depth'));
+        assert.deepEqual(
+            reopened(saved(fixture('report-src.dendro', 1), 'one.dendro')).counter_names,
+            ['cpu_cycles'],
+        );
+    });
+
+    test('Save as Report of a v3 .rez is a .dendro', () => {
+        assert.deepEqual(reopened(saved(committedRez('v3.rez'), 'one.rez')).counter_names, ['ops']);
+        // Two recordings: the report holds both, the selection on the first.
+        const registry = new WasmCaptureRegistry();
+        registry.attach('baseline', saved(committedRez('v3-multi.rez'), 'multi.rez'), 'r.dendro');
+        assert.match(registry.file_metadata_json('baseline'), /selection/);
+        // Every row the `.rez` reads comes across: the live archive's
+        // segments and WAL rows, and WAL rows alone (`v3-wal-only.rez`, the
+        // live archive with its segments deleted).
+        const rows = (bytes, name) => {
+            const registry = new WasmCaptureRegistry();
+            registry.attach('baseline', bytes, name);
+            const info = JSON.parse(registry.info('baseline'));
+            const result = JSON.parse(registry.query_range(
+                'baseline', 'irate(ops[5s])', info.minTime, info.maxTime, 1, 'grid',
+            ));
+            return result.data.result.reduce((n, s) => n + s.values.length, 0);
+        };
+        for (const name of ['v3-live.rez', 'v3-wal-only.rez']) {
+            const bytes = committedRez(name);
+            const want = rows(bytes, name);
+            assert.ok(want > 0, `${name}: the fixture holds rows`);
+            assert.equal(rows(saved(bytes, name), 'r.dendro'), want, name);
+        }
+    });
 }

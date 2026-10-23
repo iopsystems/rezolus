@@ -315,7 +315,7 @@ pub struct AppState {
     pub beside: RwLock<Vec<::dashboard::dashboard::Beside>>,
     /// The labels of the archive recording the baseline capture reads, when
     /// it reads one recording of several: a report is saved onto it
-    /// (`report_save::build_rez_report_from_rez`'s `anchor`). `None` saves
+    /// (`report_save::build_report`'s `anchor`). `None` saves
     /// onto the archive's first.
     pub anchor_labels: RwLock<Option<std::collections::BTreeMap<String, String>>>,
     /// For an archive opened combined, the archive the baseline reads, which

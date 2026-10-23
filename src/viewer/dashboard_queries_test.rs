@@ -600,6 +600,7 @@ fn archive(fixture: &Fixture) -> (tempfile::TempDir, std::path::PathBuf) {
                     counters: Vec::new(),
                     gauges: Vec::new(),
                     histograms: Vec::new(),
+                    gauge_histograms: Vec::new(),
                 };
                 match kind {
                     Kind::Counter => group.counters = vec![Some(1_000 * i); n],

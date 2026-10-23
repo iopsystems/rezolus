@@ -1,5 +1,10 @@
 # `rezolus parquet convert` — raw recordings to parquet
 
+> **Superseded in 6.0:** `recording convert` writes a `.dendro` archive
+> (metriken-storage's `MsgpackToArchive`), not parquet; an output not ending
+> in `.dendro` is refused. This design records the parquet converter as it
+> was built.
+
 Status: **Implemented 2026-08-13** in `src/parquet_tools/convert.rs` (38 unit
 tests). Two things changed during implementation, both noted inline below:
 `--metadata` rejects a malformed argument instead of dropping it the way

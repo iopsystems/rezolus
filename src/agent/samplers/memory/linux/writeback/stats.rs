@@ -60,8 +60,8 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
     description = "Distribution of the time a task that dirtied pages was made to sleep by the writeback throttle (balance_dirty_pages), in nanoseconds at one-jiffy resolution. Only sleeps are counted; an evaluation that did not throttle adds nothing here",
     metadata = { unit = "nanoseconds", acq_group = "memory_writeback_throttle_latencies" }
 )]
-pub static WRITEBACK_THROTTLE_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static WRITEBACK_THROTTLE_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "writeback_throttle_checks",

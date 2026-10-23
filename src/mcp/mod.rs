@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 mod recording_selector;
 pub(crate) use recording_selector::{
-    describe_candidates, describe_candidates_at, render_labels, RecordingSelector, SelectError,
-    SelectorSyntax,
+    describe_candidates, describe_candidates_at, render_labels, shell_word, RecordingSelector,
+    SelectError, SelectorSyntax,
 };
 
 pub mod anomaly_detection;
@@ -702,9 +702,11 @@ pub(crate) fn describe_recording_output(
             format!(
                 "{} holds {} recordings of one run, read together: every series carries its \
                  recording's labels, so a matcher on one (`{{host=\"...\"}}`) selects its \
-                 series. Recordings whose labels are identical are told apart in queries by \
-                 `__recording__` (each one's index in the archive), which no recording \
-                 selector can name:",
+                 series. A recording and its copies (one source copied, or recorded twice \
+                 from one agent process) are one recording, read once. Separate recordings \
+                 whose labels are identical are told apart in queries by `__recording__` \
+                 (the archive index of each one's first source), which no recording selector \
+                 can name:",
                 file.display(),
                 opened.combined.len()
             ),

@@ -166,7 +166,8 @@ endpoint, each acquisition group at its own cadence. One archive can hold
 Rezolus agents and Prometheus endpoints. An output path not ending in
 `.dendro` is refused; a rezolus 5.x recorder (5.27.0 or later) still writes
 `.rez`, parquet and raw. Every tool still reads `.rez` and `.parquet`, and
-`rezolus recording upgrade --to dendro` converts a `.rez`. See
+`rezolus recording upgrade` converts either to a `.dendro`; the `recording`
+tools write `.dendro` only and never change a `.rez` or `.parquet`. See
 [Output format](docs/usage.md#output-format) for the overwrite rules.
 
 `rezolus view` runs a local Rust server that evaluates queries and serves the

@@ -1,7 +1,7 @@
 use super::*;
 use crate::*;
 
-use metriken::RwLockHistogram;
+use metriken::RwLockCounterHistogram;
 
 use crate::agent::timing::AcquisitionGroup;
 
@@ -40,9 +40,9 @@ use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 /// doc comment for the granularity rule and why, and the `# Granularity
 /// rule` section on
 /// [`crate::agent::samplers::ACQUISITION_GROUPS`]. `refresh()` here is just
-/// the mmap read + the plain, windowless [`RwLockHistogram::update_from`]
+/// the mmap read + the plain, windowless [`RwLockCounterHistogram::update_from`]
 /// — no group, no window, no acquire/finish. That used to be
-/// `RwLockHistogram::set_with_window`, stamping a window on every single
+/// `RwLockCounterHistogram::set_with_window`, stamping a window on every single
 /// histogram; the window is now stamped once, by the owning batch, after
 /// every histogram in it has refreshed.
 pub struct Histogram<'a> {
@@ -50,11 +50,11 @@ pub struct Histogram<'a> {
     mmap: memmap2::MmapMut,
     slices: usize,
     sum: Vec<u64>,
-    histogram: &'static RwLockHistogram,
+    histogram: &'static RwLockCounterHistogram,
 }
 
 impl<'a> Histogram<'a> {
-    pub fn new(map: &'a libbpf_rs::Map, histogram: &'static RwLockHistogram) -> Self {
+    pub fn new(map: &'a libbpf_rs::Map, histogram: &'static RwLockCounterHistogram) -> Self {
         let buckets = histogram.config().total_buckets();
         let slices = possible_cpus();
 
