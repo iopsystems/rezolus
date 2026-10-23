@@ -9,6 +9,7 @@
 //!
 //! See `docs/parquet-convert-design.md` (written when the output was parquet).
 
+use ::dashboard::keys::{KEY_DESCRIPTIONS, KEY_SAMPLING_INTERVAL_MS, KEY_SOURCE, KEY_SYSTEMINFO};
 use metriken_storage::convert::MsgpackToArchive;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -386,22 +387,22 @@ fn build_converter(interval_ms: u64, opts: &ConvertOptions) -> MsgpackToArchive 
         .metadata
         .iter()
         .rev()
-        .find(|(k, _)| k == "source")
+        .find(|(k, _)| k == KEY_SOURCE)
         .map_or("rezolus", |(_, v)| v.as_str())
         .to_string();
     let mut converter = MsgpackToArchive::new()
-        .label("source", source.clone())
-        .metadata("sampling_interval_ms", interval_ms.to_string())
-        .metadata("source", source);
+        .label(KEY_SOURCE, source.clone())
+        .metadata(KEY_SAMPLING_INTERVAL_MS, interval_ms.to_string())
+        .metadata(KEY_SOURCE, source);
 
     for (key, value) in &opts.metadata {
         converter = converter.metadata(key.clone(), value.clone());
     }
     if let Some(json) = &opts.systeminfo {
-        converter = converter.metadata("systeminfo", json.clone());
+        converter = converter.metadata(KEY_SYSTEMINFO, json.clone());
     }
     if let Some(json) = &opts.descriptions {
-        converter = converter.metadata("descriptions", json.clone());
+        converter = converter.metadata(KEY_DESCRIPTIONS, json.clone());
     }
 
     converter

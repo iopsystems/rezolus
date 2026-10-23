@@ -1298,6 +1298,9 @@ impl Server {
             override_ext.as_ref(),
             &registry,
         )?;
+        for notice in &run.notices {
+            crate::viewer::metadata::warn_once(notice.clone());
+        }
         if run.checks_seen == 0 {
             return Ok(serde_json::to_string_pretty(&json!({
                 "checks": [],

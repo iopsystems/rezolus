@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::read_parquet_footer;
-use crate::recorder::rez::RezFormat;
-use crate::recorder::rez_sqlite::RezDb;
+use metriken_storage::rez::rez::RezFormat;
+use metriken_storage::rez::rez_sqlite::RezDb;
 
 pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     let input = args.get_one::<PathBuf>("input").unwrap();
@@ -18,7 +18,7 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     // Dispatch is by CONTENT, not extension, and covers both containers: a v3
     // `.rez` is a SQLite file, so `is_rez_path` (a tar sniff) reports false for
     // it and would have sent it to the parquet reader.
-    if crate::recorder::rez::detect_rez_format(input).unwrap_or(RezFormat::NotRez)
+    if metriken_storage::rez::rez::detect_rez_format(input).unwrap_or(RezFormat::NotRez)
         != RezFormat::NotRez
     {
         return describe_rez(input, json);
@@ -334,13 +334,13 @@ fn describe_rez(path: &Path, json: bool) -> Result<(), Box<dyn std::error::Error
         println!("{}", serde_json::to_string_pretty(&json)?);
         return Ok(());
     }
-    match crate::recorder::rez::detect_rez_format(path)? {
+    match metriken_storage::rez::rez::detect_rez_format(path)? {
         RezFormat::V3Sqlite => {
             let json = v3_json(&read_v3_summary(path)?, "sqlite");
             println!("{}", serde_json::to_string_pretty(&json)?);
         }
         _ => {
-            let (manifest, _tables) = crate::recorder::rez::read_archive_bytes(path)?;
+            let (manifest, _tables) = metriken_storage::rez::rez::read_archive_bytes(path)?;
             println!("{}", serde_json::to_string_pretty(&manifest)?);
         }
     }
@@ -357,10 +357,10 @@ pub(crate) fn describe_rez_string_at(path: &Path) -> Result<String, Box<dyn std:
         let header = format!("dendro archive — {} recording(s)", recordings.len());
         return Ok(describe_v3_string_with(&header, &recordings));
     }
-    match crate::recorder::rez::detect_rez_format(path)? {
+    match metriken_storage::rez::rez::detect_rez_format(path)? {
         RezFormat::V3Sqlite => Ok(describe_v3_string(&read_v3_summary(path)?)),
         _ => Ok(describe_rez_string(
-            &crate::recorder::rez::read_archive_bytes(path)?.0,
+            &metriken_storage::rez::rez::read_archive_bytes(path)?.0,
         )),
     }
 }
@@ -427,7 +427,7 @@ fn read_v3_summary(path: &Path) -> Result<Vec<V3Recording>, String> {
             });
         }
         out.push(V3Recording {
-            name: crate::recorder::rez::recording_dir_slug(&rec.meta.labels),
+            name: metriken_storage::rez::rez::recording_dir_slug(&rec.meta.labels),
             labels: rec.meta.labels,
             metadata: rec.meta.metadata,
             complete: rec.complete,
@@ -480,7 +480,7 @@ fn read_dendro_summary(path: &Path) -> Result<Vec<V3Recording>, String> {
             .filter_map(|(t, o)| u64::try_from(t).ok().map(|t| (t, o)))
             .collect();
         out.push(V3Recording {
-            name: crate::recorder::rez::recording_dir_slug(&src.meta.labels),
+            name: metriken_storage::rez::rez::recording_dir_slug(&src.meta.labels),
             labels: src.meta.labels,
             metadata: src.meta.metadata,
             complete: src.complete,
@@ -601,7 +601,7 @@ fn v3_json(recordings: &[V3Recording], container: &str) -> serde_json::Value {
 /// unanswerable (issue #1195). Absent for recordings written before the
 /// recorder captured it, and for a Prometheus source, which has no agent.
 fn agent_line(metadata: &std::collections::BTreeMap<String, String>) -> Option<String> {
-    let version = metadata.get(crate::parquet_metadata::KEY_VERSION)?;
+    let version = metadata.get(::dashboard::keys::KEY_VERSION)?;
     if version.is_empty() {
         return None;
     }
@@ -615,7 +615,7 @@ fn agent_line(metadata: &std::collections::BTreeMap<String, String>) -> Option<S
 /// The observation reported is the newest by *timestamp*, not the last element:
 /// the series is a per-batch maximum, so an age-sealed slow sampler can append
 /// a timestamp older than one a fast-sampler batch already contributed.
-fn clock_line(rec: &crate::recorder::rez::RezRecording) -> Option<String> {
+fn clock_line(rec: &metriken_storage::rez::rez::RezRecording) -> Option<String> {
     clock_line_of(rec.clock_anchor_wall_ns, &rec.clock_offsets)
 }
 
@@ -647,7 +647,7 @@ fn clock_line_of(anchor: Option<u64>, offsets: &[(u64, i64)]) -> Option<String> 
 /// Human-readable summary of a `.rez` manifest: recordings, their labels, clock
 /// anchor/drift, and each per-sampler table's row count, observed cadence and
 /// segment count.
-fn describe_rez_string(manifest: &crate::recorder::rez::RezManifest) -> String {
+fn describe_rez_string(manifest: &metriken_storage::rez::rez::RezManifest) -> String {
     use std::fmt::Write;
     let mut out = String::new();
     let _ = writeln!(
@@ -699,7 +699,7 @@ fn describe_rez_string(manifest: &crate::recorder::rez::RezManifest) -> String {
 #[cfg(test)]
 mod rez_tests {
     use super::*;
-    use crate::recorder::rez::{RezManifest, RezRecording, RezTableIndex};
+    use metriken_storage::rez::rez::{RezManifest, RezRecording, RezTableIndex};
 
     #[test]
     fn describe_rez_string_lists_recordings_and_tables() {
@@ -751,7 +751,7 @@ mod rez_tests {
                 dir: "rezolus".to_string(),
                 labels: Default::default(),
                 metadata: [(
-                    crate::parquet_metadata::KEY_VERSION.to_string(),
+                    ::dashboard::keys::KEY_VERSION.to_string(),
                     "5.20.0".to_string(),
                 )]
                 .into_iter()

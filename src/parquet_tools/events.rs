@@ -1,7 +1,7 @@
 //! Event-annotation helpers for `rezolus recording annotate`.
 //!
 //! Events are stored as a JSON blob in each recording's metadata under
-//! [`KEY_EVENTS`](crate::parquet_metadata::KEY_EVENTS) (a parquet file
+//! [`KEY_EVENTS`](::dashboard::keys::KEY_EVENTS) (a parquet file
 //! written before 6.0 holds them in its footer). On-disk shape:
 //! `{"events":[ {"timestamp":<ns>, "description":..., ...} ]}`. Every
 //! event is self-describing — it carries its own optional
@@ -25,8 +25,8 @@ use chrono::DateTime;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::parquet_metadata::KEY_EVENTS;
-use crate::viewer::{Event, Events};
+use ::dashboard::keys::KEY_EVENTS;
+use ::dashboard::{Event, Events};
 
 /// Fold event operations over an existing payload, in the order
 /// `clear → add file → add inline`, without any file I/O: the transform
@@ -987,7 +987,7 @@ mod tests {
         crate::parquet_tools::combine::run_combine_for_test(&[a, copy], &grp).unwrap();
 
         let shown = |path: &Path| -> Vec<String> {
-            let readers = crate::rez_reader::RezReader::open_recordings(
+            let readers = ::rez::reader::RezReader::open_recordings(
                 path,
                 metriken_storage::BufferPool::new(8 << 20),
             )
@@ -996,7 +996,7 @@ mod tests {
             readers[0]
                 .1
                 .file_metadata()
-                .get(crate::parquet_metadata::KEY_EVENTS)
+                .get(::dashboard::keys::KEY_EVENTS)
                 .map(|s| serde_json::from_str::<Events>(s).unwrap().events)
                 .unwrap_or_default()
                 .into_iter()
@@ -1015,7 +1015,7 @@ mod tests {
         let per_source: Vec<Vec<String>> = crate::parquet_tools::annotate::source_metadata(&grp)
             .iter()
             .map(|m| {
-                m.get(crate::parquet_metadata::KEY_EVENTS)
+                m.get(::dashboard::keys::KEY_EVENTS)
                     .map(|s| serde_json::from_str::<Events>(s).unwrap().events)
                     .unwrap_or_default()
                     .into_iter()

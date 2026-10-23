@@ -259,7 +259,7 @@ fn recordings_touched(groups: &[Vec<usize>], touched: &BTreeSet<usize>) -> usize
 /// catalog positions of its sources. The readers are dropped before this
 /// returns, so a writer can open the archive next.
 fn read_groups_of(path: &Path) -> Result<Vec<Vec<usize>>, Box<dyn std::error::Error>> {
-    let readers = crate::rez_reader::RezReader::open_recordings(
+    let readers = ::rez::reader::RezReader::open_recordings(
         path,
         metriken_storage::BufferPool::new(16 * 1024 * 1024),
     )?;
@@ -530,7 +530,7 @@ pub(crate) fn run_combine_for_test(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parquet_metadata::{KEY_SAMPLING_INTERVAL_MS, KEY_SOURCE};
+    use ::dashboard::keys::{KEY_SAMPLING_INTERVAL_MS, KEY_SOURCE};
     use arrow::array::{Int64Array, UInt64Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -653,7 +653,7 @@ mod tests {
 
     /// The labels of an archive's recordings, in catalog order.
     fn archive_labels(path: &std::path::Path) -> Vec<BTreeMap<String, String>> {
-        crate::rez_reader::RezReader::open_recordings(
+        ::rez::reader::RezReader::open_recordings(
             path,
             metriken_storage::BufferPool::new(16 * 1024 * 1024),
         )
@@ -688,7 +688,7 @@ mod tests {
         let exp = format!("experiment={}", b.display());
         run_combine_ab(&[a.clone(), b.clone()], &ab, &["baseline=a.rez", &exp]).unwrap();
         assert_eq!(arms(&ab), want);
-        let readers = crate::rez_reader::RezReader::open_recordings(
+        let readers = ::rez::reader::RezReader::open_recordings(
             &ab,
             metriken_storage::BufferPool::new(16 * 1024 * 1024),
         )
@@ -704,7 +704,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             [None, None]
         );
-        let readers = crate::rez_reader::RezReader::open_recordings(
+        let readers = ::rez::reader::RezReader::open_recordings(
             &plain,
             metriken_storage::BufferPool::new(16 * 1024 * 1024),
         )
@@ -841,7 +841,7 @@ mod tests {
             &["baseline=1", "experiment=0"],
         )
         .unwrap();
-        let readers = crate::rez_reader::RezReader::open_recordings(
+        let readers = ::rez::reader::RezReader::open_recordings(
             &out,
             metriken_storage::BufferPool::new(16 * 1024 * 1024),
         )
@@ -1017,7 +1017,7 @@ mod tests {
             }
         }
         drop(db);
-        let readers = crate::rez_reader::RezReader::open_recordings(
+        let readers = ::rez::reader::RezReader::open_recordings(
             &out,
             metriken_storage::BufferPool::new(64 * 1024 * 1024),
         )
@@ -1128,7 +1128,7 @@ mod tests {
                 .contains(&"threads/tasks/occupants".to_string()));
         }
         drop(db);
-        let readers = crate::rez_reader::RezReader::open_recordings(
+        let readers = ::rez::reader::RezReader::open_recordings(
             &out,
             metriken_storage::BufferPool::new(64 * 1024 * 1024),
         )
@@ -1169,7 +1169,7 @@ mod tests {
         let out = dir.path().join("ab.dendro");
         run_combine(&[a, b], &out).unwrap();
 
-        let readers = crate::rez_reader::RezReader::open_recordings(
+        let readers = ::rez::reader::RezReader::open_recordings(
             &out,
             metriken_storage::BufferPool::new(64 * 1024 * 1024),
         )
@@ -1215,9 +1215,9 @@ mod tests {
             .unwrap();
         assert_eq!(sources.len(), 2, "both sources are kept");
         let pool = || metriken_storage::BufferPool::new(64 * 1024 * 1024);
-        let both = crate::rez_reader::RezReader::open_recordings(&out, pool()).unwrap();
+        let both = ::rez::reader::RezReader::open_recordings(&out, pool()).unwrap();
         assert_eq!(both.len(), 1, "one recording");
-        let alone = crate::rez_reader::RezReader::open_recordings(&a, pool()).unwrap();
+        let alone = ::rez::reader::RezReader::open_recordings(&a, pool()).unwrap();
         let answer = |r: &dyn MetricsSource| {
             let (start, end) = r.time_range().unwrap();
             serde_json::to_value(
@@ -1258,7 +1258,7 @@ mod tests {
             write_dendro(&path, sources, None, Finish::Finalized);
             (
                 path.clone(),
-                crate::rez_reader::RezReader::open_recordings(&path, pool()).unwrap(),
+                ::rez::reader::RezReader::open_recordings(&path, pool()).unwrap(),
             )
         };
         let answer = |r: &dyn MetricsSource| {
@@ -1288,7 +1288,7 @@ mod tests {
         crate::parquet_tools::snapshot_rez(&one_path, &copy).unwrap();
         let out = dir.path().join("with-copy.dendro");
         run_combine(&[one_path, copy], &out).unwrap();
-        let both = crate::rez_reader::RezReader::open_recordings(&out, pool()).unwrap();
+        let both = ::rez::reader::RezReader::open_recordings(&out, pool()).unwrap();
         assert_eq!(both.len(), 1, "a source and its copy are one recording");
         assert_eq!(answer(&both[0].1), answer(&one[0].1));
     }
@@ -1354,7 +1354,7 @@ mod tests {
                 Some("experiment".into())
             ]
         );
-        let readers = crate::rez_reader::RezReader::open_recordings(
+        let readers = ::rez::reader::RezReader::open_recordings(
             &ab,
             metriken_storage::BufferPool::new(16 * 1024 * 1024),
         )

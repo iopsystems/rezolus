@@ -27,8 +27,6 @@ use std::sync::Arc;
 #[cfg(feature = "developer-mode")]
 use notify::Watcher;
 
-#[cfg(test)]
-pub use dashboard::Kpi;
 pub use dashboard::{Event, Events, ServiceExtension, TemplateRegistry};
 
 /// Re-export PromQL types so other modules can use `crate::viewer::promql::*`.
