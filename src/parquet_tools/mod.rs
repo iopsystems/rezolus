@@ -954,7 +954,7 @@ mod upgrade_to_dendro_tests {
     /// The committed v2 tar archive (`rez::fixtures::committed_rez`): one
     /// recording, tables `a` and `b`, written whole by the old recorder.
     fn tar_rez(dir: &std::path::Path) -> std::path::PathBuf {
-        use crate::recorder::rez::{detect_rez_format, RezFormat};
+        use metriken_storage::rez::rez::{detect_rez_format, RezFormat};
         let path = ::rez::fixtures::committed_rez("v2.rez", dir);
         assert_eq!(detect_rez_format(&path).unwrap(), RezFormat::V2Tar);
         path
@@ -1023,8 +1023,8 @@ mod upgrade_to_dendro_tests {
             let src = ::rez::fixtures::committed_rez(name, dir.path());
             let dest = dir.path().join(format!("{name}.dendro"));
             upgrade_to_dendro(&src, Some(&dest), "dendro").unwrap();
-            let a = crate::rez_reader::RezReader::open_recordings(&src, pool()).unwrap();
-            let b = crate::rez_reader::RezReader::open_recordings(&dest, pool()).unwrap();
+            let a = ::rez::reader::RezReader::open_recordings(&src, pool()).unwrap();
+            let b = ::rez::reader::RezReader::open_recordings(&dest, pool()).unwrap();
             assert_eq!(a.len(), b.len(), "{name}");
             for ((la, ra), (lb, rb)) in a.iter().zip(&b) {
                 assert_eq!(la, lb, "{name}");
@@ -1109,8 +1109,8 @@ mod dendro_command_tests {
         let out = dir.path().join("snap.dendro");
         snapshot_rez(&live, &out).unwrap();
         let pool = || metriken_storage::BufferPool::new(16 * 1024 * 1024);
-        let a = crate::rez_reader::RezReader::open_recordings(&live, pool()).unwrap();
-        let b = crate::rez_reader::RezReader::open_recordings(&out, pool()).unwrap();
+        let a = ::rez::reader::RezReader::open_recordings(&live, pool()).unwrap();
+        let b = ::rez::reader::RezReader::open_recordings(&out, pool()).unwrap();
         assert_eq!(a[0].1.time_range_ns(), b[0].1.time_range_ns());
         std::fs::write(dir.path().join("taken.dendro"), b"do not clobber me").unwrap();
         let err = snapshot_rez(&live, &dir.path().join("taken.dendro"))

@@ -3,6 +3,7 @@ pub mod combined;
 pub mod dashboard;
 pub mod display_wire;
 pub mod events;
+pub mod keys;
 pub mod metric_catalog;
 mod plot;
 pub mod rezolus_template;

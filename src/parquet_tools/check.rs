@@ -33,9 +33,9 @@ use metriken_query::{MatrixSample, MetricsSource, QueryResult};
 use crate::mcp::{
     describe_candidates, render_labels, RecordingSelector, SelectError, SelectorSyntax,
 };
-use crate::recorder::rez::RezFormat;
-use crate::viewer::{Event, ServiceExtension, TemplateRegistry};
+use ::dashboard::{Event, ServiceExtension, TemplateRegistry};
 use dashboard::{Bound, Check, Kpi, Severity};
+use metriken_storage::rez::rez::RezFormat;
 
 /// Exit status when a check with `severity: fail` failed.
 pub(super) const EXIT_FAIL: i32 = 1;
@@ -556,7 +556,7 @@ pub(crate) fn open_targets(
         return Err(format!("Recording file not found: {}", path.display()));
     }
     let pool = metriken_storage::BufferPool::new(256 * 1024 * 1024);
-    let format = crate::recorder::rez::detect_rez_format(path).unwrap_or(RezFormat::NotRez);
+    let format = metriken_storage::rez::rez::detect_rez_format(path).unwrap_or(RezFormat::NotRez);
     if format == RezFormat::NotRez {
         if !selector.is_empty() {
             return Err(format!(
@@ -579,7 +579,7 @@ pub(crate) fn open_targets(
         ));
     }
 
-    let recordings = crate::rez_reader::RezReader::open_recordings(path, pool)
+    let recordings = ::rez::reader::RezReader::open_recordings(path, pool)
         .map_err(|e| format!("failed to load {}: {e}", path.display()))?;
     if recordings.is_empty() {
         return Err(format!("{} holds no recordings", path.display()));
@@ -626,28 +626,32 @@ pub(crate) fn open_targets(
 
 /// The KPIs carrying a check for one recording: from `--queries` when
 /// given, else from the recording's own metadata through the viewer's
-/// lookup (`capture_service_extensions`), with the recording's own template
-/// winning over the registry's.
+/// lookup (`dashboard::source_templates::service_extensions_from_metadata`),
+/// with the recording's own template winning over the registry's. Also
+/// returns what the lookup had to say (a template that did not parse, an
+/// unknown `unit_system`), for the caller to log or not.
 fn checked_kpis(
     reader: &dyn MetricsSource,
     override_ext: Option<&ServiceExtension>,
     registry: &TemplateRegistry,
-) -> Vec<Kpi> {
-    let exts: Vec<ServiceExtension> = match override_ext {
-        Some(ext) => vec![ext.clone()],
-        None => crate::viewer::metadata::capture_service_extensions(
-            reader,
-            registry,
-            ::dashboard::source_templates::TemplatePreference::Archive,
-        )
-        .into_iter()
-        .map(|(_, ext)| ext)
-        .collect(),
+) -> (Vec<Kpi>, Vec<String>) {
+    let (exts, notices): (Vec<ServiceExtension>, Vec<String>) = match override_ext {
+        Some(ext) => (vec![ext.clone()], Vec::new()),
+        None => {
+            let (exts, notices) = ::dashboard::source_templates::service_extensions_from_metadata(
+                &reader.file_metadata(),
+                registry,
+                ::dashboard::source_templates::TemplatePreference::Archive,
+            );
+            (exts.into_iter().map(|(_, ext)| ext).collect(), notices)
+        }
     };
-    exts.into_iter()
+    let kpis = exts
+        .into_iter()
         .flat_map(|ext| ext.kpis)
         .filter(|kpi| kpi.check.is_some())
-        .collect()
+        .collect();
+    (kpis, notices)
 }
 
 fn load_queries(path: &Path) -> Result<ServiceExtension, String> {
@@ -678,6 +682,10 @@ pub(crate) struct CheckRun {
     /// KPIs carrying a check, across the evaluated recordings. Zero means
     /// there was nothing to run, which is not a failure.
     pub(crate) checks_seen: usize,
+    /// What the template lookup reported for the evaluated recordings (a
+    /// template that did not parse, an unknown `unit_system`). `recording
+    /// check` prints none of them; the MCP server logs each once.
+    pub(crate) notices: Vec<String>,
 }
 
 /// Pass/warn/fail/indeterminate/error counts over a run's results.
@@ -745,8 +753,10 @@ pub(crate) fn run_checks(
     let mut results: Vec<CheckResult> = Vec::new();
     let mut per_recording_events: Vec<Vec<Event>> = vec![Vec::new(); total_recordings];
     let mut checks_seen = 0usize;
+    let mut notices = Vec::new();
     for target in &targets {
-        let kpis = checked_kpis(target.reader.as_ref(), override_ext, registry);
+        let (kpis, said) = checked_kpis(target.reader.as_ref(), override_ext, registry);
+        notices.extend(said);
         checks_seen += kpis.len();
         for kpi in &kpis {
             let check = kpi.check.as_ref().expect("filtered to KPIs with a check");
@@ -761,6 +771,7 @@ pub(crate) fn run_checks(
         results,
         per_recording_events,
         checks_seen,
+        notices,
     })
 }
 

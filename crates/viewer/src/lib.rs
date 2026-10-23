@@ -11,6 +11,7 @@ use metriken_storage::BufferPool;
 /// by how many row groups fit alongside them. 64 MB is a conservative
 /// default — enough for a moderate recording without crowding the JS heap.
 const WASM_CACHE_SIZE_BYTES: usize = 64 * 1024 * 1024;
+use dashboard::keys::{KEY_DESCRIPTIONS, KEY_PER_SOURCE_METADATA, KEY_SYSTEMINFO};
 use dashboard::source_templates::TemplatePreference;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -534,9 +535,9 @@ impl Viewer {
     pub fn metrics(&self, source: Option<String>) -> String {
         let resolved_source = source.clone().unwrap_or_else(|| self.reader.source());
         let meta = serde_json::json!({
-            "descriptions": self.file_metadata.get("descriptions")
+            "descriptions": self.file_metadata.get(KEY_DESCRIPTIONS)
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
-            "per_source_metadata": self.file_metadata.get("per_source_metadata")
+            "per_source_metadata": self.file_metadata.get(KEY_PER_SOURCE_METADATA)
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
         });
         let descriptions = dashboard::metric_catalog::resolve_descriptions(&meta, &resolved_source);
@@ -582,7 +583,7 @@ impl Viewer {
 
     fn own_systeminfo(&self) -> Option<String> {
         // Try multi-node first
-        if let Some(psm_str) = self.file_metadata.get("per_source_metadata")
+        if let Some(psm_str) = self.file_metadata.get(KEY_PER_SOURCE_METADATA)
             && let Ok(psm) =
                 serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
             && let Some(rez_group) = psm.get("rezolus").and_then(|v| v.as_object())
@@ -593,7 +594,7 @@ impl Viewer {
                     Some(o) => o,
                     None => continue,
                 };
-                let sysinfo_val = match obj.get("systeminfo") {
+                let sysinfo_val = match obj.get(KEY_SYSTEMINFO) {
                     Some(v) => v,
                     None => continue,
                 };
@@ -608,7 +609,7 @@ impl Viewer {
             return self.combined_systeminfo.clone();
         }
         // Fall back to flat systeminfo
-        self.file_metadata.get("systeminfo").cloned()
+        self.file_metadata.get(KEY_SYSTEMINFO).cloned()
     }
 
     /// Returns selection JSON from parquet file metadata, or null
@@ -1621,7 +1622,7 @@ fn validate_service_extensions_inline(
 /// Parses `per_source_metadata` and adds `nodes`, `node_versions`, and
 /// `service_instances` so the frontend doesn't have to duplicate this logic.
 fn enrich_with_multi_node_info(map: &mut serde_json::Map<String, serde_json::Value>) {
-    let psm = match map.get("per_source_metadata").and_then(|v| v.as_object()) {
+    let psm = match map.get(KEY_PER_SOURCE_METADATA).and_then(|v| v.as_object()) {
         Some(psm) => psm.clone(),
         None => return,
     };

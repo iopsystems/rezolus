@@ -18,16 +18,15 @@ pub const MAX_ROW_GROUP_SIZE: usize = 1800;
 
 // ── Top-level parquet footer keys ───────────────────────────────────────
 
-/// Top-level parquet footer keys. These are read by `Tsdb::load` or shared
-/// infrastructure and must remain flat strings in both single-source and
-/// combined files.
-/// Identifies the recording source(s).
-/// Single file: `"llm-perf"`.  Combined: `["rezolus", "llm-perf"]`.
-pub const KEY_SOURCE: &str = "source";
-
-/// Agent/tool version string (single-source files only; for combined files
-/// the per-source version lives under `per_source_metadata.<source>.version`).
-pub const KEY_VERSION: &str = "version";
+/// The keys a reader looks up (`source`, `version`, `service_queries`,
+/// `events`, `per_source_metadata`, ...) are `dashboard::keys`, shared with
+/// the viewers, `report-save` and the `recording` tools; the ones the
+/// binary names through this module are re-exported here. What remains
+/// below is what only rezolus writes.
+pub use ::dashboard::keys::{
+    KEY_DESCRIPTIONS, KEY_EVENTS, KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SYSTEMINFO,
+    KEY_VERSION,
+};
 
 /// The producing agent's **counter epoch**: an opaque id that changes when,
 /// and only when, every cumulative counter in the recording restarted from
@@ -58,50 +57,10 @@ pub const KEY_PRODUCER_EPOCH: &str = "producer_epoch";
 /// tell which agent build wrote the rows from each point on.
 pub const KEY_PRODUCER_EPOCHS: &str = "producer_epochs";
 
-/// Sampling interval in milliseconds, e.g. `"1000"`. Must be identical
-/// across files before they can be combined.
-pub const KEY_SAMPLING_INTERVAL_MS: &str = "sampling_interval_ms";
-
-/// JSON-serialised hardware summary (from the Rezolus agent `/systeminfo`
-/// endpoint). Display-only — used by the viewer and MCP.
-pub const KEY_SYSTEMINFO: &str = "systeminfo";
-
-/// JSON map of metric name → help text. Used by MCP `describe-metrics`.
-pub const KEY_DESCRIPTIONS: &str = "descriptions";
-
 /// JSON-serialised user selection/filter state saved by the viewer.
 pub const KEY_SELECTION: &str = "selection";
 
-/// Service KPI query definitions (ServiceExtension JSON). Top-level key in a
-/// single-source parquet (`recording annotate`, a producer's own parquet), a
-/// `.rez` recording's or a dendro source's metadata. When files are combined,
-/// each input's is moved under
-/// `per_source_metadata.<source>.<entry>.service_queries`.
-pub const KEY_SERVICE_QUERIES: &str = "service_queries";
-
-/// Per-source metadata map (used in combined files). Value is a JSON
-/// object keyed by source name, then by entry: the node name for a rezolus
-/// source, the instance id (`"0"` by default) for any other. A source's
-/// `descriptions` sit beside its entries:
-///
-/// ```json
-/// {
-///   "llm-perf": {
-///     "0": { "version": "0.1.0", "role": "loadgen", "service_queries": { ... } },
-///     "descriptions": { ... }
-///   },
-///   "rezolus":  { "web01": { "version": "5.8.3", "node": "web01" } }
-/// }
-/// ```
-pub const KEY_PER_SOURCE_METADATA: &str = "per_source_metadata";
-
 // ── Keys nested under `per_source_metadata.<source>.<entry>` ─────────
-
-/// Per-source version string.
-pub const NESTED_VERSION: &str = "version";
-
-/// Service KPI query definitions (ServiceExtension JSON).
-pub const NESTED_SERVICE_QUERIES: &str = "service_queries";
 
 /// The role this source plays in the recording. Known values:
 /// - `"service"` — the system under test (e.g. an LLM inference server)
@@ -136,26 +95,11 @@ pub const NESTED_INSTANCE: &str = "instance";
 /// `/samplers` endpoint). Present only for Rezolus-agent sources.
 pub const NESTED_SAMPLER_STATUS: &str = "sampler_status";
 
-/// Per-source metric descriptions (metric name → help text). Nested under
-/// `per_source_metadata.<source>` in combined files; single-source files use
-/// the top-level `descriptions` key instead.
-pub const NESTED_DESCRIPTIONS: &str = "descriptions";
-
 // ── Viewer hints ─────────────────────────────────────────────────────
 
 /// The default rezolus node to display when the viewer opens a combined
 /// file with multiple nodes. Set by `parquet combine --pinned <node>`.
 pub const KEY_PINNED_NODE: &str = "pinned_node";
-
-// ── One-off event annotations ───────────────────────────────────────
-
-/// JSON payload of one-off events attached to the recording (restarts,
-/// config changes, anomalies, ...). Value is an object `{"events": [...]}`
-/// where each entry conforms to `dashboard::events::Event`. Each event
-/// carries its own optional `source` / `node` / `instance` scope rather
-/// than inheriting from file-level metadata, so the payload stays
-/// self-describing across combine.
-pub const KEY_EVENTS: &str = "events";
 
 // ── Combined A/B tarball manifest ───────────────────────────────────
 

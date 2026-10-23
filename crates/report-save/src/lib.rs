@@ -31,8 +31,7 @@ use tracing::warn;
 pub const KEY_REPORT: &str = "report";
 pub const REPORT_VALUE_TRIMMED: &str = "trimmed";
 pub const KEY_SELECTION: &str = "selection";
-pub const KEY_DESCRIPTIONS: &str = "descriptions";
-pub const KEY_EVENTS: &str = "events";
+pub use dashboard::keys::{KEY_DESCRIPTIONS, KEY_EVENTS};
 
 /// Row group size of the in-memory parquet a time range cuts a parquet
 /// source to before it is converted

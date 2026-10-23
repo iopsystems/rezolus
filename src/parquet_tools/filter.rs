@@ -2,10 +2,10 @@ use clap::ArgMatches;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::parquet_metadata::{
+use ::dashboard::keys::{
     KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE, NESTED_SERVICE_QUERIES,
 };
-use crate::viewer::{ServiceExtension, TemplateRegistry};
+use ::dashboard::{ServiceExtension, TemplateRegistry};
 
 use super::legacy::{self, Container};
 
@@ -134,7 +134,7 @@ fn kpi_metrics(
     for f in builder.schema().fields() {
         let source = f
             .metadata()
-            .get("source")
+            .get(KEY_SOURCE)
             .map(String::as_str)
             .or(file_source.as_deref());
         if source == Some("rezolus") {
@@ -545,7 +545,7 @@ mod tests {
         let kept = kpi_metrics(&path, &make_test_ext(&["wanted"])).unwrap();
         assert_eq!(kept, set(&["wanted"]));
         filter(&path, None, Some(&kept), Some(&out)).unwrap();
-        let readers = crate::rez_reader::RezReader::open_recordings(
+        let readers = ::rez::reader::RezReader::open_recordings(
             &out,
             metriken_storage::BufferPool::new(8 * 1024 * 1024),
         )
@@ -561,7 +561,7 @@ mod tests {
             service_metadata: Default::default(),
             kpis: queries
                 .iter()
-                .map(|q| crate::viewer::Kpi {
+                .map(|q| ::dashboard::Kpi {
                     role: "test".to_string(),
                     title: "test".to_string(),
                     description: None,
@@ -753,7 +753,7 @@ mod tests {
             ]
         );
         let open = |p: &Path| {
-            crate::rez_reader::RezReader::open_recordings(
+            ::rez::reader::RezReader::open_recordings(
                 p,
                 metriken_storage::BufferPool::new(64 * 1024 * 1024),
             )
@@ -764,7 +764,7 @@ mod tests {
         let (a, b) = (open(&src), open(&tasks));
         let q = "sum by (comm) (rate(task_ops[3s]))";
         let (start, end) = a.time_range().unwrap();
-        let answer = |r: &crate::rez_reader::RezReader| {
+        let answer = |r: &::rez::reader::RezReader| {
             let metriken_query::QueryResult::Matrix { result } =
                 r.query_range(q, start, end + 1.0, 1.0).unwrap()
             else {

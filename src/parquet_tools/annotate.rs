@@ -1,7 +1,7 @@
 use clap::ArgMatches;
 use std::path::{Path, PathBuf};
 
-use crate::viewer::{ServiceExtension, TemplateRegistry};
+use ::dashboard::{ServiceExtension, TemplateRegistry};
 use metriken_query::MetricsSource;
 
 use super::legacy;
@@ -181,7 +181,7 @@ pub(crate) struct RezAnnotation<'a> {
     /// (`recording check --annotate` writes each recording's own verdicts).
     /// Must have one entry per recording; an empty entry adds nothing to that
     /// recording.
-    pub(crate) per_recording_events: Option<Vec<Vec<crate::viewer::Event>>>,
+    pub(crate) per_recording_events: Option<Vec<Vec<::dashboard::Event>>>,
     /// Events to drop per recording: `Some(filter)` removes every event
     /// matching it from each of that recording's sources, each from its own
     /// payload (a source's other events stay with it; an emptied payload
@@ -268,8 +268,8 @@ pub(crate) fn annotate_archive_as(
     shown: &Path,
     annotation: &RezAnnotation,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::parquet_metadata::KEY_EVENTS;
-    use crate::viewer::Events;
+    use ::dashboard::keys::KEY_EVENTS;
+    use ::dashboard::Events;
 
     let container = legacy::Container::of(path);
     if container != legacy::Container::Dendro {
@@ -284,7 +284,7 @@ pub(crate) fn annotate_archive_as(
     }
 
     let pool = metriken_storage::BufferPool::new(256 * 1024 * 1024);
-    let readers = crate::rez_reader::RezReader::open_recordings(path, pool)?;
+    let readers = ::rez::reader::RezReader::open_recordings(path, pool)?;
     // Validated per recording, not once: a KPI's query is only meaningful
     // against the metrics that recording actually holds, and a
     // multi-recording archive can hold different sets. All of it before the
@@ -378,16 +378,16 @@ pub(crate) fn annotate_archive_as(
 
             if let Some(ext_json) = &ext_json {
                 metadata.insert(
-                    crate::parquet_metadata::KEY_SERVICE_QUERIES.to_string(),
+                    ::dashboard::keys::KEY_SERVICE_QUERIES.to_string(),
                     ext_json.clone(),
                 );
             }
             if annotation.undo_kpis {
-                metadata.remove(crate::parquet_metadata::KEY_SERVICE_QUERIES);
+                metadata.remove(::dashboard::keys::KEY_SERVICE_QUERIES);
             }
             if let Some(systeminfo) = annotation.systeminfo {
                 metadata.insert(
-                    crate::parquet_metadata::KEY_SYSTEMINFO.to_string(),
+                    ::dashboard::keys::KEY_SYSTEMINFO.to_string(),
                     systeminfo.to_string(),
                 );
             }
@@ -586,7 +586,7 @@ pub(crate) fn source_metadata(path: &Path) -> Vec<std::collections::BTreeMap<Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parquet_metadata::{KEY_EVENTS, KEY_SERVICE_QUERIES};
+    use ::dashboard::keys::{KEY_EVENTS, KEY_SERVICE_QUERIES};
 
     /// A template over [`super::MAX_QUERIES_BYTES`] is refused, however
     /// valid, and one at the limit is read.
@@ -709,15 +709,15 @@ mod tests {
         let inline = vec!["timestamp=1000000000,kind=deploy,description=rollout,id=e1".to_string()];
         annotate_archive(&path, &inline_events_annotation(&inline)).unwrap();
 
-        let events: crate::viewer::Events =
+        let events: ::dashboard::Events =
             serde_json::from_str(&source_metadata(&path)[0][KEY_EVENTS]).unwrap();
         assert_eq!(events.events.len(), 1);
         assert_eq!(events.events[0].description, "rollout");
         assert_eq!(events.events[0].kind.as_deref(), Some("deploy"));
 
         let pool = metriken_storage::BufferPool::new(64 * 1024 * 1024);
-        let readers = crate::rez_reader::RezReader::open_recordings(&path, pool).unwrap();
-        let surfaced: crate::viewer::Events =
+        let readers = ::rez::reader::RezReader::open_recordings(&path, pool).unwrap();
+        let surfaced: ::dashboard::Events =
             serde_json::from_str(&readers[0].1.file_metadata()[KEY_EVENTS]).unwrap();
         assert_eq!(surfaced.events[0].id.as_deref(), Some("e1"));
     }
@@ -750,7 +750,7 @@ mod tests {
         annotate_archive(&path, &annotation).unwrap();
         let md = source_metadata(&path)[0].clone();
         assert!(md.contains_key(KEY_SERVICE_QUERIES), "KPIs embedded");
-        let events: crate::viewer::Events = serde_json::from_str(&md[KEY_EVENTS]).unwrap();
+        let events: ::dashboard::Events = serde_json::from_str(&md[KEY_EVENTS]).unwrap();
         assert_eq!(events.events.len(), 1);
         for (k, v) in &before {
             assert_eq!(md.get(k), Some(v), "{k} survives");
@@ -793,7 +793,7 @@ mod tests {
         };
         annotate_archive(&both, &annotation).unwrap();
         for md in source_metadata(&both) {
-            let events: crate::viewer::Events = serde_json::from_str(&md[KEY_EVENTS]).unwrap();
+            let events: ::dashboard::Events = serde_json::from_str(&md[KEY_EVENTS]).unwrap();
             assert_eq!(events.events.len(), 1);
         }
         let report = annotation.report.captured().unwrap();

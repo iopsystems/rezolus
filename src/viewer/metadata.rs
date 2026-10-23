@@ -252,45 +252,27 @@ pub fn extract_service_extension_metadata(
     service_extensions_from_metadata(&metadata, registry, preference)
 }
 
-/// The KPI templates for one source's metadata map: a parquet footer's
-/// key/values, a `.rez` recording's manifest metadata, or a dendro source's
-/// metadata, as `MetricsSource::file_metadata` returns each. The viewer,
-/// `extract_service_extension_metadata` and `rezolus recording check` all go
-/// through here, so a recording's embedded KPIs resolve the same way wherever
-/// they are read, and the WASM viewer calls the same
-/// `dashboard::source_templates::resolve_source_templates`.
-///
-/// Order: top-level `service_queries`, then
-/// `per_source_metadata.<source>.<entry>.service_queries`, then the registry by
-/// source name. A template in the metadata wins over the registry's unless
-/// `preference` is `Registry`. A template that does not parse falls back to
-/// the registry, logged as a warning once per process: the terminal UI
-/// regenerates its dashboards every tick, and a template that did not parse
-/// the first time does not parse the next. A KPI whose `unit_system` the
-/// viewer does not know is warned about the same way; it renders with its
-/// default `count` scaling (`PlotOpts::maybe_unit_system`).
+/// The KPI templates for one source's metadata map
+/// (`dashboard::source_templates::service_extensions_from_metadata`, which
+/// says the order), with each notice logged as a warning once per process:
+/// the terminal UI regenerates its dashboards every tick, and a template that
+/// did not parse the first time does not parse the next.
 pub fn service_extensions_from_metadata(
     metadata: &HashMap<String, String>,
     registry: &TemplateRegistry,
     preference: TemplatePreference,
 ) -> Vec<(String, ServiceExtension)> {
-    let resolved =
-        ::dashboard::source_templates::resolve_source_templates(metadata, registry, preference);
-    for notice in resolved.notices {
+    let (exts, notices) = ::dashboard::source_templates::service_extensions_from_metadata(
+        metadata, registry, preference,
+    );
+    for notice in notices {
         warn_once(notice);
     }
-    for (source, ext) in &resolved.service_exts {
-        for e in ext.unknown_unit_systems() {
-            warn_once(format!(
-                "service template for {source:?}: {e}; rendering it with the default `count` scaling"
-            ));
-        }
-    }
-    resolved.service_exts
+    exts
 }
 
 /// Log `notice` as a warning unless this process has already logged it.
-pub(super) fn warn_once(notice: String) {
+pub(crate) fn warn_once(notice: String) {
     if first_time(&notice) {
         warn!("{notice}");
     }

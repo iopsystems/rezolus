@@ -25,7 +25,7 @@ pub(crate) enum Container {
 impl Container {
     /// The container of the file at `path`.
     pub(crate) fn of(path: &Path) -> Self {
-        use crate::recorder::rez::{detect_rez_format, RezFormat};
+        use metriken_storage::rez::rez::{detect_rez_format, RezFormat};
         if metriken_storage::DendroCatalog::is_archive(path).unwrap_or(false) {
             return Self::Dendro;
         }
