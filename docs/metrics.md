@@ -1443,14 +1443,15 @@ Measured with rezolus 5.28.0 on 2026-10-21, with only `hw_sensors` and
 Most of the EPYC sweep is one `bnxt_en` port's temperature, at 20.9 ms per
 read (median of 100); the other port takes 0.7 ms. The 1950X run
 predates the `nvme` skip: its NVMe hwmon channels read at 7.6 and 14.4 ms
-(median of 100, 10 ms apart), and its sweeps include them. The 3970X sweep is
-the `asusec` embedded-controller driver: one read per refresh takes about
-300 ms, and the rest about 30 µs. About 2.8 ms of each sweep is CPU; the
+(median of 100, 10 ms apart), and its sweeps include them. Nearly all of the
+3970X sweep is the `asusec` embedded-controller driver: one read per refresh
+takes about 300 ms, and the rest about 30 µs; its NIC's MAC temperature adds
+about 18 ms. About 2.8 ms of each sweep is CPU; the
 rest is the worker waiting.
 
 `asusec` reports -40 °C for a temperature header with nothing connected.
-Such a channel is not read; discovery, every 60 seconds, finds it once a
-sensor is connected.
+Such a channel gets no slot and is not read on each sweep; discovery reads it
+every 60 seconds and adds it once it reports another value.
 
 Each family identifies a native channel with `sensor`, `source`, `chip`,
 `channel`, and a native `label` when supplied by the kernel. `board_model` and

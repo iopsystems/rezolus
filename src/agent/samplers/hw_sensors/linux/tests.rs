@@ -254,17 +254,29 @@ fn asusec_empty_temperature_headers_are_not_read() {
             ("fan1_input", "837"),
         ],
     );
+    // Another chip's -40 °C is a reading, not an empty header.
+    let other = root.path().join("class/hwmon/hwmon1");
+    write(other.join("name"), "generic");
+    write(other.join("temp1_input"), "-40000");
+    write(other.join("temp1_label"), "outdoor");
     let found = discover(root.path());
-    let labels: Vec<_> = found
+    let channels: Vec<_> = found
         .descriptors
         .iter()
-        .map(|d| (d.family, d.label.clone().unwrap_or_default()))
+        .map(|d| {
+            (
+                d.chip.as_str(),
+                d.family,
+                d.label.clone().unwrap_or_default(),
+            )
+        })
         .collect();
     assert_eq!(
-        labels,
+        channels,
         [
-            (Family::Temperature, "Chipset".to_string()),
-            (Family::FanSpeed, String::new()),
+            ("asusec", Family::Temperature, "Chipset".to_string()),
+            ("generic", Family::Temperature, "outdoor".to_string()),
+            ("asusec", Family::FanSpeed, String::new()),
         ]
     );
 }
