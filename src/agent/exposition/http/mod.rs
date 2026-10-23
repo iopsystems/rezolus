@@ -1615,6 +1615,7 @@ mod stream_frame_fixture {
                 .collect(),
             gauges: Vec::new(),
             histograms: Vec::new(),
+            gauge_histograms: Vec::new(),
         }
     }
 
@@ -1639,6 +1640,7 @@ mod stream_frame_fixture {
             counters: (0..g.n).map(|i| Some(g.base + i as u64)).collect(),
             gauges: Vec::new(),
             histograms: Vec::new(),
+            gauge_histograms: Vec::new(),
         })
         .unwrap();
         AgentRow {
@@ -1689,6 +1691,7 @@ mod stream_frame_fixture {
                     counters: vec![Some(g.base + key)],
                     gauges: Vec::new(),
                     histograms: Vec::new(),
+                    gauge_histograms: Vec::new(),
                 })
                 .collect(),
         })

@@ -150,4 +150,39 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         const info = JSON.parse(registry.info('baseline'));
         assert.deepEqual(info.counter_names, ['ops']);
     });
+
+    // Save as Report writes a .dendro whatever the source, built in the
+    // browser: a tar `.rez` and a parquet are converted in memory
+    // (`ArchiveMut::create_in_memory`), which is what this checks in the
+    // shipped WASM. A v3 `.rez` converts by path only, so it is refused,
+    // naming the command that can save it.
+    const SQLITE_MAGIC = 'SQLite format 3\0';
+    const saved = (bytes, name) => {
+        const registry = new WasmCaptureRegistry();
+        registry.attach('baseline', bytes, name);
+        assert.equal(registry.report_extension(), '.dendro');
+        return registry.save_with_selection('{"entries":[],"trim_columns":false}');
+    };
+    const reopened = (report) => {
+        assert.equal(Buffer.from(report.slice(0, 16)).toString('latin1'), SQLITE_MAGIC);
+        const registry = new WasmCaptureRegistry();
+        registry.attach('baseline', report, 'rezolus-report.dendro');
+        assert.match(registry.file_metadata_json('baseline'), /selection/);
+        return JSON.parse(registry.info('baseline'));
+    };
+
+    test('Save as Report of a tar .rez, a parquet or a .dendro is a .dendro', () => {
+        assert.deepEqual(reopened(saved(committedRez('v2.rez'), 'one.rez')).counter_names, ['ops']);
+        const parquet = new Uint8Array(fs.readFileSync(
+            path.join(repoRoot, 'site/viewer/data/simple_capture.parquet')));
+        assert.ok(reopened(saved(parquet, 'simple.parquet')).gauge_names.includes('queue_depth'));
+        assert.deepEqual(
+            reopened(saved(fixture('report-src.dendro', 1), 'one.dendro')).counter_names,
+            ['cpu_cycles'],
+        );
+    });
+
+    test('Save as Report of a v3 .rez is refused, naming rezolus view', () => {
+        assert.throws(() => saved(committedRez('v3.rez'), 'one.rez'), /rezolus view/);
+    });
 }

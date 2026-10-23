@@ -675,7 +675,6 @@ pub(crate) struct CheckRun {
     /// Each recording's verdict events in catalog order, one entry per
     /// recording of the archive (empty for the ones not evaluated).
     pub(crate) per_recording_events: Vec<Vec<Event>>,
-    pub(crate) format: RezFormat,
     /// KPIs carrying a check, across the evaluated recordings. Zero means
     /// there was nothing to run, which is not a failure.
     pub(crate) checks_seen: usize,
@@ -741,7 +740,7 @@ pub(crate) fn run_checks(
     override_ext: Option<&ServiceExtension>,
     registry: &TemplateRegistry,
 ) -> Result<CheckRun, String> {
-    let (format, targets, total_recordings) = open_targets(path, selector)?;
+    let (_, targets, total_recordings) = open_targets(path, selector)?;
 
     let mut results: Vec<CheckResult> = Vec::new();
     let mut per_recording_events: Vec<Vec<Event>> = vec![Vec::new(); total_recordings];
@@ -761,7 +760,6 @@ pub(crate) fn run_checks(
     Ok(CheckRun {
         results,
         per_recording_events,
-        format,
         checks_seen,
     })
 }
@@ -822,8 +820,14 @@ fn run_inner(args: &ArgMatches, registry: &TemplateRegistry) -> Result<i32, Stri
             eprintln!("nothing to annotate: no violation windows");
         } else {
             // With --json, stdout is the array and nothing else.
-            let line = annotate_events(path, run.format, run.per_recording_events.clone())
-                .map_err(|e| e.to_string())?;
+            let output = args.get_one::<PathBuf>("output").map(PathBuf::as_path);
+            let line = annotate_events(
+                path,
+                output,
+                run.per_recording_events.clone(),
+                super::legacy::command_with_output,
+            )
+            .map_err(|e| e.to_string())?;
             if json {
                 eprintln!("{line}");
             } else {
@@ -836,30 +840,19 @@ fn run_inner(args: &ArgMatches, registry: &TemplateRegistry) -> Result<i32, Stri
 }
 
 /// Write the violation windows into the recording as events, through the
-/// same code `recording annotate` uses for each container. Returns the
-/// report line; the caller decides which stream it goes to.
+/// writer `recording annotate` uses: into the dendro archive at `path`, or
+/// with `output` into a new `.dendro` there (a legacy `.rez` or parquet input
+/// needs one: it is converted there first, and without one the refusal
+/// `refusal` builds names the way to give it). `per_recording` is indexed
+/// as [`open_targets`] lists the recordings. Returns the report line; the
+/// caller decides which stream it goes to.
 pub(crate) fn annotate_events(
     path: &Path,
-    format: RezFormat,
+    output: Option<&Path>,
     per_recording: Vec<Vec<Event>>,
+    refusal: impl FnOnce(&Path) -> String,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    if format == RezFormat::NotRez {
-        let events = per_recording.into_iter().flatten().collect();
-        let appended = super::events::append_to_parquet(path, events)?;
-        return Ok(if appended.counts.nothing_new() {
-            format!(
-                "Annotated {:?}: nothing new; {} check event(s) already present",
-                path, appended.counts.unchanged
-            )
-        } else {
-            format!(
-                "Annotated {:?}: {} ({} event(s) total)",
-                path,
-                appended.counts.describe(),
-                appended.events.events.len()
-            )
-        });
-    }
+    let (target, note) = super::legacy::edit_target(path, output, refusal)?;
     let annotation = super::annotate::RezAnnotation {
         ext_json: None,
         events: None,
@@ -867,11 +860,15 @@ pub(crate) fn annotate_events(
         per_recording_replace: None,
         report: super::annotate::ReportSink::capture(),
     };
-    super::annotate::annotate_rez_any(path, format, &annotation)?;
-    Ok(annotation
+    super::annotate::annotate_archive(&target, &annotation)?;
+    let line = annotation
         .report
         .captured()
-        .unwrap_or_else(|| format!("Annotated {:?}", path)))
+        .unwrap_or_else(|| format!("Annotated {:?}", target));
+    Ok(match note {
+        Some(note) => format!("{note}\n{line}"),
+        None => line,
+    })
 }
 
 #[cfg(test)]

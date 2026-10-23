@@ -341,133 +341,133 @@ static LATENCIES_ACQ_REG: &'static AcquisitionGroup = &LATENCIES_ACQ;
     description = "Distribution of syscall latencies",
     metadata = { unit = "nanoseconds", op = "other", acq_group = "syscall_latency_latencies" }
 )]
-pub static SYSCALL_OTHER_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static SYSCALL_OTHER_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "syscall_latency",
     description = "Distribution of syscall latencies",
     metadata = { unit = "nanoseconds", op = "read", acq_group = "syscall_latency_latencies" }
 )]
-pub static SYSCALL_READ_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static SYSCALL_READ_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "syscall_latency",
     description = "Distribution of syscall latencies",
     metadata = { unit = "nanoseconds", op = "write", acq_group = "syscall_latency_latencies" }
 )]
-pub static SYSCALL_WRITE_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static SYSCALL_WRITE_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "syscall_latency",
     description = "Distribution of syscall latencies",
     metadata = { unit = "nanoseconds", op = "poll", acq_group = "syscall_latency_latencies" }
 )]
-pub static SYSCALL_POLL_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static SYSCALL_POLL_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "syscall_latency",
     description = "Distribution of syscall latencies",
     metadata = { unit = "nanoseconds", op = "lock", acq_group = "syscall_latency_latencies" }
 )]
-pub static SYSCALL_LOCK_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static SYSCALL_LOCK_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "syscall_latency",
     description = "Distribution of syscall latencies",
     metadata = { unit = "nanoseconds", op = "time", acq_group = "syscall_latency_latencies" }
 )]
-pub static SYSCALL_TIME_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static SYSCALL_TIME_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "syscall_latency",
     description = "Distribution of syscall latencies",
     metadata = { unit = "nanoseconds", op = "sleep", acq_group = "syscall_latency_latencies" }
 )]
-pub static SYSCALL_SLEEP_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static SYSCALL_SLEEP_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "syscall_latency",
     description = "Distribution of syscall latencies",
     metadata = { unit = "nanoseconds", op = "socket", acq_group = "syscall_latency_latencies" }
 )]
-pub static SYSCALL_SOCKET_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static SYSCALL_SOCKET_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "syscall_latency",
     description = "Distribution of syscall latencies",
     metadata = { unit = "nanoseconds", op = "yield", acq_group = "syscall_latency_latencies" }
 )]
-pub static SYSCALL_YIELD_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static SYSCALL_YIELD_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "syscall_latency",
     description = "Distribution of syscall latencies",
     metadata = { unit = "nanoseconds", op = "filesystem", acq_group = "syscall_latency_latencies" }
 )]
-pub static SYSCALL_FILESYSTEM_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static SYSCALL_FILESYSTEM_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "syscall_latency",
     description = "Distribution of syscall latencies",
     metadata = { unit = "nanoseconds", op = "memory", acq_group = "syscall_latency_latencies" }
 )]
-pub static SYSCALL_MEMORY_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static SYSCALL_MEMORY_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "syscall_latency",
     description = "Distribution of syscall latencies",
     metadata = { unit = "nanoseconds", op = "process", acq_group = "syscall_latency_latencies" }
 )]
-pub static SYSCALL_PROCESS_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static SYSCALL_PROCESS_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "syscall_latency",
     description = "Distribution of syscall latencies",
     metadata = { unit = "nanoseconds", op = "query", acq_group = "syscall_latency_latencies" }
 )]
-pub static SYSCALL_QUERY_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static SYSCALL_QUERY_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "syscall_latency",
     description = "Distribution of syscall latencies",
     metadata = { unit = "nanoseconds", op = "ipc", acq_group = "syscall_latency_latencies" }
 )]
-pub static SYSCALL_IPC_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static SYSCALL_IPC_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "syscall_latency",
     description = "Distribution of syscall latencies",
     metadata = { unit = "nanoseconds", op = "timer", acq_group = "syscall_latency_latencies" }
 )]
-pub static SYSCALL_TIMER_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static SYSCALL_TIMER_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "syscall_latency",
     description = "Distribution of syscall latencies",
     metadata = { unit = "nanoseconds", op = "event", acq_group = "syscall_latency_latencies" }
 )]
-pub static SYSCALL_EVENT_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static SYSCALL_EVENT_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "syscall_latency",
     description = "Distribution of syscall latencies",
     metadata = { unit = "nanoseconds", op = "sync", acq_group = "syscall_latency_latencies" }
 )]
-pub static SYSCALL_SYNC_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static SYSCALL_SYNC_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);

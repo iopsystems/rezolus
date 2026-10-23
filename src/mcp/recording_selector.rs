@@ -237,7 +237,7 @@ fn json_str(s: &str) -> String {
 /// way double-quote escaping lets `$`, `` ` ``, `\` and `!` do. Left bare when
 /// the word is already shell-safe, so the common `source=redis` reads unchanged
 /// and existing captures' advice does not churn.
-fn shell_word(word: &str) -> String {
+pub(crate) fn shell_word(word: &str) -> String {
     // The set that never needs quoting in POSIX sh. `=` is here because the
     // token is `k=v`; the rest are the label-value characters that occur in
     // practice (paths, versions, hostports).

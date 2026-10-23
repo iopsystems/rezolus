@@ -114,6 +114,7 @@ fn serve_stream(mut stream: TcpStream, path: &str) {
         }],
         gauges: Vec::new(),
         histograms: Vec::new(),
+        gauge_histograms: Vec::new(),
     };
     let start = wall_ns();
     for seq in 0u64.. {
@@ -127,6 +128,7 @@ fn serve_stream(mut stream: TcpStream, path: &str) {
             counters: vec![Some((ts - start) / 2)],
             gauges: Vec::new(),
             histograms: Vec::new(),
+            gauge_histograms: Vec::new(),
         };
         let row = rez::wal::encode_wal_group_row(&rez::wal::wal_group_row(
             &group,
@@ -417,9 +419,9 @@ fn an_agent_and_a_service_of_one_run_open_as_one_view() {
 }
 
 /// A single-source parquet is a recording of one member: its series carry
-/// its `source`, so a KPI template carried in it whose queries select
-/// `source=` (as an archive's do) renders, and `mcp query` with the matcher
-/// reads the series.
+/// its `source`, and so do they in the `.dendro` it is annotated into, so a
+/// KPI template whose queries select `source=` (as an archive's do) renders,
+/// and `mcp query` with the matcher reads the series of either.
 #[test]
 fn a_parquets_template_selecting_its_source_renders() {
     let dir = tempfile::tempdir().unwrap();
@@ -444,11 +446,14 @@ fn a_parquets_template_selecting_its_source_renders() {
         .to_string(),
     )
     .unwrap();
+    let archive = dir.path().join("run.dendro");
     let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
         .args(["recording", "annotate"])
         .arg(&parquet)
         .arg("--queries")
         .arg(&kpis)
+        .arg("-o")
+        .arg(&archive)
         .output()
         .unwrap();
     assert!(
@@ -457,21 +462,27 @@ fn a_parquets_template_selecting_its_source_renders() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let query = Command::new(env!("CARGO_BIN_EXE_rezolus"))
-        .args(["mcp", "query"])
-        .arg(&parquet)
-        .arg("sum(cpu_cores{source=\"rezolus\"})")
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&query.stdout);
-    assert!(
-        query.status.success(),
-        "{stdout}{}",
-        String::from_utf8_lossy(&query.stderr)
-    );
-    assert!(!stdout.contains("no series"), "{stdout}");
+    for recording in [&parquet, &archive] {
+        let query = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+            .args(["mcp", "query"])
+            .arg(recording)
+            .arg("sum(cpu_cores{source=\"rezolus\"})")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&query.stdout);
+        assert!(
+            query.status.success(),
+            "{stdout}{}",
+            String::from_utf8_lossy(&query.stderr)
+        );
+        assert!(
+            !stdout.contains("no series"),
+            "{}: {stdout}",
+            recording.display()
+        );
+    }
 
-    let viewer = spawn_viewer(&parquet);
+    let viewer = spawn_viewer(&archive);
     let svc = get(&viewer, "/data/service/rezolus.json");
     assert!(svc["metadata"].get("unavailable_kpis").is_none(), "{svc}");
     assert_eq!(

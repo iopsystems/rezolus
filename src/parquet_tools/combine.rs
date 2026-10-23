@@ -1,173 +1,10 @@
-use arrow::array::{Array, ArrayRef, UInt64Array};
-use arrow::compute;
-use arrow::datatypes::{Field, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
 use clap::ArgMatches;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use parquet::arrow::ArrowWriter;
-use parquet::file::metadata::KeyValue;
-use parquet::file::properties::WriterProperties;
-use parquet::file::reader::FileReader;
-use parquet::file::serialized_reader::SerializedFileReader;
-use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
-use crate::parquet_metadata::*;
+use super::legacy::{self, Container};
 
-/// Parsed data from one input parquet file.
-struct InputFile {
-    path: PathBuf,
-    schema: SchemaRef,
-    kv_metadata: Vec<KeyValue>,
-    batches: Vec<RecordBatch>,
-    source: String,
-    sampling_interval_ms: Option<String>,
-    node: Option<String>,
-    instance: Option<String>,
-}
-
-/// Flatten an `InputFile.source` field into one or more flat source names.
-/// Already-combined inputs carry a JSON-array string (e.g. `"[\"rezolus\",\"vllm\"]"`);
-/// single-source inputs carry the bare name. This returns the flat list either way.
-fn flatten_input_sources(input: &InputFile) -> Vec<String> {
-    if let Ok(arr) = serde_json::from_str::<Vec<String>>(&input.source) {
-        arr
-    } else {
-        vec![input.source.clone()]
-    }
-}
-
-/// Parse a `--ab` argument list into (baseline, experiment) sides.
-///
-/// `raw` is the clap-collected Vec, each entry `key=value`. `available_sources`
-/// is the flat list of source names across all inputs (for validation).
-fn parse_ab_args(
-    raw: &[String],
-    available_sources: &[&str],
-) -> Result<(AbSide, AbSide), Box<dyn std::error::Error>> {
-    let mut baseline: Option<String> = None;
-    let mut experiment: Option<String> = None;
-
-    for entry in raw {
-        let (key, value) = entry
-            .split_once('=')
-            .ok_or_else(|| format!("--ab entry {entry:?} must be key=value"))?;
-        match key {
-            "baseline" => {
-                if baseline.is_some() {
-                    return Err("--ab baseline= specified more than once".into());
-                }
-                baseline = Some(value.to_string());
-            }
-            "experiment" => {
-                if experiment.is_some() {
-                    return Err("--ab experiment= specified more than once".into());
-                }
-                experiment = Some(value.to_string());
-            }
-            other => {
-                return Err(format!(
-                    "--ab key {other:?} not recognized (valid: baseline, experiment)"
-                )
-                .into());
-            }
-        }
-    }
-
-    let baseline = baseline.ok_or("--ab requires baseline=<source>")?;
-    let experiment = experiment.ok_or("--ab requires experiment=<source>")?;
-
-    for (label, value) in [("baseline", &baseline), ("experiment", &experiment)] {
-        if !available_sources.contains(&value.as_str()) {
-            return Err(format!(
-                "--ab {label}={value:?} does not match any input source (available: {available_sources:?})"
-            )
-            .into());
-        }
-    }
-
-    if baseline == experiment {
-        return Err(format!(
-            "--ab baseline and experiment must be different sources (both are {baseline:?})"
-        )
-        .into());
-    }
-
-    Ok((
-        AbSide {
-            alias: baseline.clone(),
-            sources: vec![baseline],
-        },
-        AbSide {
-            alias: experiment.clone(),
-            sources: vec![experiment],
-        },
-    ))
-}
-
-/// Resolve which input file maps to baseline vs experiment in --ab mode.
-///
-/// Each input must match exactly ONE side via its (possibly multi-source)
-/// flat source list, and the two inputs must be different. Returns the
-/// (baseline_idx, experiment_idx) tuple. Errors are user-actionable —
-/// the upfront check catches both ambiguous mappings (input matches both
-/// sides) and orphan inputs (input matches neither side) BEFORE the
-/// column writer would silently mis-route data.
-fn resolve_ab_input_indices(
-    inputs: &[InputFile],
-    baseline: &AbSide,
-    experiment: &AbSide,
-) -> Result<(usize, usize), Box<dyn std::error::Error>> {
-    let baseline_idxs: Vec<usize> = inputs
-        .iter()
-        .enumerate()
-        .filter(|(_, i)| {
-            flatten_input_sources(i)
-                .iter()
-                .any(|s| baseline.sources.contains(s))
-        })
-        .map(|(idx, _)| idx)
-        .collect();
-    let experiment_idxs: Vec<usize> = inputs
-        .iter()
-        .enumerate()
-        .filter(|(_, i)| {
-            flatten_input_sources(i)
-                .iter()
-                .any(|s| experiment.sources.contains(s))
-        })
-        .map(|(idx, _)| idx)
-        .collect();
-
-    if baseline_idxs.len() != 1 {
-        return Err(format!(
-            "--ab: expected exactly one input matching baseline source(s) {:?}, got {} (inputs: {:?})",
-            baseline.sources,
-            baseline_idxs.len(),
-            inputs.iter().map(flatten_input_sources).collect::<Vec<_>>(),
-        )
-        .into());
-    }
-    if experiment_idxs.len() != 1 {
-        return Err(format!(
-            "--ab: expected exactly one input matching experiment source(s) {:?}, got {} (inputs: {:?})",
-            experiment.sources,
-            experiment_idxs.len(),
-            inputs.iter().map(flatten_input_sources).collect::<Vec<_>>(),
-        )
-        .into());
-    }
-    if baseline_idxs[0] == experiment_idxs[0] {
-        return Err(
-            "--ab: baseline and experiment resolved to the same input file (sources overlap)"
-                .into(),
-        );
-    }
-    Ok((baseline_idxs[0], experiment_idxs[0]))
-}
-
-/// How `--ab` assigns arms in an archive output.
+/// How `--ab` assigns arms.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum AbPlan {
     /// No `--ab`: nothing is stamped, and the archive opens combined.
@@ -367,24 +204,23 @@ fn stamped_labels(
 }
 
 /// Refuse a plan an input's recordings already contradict, before anything
-/// is copied: each archive input's labels, read from its catalog. A parquet
-/// input's labels are known only once it is ingested, and are checked then.
+/// is written: each input's source labels, read from the dendro archive it
+/// is copied from (`inputs`, the converted ones for a legacy input), named by
+/// the input as given (`files`).
 fn check_ab_plan(
     plan: &AbPlan,
     files: &[PathBuf],
-    archives: bool,
+    inputs: &[PathBuf],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if *plan == AbPlan::Nothing || !archives {
+    if *plan == AbPlan::Nothing {
         return Ok(());
     }
-    let pool = metriken_storage::BufferPool::new(16 * 1024 * 1024);
     let mut labels = Vec::new();
     let mut counts = Vec::new();
-    for file in files {
-        let recordings =
-            crate::rez_reader::RezReader::open_recordings(file, std::sync::Arc::clone(&pool))?;
-        counts.push(recordings.len());
-        labels.extend(recordings.into_iter().map(|(l, _)| l));
+    for input in inputs {
+        let sources = dendro::archive::Archive::open(input)?.read_sources()?;
+        counts.push(sources.len());
+        labels.extend(sources.into_iter().map(|s| s.meta.labels));
     }
     let stamped = stamped_labels(&labels, &plan.per_recording(&counts, files)?)?;
     check_slots(&labels, &stamped, plan)
@@ -428,57 +264,6 @@ thread_local! {
     static FAIL_STAMP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Stamp `plan`'s arms on the `.rez` v3 at `path`, assembled from inputs
-/// that contributed `counts` recordings each. Returns how many were stamped.
-fn stamp_rez_arms(
-    path: &std::path::Path,
-    plan: &AbPlan,
-    counts: &[usize],
-    files: &[PathBuf],
-) -> Result<usize, Box<dyn std::error::Error>> {
-    use crate::recorder::rez_sqlite::RezDb;
-    #[cfg(test)]
-    if *plan != AbPlan::Nothing && FAIL_STAMP.with(|f| f.get()) {
-        return Err("injected relabel failure".into());
-    }
-    let db = RezDb::open(path)?;
-    let recordings = db.read_recordings()?;
-    let labels: Vec<_> = recordings.iter().map(|r| r.meta.labels.clone()).collect();
-    let stamped = stamped_labels(&labels, &plan.per_recording(counts, files)?)?;
-    check_slots(&labels, &stamped, plan)?;
-    let mut n = 0;
-    for (rec, new) in recordings.iter().zip(stamped) {
-        if let Some(new) = new {
-            db.update_recording_labels(rec.id, &new)?;
-            n += 1;
-        }
-    }
-    Ok(n)
-}
-
-/// A staging directory beside `output`, and the path in it an assembly
-/// writes, renamed onto `output` once complete: a failure at any step
-/// leaves nothing at `output`. Refuses an existing `output`.
-fn staged_output(
-    output: &std::path::Path,
-) -> Result<(tempfile::TempDir, PathBuf), Box<dyn std::error::Error>> {
-    if output.exists() {
-        return Err(format!(
-            "{} already exists; refusing to overwrite it",
-            output.display()
-        )
-        .into());
-    }
-    // Beside the output, never in $TMPDIR: a rename across filesystems fails.
-    let dir = output
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(std::path::Path::new("."));
-    let staging = tempfile::tempdir_in(dir)?;
-    let staged = staging.path().join("combined.rez");
-    Ok((staging, staged))
-}
-
 pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     let files: Vec<PathBuf> = args
         .get_many::<PathBuf>("FILES")
@@ -486,257 +271,37 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         .cloned()
         .collect();
     let output = args.get_one::<PathBuf>("output").unwrap();
-    let bypass_time_check = args.get_flag("bypass-time-check");
     let ab_raw: Vec<String> = args
         .get_many::<String>("ab")
         .map(|i| i.cloned().collect())
         .unwrap_or_default();
+    for (given, flag) in [
+        (args.get_flag("bypass-time-check"), "--bypass-time-check"),
+        (args.get_one::<String>("pinned").is_some(), "--pinned"),
+        (args.get_one::<String>("category").is_some(), "--category"),
+    ] {
+        if given {
+            return Err(format!(
+                "{flag} applied to the parquet row-merge and the A/B tarball, which 6.x \
+                 does not write; combine writes one .dendro archive (-o <name>.dendro)"
+            )
+            .into());
+        }
+    }
+    if output.extension().and_then(|e| e.to_str()) != Some("dendro") {
+        return Err(format!(
+            "{}: combine writes .dendro archives only in 6.x (the parquet row-merge, the \
+             .parquet.ab.tar and .rez outputs are gone); give -o {}",
+            output.display(),
+            legacy::dendro_beside(output).display()
+        )
+        .into());
+    }
     // One input only relabels an archive's recordings (`--ab baseline=0
     // experiment=1`); everything else combines two or more.
     if files.len() < 2 && ab_raw.is_empty() {
         return Err("combine takes two or more inputs (or one archive with --ab)".into());
     }
-
-    let pinned = args.get_one::<String>("pinned");
-
-    // `.rez` inputs: assemble a multi-recording archive (label-set model).
-    // Dispatch is by CONTENT, not extension, and recognizes both `.rez`
-    // containers (v2 tar and v3 SQLite).
-    {
-        use crate::recorder::rez::RezFormat;
-        let formats: Vec<RezFormat> = files
-            .iter()
-            .map(|f| crate::recorder::rez::detect_rez_format(f).unwrap_or(RezFormat::NotRez))
-            .collect();
-
-        let dendro_out = output.extension().and_then(|e| e.to_str()) == Some("dendro");
-        let dendro_in: Vec<bool> = files
-            .iter()
-            .map(|f| metriken_storage::DendroCatalog::is_archive(f).unwrap_or(false))
-            .collect();
-        if dendro_out {
-            if formats.contains(&RezFormat::NotRez) {
-                return Err(
-                    "combine into a .dendro takes .rez and .dendro inputs; combine \
-                     parquet inputs into a .rez first, then convert it with `recording \
-                     upgrade --to dendro`"
-                        .into(),
-                );
-            }
-            let plan = ab_plan(&ab_raw, &files)?;
-            check_ab_plan(&plan, &files, true)?;
-            return combine_dendro(&files, &formats, &dendro_in, output, &plan);
-        }
-        if let Some(i) = dendro_in.iter().position(|d| *d) {
-            return Err(format!(
-                "{} is a dendro archive; combine dendro inputs into a .dendro output",
-                files[i].display()
-            )
-            .into());
-        }
-
-        if formats.iter().any(|f| *f != RezFormat::NotRez) {
-            if !formats.iter().all(|f| *f != RezFormat::NotRez) {
-                return Err("cannot mix .rez and .parquet inputs in combine".into());
-            }
-            // A v1/v2 input is upgraded to v3 on the way in, so the output is
-            // always v3 and mixing containers needs no special case: by the
-            // time anything is assembled, every input is the same shape.
-            let plan = ab_plan(&ab_raw, &files)?;
-            check_ab_plan(&plan, &files, true)?;
-            return combine_rez_v3(&files, &formats, output, &plan);
-        }
-    }
-
-    // All-parquet inputs with a `.rez` OUTPUT: ingest each parquet as its own
-    // windowless recording (one archive, a recording per input) — the `.rez`
-    // form that replaces `combine --ab` for a rezolus-vs-rezolus comparison.
-    // Inputs are detected by content above; the output is chosen by extension.
-    if output.extension().and_then(|e| e.to_str()) == Some("rez") {
-        let plan = ab_plan(&ab_raw, &files)?;
-        if matches!(plan, AbPlan::Positions(_)) {
-            return Err("--ab by recording position takes one .rez or .dendro input".into());
-        }
-        return combine_parquet_to_rez(&files, output, &plan);
-    }
-
-    let mut inputs = load_inputs(&files)?;
-
-    // Phase 2: Validate (cheapest checks first). --ab mode packages two
-    // independent captures into a tarball; they aren't row-merged so
-    // label/interval/time-overlap consistency is irrelevant.
-    if ab_raw.is_empty() {
-        validate_sampling_interval(&inputs)?;
-        validate_labels(&mut inputs)?;
-        validate_time_overlap(&inputs)?;
-    }
-
-    // Validate --pinned matches an actual rezolus node
-    if let Some(pinned_node) = pinned {
-        let rez_nodes: Vec<&str> = inputs
-            .iter()
-            .filter(|i| i.source == "rezolus")
-            .filter_map(|i| i.node.as_deref())
-            .collect();
-        if !rez_nodes.contains(&pinned_node.as_str()) {
-            return Err(format!(
-                "--pinned {:?} does not match any rezolus node (available: {:?})",
-                pinned_node, rez_nodes
-            )
-            .into());
-        }
-    }
-
-    let ab = if !ab_raw.is_empty() {
-        if inputs.len() != 2 {
-            return Err(format!(
-                "--ab requires exactly two input files (got {})",
-                inputs.len()
-            )
-            .into());
-        }
-        let flat: Vec<String> = inputs.iter().flat_map(flatten_input_sources).collect();
-        let available: Vec<&str> = flat.iter().map(|s| s.as_str()).collect();
-        let parsed = parse_ab_args(&ab_raw, &available)?;
-        // Upfront validation — catches multi-source ambiguity before
-        // `write_ab_tarball` would silently mis-route data.
-        let _ = resolve_ab_input_indices(&inputs, &parsed.0, &parsed.1)?;
-        Some(parsed)
-    } else {
-        None
-    };
-
-    let ab_category = args.get_one::<String>("category").cloned();
-    let ab_active = ab.is_some();
-    combine_and_write(
-        &inputs,
-        output,
-        CombineOptions {
-            bypass_time_check,
-            pinned,
-            ab,
-            ab_category,
-        },
-    )?;
-
-    let source_names: Vec<&str> = inputs.iter().map(|i| i.source.as_str()).collect();
-    if ab_active {
-        println!(
-            "Packaged A/B captures ({}) into {:?}",
-            source_names.join(" vs "),
-            output
-        );
-    } else {
-        println!(
-            "Combined {} files ({}) into {:?}",
-            inputs.len(),
-            source_names.join(", "),
-            output
-        );
-    }
-
-    Ok(())
-}
-
-/// Assemble several `.rez` archives into one multi-recording v3 archive.
-///
-/// Segment BLOBs are copied verbatim — nothing is decoded, re-encoded or
-/// re-timestamped, so this costs a BLOB copy per segment and nothing else.
-/// Every input's recordings are appended under fresh ids, which is all a
-/// multi-recording archive is; unlike the old tar path there are no directory
-/// names to keep unique, because a v3 recording is identified by its row id
-/// and described by its labels.
-///
-/// A v1/v2 (tar) input is upgraded to v3 in a staging directory first, so
-/// containers can be mixed freely and the output is always v3. The staging
-/// copies are transient — they exist only for the length of the assembly.
-///
-/// The whole assembly is one destination transaction: either the output holds
-/// every input or it does not exist.
-fn combine_rez_v3(
-    files: &[PathBuf],
-    formats: &[crate::recorder::rez::RezFormat],
-    output: &std::path::Path,
-    plan: &AbPlan,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::recorder::rez::RezFormat;
-    use crate::recorder::rez_sqlite::RezDb;
-    use crate::recorder::rez_v3_rewrite::{copy_recordings_into, upgrade_tar_to_v3, CopySpec};
-
-    let (out_dir, staged_out) = staged_output(output)?;
-
-    let staging = tempfile::tempdir()?;
-    let mut upgraded = 0usize;
-    let mut opened: Vec<PathBuf> = Vec::with_capacity(files.len());
-    for (i, (file, format)) in files.iter().zip(formats).enumerate() {
-        match format {
-            RezFormat::V2Tar => {
-                let staged = staging.path().join(format!("upgraded-{i}.rez"));
-                upgrade_tar_to_v3(file, &staged)?;
-                upgraded += 1;
-                opened.push(staged);
-            }
-            _ => opened.push(file.clone()),
-        }
-    }
-    if upgraded > 0 {
-        println!("upgraded {upgraded} tar (v1/v2) input(s) to v3 for the assembly");
-    }
-
-    let mut dst = RezDb::create(&staged_out)?;
-    let mut recordings = 0usize;
-    let mut counts: Vec<usize> = Vec::with_capacity(opened.len());
-    dst.transaction(|tx| {
-        for file in &opened {
-            let src = RezDb::open(file)?;
-            // A read snapshot per input: one of them may still be being
-            // written (a live hindsight buffer is a perfectly good input), and
-            // this is what stops retention from deleting a segment out from
-            // under the copy.
-            src.read_snapshot(|src| {
-                let n = copy_recordings_into(src, tx, &CopySpec::everything())?;
-                counts.push(n);
-                recordings += n;
-                Ok(())
-            })?;
-        }
-        Ok(())
-    })?;
-    drop(dst);
-    let stamped = stamp_rez_arms(&staged_out, plan, &counts, files)?;
-    std::fs::rename(&staged_out, output)?;
-    drop(out_dir);
-    report_arms(stamped, files, plan);
-    println!(
-        "wrote {} with {} recording(s) from {} input(s)",
-        output.display(),
-        recordings,
-        files.len()
-    );
-    Ok(())
-}
-
-/// Assemble one dendro archive from `.dendro` and `.rez` inputs, a source
-/// per input recording, in one transaction: the output holds every input or
-/// does not exist.
-///
-/// A `.rez` input (either container) is converted first, as `recording
-/// upgrade --to dendro` converts it, into the staging directory. Each input
-/// is then copied through `copy_sources_into` in its own read snapshot, its
-/// live tail sealed (`crate::dendro_copy`), and each source keeps its uuid.
-/// The same source given twice (the same uuid, e.g. a file and its
-/// snapshot) is refused: it would double every value it holds.
-fn combine_dendro(
-    files: &[PathBuf],
-    formats: &[crate::recorder::rez::RezFormat],
-    dendro_in: &[bool],
-    output: &std::path::Path,
-    plan: &AbPlan,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::recorder::rez::RezFormat;
-    use dendro::archive::{Archive, ArchiveMut};
-    use dendro::rewrite::{copy_sources_into, shared_sources, CopySpec};
-
     if output.exists() {
         return Err(format!(
             "{} already exists; refusing to replace it",
@@ -744,55 +309,64 @@ fn combine_dendro(
         )
         .into());
     }
+    let plan = ab_plan(&ab_raw, &files)?;
+    combine_dendro(&files, output, &plan)
+}
+
+/// Assemble one dendro archive from `files`, a source per input recording,
+/// in one transaction: the output holds every input or does not exist.
+///
+/// A `.rez` or parquet input is converted first into the staging directory,
+/// as `recording upgrade` converts it. Each input is then copied through
+/// `copy_sources_into` in its own read snapshot, its live tail sealed
+/// (`crate::dendro_copy`), and each source keeps its uuid, so a source and a
+/// copy of it (the same uuid, e.g. a file and its snapshot) stay one
+/// recording to every reader (metriken-storage's process groups).
+fn combine_dendro(
+    files: &[PathBuf],
+    output: &Path,
+    plan: &AbPlan,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use dendro::archive::{Archive, ArchiveMut};
+    use dendro::rewrite::{copy_sources_into, CopySpec};
+
     // Beside the output, never in $TMPDIR: a rename across filesystems fails.
     let dir = output
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(std::path::Path::new("."));
+        .unwrap_or(Path::new("."));
     let staging = tempfile::tempdir_in(dir)?;
 
     let mut inputs: Vec<PathBuf> = Vec::with_capacity(files.len());
     let mut converted = 0usize;
-    for (i, ((file, format), dendro)) in files.iter().zip(formats).zip(dendro_in).enumerate() {
-        if *dendro {
-            inputs.push(file.clone());
-            continue;
-        }
-        let v3 = match format {
-            RezFormat::V2Tar => {
-                let upgraded = staging.path().join(format!("upgraded-{i}.rez"));
-                crate::recorder::rez_v3_rewrite::upgrade_tar_to_v3(file, &upgraded)?;
-                upgraded
+    for (i, file) in files.iter().enumerate() {
+        match Container::of(file) {
+            Container::Dendro => inputs.push(file.clone()),
+            c if c.is_legacy() => {
+                let staged = staging.path().join(format!("converted-{i}.dendro"));
+                legacy::convert(file, &staged)?;
+                converted += 1;
+                inputs.push(staged);
             }
-            _ => file.clone(),
-        };
-        let staged = staging.path().join(format!("converted-{i}.dendro"));
-        ::rez::to_dendro::convert_v3_to_dendro(&v3, &staged)?;
-        converted += 1;
-        inputs.push(staged);
+            c => {
+                return Err(format!(
+                    "{} is a {}, not a recording (.dendro, .rez or .parquet)",
+                    file.display(),
+                    c.name()
+                )
+                .into())
+            }
+        }
     }
     if converted > 0 {
-        println!("converted {converted} .rez input(s) to dendro for the assembly");
+        println!("converted {converted} .rez or parquet input(s) to dendro for the assembly");
     }
+    check_ab_plan(plan, files, &inputs)?;
 
     let archives: Vec<Archive> = inputs
         .iter()
         .map(|p| Archive::open(p))
         .collect::<Result<_, _>>()?;
-    for a in 0..archives.len() {
-        for b in a + 1..archives.len() {
-            let shared = shared_sources(&archives[a], &archives[b])?;
-            if !shared.is_empty() {
-                return Err(format!(
-                    "{} and {} hold the same source ({}); combining them would count it twice",
-                    files[a].display(),
-                    files[b].display(),
-                    shared.join(", ")
-                )
-                .into());
-            }
-        }
-    }
 
     let staged = staging.path().join("combined.dendro");
     let mut dst = ArchiveMut::create(&staged)?;
@@ -813,6 +387,10 @@ fn combine_dendro(
         Ok(())
     })?;
     // Stamped on the staged copy, so a refusal leaves no output.
+    #[cfg(test)]
+    if *plan != AbPlan::Nothing && FAIL_STAMP.with(|f| f.get()) {
+        return Err("injected relabel failure".into());
+    }
     let mut stamped = 0;
     {
         let rows = dst.read_sources()?;
@@ -858,1086 +436,36 @@ fn report_arms(stamped: usize, files: &[PathBuf], plan: &AbPlan) {
     println!("stamped arm on {stamped} recording(s); the archive opens as an A/B comparison");
 }
 
-/// Assemble a multi-recording v3 `.rez` from plain `.parquet` inputs: each
-/// input becomes one windowless recording (see `combine_rez_ingest`). This is
-/// the parquet analogue of `combine_rez_v3` — one archive, a recording per
-/// input — for a comparison whose sides only exist as parquet.
-fn combine_parquet_to_rez(
+/// [`run`] for `files` into `output` with no `--ab`, for other modules'
+/// tests.
+#[cfg(test)]
+pub(crate) fn run_combine_for_test(
     files: &[PathBuf],
-    output: &std::path::Path,
-    plan: &AbPlan,
+    output: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::recorder::parquet_ingest::ingest_parquet_bytes;
-    use crate::recorder::rez_sqlite::RezDb;
-
-    // A `.rez` output must not already exist, matching the recorder's refusal:
-    // silently overwriting a long-lived capture is the failure mode to avoid.
-    if output.exists() {
-        return Err(format!(
-            "{} already exists; refusing to overwrite it",
-            output.display()
-        )
-        .into());
-    }
-
-    // Read each input to bytes up front (the ingest is bytes-based, shared with
-    // the browser report path), so the transaction below is pure catalog work.
-    let inputs: Vec<Vec<u8>> = files
-        .iter()
-        .map(|f| std::fs::read(f).map_err(|e| format!("failed to read {}: {e}", f.display())))
-        .collect::<Result<_, _>>()?;
-
-    let (out_dir, staged_out) = staged_output(output)?;
-    let mut dst = RezDb::create(&staged_out)?;
-    let mut tables = 0usize;
-    dst.transaction(|tx| {
-        for bytes in &inputs {
-            tables += ingest_parquet_bytes(bytes, tx, None)?;
-        }
-        Ok(())
-    })?;
-    drop(dst);
-    // One recording per parquet input.
-    let stamped = stamp_rez_arms(&staged_out, plan, &vec![1; files.len()], files)?;
-    std::fs::rename(&staged_out, output)?;
-    drop(out_dir);
-    report_arms(stamped, files, plan);
-    println!(
-        "wrote {} with {} recording(s) ({} sampler table(s)) from {} parquet input(s)",
-        output.display(),
-        files.len(),
-        tables,
-        files.len()
-    );
-    Ok(())
+    combine_dendro(files, output, &AbPlan::Nothing)
 }
-
-// ── Loading ─────────────────────────────────────────────────────────────
-
-fn load_inputs(paths: &[PathBuf]) -> Result<Vec<InputFile>, Box<dyn std::error::Error>> {
-    paths.iter().map(load_single_input).collect()
-}
-
-fn load_single_input(path: &PathBuf) -> Result<InputFile, Box<dyn std::error::Error>> {
-    let meta_reader = SerializedFileReader::new(std::fs::File::open(path)?)?;
-    let kv_metadata: Vec<KeyValue> = meta_reader
-        .metadata()
-        .file_metadata()
-        .key_value_metadata()
-        .cloned()
-        .unwrap_or_default();
-
-    let source = kv_metadata
-        .iter()
-        .find(|kv| kv.key == KEY_SOURCE)
-        .and_then(|kv| kv.value.clone())
-        .ok_or_else(|| format!("{:?}: missing '{}' metadata", path, KEY_SOURCE))?;
-
-    let sampling_interval_ms = kv_metadata
-        .iter()
-        .find(|kv| kv.key == KEY_SAMPLING_INTERVAL_MS)
-        .and_then(|kv| kv.value.clone());
-
-    let node = kv_metadata
-        .iter()
-        .find(|kv| kv.key == KEY_NODE)
-        .and_then(|kv| kv.value.clone())
-        .or_else(|| {
-            // For rezolus files, fall back to filename stem
-            if source == "rezolus" {
-                path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.to_string())
-            } else {
-                None
-            }
-        });
-
-    let instance = kv_metadata
-        .iter()
-        .find(|kv| kv.key == KEY_INSTANCE)
-        .and_then(|kv| kv.value.clone());
-
-    let file = std::fs::File::open(path)?;
-    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-    let schema = builder.schema().clone();
-    let reader = builder.build()?;
-    let batches: Vec<RecordBatch> = reader.collect::<Result<Vec<_>, _>>()?;
-
-    Ok(InputFile {
-        path: path.clone(),
-        schema,
-        kv_metadata,
-        batches,
-        source,
-        sampling_interval_ms,
-        node,
-        instance,
-    })
-}
-
-// ── Validation ──────────────────────────────────────────────────────────
-
-fn validate_sampling_interval(inputs: &[InputFile]) -> Result<(), Box<dyn std::error::Error>> {
-    let intervals: Vec<(&str, &PathBuf)> = inputs
-        .iter()
-        .filter_map(|i| i.sampling_interval_ms.as_deref().map(|v| (v, &i.path)))
-        .collect();
-
-    if let Some((first_val, _)) = intervals.first() {
-        for (val, path) in &intervals[1..] {
-            if val != first_val {
-                return Err(format!(
-                    "sampling_interval_ms mismatch: \"{}\" vs \"{}\" in {:?}",
-                    first_val, val, path
-                )
-                .into());
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Validate and resolve node/instance labels across all inputs.
-///
-/// - Rezolus files: `node` must be unique across all rezolus inputs.
-/// - Service files: within each source group, either all have `instance`
-///   metadata or none do. If none do, auto-assign "0", "1", "2"...
-///   If all do, they must be unique within the group.
-/// - Mixed (some have instance, some don't) within the same source: error.
-fn validate_labels(inputs: &mut [InputFile]) -> Result<(), Box<dyn std::error::Error>> {
-    // ── Rezolus node validation ──
-    let mut seen_nodes: HashMap<&str, &PathBuf> = HashMap::new();
-    for input in inputs.iter() {
-        if input.source != "rezolus" {
-            continue;
-        }
-        let node = input.node.as_deref().ok_or_else(|| {
-            format!(
-                "{:?}: rezolus file has no node label and filename fallback failed",
-                input.path
-            )
-        })?;
-        if let Some(prev) = seen_nodes.get(node) {
-            return Err(
-                format!("duplicate node {:?}: {:?} and {:?}", node, prev, input.path).into(),
-            );
-        }
-        seen_nodes.insert(node, &input.path);
-    }
-
-    // ── Service instance validation ──
-    // Group non-rezolus files by source (use owned keys to avoid borrow conflicts)
-    let mut source_groups: HashMap<String, Vec<usize>> = HashMap::new();
-    for (i, input) in inputs.iter().enumerate() {
-        if input.source != "rezolus" {
-            source_groups
-                .entry(input.source.clone())
-                .or_default()
-                .push(i);
-        }
-    }
-
-    for (source, indices) in &source_groups {
-        if indices.len() <= 1 {
-            // Single file for this source — auto-assign instance "0" if missing
-            let idx = indices[0];
-            if inputs[idx].instance.is_none() {
-                inputs[idx].instance = Some("0".to_string());
-            }
-            continue;
-        }
-
-        let has_instance: Vec<bool> = indices
-            .iter()
-            .map(|&i| inputs[i].instance.is_some())
-            .collect();
-        let all_have = has_instance.iter().all(|&b| b);
-        let none_have = has_instance.iter().all(|&b| !b);
-
-        if !all_have && !none_have {
-            return Err(format!(
-                "source {:?}: mixed instance metadata — either all files must have \
-                 'instance' metadata or none should",
-                source
-            )
-            .into());
-        }
-
-        if none_have {
-            // Auto-assign sequential instance IDs
-            for (seq, &idx) in indices.iter().enumerate() {
-                inputs[idx].instance = Some(seq.to_string());
-            }
-        } else {
-            // All have instance — check for duplicates within the group
-            let mut seen: Vec<(&str, &PathBuf)> = Vec::new();
-            for &idx in indices {
-                let inst = inputs[idx].instance.as_deref().unwrap();
-                if let Some((_, prev)) = seen.iter().find(|(s, _)| *s == inst) {
-                    return Err(format!(
-                        "source {:?}: duplicate instance {:?} in {:?} and {:?}",
-                        source, inst, prev, inputs[idx].path
-                    )
-                    .into());
-                }
-                seen.push((inst, &inputs[idx].path));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_time_overlap(inputs: &[InputFile]) -> Result<(), Box<dyn std::error::Error>> {
-    let mut ranges: Vec<(u64, u64, &PathBuf)> = Vec::new();
-
-    for input in inputs {
-        let (min_ts, max_ts) = timestamp_range(input)?;
-        ranges.push((min_ts, max_ts, &input.path));
-    }
-
-    let global_min = ranges.iter().map(|(lo, _, _)| *lo).max().unwrap();
-    let global_max = ranges.iter().map(|(_, hi, _)| *hi).min().unwrap();
-
-    if global_min > global_max {
-        let range_strs: Vec<String> = ranges
-            .iter()
-            .map(|(lo, hi, path)| format!("  {:?}: {} - {}", path, lo, hi))
-            .collect();
-        return Err(format!(
-            "timestamp ranges do not overlap:\n{}",
-            range_strs.join("\n")
-        )
-        .into());
-    }
-
-    Ok(())
-}
-
-fn timestamp_range(input: &InputFile) -> Result<(u64, u64), Box<dyn std::error::Error>> {
-    let ts_idx = input
-        .schema
-        .index_of("timestamp")
-        .map_err(|_| format!("{:?}: missing 'timestamp' column", input.path))?;
-
-    let mut min_ts = u64::MAX;
-    let mut max_ts = u64::MIN;
-
-    for batch in &input.batches {
-        let ts_col = batch
-            .column(ts_idx)
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| format!("{:?}: timestamp column is not UInt64", input.path))?;
-
-        for i in 0..ts_col.len() {
-            let v = ts_col.value(i);
-            min_ts = min_ts.min(v);
-            max_ts = max_ts.max(v);
-        }
-    }
-
-    if min_ts == u64::MAX {
-        return Err(format!("{:?}: file has no rows", input.path).into());
-    }
-
-    Ok((min_ts, max_ts))
-}
-
-// ── Combine ─────────────────────────────────────────────────────────────
-
-#[derive(Default)]
-struct CombineOptions<'a> {
-    /// Skip the >=95% timestamp-alignment quality check.
-    bypass_time_check: bool,
-    /// Default rezolus node to display in the viewer (set by --pinned).
-    pinned: Option<&'a String>,
-    /// When set, tag the output as a combined-A/B parquet.
-    ab: Option<(AbSide, AbSide)>,
-    /// Optional category template name to embed in the AB manifest.
-    /// Only honored when `ab` is also set.
-    ab_category: Option<String>,
-}
-
-fn combine_and_write(
-    inputs: &[InputFile],
-    output: &PathBuf,
-    options: CombineOptions<'_>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let CombineOptions {
-        bypass_time_check,
-        pinned,
-        ab,
-        ab_category,
-    } = options;
-
-    if let Some((baseline_side, experiment_side)) = ab.as_ref() {
-        return write_ab_tarball(
-            inputs,
-            output,
-            baseline_side,
-            experiment_side,
-            ab_category.as_deref(),
-        );
-    }
-
-    let interval_ns = resolve_interval_ns(inputs)?;
-
-    // Build quantized-timestamp → row-index maps
-    let ts_maps: Vec<HashMap<u64, usize>> = inputs
-        .iter()
-        .map(|input| build_timestamp_map(input, interval_ns))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // Compute intersection of all quantized timestamp sets (sorted)
-    let common_timestamps = compute_common_timestamps(&ts_maps);
-    if common_timestamps.is_empty() {
-        return Err("no common timestamps across all input files".into());
-    }
-
-    // Validate alignment quality — at least 95% of matched timestamps
-    // must have raw values within 10% of the interval.
-    if bypass_time_check {
-        eprintln!("warning: skipping timestamp alignment quality check (--bypass-time-check)");
-    } else {
-        validate_alignment_quality(inputs, &common_timestamps, interval_ns)?;
-    }
-
-    let (primary_idx, merged_schema) = build_merged_schema(inputs);
-    let output_batch = build_output_batch(
-        inputs,
-        &ts_maps,
-        &common_timestamps,
-        primary_idx,
-        &merged_schema,
-    )?;
-
-    let mut merged_kv = merge_metadata(inputs)?;
-    if let Some(pinned_node) = pinned {
-        merged_kv.push(KeyValue {
-            key: KEY_PINNED_NODE.to_string(),
-            value: Some(pinned_node.clone()),
-        });
-    }
-    write_parquet(output, &merged_schema, &output_batch, merged_kv)?;
-
-    Ok(())
-}
-
-/// AB combine: package each side's parquet bytes (unmodified) + an
-/// `ab.json` manifest into a tar archive. No schema merging, no row
-/// alignment — the two captures stay independently valid. Viewer-side
-/// extraction lives in `src/viewer/ab_extract.rs`.
-fn write_ab_tarball(
-    inputs: &[InputFile],
-    output: &PathBuf,
-    baseline_side: &AbSide,
-    experiment_side: &AbSide,
-    category: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use std::io::Read;
-
-    let (baseline_idx, experiment_idx) =
-        resolve_ab_input_indices(inputs, baseline_side, experiment_side)?;
-
-    let manifest = AbContainers {
-        version: AbContainers::SCHEMA_VERSION,
-        baseline: baseline_side.clone(),
-        experiment: experiment_side.clone(),
-        category: category.map(str::to_string),
-    };
-    let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
-
-    let file = std::fs::File::create(output)?;
-    let mut builder = tar::Builder::new(file);
-    builder.mode(tar::HeaderMode::Deterministic);
-
-    for (name, src_path) in [
-        ("baseline.parquet", &inputs[baseline_idx].path),
-        ("experiment.parquet", &inputs[experiment_idx].path),
-    ] {
-        let mut src = std::fs::File::open(src_path)?;
-        let len = src.metadata()?.len();
-        let mut header = tar::Header::new_gnu();
-        header.set_path(name)?;
-        header.set_size(len);
-        header.set_mode(0o644);
-        header.set_cksum();
-        let mut buf = Vec::with_capacity(len as usize);
-        src.read_to_end(&mut buf)?;
-        builder.append(&header, &buf[..])?;
-    }
-
-    {
-        let mut header = tar::Header::new_gnu();
-        header.set_path(AB_MANIFEST_NAME)?;
-        header.set_size(manifest_bytes.len() as u64);
-        header.set_mode(0o644);
-        header.set_cksum();
-        builder.append(&header, &manifest_bytes[..])?;
-    }
-
-    builder.into_inner()?.sync_all()?;
-    Ok(())
-}
-
-/// Filename used for the AbContainers manifest inside the tarball.
-pub(crate) const AB_MANIFEST_NAME: &str = "ab.json";
-pub(crate) const AB_BASELINE_NAME: &str = "baseline.parquet";
-pub(crate) const AB_EXPERIMENT_NAME: &str = "experiment.parquet";
-
-/// Parse the (already-validated-identical) sampling interval as nanoseconds.
-fn resolve_interval_ns(inputs: &[InputFile]) -> Result<u64, Box<dyn std::error::Error>> {
-    let ms_str = inputs
-        .iter()
-        .find_map(|i| i.sampling_interval_ms.as_deref())
-        .ok_or("no sampling_interval_ms metadata in any input file")?;
-    let ms: u64 = ms_str
-        .parse()
-        .map_err(|_| format!("sampling_interval_ms {:?} is not a valid integer", ms_str))?;
-    Ok(ms * 1_000_000) // ms → ns
-}
-
-/// Round a nanosecond timestamp to the nearest interval boundary.
-fn quantize(ts: u64, interval_ns: u64) -> u64 {
-    let half = interval_ns / 2;
-    ((ts + half) / interval_ns) * interval_ns
-}
-
-/// Validate that aligned timestamps are close enough across files.
-///
-/// For each quantized bucket in the common set, collect the raw timestamps
-/// from every file that mapped to that bucket. At least 95% of these buckets
-/// must have all raw timestamps within 10% of the interval of each other.
-fn validate_alignment_quality(
-    inputs: &[InputFile],
-    common_quantized: &[u64],
-    interval_ns: u64,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let tolerance = interval_ns / 10; // 10% of interval
-    let threshold = 0.95;
-
-    // Build quantized → raw timestamp maps for each file
-    let raw_maps: Vec<HashMap<u64, u64>> = inputs
-        .iter()
-        .map(|input| {
-            let ts_idx = input.schema.index_of("timestamp").unwrap();
-            let mut map = HashMap::new();
-            for batch in &input.batches {
-                let ts_col = batch
-                    .column(ts_idx)
-                    .as_any()
-                    .downcast_ref::<UInt64Array>()
-                    .unwrap();
-                for i in 0..ts_col.len() {
-                    let raw = ts_col.value(i);
-                    let q = quantize(raw, interval_ns);
-                    // Keep the value closest to the bucket center
-                    map.entry(q)
-                        .and_modify(|existing: &mut u64| {
-                            if raw.abs_diff(q) < existing.abs_diff(q) {
-                                *existing = raw;
-                            }
-                        })
-                        .or_insert(raw);
-                }
-            }
-            map
-        })
-        .collect();
-
-    let mut aligned = 0usize;
-    for &qts in common_quantized {
-        let raws: Vec<u64> = raw_maps
-            .iter()
-            .filter_map(|m| m.get(&qts).copied())
-            .collect();
-        if raws.len() < 2 {
-            aligned += 1;
-            continue;
-        }
-        let min_raw = *raws.iter().min().unwrap();
-        let max_raw = *raws.iter().max().unwrap();
-        if max_raw - min_raw <= tolerance {
-            aligned += 1;
-        }
-    }
-
-    let ratio = aligned as f64 / common_quantized.len() as f64;
-    if ratio < threshold {
-        return Err(format!(
-            "timestamp alignment too poor: only {:.1}% of matched timestamps are within \
-             10% of the sampling interval (need ≥95%)",
-            ratio * 100.0
-        )
-        .into());
-    }
-
-    if ratio < 1.0 {
-        let misaligned = common_quantized.len() - aligned;
-        eprintln!(
-            "warning: {misaligned}/{} timestamps have phase offset >10% of interval",
-            common_quantized.len()
-        );
-    }
-
-    Ok(())
-}
-
-fn build_timestamp_map(
-    input: &InputFile,
-    interval_ns: u64,
-) -> Result<HashMap<u64, usize>, Box<dyn std::error::Error>> {
-    let ts_idx = input
-        .schema
-        .index_of("timestamp")
-        .map_err(|_| format!("{:?}: missing 'timestamp' column", input.path))?;
-
-    let mut map: HashMap<u64, (usize, u64)> = HashMap::new(); // quantized → (row_idx, raw_ts)
-    let mut global_row = 0usize;
-
-    for batch in &input.batches {
-        let ts_col = batch
-            .column(ts_idx)
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or("timestamp column is not UInt64")?;
-
-        for i in 0..ts_col.len() {
-            let raw = ts_col.value(i);
-            let q = quantize(raw, interval_ns);
-            let row = global_row + i;
-            map.entry(q)
-                .and_modify(|(existing_row, existing_raw)| {
-                    // Keep the row whose raw timestamp is closest to the bucket center
-                    if raw.abs_diff(q) < existing_raw.abs_diff(q) {
-                        *existing_row = row;
-                        *existing_raw = raw;
-                    }
-                })
-                .or_insert((row, raw));
-        }
-        global_row += batch.num_rows();
-    }
-
-    Ok(map.into_iter().map(|(q, (row, _))| (q, row)).collect())
-}
-
-fn compute_common_timestamps(ts_maps: &[HashMap<u64, usize>]) -> Vec<u64> {
-    if ts_maps.is_empty() {
-        return Vec::new();
-    }
-
-    // Start from the smallest map for efficiency
-    let (smallest_idx, _) = ts_maps
-        .iter()
-        .enumerate()
-        .min_by_key(|(_, m)| m.len())
-        .unwrap();
-
-    let mut common: Vec<u64> = ts_maps[smallest_idx]
-        .keys()
-        .filter(|ts| ts_maps.iter().all(|m| m.contains_key(ts)))
-        .copied()
-        .collect();
-
-    common.sort_unstable();
-    common
-}
-
-fn build_merged_schema(inputs: &[InputFile]) -> (usize, SchemaRef) {
-    // Prefer rezolus file as primary (for timestamp/duration), else first file
-    let primary_idx = inputs
-        .iter()
-        .position(|i| i.source == "rezolus")
-        .unwrap_or(0);
-
-    let mut fields: Vec<Arc<Field>> = Vec::new();
-
-    // timestamp and duration from primary
-    let primary_schema = &inputs[primary_idx].schema;
-    for field in primary_schema.fields() {
-        let name = field.name().as_str();
-        if name == "timestamp" || name == "duration" {
-            fields.push(field.clone());
-        }
-    }
-
-    // All metric columns from each input, prefixed and labeled
-    for input in inputs.iter() {
-        let (prefix, label_key, label_value) = if input.source == "rezolus" {
-            let node = input.node.as_deref().unwrap_or("unknown");
-            (node.to_string(), "node".to_string(), node.to_string())
-        } else {
-            let instance = input.instance.as_deref().unwrap_or("0");
-            (
-                instance.to_string(),
-                "instance".to_string(),
-                instance.to_string(),
-            )
-        };
-
-        for field in input.schema.fields() {
-            let name = field.name().as_str();
-            if name != "timestamp" && name != "duration" {
-                let prefixed_name = format!("{}::{}", prefix, name);
-                let mut meta = field.metadata().clone();
-                if !meta.contains_key("source") {
-                    meta.insert("source", input.source.clone());
-                }
-                meta.insert(label_key.clone(), label_value.clone());
-                let new_field = Field::new(
-                    prefixed_name,
-                    field.data_type().clone(),
-                    field.is_nullable(),
-                )
-                .with_metadata(meta);
-                fields.push(Arc::new(new_field));
-            }
-        }
-    }
-
-    (primary_idx, Arc::new(Schema::new(fields)))
-}
-
-fn build_output_batch(
-    inputs: &[InputFile],
-    ts_maps: &[HashMap<u64, usize>],
-    common_timestamps: &[u64],
-    primary_idx: usize,
-    merged_schema: &SchemaRef,
-) -> Result<RecordBatch, Box<dyn std::error::Error>> {
-    // For each input, compute selection indices (row numbers for common timestamps)
-    let selection_indices: Vec<UInt64Array> = ts_maps
-        .iter()
-        .map(|ts_map| {
-            UInt64Array::from(
-                common_timestamps
-                    .iter()
-                    .map(|ts| ts_map[ts] as u64)
-                    .collect::<Vec<u64>>(),
-            )
-        })
-        .collect();
-
-    // Concatenate batches per input into single contiguous arrays per column
-    let concatenated: Vec<Vec<ArrayRef>> = inputs
-        .iter()
-        .map(concatenate_columns)
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let mut output_columns: Vec<ArrayRef> = Vec::new();
-
-    // Timestamp column: use quantized (bucket-center) values for a clean,
-    // uniform time grid regardless of per-file phase offsets.
-    output_columns.push(Arc::new(UInt64Array::from(common_timestamps.to_vec())));
-
-    // Duration from primary file
-    let dur_idx = inputs[primary_idx].schema.index_of("duration").unwrap();
-    output_columns.push(compute::take(
-        concatenated[primary_idx][dur_idx].as_ref(),
-        &selection_indices[primary_idx],
-        None,
-    )?);
-
-    // Metric columns from each input
-    for (file_idx, input) in inputs.iter().enumerate() {
-        for (col_idx, field) in input.schema.fields().iter().enumerate() {
-            if field.name() == "timestamp" || field.name() == "duration" {
-                continue;
-            }
-            output_columns.push(compute::take(
-                concatenated[file_idx][col_idx].as_ref(),
-                &selection_indices[file_idx],
-                None,
-            )?);
-        }
-    }
-
-    let batch = RecordBatch::try_new(merged_schema.clone(), output_columns)?;
-    Ok(batch)
-}
-
-/// Build the merged schema for an --ab column-union output.
-fn concatenate_columns(input: &InputFile) -> Result<Vec<ArrayRef>, Box<dyn std::error::Error>> {
-    if input.batches.is_empty() {
-        return Err(format!("{:?}: file has no data", input.path).into());
-    }
-
-    if input.batches.len() == 1 {
-        return Ok((0..input.batches[0].num_columns())
-            .map(|i| input.batches[0].column(i).clone())
-            .collect());
-    }
-
-    let num_cols = input.schema.fields().len();
-    let mut result = Vec::with_capacity(num_cols);
-
-    for col_idx in 0..num_cols {
-        let arrays: Vec<&dyn Array> = input
-            .batches
-            .iter()
-            .map(|b| b.column(col_idx).as_ref())
-            .collect();
-        result.push(compute::concat(&arrays)?);
-    }
-
-    Ok(result)
-}
-
-// ── Metadata merge ──────────────────────────────────────────────────────
-
-fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::error::Error>> {
-    let mut result: Vec<KeyValue> = Vec::new();
-
-    // source: deduplicated JSON array of all source names. If an input is
-    // itself an already-combined file, its `source` field is a JSON-encoded
-    // array — flatten it in rather than pushing the array-string verbatim,
-    // so the final result is one flat array.
-    let sources: Vec<String> = {
-        let mut s: Vec<String> = inputs.iter().flat_map(flatten_input_sources).collect();
-        s.sort();
-        s.dedup();
-        s
-    };
-    result.push(KeyValue {
-        key: KEY_SOURCE.to_string(),
-        value: Some(serde_json::to_string(&sources)?),
-    });
-
-    // sampling_interval_ms: take from first file that has it (already validated identical)
-    if let Some(interval) = inputs.iter().find_map(|i| i.sampling_interval_ms.clone()) {
-        result.push(KeyValue {
-            key: KEY_SAMPLING_INTERVAL_MS.to_string(),
-            value: Some(interval),
-        });
-    }
-
-    // systeminfo: keep first rezolus file as the top-level value (viewer compat).
-    // Per-node systeminfo is stashed in per_source_metadata for future use.
-    if let Some(val) = find_kv_value(inputs, KEY_SYSTEMINFO, Some("rezolus")) {
-        result.push(KeyValue {
-            key: KEY_SYSTEMINFO.to_string(),
-            value: Some(val),
-        });
-    }
-
-    // per_source_metadata: nested by source name, then by node/instance ID.
-    // Structure: { "rezolus": { "web01": {...}, "web02": {...} },
-    //              "vllm":    { "0": {...}, "1": {...} } }
-    // For rezolus sources, the sub-key is the node name.
-    // For service sources, the sub-key is the instance ID.
-    let mut per_source: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-    for input in inputs {
-        // Merge existing per_source_metadata if present (from already-combined files)
-        if let Some(psm_str) = input
-            .kv_metadata
-            .iter()
-            .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
-            .and_then(|kv| kv.value.as_deref())
-        {
-            if let Ok(psm) =
-                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
-            {
-                // Deep-merge: source groups are objects, merge their sub-entries
-                for (source_name, group_val) in psm {
-                    let target = per_source
-                        .entry(source_name)
-                        .or_insert_with(|| serde_json::json!({}));
-                    if let (
-                        serde_json::Value::Object(target_map),
-                        serde_json::Value::Object(src_map),
-                    ) = (target, group_val)
-                    {
-                        for (k, v) in src_map {
-                            target_map.entry(k).or_insert(v);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Determine the source names this input contributes to. If the
-        // input was an already-combined file with a single top-level set of
-        // metadata but a JSON-array `source`, expand it into one
-        // per_source_metadata entry per array element, duplicating the
-        // top-level fields (version, node, instance) into each.
-        let source_names: Vec<String> = flatten_input_sources(input);
-
-        let version = input
-            .kv_metadata
-            .iter()
-            .find(|kv| kv.key == KEY_VERSION)
-            .and_then(|kv| kv.value.clone());
-
-        for source_name in &source_names {
-            // Determine the sub-key within this source's group
-            let sub_key = if source_name == "rezolus" {
-                input.node.as_deref().unwrap_or("unknown").to_string()
-            } else {
-                input.instance.as_deref().unwrap_or("0").to_string()
-            };
-
-            let source_group = per_source
-                .entry(source_name.clone())
-                .or_insert_with(|| serde_json::json!({}));
-            let serde_json::Value::Object(group_map) = source_group else {
-                continue;
-            };
-            let entry = group_map
-                .entry(sub_key)
-                .or_insert_with(|| serde_json::json!({}));
-            let serde_json::Value::Object(map) = entry else {
-                continue;
-            };
-
-            // Move top-level version into per-source entry
-            if let Some(ref version) = version {
-                map.entry(NESTED_VERSION.to_string())
-                    .or_insert(serde_json::Value::String(version.clone()));
-            }
-
-            // Store node or instance label in per-source metadata
-            if source_name == "rezolus" {
-                if let Some(ref node) = input.node {
-                    map.entry(NESTED_NODE.to_string())
-                        .or_insert(serde_json::Value::String(node.clone()));
-                }
-            } else {
-                if let Some(ref instance) = input.instance {
-                    map.entry(NESTED_INSTANCE.to_string())
-                        .or_insert(serde_json::Value::String(instance.clone()));
-                }
-                // Also store node for service files if present (informational — which host it ran on)
-                if let Some(ref node) = input.node {
-                    map.entry(NESTED_NODE.to_string())
-                        .or_insert(serde_json::Value::String(node.clone()));
-                }
-            }
-        }
-
-        // Carry this input's KPI template into its source's entry, where the
-        // viewers read a combined parquet's templates
-        // (`dashboard::source_templates`): a combined file's top-level
-        // `service_queries` would be keyed by the template's own
-        // `service_name`, and each input's would overwrite the last. A
-        // single-source input's template is that source's. An already-combined
-        // input's top-level one (annotated after combining) goes to the
-        // source its `service_name` names, and is dropped with a warning when
-        // that is none of the input's sources. It replaces a template already
-        // nested there: annotate wrote it after the combine that nested the
-        // other, and the viewer prefers it in that input too.
-        if let Some(raw) = input
-            .kv_metadata
-            .iter()
-            .find(|kv| kv.key == KEY_SERVICE_QUERIES)
-            .and_then(|kv| kv.value.as_deref())
-        {
-            match serde_json::from_str::<serde_json::Value>(raw) {
-                Ok(template) => {
-                    let named = template
-                        .get("service_name")
-                        .and_then(|n| n.as_str())
-                        .map(str::to_string);
-                    let combined_input = source_names.len() > 1;
-                    let target = match source_names.as_slice() {
-                        [only] => Some(only.clone()),
-                        many => named.filter(|n| many.contains(n)),
-                    };
-                    match target {
-                        Some(source_name) => {
-                            let sub_key = if source_name == "rezolus" {
-                                input.node.as_deref().unwrap_or("unknown").to_string()
-                            } else {
-                                input.instance.as_deref().unwrap_or("0").to_string()
-                            };
-                            if let Some(entry) = per_source
-                                .get_mut(&source_name)
-                                .and_then(|g| g.as_object_mut())
-                                .and_then(|g| g.get_mut(&sub_key))
-                                .and_then(|e| e.as_object_mut())
-                            {
-                                if combined_input {
-                                    entry.insert(NESTED_SERVICE_QUERIES.to_string(), template);
-                                } else {
-                                    entry
-                                        .entry(NESTED_SERVICE_QUERIES.to_string())
-                                        .or_insert(template);
-                                }
-                            }
-                        }
-                        None => eprintln!(
-                            "warning: {}: its service_queries names none of its sources; \
-                             not carried into the combined file",
-                            input.path.display()
-                        ),
-                    }
-                }
-                Err(e) => eprintln!(
-                    "warning: {}: service_queries is not JSON ({e}); not carried into the \
-                     combined file",
-                    input.path.display()
-                ),
-            }
-        }
-
-        // Nest this input's top-level descriptions at the source group level
-        // (sibling of the node/instance sub-keys) so each source keeps its
-        // own help text rather than losing collisions in a union-merge.
-        let input_desc: Option<serde_json::Value> = input
-            .kv_metadata
-            .iter()
-            .find(|kv| kv.key == KEY_DESCRIPTIONS)
-            .and_then(|kv| kv.value.as_ref())
-            .and_then(|s| serde_json::from_str(s).ok());
-        if let Some(ref desc) = input_desc {
-            for source_name in &source_names {
-                let source_group = per_source
-                    .entry(source_name.clone())
-                    .or_insert_with(|| serde_json::json!({}));
-                if let Some(map) = source_group.as_object_mut() {
-                    map.entry(NESTED_DESCRIPTIONS.to_string())
-                        .or_insert_with(|| desc.clone());
-                }
-            }
-        }
-    }
-
-    // Stash per-node systeminfo into per_source_metadata entries
-    for input in inputs.iter().filter(|i| i.source == "rezolus") {
-        if let Some(sysinfo_val) = input
-            .kv_metadata
-            .iter()
-            .find(|kv| kv.key == KEY_SYSTEMINFO)
-            .and_then(|kv| kv.value.as_deref())
-        {
-            let node = input.node.as_deref().unwrap_or("unknown");
-            if let Some(serde_json::Value::Object(group)) = per_source.get_mut("rezolus") {
-                if let Some(serde_json::Value::Object(map)) = group.get_mut(node) {
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(sysinfo_val) {
-                        map.entry(KEY_SYSTEMINFO.to_string()).or_insert(parsed);
-                    }
-                }
-            }
-        }
-    }
-
-    if !per_source.is_empty() {
-        result.push(KeyValue {
-            key: KEY_PER_SOURCE_METADATA.to_string(),
-            value: Some(serde_json::to_string(&per_source)?),
-        });
-    }
-
-    // selection: preserve from primary (rezolus) file if present
-    let primary_idx = inputs
-        .iter()
-        .position(|i| i.source == "rezolus")
-        .unwrap_or(0);
-    if let Some(sel) = inputs[primary_idx]
-        .kv_metadata
-        .iter()
-        .find(|kv| kv.key == KEY_SELECTION)
-        .and_then(|kv| kv.value.clone())
-    {
-        result.push(KeyValue {
-            key: KEY_SELECTION.to_string(),
-            value: Some(sel),
-        });
-    }
-
-    // Events are self-describing (each carries its own source/node/instance),
-    // so they stay at the top level rather than nesting under per_source_metadata.
-    let mut events = ::dashboard::Events::default();
-    for input in inputs {
-        if let Some(raw) = input
-            .kv_metadata
-            .iter()
-            .find(|kv| kv.key == KEY_EVENTS)
-            .and_then(|kv| kv.value.as_deref())
-        {
-            match serde_json::from_str::<::dashboard::Events>(raw) {
-                Ok(mut e) => events.events.append(&mut e.events),
-                Err(e) => {
-                    eprintln!("warning: ignoring malformed events payload in input file: {e}")
-                }
-            }
-        }
-    }
-    if !events.events.is_empty() {
-        events.normalize();
-        result.push(KeyValue {
-            key: KEY_EVENTS.to_string(),
-            value: Some(serde_json::to_string(&events)?),
-        });
-    }
-
-    Ok(result)
-}
-
-fn find_kv_value(
-    inputs: &[InputFile],
-    key: &str,
-    preferred_source: Option<&str>,
-) -> Option<String> {
-    if let Some(src) = preferred_source {
-        if let Some(input) = inputs.iter().find(|i| i.source == src) {
-            if let Some(val) = input
-                .kv_metadata
-                .iter()
-                .find(|kv| kv.key == key)
-                .and_then(|kv| kv.value.clone())
-            {
-                return Some(val);
-            }
-        }
-    }
-    inputs.iter().find_map(|i| {
-        i.kv_metadata
-            .iter()
-            .find(|kv| kv.key == key)
-            .and_then(|kv| kv.value.clone())
-    })
-}
-
-// ── Output ──────────────────────────────────────────────────────────────
-
-fn write_parquet(
-    output: &PathBuf,
-    schema: &SchemaRef,
-    batch: &RecordBatch,
-    kv_metadata: Vec<KeyValue>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let props = WriterProperties::builder()
-        .set_key_value_metadata(Some(kv_metadata))
-        .set_max_row_group_row_count(Some(crate::parquet_metadata::MAX_ROW_GROUP_SIZE))
-        .set_compression(parquet::basic::Compression::ZSTD(Default::default()))
-        .build();
-
-    let file = std::fs::File::create(output)?;
-    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))?;
-    writer.write(batch)?;
-    writer.close()?;
-
-    Ok(())
-}
-
-// ── Tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int64Array;
-    use arrow::datatypes::DataType;
+    use crate::parquet_metadata::{KEY_SAMPLING_INTERVAL_MS, KEY_SOURCE};
+    use arrow::array::{Int64Array, UInt64Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::ArrowWriter;
+    use parquet::file::metadata::KeyValue;
+    use parquet::file::properties::WriterProperties;
+    use std::collections::HashMap;
+    use std::sync::Arc;
     use tempfile::NamedTempFile;
 
     /// 1 second in nanoseconds — use as a multiplier so test timestamps
     /// are at a realistic scale relative to the sampling interval.
     const SEC: u64 = 1_000_000_000;
 
-    /// Create a test parquet file with a timestamp column, duration column,
-    /// and one gauge metric column.
+    /// A parquet recording as a 5.x recorder wrote one: a timestamp column, a
+    /// duration column, and one gauge metric column.
     fn make_test_file(
         timestamps: &[u64],
         metric_name: &str,
@@ -1999,1582 +527,6 @@ mod tests {
         (tmp, path)
     }
 
-    fn load(path: &PathBuf) -> InputFile {
-        load_single_input(path).unwrap()
-    }
-
-    #[test]
-    fn test_validate_sampling_interval_mismatch() {
-        let (_t1, p1) = make_test_file(&[100, 200], "m1", &[Some(1), Some(2)], "rezolus", "1000");
-        let (_t2, p2) = make_test_file(&[100, 200], "m2", &[Some(3), Some(4)], "llm-perf", "500");
-        let inputs = vec![load(&p1), load(&p2)];
-        assert!(validate_sampling_interval(&inputs).is_err());
-    }
-
-    #[test]
-    fn test_validate_time_overlap_none() {
-        let (_t1, p1) = make_test_file(&[100, 200], "m1", &[Some(1), Some(2)], "rezolus", "1000");
-        let (_t2, p2) = make_test_file(&[300, 400], "m2", &[Some(3), Some(4)], "llm-perf", "1000");
-        let inputs = vec![load(&p1), load(&p2)];
-        assert!(validate_time_overlap(&inputs).is_err());
-    }
-
-    #[test]
-    fn test_validate_time_overlap_partial() {
-        let (_t1, p1) = make_test_file(
-            &[100, 200, 300],
-            "m1",
-            &[Some(1), Some(2), Some(3)],
-            "rezolus",
-            "1000",
-        );
-        let (_t2, p2) = make_test_file(
-            &[200, 300, 400],
-            "m2",
-            &[Some(4), Some(5), Some(6)],
-            "llm-perf",
-            "1000",
-        );
-        let inputs = vec![load(&p1), load(&p2)];
-        assert!(validate_time_overlap(&inputs).is_ok());
-    }
-
-    #[test]
-    fn test_combine_trims_to_overlap() {
-        let (_t1, p1) = make_test_file(
-            &[SEC, 2 * SEC, 3 * SEC],
-            "m1",
-            &[Some(1), Some(2), Some(3)],
-            "rezolus",
-            "1000",
-        );
-        let (_t2, p2) = make_test_file(
-            &[2 * SEC, 3 * SEC, 4 * SEC],
-            "m2",
-            &[Some(4), Some(5), Some(6)],
-            "llm-perf",
-            "1000",
-        );
-
-        let out_tmp = NamedTempFile::new().unwrap();
-        let out_path = out_tmp.path().to_path_buf();
-
-        let mut inputs = vec![load(&p1), load(&p2)];
-        validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
-
-        // Read back
-        let file = std::fs::File::open(&out_path).unwrap();
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        let schema = builder.schema().clone();
-        let mut reader = builder.build().unwrap();
-        let batch = reader.next().unwrap().unwrap();
-
-        // Only timestamps at 2s and 3s should be present
-        assert_eq!(batch.num_rows(), 2);
-
-        let ts_col = batch
-            .column(schema.index_of("timestamp").unwrap())
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .unwrap();
-        assert_eq!(ts_col.value(0), 2 * SEC);
-        assert_eq!(ts_col.value(1), 3 * SEC);
-
-        // Find prefixed column names
-        let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-        let m1_col_name = *field_names.iter().find(|n| n.ends_with("::m1")).unwrap();
-        let m2_col_name = *field_names.iter().find(|n| n.ends_with("::m2")).unwrap();
-
-        let m1_col = batch
-            .column(schema.index_of(m1_col_name).unwrap())
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(m1_col.value(0), 2);
-        assert_eq!(m1_col.value(1), 3);
-
-        let m2_col = batch
-            .column(schema.index_of(m2_col_name).unwrap())
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(m2_col.value(0), 4);
-        assert_eq!(m2_col.value(1), 5);
-    }
-
-    #[test]
-    fn test_combine_end_to_end() {
-        let (_t1, p1) = make_test_file(
-            &[SEC, 2 * SEC, 3 * SEC],
-            "cpu",
-            &[Some(10), Some(20), Some(30)],
-            "rezolus",
-            "1000",
-        );
-        let (_t2, p2) = make_test_file(
-            &[2 * SEC, 3 * SEC, 4 * SEC],
-            "tokens",
-            &[Some(40), Some(50), Some(60)],
-            "llm-perf",
-            "1000",
-        );
-
-        let out_tmp = NamedTempFile::new().unwrap();
-        let out_path = out_tmp.path().to_path_buf();
-
-        let mut inputs = load_inputs(&[p1, p2]).unwrap();
-        validate_sampling_interval(&inputs).unwrap();
-        validate_labels(&mut inputs).unwrap();
-        validate_time_overlap(&inputs).unwrap();
-        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
-
-        // Read back and verify schema
-        let file = std::fs::File::open(&out_path).unwrap();
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        let schema = builder.schema().clone();
-
-        // Columns are now prefixed with node/instance
-        let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-        assert_eq!(field_names.len(), 4); // timestamp, duration, <node>::cpu, 0::tokens
-        assert!(field_names[2].ends_with("::cpu"));
-        assert!(field_names[3].starts_with("0::tokens"));
-
-        // Verify metadata
-        let meta_reader =
-            SerializedFileReader::new(std::fs::File::open(&out_path).unwrap()).unwrap();
-        let kv = meta_reader
-            .metadata()
-            .file_metadata()
-            .key_value_metadata()
-            .unwrap();
-
-        let source_val = kv
-            .iter()
-            .find(|kv| kv.key == KEY_SOURCE)
-            .and_then(|kv| kv.value.as_deref())
-            .unwrap();
-        let sources: Vec<String> = serde_json::from_str(source_val).unwrap();
-        assert!(sources.contains(&"rezolus".to_string()));
-        assert!(sources.contains(&"llm-perf".to_string()));
-
-        let interval_val = kv
-            .iter()
-            .find(|kv| kv.key == KEY_SAMPLING_INTERVAL_MS)
-            .and_then(|kv| kv.value.as_deref())
-            .unwrap();
-        assert_eq!(interval_val, "1000");
-    }
-
-    #[test]
-    fn test_combine_preserves_field_metadata() {
-        let (_t1, p1) = make_test_file(
-            &[SEC, 2 * SEC],
-            "m1",
-            &[Some(1), Some(2)],
-            "rezolus",
-            "1000",
-        );
-        let (_t2, p2) = make_test_file(
-            &[SEC, 2 * SEC],
-            "m2",
-            &[Some(3), Some(4)],
-            "llm-perf",
-            "1000",
-        );
-
-        let out_tmp = NamedTempFile::new().unwrap();
-        let out_path = out_tmp.path().to_path_buf();
-
-        let mut inputs = vec![load(&p1), load(&p2)];
-        validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
-
-        let file = std::fs::File::open(&out_path).unwrap();
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        let schema = builder.schema().clone();
-
-        // Find prefixed column names
-        let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-        let m1_name = *field_names.iter().find(|n| n.ends_with("::m1")).unwrap();
-        let m2_name = *field_names.iter().find(|n| n.ends_with("::m2")).unwrap();
-
-        // Check that metric_type metadata is preserved on metric columns
-        let m1_field = schema.field_with_name(m1_name).unwrap();
-        assert_eq!(m1_field.metadata().get("metric_type").unwrap(), "gauge");
-        assert_eq!(m1_field.metadata().get("source").unwrap(), "rezolus");
-        assert!(m1_field.metadata().contains_key("node"));
-
-        let m2_field = schema.field_with_name(m2_name).unwrap();
-        assert_eq!(m2_field.metadata().get("metric_type").unwrap(), "gauge");
-        assert_eq!(m2_field.metadata().get("source").unwrap(), "llm-perf");
-        assert!(m2_field.metadata().contains_key("instance"));
-
-        // Check timestamp field metadata
-        let ts_field = schema.field_with_name("timestamp").unwrap();
-        assert_eq!(ts_field.metadata().get("metric_type").unwrap(), "timestamp");
-    }
-
-    #[test]
-    fn test_combine_preserves_existing_field_source_metadata() {
-        // Build an input whose metric column already carries `source` in its
-        // field metadata (as happens when re-combining an already-combined
-        // file). The combiner must NOT overwrite that with the file-level
-        // source.
-        let ts_field = Field::new("timestamp", DataType::UInt64, false).with_metadata(
-            HashMap::from([("metric_type".to_string(), "timestamp".to_string())]),
-        );
-        let dur_field = Field::new("duration", DataType::UInt64, true).with_metadata(
-            HashMap::from([("metric_type".to_string(), "duration".to_string())]),
-        );
-        let metric_field = Field::new("m1", DataType::Int64, true).with_metadata(HashMap::from([
-            ("metric_type".to_string(), "gauge".to_string()),
-            ("source".to_string(), "original-source".to_string()),
-        ]));
-        let schema = Arc::new(Schema::new(vec![ts_field, dur_field, metric_field]));
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(UInt64Array::from(vec![SEC, 2 * SEC])),
-                Arc::new(UInt64Array::from(vec![None::<u64>; 2])),
-                Arc::new(Int64Array::from(vec![Some(1i64), Some(2)])),
-            ],
-        )
-        .unwrap();
-        let props = WriterProperties::builder()
-            .set_key_value_metadata(Some(vec![
-                KeyValue {
-                    key: KEY_SOURCE.to_string(),
-                    value: Some("rezolus".to_string()),
-                },
-                KeyValue {
-                    key: KEY_SAMPLING_INTERVAL_MS.to_string(),
-                    value: Some("1000".to_string()),
-                },
-            ]))
-            .build();
-        let tmp1 = NamedTempFile::new().unwrap();
-        let p1 = tmp1.path().to_path_buf();
-        let mut writer =
-            ArrowWriter::try_new(std::fs::File::create(&p1).unwrap(), schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        let (_t2, p2) = make_test_file(
-            &[SEC, 2 * SEC],
-            "m2",
-            &[Some(3), Some(4)],
-            "llm-perf",
-            "1000",
-        );
-
-        let out_tmp = NamedTempFile::new().unwrap();
-        let out_path = out_tmp.path().to_path_buf();
-        let mut inputs = vec![load(&p1), load(&p2)];
-        validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
-
-        let file = std::fs::File::open(&out_path).unwrap();
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        let schema = builder.schema().clone();
-        let m1_name = schema
-            .fields()
-            .iter()
-            .find(|f| f.name().ends_with("::m1"))
-            .map(|f| f.name().clone())
-            .unwrap();
-        let m1_field = schema.field_with_name(&m1_name).unwrap();
-        // Original source metadata is preserved, NOT overwritten with "rezolus"
-        assert_eq!(
-            m1_field.metadata().get("source").unwrap(),
-            "original-source"
-        );
-    }
-
-    #[test]
-    fn test_combine_empty_intersection() {
-        // Overlapping time range but timestamps land in different buckets
-        // (offset by a full interval so they never share a quantized bucket)
-        let (_t1, p1) = make_test_file(
-            &[SEC, 3 * SEC, 5 * SEC],
-            "m1",
-            &[Some(1), Some(2), Some(3)],
-            "rezolus",
-            "2000", // 2s interval
-        );
-        let (_t2, p2) = make_test_file(
-            &[2 * SEC, 4 * SEC, 6 * SEC],
-            "m2",
-            &[Some(4), Some(5), Some(6)],
-            "llm-perf",
-            "2000",
-        );
-
-        let out_tmp = NamedTempFile::new().unwrap();
-        let out_path = out_tmp.path().to_path_buf();
-
-        let inputs = vec![load(&p1), load(&p2)];
-        let result = combine_and_write(&inputs, &out_path, CombineOptions::default());
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_combine_fuzzy_timestamp_matching() {
-        // Two files with a small phase offset (5ms) on a 1s interval.
-        // Quantization should snap them to the same bucket.
-        let offset = 5_000_000; // 5ms in ns
-        let (_t1, p1) = make_test_file(
-            &[SEC, 2 * SEC, 3 * SEC],
-            "m1",
-            &[Some(10), Some(20), Some(30)],
-            "rezolus",
-            "1000",
-        );
-        let (_t2, p2) = make_test_file(
-            &[SEC + offset, 2 * SEC + offset, 3 * SEC + offset],
-            "m2",
-            &[Some(40), Some(50), Some(60)],
-            "llm-perf",
-            "1000",
-        );
-
-        let out_tmp = NamedTempFile::new().unwrap();
-        let out_path = out_tmp.path().to_path_buf();
-
-        let mut inputs = vec![load(&p1), load(&p2)];
-        validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
-
-        let file = std::fs::File::open(&out_path).unwrap();
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        let schema = builder.schema().clone();
-        let mut reader = builder.build().unwrap();
-        let batch = reader.next().unwrap().unwrap();
-
-        // All 3 timestamps should match
-        assert_eq!(batch.num_rows(), 3);
-
-        let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-        let m2_col_name = *field_names.iter().find(|n| n.ends_with("::m2")).unwrap();
-        let m2_col = batch
-            .column(schema.index_of(m2_col_name).unwrap())
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(m2_col.value(0), 40);
-        assert_eq!(m2_col.value(1), 50);
-        assert_eq!(m2_col.value(2), 60);
-    }
-
-    #[test]
-    fn test_combine_rejects_poor_alignment() {
-        // Two files where >5% of timestamps have phase offset >10% of interval.
-        // With a 1s interval, 150ms offset exceeds the 100ms (10%) tolerance.
-        let bad_offset = 150_000_000; // 150ms in ns
-        let (_t1, p1) = make_test_file(
-            &[SEC, 2 * SEC, 3 * SEC],
-            "m1",
-            &[Some(1), Some(2), Some(3)],
-            "rezolus",
-            "1000",
-        );
-        let (_t2, p2) = make_test_file(
-            &[SEC + bad_offset, 2 * SEC + bad_offset, 3 * SEC + bad_offset],
-            "m2",
-            &[Some(4), Some(5), Some(6)],
-            "llm-perf",
-            "1000",
-        );
-
-        let out_tmp = NamedTempFile::new().unwrap();
-        let out_path = out_tmp.path().to_path_buf();
-
-        let inputs = vec![load(&p1), load(&p2)];
-        let result = combine_and_write(&inputs, &out_path, CombineOptions::default());
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("alignment too poor"),
-            "unexpected error: {err}"
-        );
-    }
-
-    fn make_test_file_with_metadata(
-        timestamps: &[u64],
-        metric_name: &str,
-        metric_values: &[Option<i64>],
-        source: &str,
-        sampling_interval_ms: &str,
-        extra_kv: Vec<(&str, &str)>,
-    ) -> (NamedTempFile, PathBuf) {
-        let ts_field =
-            Field::new("timestamp", DataType::UInt64, false).with_metadata(HashMap::from([
-                ("metric_type".to_string(), "timestamp".to_string()),
-                ("unit".to_string(), "nanoseconds".to_string()),
-            ]));
-        let dur_field =
-            Field::new("duration", DataType::UInt64, true).with_metadata(HashMap::from([
-                ("metric_type".to_string(), "duration".to_string()),
-                ("unit".to_string(), "nanoseconds".to_string()),
-            ]));
-        let metric_field = Field::new(metric_name, DataType::Int64, true).with_metadata(
-            HashMap::from([("metric_type".to_string(), "gauge".to_string())]),
-        );
-
-        let schema = Arc::new(Schema::new(vec![ts_field, dur_field, metric_field]));
-
-        let ts_array = UInt64Array::from(timestamps.to_vec());
-        let dur_array = UInt64Array::from(vec![None::<u64>; timestamps.len()]);
-        let metric_array = Int64Array::from(metric_values.to_vec());
-
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(ts_array),
-                Arc::new(dur_array),
-                Arc::new(metric_array),
-            ],
-        )
-        .unwrap();
-
-        let mut kv = vec![
-            KeyValue {
-                key: KEY_SOURCE.to_string(),
-                value: Some(source.to_string()),
-            },
-            KeyValue {
-                key: KEY_SAMPLING_INTERVAL_MS.to_string(),
-                value: Some(sampling_interval_ms.to_string()),
-            },
-        ];
-        for (k, v) in extra_kv {
-            kv.push(KeyValue {
-                key: k.to_string(),
-                value: Some(v.to_string()),
-            });
-        }
-        let props = WriterProperties::builder()
-            .set_key_value_metadata(Some(kv))
-            .build();
-
-        let tmp = NamedTempFile::new().unwrap();
-        let path = tmp.path().to_path_buf();
-        let file = std::fs::File::create(&path).unwrap();
-        let mut writer = ArrowWriter::try_new(file, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        (tmp, path)
-    }
-
-    // ── Label resolution tests ──
-
-    #[test]
-    fn test_resolve_node_from_metadata() {
-        let (_t1, p1) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC],
-            "cpu",
-            &[Some(10), Some(20)],
-            "rezolus",
-            "1000",
-            vec![("node", "web01")],
-        );
-        let input = load(&p1);
-        assert_eq!(input.node.as_deref(), Some("web01"));
-    }
-
-    #[test]
-    fn test_resolve_node_fallback_to_filename() {
-        let (_t1, p1) = make_test_file(
-            &[SEC, 2 * SEC],
-            "cpu",
-            &[Some(10), Some(20)],
-            "rezolus",
-            "1000",
-        );
-        let input = load(&p1);
-        assert!(input.node.is_some());
-    }
-
-    #[test]
-    fn test_resolve_instance_from_metadata() {
-        let (_t1, p1) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC],
-            "tokens",
-            &[Some(10), Some(20)],
-            "vllm",
-            "1000",
-            vec![("instance", "primary")],
-        );
-        let input = load(&p1);
-        assert_eq!(input.instance.as_deref(), Some("primary"));
-    }
-
-    #[test]
-    fn test_resolve_instance_none_when_absent() {
-        let (_t1, p1) = make_test_file(
-            &[SEC, 2 * SEC],
-            "tokens",
-            &[Some(10), Some(20)],
-            "vllm",
-            "1000",
-        );
-        let input = load(&p1);
-        assert!(input.instance.is_none());
-    }
-
-    // ── Label validation tests ──
-
-    #[test]
-    fn test_validate_labels_rejects_duplicate_nodes() {
-        let (_t1, p1) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC],
-            "cpu",
-            &[Some(10), Some(20)],
-            "rezolus",
-            "1000",
-            vec![("node", "web01")],
-        );
-        let (_t2, p2) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC],
-            "cpu",
-            &[Some(30), Some(40)],
-            "rezolus",
-            "1000",
-            vec![("node", "web01")],
-        );
-        let mut inputs = vec![load(&p1), load(&p2)];
-        assert!(validate_labels(&mut inputs).is_err());
-    }
-
-    #[test]
-    fn test_validate_labels_allows_different_nodes() {
-        let (_t1, p1) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC],
-            "cpu",
-            &[Some(10), Some(20)],
-            "rezolus",
-            "1000",
-            vec![("node", "web01")],
-        );
-        let (_t2, p2) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC],
-            "cpu",
-            &[Some(30), Some(40)],
-            "rezolus",
-            "1000",
-            vec![("node", "web02")],
-        );
-        let mut inputs = vec![load(&p1), load(&p2)];
-        assert!(validate_labels(&mut inputs).is_ok());
-    }
-
-    #[test]
-    fn test_validate_labels_rejects_mixed_instance_metadata() {
-        let (_t1, p1) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC],
-            "tokens_a",
-            &[Some(10), Some(20)],
-            "vllm",
-            "1000",
-            vec![("instance", "primary")],
-        );
-        let (_t2, p2) = make_test_file(
-            &[SEC, 2 * SEC],
-            "tokens_b",
-            &[Some(30), Some(40)],
-            "vllm",
-            "1000",
-        );
-        let mut inputs = vec![load(&p1), load(&p2)];
-        let err = validate_labels(&mut inputs).unwrap_err().to_string();
-        assert!(err.contains("mixed"), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn test_validate_labels_auto_assigns_instances() {
-        let (_t1, p1) = make_test_file(
-            &[SEC, 2 * SEC],
-            "tokens_a",
-            &[Some(10), Some(20)],
-            "vllm",
-            "1000",
-        );
-        let (_t2, p2) = make_test_file(
-            &[SEC, 2 * SEC],
-            "tokens_b",
-            &[Some(30), Some(40)],
-            "vllm",
-            "1000",
-        );
-        let mut inputs = vec![load(&p1), load(&p2)];
-        validate_labels(&mut inputs).unwrap();
-        assert_eq!(inputs[0].instance.as_deref(), Some("0"));
-        assert_eq!(inputs[1].instance.as_deref(), Some("1"));
-    }
-
-    // ── Multi-node / multi-instance combine tests ──
-
-    #[test]
-    fn test_combine_two_rezolus_nodes() {
-        let (_t1, p1) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC, 3 * SEC],
-            "cpu",
-            &[Some(10), Some(20), Some(30)],
-            "rezolus",
-            "1000",
-            vec![("node", "web01")],
-        );
-        let (_t2, p2) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC, 3 * SEC],
-            "cpu",
-            &[Some(40), Some(50), Some(60)],
-            "rezolus",
-            "1000",
-            vec![("node", "web02")],
-        );
-
-        let out_tmp = NamedTempFile::new().unwrap();
-        let out_path = out_tmp.path().to_path_buf();
-
-        let mut inputs = vec![load(&p1), load(&p2)];
-        validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
-
-        let file = std::fs::File::open(&out_path).unwrap();
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        let schema = builder.schema().clone();
-        let mut reader = builder.build().unwrap();
-        let batch = reader.next().unwrap().unwrap();
-
-        assert_eq!(batch.num_rows(), 3);
-
-        let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-        assert_eq!(
-            field_names,
-            vec!["timestamp", "duration", "web01::cpu", "web02::cpu"]
-        );
-
-        let web01_field = schema.field_with_name("web01::cpu").unwrap();
-        assert_eq!(web01_field.metadata().get("node").unwrap(), "web01");
-        assert_eq!(web01_field.metadata().get("source").unwrap(), "rezolus");
-
-        let web02_field = schema.field_with_name("web02::cpu").unwrap();
-        assert_eq!(web02_field.metadata().get("node").unwrap(), "web02");
-
-        let web01_col = batch
-            .column(schema.index_of("web01::cpu").unwrap())
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(web01_col.value(0), 10);
-
-        let web02_col = batch
-            .column(schema.index_of("web02::cpu").unwrap())
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(web02_col.value(0), 40);
-    }
-
-    #[test]
-    fn test_combine_two_service_instances() {
-        let (_t1, p1) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC],
-            "tokens",
-            &[Some(100), Some(200)],
-            "vllm",
-            "1000",
-            vec![("instance", "primary")],
-        );
-        let (_t2, p2) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC],
-            "tokens",
-            &[Some(300), Some(400)],
-            "vllm",
-            "1000",
-            vec![("instance", "secondary")],
-        );
-
-        let out_tmp = NamedTempFile::new().unwrap();
-        let out_path = out_tmp.path().to_path_buf();
-
-        let mut inputs = vec![load(&p1), load(&p2)];
-        validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
-
-        let file = std::fs::File::open(&out_path).unwrap();
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        let schema = builder.schema().clone();
-
-        let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-        assert_eq!(
-            field_names,
-            vec![
-                "timestamp",
-                "duration",
-                "primary::tokens",
-                "secondary::tokens"
-            ]
-        );
-
-        let primary_field = schema.field_with_name("primary::tokens").unwrap();
-        assert_eq!(primary_field.metadata().get("instance").unwrap(), "primary");
-        assert_eq!(primary_field.metadata().get("source").unwrap(), "vllm");
-    }
-
-    #[test]
-    fn test_combine_mixed_rezolus_and_service() {
-        let (_t1, p1) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC],
-            "cpu",
-            &[Some(10), Some(20)],
-            "rezolus",
-            "1000",
-            vec![("node", "web01")],
-        );
-        let (_t2, p2) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC],
-            "cpu",
-            &[Some(30), Some(40)],
-            "rezolus",
-            "1000",
-            vec![("node", "web02")],
-        );
-        let (_t3, p3) = make_test_file(
-            &[SEC, 2 * SEC],
-            "tokens",
-            &[Some(100), Some(200)],
-            "vllm",
-            "1000",
-        );
-
-        let out_tmp = NamedTempFile::new().unwrap();
-        let out_path = out_tmp.path().to_path_buf();
-
-        let mut inputs = vec![load(&p1), load(&p2), load(&p3)];
-        validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
-
-        let file = std::fs::File::open(&out_path).unwrap();
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        let schema = builder.schema().clone();
-
-        let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-        assert_eq!(
-            field_names,
-            vec![
-                "timestamp",
-                "duration",
-                "web01::cpu",
-                "web02::cpu",
-                "0::tokens"
-            ]
-        );
-    }
-
-    #[test]
-    fn test_merge_metadata_includes_nodes() {
-        let (_t1, p1) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC],
-            "cpu",
-            &[Some(10), Some(20)],
-            "rezolus",
-            "1000",
-            vec![("node", "web01")],
-        );
-        let (_t2, p2) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC],
-            "cpu",
-            &[Some(30), Some(40)],
-            "rezolus",
-            "1000",
-            vec![("node", "web02")],
-        );
-
-        let mut inputs = vec![load(&p1), load(&p2)];
-        validate_labels(&mut inputs).unwrap();
-
-        let out_tmp = NamedTempFile::new().unwrap();
-        let out_path = out_tmp.path().to_path_buf();
-        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
-
-        let meta_reader =
-            SerializedFileReader::new(std::fs::File::open(&out_path).unwrap()).unwrap();
-        let kv = meta_reader
-            .metadata()
-            .file_metadata()
-            .key_value_metadata()
-            .unwrap();
-
-        // source array should be deduplicated
-        let source_val = kv
-            .iter()
-            .find(|kv| kv.key == KEY_SOURCE)
-            .and_then(|kv| kv.value.as_deref())
-            .unwrap();
-        let sources: Vec<String> = serde_json::from_str(source_val).unwrap();
-        assert_eq!(sources, vec!["rezolus"]);
-
-        // per_source_metadata nested by source, then by node/instance
-        let psm_str = kv
-            .iter()
-            .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
-            .and_then(|kv| kv.value.as_deref())
-            .unwrap();
-        let psm: serde_json::Value = serde_json::from_str(psm_str).unwrap();
-
-        assert!(psm["rezolus"].get("web01").is_some());
-        assert!(psm["rezolus"].get("web02").is_some());
-        assert_eq!(psm["rezolus"]["web01"]["node"].as_str().unwrap(), "web01");
-        assert_eq!(psm["rezolus"]["web02"]["node"].as_str().unwrap(), "web02");
-    }
-
-    #[test]
-    fn test_merge_metadata_includes_service_node() {
-        let (_t1, p1) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC],
-            "metric_a",
-            &[Some(1), Some(2)],
-            "vllm",
-            "1000",
-            vec![("instance", "0"), ("node", "gpu01")],
-        );
-
-        let inputs = vec![load(&p1)];
-        let kv = merge_metadata(&inputs).unwrap();
-
-        let psm_str = kv
-            .iter()
-            .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
-            .and_then(|kv| kv.value.as_deref())
-            .expect("per_source_metadata should exist");
-
-        let psm: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_str(psm_str).unwrap();
-
-        let entry = psm
-            .get("vllm")
-            .and_then(|g| g.get("0"))
-            .expect("vllm.0 entry should exist");
-        assert_eq!(entry.get("instance").and_then(|v| v.as_str()), Some("0"));
-        assert_eq!(entry.get("node").and_then(|v| v.as_str()), Some("gpu01"));
-    }
-
-    #[test]
-    fn test_merge_metadata_flattens_existing_source_array() {
-        // Simulate an already-combined input by setting its `source` field
-        // to a JSON array string. Combining it with a single-source file
-        // should yield a flat array, not a nested one.
-        let (_t1, p1) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC],
-            "m1",
-            &[Some(1), Some(2)],
-            "[\"rezolus\",\"llm-perf\"]",
-            "1000",
-            vec![("node", "web01")],
-        );
-        let (_t2, p2) = make_test_file(&[SEC, 2 * SEC], "m2", &[Some(3), Some(4)], "vllm", "1000");
-
-        let inputs = vec![load(&p1), load(&p2)];
-        let kv = merge_metadata(&inputs).unwrap();
-
-        let source_val = kv
-            .iter()
-            .find(|kv| kv.key == KEY_SOURCE)
-            .and_then(|kv| kv.value.as_deref())
-            .unwrap();
-        let sources: Vec<String> = serde_json::from_str(source_val).unwrap();
-        let mut expected = vec![
-            "rezolus".to_string(),
-            "llm-perf".to_string(),
-            "vllm".to_string(),
-        ];
-        expected.sort();
-        assert_eq!(sources, expected);
-    }
-
-    #[test]
-    fn test_merge_metadata_expands_source_array_into_per_source() {
-        // Input file has `source` as a JSON array but only top-level metadata
-        // (no per_source_metadata). Combine should produce one
-        // per_source_metadata entry per array element, duplicating the
-        // top-level fields (version, node, instance) into each.
-        let (_t1, p1) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC],
-            "m1",
-            &[Some(1), Some(2)],
-            "[\"rezolus\",\"llm-perf\"]",
-            "1000",
-            vec![
-                ("node", "web01"),
-                ("instance", "primary"),
-                ("version", "1.2.3"),
-            ],
-        );
-        let (_t2, p2) = make_test_file_with_metadata(
-            &[SEC, 2 * SEC],
-            "m2",
-            &[Some(3), Some(4)],
-            "rezolus",
-            "1000",
-            vec![("node", "web02")],
-        );
-
-        let inputs = vec![load(&p1), load(&p2)];
-        let kv = merge_metadata(&inputs).unwrap();
-
-        let psm_str = kv
-            .iter()
-            .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
-            .and_then(|kv| kv.value.as_deref())
-            .expect("per_source_metadata should exist");
-        let psm: serde_json::Value = serde_json::from_str(psm_str).unwrap();
-
-        // The array source "rezolus" element should land under web01
-        // (the top-level `node` of the array-source input).
-        let rez_web01 = psm
-            .get("rezolus")
-            .and_then(|g| g.get("web01"))
-            .expect("rezolus.web01 entry should exist");
-        assert_eq!(
-            rez_web01.get("version").and_then(|v| v.as_str()),
-            Some("1.2.3")
-        );
-        assert_eq!(
-            rez_web01.get("node").and_then(|v| v.as_str()),
-            Some("web01")
-        );
-
-        // The array source "llm-perf" element should land under instance
-        // "primary" with the top-level fields duplicated.
-        let llm_primary = psm
-            .get("llm-perf")
-            .and_then(|g| g.get("primary"))
-            .expect("llm-perf.primary entry should exist");
-        assert_eq!(
-            llm_primary.get("version").and_then(|v| v.as_str()),
-            Some("1.2.3")
-        );
-        assert_eq!(
-            llm_primary.get("instance").and_then(|v| v.as_str()),
-            Some("primary")
-        );
-        assert_eq!(
-            llm_primary.get("node").and_then(|v| v.as_str()),
-            Some("web01")
-        );
-
-        // The second input (single-source rezolus, web02) should still get
-        // its own entry alongside the expanded array source's web01.
-        assert!(psm.get("rezolus").and_then(|g| g.get("web02")).is_some());
-    }
-
-    #[test]
-    fn test_quantize_rounds_to_nearest() {
-        let interval = 1_000_000_000; // 1s
-                                      // Exact boundary
-        assert_eq!(quantize(2 * interval, interval), 2 * interval);
-        // Slightly after boundary
-        assert_eq!(quantize(2 * interval + 1000, interval), 2 * interval);
-        // Just before next boundary (rounds up)
-        assert_eq!(quantize(3 * interval - 1000, interval), 3 * interval);
-        // Exactly at midpoint (rounds up)
-        assert_eq!(
-            quantize(2 * interval + interval / 2, interval),
-            3 * interval
-        );
-    }
-
-    #[test]
-    fn parse_ab_args_happy_path() {
-        let raw = vec!["baseline=vllm".to_string(), "experiment=sglang".to_string()];
-        let (baseline, experiment) = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap();
-        assert_eq!(baseline.alias, "vllm");
-        assert_eq!(baseline.sources, vec!["vllm".to_string()]);
-        assert_eq!(experiment.alias, "sglang");
-        assert_eq!(experiment.sources, vec!["sglang".to_string()]);
-    }
-
-    #[test]
-    fn parse_ab_args_rejects_unknown_source() {
-        let raw = vec![
-            "baseline=vllm".to_string(),
-            "experiment=does_not_exist".to_string(),
-        ];
-        let err = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap_err();
-        assert!(
-            err.to_string().contains("does_not_exist"),
-            "error should name the missing source: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_ab_args_rejects_missing_side() {
-        let raw = vec!["baseline=vllm".to_string()];
-        let err = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap_err();
-        assert!(
-            err.to_string().contains("experiment"),
-            "error should name the missing side: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_ab_args_rejects_duplicate_side() {
-        let raw = vec!["baseline=vllm".to_string(), "baseline=sglang".to_string()];
-        let err = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap_err();
-        assert!(
-            err.to_string().contains("baseline"),
-            "error should name the duplicated side: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_ab_args_rejects_unknown_side() {
-        let raw = vec!["control=vllm".to_string(), "treatment=sglang".to_string()];
-        let err = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap_err();
-        assert!(
-            err.to_string().contains("control") || err.to_string().contains("baseline"),
-            "error should explain valid sides: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_ab_args_accepts_multi_source_input() {
-        // Already-combined inputs (e.g. rezolus+vllm) expose all their
-        // flattened source names to the validator. The user names ONE of
-        // them in --ab; the side-mapping code (in combine_and_write) is
-        // responsible for back-resolving which input contributes the side.
-        let raw = vec!["baseline=vllm".to_string(), "experiment=sglang".to_string()];
-        // Flat list as combine_and_write would compute it.
-        let available = ["rezolus", "vllm", "rezolus", "sglang"];
-        let (baseline, experiment) = parse_ab_args(&raw, &available).unwrap();
-        assert_eq!(baseline.alias, "vllm");
-        assert_eq!(experiment.alias, "sglang");
-    }
-
-    #[test]
-    fn parse_ab_args_rejects_same_source_on_both_sides() {
-        let raw = vec!["baseline=vllm".to_string(), "experiment=vllm".to_string()];
-        let err = parse_ab_args(&raw, &["vllm", "sglang"]).unwrap_err();
-        assert!(
-            err.to_string().contains("different"),
-            "error should explain that sides must differ: {err}"
-        );
-    }
-
-    #[test]
-    fn resolve_ab_input_indices_rejects_ambiguous_inputs() {
-        // Both inputs are ["rezolus","vllm"]; baseline=rezolus experiment=vllm
-        // is ambiguous — each input's flat sources contain BOTH side names.
-        // First-match-wins would silently put both on baseline.
-        let make_input = |source_json: &str| InputFile {
-            path: "/tmp/x.parquet".into(),
-            source: source_json.to_string(),
-            kv_metadata: vec![],
-            sampling_interval_ms: Some("1000".to_string()),
-            node: None,
-            instance: None,
-            schema: Arc::new(arrow::datatypes::Schema::empty()),
-            batches: vec![],
-        };
-        let inputs = vec![
-            make_input(r#"["rezolus","vllm"]"#),
-            make_input(r#"["rezolus","vllm"]"#),
-        ];
-        let baseline = AbSide {
-            alias: "rezolus".into(),
-            sources: vec!["rezolus".into()],
-        };
-        let experiment = AbSide {
-            alias: "vllm".into(),
-            sources: vec!["vllm".into()],
-        };
-        let err = resolve_ab_input_indices(&inputs, &baseline, &experiment).unwrap_err();
-        assert!(
-            err.to_string().contains("expected exactly one"),
-            "ambiguous mapping should be rejected upfront: {err}"
-        );
-    }
-
-    #[test]
-    fn resolve_ab_input_indices_rejects_orphan_input() {
-        // Input #2 matches neither side. Used to panic in the writer's
-        // unreachable!() arm; now caught upfront.
-        let make_input = |source_json: &str| InputFile {
-            path: "/tmp/x.parquet".into(),
-            source: source_json.to_string(),
-            kv_metadata: vec![],
-            sampling_interval_ms: Some("1000".to_string()),
-            node: None,
-            instance: None,
-            schema: Arc::new(arrow::datatypes::Schema::empty()),
-            batches: vec![],
-        };
-        let inputs = vec![
-            make_input(r#"["rezolus","vllm","sglang"]"#),
-            make_input(r#"["rezolus"]"#),
-        ];
-        let baseline = AbSide {
-            alias: "vllm".into(),
-            sources: vec!["vllm".into()],
-        };
-        let experiment = AbSide {
-            alias: "sglang".into(),
-            sources: vec!["sglang".into()],
-        };
-        let err = resolve_ab_input_indices(&inputs, &baseline, &experiment).unwrap_err();
-        assert!(
-            err.to_string().contains("experiment"),
-            "orphan input (no experiment match) should be named in error: {err}"
-        );
-    }
-
-    /// Like `make_test_file` but also writes a top-level `descriptions` KV.
-    fn make_test_file_with_descriptions(
-        timestamps: &[u64],
-        metric_name: &str,
-        metric_values: &[Option<i64>],
-        source: &str,
-        sampling_interval_ms: &str,
-        descriptions: serde_json::Value,
-    ) -> (NamedTempFile, PathBuf) {
-        make_test_file_with_kv(
-            timestamps,
-            metric_name,
-            metric_values,
-            source,
-            sampling_interval_ms,
-            KEY_DESCRIPTIONS,
-            &serde_json::to_string(&descriptions).unwrap(),
-        )
-    }
-
-    /// Like `make_test_file` but also writes the top-level KV `key=value`.
-    fn make_test_file_with_kv(
-        timestamps: &[u64],
-        metric_name: &str,
-        metric_values: &[Option<i64>],
-        source: &str,
-        sampling_interval_ms: &str,
-        key: &str,
-        value: &str,
-    ) -> (NamedTempFile, PathBuf) {
-        let ts_field =
-            Field::new("timestamp", DataType::UInt64, false).with_metadata(HashMap::from([
-                ("metric_type".to_string(), "timestamp".to_string()),
-                ("unit".to_string(), "nanoseconds".to_string()),
-            ]));
-        let dur_field =
-            Field::new("duration", DataType::UInt64, true).with_metadata(HashMap::from([
-                ("metric_type".to_string(), "duration".to_string()),
-                ("unit".to_string(), "nanoseconds".to_string()),
-            ]));
-        let metric_field = Field::new(metric_name, DataType::Int64, true).with_metadata(
-            // `metric` names the series once combine prefixes the column.
-            HashMap::from([
-                ("metric_type".to_string(), "gauge".to_string()),
-                ("metric".to_string(), metric_name.to_string()),
-            ]),
-        );
-        let schema = Arc::new(Schema::new(vec![ts_field, dur_field, metric_field]));
-        let ts_array = UInt64Array::from(timestamps.to_vec());
-        let dur_array = UInt64Array::from(vec![None::<u64>; timestamps.len()]);
-        let metric_array = Int64Array::from(metric_values.to_vec());
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(ts_array),
-                Arc::new(dur_array),
-                Arc::new(metric_array),
-            ],
-        )
-        .unwrap();
-        let kv = vec![
-            KeyValue {
-                key: KEY_SOURCE.to_string(),
-                value: Some(source.to_string()),
-            },
-            KeyValue {
-                key: KEY_SAMPLING_INTERVAL_MS.to_string(),
-                value: Some(sampling_interval_ms.to_string()),
-            },
-            KeyValue {
-                key: key.to_string(),
-                value: Some(value.to_string()),
-            },
-        ];
-        let props = WriterProperties::builder()
-            .set_key_value_metadata(Some(kv))
-            .build();
-        let tmp = NamedTempFile::new().unwrap();
-        let path = tmp.path().to_path_buf();
-        let file = std::fs::File::create(&path).unwrap();
-        let mut writer = ArrowWriter::try_new(file, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-        (tmp, path)
-    }
-
-    /// Each input's `service_queries` is carried into its source's entry in
-    /// `per_source_metadata`, which the viewers read, and the combined file
-    /// renders it: the template resolves for its source and its query reads
-    /// that source's series.
-    #[test]
-    fn combine_carries_each_inputs_kpi_template() {
-        let template = r#"{"service_name":"widgetd","kpis":[{"role":"load","title":"Depth","query":"m{source=\"widgetd\"}","type":"gauge","unit_system":"count"}]}"#;
-        let (_ta, pa) = make_test_file_with_kv(
-            &[SEC, 2 * SEC],
-            "m",
-            &[Some(1), Some(2)],
-            "widgetd",
-            "1000",
-            KEY_SERVICE_QUERIES,
-            template,
-        );
-        let (_tb, pb) = make_test_file(&[SEC, 2 * SEC], "n", &[Some(3), Some(4)], "b", "1000");
-
-        let out_tmp = NamedTempFile::new().unwrap();
-        let out_path = out_tmp.path().to_path_buf();
-        let mut inputs = vec![load(&pa), load(&pb)];
-        validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
-
-        let reader = metriken_query::ParquetReader::open(&out_path).unwrap();
-        let metadata = metriken_query::MetricsSource::file_metadata(&reader);
-        let psm: serde_json::Value =
-            serde_json::from_str(&metadata[KEY_PER_SOURCE_METADATA]).unwrap();
-        assert_eq!(
-            psm["widgetd"]["0"][NESTED_SERVICE_QUERIES],
-            serde_json::from_str::<serde_json::Value>(template).unwrap()
-        );
-        assert!(psm["b"]["0"].get(NESTED_SERVICE_QUERIES).is_none(), "{psm}");
-
-        // widgetd is not in the built-in registry, so what resolves is the
-        // carried template.
-        let registry = ::dashboard::TemplateRegistry::embedded().unwrap();
-        let resolved = ::dashboard::source_templates::resolve_source_templates(
-            &metadata,
-            &registry,
-            ::dashboard::source_templates::TemplatePreference::Archive,
-        );
-        let (source, ext) = resolved
-            .service_exts
-            .iter()
-            .find(|(s, _)| s == "widgetd")
-            .unwrap_or_else(|| panic!("{:?}", resolved.service_exts));
-        assert_eq!(source, "widgetd");
-        let (start, end) = reader.time_range().unwrap();
-        let result = reader
-            .query_range(&ext.kpis[0].query, start, end, 1.0)
-            .unwrap();
-        let metriken_query::QueryResult::Matrix { result } = result else {
-            panic!("not a matrix: {result:?}");
-        };
-        assert!(
-            result.iter().any(|s| !s.values.is_empty()),
-            "the KPI's query reads no data from the combined file"
-        );
-    }
-
-    /// A combined input annotated after combining carries a newer top-level
-    /// template beside the nested one: the top-level one is what that input
-    /// renders, so re-combining keeps it. It goes to the source its
-    /// `service_name` names; one naming none of the input's sources is
-    /// dropped and the nested one kept.
-    #[test]
-    fn recombining_keeps_a_combined_inputs_newer_template() {
-        let old = serde_json::json!({"service_name": "vllm", "kpis": [], "service_metadata": {"v": "old"}});
-        let new = serde_json::json!({"service_name": "vllm", "kpis": [], "service_metadata": {"v": "new"}});
-        let stray = serde_json::json!({"service_name": "sglang", "kpis": []});
-        let psm = serde_json::json!({"vllm": {"0": {"service_queries": old}}}).to_string();
-        let combined = |top: &serde_json::Value| {
-            let top = top.to_string();
-            make_test_file_with_metadata(
-                &[SEC, 2 * SEC],
-                "m1",
-                &[Some(1), Some(2)],
-                "[\"llm-perf\",\"vllm\"]",
-                "1000",
-                vec![
-                    (KEY_PER_SOURCE_METADATA, psm.as_str()),
-                    (KEY_SERVICE_QUERIES, top.as_str()),
-                ],
-            )
-        };
-        let (_t2, p2) = make_test_file(&[SEC, 2 * SEC], "m2", &[Some(3), Some(4)], "c", "1000");
-        let nested = |p1: &PathBuf| {
-            let kv = merge_metadata(&[load(p1), load(&p2)]).unwrap();
-            let psm_str = kv
-                .iter()
-                .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
-                .and_then(|kv| kv.value.clone())
-                .unwrap();
-            let psm: serde_json::Value = serde_json::from_str(&psm_str).unwrap();
-            (
-                psm["vllm"]["0"][NESTED_SERVICE_QUERIES].clone(),
-                psm["llm-perf"]["0"].get(NESTED_SERVICE_QUERIES).cloned(),
-            )
-        };
-
-        let (_t1, p1) = combined(&new);
-        let (vllm, llm_perf) = nested(&p1);
-        assert_eq!(vllm, new, "the top-level template replaces the nested one");
-        assert_eq!(llm_perf, None, "it goes to the source it names only");
-
-        let (_t3, p3) = combined(&stray);
-        let (vllm, llm_perf) = nested(&p3);
-        assert_eq!(
-            vllm, old,
-            "a template naming none of the sources is dropped"
-        );
-        assert_eq!(llm_perf, None);
-    }
-
-    #[test]
-    fn combine_nests_descriptions_per_source_no_collision() {
-        // Two sources share the metric name "m" but with different help text;
-        // combined output must preserve both under per_source_metadata, not
-        // union-merge them into a lossy top-level descriptions key.
-        let (_ta, pa) = make_test_file_with_descriptions(
-            &[SEC, 2 * SEC],
-            "m",
-            &[Some(1), Some(2)],
-            "a",
-            "1000",
-            serde_json::json!({"m": "desc A"}),
-        );
-        let (_tb, pb) = make_test_file_with_descriptions(
-            &[SEC, 2 * SEC],
-            "m",
-            &[Some(3), Some(4)],
-            "b",
-            "1000",
-            serde_json::json!({"m": "desc B"}),
-        );
-
-        let out_tmp = NamedTempFile::new().unwrap();
-        let out_path = out_tmp.path().to_path_buf();
-
-        let mut inputs = vec![load(&pa), load(&pb)];
-        validate_labels(&mut inputs).unwrap();
-        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
-
-        let meta_reader =
-            SerializedFileReader::new(std::fs::File::open(&out_path).unwrap()).unwrap();
-        let kv = meta_reader
-            .metadata()
-            .file_metadata()
-            .key_value_metadata()
-            .unwrap();
-
-        // Descriptions must be nested per-source, not in the top-level key.
-        assert!(
-            kv.iter().all(|kv| kv.key != KEY_DESCRIPTIONS),
-            "combined file must not have a top-level descriptions key"
-        );
-
-        let psm_str = kv
-            .iter()
-            .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
-            .and_then(|kv| kv.value.as_deref())
-            .expect("per_source_metadata must be present");
-        let psm: serde_json::Value = serde_json::from_str(psm_str).unwrap();
-
-        assert_eq!(psm["a"][NESTED_DESCRIPTIONS]["m"], "desc A");
-        assert_eq!(psm["b"][NESTED_DESCRIPTIONS]["m"], "desc B");
-    }
-
-    #[test]
-    fn resolve_ab_input_indices_happy_path() {
-        let make_input = |source_json: &str| InputFile {
-            path: "/tmp/x.parquet".into(),
-            source: source_json.to_string(),
-            kv_metadata: vec![],
-            sampling_interval_ms: Some("1000".to_string()),
-            node: None,
-            instance: None,
-            schema: Arc::new(arrow::datatypes::Schema::empty()),
-            batches: vec![],
-        };
-        let inputs = vec![
-            make_input(r#"["rezolus","vllm"]"#),
-            make_input(r#"["rezolus","sglang"]"#),
-        ];
-        let baseline = AbSide {
-            alias: "vllm".into(),
-            sources: vec!["vllm".into()],
-        };
-        let experiment = AbSide {
-            alias: "sglang".into(),
-            sources: vec!["sglang".into()],
-        };
-        let (b, e) = resolve_ab_input_indices(&inputs, &baseline, &experiment).unwrap();
-        assert_eq!(b, 0);
-        assert_eq!(e, 1);
-    }
-
-    #[test]
-    fn combine_rez_merges_recordings_with_distinct_dirs() {
-        use crate::recorder::rez::{self, RecordingData, RezColumn, RezTable, RezValues};
-
-        let mk = |arm: &str| -> (tempfile::TempDir, PathBuf) {
-            let col = RezColumn {
-                name: "0".to_string(),
-                metadata: HashMap::from([
-                    ("metric".to_string(), "0".to_string()),
-                    ("metric_type".to_string(), "counter".to_string()),
-                ]),
-                values: RezValues::Counter(vec![Some(1), Some(2)]),
-                windows: vec![None, None],
-            };
-            let table = RezTable {
-                sampler: "cpu_usage".to_string(),
-                timestamps: vec![1_000, 2_000],
-                wall_offsets: Vec::new(),
-                columns: vec![col],
-                table_window: None,
-            };
-            let d = tempfile::tempdir().unwrap();
-            let p = d.path().join("one.rez");
-            let tables = [table];
-            rez::write_archive(
-                &p,
-                &[RecordingData {
-                    dir: "rezolus".to_string(),
-                    labels: [("source".to_string(), arm.to_string())]
-                        .into_iter()
-                        .collect(),
-                    metadata: std::collections::BTreeMap::new(),
-                    tables: &tables,
-                }],
-            )
-            .unwrap();
-            (d, p)
-        };
-
-        let (_da, a) = mk("redis");
-        let (_db, b) = mk("valkey");
-
-        let outdir = tempfile::tempdir().unwrap();
-        let out = outdir.path().join("ab.rez");
-        run_combine(&[a, b], &out).unwrap();
-
-        // Upgraded on the way in, so the assembly is v3 regardless of the
-        // inputs' container.
-        assert_eq!(
-            rez::detect_rez_format(&out).unwrap(),
-            rez::RezFormat::V3Sqlite
-        );
-        let db = crate::recorder::rez_sqlite::RezDb::open(&out).unwrap();
-        let recordings = db.read_recordings().unwrap();
-        assert_eq!(recordings.len(), 2);
-        // v3 has no directory names; a recording is its id plus its labels,
-        // and the labels are what keep the two arms apart.
-        let sources: Vec<&str> = recordings
-            .iter()
-            .filter_map(|r| r.meta.labels.get("source").map(String::as_str))
-            .collect();
-        assert_eq!(sources, vec!["redis", "valkey"]);
-    }
-
-    // `combine` copies each input's `RezTableIndex` verbatim and lets
-    // `write_archive_bytes` re-canonicalize the file names. On segmented input
-    // that is the whole ballgame: a stale index, a dropped segment, or a
-    // reordered one all produce an archive that opens but reads wrong. Only the
-    // streaming writer produces segmented tables, so this needs a real one.
-    #[test]
-    fn combine_rez_passes_segments_through_and_propagates_completeness() {
-        use crate::recorder::rez;
-        use crate::recorder::rez_stream::write_segmented_rez;
-        use metriken_query::MetricsSource;
-
-        let d = tempfile::tempdir().unwrap();
-        // One cleanly finalized recording…
-        let a = write_segmented_rez(
-            &d.path().join("a.rez"),
-            "rezolus",
-            [("arm".to_string(), "baseline".to_string())]
-                .into_iter()
-                .collect(),
-            &["cpu_usage", "scheduler"],
-            6,
-            2,
-            true,
-        );
-        // …and one recovered from a `.partial` (killed recorder).
-        let b = write_segmented_rez(
-            &d.path().join("b.rez"),
-            "rezolus",
-            [("arm".to_string(), "experiment".to_string())]
-                .into_iter()
-                .collect(),
-            &["cpu_usage", "scheduler"],
-            6,
-            2,
-            false,
-        );
-
-        let seg_bytes = |p: &std::path::Path| -> Vec<(String, Vec<Vec<u8>>)> {
-            rez::read_archive_bytes(p).unwrap().1.remove(0).tables
-        };
-        let a_tables = seg_bytes(&a);
-        let _b_tables = seg_bytes(&b);
-        assert!(
-            a_tables.iter().all(|(_, s)| s.len() == 3),
-            "the input must actually be segmented"
-        );
-
-        let out = d.path().join("combined.rez");
-        run_combine(&[a, b], &out).unwrap();
-
-        assert_eq!(
-            rez::detect_rez_format(&out).unwrap(),
-            rez::RezFormat::V3Sqlite
-        );
-        let db = crate::recorder::rez_sqlite::RezDb::open(&out).unwrap();
-        let recordings = db.read_recordings().unwrap();
-        assert_eq!(recordings.len(), 2);
-
-        // The one that matters: `complete` answers "may data after the last
-        // row be missing", which is a property of the DATA. It has to survive
-        // both the tar->v3 upgrade and the assembly, so a recording recovered
-        // from a checkpoint still presents as recovered. Blanket-marking the
-        // output complete would launder a truncated recording into a clean
-        // one, silently.
-        assert!(
-            recordings[0].complete,
-            "the cleanly finalized input must stay complete"
-        );
-        assert!(
-            !recordings[1].complete,
-            "the recovered input must NOT be laundered into a complete one"
-        );
-
-        // Every segment came across: the inputs are multi-segment, so a
-        // dropped or reordered one would show up as a short table here.
-        let a_rows: u64 = a_tables.iter().map(|(_, s)| s.len() as u64).sum();
-        assert!(a_rows >= 3, "the input must actually be segmented");
-        for rec in &recordings {
-            let mut tables = db.all_samplers(rec.id).unwrap();
-            tables.sort();
-            assert_eq!(
-                tables,
-                vec!["cpu_usage".to_string(), "scheduler".to_string()]
-            );
-            for t in &tables {
-                assert!(db.total_rows(rec.id, t).unwrap() > 0, "{t} lost its rows");
-            }
-        }
-
-        let reader = crate::rez_reader::RezReader::open_with_pool(
-            &out,
-            metriken_storage::BufferPool::new(64 * 1024 * 1024),
-        )
-        .unwrap();
-        assert!(!reader.counter_names().is_empty());
-    }
-
     /// Build ArgMatches for `parquet combine <FILES...> -o <output>` and call
     /// `run()` on them, exactly as the CLI does.
     fn run_combine(
@@ -3630,9 +582,9 @@ mod tests {
         .collect()
     }
 
-    /// `--ab` stamps `arm` on each input's recordings, into a `.rez` and a
-    /// `.dendro` and from parquet inputs, and the archive opens as a
-    /// comparison; without it nothing is stamped and it opens combined.
+    /// `--ab` stamps `arm` on each input's recordings, from `.rez` and
+    /// parquet inputs, and the archive opens as a comparison; without it
+    /// nothing is stamped and it opens combined.
     #[test]
     fn combine_ab_stamps_each_inputs_arm() {
         let dir = tempfile::tempdir().unwrap();
@@ -3650,7 +602,7 @@ mod tests {
             ("b".to_string(), Some("experiment".to_string())),
         ];
 
-        let ab = dir.path().join("ab.rez");
+        let ab = dir.path().join("ab.dendro");
         // One input named by its file name, the other by the path as typed.
         let exp = format!("experiment={}", b.display());
         run_combine_ab(&[a.clone(), b.clone()], &ab, &["baseline=a.rez", &exp]).unwrap();
@@ -3662,16 +614,7 @@ mod tests {
         .unwrap();
         assert!(!crate::viewer::opens_combined(&readers, false));
 
-        let ab_dendro = dir.path().join("ab.dendro");
-        run_combine_ab(
-            &[a.clone(), b.clone()],
-            &ab_dendro,
-            &["baseline=a.rez", &exp],
-        )
-        .unwrap();
-        assert_eq!(arms(&ab_dendro), want);
-
-        let plain = dir.path().join("plain.rez");
+        let plain = dir.path().join("plain.dendro");
         run_combine_ab(&[a.clone(), b.clone()], &plain, &[]).unwrap();
         assert_eq!(
             arms(&plain)
@@ -3688,7 +631,7 @@ mod tests {
         assert!(crate::viewer::opens_combined(&readers, false));
     }
 
-    /// Parquet inputs into a `.rez`, one recording each, take their arms.
+    /// Parquet inputs, one recording each, take their arms.
     #[test]
     fn combine_ab_stamps_parquet_inputs() {
         let (_t1, p1) = make_test_file(
@@ -3706,7 +649,7 @@ mod tests {
             "1000",
         );
         let dir = tempfile::tempdir().unwrap();
-        let out = dir.path().join("ab.rez");
+        let out = dir.path().join("ab.dendro");
         let base = format!("baseline={}", p2.display());
         let exp = format!("experiment={}", p1.display());
         run_combine_ab(&[p1, p2], &out, &[&base, &exp]).unwrap();
@@ -3732,7 +675,7 @@ mod tests {
             &b,
             &[("source", "rezolus"), ("host", "b"), ("arm", "baseline")],
         );
-        let kept = dir.path().join("kept.rez");
+        let kept = dir.path().join("kept.dendro");
         run_combine_ab(
             &[a.clone(), b.clone()],
             &kept,
@@ -3740,7 +683,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(!kept.exists());
-        let out = dir.path().join("out.rez");
+        let out = dir.path().join("out.dendro");
         let err = run_combine_ab(
             &[a.clone(), b.clone()],
             &out,
@@ -3756,22 +699,14 @@ mod tests {
         FAIL_STAMP.with(|f| f.set(true));
         let early = run_combine_ab(
             &[a.clone(), b.clone()],
-            &dir.path().join("early.rez"),
+            &dir.path().join("early.dendro"),
             &["baseline=a.rez", "experiment=b.rez"],
         );
         FAIL_STAMP.with(|f| f.set(false));
         let early = early.unwrap_err().to_string();
         assert!(early.contains("already arm baseline"), "{early}");
         assert!(!out.exists(), "a refusal leaves no output");
-        let out = dir.path().join("out.dendro");
-        run_combine_ab(
-            &[a.clone(), b.clone()],
-            &out,
-            &["baseline=a.rez", "experiment=b.rez"],
-        )
-        .unwrap_err();
-        assert!(!out.exists(), "a refusal leaves no output");
-        let swapped = dir.path().join("swapped.rez");
+        let swapped = dir.path().join("swapped.dendro");
         run_combine_ab(
             &[b.clone(), a.clone()],
             &swapped,
@@ -3781,7 +716,7 @@ mod tests {
         // The matching arm is kept.
         let c = dir.path().join("c.rez");
         agent_rez(&c, &[("source", "rezolus"), ("host", "c")]);
-        let ok = dir.path().join("ok.rez");
+        let ok = dir.path().join("ok.dendro");
         run_combine_ab(
             &[a.clone(), c.clone()],
             &ok,
@@ -3798,8 +733,7 @@ mod tests {
     /// An archive assembled without `--ab` (as every `combine` before it
     /// did) whose two recordings carry the same labels: no selector tells
     /// them apart, so `--ab` names them by position, and the result opens as
-    /// a comparison with the named recording as the baseline. Into a `.rez`
-    /// and a `.dendro`.
+    /// a comparison with the named recording as the baseline.
     #[test]
     fn combine_ab_relabels_one_archive_by_position() {
         let dir = tempfile::tempdir().unwrap();
@@ -3814,45 +748,43 @@ mod tests {
             &[("source", "rezolus")],
             &[("source", "rezolus"), ("version", "second")],
         );
-        let old = dir.path().join("old.rez");
+        let old = dir.path().join("old.dendro");
         run_combine_ab(&[a, b], &old, &[]).unwrap();
         let labels = archive_labels(&old);
         assert_eq!(labels[0], labels[1], "twins: {labels:?}");
 
-        for out in ["new.rez", "new.dendro"] {
-            let out = dir.path().join(out);
-            run_combine_ab(
-                std::slice::from_ref(&old),
-                &out,
-                &["baseline=1", "experiment=0"],
-            )
-            .unwrap();
-            let readers = crate::rez_reader::RezReader::open_recordings(
-                &out,
-                metriken_storage::BufferPool::new(16 * 1024 * 1024),
-            )
-            .unwrap();
-            let arms: Vec<(String, String)> = readers
-                .iter()
-                .map(|(l, r)| {
-                    use metriken_query::MetricsSource;
-                    (r.version(), l["arm"].clone())
-                })
-                .collect();
-            assert_eq!(
-                arms,
-                [
-                    ("first".to_string(), "experiment".to_string()),
-                    ("second".to_string(), "baseline".to_string()),
-                ],
-                "{}",
-                out.display()
-            );
-            assert!(!crate::viewer::opens_combined(&readers, false));
-        }
+        let out = dir.path().join("new.dendro");
+        run_combine_ab(
+            std::slice::from_ref(&old),
+            &out,
+            &["baseline=1", "experiment=0"],
+        )
+        .unwrap();
+        let readers = crate::rez_reader::RezReader::open_recordings(
+            &out,
+            metriken_storage::BufferPool::new(16 * 1024 * 1024),
+        )
+        .unwrap();
+        let arms: Vec<(String, String)> = readers
+            .iter()
+            .map(|(l, r)| {
+                use metriken_query::MetricsSource;
+                (r.version(), l["arm"].clone())
+            })
+            .collect();
+        assert_eq!(
+            arms,
+            [
+                ("first".to_string(), "experiment".to_string()),
+                ("second".to_string(), "baseline".to_string()),
+            ],
+            "{}",
+            out.display()
+        );
+        assert!(!crate::viewer::opens_combined(&readers, false));
         let err = run_combine_ab(
             std::slice::from_ref(&old),
-            &dir.path().join("x.rez"),
+            &dir.path().join("x.dendro"),
             &["baseline=2", "experiment=0"],
         )
         .unwrap_err()
@@ -3872,7 +804,7 @@ mod tests {
             &[("source", "rezolus"), ("host", "a"), ("arm", "Baseline")],
         );
         agent_rez(&b, &[("source", "rezolus"), ("host", "b")]);
-        let out = dir.path().join("ab.rez");
+        let out = dir.path().join("ab.dendro");
         run_combine_ab(
             &[a.clone(), b.clone()],
             &out,
@@ -3885,7 +817,7 @@ mod tests {
             .collect();
         assert_eq!(arms, ["Baseline", "experiment"]);
 
-        let three = dir.path().join("three.rez");
+        let three = dir.path().join("three.dendro");
         let c = dir.path().join("c.rez");
         agent_rez(
             &c,
@@ -3897,23 +829,16 @@ mod tests {
         run_combine_ab(&[d, e, c.clone()], &three, &[]).unwrap();
         let err = run_combine_ab(
             std::slice::from_ref(&three),
-            &dir.path().join("x.rez"),
+            &dir.path().join("x.dendro"),
             &["baseline=0", "experiment=1"],
         )
         .unwrap_err()
         .to_string();
         assert!(err.contains("would not open as a comparison"), "{err}");
-        assert!(!dir.path().join("x.rez").exists());
-        let x = dir.path().join("x.dendro");
-        let err = run_combine_ab(
-            std::slice::from_ref(&three),
-            &x,
-            &["baseline=0", "experiment=1"],
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("would not open as a comparison"), "{err}");
-        assert!(!x.exists(), "no .dendro is written");
+        assert!(
+            !dir.path().join("x.dendro").exists(),
+            "no .dendro is written"
+        );
     }
 
     /// A failure after the copy (here, the relabel) leaves nothing at the
@@ -3924,7 +849,7 @@ mod tests {
         let (a, b) = (dir.path().join("a.rez"), dir.path().join("b.rez"));
         agent_rez(&a, &[("source", "rezolus"), ("host", "a")]);
         agent_rez(&b, &[("source", "rezolus"), ("host", "b")]);
-        let out = dir.path().join("ab.rez");
+        let out = dir.path().join("ab.dendro");
         let ab = ["baseline=a.rez", "experiment=b.rez"];
         FAIL_STAMP.with(|f| f.set(true));
         let err = run_combine_ab(&[a.clone(), b.clone()], &out, &ab);
@@ -3987,141 +912,49 @@ mod tests {
         }
     }
 
-    /// `parquet combine` recognizes a v3 (SQLite) `.rez` as a `.rez` input (not
-    /// All-v3 inputs assemble into one multi-recording v3 archive, and the
-    /// result must be READABLE — not merely written. The trap a segment copy
-    /// invites is producing a catalog that looks right while the parquet
-    /// BLOBs it points at were reseq'd out of order or attributed to the
-    /// wrong recording, which only a read catches.
-    ///
-    /// Mutation check: dropping the `seq` renumbering in
-    /// `copy_recordings_into` leaves this passing only while every input has a
-    /// single segment, which is why the fixture writes several ticks.
+    /// `.rez` inputs of both containers are converted on the way in, and
+    /// the assembled archive is readable, a recording per input, each
+    /// holding its tables' rows.
     #[test]
-    fn combine_assembles_v3_inputs_into_one_readable_archive() {
-        use crate::recorder::rez::recorder_tests_support::populated_v3_rez;
+    fn combine_converts_rez_inputs_into_one_readable_archive() {
         let dir = tempfile::tempdir().unwrap();
-        let a = dir.path().join("a.rez");
-        let b = dir.path().join("b.rez");
-        populated_v3_rez(&a, "baseline", &["cpu_usage", "scheduler"], 6);
-        populated_v3_rez(&b, "experiment", &["cpu_usage", "scheduler"], 6);
-        let out = dir.path().join("out.rez");
+        let v3 = rez::fixtures::committed_rez("v3.rez", dir.path());
+        let v2 = rez::fixtures::committed_rez("v2.rez", dir.path());
+        let out = dir.path().join("out.dendro");
+        run_combine(&[v3.clone(), v2.clone()], &out).unwrap();
 
-        run_combine(&[a, b], &out).unwrap();
-
-        assert_eq!(
-            crate::recorder::rez::detect_rez_format(&out).unwrap(),
-            crate::recorder::rez::RezFormat::V3Sqlite,
-            "a combined v3 archive must still be a v3 archive"
-        );
-
-        let db = crate::recorder::rez_sqlite::RezDb::open(&out).unwrap();
-        let recordings = db.read_recordings().unwrap();
-        assert_eq!(recordings.len(), 2, "one recording per input");
-        let arms: Vec<&str> = recordings
-            .iter()
-            .filter_map(|r| r.meta.labels.get("arm").map(String::as_str))
-            .collect();
-        assert_eq!(
-            arms,
-            vec!["baseline", "experiment"],
-            "each input's labels must survive, distinguishing the arms"
-        );
-        for rec in &recordings {
-            assert!(
-                rec.complete,
-                "an assembled archive is finished by definition and must not \
-                 open with a 'not cleanly finalized' warning"
-            );
-            let mut tables = db.all_samplers(rec.id).unwrap();
-            tables.sort();
-            assert_eq!(
-                tables,
-                vec!["cpu_usage".to_string(), "scheduler".to_string()]
-            );
-            for table in &tables {
-                assert!(
-                    db.total_rows(rec.id, table).unwrap() > 0,
-                    "table {table} carried no rows across the copy"
-                );
+        let db = dendro::archive::Archive::open(&out).unwrap();
+        let sources = db.read_sources().unwrap();
+        assert_eq!(sources.len(), 2, "one source per input recording");
+        for s in &sources {
+            assert!(s.complete, "an assembled archive is finished");
+            let mut streams = db.all_streams(s.id).unwrap();
+            streams.sort();
+            assert_eq!(streams, ["a", "b"]);
+            for stream in &streams {
+                assert!(db.total_rows(s.id, stream).unwrap() > 0, "{stream}");
             }
         }
-
-        // The point of the whole exercise: the assembled archive answers
-        // queries, per recording.
-        let pool = metriken_storage::BufferPool::new(64 * 1024 * 1024);
-        let readers = crate::rez_reader::RezReader::open_recordings(&out, pool).unwrap();
-        assert_eq!(readers.len(), 2, "both recordings must be readable");
+        drop(db);
+        let readers = crate::rez_reader::RezReader::open_recordings(
+            &out,
+            metriken_storage::BufferPool::new(64 * 1024 * 1024),
+        )
+        .unwrap();
+        assert_eq!(readers.len(), 2, "both recordings are readable");
+        let committed = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("crates/rez/tests/fixtures/rez/v3.rez");
+        assert_eq!(
+            std::fs::read(&v3).unwrap(),
+            std::fs::read(committed).unwrap(),
+            "the input is not changed"
+        );
     }
 
-    /// Mixing a v2 tar input with a v3 SQLite input is deliberately out of
-    /// Mixing a v1/v2 tar input with a v3 SQLite one works: the tar side is
-    /// upgraded on the way in, so by the time anything is assembled every
-    /// input is the same shape and the output is v3.
-    ///
-    /// This replaces a test that asserted the opposite. Refusing the mix was
-    /// never a property worth having — it was the absence of a converter.
+    /// Parquet inputs become a recording each, labelled with each file's
+    /// `source` as the viewer labels a parquet file.
     #[test]
-    fn combine_upgrades_a_tar_input_and_mixes_it_with_a_v3_one() {
-        use crate::recorder::rez::recorder_tests_support::populated_v3_rez;
-        let dir = tempfile::tempdir().unwrap();
-        let a = crate::recorder::rez_stream::write_segmented_rez(
-            &dir.path().join("a.rez"),
-            "rezolus",
-            [("arm".to_string(), "baseline".to_string())]
-                .into_iter()
-                .collect(),
-            &["cpu_usage"],
-            4,
-            2,
-            true,
-        );
-        let b = dir.path().join("b.rez");
-        populated_v3_rez(&b, "experiment", &["cpu_usage"], 4);
-        assert_eq!(
-            crate::recorder::rez::detect_rez_format(&a).unwrap(),
-            crate::recorder::rez::RezFormat::V2Tar,
-            "fixture sanity: must actually be a v2 tar archive"
-        );
-        assert_eq!(
-            crate::recorder::rez::detect_rez_format(&b).unwrap(),
-            crate::recorder::rez::RezFormat::V3Sqlite,
-            "fixture sanity: must actually be a v3 SQLite archive"
-        );
-        let out = dir.path().join("out.rez");
-
-        run_combine(&[a, b], &out).unwrap();
-
-        assert_eq!(
-            crate::recorder::rez::detect_rez_format(&out).unwrap(),
-            crate::recorder::rez::RezFormat::V3Sqlite,
-            "a mixed combine still produces a v3 archive"
-        );
-        let db = crate::recorder::rez_sqlite::RezDb::open(&out).unwrap();
-        let recordings = db.read_recordings().unwrap();
-        assert_eq!(recordings.len(), 2, "both inputs contributed a recording");
-        let arms: Vec<&str> = recordings
-            .iter()
-            .filter_map(|r| r.meta.labels.get("arm").map(String::as_str))
-            .collect();
-        assert_eq!(arms, vec!["baseline", "experiment"]);
-        for rec in &recordings {
-            let tables = db.all_samplers(rec.id).unwrap();
-            assert!(!tables.is_empty(), "a recording came across with no tables");
-            for t in &tables {
-                assert!(
-                    db.total_rows(rec.id, t).unwrap() > 0,
-                    "table {t} came across with no rows"
-                );
-            }
-        }
-    }
-
-    /// `combine a.parquet b.parquet -o out.rez` assembles a multi-recording
-    /// `.rez`, one recording per parquet, labelled from each file's source —
-    /// the `.rez` replacement for `combine --ab`.
-    #[test]
-    fn combine_parquet_inputs_into_a_multi_recording_rez() {
+    fn combine_parquet_inputs_into_a_multi_recording_archive() {
         let (_t1, p1) = make_test_file(
             &[100 * SEC, 200 * SEC],
             "m1",
@@ -4137,50 +970,59 @@ mod tests {
             "1000",
         );
         let dir = tempfile::tempdir().unwrap();
-        let out = dir.path().join("ab.rez");
-
-        combine_parquet_to_rez(&[p1, p2], &out, &AbPlan::Nothing).unwrap();
-
-        let db = crate::recorder::rez_sqlite::RezDb::open(&out).unwrap();
-        let recs = db.read_recordings().unwrap();
-        assert_eq!(recs.len(), 2, "one recording per parquet input");
-        let sources: std::collections::BTreeSet<String> = recs
-            .iter()
-            .filter_map(|r| r.meta.labels.get("source").cloned())
+        let out = dir.path().join("ab.dendro");
+        run_combine(&[p1, p2], &out).unwrap();
+        let sources: std::collections::BTreeSet<String> = archive_labels(&out)
+            .into_iter()
+            .filter_map(|l| l.get("source").cloned())
             .collect();
         assert_eq!(
             sources,
             ["redis".to_string(), "valkey".to_string()]
                 .into_iter()
-                .collect(),
-            "recordings are labelled from each parquet's source"
+                .collect()
         );
-        // Each metric has no `sampler` metadata, so it lands in one
-        // `unattributed` table per recording, carrying its rows.
-        for r in &recs {
-            assert!(
-                db.total_rows(r.id, "unattributed").unwrap() > 0,
-                "the ingested recording kept its rows"
-            );
-        }
     }
 
-    /// A `.rez` output that already exists is not silently overwritten — the
-    /// same guard the recorder and `filter` carry.
+    /// 6.x writes `.dendro` only: a `.rez`, `.parquet` or `.parquet.ab.tar`
+    /// output is refused, naming the `.dendro` to give, as are the row-merge
+    /// flags and an existing output; nothing is written.
     #[test]
-    fn combine_parquet_to_rez_refuses_to_overwrite() {
-        let (_t1, p1) = make_test_file(&[100 * SEC], "m1", &[Some(1)], "redis", "1000");
+    fn combine_refuses_every_output_but_a_new_dendro() {
         let dir = tempfile::tempdir().unwrap();
-        let out = dir.path().join("ab.rez");
+        let (a, b) = (dir.path().join("a.dendro"), dir.path().join("b.dendro"));
+        crate::dendro_copy::fixtures::recorded(&a, 4, true);
+        crate::dendro_copy::fixtures::recorded(&b, 4, true);
+        for name in ["out.rez", "out.parquet", "out.parquet.ab.tar"] {
+            let out = dir.path().join(name);
+            let err = run_combine(&[a.clone(), b.clone()], &out)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(".dendro archives only"), "{name}: {err}");
+            assert!(!out.exists(), "{name}");
+        }
+        let out = dir.path().join("out.dendro");
+        for flags in [&["--pinned", "x"][..], &["--bypass-time-check"][..]] {
+            let mut args: Vec<String> = vec!["parquet".into(), "combine".into()];
+            args.extend(
+                [a.clone(), b.clone()]
+                    .iter()
+                    .map(|f| f.display().to_string()),
+            );
+            args.extend(["-o".to_string(), out.display().to_string()]);
+            args.extend(flags.iter().map(|s| s.to_string()));
+            let matches = crate::parquet_tools::command()
+                .try_get_matches_from(args)
+                .unwrap();
+            let err = run(matches.subcommand().unwrap().1)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("does not write"), "{flags:?}: {err}");
+        }
         std::fs::write(&out, b"existing").unwrap();
-
-        let err = combine_parquet_to_rez(&[p1], &out, &AbPlan::Nothing)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("already exists"),
-            "explains the refusal: {err}"
-        );
+        let err = run_combine(&[a, b], &out).unwrap_err().to_string();
+        assert!(err.contains("already exists"), "{err}");
+        assert_eq!(std::fs::read(&out).unwrap(), b"existing");
     }
 
     /// Two dendro archives become one with a source each, still long and
@@ -4271,47 +1113,102 @@ mod tests {
         }
     }
 
-    /// The same source twice would count every value twice: refused, and
-    /// nothing is left at the output.
+    /// A recording and its snapshot (one uuid) combine into two sources that
+    /// read as one recording, answering as the recording alone: copies are
+    /// read once (metriken-storage process groups), so nothing is counted
+    /// twice.
     #[test]
-    fn combine_refuses_the_same_dendro_source_twice() {
+    fn a_recording_and_its_copy_combine_into_one_recording() {
+        use metriken_query::MetricsSource;
         let dir = tempfile::tempdir().unwrap();
         let a = dir.path().join("a.dendro");
-        crate::dendro_copy::fixtures::recorded(&a, 4, true);
+        crate::dendro_copy::fixtures::recorded(&a, 6, true);
         let copy = dir.path().join("copy.dendro");
         crate::parquet_tools::snapshot_rez(&a, &copy).unwrap();
         let out = dir.path().join("twice.dendro");
-        let err = run_combine(&[a, copy], &out).unwrap_err();
-        assert!(err.to_string().contains("same source"), "{err}");
-        assert!(!out.exists());
+        run_combine(&[a.clone(), copy], &out).unwrap();
+
+        let sources = dendro::archive::Archive::open(&out)
+            .unwrap()
+            .read_sources()
+            .unwrap();
+        assert_eq!(sources.len(), 2, "both sources are kept");
+        let pool = || metriken_storage::BufferPool::new(64 * 1024 * 1024);
+        let both = crate::rez_reader::RezReader::open_recordings(&out, pool()).unwrap();
+        assert_eq!(both.len(), 1, "one recording");
+        let alone = crate::rez_reader::RezReader::open_recordings(&a, pool()).unwrap();
+        let answer = |r: &dyn MetricsSource| {
+            let (start, end) = r.time_range().unwrap();
+            serde_json::to_value(
+                r.query_range("sum(irate(task_ops[3s]))", start, end, 1.0)
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(answer(&both[0].1), answer(&alone[0].1));
     }
 
-    /// A `.rez` input joins a `.dendro` output by conversion; a dendro input
-    /// with a `.rez` output, and a parquet input with a `.dendro` output, are
-    /// refused before anything is created.
+    /// metriken-query 0.42 reads each process group once, and these are the
+    /// cases that decide a group. Two sources with one `producer_epoch`
+    /// whose spans overlap (one agent process recorded twice) are one
+    /// recording, answering what either answers alone, not the sum; with
+    /// disjoint spans they are two; with different epochs they are two
+    /// (the control); and an archive combined with its own snapshot (the
+    /// same uuid) is one.
     #[test]
-    fn combine_into_dendro_converts_a_rez_and_refuses_the_rest() {
+    fn producer_epoch_decides_which_sources_are_one_recording() {
+        use ::rez::fixtures::{counter, map, snap_counters, write_dendro, Finish, Source, ANCHOR};
+        use metriken_query::MetricsSource;
         let dir = tempfile::tempdir().unwrap();
-        let rez = rez::fixtures::committed_rez("v3.rez", dir.path());
-        let d = dir.path().join("b.dendro");
-        crate::dendro_copy::fixtures::recorded(&d, 4, true);
+        let source = |epoch: &str, ticks: std::ops::Range<u64>| Source {
+            labels: map(&[("source", "rezolus")]),
+            metadata: map(&[("producer_epoch", epoch)]),
+            rows: ticks
+                .map(|i| {
+                    let ts = ANCHOR + i * 1_000_000_000;
+                    let w = Some(::rez::window::Window::new(ts - 50_000_000, ts));
+                    (snap_counters(ts, vec![counter("ops", "s", 10 * i, w)]), ts)
+                })
+                .collect(),
+        };
+        let pool = || metriken_storage::BufferPool::new(16 * 1024 * 1024);
+        let open = |name: &str, sources: &[Source]| {
+            let path = dir.path().join(name);
+            write_dendro(&path, sources, None, Finish::Finalized);
+            (
+                path.clone(),
+                crate::rez_reader::RezReader::open_recordings(&path, pool()).unwrap(),
+            )
+        };
+        let answer = |r: &dyn MetricsSource| {
+            let (start, end) = r.time_range().unwrap();
+            serde_json::to_value(
+                r.query_range("sum(irate(ops[2s]))", start, end, 1.0)
+                    .unwrap(),
+            )
+            .unwrap()
+        };
 
-        let out = dir.path().join("mixed.dendro");
-        run_combine(&[rez.clone(), d.clone()], &out).unwrap();
-        let db = dendro::archive::Archive::open(&out).unwrap();
-        assert_eq!(db.read_sources().unwrap().len(), 2);
-
-        let rez_out = dir.path().join("out.rez");
-        let err = run_combine(&[rez.clone(), d.clone()], &rez_out).unwrap_err();
-        assert!(err.to_string().contains("is a dendro archive"), "{err}");
-        assert!(!rez_out.exists(), "refused before the output was created");
-
-        let parquet = dir.path().join("x.parquet");
-        std::fs::write(&parquet, b"PAR1").unwrap();
-        let err = run_combine(&[parquet, d], &dir.path().join("p.dendro")).unwrap_err();
-        assert!(
-            err.to_string().contains("takes .rez and .dendro inputs"),
-            "{err}"
+        let (one_path, one) = open("one.dendro", &[source("E", 0..6)]);
+        let (_, twice) = open("twice.dendro", &[source("E", 0..6), source("E", 0..6)]);
+        assert_eq!(
+            twice.len(),
+            1,
+            "one process recorded twice is one recording"
         );
+        assert_eq!(answer(&twice[0].1), answer(&one[0].1), "read once");
+
+        let (_, apart) = open("apart.dendro", &[source("E", 0..4), source("E", 10..14)]);
+        assert_eq!(apart.len(), 2, "one epoch, disjoint spans: two recordings");
+        let (_, other) = open("other.dendro", &[source("E", 0..6), source("F", 0..6)]);
+        assert_eq!(other.len(), 2, "different epochs: two recordings");
+
+        let copy = dir.path().join("copy.dendro");
+        crate::parquet_tools::snapshot_rez(&one_path, &copy).unwrap();
+        let out = dir.path().join("with-copy.dendro");
+        run_combine(&[one_path, copy], &out).unwrap();
+        let both = crate::rez_reader::RezReader::open_recordings(&out, pool()).unwrap();
+        assert_eq!(both.len(), 1, "a source and its copy are one recording");
+        assert_eq!(answer(&both[0].1), answer(&one[0].1));
     }
 }

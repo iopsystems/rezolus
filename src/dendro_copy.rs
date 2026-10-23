@@ -106,6 +106,7 @@ pub(crate) mod fixtures {
             counters: vec![member(0, "nginx"), member(1, "redis")],
             gauges: Vec::new(),
             histograms: Vec::new(),
+            gauge_histograms: Vec::new(),
         };
         let memory = GroupSchema {
             counters: Vec::new(),
@@ -117,6 +118,7 @@ pub(crate) mod fixtures {
                     .collect(),
             }],
             histograms: Vec::new(),
+            gauge_histograms: Vec::new(),
         };
         let window = Some(metriken::Window::new(ts - SECOND / 2, ts));
         Snapshot::V3(SnapshotV3 {
@@ -132,6 +134,7 @@ pub(crate) mod fixtures {
                     counters: vec![Some(i * 10), Some(i * 20)],
                     gauges: Vec::new(),
                     histograms: Vec::new(),
+                    gauge_histograms: Vec::new(),
                 },
                 GroupSnapshot {
                     name: "memory/meminfo".to_string(),
@@ -141,6 +144,7 @@ pub(crate) mod fixtures {
                     counters: Vec::new(),
                     gauges: vec![Some(1_000 - i as i64)],
                     histograms: Vec::new(),
+                    gauge_histograms: Vec::new(),
                 },
             ],
         })

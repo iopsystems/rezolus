@@ -22,7 +22,8 @@ static LATENCY_ACQ_REG: &'static AcquisitionGroup = &LATENCY_ACQ;
     description = "Distribution of latency from a socket becoming readable until a userspace read",
     metadata = { unit = "nanoseconds", acq_group = "tcp_packet_latency_latency" }
 )]
-pub static TCP_PACKET_LATENCY: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static TCP_PACKET_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "rezolus_bpf_run_count",

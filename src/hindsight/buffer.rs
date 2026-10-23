@@ -995,6 +995,7 @@ mod tests {
             window: Some(metriken::Window::new(ts - SECOND / 2, ts)),
             gauges: Vec::new(),
             histograms: Vec::new(),
+            gauge_histograms: Vec::new(),
         };
         (
             Snapshot::V3(SnapshotV3 {

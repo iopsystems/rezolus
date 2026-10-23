@@ -126,6 +126,7 @@ mod tests {
                 counters: vec![],
                 gauges,
                 histograms: vec![],
+                gauge_histograms: Vec::new(),
             },
         ));
         store
@@ -149,6 +150,7 @@ mod tests {
                 counters: vec![],
                 gauges,
                 histograms: vec![],
+                gauge_histograms: Vec::new(),
             },
         ));
         store

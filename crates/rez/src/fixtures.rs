@@ -175,6 +175,37 @@ pub fn snap(ts: u64, counters: Vec<Counter>, gauges: Vec<Gauge>) -> Snapshot {
         counters,
         gauges,
         histograms: Vec::new(),
+        gauge_histograms: Vec::new(),
+    })
+}
+
+/// A V2 snapshot at `ts` holding one gauge histogram named `name` in
+/// `sampler`, one count at `value`: the state at `ts`, which a reader never
+/// differences.
+pub fn snap_gauge_histogram(ts: u64, name: &str, sampler: &str, value: u64) -> Snapshot {
+    let mut h = ::histogram::Histogram::new(7, 64).unwrap();
+    h.increment(value).unwrap();
+    let hist = metriken_exposition::Histogram::new(
+        name.to_string(),
+        h,
+        meta(&[
+            ("metric", name),
+            ("sampler", sampler),
+            // The query engine reads the bucket layout from these, as the
+            // agent's snapshots carry them.
+            ("grouping_power", "7"),
+            ("max_value_power", "64"),
+        ]),
+    )
+    .with_window(Some(Window::new(ts - 50_000_000, ts)));
+    Snapshot::V2(SnapshotV2 {
+        systemtime: SystemTime::UNIX_EPOCH + Duration::from_nanos(ts),
+        duration: Duration::ZERO,
+        metadata: HashMap::new(),
+        counters: Vec::new(),
+        gauges: Vec::new(),
+        histograms: Vec::new(),
+        gauge_histograms: vec![hist],
     })
 }
 

@@ -225,7 +225,7 @@ fn read_tools() -> Vec<Value> {
                 "properties": {
                     "parquet_file": {
                         "type": "string",
-                        "description": "Path to the recording (parquet or .rez)"
+                        "description": "Path to the recording (.dendro, .rez or .parquet)"
                     },
                     "recording": {
                         "type": "object",
@@ -262,8 +262,9 @@ fn additive_tools() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "parquet_file": {"type": "string", "description": "Path to the recording (parquet or .rez)"},
+                    "parquet_file": {"type": "string", "description": "Path to the recording (.dendro, .rez or .parquet)"},
                     "recording": recording_property(),
+                    "output": {"type": "string", "description": "A new .dendro to write the edited recording to. Required when parquet_file is a .rez or .parquet, which 6.x does not change (it is converted there and the copy written); for a .dendro, write a copy instead of editing it in place."},
                     "timestamp": {"type": ["string", "number"], "description": "When the event starts: an RFC 3339 string (e.g. 2026-09-28T14:03:11Z), or Unix seconds as a JSON number (never as a string: a digit-only string is refused as ambiguous)."},
                     "description": {"type": "string", "description": "One line, what happened. Shown on the timeline."},
                     "kind": {"type": "string", "description": "A short category such as deploy, incident, spike, or finding. Alignment and filters key on it."},
@@ -279,14 +280,15 @@ fn additive_tools() -> Vec<Value> {
         }),
         json!({
             "name": "run_checks",
-            "description": "Evaluate the recording's KPI checks (the `check` blocks embedded by `recording annotate --queries`, or the ones in `queries`) and return each verdict with its violation windows. With annotate=true the violation windows are also written into the recording as kind=check events, the same as `rezolus recording check --annotate`. On a multi-recording .rez with no `recording` selector every recording is evaluated and each gets its own verdicts, as the CLI does.",
+            "description": "Evaluate the recording's KPI checks (the `check` blocks embedded by `recording annotate --queries`, or the ones in `queries`) and return each verdict with its violation windows. With annotate=true the violation windows are also written into the recording as kind=check events, the same as `rezolus recording check --annotate` (into `output` for a .rez or .parquet). On a multi-recording archive with no `recording` selector every recording is evaluated and each gets its own verdicts, as the CLI does.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "parquet_file": {"type": "string", "description": "Path to the recording (parquet or .rez)"},
+                    "parquet_file": {"type": "string", "description": "Path to the recording (.dendro, .rez or .parquet)"},
                     "recording": recording_property(),
                     "queries": {"type": "object", "description": "A ServiceExtension object evaluated instead of the recording's embedded KPIs: {\"service_name\": \"...\", \"kpis\": [{\"role\": \"...\", \"title\": \"...\", \"query\": \"<PromQL producing ONE series>\", \"type\": \"gauge\"|\"counter\"|\"histogram\", \"check\": {\"above\": N} | {\"below\": N}, optional \"quantile\", \"for\" (seconds), \"severity\": \"fail\"|\"warn\"}]}."},
-                    "annotate": {"type": "boolean", "description": "Write the violation windows into the recording as events. Default false."}
+                    "annotate": {"type": "boolean", "description": "Write the violation windows into the recording as events. Default false."},
+                    "output": {"type": "string", "description": "A new .dendro to write the edited recording to. Required when parquet_file is a .rez or .parquet, which 6.x does not change (it is converted there and the copy written); for a .dendro, write a copy instead of editing it in place."}
                 },
                 "required": ["parquet_file"]
             }
@@ -297,7 +299,7 @@ fn additive_tools() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "parquet_file": {"type": "string", "description": "Path to the recording (parquet or .rez)"},
+                    "parquet_file": {"type": "string", "description": "Path to the recording (.dendro, .rez or .parquet)"},
                     "recording": recording_property(),
                     "query": {"type": "string", "description": "PromQL expression, as for the query tool. A heatmap result is refused: export histogram_quantile(...) of it instead."},
                     "format": {"type": "string", "enum": ["csv", "parquet"], "description": "Default csv."},
@@ -342,8 +344,9 @@ fn mutating_tools() -> Vec<Value> {
         "inputSchema": {
             "type": "object",
             "properties": {
-                "parquet_file": {"type": "string", "description": "Path to the recording (parquet or .rez)"},
+                "parquet_file": {"type": "string", "description": "Path to the recording (.dendro, .rez or .parquet)"},
                 "recording": recording_property(),
+                "output": {"type": "string", "description": "A new .dendro to write the edited recording to. Required when parquet_file is a .rez or .parquet, which 6.x does not change (it is converted there and the copy written); for a .dendro, write a copy instead of editing it in place."},
                 "ids": {"type": "array", "items": {"type": "string"}, "description": "Event ids to remove (as returned by add_event, or check:<hash> for verdicts)."},
                 "kind": {"type": "string", "description": "Remove events of this kind."},
                 "source": {"type": "string", "description": "Remove events with this source, e.g. mcp for every agent-written event."}
@@ -1185,12 +1188,14 @@ impl Server {
             id: Some(id.clone()),
             chart_id: None,
         };
+        let output = opt_str(arguments, "output")?;
         let report = crate::parquet_tools::events::add_events_selected(
             Path::new(parquet_file),
+            output.as_deref().map(Path::new),
             &selector,
             vec![event],
         )?;
-        self.evict(parquet_file);
+        self.evict(output.as_deref().unwrap_or(parquet_file));
         let outcome = if report.counts.new > 0 {
             "added"
         } else if report.counts.updated > 0 {
@@ -1205,9 +1210,9 @@ impl Server {
             "outcome": outcome,
             "recording": report.recording,
             "events_in_recording": report.total,
-            "file": parquet_file,
-            // The writer's own line, which is where a v1/v2 tar archive
-            // says it was upgraded to v3 on the way.
+            "file": output.as_deref().unwrap_or(parquet_file),
+            // The writer's own line, after the line saying what a legacy
+            // input was converted to.
             "report": report.report,
         }))?)
     }
@@ -1235,17 +1240,19 @@ impl Server {
             kind: opt_str(arguments, "kind")?,
             source: opt_str(arguments, "source")?,
         };
+        let output = opt_str(arguments, "output")?;
         let report = crate::parquet_tools::events::remove_events_selected(
             Path::new(parquet_file),
+            output.as_deref().map(Path::new),
             &selector,
             &filter,
         )?;
-        self.evict(parquet_file);
+        self.evict(output.as_deref().unwrap_or(parquet_file));
         Ok(serde_json::to_string_pretty(&json!({
             "removed": report.removed,
             "recording": report.recording,
             "events_in_recording": report.total,
-            "file": parquet_file,
+            "file": output.as_deref().unwrap_or(parquet_file),
             "report": report.report,
         }))?)
     }
@@ -1292,12 +1299,19 @@ impl Server {
             annotated = Some(if n == 0 {
                 "nothing to annotate: no violation windows".to_string()
             } else {
+                let output = opt_str(arguments, "output")?;
                 let line = crate::parquet_tools::check::annotate_events(
                     path,
-                    run.format,
+                    output.as_deref().map(Path::new),
                     run.per_recording_events.clone(),
+                    |suggested| {
+                        format!(
+                            "pass \"output\": {:?} (a new .dendro the events are written to)",
+                            suggested.display().to_string()
+                        )
+                    },
                 )?;
-                self.evict(parquet_file);
+                self.evict(output.as_deref().unwrap_or(parquet_file));
                 line
             });
         }

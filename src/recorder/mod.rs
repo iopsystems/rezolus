@@ -7,19 +7,10 @@ mod endpoint;
 /// The replication stream, read through `metriken-recorder`, and the wire
 /// names older agents serve it under.
 pub(crate) mod stream;
-// The `.rez` format lives in its own crate so the WASM viewer can read the
-// archives this binary writes (`rezolus` is binary-only, so nothing could
-// depend on it). Re-exported under the paths call sites already use.
-/// The tar (v1/v2) `.rez` writer, kept only so tests can build v1/v2 fixtures.
-///
-/// Nothing ships that writes this container any more: `record` writes v3, and
-/// `combine`/`filter`/`annotate`/`parquet upgrade` convert a tar archive
-/// rather than producing one. Proving that tar archives still READ, though,
-/// requires being able to construct one — which is what the `rez` crate's
-/// `test-support` feature (a dev-dependency here) exists for.
-#[cfg(test)]
-pub(crate) use ::rez::rez_stream;
-pub(crate) use ::rez::{parquet_ingest, rez, rez_sqlite, rez_v3_rewrite, seal_policy, wire};
+// The `.rez` format lives in its own crate so the WASM viewer can read it
+// (`rezolus` is binary-only, so nothing could depend on it). Re-exported under
+// the paths call sites already use. 6.x reads `.rez` and writes none.
+pub(crate) use ::rez::{rez, rez_sqlite, wire};
 #[cfg(test)]
 pub(crate) use ::rez::{schema, wal};
 

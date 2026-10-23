@@ -40,6 +40,7 @@ mod tests {
                 .collect(),
             gauges: Vec::new(),
             histograms: Vec::new(),
+            gauge_histograms: Vec::new(),
         }
     }
 
@@ -51,6 +52,7 @@ mod tests {
             counters: (0..n).map(|i| Some(i as u64)).collect(),
             gauges: Vec::new(),
             histograms: Vec::new(),
+            gauge_histograms: Vec::new(),
         })
         .unwrap()
     }

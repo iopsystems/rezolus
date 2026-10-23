@@ -142,8 +142,37 @@
   the same `output`, `format` and `separate = true` in a `--config` file.
   The refusal quotes the path as it was given (`-o`, the positional OUTPUT,
   or the config file's `output`) and names a 5.x recorder (5.27.0 or later),
-  which still writes those formats; `rezolus recording upgrade --to dendro`
-  converts a `.rez`. Reading `.rez` and parquet is unchanged.
+  which still writes those formats; `rezolus recording upgrade` converts a
+  `.rez` or a parquet file. Reading `.rez` and parquet is unchanged.
+- **The `recording` tools write `.dendro` only, and never change a `.rez` or
+  a parquet file.** metriken-storage 0.5 has no `.rez` writer; legacy
+  recordings are converted with its converters (0.5.1).
+  - `combine` writes one `.dendro` from any mix of `.dendro`, `.rez` and
+    `.parquet` inputs, a recording per input recording; `--ab` is kept and
+    labels each input's recordings `arm=baseline`/`arm=experiment`. An
+    output ending in `.parquet` (the row-merge), `.parquet.ab.tar` or `.rez`
+    is refused, naming `-o <name>.dendro`, and so are `--pinned`,
+    `--category` and `--bypass-time-check`, which applied to those outputs.
+  - `filter`, `annotate` and `check --annotate` edit a `.dendro` in place,
+    or a copy given `-o`. A `.rez` or `.parquet` input needs `-o
+    <new>.dendro`; without it the command is refused (exit 1; `check`, exit
+    2) and the error prints the command line with `-o` added. A parquet
+    `filter` with neither `--samplers` nor `--metrics` keeps the metrics its
+    KPIs name, as before. `annotate`'s `--undo`, `--node`, `--source`,
+    `--systeminfo` and `--filter` edited a parquet footer; they are ignored
+    with a warning.
+  - `snapshot` of a `.rez` writes a `.dendro`.
+  - `upgrade` converts any `.rez` (v1, v2, v3) or `.parquet` into a
+    `.dendro` (`<input>.dendro` without `-o`); `--to v3` is refused.
+  - `convert` turns a raw msgpack recording into a `.dendro`.
+  - The MCP server's `add_event`, `remove_events` and `run_checks`
+    (`annotate=true`) take an `output` path, required for a `.rez` or
+    parquet recording, as `-o` is. `export_query` is unchanged.
+- **Save as Report writes a `.dendro`**, in the server viewer and the static
+  site, from a `.dendro`, a `.rez` or one or two parquet files. A two-file
+  parquet compare is saved with `arm=baseline`/`arm=experiment`, so it
+  reopens as the comparison. The static site refuses a report of a v3 `.rez`,
+  which converts by path only, and names `rezolus view`.
 - **`record` refuses every Rezolus agent that cannot stream.** An agent older
   than 5.21.0, a v2 agent, or a stream route that answers 404, 409 or a
   foreign content type is refused at startup (exit 1, nothing written) or,
@@ -201,6 +230,20 @@
   An `asusec` temperature channel reading -40 °C, the driver's value for an
   empty header, is skipped. `[samplers.hw_sensors] enabled = false` turns it off, and an
   existing config that sets it keeps the sampler off.
+- **metriken 0.11.4, metriken-exposition 0.25, metriken-model 0.2,
+  metriken-storage 0.5.1, metriken-query 0.42, metriken-recorder 0.5.** The
+  counting histogram types are named for their kind (`AtomicCounterHistogram`,
+  `RwLockCounterHistogram`, `CounterHistogramGroup`).
+- **A recording and its copies are read once.** metriken-query 0.42 forms
+  process groups: sources that share a uuid (a source and its snapshot or
+  hindsight dump), or share a `producer_epoch` and overlap in time (one agent
+  process recorded twice), are one recording; one epoch with disjoint spans
+  is two. `rezolus view`, `mcp` (its `--recording` selectors and
+  `describe-recording`), `recording check` and `annotate` list and select
+  these recordings, and an edit of one is written to each of its sources.
+  `recording combine` no longer refuses inputs that share a source uuid. A
+  query's `__recording__` is the archive index of a recording's first
+  source.
 - **Archives written are dendro schema 5** (dendro 0.6, metriken-storage
   0.4, metriken-query 0.41, metriken-exposition 0.24, metriken-recorder
   0.4). Every `.dendro` this release creates (`record`, hindsight buffers
@@ -994,6 +1037,10 @@
 
 ### Added
 
+- **Gauge histograms are read.** A `.dendro` holding gauge histograms
+  (metriken 0.11.4's `GaugeHistogram`) lists and queries them through every
+  viewer reader (`RezReader`, `LiveReader`, and the combined and per-recording
+  views).
 - **`record --endpoint url,template=FILE` attaches a KPI template to an
   endpoint's recording.** The file, a `ServiceExtension` JSON as `recording
   annotate --queries` takes, is written into that recording's metadata as

@@ -235,6 +235,7 @@ fn empty_snapshot() -> Vec<u8> {
         counters: Vec::new(),
         gauges: Vec::new(),
         histograms: Vec::new(),
+        gauge_histograms: Vec::new(),
     });
 
     // Encoding a struct of empty vecs cannot fail, but an exporter that is

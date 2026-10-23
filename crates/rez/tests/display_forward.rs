@@ -83,6 +83,7 @@ fn archive(path: &std::path::Path) {
             counters,
             gauges: Vec::new(),
             histograms: Vec::new(),
+            gauge_histograms: Vec::new(),
         });
         let staged = r.stage(&snapshot, ts, 0).unwrap();
         writer.commit(vec![staged]).unwrap();

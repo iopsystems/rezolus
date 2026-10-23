@@ -7,7 +7,7 @@ use super::*;
 use crate::agent::external_metrics::{ExternalMetric, ExternalMetricValue};
 use linkme::distributed_slice;
 use metriken::{
-    AtomicHistogram, Counter, CounterGroup, DynBoxedMetric, Gauge, GaugeGroup, MetricBuilder,
+    AtomicCounterHistogram, Counter, CounterGroup, DynBoxedMetric, Gauge, GaugeGroup, MetricBuilder,
 };
 use metriken_exposition::{GroupSchema, GroupSnapshot, SnapshotV3};
 
@@ -109,6 +109,7 @@ fn expected(members: Vec<Want>) -> (GroupSchema, Values) {
         counters: Vec::new(),
         gauges: Vec::new(),
         histograms: Vec::new(),
+        gauge_histograms: Vec::new(),
     };
     let mut values: Values = (Vec::new(), Vec::new(), Vec::new());
     for (pos, w) in members {
@@ -299,6 +300,7 @@ fn assert_external(tick: &str, g: &GroupSnapshot, generation: u64) {
                 &[("grouping_power", "2"), ("max_value_power", "4")],
             ),
         }],
+        gauge_histograms: Vec::new(),
     };
     assert_eq!(
         g.schema.as_deref(),
@@ -346,8 +348,8 @@ fn run_v3_contract(build: &mut dyn FnMut(Vec<ExternalMetric>) -> Snapshot) {
         in_group("v3c_d_cgroup", "v3_contract_declared").build(CounterGroup::new(6));
     let d_ggroup: DynBoxedMetric<GaugeGroup> =
         in_group("v3c_d_ggroup", "v3_contract_declared").build(GaugeGroup::new(4));
-    let d_hist: DynBoxedMetric<AtomicHistogram> =
-        in_group("v3c_d_hist", "v3_contract_declared").build(AtomicHistogram::new(4, 10));
+    let d_hist: DynBoxedMetric<AtomicCounterHistogram> =
+        in_group("v3c_d_hist", "v3_contract_declared").build(AtomicCounterHistogram::new(4, 10));
     CONTRACT_BOUNDED.set_member_bound(3);
     let b_cgroup: DynBoxedMetric<CounterGroup> =
         in_group("v3c_b_cgroup", "v3_contract_bounded").build(CounterGroup::new(8));
@@ -364,8 +366,8 @@ fn run_v3_contract(build: &mut dyn FnMut(Vec<ExternalMetric>) -> Snapshot) {
         MetricBuilder::new("v3c_x_cgroup").build(CounterGroup::new(4));
     let x_ggroup: DynBoxedMetric<GaugeGroup> =
         MetricBuilder::new("v3c_x_ggroup").build(GaugeGroup::new(4));
-    let x_hist: DynBoxedMetric<AtomicHistogram> =
-        MetricBuilder::new("v3c_x_hist").build(AtomicHistogram::new(4, 10));
+    let x_hist: DynBoxedMetric<AtomicCounterHistogram> =
+        MetricBuilder::new("v3c_x_hist").build(AtomicCounterHistogram::new(4, 10));
     let x_counter: DynBoxedMetric<Counter> =
         MetricBuilder::new("v3c_x_counter").build(Counter::new());
     let log_counter: DynBoxedMetric<Counter> =

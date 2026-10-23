@@ -198,7 +198,7 @@ pub fn run(config: Config) {
     // writer's 900 rows is a segment per ~15 minutes at the default 1 s
     // interval, which a faster buffer wants smaller. Everything else about the
     // seal policy — the byte cap and the age cap — stays the writer's.
-    let mut policy = crate::recorder::seal_policy::SealPolicy::default();
+    let mut policy = dendro::seal::SealPolicy::default();
     if let Some(rows) = config.general().segment_rows() {
         // `max(1)`: a zero row target would seal a one-row segment every tick
         // forever rather than doing anything useful with the 0.
@@ -206,12 +206,7 @@ pub fn run(config: Config) {
     }
     let mut recorder_cfg = mr::RecorderConfig::new(buffer_path.clone(), interval_dur);
     recorder_cfg.writer = metriken_storage::WriterConfig {
-        seal: dendro::seal::SealPolicy {
-            max_bytes: policy.max_bytes,
-            max_rows: policy.max_rows,
-            max_age: policy.max_age,
-            align: None,
-        },
+        seal: policy,
         ..metriken_storage::WriterConfig::default()
     };
     recorder_cfg.timeout = timeout;
