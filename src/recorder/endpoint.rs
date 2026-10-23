@@ -67,6 +67,11 @@ pub struct EndpointConfig {
     /// to label the recording (`Event::LabelsNotApplied`).
     #[serde(default)]
     pub host: Option<String>,
+    /// The `--endpoint` argument this was parsed from, as typed; `None` for
+    /// an endpoint from a config file or `--url`. Messages that suggest a
+    /// changed `--endpoint` build on it.
+    #[serde(skip)]
+    pub arg: Option<String>,
 }
 
 impl EndpointConfig {

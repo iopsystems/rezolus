@@ -32,20 +32,30 @@ pub type LabeledRecordings = Vec<(BTreeMap<String, String>, RezReader)>;
 /// (`parquet_metadata::KEY_EVENTS` in the binary).
 const KEY_EVENTS: &str = "events";
 
-/// The metadata of a read group of several sources: the first source's,
-/// with `events` the union of every source's events. Events are records a
-/// source gains one at a time (an annotate of a copy, a check of the
-/// original), so the group shows each of them once: deduplicated by `id`,
-/// the first source's copy kept, and an event with no `id` kept unless an
-/// identical one is already there; sorted by timestamp. Every other key
-/// (KPIs, systeminfo, descriptions, the agent version) is a whole value with
-/// no merge rule; the sources of a group are copies of one recording or
-/// recordings of one agent process, which agree on them unless one was
-/// edited alone, and then the first source's (the archive's earliest) wins.
-/// A payload that does not parse is skipped, as a reader of one source
-/// would fail to read it.
+/// The metadata of a read group of several sources. `events` is the union
+/// of every source's events: events are records a source gains one at a
+/// time (an annotate of a copy, a check of the original), so the group
+/// shows each of them once, deduplicated by `id` (the first source's copy
+/// kept), an event with no `id` kept unless an identical one is already
+/// there, sorted by timestamp. Every other key (KPIs, systeminfo,
+/// descriptions, the agent version) is a whole value with no merge rule, and
+/// is taken from the first source (in archive order) that has it: the
+/// sources of a group are copies of one recording or recordings of one
+/// agent process, so they agree on a key both hold unless one was edited
+/// alone, and a key only one holds (KPIs annotated onto a snapshot before it
+/// was combined with its original) is the group's whichever order they were
+/// combined in. So removing KPIs from one copy (`recording annotate --undo`)
+/// does not remove them from a combined recording whose other source still
+/// has them; annotate the combined recording instead, which edits every
+/// source. A payload that does not parse is skipped, as a reader of one
+/// source would fail to read it.
 fn group_metadata(members: &[ArchiveReader]) -> HashMap<String, String> {
-    let mut metadata = members[0].file_metadata();
+    let mut metadata: HashMap<String, String> = HashMap::new();
+    for member in members {
+        for (key, value) in member.file_metadata() {
+            metadata.entry(key).or_insert(value);
+        }
+    }
     let mut events: Vec<serde_json::Value> = Vec::new();
     let mut ids = std::collections::HashSet::new();
     let mut payloads = 0;
@@ -70,6 +80,7 @@ fn group_metadata(members: &[ArchiveReader]) -> HashMap<String, String> {
             }
         }
     }
+    // One payload is already in `metadata` as it is.
     if payloads > 1 {
         events.sort_by_key(|e| {
             (
@@ -80,12 +91,6 @@ fn group_metadata(members: &[ArchiveReader]) -> HashMap<String, String> {
                     .to_string(),
             )
         });
-        metadata.insert(
-            KEY_EVENTS.to_string(),
-            serde_json::json!({ KEY_EVENTS: events }).to_string(),
-        );
-    } else if payloads == 1 && !metadata.contains_key(KEY_EVENTS) {
-        // Only a later source has events.
         metadata.insert(
             KEY_EVENTS.to_string(),
             serde_json::json!({ KEY_EVENTS: events }).to_string(),
@@ -587,6 +592,46 @@ mod tests {
             r.is_ok(),
             "single-sampler gauge query should succeed: {r:?}"
         );
+    }
+
+    /// A read group's metadata takes each key from the first source, in
+    /// archive order, that has it: a key both hold is the first's, and a key
+    /// only the second holds is the group's.
+    #[test]
+    fn a_groups_metadata_is_the_first_source_holding_each_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("twice.dendro");
+        let source = |k: &str, only: Option<&str>| {
+            let mut metadata = fixtures::map(&[("producer_epoch", "E"), ("k", k)]);
+            if let Some(only) = only {
+                metadata.insert("only".to_string(), only.to_string());
+            }
+            Source {
+                labels: fixtures::map(&[("source", "rezolus")]),
+                metadata,
+                rows: (0..4u64)
+                    .map(|i| {
+                        let ts = fixtures::ANCHOR + i * 1_000_000_000;
+                        let w = Some(Window::new(ts - 50_000_000, ts));
+                        (
+                            fixtures::snap_counters(ts, vec![fixtures::counter("ops", "s", i, w)]),
+                            ts,
+                        )
+                    })
+                    .collect(),
+            }
+        };
+        fixtures::write_dendro(
+            &path,
+            &[source("first", None), source("second", Some("x"))],
+            None,
+            Finish::Finalized,
+        );
+        let readers = RezReader::open_recordings(&path, BufferPool::new(8 << 20)).unwrap();
+        assert_eq!(readers.len(), 1, "one epoch, overlapping: one recording");
+        let md = readers[0].1.file_metadata();
+        assert_eq!(md.get("k").map(String::as_str), Some("first"));
+        assert_eq!(md.get("only").map(String::as_str), Some("x"));
     }
 
     /// A gauge histogram shows through `RezReader` and `LiveReader`, which

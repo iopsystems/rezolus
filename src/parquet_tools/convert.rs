@@ -494,12 +494,19 @@ fn convert_file(
             // failure part-way leaves no half-written archive for the next
             // command to pick up, and --force replaces the old output only
             // once the new one is complete.
-            let staging = tempfile::tempdir_in(out_dir)?;
+            let staging = super::legacy::staging_dir(output)
+                .map_err(|e| ConvertError::Stream(e.to_string()))?;
             let staged = staging.path().join("converted.dendro");
             let rows = build_converter(interval_millis(interval)?, opts)
                 .convert_reader(source, &staged)
                 .map_err(|e| ConvertError::Stream(e.to_string()))?;
-            std::fs::rename(&staged, output)?;
+            if opts.force {
+                // --force replaces the old output, once the new one is whole.
+                std::fs::rename(&staged, output)?;
+            } else {
+                super::legacy::publish(&staged, output)
+                    .map_err(|e| ConvertError::Stream(e.to_string()))?;
+            }
 
             Ok(Converted {
                 rows,

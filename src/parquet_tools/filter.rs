@@ -108,11 +108,7 @@ fn filter_legacy(
         .into());
     };
     legacy::check_new_dendro(output)?;
-    let dir = output
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let staging = tempfile::tempdir_in(dir)?;
+    let staging = super::legacy::staging_dir(output)?;
     let converted = staging.path().join("converted.dendro");
     println!("{}", legacy::convert_for(path, &converted, output)?);
     filter_dendro(&converted, keep_samplers, keep_metrics, Some(output))
@@ -202,6 +198,13 @@ fn filter_dendro(
     use dendro::rewrite::CopySpec;
     use metriken_storage::table_sampler;
 
+    // An `-o` naming another file must be a new `.dendro`; one naming the
+    // input itself (`./live.dendro` for `live.dendro`) filters in place.
+    let in_place = output.is_none_or(|o| super::legacy::same_path(o, path));
+    if let Some(output) = output.filter(|_| !in_place) {
+        super::legacy::check_new_dendro(output)?;
+    }
+
     let src = Archive::open(path)?;
     let tables: Vec<String> = crate::dendro_copy::streams(&src)?
         .into_iter()
@@ -233,11 +236,7 @@ fn filter_dendro(
     }
 
     let dest = output.unwrap_or(path);
-    let dir = dest.parent().filter(|p| !p.as_os_str().is_empty());
-    let staging = match dir {
-        Some(dir) => tempfile::tempdir_in(dir),
-        None => tempfile::tempdir(),
-    }?;
+    let staging = super::legacy::staging_dir(dest)?;
     let staged = staging.path().join("filtered.dendro");
 
     let keep_stream = |stream: &str| -> bool {
@@ -285,7 +284,13 @@ fn filter_dendro(
         )
         .into());
     }
-    std::fs::rename(&staged, dest)?;
+    // In place, the filtered copy replaces the input, as asked; to a new
+    // output, nothing that appeared there meanwhile is replaced.
+    if in_place {
+        std::fs::rename(&staged, path)?;
+    } else {
+        super::legacy::publish(&staged, dest)?;
+    }
     println!(
         "Filtered {:?}: kept {} of {} tables",
         dest,
@@ -675,6 +680,37 @@ mod tests {
 
     fn set(names: &[&str]) -> BTreeSet<String> {
         names.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A filter in place replaces the input with the filtered copy, also when
+    /// `-o` names the input by another spelling; an `-o` naming another file
+    /// that exists is refused before anything is written.
+    #[test]
+    fn filter_in_place_and_an_existing_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("rec.dendro");
+        crate::dendro_copy::fixtures::recorded(&src, 10, true);
+        let all = dendro_streams(&src);
+        assert!(all.len() > 2, "{all:?}");
+        let taken = dir.path().join("taken.dendro");
+        std::fs::write(&taken, b"theirs").unwrap();
+        let err = filter_dendro(&src, Some(&set(&["threads"])), None, Some(&taken))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("already exists"), "{err}");
+        assert_eq!(std::fs::read(&taken).unwrap(), b"theirs");
+        assert_eq!(dendro_streams(&src), all);
+
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        let respelled = dir.path().join("sub").join("..").join("rec.dendro");
+        filter_dendro(&src, Some(&set(&["threads"])), None, Some(&respelled)).unwrap();
+        assert_eq!(
+            dendro_streams(&src),
+            vec![
+                "threads/tasks".to_string(),
+                "threads/tasks/occupants".to_string()
+            ]
+        );
     }
 
     /// `--samplers` keeps a long table's occupant stream with its table.

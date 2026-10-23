@@ -511,3 +511,49 @@ fn an_invalid_check_in_the_queries_file_is_refused() {
     assert_eq!(out.status.code(), Some(2));
     assert!(stderr(&out).contains("exactly one"), "{}", stderr(&out));
 }
+
+/// A recording read from a source and its snapshot carries a key only one
+/// of them holds: KPIs annotated onto the snapshot are the recording's
+/// whichever order the two are combined in, and `recording check` runs them.
+#[test]
+fn kpis_on_a_snapshot_are_the_combined_recordings() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dendro_fixture(dir.path());
+    let copy = dir.path().join("snap.dendro");
+    let out = rezolus(&[
+        "recording",
+        "snapshot",
+        a.to_str().unwrap(),
+        "-o",
+        copy.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let queries = write_queries(dir.path(), "q.json", FAILING);
+    let out = rezolus(&[
+        "recording",
+        "annotate",
+        copy.to_str().unwrap(),
+        "--queries",
+        queries.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    for (name, first, second) in [("ac.dendro", &a, &copy), ("ca.dendro", &copy, &a)] {
+        let combined = dir.path().join(name);
+        let out = rezolus(&[
+            "recording",
+            "combine",
+            first.to_str().unwrap(),
+            second.to_str().unwrap(),
+            "-o",
+            combined.to_str().unwrap(),
+        ]);
+        assert!(out.status.success(), "{name}: {}", stderr(&out));
+        let out = rezolus(&["recording", "check", combined.to_str().unwrap()]);
+        assert_eq!(out.status.code(), Some(1), "{name}: {}", stderr(&out));
+        assert!(
+            stdout(&out).contains("FAIL          Queue depth bounded"),
+            "{name}: {}",
+            stdout(&out)
+        );
+    }
+}

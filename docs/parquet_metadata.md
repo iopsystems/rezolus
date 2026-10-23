@@ -6,11 +6,13 @@ Rezolus recordings carry metadata in one of two places depending on format:
   The canonical key list lives in
   [src/parquet_metadata.rs](../src/parquet_metadata.rs); most of this doc
   describes those keys.
-- **`.rez`** — a tar archive (one recording per directory, one parquet table
-  per sampler) whose metadata lives in a top-level `manifest.json`, not in
-  parquet footers. See [`.rez` archives](#rez-archives-metadata-lives-in-the-manifest)
-  below for the mapping; schema lives in
-  [src/recorder/rez.rs](../src/recorder/rez.rs).
+- **`.rez`** — a tar archive (v1/v2: one recording per directory, one parquet
+  table per sampler, metadata in a top-level `manifest.json`) or a SQLite
+  container (v3: a `recordings` table holding each recording's labels and
+  metadata). See [`.rez` archives](#rez-archives-metadata-lives-in-the-manifest)
+  below for the mapping; the reader is metriken-storage's `rez` module
+  (`rez::rez` for the tar container, `rez::rez_sqlite` for v3), which
+  `crates/rez` re-exports.
 
 The viewer, MCP, and downstream tools rely on this metadata to interpret the
 data, distinguish recordings, build dashboards, and combine files.
@@ -50,12 +52,13 @@ target/release/rezolus recording metadata -i file.rez --json   # full manifest J
 
 ## `.rez` archives: metadata lives in the manifest
 
-The `.rez` format ([src/recorder/rez.rs](../src/recorder/rez.rs),
-[src/rez_reader.rs](../src/rez_reader.rs)) is the recorder's per-sampler
-archive: `manifest.json` plus `<dir>/<sampler>.parquet` tables per recording.
-A recording is one endpoint on one host; a multi-recording `.rez` is the
-viewer's A/B input. Producing one requires a rezolus/msgpack endpoint, so
-`source` is always `rezolus` today.
+The `.rez` format (metriken-storage's `rez` module, read through
+`crates/rez/src/reader.rs`) is the 5.x recorder's per-sampler archive:
+`manifest.json` plus `<dir>/<sampler>.parquet` tables per recording in the
+tar container, the same maps in the v3 container's `recordings` table. A
+recording is one endpoint on one host. A 5.x `.rez` holds a rezolus agent's
+recordings and, from 5.19.1, Prometheus endpoints' (`prometheus/scrape`
+groups), so `source` is whatever each endpoint was named.
 
 Each manifest recording carries two maps:
 
@@ -555,7 +558,7 @@ mutators are:
 |------|--------------------|
 | `rezolus record --metadata k=v` | Anything written at recording time; `--metadata` sets any top-level key, `node` and `instance` included. (The dedicated `--node`/`--instance` flags were removed — they never wrote anything.) |
 | `rezolus recording annotate` | In each recording of a `.dendro`: adds/replaces `service_queries` (`--queries`) or removes it (`--undo`), sets/replaces `systeminfo` (`--systeminfo PATH`, or `-` for stdin), and appends, inserts or wipes `events` (`--add-events PATH` / `--event KV` / `--clear-events`). A `.rez` or `.parquet` needs `-o <new>.dendro`. |
-| `rezolus recording combine --ab` | Adds the `arm` label to each input's recordings. |
+| `rezolus recording combine --ab` | Adds the `arm` label to each input's recordings (`--ab baseline=a.dendro experiment=b.dendro`), or, with one archive input, to the recordings at two positions in the order `rezolus mcp describe-recording` lists them (`--ab baseline=0 experiment=1`; every source of a recording, such as a source and its snapshot, takes its arm). |
 
 6.x has no tool that edits a `.rez` or a parquet file.
 

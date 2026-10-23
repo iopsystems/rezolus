@@ -871,6 +871,26 @@ fn serialize_lean_section(mut value: serde_json::Value) -> Option<String> {
     serde_json::to_string(&value).ok()
 }
 
+/// The largest recording, in bytes, the browser saves a report of. A report
+/// is built in memory: the upload, the archive converted from it and the
+/// report's bytes, about three times the recording, against wasm32's 4 GiB
+/// address space. Above it the save is refused ([`report_too_large`]).
+pub const MAX_REPORT_SOURCE_BYTES: usize = 1 << 30;
+
+/// The refusal for a Save as Report of a `size`-byte recording, when it is
+/// over [`MAX_REPORT_SOURCE_BYTES`].
+fn report_too_large(size: usize) -> Option<String> {
+    (size > MAX_REPORT_SOURCE_BYTES).then(|| {
+        format!(
+            "this recording is {:.1} GiB; the browser saves a report of at most 1 GiB, \
+             since it holds about three copies in memory. Save the report from `rezolus \
+             view` (the server viewer reads the file from disk), or convert the file with \
+             `rezolus recording upgrade` and shrink it with `rezolus recording filter` first",
+            size as f64 / (1u64 << 30) as f64
+        )
+    })
+}
+
 /// Registry wrapping up to two `Viewer` instances keyed by capture id
 /// ("baseline" / "experiment").  Mirrors the server-side `CaptureRegistry`
 /// shape so the JS transport layer can address either capture uniformly.
@@ -1414,6 +1434,16 @@ impl WasmCaptureRegistry {
             }
             set
         });
+
+        let size = match &self.rez_source {
+            Some(archive) => archive.len(),
+            None => {
+                baseline.source_bytes.len() + self.experiment().map_or(0, |e| e.source_bytes.len())
+            }
+        };
+        if let Some(refusal) = report_too_large(size) {
+            return Err(JsValue::from_str(&refusal));
+        }
 
         let source = if let Some(archive) = &self.rez_source {
             if metriken_storage::DendroCatalog::is_archive_bytes(archive) {
@@ -2262,6 +2292,16 @@ mod tests {
         assert_eq!(json, "[]");
     }
 
+    /// Save as Report refuses a recording over 1 GiB, naming the server
+    /// viewer and the tools that make it smaller, and takes one at the limit.
+    #[test]
+    fn a_report_of_a_recording_over_a_gib_is_refused() {
+        assert!(report_too_large(MAX_REPORT_SOURCE_BYTES).is_none());
+        let refusal = report_too_large(MAX_REPORT_SOURCE_BYTES + 1).unwrap();
+        assert!(refusal.contains("rezolus view"), "{refusal}");
+        assert!(refusal.contains("rezolus recording upgrade"), "{refusal}");
+    }
+
     /// Every report is a `.dendro`. A dendro source, a tar or v3 `.rez` and
     /// a parquet save one in the browser (no filesystem), the selection
     /// embedded on the anchor.
@@ -2295,6 +2335,37 @@ mod tests {
             2
         );
         assert_eq!(saved(&parquet_bytes(), "capture.parquet").len(), 1);
+
+        // A v3 report holds every row the `.rez` reads: segments and WAL
+        // rows (`v3-live.rez`), and WAL rows alone (`v3-wal-only.rez`).
+        // Counted as the points of a 1 s rate over the whole recording,
+        // whose rows are a second apart.
+        let rows = |readers: &rez::reader::LabeledRecordings| -> usize {
+            readers
+                .iter()
+                .map(|(_, r)| {
+                    let (start, end) = r.time_range().unwrap();
+                    let result = r.query_range("irate(ops[5s])", start, end, 1.0).unwrap();
+                    serde_json::to_value(result).unwrap()["result"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|s| s["values"].as_array().unwrap().len())
+                        .sum::<usize>()
+                })
+                .sum()
+        };
+        for name in ["v3-live.rez", "v3-wal-only.rez"] {
+            let bytes = committed_rez_bytes(name);
+            let source = rez::reader::RezReader::open_recordings_from_bytes(
+                bytes.clone(),
+                BufferPool::new(8 << 20),
+            )
+            .unwrap();
+            let want = rows(&source);
+            assert!(want > 0, "{name}: the fixture holds rows");
+            assert_eq!(rows(&saved(&bytes, name)), want, "{name}");
+        }
     }
 
     /// The Rezolus template with `edit` applied to its CPU section.

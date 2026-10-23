@@ -610,6 +610,9 @@ pub(crate) fn tick_timeout(interval: Duration) -> Duration {
 struct Watch {
     /// Endpoint URL per source, for messages.
     urls: Vec<String>,
+    /// Each endpoint's `--endpoint` argument as typed (its URL when it had
+    /// none), for a suggested `--endpoint`.
+    args: Vec<String>,
     names: Vec<Option<String>>,
     streaming: BTreeSet<mr::SourceId>,
     refused: BTreeSet<mr::SourceId>,
@@ -666,10 +669,10 @@ impl Watch {
             ),
             mr::Event::LabelsNotApplied { source, labels } => {
                 let i = source.0 as usize;
-                let url = self.urls.get(i).cloned().unwrap_or_default();
+                let arg = self.args.get(i).cloned().unwrap_or_default();
                 eprintln!(
                     "warn: {}",
-                    labels_not_applied(&self.label(source), &url, &labels)
+                    labels_not_applied(&self.label(source), &arg, self.args.len() > 1, &labels)
                 );
             }
             mr::Event::Failed { error } => {
@@ -687,33 +690,70 @@ impl Watch {
 
 /// The line for labels a late probe reply carried that could not be put on
 /// the recording (`Event::LabelsNotApplied`), naming how to set them on the
-/// next run: the labels `--endpoint` takes (`source=`, `arm=`, `host=`) on
-/// the endpoint, any other as a run-wide `--label`.
+/// next run: `arg`, the endpoint's `--endpoint` as typed, with each label
+/// `--endpoint` takes (`source=`, `arm=`, `host=`) appended in place of any
+/// value it gave for it, and any other label as a run-wide `--label`. With
+/// `several` endpoints the line says which `--endpoint` it replaces. When
+/// the rebuilt argument would not parse as an `--endpoint` (a value the
+/// parser refuses), the line names the labels and suggests no command.
 pub(crate) fn labels_not_applied(
     name: &str,
-    url: &str,
+    arg: &str,
+    several: bool,
     labels: &BTreeMap<String, String>,
 ) -> String {
     let keys: Vec<&str> = labels.keys().map(String::as_str).collect();
-    let mut endpoint = url.to_string();
-    let mut run_wide = Vec::new();
-    for (k, v) in labels {
-        match k.as_str() {
-            "source" | "arm" | "host" => endpoint.push_str(&format!(",{k}={v}")),
-            _ => run_wide.push(format!("--label {k}={v}")),
-        }
+    let (url, options) = arg.split_once(',').unwrap_or((arg, ""));
+    let endpoint_keys = ["source", "arm", "host"];
+    let set_here: Vec<(&String, &String)> = labels
+        .iter()
+        .filter(|(k, _)| endpoint_keys.contains(&k.as_str()))
+        .collect();
+    let mut parts: Vec<String> = vec![url.to_string()];
+    parts.extend(
+        options
+            .split(',')
+            .filter(|p| !p.trim().is_empty())
+            .filter(|p| {
+                let key = p.split_once('=').map_or(*p, |(k, _)| k).trim();
+                !set_here.iter().any(|(k, _)| k.as_str() == key)
+            })
+            .map(str::to_string),
+    );
+    parts.extend(set_here.iter().map(|(k, v)| format!("{k}={v}")));
+    let rebuilt = parts.join(",");
+    let noun = if keys.len() == 1 {
+        "label arrived late and is"
+    } else {
+        "labels arrived late and are"
+    };
+    if crate::recorder::config::parse_endpoint_str(&rebuilt).is_err() {
+        let shown: Vec<String> = labels.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        return format!(
+            "{name}: its {} {noun} not on the recording ({})",
+            keys.join("/"),
+            shown.join(", ")
+        );
     }
-    let mut again = format!("--endpoint {endpoint}");
-    for flag in run_wide {
-        again.push(' ');
-        again.push_str(&flag);
+    let mut again = format!("--endpoint {}", crate::mcp::shell_word(&rebuilt));
+    for (k, v) in labels
+        .iter()
+        .filter(|(k, _)| !endpoint_keys.contains(&k.as_str()))
+    {
+        again.push_str(&format!(
+            " --label {}",
+            crate::mcp::shell_word(&format!("{k}={v}"))
+        ));
+    }
+    if several {
+        again.push_str(&format!(
+            " in place of --endpoint {}",
+            crate::mcp::shell_word(arg)
+        ));
     }
     format!(
-        "{name}: its {} label{} arrived late and {} not on the recording; record again \
-         with {again}",
+        "{name}: its {} {noun} not on the recording; record again with {again}",
         keys.join("/"),
-        if keys.len() == 1 { "" } else { "s" },
-        if keys.len() == 1 { "is" } else { "are" },
     )
 }
 
@@ -813,6 +853,11 @@ pub fn run(config: RecordingConfig) {
 
     let mut watch = Watch {
         urls: detected.iter().map(|d| d.spec().url.to_string()).collect(),
+        args: config
+            .endpoints
+            .iter()
+            .map(|ep| ep.arg.clone().unwrap_or_else(|| ep.url.to_string()))
+            .collect(),
         names: detected
             .iter()
             .map(|d| d.spec().labels.get("source").cloned())
@@ -1295,6 +1340,7 @@ mod tests {
             template_json: None,
             arm: None,
             host: None,
+            arg: None,
         };
         let spec = endpoint_spec(&config, &ep);
         assert_eq!(spec.labels["source"], "web");
@@ -1323,6 +1369,7 @@ mod tests {
             template_json: Some(r#"{"service_name":"vllm","kpis":[]}"#.to_string()),
             arm: None,
             host: None,
+            arg: None,
         };
         assert_eq!(
             endpoint_spec(&config, &ep).metadata["service_queries"],
@@ -1341,25 +1388,50 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let line = labels_not_applied("rezolus", "http://agent:4241", &labels);
+        let arg = "http://a:4241,source=svc,arm=baseline,template=k.json";
+        let line = labels_not_applied("svc", arg, false, &labels);
         assert_eq!(
             line,
-            "rezolus: its host/zone labels arrived late and are not on the recording; \
-             record again with --endpoint http://agent:4241,host=web-01 --label zone=a"
+            "svc: its host/zone labels arrived late and are not on the recording; record \
+             again with --endpoint http://a:4241,source=svc,arm=baseline,template=k.json,\
+             host=web-01 --label zone=a"
         );
+        // A host= already given is replaced, and with several endpoints the
+        // line names the one it replaces.
         let one: BTreeMap<String, String> = [("host".to_string(), "web-01".to_string())]
             .into_iter()
             .collect();
-        let line = labels_not_applied("rezolus", "http://agent:4241", &one);
-        assert!(
-            line.contains("its host label arrived late and is not"),
-            "{line}"
+        let line = labels_not_applied("svc", "http://a:4241,host=old,source=svc", true, &one);
+        assert_eq!(
+            line,
+            "svc: its host label arrived late and is not on the recording; record again \
+             with --endpoint http://a:4241,source=svc,host=web-01 in place of --endpoint \
+             http://a:4241,host=old,source=svc"
         );
-        let ep =
-            crate::recorder::config::parse_endpoint_str("http://agent:4241,host=web-01").unwrap();
+        // The suggestion parses back, and sets the label.
+        let suggested = "http://a:4241,source=svc,arm=baseline,template=k.json,host=web-01";
+        let ep = crate::recorder::config::parse_endpoint_str(suggested).unwrap();
+        assert_eq!(ep.arg.as_deref(), Some(suggested));
         let dir = tempfile::tempdir().unwrap();
         let config = test_config(&dir.path().join("out.dendro"));
         assert_eq!(endpoint_spec(&config, &ep).labels["host"], "web-01");
+        assert!(crate::recorder::config::parse_endpoint_str("http://a:4241,host= x").is_err());
+
+        // A shell word is quoted.
+        let line = labels_not_applied("svc", "http://a:4241,template=my kpis.json", false, &one);
+        assert!(
+            line.ends_with("--endpoint 'http://a:4241,template=my kpis.json,host=web-01'"),
+            "{line}"
+        );
+        // A label the parser refuses gets no command.
+        let padded: BTreeMap<String, String> = [("host".to_string(), " web-01".to_string())]
+            .into_iter()
+            .collect();
+        let line = labels_not_applied("svc", "http://a:4241", false, &padded);
+        assert_eq!(
+            line,
+            "svc: its host label arrived late and is not on the recording (host= web-01)"
+        );
     }
 
     /// An endpoint's `arm=` labels its recording, over a run-wide

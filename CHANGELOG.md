@@ -1044,10 +1044,21 @@
 - **`record --endpoint url,host=NAME` sets the recording's `host` label.**
   `record` names labels that a Rezolus agent's metadata brought too late to
   put on the recording (metriken-recorder's `LabelsNotApplied`), with the
-  `--endpoint` (and `--label`) that sets them on the next run, e.g. `warn:
-  rezolus: its host label arrived late and is not on the recording; record
-  again with --endpoint http://agent:4241,host=web-01`. Hindsight and the
-  live viewer log the same.
+  `--endpoint` that sets them on the next run: the argument as typed with
+  `host=` (and `source=`/`arm=`) added in place of any it gave, any other
+  label as `--label`, and with several endpoints the one it replaces, e.g.
+  `warn: svc: its host label arrived late and is not on the recording;
+  record again with --endpoint http://a:4241,source=svc,host=web-01`.
+  Hindsight and the live viewer log the labels.
+- **A new output never replaces a file.** The `recording` tools stage each
+  output in `.<output>.rezolus-staging.<pid>.<random>` beside it and link it
+  into place, refusing an output that appeared meanwhile (an in-place
+  `filter` and `convert --force` replace, as asked). `filter x.dendro -o y`
+  now refuses a `y` that exists before reading anything, where it replaced
+  it; `-o` naming the input itself (`./x.dendro`) filters in place. A killed
+  command leaves that directory behind. Save as Report in the static site
+  refuses a recording over 1 GiB (it holds about three copies in memory),
+  naming `rezolus view`.
 - **Gauge histograms are listed.** A `.dendro` holding gauge histograms
   (metriken 0.11.4's `GaugeHistogram`) shows them in the viewer's metric
   browser (as histograms, charted through the histogram functions) and in

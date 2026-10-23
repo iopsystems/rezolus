@@ -783,11 +783,7 @@ pub(crate) fn snapshot_rez(
     use legacy::Container;
     legacy::check_new_dendro(output)?;
     // Staged beside the output so a failed copy leaves nothing there.
-    let dir = output.parent().filter(|p| !p.as_os_str().is_empty());
-    let staging = match dir {
-        Some(dir) => tempfile::tempdir_in(dir),
-        None => tempfile::tempdir(),
-    }?;
+    let staging = legacy::staging_dir(output)?;
     let staged = staging.path().join("snapshot.dendro");
     match Container::of(path) {
         Container::Dendro => {
@@ -806,7 +802,7 @@ pub(crate) fn snapshot_rez(
             .into())
         }
     }
-    std::fs::rename(&staged, output)?;
+    legacy::publish(&staged, output)?;
     println!("Wrote {}", output.display());
     Ok(())
 }
@@ -841,7 +837,7 @@ fn upgrade_to_dendro(
     // conversion leaves nothing at the output.
     let (_staging, staged) = legacy::stage_beside(&output)?;
     let summary = legacy::convert_quiet(path, &staged)?;
-    std::fs::rename(&staged, &output)?;
+    legacy::publish(&staged, &output)?;
     println!(
         "converted {} ({}) to {}: {summary}",
         path.display(),

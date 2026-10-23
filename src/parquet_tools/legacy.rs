@@ -148,6 +148,25 @@ pub(crate) fn convert_quiet(
     Ok(summary)
 }
 
+/// Whether `a` and `b` name the same file: their canonical paths, or for a
+/// path that does not exist, its canonical directory and file name.
+pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
+    let canonical = |p: &Path| -> Option<PathBuf> {
+        if let Ok(c) = p.canonicalize() {
+            return Some(c);
+        }
+        let dir = p
+            .parent()
+            .filter(|d| !d.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        Some(dir.canonicalize().ok()?.join(p.file_name()?))
+    };
+    match (canonical(a), canonical(b)) {
+        (Some(a), Some(b)) => a == b,
+        _ => a == b,
+    }
+}
+
 /// Refuse `output` unless it names a new `.dendro`.
 pub(crate) fn check_new_dendro(output: &Path) -> Result<(), String> {
     if output.extension().and_then(|e| e.to_str()) != Some("dendro") {
@@ -250,36 +269,93 @@ impl EditTarget {
         self.note.clone()
     }
 
-    /// Move a staged edit to its output. The output must still not exist.
+    /// Move a staged edit to its output ([`publish`]), which must still not
+    /// exist.
     pub(crate) fn commit(self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some((dir, output)) = self.staged {
-            if output.exists() {
-                return Err(format!(
-                    "{} already exists; refusing to replace it",
-                    output.display()
-                )
-                .into());
-            }
-            std::fs::rename(&self.path, &output)?;
+            publish(&self.path, &output)?;
             drop(dir);
         }
         Ok(())
     }
 }
 
-/// A staging directory beside `output`, so the final rename stays on one
-/// filesystem, and the staged file in it.
-pub(crate) fn stage_beside(
-    output: &Path,
-) -> Result<(tempfile::TempDir, PathBuf), Box<dyn std::error::Error>> {
+/// A staging directory beside `output`, so publishing it stays on one
+/// filesystem. It is named `.<output name>.rezolus-staging.<pid>.<random>`,
+/// the output name truncated to its first 64 characters so the directory
+/// name stays under the 255-byte limit, so one a killed process left behind
+/// says what it was; it is removed when the returned `TempDir` drops.
+pub(crate) fn staging_dir(output: &Path) -> Result<tempfile::TempDir, Box<dyn std::error::Error>> {
     let dir = output
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    let staging = tempfile::tempdir_in(dir)
-        .map_err(|e| format!("{}: cannot write beside it ({e})", output.display()))?;
+    let name: String = output
+        .file_name()
+        .map(|n| n.to_string_lossy().chars().take(64).collect())
+        .unwrap_or_default();
+    tempfile::Builder::new()
+        .prefix(&format!(".{name}.rezolus-staging.{}.", std::process::id()))
+        .tempdir_in(dir)
+        .map_err(|e| format!("{}: cannot write beside it ({e})", output.display()).into())
+}
+
+/// [`staging_dir`] and the staged file in it.
+pub(crate) fn stage_beside(
+    output: &Path,
+) -> Result<(tempfile::TempDir, PathBuf), Box<dyn std::error::Error>> {
+    let staging = staging_dir(output)?;
     let staged = staging.path().join("edit.dendro");
     Ok((staging, staged))
+}
+
+/// Put the staged file at `output` without replacing anything: a hard link,
+/// then the staged name removed, so an `output` that appeared since it was
+/// checked is refused rather than replaced. Where links are not supported,
+/// the file is copied into an `output` created new (`create_new`), and a
+/// copy that fails part way is removed.
+pub(crate) fn publish(staged: &Path, output: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    match std::fs::hard_link(staged, output) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(staged);
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(exists(output)),
+        Err(_) => copy_new(staged, output),
+    }
+}
+
+fn exists(output: &Path) -> Box<dyn std::error::Error> {
+    format!(
+        "{} already exists; refusing to replace it",
+        output.display()
+    )
+    .into()
+}
+
+/// [`publish`] where links are not supported: `staged` copied into `output`
+/// created new (`create_new`), so an existing file is refused, and a copy
+/// that fails part way removed.
+fn copy_new(staged: &Path, output: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut out = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
+    {
+        Ok(out) => out,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Err(exists(output)),
+        Err(e) => return Err(format!("{}: {e}", output.display()).into()),
+    };
+    let copied = std::fs::File::open(staged)
+        .and_then(|mut src| std::io::copy(&mut src, &mut out))
+        .and_then(|_| out.sync_all());
+    if let Err(e) = copied {
+        drop(out);
+        let _ = std::fs::remove_file(output);
+        return Err(format!("{}: {e}", output.display()).into());
+    }
+    let _ = std::fs::remove_file(staged);
+    Ok(())
 }
 
 /// Where an edit of the recording at `input` is written.
@@ -345,5 +421,81 @@ pub(crate) fn edit_target(
             input.display()
         )
         .into()),
+    }
+}
+
+#[cfg(test)]
+mod publish_tests {
+    use super::*;
+
+    /// Publishing never replaces a file: an output that appeared after it
+    /// was checked is refused and kept as it was. The staging directory is
+    /// named for its output and this process.
+    #[test]
+    fn publish_refuses_an_output_that_appeared_meanwhile() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("out.dendro");
+        let (staging, staged) = stage_beside(&output).unwrap();
+        let name = staging
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            name.starts_with(&format!(
+                ".out.dendro.rezolus-staging.{}.",
+                std::process::id()
+            )),
+            "{name}"
+        );
+        std::fs::write(&staged, b"new").unwrap();
+        std::fs::write(&output, b"theirs").unwrap();
+        let err = publish(&staged, &output).unwrap_err().to_string();
+        assert!(err.contains("already exists"), "{err}");
+        assert_eq!(std::fs::read(&output).unwrap(), b"theirs");
+
+        std::fs::remove_file(&output).unwrap();
+        publish(&staged, &output).unwrap();
+        assert_eq!(std::fs::read(&output).unwrap(), b"new");
+        assert!(!staged.exists(), "the staged name is removed");
+    }
+
+    /// An output whose name is near the 255-byte limit still stages: the
+    /// staging directory carries the first 64 characters of it.
+    #[test]
+    fn a_long_output_name_stages() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = format!("{}.dendro", "x".repeat(233));
+        assert_eq!(name.len(), 240);
+        let output = dir.path().join(&name);
+        let (staging, staged) = stage_beside(&output).unwrap();
+        let dir_name = staging
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(dir_name.starts_with(&format!(".{}.rezolus-staging.", "x".repeat(64))));
+        std::fs::write(&staged, b"new").unwrap();
+        publish(&staged, &output).unwrap();
+        assert_eq!(std::fs::read(&output).unwrap(), b"new");
+    }
+
+    /// The copy used where links are not supported never replaces a file
+    /// either.
+    #[test]
+    fn the_copy_fallback_refuses_an_existing_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = dir.path().join("staged");
+        let output = dir.path().join("out.dendro");
+        std::fs::write(&staged, b"new").unwrap();
+        std::fs::write(&output, b"theirs").unwrap();
+        let err = copy_new(&staged, &output).unwrap_err().to_string();
+        assert!(err.contains("already exists"), "{err}");
+        assert_eq!(std::fs::read(&output).unwrap(), b"theirs");
+        std::fs::remove_file(&output).unwrap();
+        copy_new(&staged, &output).unwrap();
+        assert_eq!(std::fs::read(&output).unwrap(), b"new");
     }
 }

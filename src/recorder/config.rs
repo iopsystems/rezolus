@@ -382,6 +382,7 @@ impl RecordingConfig {
             template_json: None,
             arm: None,
             host: None,
+            arg: None,
         };
 
         Ok(RecordingConfig {
@@ -441,6 +442,9 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
                 }
                 "arm" => arm = Some(value.to_string()),
                 "host" if value.is_empty() => return Err("host= needs a name".to_string()),
+                "host" if value.trim() != value => {
+                    return Err(format!("host={value:?} has whitespace around it"));
+                }
                 "host" => host = Some(value.to_string()),
                 "protocol" => {
                     protocol = Some(match value {
@@ -463,6 +467,7 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
         template_json: None,
         arm,
         host,
+        arg: Some(s.to_string()),
     })
 }
 

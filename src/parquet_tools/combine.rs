@@ -1,5 +1,5 @@
 use clap::ArgMatches;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use super::legacy::{self, Container};
@@ -245,6 +245,15 @@ fn check_ab_plan(
     Ok(())
 }
 
+/// How many of `groups` (recordings, each by its sources' positions) hold a
+/// source in `touched`: what "stamped arm on N recording(s)" counts.
+fn recordings_touched(groups: &[Vec<usize>], touched: &BTreeSet<usize>) -> usize {
+    groups
+        .iter()
+        .filter(|g| g.iter().any(|i| touched.contains(i)))
+        .count()
+}
+
 /// The recordings of the dendro archive at `path` as every reader presents
 /// them (`RezReader::open_recordings`, one per read group), each by the
 /// catalog positions of its sources. The readers are dropped before this
@@ -304,6 +313,21 @@ thread_local! {
     /// Fail the relabel after the copy, for a test of what a late failure
     /// leaves behind.
     static FAIL_STAMP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Write this file's bytes at the output just before publishing, for a
+    /// test of an output that appears while the archive is assembled.
+    static APPEAR: std::cell::RefCell<Option<Vec<u8>>> = const { std::cell::RefCell::new(None) };
+    /// The lines combine printed on this thread.
+    static SAID: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// `println!`, and under test also kept for the test to read (`SAID`).
+macro_rules! say {
+    ($($arg:tt)*) => {{
+        let line = format!($($arg)*);
+        #[cfg(test)]
+        SAID.with(|s| s.borrow_mut().push(line.clone()));
+        println!("{line}");
+    }};
 }
 
 pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
@@ -366,12 +390,8 @@ fn combine_dendro(
     use dendro::archive::{Archive, ArchiveMut};
     use dendro::rewrite::{copy_sources_into, CopySpec};
 
-    // Beside the output, never in $TMPDIR: a rename across filesystems fails.
-    let dir = output
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let staging = tempfile::tempdir_in(dir)?;
+    // Beside the output, never in $TMPDIR: a link across filesystems fails.
+    let staging = legacy::staging_dir(output)?;
 
     let mut inputs: Vec<PathBuf> = Vec::with_capacity(files.len());
     let mut converted = 0usize;
@@ -395,7 +415,7 @@ fn combine_dendro(
         }
     }
     if converted > 0 {
-        println!("converted {converted} .rez or parquet input(s) to dendro for the assembly");
+        say!("converted {converted} .rez or parquet input(s) to dendro for the assembly");
     }
     check_ab_plan(plan, files, &inputs)?;
 
@@ -433,17 +453,17 @@ fn combine_dendro(
     // positions name, and what fills a comparison's slots.
     let groups = read_groups_of(&staged)?;
     let mut dst = ArchiveMut::open(&staged)?;
-    let mut stamped = 0;
+    let mut stamped_sources = BTreeSet::new();
     {
         let rows = dst.read_sources()?;
         let labels: Vec<_> = rows.iter().map(|r| r.meta.labels.clone()).collect();
         let per = plan.per_recording(&counts, files, &groups)?;
         let new_labels = stamped_labels(&labels, &per)?;
         check_slots(&labels, &new_labels, plan, &groups)?;
-        for (row, new) in rows.iter().zip(new_labels) {
+        for (i, (row, new)) in rows.iter().zip(new_labels).enumerate() {
             if let Some(new) = new {
                 dst.update_source_labels(row.id, &new)?;
-                stamped += 1;
+                stamped_sources.insert(i);
             }
         }
     }
@@ -451,18 +471,24 @@ fn combine_dendro(
     // Read again after the relabel, which can split a recording (a source
     // and its copy given different arms). The staged file's sidecars stay
     // in the staging directory.
-    let recordings = read_groups_of(&staged)?.len();
-    std::fs::rename(&staged, output)?;
-    report_arms(stamped, files, plan);
+    let final_groups = read_groups_of(&staged)?;
+    let recordings = final_groups.len();
+    let stamped_recordings = recordings_touched(&final_groups, &stamped_sources);
+    #[cfg(test)]
+    if let Some(bytes) = APPEAR.with(|a| a.borrow_mut().take()) {
+        std::fs::write(output, bytes)?;
+    }
+    legacy::publish(&staged, output)?;
+    report_arms(stamped_recordings, files, plan);
     if recordings == sources {
-        println!(
+        say!(
             "wrote {} with {} recording(s) from {} input(s)",
             output.display(),
             recordings,
             files.len()
         );
     } else {
-        println!(
+        say!(
             "wrote {} with {} recording(s) ({} sources) from {} input(s)",
             output.display(),
             recordings,
@@ -479,16 +505,16 @@ fn report_arms(stamped: usize, files: &[PathBuf], plan: &AbPlan) {
         AbPlan::Nothing => return,
         AbPlan::Inputs(arms) => {
             for (file, arm) in files.iter().zip(arms) {
-                println!("{}: arm={arm}", file.display());
+                say!("{}: arm={arm}", file.display());
             }
         }
         AbPlan::Positions(picks) => {
             for (at, arm) in picks {
-                println!("{} recording {at}: arm={arm}", files[0].display());
+                say!("{} recording {at}: arm={arm}", files[0].display());
             }
         }
     }
-    println!("stamped arm on {stamped} recording(s); the archive opens as an A/B comparison");
+    say!("stamped arm on {stamped} recording(s); the archive opens as an A/B comparison");
 }
 
 /// [`run`] for `files` into `output` with no `--ab`, for other modules'
@@ -1338,5 +1364,31 @@ mod tests {
             2,
             "the original and its copy stay one recording"
         );
+        // Three sources took an arm, in two recordings, and the report
+        // counts recordings.
+        let groups = read_groups_of(&ab).unwrap();
+        assert_eq!(recordings_touched(&groups, &(0..3).collect()), 2);
+        let said = SAID.with(|s| s.take());
+        assert!(
+            said.iter()
+                .any(|l| l.starts_with("stamped arm on 2 recording(s)")),
+            "{said:?}"
+        );
+    }
+
+    /// An output that appears while the archive is assembled is refused and
+    /// kept as it was: publishing links, never replaces.
+    #[test]
+    fn combine_refuses_an_output_that_appeared_meanwhile() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.dendro");
+        let b = dir.path().join("b.dendro");
+        crate::dendro_copy::fixtures::recorded(&a, 4, true);
+        crate::dendro_copy::fixtures::recorded(&b, 4, true);
+        let out = dir.path().join("out.dendro");
+        APPEAR.with(|x| *x.borrow_mut() = Some(b"theirs".to_vec()));
+        let err = run_combine(&[a, b], &out).unwrap_err().to_string();
+        assert!(err.contains("already exists"), "{err}");
+        assert_eq!(std::fs::read(&out).unwrap(), b"theirs");
     }
 }

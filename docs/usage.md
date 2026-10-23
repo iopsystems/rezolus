@@ -637,7 +637,16 @@ compatibility alias for the command. Check `rezolus recording <subcommand>
 `annotate`, `filter` and `check --annotate` edit a `.dendro` in place (or a
 copy, given `-o`); for a `.rez` or `.parquet` input they need `-o
 <new>.dendro`, and without it they stop and print the command with `-o`
-added.
+added. A recording read from several sources (a recording and its snapshot,
+combined) takes each metadata key from the first source holding it, so
+removing KPIs from one copy with `--undo` does not remove them from a
+combined recording whose other source still has them: annotate the combined
+recording instead, which edits every source. A new output is written in a
+directory beside it,
+`.<output>.rezolus-staging.<pid>.<random>`, and appears only once it is
+complete; it never replaces a file that exists, except an in-place `filter`
+(which replaces its input) and `convert --force`. A command killed part way
+leaves that directory behind, safe to delete.
 
 ```bash
 rezolus recording metadata -i run.dendro

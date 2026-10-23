@@ -228,6 +228,9 @@ pub fn snap_gauge_histogram(ts: u64, name: &str, sampler: &str, value: u64) -> S
 ///   rows a segment, not finalized: sealed segments and live WAL rows.
 /// - `v3-multi.rez`: v3, two recordings `host=web-01` and `host=web-02`,
 ///   three ticks of `mem_free` each, `(i + 1) * 1000 + t` for recording `i`.
+/// - `v3-wal-only.rez`: `v3-live.rez` with its segments deleted, so every
+///   row it holds is a live WAL row; written in this repository as
+///   `edited_rez("v3-live.rez", dest, "DELETE FROM segments; VACUUM;")`.
 pub fn committed_rez(name: &str, dir: &Path) -> PathBuf {
     let src = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/rez")

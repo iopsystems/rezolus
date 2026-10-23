@@ -187,7 +187,23 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         const registry = new WasmCaptureRegistry();
         registry.attach('baseline', saved(committedRez('v3-multi.rez'), 'multi.rez'), 'r.dendro');
         assert.match(registry.file_metadata_json('baseline'), /selection/);
-        // The live archive's rows still in its WAL table come across.
-        assert.deepEqual(reopened(saved(committedRez('v3-live.rez'), 'live.rez')).counter_names, ['ops']);
+        // Every row the `.rez` reads comes across: the live archive's
+        // segments and WAL rows, and WAL rows alone (`v3-wal-only.rez`, the
+        // live archive with its segments deleted).
+        const rows = (bytes, name) => {
+            const registry = new WasmCaptureRegistry();
+            registry.attach('baseline', bytes, name);
+            const info = JSON.parse(registry.info('baseline'));
+            const result = JSON.parse(registry.query_range(
+                'baseline', 'irate(ops[5s])', info.minTime, info.maxTime, 1, 'grid',
+            ));
+            return result.data.result.reduce((n, s) => n + s.values.length, 0);
+        };
+        for (const name of ['v3-live.rez', 'v3-wal-only.rez']) {
+            const bytes = committedRez(name);
+            const want = rows(bytes, name);
+            assert.ok(want > 0, `${name}: the fixture holds rows`);
+            assert.equal(rows(saved(bytes, name), 'r.dendro'), want, name);
+        }
     });
 }
