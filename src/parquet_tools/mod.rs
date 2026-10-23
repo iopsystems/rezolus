@@ -1214,33 +1214,13 @@ mod command_name_tests {
 #[cfg(test)]
 mod upgrade_to_dendro_tests {
     use super::upgrade_to_dendro;
-    use ::rez::rez::recorder_tests_support::{counter, snap};
     use dendro::archive::Archive;
 
-    /// A v2 tar archive with two samplers, built the way the old recorder
-    /// wrote one.
+    /// The committed v2 tar archive (`rez::fixtures::committed_rez`): one
+    /// recording, tables `a` and `b`, written whole by the old recorder.
     fn tar_rez(dir: &std::path::Path) -> std::path::PathBuf {
-        use crate::recorder::rez::{detect_rez_format, RezFormat, RezRecorder};
-        let labels: std::collections::BTreeMap<String, String> =
-            [("source".to_string(), "rezolus".to_string())]
-                .into_iter()
-                .collect();
-        let mut r = RezRecorder::new(labels.clone(), labels, "rezolus".to_string());
-        for i in 0..3u64 {
-            let ts = 1_000_000_000 * (i + 1);
-            r.ingest(
-                &snap(
-                    ts,
-                    vec![
-                        counter("cpu_cycles", "cpu_usage", i, None),
-                        counter("reads", "blockio_requests", i, None),
-                    ],
-                ),
-                ts,
-            );
-        }
-        let path = dir.join("old.rez");
-        r.finalize(&path).unwrap();
+        use crate::recorder::rez::{detect_rez_format, RezFormat};
+        let path = ::rez::fixtures::committed_rez("v2.rez", dir);
         assert_eq!(detect_rez_format(&path).unwrap(), RezFormat::V2Tar);
         path
     }
@@ -1260,7 +1240,7 @@ mod upgrade_to_dendro_tests {
             .map(|e| e.unwrap().file_name().into_string().unwrap())
             .collect();
         names.sort();
-        assert_eq!(names, vec!["old.rez".to_string(), "out.dendro".to_string()]);
+        assert_eq!(names, vec!["out.dendro".to_string(), "v2.rez".to_string()]);
 
         let out = Archive::open(&dest).unwrap();
         let sources = out.read_sources().unwrap();
@@ -1268,7 +1248,7 @@ mod upgrade_to_dendro_tests {
         assert!(sources[0].complete);
         assert_eq!(
             out.all_streams(sources[0].id).unwrap(),
-            vec!["blockio_requests".to_string(), "cpu_usage".to_string()]
+            vec!["a".to_string(), "b".to_string()]
         );
     }
 

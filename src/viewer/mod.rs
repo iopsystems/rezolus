@@ -1695,8 +1695,7 @@ mod tests {
     #[test]
     fn init_file_mode_reads_v3_sqlite_rez() {
         let dir = tempfile::tempdir().unwrap();
-        let rez_path = dir.path().join("rec.rez");
-        crate::recorder::rez::recorder_tests_support::empty_v3_rez(&rez_path);
+        let rez_path = ::rez::fixtures::committed_rez("v3.rez", dir.path());
         assert_eq!(
             crate::recorder::rez::detect_rez_format(&rez_path).unwrap(),
             crate::recorder::rez::RezFormat::V3Sqlite,
@@ -1730,37 +1729,29 @@ mod tests {
     /// `state.selection` for a `.rez`.
     #[test]
     fn init_file_mode_rez_surfaces_manifest_selection_and_events() {
-        use crate::recorder::rez_sqlite::RezDb;
-
         let dir = tempfile::tempdir().unwrap();
-        let rez_path = dir.path().join("rec.rez");
-        crate::recorder::rez::recorder_tests_support::populated_v3_rez(
-            &rez_path,
-            "baseline",
-            &["cpu_usage"],
-            6,
-        );
+        let rez_path = ::rez::fixtures::committed_rez("v3.rez", dir.path());
 
-        // Write a selection + events payload straight into the recording's
-        // manifest metadata (the shape `annotate`/report-save produce).
-        {
-            let db = RezDb::open(&rez_path).unwrap();
-            let recs = db.read_recordings().unwrap();
-            let mut md = recs[0].meta.metadata.clone();
-            md.insert(
-                crate::parquet_metadata::KEY_SELECTION.to_string(),
-                r#"{"entries":[{"query":"cpu_usage"}]}"#.to_string(),
-            );
-            md.insert(
-                crate::parquet_metadata::KEY_EVENTS.to_string(),
-                r#"{"events":[{"timestamp":1000000000,"description":"rollout"}]}"#.to_string(),
-            );
-            md.insert(
-                crate::parquet_metadata::KEY_REPORT.to_string(),
-                crate::parquet_metadata::REPORT_VALUE_TRIMMED.to_string(),
-            );
-            db.update_recording_metadata(recs[0].id, &md).unwrap();
-        }
+        // A selection + events payload in the recording's manifest metadata
+        // (the shape `annotate`/report-save produced in a `.rez`).
+        ::rez::fixtures::add_rez_metadata(
+            &rez_path,
+            0,
+            &[
+                (
+                    crate::parquet_metadata::KEY_SELECTION,
+                    r#"{"entries":[{"query":"cpu_usage"}]}"#,
+                ),
+                (
+                    crate::parquet_metadata::KEY_EVENTS,
+                    r#"{"events":[{"timestamp":1000000000,"description":"rollout"}]}"#,
+                ),
+                (
+                    crate::parquet_metadata::KEY_REPORT,
+                    crate::parquet_metadata::REPORT_VALUE_TRIMMED,
+                ),
+            ],
+        );
 
         let matches = super::command().get_matches_from(["view", rez_path.to_str().unwrap()]);
         let config = super::Config::try_from(matches).unwrap();
@@ -1798,31 +1789,17 @@ mod tests {
     }
 
     /// A one-recording `.dendro` whose source is `source`, with `extra` added
-    /// to its source metadata. Built as a `.rez` and converted, which carries
-    /// the recording's metadata into the dendro source's.
+    /// to its source metadata.
     fn dendro_with_metadata(
         dir: &std::path::Path,
         source: &str,
         extra: &[(&str, &str)],
     ) -> std::path::PathBuf {
-        use crate::recorder::rez_sqlite::RezDb;
-        let rez_path = dir.join("rec.rez");
-        crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
-            &rez_path,
-            &[(source, "web-01")],
-        );
-        {
-            let db = RezDb::open(&rez_path).unwrap();
-            let recs = db.read_recordings().unwrap();
-            let mut md = recs[0].meta.metadata.clone();
-            for (k, v) in extra {
-                md.insert(k.to_string(), v.to_string());
-            }
-            db.update_recording_metadata(recs[0].id, &md).unwrap();
-        }
-        let dendro_path = dir.join("rec.dendro");
-        rez::to_dendro::convert_v3_to_dendro(&rez_path, &dendro_path).unwrap();
-        dendro_path
+        let path = dir.join("rec.dendro");
+        let mut sources = ::rez::fixtures::multi_recording_sources(&[(source, "web-01")]);
+        sources[0].metadata.extend(::rez::fixtures::map(extra));
+        ::rez::fixtures::write_dendro(&path, &sources, None, ::rez::fixtures::Finish::Finalized);
+        path
     }
 
     /// A one-KPI template whose KPI title names where it came from.
@@ -1967,18 +1944,15 @@ mod tests {
         );
     }
 
-    /// A `.rez` simple capture (a source with no template and no Rezolus
-    /// metrics) is classified from its recording's metadata, so its section
-    /// is named by its `source`, as the same capture's parquet and the WASM
-    /// viewer name it, rather than by the archive's filename.
+    /// An archive's simple capture (a source with no template and no
+    /// Rezolus metrics) is classified from its recording's metadata, so its
+    /// section is named by its `source`, as the same capture's parquet and the
+    /// WASM viewer name it, rather than by the archive's filename.
     #[test]
-    fn a_rez_simple_capture_is_named_by_its_source() {
+    fn an_archive_simple_capture_is_named_by_its_source() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("simple_capture.rez");
-        crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
-            &path,
-            &[("127.0.0.1-18651", "web-01")],
-        );
+        let path = dir.path().join("simple_capture.dendro");
+        ::rez::fixtures::multi_recording(&path, &[("127.0.0.1-18651", "web-01")]);
         let (exts, routes) = served_templates(&path, &[]);
         assert!(exts.is_empty(), "{exts:?}");
         assert!(
@@ -1996,25 +1970,18 @@ mod tests {
     /// from a parquet path the archive does not have.
     #[test]
     fn each_recording_of_an_archive_renders_its_own_template() {
-        use crate::recorder::rez_sqlite::RezDb;
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
-        crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
-            &path,
-            &[("alpha", "web-01"), ("beta", "web-01")],
-        );
-        {
-            let db = RezDb::open(&path).unwrap();
-            for rec in db.read_recordings().unwrap() {
-                let source = rec.meta.labels["source"].clone();
-                let mut md = rec.meta.metadata.clone();
-                md.insert(
-                    "service_queries".to_string(),
-                    titled_template(&source, &format!("{source}'s own")),
-                );
-                db.update_recording_metadata(rec.id, &md).unwrap();
-            }
+        let path = dir.path().join("ab.dendro");
+        let mut sources =
+            ::rez::fixtures::multi_recording_sources(&[("alpha", "web-01"), ("beta", "web-01")]);
+        for source in &mut sources {
+            let name = source.labels["source"].clone();
+            source.metadata.insert(
+                "service_queries".to_string(),
+                titled_template(&name, &format!("{name}'s own")),
+            );
         }
+        ::rez::fixtures::write_dendro(&path, &sources, None, ::rez::fixtures::Finish::Finalized);
         let (exts, _) = served_templates(&path, &[]);
         assert_eq!(
             exts,
@@ -2274,8 +2241,8 @@ mod tests {
     #[test]
     fn selected_recordings_fill_the_ab_slots() {
         let dir = tempfile::tempdir().unwrap();
-        let rez_path = dir.path().join("fleet.rez");
-        crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
+        let rez_path = dir.path().join("fleet.dendro");
+        ::rez::fixtures::multi_recording(
             &rez_path,
             // One host, three services: `source` is what tells them apart, so
             // the aliases below are the selected recordings' own sources.
@@ -2333,11 +2300,8 @@ mod tests {
     #[test]
     fn a_baseline_selector_alone_leaves_the_experiment_slot_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let rez_path = dir.path().join("fleet.rez");
-        crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
-            &rez_path,
-            &[("redis", "web-01"), ("valkey", "web-01")],
-        );
+        let rez_path = dir.path().join("fleet.dendro");
+        ::rez::fixtures::multi_recording(&rez_path, &[("redis", "web-01"), ("valkey", "web-01")]);
 
         let matches = super::command().get_matches_from([
             "view",
@@ -2397,8 +2361,8 @@ mod tests {
     #[test]
     fn aliases_come_from_the_recordings_shown_not_the_whole_archive() {
         let dir = tempfile::tempdir().unwrap();
-        let rez_path = dir.path().join("fleet.rez");
-        crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
+        let rez_path = dir.path().join("fleet.dendro");
+        ::rez::fixtures::multi_recording(
             &rez_path,
             // `host` does not discriminate all three (web-01 twice) and
             // neither does `source` (redis twice) — but it discriminates the

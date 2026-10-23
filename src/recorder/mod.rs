@@ -21,7 +21,7 @@ pub(crate) mod stream;
 pub(crate) use ::rez::rez_stream;
 pub(crate) use ::rez::{parquet_ingest, rez, rez_sqlite, rez_v3_rewrite, seal_policy, wire};
 #[cfg(test)]
-pub(crate) use ::rez::{rez_v3_writer, schema, wal};
+pub(crate) use ::rez::{schema, wal};
 
 /// The 5.x release the refusals of what 6.x no longer records (`.rez`,
 /// parquet and raw output, `--separate`, an agent that cannot stream) point
