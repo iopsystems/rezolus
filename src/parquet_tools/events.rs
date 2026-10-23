@@ -189,15 +189,16 @@ pub(crate) struct WriteReport {
 pub(crate) fn add_events_selected(
     path: &Path,
     output: Option<&Path>,
-    selector: &crate::mcp::RecordingSelector,
+    selector: &crate::parquet_tools::select::RecordingSelector,
     new: Vec<Event>,
+    program: &str,
 ) -> Result<WriteReport, Box<dyn std::error::Error>> {
     // Resolved on the input first, so a selector that names nothing is
     // refused before anything is written.
-    one_target(path, selector)?;
+    one_target(path, selector, program)?;
     let edit = super::legacy::edit_target(path, output, output_advice)?;
     let target_path = edit.path().to_path_buf();
-    let (target, total) = one_target(&target_path, selector)?;
+    let (target, total) = one_target(&target_path, selector, program)?;
     // The same append the writer applies, run here first so the counts
     // and the resulting total can be reported; the writer repeats it
     // against what is stored, which is what was just read.
@@ -205,6 +206,7 @@ pub(crate) fn add_events_selected(
     let mut per: Vec<Vec<Event>> = vec![Vec::new(); total];
     per[target.index] = new;
     let annotation = super::annotate::RezAnnotation {
+        program,
         ext_json: None,
         events: None,
         per_recording_events: Some(per),
@@ -289,18 +291,19 @@ pub(crate) struct RemoveReport {
 pub(crate) fn remove_events_selected(
     path: &Path,
     output: Option<&Path>,
-    selector: &crate::mcp::RecordingSelector,
+    selector: &crate::parquet_tools::select::RecordingSelector,
     filter: &RemoveFilter,
+    program: &str,
 ) -> Result<RemoveReport, Box<dyn std::error::Error>> {
     if filter.is_empty() {
         return Err("remove_events needs at least one of ids, kind or source; \
                     clearing every event is `recording annotate --clear-events`"
             .into());
     }
-    one_target(path, selector)?;
+    one_target(path, selector, program)?;
     let edit = super::legacy::edit_target(path, output, output_advice)?;
     let target_path = edit.path().to_path_buf();
-    let (target, total) = one_target(&target_path, selector)?;
+    let (target, total) = one_target(&target_path, selector, program)?;
     // The recording's events as a reader shows them: every source's, as one
     // (`rez::reader`'s `group_metadata`). Each source is then filtered from
     // its own payload by `annotate_archive`, so no source is given another's
@@ -315,6 +318,7 @@ pub(crate) fn remove_events_selected(
     let mut per: Vec<Option<RemoveFilter>> = vec![None; total];
     per[target.index] = Some(filter.clone());
     let annotation = super::annotate::RezAnnotation {
+        program,
         ext_json: None,
         events: None,
         per_recording_events: None,
@@ -342,9 +346,10 @@ pub(crate) fn remove_events_selected(
 /// tools give. Returns the recording and how many the archive holds.
 fn one_target(
     path: &Path,
-    selector: &crate::mcp::RecordingSelector,
+    selector: &crate::parquet_tools::select::RecordingSelector,
+    program: &str,
 ) -> Result<(super::check::Target, usize), Box<dyn std::error::Error>> {
-    let (_format, mut targets, total) = super::check::open_targets(path, selector)?;
+    let (_format, mut targets, total) = super::check::open_targets(path, selector, program)?;
     if targets.len() != 1 {
         let all: Vec<BTreeMap<String, String>> =
             targets.iter().filter_map(|t| t.labels.clone()).collect();
@@ -352,7 +357,12 @@ fn one_target(
             "{} holds {} recordings; name one with a recording selector:\n{}",
             path.display(),
             targets.len(),
-            crate::mcp::describe_candidates(&all, &[], crate::mcp::SelectorSyntax::Json)
+            crate::parquet_tools::select::describe_candidates(
+                &all,
+                &[],
+                crate::parquet_tools::select::SelectorSyntax::Json,
+                program,
+            )
         )
         .into());
     }
@@ -975,14 +985,14 @@ mod tests {
             rows,
         };
         write_dendro(&a, &[source], None, Finish::Finalized);
-        let any = crate::mcp::RecordingSelector::default();
+        let any = crate::parquet_tools::select::RecordingSelector::default();
         let event = |id: &str| {
             parse_inline_event(&format!("time={},id={id},description={id}", ANCHOR + 1)).unwrap()
         };
-        add_events_selected(&a, None, &any, vec![event("E1")]).unwrap();
+        add_events_selected(&a, None, &any, vec![event("E1")], "rezolus").unwrap();
         let copy = dir.path().join("copy.dendro");
         crate::parquet_tools::snapshot_rez(&a, &copy).unwrap();
-        add_events_selected(&copy, None, &any, vec![event("E2")]).unwrap();
+        add_events_selected(&copy, None, &any, vec![event("E2")], "rezolus").unwrap();
         let grp = dir.path().join("grp.dendro");
         crate::parquet_tools::combine::run_combine_for_test(&[a, copy], &grp).unwrap();
 
@@ -1009,7 +1019,7 @@ mod tests {
             ids: vec!["E1".to_string()],
             ..Default::default()
         };
-        let report = remove_events_selected(&grp, None, &any, &filter).unwrap();
+        let report = remove_events_selected(&grp, None, &any, &filter, "rezolus").unwrap();
         assert_eq!((report.removed, report.total), (1, 1));
         assert_eq!(shown(&grp), ["E2"]);
         let per_source: Vec<Vec<String>> = crate::parquet_tools::annotate::source_metadata(&grp)

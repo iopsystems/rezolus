@@ -1,18 +1,20 @@
-use clap::ArgMatches;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::read_parquet_footer;
 use metriken_storage::rez::rez::RezFormat;
 use metriken_storage::rez::rez_sqlite::RezDb;
 
-pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
-    let input = args.get_one::<PathBuf>("input").unwrap();
-    let schema_only = args.get_flag("schema");
-    let geometry_only = args.get_flag("geometry");
-    let file_only = args.get_flag("file");
-    let field_key = args.get_one::<String>("field");
-    let json = args.get_flag("json");
+pub(super) fn run(
+    host: &super::Host,
+    args: &super::cli::MetadataArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let input = &args.input;
+    let schema_only = args.schema;
+    let geometry_only = args.geometry;
+    let file_only = args.file;
+    let field_key = args.field.as_ref();
+    let json = args.json;
 
     // `.rez` archives have no single parquet footer — describe the catalog.
     // Dispatch is by CONTENT, not extension, and covers both containers: a v3
@@ -21,7 +23,7 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     if metriken_storage::rez::rez::detect_rez_format(input).unwrap_or(RezFormat::NotRez)
         != RezFormat::NotRez
     {
-        return describe_rez(input, json);
+        return describe_rez(input, json, host.agent);
     }
 
     let (metadata, schema, _) = read_parquet_footer(input)?;
@@ -195,13 +197,13 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run_json(
-    args: &ArgMatches,
+    args: &super::cli::MetadataArgs,
     metadata: &parquet::file::metadata::ParquetMetaData,
     schema: &arrow::datatypes::SchemaRef,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let schema_only = args.get_flag("schema");
-    let geometry_only = args.get_flag("geometry");
-    let file_only = args.get_flag("file");
+    let schema_only = args.schema;
+    let geometry_only = args.geometry;
+    let file_only = args.file;
     let show_all = !schema_only && !geometry_only && !file_only;
 
     let mut out = serde_json::Map::new();
@@ -324,9 +326,10 @@ fn format_bytes(bytes: i64) -> String {
 /// parquet footer, so we summarize the recordings/tables index).
 ///
 /// Both containers land here: a v2/v1 tar manifest, or a v3 SQLite catalog.
-fn describe_rez(path: &Path, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+/// `agent` names the producer in each recording's agent line.
+fn describe_rez(path: &Path, json: bool, agent: &str) -> Result<(), Box<dyn std::error::Error>> {
     if !json {
-        print!("{}", describe_rez_string_at(path)?);
+        print!("{}", describe_rez_string_at(path, agent)?);
         return Ok(());
     }
     if is_dendro(path) {
@@ -351,16 +354,20 @@ fn describe_rez(path: &Path, json: bool) -> Result<(), Box<dyn std::error::Error
 ///
 /// Dispatch is by CONTENT: a v3 `.rez` is a SQLite file whose catalog answers
 /// every question here, a v1/v2 `.rez` is a tar whose `manifest.json` does.
-pub(crate) fn describe_rez_string_at(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
+pub(crate) fn describe_rez_string_at(
+    path: &Path,
+    agent: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
     if is_dendro(path) {
         let recordings = read_dendro_summary(path)?;
         let header = format!("dendro archive — {} recording(s)", recordings.len());
-        return Ok(describe_v3_string_with(&header, &recordings));
+        return Ok(describe_v3_string_with(&header, &recordings, agent));
     }
     match metriken_storage::rez::rez::detect_rez_format(path)? {
-        RezFormat::V3Sqlite => Ok(describe_v3_string(&read_v3_summary(path)?)),
+        RezFormat::V3Sqlite => Ok(describe_v3_string(&read_v3_summary(path)?, agent)),
         _ => Ok(describe_rez_string(
             &metriken_storage::rez::rez::read_archive_bytes(path)?.0,
+            agent,
         )),
     }
 }
@@ -509,17 +516,17 @@ fn max_opt(a: Option<u64>, b: Option<u64>) -> Option<u64> {
 /// Human-readable summary of a v3 `.rez`, deliberately shaped like the v2 one:
 /// same recording/table lines, same clock line, with the container named and
 /// the live WAL depth added.
-fn describe_v3_string(recordings: &[V3Recording]) -> String {
+fn describe_v3_string(recordings: &[V3Recording], agent: &str) -> String {
     let header = format!(
         ".rez archive v3 (sqlite) — {} recording(s)",
         recordings.len()
     );
-    describe_v3_string_with(&header, recordings)
+    describe_v3_string_with(&header, recordings, agent)
 }
 
 /// [`describe_v3_string`] under the given first line: a dendro archive is
 /// summarized from the same catalog facts.
-fn describe_v3_string_with(header: &str, recordings: &[V3Recording]) -> String {
+fn describe_v3_string_with(header: &str, recordings: &[V3Recording], agent: &str) -> String {
     use std::fmt::Write;
     let mut out = String::new();
     let _ = writeln!(out, "{header}");
@@ -537,7 +544,7 @@ fn describe_v3_string_with(header: &str, recordings: &[V3Recording]) -> String {
                  at most the final tick is missing"
             );
         }
-        if let Some(line) = agent_line(&rec.metadata) {
+        if let Some(line) = agent_line(&rec.metadata, agent) {
             let _ = writeln!(out, "    {line}");
         }
         if let Some(line) = clock_line_of(Some(rec.clock_anchor_wall_ns), &rec.clock_offsets) {
@@ -593,19 +600,23 @@ fn v3_json(recordings: &[V3Recording], container: &str) -> serde_json::Value {
     })
 }
 
-/// The recording's agent line: which rezolus build produced it.
+/// The recording's agent line: which build of `agent` (`Host::agent`)
+/// produced it.
 ///
 /// Printed because "which agent wrote this?" is the first question when two
 /// recordings of the same host disagree, and a manifest that describes the
 /// machine in detail while omitting the thing that read it leaves that
 /// unanswerable (issue #1195). Absent for recordings written before the
 /// recorder captured it, and for a Prometheus source, which has no agent.
-fn agent_line(metadata: &std::collections::BTreeMap<String, String>) -> Option<String> {
+fn agent_line(
+    metadata: &std::collections::BTreeMap<String, String>,
+    agent: &str,
+) -> Option<String> {
     let version = metadata.get(::dashboard::keys::KEY_VERSION)?;
     if version.is_empty() {
         return None;
     }
-    Some(format!("agent rezolus {version}"))
+    Some(format!("agent {agent} {version}"))
 }
 
 /// The recording's clock line: the wall-clock anchor its row timestamps are
@@ -647,7 +658,7 @@ fn clock_line_of(anchor: Option<u64>, offsets: &[(u64, i64)]) -> Option<String> 
 /// Human-readable summary of a `.rez` manifest: recordings, their labels, clock
 /// anchor/drift, and each per-sampler table's row count, observed cadence and
 /// segment count.
-fn describe_rez_string(manifest: &metriken_storage::rez::rez::RezManifest) -> String {
+fn describe_rez_string(manifest: &metriken_storage::rez::rez::RezManifest, agent: &str) -> String {
     use std::fmt::Write;
     let mut out = String::new();
     let _ = writeln!(
@@ -669,7 +680,7 @@ fn describe_rez_string(manifest: &metriken_storage::rez::rez::RezManifest) -> St
                  data after that may be missing"
             );
         }
-        if let Some(line) = agent_line(&rec.metadata) {
+        if let Some(line) = agent_line(&rec.metadata, agent) {
             let _ = writeln!(out, "    {line}");
         }
         if let Some(line) = clock_line(rec) {
@@ -727,7 +738,7 @@ mod rez_tests {
                 }],
             }],
         };
-        let s = describe_rez_string(&m);
+        let s = describe_rez_string(&m, "rezolus");
         assert!(s.contains("recording rezolus"), "{s}");
         assert!(s.contains("arm=baseline"), "{s}");
         assert!(s.contains("cpu_usage"), "{s}");
@@ -763,16 +774,16 @@ mod rez_tests {
             }],
         };
         assert!(
-            describe_rez_string(&m).contains("agent rezolus 5.20.0"),
+            describe_rez_string(&m, "rezolus").contains("agent rezolus 5.20.0"),
             "{}",
-            describe_rez_string(&m)
+            describe_rez_string(&m, "rezolus")
         );
 
         m.recordings[0].metadata = Default::default();
         assert!(
-            !describe_rez_string(&m).contains("agent"),
+            !describe_rez_string(&m, "rezolus").contains("agent"),
             "an archive without a captured version must not print the label: {}",
-            describe_rez_string(&m)
+            describe_rez_string(&m, "rezolus")
         );
     }
 
@@ -793,18 +804,18 @@ mod rez_tests {
             }],
         };
         assert!(
-            describe_rez_string(&m).contains("not cleanly finalized"),
+            describe_rez_string(&m, "rezolus").contains("not cleanly finalized"),
             "{}",
-            describe_rez_string(&m)
+            describe_rez_string(&m, "rezolus")
         );
 
         m.recordings[0].complete = true;
-        assert!(!describe_rez_string(&m).contains("not cleanly finalized"));
+        assert!(!describe_rez_string(&m, "rezolus").contains("not cleanly finalized"));
 
         // v1 predates the flag entirely, so it is never interpreted there.
         m.version = 1;
         m.recordings[0].complete = false;
-        assert!(!describe_rez_string(&m).contains("not cleanly finalized"));
+        assert!(!describe_rez_string(&m, "rezolus").contains("not cleanly finalized"));
     }
 
     fn table(sampler: &str, segments: usize) -> RezTableIndex {
@@ -842,7 +853,7 @@ mod rez_tests {
                 tables: vec![table("cpu_usage", 2), table("blockio_latency", 1)],
             }],
         };
-        let s = describe_rez_string(&m);
+        let s = describe_rez_string(&m, "rezolus");
         assert!(s.contains("not cleanly finalized"), "{s}");
         assert!(s.contains("2 segments"), "{s}");
         assert!(
@@ -869,7 +880,7 @@ mod rez_tests {
                 tables: Vec::new(),
             }],
         };
-        let s = describe_rez_string(&m);
+        let s = describe_rez_string(&m, "rezolus");
         assert!(s.contains("clock anchor"), "{s}");
         assert!(s.contains("2023-11-14T22:13:20"), "{s}");
         assert!(s.contains("-2.250ms"), "the newest observation, in ms: {s}");
@@ -877,13 +888,13 @@ mod rez_tests {
 
         // An anchor with no observations still reports the anchor.
         m.recordings[0].clock_offsets.clear();
-        let s = describe_rez_string(&m);
+        let s = describe_rez_string(&m, "rezolus");
         assert!(s.contains("clock anchor"), "{s}");
         assert!(!s.contains("offset"), "{s}");
 
         // v1 archives carry neither field, so nothing is printed.
         m.recordings[0].clock_anchor_wall_ns = None;
-        assert!(!describe_rez_string(&m).contains("clock anchor"));
+        assert!(!describe_rez_string(&m, "rezolus").contains("clock anchor"));
     }
 }
 
@@ -921,7 +932,7 @@ mod rez_v3_tests {
         let path = dir.path().join("out.rez");
         edited_rez("v3.rez", &path, &format!("{NOT_PARQUET}{ARMED}"));
 
-        let s = describe_rez_string_at(&path).unwrap();
+        let s = describe_rez_string_at(&path, "rezolus").unwrap();
         assert!(s.contains(".rez archive v3"), "the container is named: {s}");
         assert!(s.contains("1 recording(s)"), "{s}");
         // v3 has no `dir`; the display name is the slug that produced it.
@@ -968,7 +979,7 @@ mod rez_v3_tests {
             ),
         );
 
-        let s = describe_rez_string_at(&path).unwrap();
+        let s = describe_rez_string_at(&path, "rezolus").unwrap();
         assert!(s.contains("not cleanly finalized"), "{s}");
         assert!(
             s.contains("final tick"),
@@ -1007,7 +1018,7 @@ mod rez_v3_tests {
             &format!("{NOT_PARQUET}DELETE FROM segments WHERE sampler = 'b/g';"),
         );
 
-        let s = describe_rez_string_at(&path).unwrap();
+        let s = describe_rez_string_at(&path, "rezolus").unwrap();
         assert!(
             s.contains("b/g"),
             "a never-sealed sampler must still be listed: {s}"
@@ -1050,7 +1061,7 @@ mod rez_v3_tests {
             ),
         );
 
-        let s = describe_rez_string_at(&path).unwrap();
+        let s = describe_rez_string_at(&path, "rezolus").unwrap();
         assert!(s.contains("clock anchor 2023-11-14T22:13:20"), "{s}");
         assert!(s.contains("-2.250ms"), "the newest observation, in ms: {s}");
         assert!(s.contains("3 observations"), "{s}");
@@ -1090,7 +1101,7 @@ mod rez_v3_tests {
         let path = dir.path().join("rec.dendro");
         crate::dendro_copy::fixtures::recorded(&path, 10, true);
 
-        let text = describe_rez_string_at(&path).unwrap();
+        let text = describe_rez_string_at(&path, "rezolus").unwrap();
         assert!(
             text.starts_with("dendro archive — 1 recording(s)"),
             "{text}"

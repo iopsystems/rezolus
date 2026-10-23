@@ -1,97 +1,93 @@
-use clap::ArgMatches;
 use std::path::{Path, PathBuf};
 
-use ::dashboard::{ServiceExtension, TemplateRegistry};
+use ::dashboard::ServiceExtension;
 use metriken_query::MetricsSource;
 
 use super::legacy;
 
-pub(super) fn run(args: &ArgMatches, _registry: &TemplateRegistry) {
-    let path = args.get_one::<PathBuf>("FILE").unwrap();
-    let output = args.get_one::<PathBuf>("output").map(PathBuf::as_path);
+pub(super) fn run(host: &super::Host, args: &super::cli::AnnotateArgs) -> i32 {
+    match run_inner(host, args) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
+    }
+}
+
+fn run_inner(host: &super::Host, args: &super::cli::AnnotateArgs) -> Result<(), String> {
+    let path = &args.file;
+    let output = args.output.as_deref();
 
     // Read, parse and check the --queries file before anything is written, so
     // a refusal leaves the file as it was whatever other edits were asked for.
-    let queries = args.get_one::<PathBuf>("queries").map(|p| read_queries(p));
+    let queries = args.queries.as_deref().map(load_queries).transpose()?;
 
-    let event_files: Vec<&Path> = args
-        .get_many::<PathBuf>("add-events")
-        .map(|it| it.map(PathBuf::as_path).collect())
-        .unwrap_or_default();
-    let inline_events: Vec<String> = args
-        .get_many::<String>("event")
-        .map(|it| it.cloned().collect())
-        .unwrap_or_default();
-    let clear_events = args.get_flag("clear-events");
+    let event_files: Vec<&Path> = args.add_events.iter().map(PathBuf::as_path).collect();
+    let inline_events: &[String] = &args.event;
+    let clear_events = args.clear_events;
     let events_requested = clear_events || !event_files.is_empty() || !inline_events.is_empty();
 
     // Flags that edited a parquet file's footer and have no meaning for a
     // .dendro archive are refused before anything is written. --undo and
     // --systeminfo have one (a recording's metadata keys) and are applied.
+    let program = host.program;
+    let how = host.how_labels_are_set();
     let relabel = |flag: &str| {
         format!(
             "{flag} set a key in a parquet file's footer. A .dendro recording's {} is a \
-             label, set when it is recorded (`rezolus record --endpoint URL,source=NAME` or \
-             `--label k=v`), and 6.x does not relabel a recording; to tell recordings apart \
-             in a comparison, use `rezolus recording combine --ab`",
+             label, set when it is recorded{how}, and 6.x does not relabel a recording; to \
+             tell recordings apart in a comparison, use `{program} recording combine --ab`",
             flag.trim_start_matches("--")
         )
     };
+    let table_flag = host.table_flag.flag();
     for (present, refusal) in [
+        (args.source.is_some(), relabel("--source")),
+        (args.node.is_some(), relabel("--node")),
         (
-            args.get_one::<String>("source").is_some(),
-            relabel("--source"),
-        ),
-        (args.get_one::<String>("node").is_some(), relabel("--node")),
-        (
-            args.get_flag("filter"),
+            args.filter,
             format!(
                 "--filter dropped a parquet file's columns its KPIs do not need; run \
-                 `rezolus recording filter {} -o slim.dendro` instead (a parquet file \
-                 with neither --samplers nor --metrics keeps what its KPIs need)",
-                crate::mcp::shell_word(&path.display().to_string())
+                 `{program} recording filter {} -o slim.dendro` instead (a parquet file \
+                 with neither {table_flag} nor --metrics keeps what its KPIs need)",
+                super::select::shell_word(&path.display().to_string())
             ),
         ),
     ] {
         if present {
-            eprintln!("error: {refusal}");
-            std::process::exit(1);
+            return Err(refusal);
         }
     }
-    let undo = args.get_flag("undo");
+    let undo = args.undo;
     let systeminfo = args
-        .get_one::<PathBuf>("systeminfo")
+        .systeminfo
+        .as_deref()
         .map(|p| {
             super::convert::load_json(p, super::convert::JsonShape::Any, "systeminfo")
                 .map_err(|e| e.to_string())
         })
-        .transpose()
-        .unwrap_or_else(|e| {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        });
+        .transpose()?;
 
     if queries.is_none() && !events_requested && !undo && systeminfo.is_none() {
-        eprintln!(
-            "error: annotating needs --queries <service-extension.json>, --undo, \
+        return Err(
+            "annotating needs --queries <service-extension.json>, --undo, \
              --systeminfo <PATH> and/or event flags (--event/--add-events/--clear-events)"
+                .to_string(),
         );
-        std::process::exit(1);
     }
 
-    let target =
-        legacy::edit_target(path, output, legacy::command_with_output).unwrap_or_else(|e| {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        });
+    let target = legacy::edit_target(path, output, legacy::command_with_output)
+        .map_err(|e| e.to_string())?;
 
     let events = events_requested.then(|| EventOps {
         add_files: &event_files,
-        inline: &inline_events,
+        inline: inline_events,
         clear: clear_events,
     });
 
     let annotation = RezAnnotation {
+        program,
         ext_json: queries.as_deref(),
         events,
         per_recording_events: None,
@@ -116,29 +112,16 @@ pub(super) fn run(args: &ArgMatches, _registry: &TemplateRegistry) {
             if let Some(report) = annotation.report.captured() {
                 println!("{report}");
             }
+            Ok(())
         }
-        Err(e) => {
-            eprintln!("error: failed to annotate {}: {e}", path.display());
-            std::process::exit(1);
-        }
+        Err(e) => Err(format!("failed to annotate {}: {e}", path.display())),
     }
 }
 
-/// The --queries file's contents, after checking that it parses as a
-/// `ServiceExtension` and that every KPI's `unit_system` is one the viewer
-/// knows (`ServiceExtension::check_unit_systems`). Exits 1 otherwise. `run`
-/// calls this before any edit, so a refusal writes nothing.
 /// The largest KPI template [`load_queries`] accepts: the limit the viewers
 /// put on a source's `dashboard` template, 1 MiB. Every shipped template is
 /// under 9 KB.
 pub(crate) const MAX_QUERIES_BYTES: usize = ::dashboard::source_templates::MAX_DASHBOARD_BYTES;
-
-fn read_queries(path: &Path) -> String {
-    load_queries(path).unwrap_or_else(|e| {
-        eprintln!("error: {e}");
-        std::process::exit(1);
-    })
-}
 
 /// Read a KPI template file and check it: it must be at most
 /// [`MAX_QUERIES_BYTES`], parse as a [`ServiceExtension`] and name only unit
@@ -172,6 +155,8 @@ pub(crate) fn load_queries(path: &Path) -> Result<String, String> {
 /// (`RezReader::open_recordings`): an edit of a recording is written into
 /// each of its sources, so a recording and its copy stay alike.
 pub(crate) struct RezAnnotation<'a> {
+    /// The program name refusals spell commands with (`Host::program`).
+    pub(crate) program: &'a str,
     /// Validated ServiceExtension JSON to embed under `KEY_SERVICE_QUERIES`
     /// (KPIs). Re-probed against each recording's own metrics.
     pub(crate) ext_json: Option<&'a str>,
@@ -274,11 +259,12 @@ pub(crate) fn annotate_archive_as(
     let container = legacy::Container::of(path);
     if container != legacy::Container::Dendro {
         return Err(format!(
-            "{} is a {}, which 6.x does not change; convert it with `rezolus recording \
+            "{} is a {}, which 6.x does not change; convert it with `{} recording \
              upgrade {}` and annotate the .dendro",
             path.display(),
             container.name(),
-            crate::mcp::shell_word(&path.display().to_string())
+            annotation.program,
+            crate::parquet_tools::select::shell_word(&path.display().to_string())
         )
         .into());
     }
@@ -614,6 +600,7 @@ mod tests {
     /// A KPIs-only annotation.
     fn kpi_annotation(ext_json: &str) -> RezAnnotation<'_> {
         RezAnnotation {
+            program: "rezolus",
             ext_json: Some(ext_json),
             events: None,
             per_recording_events: None,
@@ -627,6 +614,7 @@ mod tests {
     /// An events-only annotation adding the given inline events.
     fn inline_events_annotation(inline: &[String]) -> RezAnnotation<'_> {
         RezAnnotation {
+            program: "rezolus",
             ext_json: None,
             events: Some(EventOps {
                 add_files: &[],
@@ -733,6 +721,7 @@ mod tests {
 
         let inline = vec!["timestamp=1700000002000000000,description=marker".to_string()];
         let annotation = RezAnnotation {
+            program: "rezolus",
             ext_json: Some(
                 r#"{"service_name":"svc","kpis":[{"role":"overview","title":"Z","query":"0","type":"gauge"}]}"#,
             ),
@@ -757,6 +746,7 @@ mod tests {
         }
 
         let clear = RezAnnotation {
+            program: "rezolus",
             ext_json: None,
             events: Some(EventOps {
                 add_files: &[],
@@ -788,6 +778,7 @@ mod tests {
 
         let inline = vec!["timestamp=1700000002000000000,description=marker".to_string()];
         let annotation = RezAnnotation {
+            program: "rezolus",
             report: ReportSink::capture(),
             ..inline_events_annotation(&inline)
         };

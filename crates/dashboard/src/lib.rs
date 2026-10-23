@@ -22,6 +22,8 @@ pub use service_extension::{
     Bound, CategoryExtension, Check, Kpi, ServiceExtension, Severity, TemplateRegistry,
     format_duration, parse_duration,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use service_extension::{embedded_templates, resolve_templates};
 
 /// Default percentile quantiles used for histogram summaries.
 pub const DEFAULT_PERCENTILES: &[f64] = &[0.5, 0.9, 0.99, 0.999, 0.9999];

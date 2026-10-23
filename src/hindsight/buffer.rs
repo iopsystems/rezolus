@@ -743,7 +743,8 @@ mod tests {
 
         // `recording metadata` — dispatched by content, not by extension, and
         // handed a file that is still being written.
-        let described = crate::parquet_tools::metadata::describe_rez_string_at(&path).unwrap();
+        let described =
+            crate::parquet_tools::metadata::describe_rez_string_at(&path, "rezolus").unwrap();
         assert!(
             described.contains("cpu_usage"),
             "the metadata tool must name the buffer's tables: {described}"

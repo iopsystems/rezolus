@@ -1,4 +1,3 @@
-use clap::ArgMatches;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -21,7 +20,13 @@ enum AbPlan {
 /// The plan of `--ab baseline=<x> experiment=<y>`. With two inputs, each
 /// value names one input: the path as typed, else its file name. With one
 /// input, each is the position of one of its recordings.
-fn ab_plan(raw: &[String], files: &[PathBuf]) -> Result<AbPlan, Box<dyn std::error::Error>> {
+/// `positions_from` says where the positions come from
+/// (`Host::positions_from`), for the refusal of a value that is not one.
+fn ab_plan(
+    raw: &[String],
+    files: &[PathBuf],
+    positions_from: &str,
+) -> Result<AbPlan, Box<dyn std::error::Error>> {
     if raw.is_empty() {
         return Ok(AbPlan::Nothing);
     }
@@ -55,7 +60,7 @@ fn ab_plan(raw: &[String], files: &[PathBuf]) -> Result<AbPlan, Box<dyn std::err
                 let at: usize = value.parse().map_err(|_| {
                     format!(
                         "--ab {arm}={value:?}: with one input, name a recording by its \
-                         position (0, 1, ...) as `rezolus mcp describe-recording` lists them"
+                         position (0, 1, ...) {positions_from}"
                     )
                 })?;
                 *slot = (at, *arm);
@@ -200,7 +205,7 @@ fn stamped_labels(
                     "{}: its recording {} is already arm {existing}; --ab would make it {arm} \
                      (it never replaces an arm)",
                     file.display(),
-                    crate::mcp::render_labels(l)
+                    crate::parquet_tools::select::render_labels(l)
                 )
                 .into()),
                 None => {
@@ -275,6 +280,7 @@ fn read_groups_of(path: &Path) -> Result<Vec<Vec<usize>>, Box<dyn std::error::Er
 /// not, since the output would not open as the comparison asked for;
 /// without, a warning when the inputs' own arms would be refused.
 fn check_slots(
+    viewer_refuses: &str,
     labels: &[Labels],
     stamped: &[Option<Labels>],
     plan: &AbPlan,
@@ -296,7 +302,7 @@ fn check_slots(
         if *plan == AbPlan::Nothing {
             eprintln!(
                 "warning: the assembled recordings' arms do not fill a comparison ({why}); \
-                 `rezolus view` refuses it without --baseline/--experiment"
+                 {viewer_refuses}"
             );
         } else {
             return Err(format!(
@@ -330,21 +336,17 @@ macro_rules! say {
     }};
 }
 
-pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
-    let files: Vec<PathBuf> = args
-        .get_many::<PathBuf>("FILES")
-        .unwrap()
-        .cloned()
-        .collect();
-    let output = args.get_one::<PathBuf>("output").unwrap();
-    let ab_raw: Vec<String> = args
-        .get_many::<String>("ab")
-        .map(|i| i.cloned().collect())
-        .unwrap_or_default();
+pub(super) fn run(
+    host: &super::Host,
+    args: &super::cli::CombineArgs,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let files = &args.files;
+    let output = &args.output;
+    let ab_raw = &args.ab;
     for (given, flag) in [
-        (args.get_flag("bypass-time-check"), "--bypass-time-check"),
-        (args.get_one::<String>("pinned").is_some(), "--pinned"),
-        (args.get_one::<String>("category").is_some(), "--category"),
+        (args.bypass_time_check, "--bypass-time-check"),
+        (args.pinned.is_some(), "--pinned"),
+        (args.category.is_some(), "--category"),
     ] {
         if given {
             return Err(format!(
@@ -369,8 +371,8 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         return Err("combine takes two or more inputs (or one archive with --ab)".into());
     }
     legacy::check_new_dendro(output)?;
-    let plan = ab_plan(&ab_raw, &files)?;
-    combine_dendro(&files, output, &plan)
+    let plan = ab_plan(ab_raw, files, &host.positions_from())?;
+    combine_dendro(&host.viewer_refuses(), files, output, &plan)
 }
 
 /// Assemble one dendro archive from `files`, a source per input recording,
@@ -383,6 +385,7 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
 /// copy of it (the same uuid, e.g. a file and its snapshot) stay one
 /// recording to every reader (metriken-storage's process groups).
 fn combine_dendro(
+    viewer_refuses: &str,
     files: &[PathBuf],
     output: &Path,
     plan: &AbPlan,
@@ -459,7 +462,7 @@ fn combine_dendro(
         let labels: Vec<_> = rows.iter().map(|r| r.meta.labels.clone()).collect();
         let per = plan.per_recording(&counts, files, &groups)?;
         let new_labels = stamped_labels(&labels, &per)?;
-        check_slots(&labels, &new_labels, plan, &groups)?;
+        check_slots(viewer_refuses, &labels, &new_labels, plan, &groups)?;
         for (i, (row, new)) in rows.iter().zip(new_labels).enumerate() {
             if let Some(new) = new {
                 dst.update_source_labels(row.id, &new)?;
@@ -524,7 +527,12 @@ pub(crate) fn run_combine_for_test(
     files: &[PathBuf],
     output: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    combine_dendro(files, output, &AbPlan::Nothing)
+    combine_dendro(
+        "`rezolus view` refuses it without --baseline/--experiment",
+        files,
+        output,
+        &AbPlan::Nothing,
+    )
 }
 
 #[cfg(test)]
@@ -608,8 +616,17 @@ mod tests {
         (tmp, path)
     }
 
-    /// Build ArgMatches for `parquet combine <FILES...> -o <output>` and call
-    /// `run()` on them, exactly as the CLI does.
+    /// Parse `args` as the CLI does and run the combine they name.
+    fn combine_args(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::parquet_tools::{test_support, Recording};
+        let Recording::Combine(args) = test_support::parse(args) else {
+            panic!("not a combine");
+        };
+        run(&test_support::host(), &args)
+    }
+
+    /// Build the arguments of `parquet combine <FILES...> -o <output>` and
+    /// run them, exactly as the CLI does.
     fn run_combine(
         files: &[PathBuf],
         output: &std::path::Path,
@@ -618,11 +635,7 @@ mod tests {
         args.extend(files.iter().map(|f| f.to_string_lossy().into_owned()));
         args.push("-o".to_string());
         args.push(output.to_string_lossy().into_owned());
-        let matches = crate::parquet_tools::command()
-            .try_get_matches_from(args)
-            .unwrap();
-        let (_, sub) = matches.subcommand().unwrap();
-        run(sub)
+        combine_args(args)
     }
 
     /// `run_combine` with `--ab` and its values after the inputs.
@@ -639,11 +652,7 @@ mod tests {
             args.push("--ab".to_string());
             args.extend(ab.iter().map(|s| s.to_string()));
         }
-        let matches = crate::parquet_tools::command()
-            .try_get_matches_from(args)
-            .unwrap();
-        let (_, sub) = matches.subcommand().unwrap();
-        run(sub)
+        combine_args(args)
     }
 
     /// A one-recording `.rez` labelled `labels`.
@@ -952,6 +961,7 @@ mod tests {
             ab_plan(
                 &raw.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
                 &files.iter().map(PathBuf::from).collect::<Vec<_>>(),
+                "as `rezolus mcp describe-recording` lists them",
             )
         };
         assert_eq!(
@@ -1092,12 +1102,7 @@ mod tests {
             );
             args.extend(["-o".to_string(), out.display().to_string()]);
             args.extend(flags.iter().map(|s| s.to_string()));
-            let matches = crate::parquet_tools::command()
-                .try_get_matches_from(args)
-                .unwrap();
-            let err = run(matches.subcommand().unwrap().1)
-                .unwrap_err()
-                .to_string();
+            let err = combine_args(args).unwrap_err().to_string();
             assert!(err.contains("does not write"), "{flags:?}: {err}");
         }
         std::fs::write(&out, b"existing").unwrap();

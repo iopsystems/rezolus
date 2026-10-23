@@ -232,7 +232,7 @@ pub(crate) fn command_with_output(output: &Path) -> String {
     words.push(output.display().to_string());
     words
         .iter()
-        .map(|w| crate::mcp::shell_word(w))
+        .map(|w| crate::parquet_tools::select::shell_word(w))
         .collect::<Vec<_>>()
         .join(" ")
 }
