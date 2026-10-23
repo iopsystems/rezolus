@@ -49,15 +49,17 @@ pub fn command() -> Command {
                 .about("Add service extension KPIs or events to a recording (.dendro; a .rez or .parquet into a new .dendro)")
                 .long_about(
                     "Embed metadata the viewer reads into each recording of a .dendro archive,\n\
-                     in place: service-extension KPIs (--queries) and timeline events\n\
-                     (--event/--add-events/--clear-events). At least one is required.\n\n\
+                     in place: service-extension KPIs (--queries, or --undo to remove them),\n\
+                     timeline events (--event/--add-events/--clear-events) and a systeminfo JSON\n\
+                     (--systeminfo). At least one is required.\n\n\
                      A .rez archive or a .parquet file is not changed: 6.x writes .dendro only.\n\
                      Give -o <new.dendro> and the recording is converted there and the edit\n\
                      written to the copy; without -o the command is refused, naming the command\n\
                      to run. A .dendro with -o is copied there and the copy edited.\n\n\
-                     --undo, --node, --source, --systeminfo and --filter edited a parquet file's\n\
-                     footer, which 6.x no longer writes; they are accepted and ignored with a\n\
-                     warning.\n\n\
+                     --undo removes each recording's KPIs, and --systeminfo stores a systeminfo\n\
+                     JSON in each recording. --source, --node and --filter edited a parquet\n\
+                     file's footer and are refused: a recording's labels are set when it is\n\
+                     recorded, and `recording filter` shrinks a recording.\n\n\
                      EXAMPLES:\n    \
                      # Embed KPIs into each recording of an archive\n    \
                      rezolus recording annotate run.dendro --queries kpis.json\n\n    \
@@ -92,14 +94,14 @@ pub fn command() -> Command {
                 .arg(
                     clap::Arg::new("undo")
                         .long("undo")
-                        .help("Remove service extension annotation from the parquet file")
+                        .help("Remove the KPIs (service extension) from each recording")
                         .action(clap::ArgAction::SetTrue)
                         .conflicts_with("queries"),
                 )
                 .arg(
                     clap::Arg::new("filter")
                         .long("filter")
-                        .help("Also filter columns to only those needed by the service extension KPIs")
+                        .help("Refused: filtered a parquet file's columns; use `rezolus recording filter`")
                         .action(clap::ArgAction::SetTrue)
                         .conflicts_with("undo"),
                 )
@@ -115,7 +117,7 @@ pub fn command() -> Command {
                     clap::Arg::new("node")
                         .long("node")
                         .value_name("NAME")
-                        .help("Set the node attribute on this parquet file")
+                        .help("Refused: set a parquet footer key; a recording's labels are set when it is recorded")
                         .value_parser(value_parser!(String))
                         .action(clap::ArgAction::Set),
                 )
@@ -123,7 +125,7 @@ pub fn command() -> Command {
                     clap::Arg::new("source")
                         .long("source")
                         .value_name("NAME")
-                        .help("Set the source attribute (use with --overwrite to replace an existing one)")
+                        .help("Refused: set a parquet footer key; a recording's labels are set when it is recorded")
                         .value_parser(value_parser!(String))
                         .action(clap::ArgAction::Set)
                         .conflicts_with("undo"),
@@ -131,7 +133,7 @@ pub fn command() -> Command {
                 .arg(
                     clap::Arg::new("overwrite")
                         .long("overwrite")
-                        .help("Allow --source to replace an existing source value")
+                        .help("Applied to --source, which is refused")
                         .action(clap::ArgAction::SetTrue)
                         .requires("source"),
                 )
@@ -139,10 +141,9 @@ pub fn command() -> Command {
                     clap::Arg::new("systeminfo")
                         .long("systeminfo")
                         .value_name("PATH")
-                        .help("Embed systeminfo JSON from PATH (or '-' for stdin) into the parquet footer")
+                        .help("Store systeminfo JSON from PATH (or '-' for stdin) in each recording")
                         .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Set)
-                        .conflicts_with("undo"),
+                        .action(clap::ArgAction::Set),
                 )
                 .arg(
                     clap::Arg::new("add-events")
@@ -354,9 +355,11 @@ pub fn command() -> Command {
                      baseline/experiment comparison; an input recording that already carries\n\
                      the other arm is refused, naming the input. With ONE archive input,\n\
                      `--ab baseline=0 experiment=1` labels its recordings by position (from 0,\n\
-                     in the order `rezolus mcp describe-recording` lists them): the way to\n\
+                     in the order `rezolus mcp describe-recording` lists them; every source of\n\
+                     a recording, such as a source and its snapshot, takes its arm): the way to\n\
                      compare the two recordings of an archive combined before --ab existed,\n\
-                     whose labels may be identical.\n\n\
+                     whose labels may be identical. With two inputs, each value is an input's\n\
+                     path or file name; the source names the 5.x A/B tarball took are refused.\n\n\
                      --pinned, --category and --bypass-time-check applied to the parquet\n\
                      row-merge and the A/B tarball, which 6.x does not write; they are refused.\n\n\
                      EXAMPLES:\n    \
@@ -823,11 +826,28 @@ fn upgrade_to_dendro(
         )
         .into());
     }
+    if legacy::Container::of(path) == legacy::Container::Dendro {
+        return Err(format!(
+            "{} is already a dendro archive; there is nothing to upgrade",
+            path.display()
+        )
+        .into());
+    }
     let output = output
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| legacy::dendro_beside(path));
     legacy::check_new_dendro(&output)?;
-    println!("{}", legacy::convert(path, &output)?);
+    // Staged beside the output and moved there whole, so a failed
+    // conversion leaves nothing at the output.
+    let (_staging, staged) = legacy::stage_beside(&output)?;
+    let summary = legacy::convert_quiet(path, &staged)?;
+    std::fs::rename(&staged, &output)?;
+    println!(
+        "converted {} ({}) to {}: {summary}",
+        path.display(),
+        legacy::Container::of(path).name(),
+        output.display()
+    );
     Ok(())
 }
 

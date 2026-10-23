@@ -83,7 +83,9 @@ fn ab_plan(raw: &[String], files: &[PathBuf]) -> Result<AbPlan, Box<dyn std::err
                     [at] => *at,
                     [] => {
                         return Err(format!(
-                            "--ab {arm}={value:?} names neither input ({} or {})",
+                            "--ab {arm}={value:?} names neither input ({} or {}); --ab \
+                             names an input by its path or file name (a source name, which \
+                             the 5.x A/B tarball took, is no longer accepted)",
                             files[0].display(),
                             files[1].display()
                         )
@@ -122,13 +124,18 @@ fn ab_plan(raw: &[String], files: &[PathBuf]) -> Result<AbPlan, Box<dyn std::err
 type ArmOf<'a> = (&'static str, &'a PathBuf);
 
 impl AbPlan {
-    /// The arm each recording of the output takes, and the input it came
-    /// from: `counts` is how many recordings each input contributed, in the
-    /// order they were copied.
+    /// The arm each source of the output takes, and the input it came
+    /// from: `counts` is how many sources each input contributed, in the
+    /// order they were copied. `groups` is the one input's recordings as
+    /// `rezolus mcp describe-recording` lists them (its read groups, each by
+    /// the catalog positions of its sources), which `--ab baseline=0
+    /// experiment=1` positions index; every source of a named recording
+    /// takes its arm.
     fn per_recording<'a>(
         &self,
         counts: &[usize],
         files: &'a [PathBuf],
+        groups: &[Vec<usize>],
     ) -> Result<Vec<Option<ArmOf<'a>>>, Box<dyn std::error::Error>> {
         let total: usize = counts.iter().sum();
         match self {
@@ -141,13 +148,19 @@ impl AbPlan {
             AbPlan::Positions(picks) => {
                 let mut out = vec![None; total];
                 for (at, arm) in picks {
-                    let slot = out.get_mut(*at).ok_or_else(|| {
+                    let group = groups.get(*at).ok_or_else(|| {
                         format!(
-                            "--ab {arm}={at}: {} holds {total} recording(s), numbered from 0",
-                            files[0].display()
+                            "--ab {arm}={at}: {} holds {} recording(s), numbered from 0",
+                            files[0].display(),
+                            groups.len()
                         )
                     })?;
-                    *slot = Some((*arm, &files[0]));
+                    for &source in group {
+                        let slot = out.get_mut(source).ok_or_else(|| {
+                            format!("--ab {arm}={at}: source {source} is not in the output")
+                        })?;
+                        *slot = Some((*arm, &files[0]));
+                    }
                 }
                 Ok(out)
             }
@@ -204,9 +217,11 @@ fn stamped_labels(
 }
 
 /// Refuse a plan an input's recordings already contradict, before anything
-/// is written: each input's source labels, read from the dendro archive it
-/// is copied from (`inputs`, the converted ones for a legacy input), named by
-/// the input as given (`files`).
+/// is copied: each input's source labels, read from the dendro archive it is
+/// copied from (`inputs`, the converted ones for a legacy input), named by
+/// the input as given (`files`). Whether the arms fill a comparison is
+/// checked after the copy (`check_slots`), when the output's recordings are
+/// known: a source and its copy in two inputs are one recording.
 fn check_ab_plan(
     plan: &AbPlan,
     files: &[PathBuf],
@@ -222,8 +237,27 @@ fn check_ab_plan(
         counts.push(sources.len());
         labels.extend(sources.into_iter().map(|s| s.meta.labels));
     }
-    let stamped = stamped_labels(&labels, &plan.per_recording(&counts, files)?)?;
-    check_slots(&labels, &stamped, plan)
+    let groups = match plan {
+        AbPlan::Positions(_) => read_groups_of(&inputs[0])?,
+        _ => Vec::new(),
+    };
+    stamped_labels(&labels, &plan.per_recording(&counts, files, &groups)?)?;
+    Ok(())
+}
+
+/// The recordings of the dendro archive at `path` as every reader presents
+/// them (`RezReader::open_recordings`, one per read group), each by the
+/// catalog positions of its sources. The readers are dropped before this
+/// returns, so a writer can open the archive next.
+fn read_groups_of(path: &Path) -> Result<Vec<Vec<usize>>, Box<dyn std::error::Error>> {
+    let readers = crate::rez_reader::RezReader::open_recordings(
+        path,
+        metriken_storage::BufferPool::new(16 * 1024 * 1024),
+    )?;
+    Ok(readers
+        .iter()
+        .map(|(_, r)| r.sources().iter().map(|s| s.catalog_index).collect())
+        .collect())
 }
 
 /// Whether the labels an assembly ends with (`stamped`, else the
@@ -235,12 +269,20 @@ fn check_slots(
     labels: &[Labels],
     stamped: &[Option<Labels>],
     plan: &AbPlan,
+    groups: &[Vec<usize>],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let last: Vec<Labels> = labels
-        .iter()
-        .zip(stamped)
-        .map(|(l, s)| s.clone().unwrap_or_else(|| l.clone()))
-        .collect();
+    // One label set per recording: the sources of a read group are one
+    // recording unless their final labels differ.
+    let mut last: Vec<Labels> = Vec::new();
+    for group in groups {
+        let mut seen = std::collections::BTreeSet::new();
+        for &i in group {
+            let l = stamped[i].clone().unwrap_or_else(|| labels[i].clone());
+            if seen.insert(l.clone()) {
+                last.push(l);
+            }
+        }
+    }
     if let Err(why) = ::dashboard::combined::arm_slots(&last) {
         if *plan == AbPlan::Nothing {
             eprintln!(
@@ -302,13 +344,7 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     if files.len() < 2 && ab_raw.is_empty() {
         return Err("combine takes two or more inputs (or one archive with --ab)".into());
     }
-    if output.exists() {
-        return Err(format!(
-            "{} already exists; refusing to replace it",
-            output.display()
-        )
-        .into());
-    }
+    legacy::check_new_dendro(output)?;
     let plan = ab_plan(&ab_raw, &files)?;
     combine_dendro(&files, output, &plan)
 }
@@ -367,11 +403,11 @@ fn combine_dendro(
         .iter()
         .map(|p| Archive::open(p))
         .collect::<Result<_, _>>()?;
+    let mut sources = 0usize;
+    let mut counts: Vec<usize> = Vec::with_capacity(archives.len());
 
     let staged = staging.path().join("combined.dendro");
     let mut dst = ArchiveMut::create(&staged)?;
-    let mut sources = 0usize;
-    let mut counts: Vec<usize> = Vec::with_capacity(archives.len());
     dst.transaction(|tx| {
         for src in &archives {
             // The encoder is built in the snapshot the copy reads, so an
@@ -391,13 +427,19 @@ fn combine_dendro(
     if *plan != AbPlan::Nothing && FAIL_STAMP.with(|f| f.get()) {
         return Err("injected relabel failure".into());
     }
+    drop(dst);
+    drop(archives);
+    // The output's recordings as the readers present them: what --ab
+    // positions name, and what fills a comparison's slots.
+    let groups = read_groups_of(&staged)?;
+    let mut dst = ArchiveMut::open(&staged)?;
     let mut stamped = 0;
     {
         let rows = dst.read_sources()?;
         let labels: Vec<_> = rows.iter().map(|r| r.meta.labels.clone()).collect();
-        let per = plan.per_recording(&counts, files)?;
+        let per = plan.per_recording(&counts, files, &groups)?;
         let new_labels = stamped_labels(&labels, &per)?;
-        check_slots(&labels, &new_labels, plan)?;
+        check_slots(&labels, &new_labels, plan, &groups)?;
         for (row, new) in rows.iter().zip(new_labels) {
             if let Some(new) = new {
                 dst.update_source_labels(row.id, &new)?;
@@ -406,15 +448,28 @@ fn combine_dendro(
         }
     }
     drop(dst);
-    drop(archives);
+    // Read again after the relabel, which can split a recording (a source
+    // and its copy given different arms). The staged file's sidecars stay
+    // in the staging directory.
+    let recordings = read_groups_of(&staged)?.len();
     std::fs::rename(&staged, output)?;
     report_arms(stamped, files, plan);
-    println!(
-        "wrote {} with {} recording(s) from {} input(s)",
-        output.display(),
-        sources,
-        files.len()
-    );
+    if recordings == sources {
+        println!(
+            "wrote {} with {} recording(s) from {} input(s)",
+            output.display(),
+            recordings,
+            files.len()
+        );
+    } else {
+        println!(
+            "wrote {} with {} recording(s) ({} sources) from {} input(s)",
+            output.display(),
+            recordings,
+            sources,
+            files.len()
+        );
+    }
     Ok(())
 }
 
@@ -1210,5 +1265,78 @@ mod tests {
         let both = crate::rez_reader::RezReader::open_recordings(&out, pool()).unwrap();
         assert_eq!(both.len(), 1, "a source and its copy are one recording");
         assert_eq!(answer(&both[0].1), answer(&one[0].1));
+    }
+
+    /// `--ab` positions index the recordings `describe-recording` lists (the
+    /// read groups), not the archive's sources. An original, its snapshot and
+    /// a later recording are three sources but two recordings: position 0 is
+    /// the original with its copy, and both of its sources take the arm;
+    /// position 1 is the later one; position 2 does not exist.
+    #[test]
+    fn ab_positions_name_recordings_not_sources() {
+        use ::rez::fixtures::{counter, map, snap_counters, write_dendro, Finish, Source, ANCHOR};
+        let dir = tempfile::tempdir().unwrap();
+        let source = |epoch: &str, ticks: std::ops::Range<u64>| Source {
+            labels: map(&[("source", "rezolus")]),
+            metadata: map(&[("producer_epoch", epoch)]),
+            rows: ticks
+                .map(|i| {
+                    let ts = ANCHOR + i * 1_000_000_000;
+                    let w = Some(::rez::window::Window::new(ts - 50_000_000, ts));
+                    (snap_counters(ts, vec![counter("ops", "s", 10 * i, w)]), ts)
+                })
+                .collect(),
+        };
+        let a = dir.path().join("a.dendro");
+        write_dendro(&a, &[source("E", 0..6)], None, Finish::Finalized);
+        let copy = dir.path().join("a-copy.dendro");
+        crate::parquet_tools::snapshot_rez(&a, &copy).unwrap();
+        let later = dir.path().join("later.dendro");
+        write_dendro(&later, &[source("F", 10..16)], None, Finish::Finalized);
+        let three = dir.path().join("three.dendro");
+        run_combine(&[a, copy, later], &three).unwrap();
+        assert_eq!(read_groups_of(&three).unwrap(), [vec![0, 1], vec![2]]);
+
+        let err = run_combine_ab(
+            std::slice::from_ref(&three),
+            &dir.path().join("x.dendro"),
+            &["baseline=0", "experiment=2"],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("holds 2 recording(s)"), "{err}");
+
+        let ab = dir.path().join("ab.dendro");
+        run_combine_ab(
+            std::slice::from_ref(&three),
+            &ab,
+            &["baseline=0", "experiment=1"],
+        )
+        .unwrap();
+        let arms: Vec<Option<String>> = dendro::archive::Archive::open(&ab)
+            .unwrap()
+            .read_sources()
+            .unwrap()
+            .into_iter()
+            .map(|s| s.meta.labels.get("arm").cloned())
+            .collect();
+        assert_eq!(
+            arms,
+            [
+                Some("baseline".into()),
+                Some("baseline".into()),
+                Some("experiment".into())
+            ]
+        );
+        let readers = crate::rez_reader::RezReader::open_recordings(
+            &ab,
+            metriken_storage::BufferPool::new(16 * 1024 * 1024),
+        )
+        .unwrap();
+        assert_eq!(
+            readers.len(),
+            2,
+            "the original and its copy stay one recording"
+        );
     }
 }

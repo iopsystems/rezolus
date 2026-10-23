@@ -25,40 +25,65 @@ pub(super) fn run(args: &ArgMatches, _registry: &TemplateRegistry) {
     let clear_events = args.get_flag("clear-events");
     let events_requested = clear_events || !event_files.is_empty() || !inline_events.is_empty();
 
-    for (present, label) in [
-        (args.get_flag("undo"), "--undo"),
-        (args.get_one::<String>("node").is_some(), "--node"),
-        (args.get_one::<String>("source").is_some(), "--source"),
+    // Flags that edited a parquet file's footer and have no meaning for a
+    // .dendro archive are refused before anything is written. --undo and
+    // --systeminfo have one (a recording's metadata keys) and are applied.
+    let relabel = |flag: &str| {
+        format!(
+            "{flag} set a key in a parquet file's footer. A .dendro recording's {} is a \
+             label, set when it is recorded (`rezolus record --endpoint URL,source=NAME` or \
+             `--label k=v`), and 6.x does not relabel a recording; to tell recordings apart \
+             in a comparison, use `rezolus recording combine --ab`",
+            flag.trim_start_matches("--")
+        )
+    };
+    for (present, refusal) in [
         (
-            args.get_one::<PathBuf>("systeminfo").is_some(),
-            "--systeminfo",
+            args.get_one::<String>("source").is_some(),
+            relabel("--source"),
         ),
-        (args.get_flag("filter"), "--filter"),
+        (args.get_one::<String>("node").is_some(), relabel("--node")),
+        (
+            args.get_flag("filter"),
+            format!(
+                "--filter dropped a parquet file's columns its KPIs do not need; run \
+                 `rezolus recording filter {} -o slim.dendro` instead (a parquet file \
+                 with neither --samplers nor --metrics keeps what its KPIs need)",
+                crate::mcp::shell_word(&path.display().to_string())
+            ),
+        ),
     ] {
         if present {
-            eprintln!(
-                "warning: {label} edited a parquet file's footer, which 6.x no longer \
-                 writes; it is not supported on an archive and is ignored"
-            );
+            eprintln!("error: {refusal}");
+            std::process::exit(1);
         }
     }
-
-    if queries.is_none() && !events_requested {
-        eprintln!(
-            "error: annotating needs --queries <service-extension.json> and/or event \
-             flags (--event/--add-events/--clear-events)"
-        );
-        std::process::exit(1);
-    }
-
-    let (target, note) = legacy::edit_target(path, output, legacy::command_with_output)
+    let undo = args.get_flag("undo");
+    let systeminfo = args
+        .get_one::<PathBuf>("systeminfo")
+        .map(|p| {
+            super::convert::load_json(p, super::convert::JsonShape::Any, "systeminfo")
+                .map_err(|e| e.to_string())
+        })
+        .transpose()
         .unwrap_or_else(|e| {
             eprintln!("error: {e}");
             std::process::exit(1);
         });
-    if let Some(note) = note {
-        println!("{note}");
+
+    if queries.is_none() && !events_requested && !undo && systeminfo.is_none() {
+        eprintln!(
+            "error: annotating needs --queries <service-extension.json>, --undo, \
+             --systeminfo <PATH> and/or event flags (--event/--add-events/--clear-events)"
+        );
+        std::process::exit(1);
     }
+
+    let target =
+        legacy::edit_target(path, output, legacy::command_with_output).unwrap_or_else(|e| {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        });
 
     let events = events_requested.then(|| EventOps {
         add_files: &event_files,
@@ -70,14 +95,33 @@ pub(super) fn run(args: &ArgMatches, _registry: &TemplateRegistry) {
         ext_json: queries.as_deref(),
         events,
         per_recording_events: None,
-        per_recording_replace: None,
-        report: ReportSink::Stdout,
+        per_recording_remove: None,
+        undo_kpis: undo,
+        systeminfo: systeminfo.as_deref(),
+        // Printed once the edit is in place, after the note saying what
+        // was converted.
+        report: ReportSink::capture(),
     };
 
-    annotate_archive(&target, &annotation).unwrap_or_else(|e| {
-        eprintln!("error: failed to annotate {}: {e}", target.display());
-        std::process::exit(1);
+    let result = annotate_archive_as(target.path(), target.shown(), &annotation).and_then(|()| {
+        let note = target.note();
+        target.commit()?;
+        Ok(note)
     });
+    match result {
+        Ok(note) => {
+            if let Some(note) = note {
+                println!("{note}");
+            }
+            if let Some(report) = annotation.report.captured() {
+                println!("{report}");
+            }
+        }
+        Err(e) => {
+            eprintln!("error: failed to annotate {}: {e}", path.display());
+            std::process::exit(1);
+        }
+    }
 }
 
 /// The --queries file's contents, after checking that it parses as a
@@ -138,21 +182,25 @@ pub(crate) struct RezAnnotation<'a> {
     /// Must have one entry per recording; an empty entry adds nothing to that
     /// recording.
     pub(crate) per_recording_events: Option<Vec<Vec<crate::viewer::Event>>>,
-    /// A whole events payload per recording, replacing what is stored:
-    /// `Some(events)` rewrites that recording's `KEY_EVENTS` (an empty list
-    /// drops the key), `None` leaves it alone. Must have one entry per
-    /// recording. The MCP `remove_events` tool writes through this, since a
-    /// removal is a read, a filter, and a replace.
-    pub(crate) per_recording_replace: Option<Vec<Option<crate::viewer::Events>>>,
+    /// Events to drop per recording: `Some(filter)` removes every event
+    /// matching it from each of that recording's sources, each from its own
+    /// payload (a source's other events stay with it; an emptied payload
+    /// drops the key), `None` leaves the recording alone. Must have one entry
+    /// per recording. The MCP `remove_events` tool writes through this.
+    pub(crate) per_recording_remove: Option<Vec<Option<super::events::RemoveFilter>>>,
+    /// Remove the KPIs (`service_queries`) from every recording (`--undo`).
+    pub(crate) undo_kpis: bool,
+    /// A systeminfo JSON to store in every recording (`--systeminfo`).
+    pub(crate) systeminfo: Option<&'a str>,
     /// Where the one-line report goes.
     pub(crate) report: ReportSink,
 }
 
-/// Where an annotation's report line is delivered: stdout (the CLI's
-/// default), or captured for a caller that decides itself (`check`, whose
-/// stdout may be a JSON payload; the MCP tools, which return it).
+/// Where an annotation's report lines go: captured, for the caller to
+/// print once the edit is in place (`annotate`, after a staged edit is
+/// moved to its output), to send where it chooses (`check`, whose stdout
+/// may be a JSON payload), or to return (the MCP tools).
 pub(crate) enum ReportSink {
-    Stdout,
     Capture(std::cell::RefCell<Vec<String>>),
 }
 
@@ -168,7 +216,6 @@ impl ReportSink {
                 let lines = cell.borrow();
                 (!lines.is_empty()).then(|| lines.join("\n"))
             }
-            _ => None,
         }
     }
 }
@@ -176,7 +223,6 @@ impl ReportSink {
 impl RezAnnotation<'_> {
     fn report(&self, line: String) {
         match &self.report {
-            ReportSink::Stdout => println!("{line}"),
             ReportSink::Capture(cell) => cell.borrow_mut().push(line),
         }
     }
@@ -207,8 +253,19 @@ pub(crate) struct EventOps<'a> {
 /// read or copied, which is why annotating a 4 GB archive costs the same as
 /// annotating a 4 MB one. A dendro archive a writer still holds cannot be
 /// opened for writing, and says so.
+#[cfg(test)]
 pub(crate) fn annotate_archive(
     path: &Path,
+    annotation: &RezAnnotation,
+) -> Result<(), Box<dyn std::error::Error>> {
+    annotate_archive_as(path, path, annotation)
+}
+
+/// [`annotate_archive`] of the archive at `path`, reported as `shown`: the
+/// output a staged edit is moved to (`legacy::EditTarget`).
+pub(crate) fn annotate_archive_as(
+    path: &Path,
+    shown: &Path,
     annotation: &RezAnnotation,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::parquet_metadata::KEY_EVENTS;
@@ -289,12 +346,12 @@ pub(crate) fn annotate_archive(
     }
 
     if let Some(per) = annotation
-        .per_recording_replace
+        .per_recording_remove
         .as_ref()
         .filter(|per| per.len() != recordings)
     {
         return Err(format!(
-            "{} has {} recording(s) but replacement payloads were built for {}; the archive \
+            "{} has {} recording(s) but removals were built for {}; the archive \
              changed between the read and the write",
             path.display(),
             recordings,
@@ -303,8 +360,9 @@ pub(crate) fn annotate_archive(
         .into());
     }
 
-    // Recordings whose whole events payload was replaced, and the event
-    // count they hold afterwards.
+    // Recordings events were removed from, and the event count they hold
+    // afterwards (each recording's sources' events as one, as a reader shows
+    // them).
     let mut replaced: Option<(usize, usize)> = None;
     // (events remaining after the ops, whether they were cleared first) — the
     // input is identical for every recording, so the last one's counts stand
@@ -313,6 +371,7 @@ pub(crate) fn annotate_archive(
     let mut per_recording_report: Option<CheckEventTally> = None;
     for (idx, ext_json) in ext_jsons.iter().enumerate() {
         let mut touched = false;
+        let mut kept_per_source: Vec<Events> = Vec::new();
         for (member_n, &position) in members[idx].iter().enumerate() {
             let source = &sources[position];
             let mut metadata = source.meta.metadata.clone();
@@ -321,6 +380,15 @@ pub(crate) fn annotate_archive(
                 metadata.insert(
                     crate::parquet_metadata::KEY_SERVICE_QUERIES.to_string(),
                     ext_json.clone(),
+                );
+            }
+            if annotation.undo_kpis {
+                metadata.remove(crate::parquet_metadata::KEY_SERVICE_QUERIES);
+            }
+            if let Some(systeminfo) = annotation.systeminfo {
+                metadata.insert(
+                    crate::parquet_metadata::KEY_SYSTEMINFO.to_string(),
+                    systeminfo.to_string(),
                 );
             }
 
@@ -359,28 +427,51 @@ pub(crate) fn annotate_archive(
                         serde_json::to_string(&appended.events)?,
                     );
                 }
-                // A recording's sources hold its events alike; count them
-                // once, from its first source.
+                // Counted once per recording, against its sources' events
+                // as one (what a reader shows), not one source's.
                 if member_n == 0 {
+                    let shown = members[idx]
+                        .iter()
+                        .filter_map(|&p| sources[p].meta.metadata.get(KEY_EVENTS))
+                        .map(|s| serde_json::from_str::<Events>(s))
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|e| format!("recording has an invalid events payload: {e}"))?;
+                    let counts =
+                        super::events::append_events(Some(Events::union(shown)), per[idx].clone())
+                            .counts;
                     let tally = per_recording_report.get_or_insert_with(Default::default);
-                    tally.counts.add(appended.counts);
+                    tally.counts.add(counts);
                 }
             }
 
-            if let Some(events) = annotation
-                .per_recording_replace
+            if let Some(filter) = annotation
+                .per_recording_remove
                 .as_ref()
                 .and_then(|per| per[idx].as_ref())
             {
-                if events.events.is_empty() {
-                    metadata.remove(KEY_EVENTS);
-                } else {
-                    metadata.insert(KEY_EVENTS.to_string(), serde_json::to_string(events)?);
+                let existing = metadata
+                    .get(KEY_EVENTS)
+                    .map(|s| serde_json::from_str::<Events>(s))
+                    .transpose()
+                    .map_err(|e| format!("recording has an invalid events payload: {e}"))?;
+                if let Some(existing) = existing {
+                    let mut kept = Events::new(
+                        existing
+                            .events
+                            .into_iter()
+                            .filter(|e| !filter.matches(e))
+                            .collect(),
+                    );
+                    kept.normalize();
+                    if kept.events.is_empty() {
+                        metadata.remove(KEY_EVENTS);
+                    } else {
+                        metadata.insert(KEY_EVENTS.to_string(), serde_json::to_string(&kept)?);
+                    }
+                    kept_per_source.push(kept);
                 }
                 if member_n == 0 {
-                    let r = replaced.get_or_insert((0, 0));
-                    r.0 += 1;
-                    r.1 += events.events.len();
+                    replaced.get_or_insert((0, 0)).0 += 1;
                 }
             }
 
@@ -391,12 +482,20 @@ pub(crate) fn annotate_archive(
                 tally.touched += 1;
             }
         }
+        if let Some(r) = replaced.as_mut().filter(|_| {
+            annotation
+                .per_recording_remove
+                .as_ref()
+                .is_some_and(|per| per[idx].is_some())
+        }) {
+            r.1 += Events::union(kept_per_source).events.len();
+        }
     }
 
     if let Some((n, total)) = replaced {
         annotation.report(format!(
-            "Annotated {:?}: replaced the events of {n} of {recordings} recording(s) ({total} event(s) remain)",
-            path
+            "Annotated {:?}: removed events from {n} of {recordings} recording(s) ({total} event(s) remain)",
+            shown
         ));
         return Ok(());
     }
@@ -411,7 +510,7 @@ pub(crate) fn annotate_archive(
     {
         annotation.report(format!(
             "Annotated {:?}: nothing new; {} check event(s) already present in {} of {recordings} recording(s)",
-            path, tally.counts.unchanged, tally.touched,
+            shown, tally.counts.unchanged, tally.touched,
         ));
         return Ok(());
     }
@@ -419,6 +518,9 @@ pub(crate) fn annotate_archive(
     let mut parts: Vec<String> = Vec::new();
     if let Some(k) = kpis {
         parts.push(format!("{k} KPIs"));
+    }
+    if annotation.systeminfo.is_some() {
+        parts.push("systeminfo".to_string());
     }
     if let Some((total, cleared)) = events_report {
         parts.push(if cleared {
@@ -436,11 +538,14 @@ pub(crate) fn annotate_archive(
         }
         _ => format!("{recordings} recording(s)"),
     };
-    annotation.report(format!(
-        "Annotated {:?}: embedded {} into {scope}",
-        path,
-        parts.join(" and ")
-    ));
+    let mut done: Vec<String> = Vec::new();
+    if annotation.undo_kpis {
+        done.push(format!("removed the KPIs of {scope}"));
+    }
+    if !parts.is_empty() {
+        done.push(format!("embedded {} into {scope}", parts.join(" and ")));
+    }
+    annotation.report(format!("Annotated {:?}: {}", shown, done.join("; ")));
     Ok(())
 }
 
@@ -512,8 +617,10 @@ mod tests {
             ext_json: Some(ext_json),
             events: None,
             per_recording_events: None,
-            per_recording_replace: None,
-            report: ReportSink::Stdout,
+            per_recording_remove: None,
+            undo_kpis: false,
+            systeminfo: None,
+            report: ReportSink::capture(),
         }
     }
 
@@ -527,8 +634,10 @@ mod tests {
                 clear: false,
             }),
             per_recording_events: None,
-            per_recording_replace: None,
-            report: ReportSink::Stdout,
+            per_recording_remove: None,
+            undo_kpis: false,
+            systeminfo: None,
+            report: ReportSink::capture(),
         }
     }
 
@@ -633,8 +742,10 @@ mod tests {
                 clear: false,
             }),
             per_recording_events: None,
-            per_recording_replace: None,
-            report: ReportSink::Stdout,
+            per_recording_remove: None,
+            undo_kpis: false,
+            systeminfo: None,
+            report: ReportSink::capture(),
         };
         annotate_archive(&path, &annotation).unwrap();
         let md = source_metadata(&path)[0].clone();
@@ -653,8 +764,10 @@ mod tests {
                 clear: true,
             }),
             per_recording_events: None,
-            per_recording_replace: None,
-            report: ReportSink::Stdout,
+            per_recording_remove: None,
+            undo_kpis: false,
+            systeminfo: None,
+            report: ReportSink::capture(),
         };
         annotate_archive(&path, &clear).unwrap();
         assert!(!source_metadata(&path)[0].contains_key(KEY_EVENTS));

@@ -607,12 +607,13 @@ browser would.
 
 ## Recording tools
 
-`rezolus recording` inspects and transforms `.parquet` files and `.rez`
-archives. `parquet` remains a compatibility alias for the command. Operations
-and flags differ by format; check `rezolus recording <subcommand> --help`.
+`rezolus recording` inspects and transforms recordings: `.dendro` archives,
+and the `.rez` archives and `.parquet` files 5.x wrote. `parquet` remains a
+compatibility alias for the command. Check `rezolus recording <subcommand>
+--help` for each one's flags.
 
-- **Metadata** — inspect file-level and column-level metadata, geometry, and
-  schema.
+- **Metadata** — inspect a recording: an archive's recordings, labels,
+  metadata and tables, or a parquet file's metadata, geometry and schema.
 - **Annotate** — embed service extension KPI definitions for custom viewer
   dashboards.
 - **Check** — evaluate the checks a recording's KPIs carry and report a
@@ -923,12 +924,15 @@ rezolus mcp --allow-mutating
   --clear-events`, typed by a person.
 
 Without the flag `remove_events` is neither listed nor callable; a call
-answers with the flag's name. On a multi-recording `.rez`, `add_event` and
+answers with the flag's name. On a multi-recording archive, `add_event` and
 `remove_events` need the `recording` selector below and refuse to write to
 every arm; `run_checks` without a selector evaluates every recording and
-gives each its own verdicts, as `recording check` does. The reply of a
-write carries the writer's report line, which is where a v1/v2 tar archive
-says it was upgraded to v3 on the way.
+gives each its own verdicts, as `recording check` does. A write edits a
+`.dendro` in place. A `.rez` or `.parquet` recording is not changed: the
+write needs `output`, a new `.dendro` the recording is converted to and the
+edit written into, and is refused without it. The reply of a write carries
+the writer's report line, and for a converted input the line saying what was
+converted.
 
 ### Multi-recording archives
 

@@ -15,6 +15,16 @@ Rezolus recordings carry metadata in one of two places depending on format:
 The viewer, MCP, and downstream tools rely on this metadata to interpret the
 data, distinguish recordings, build dashboards, and combine files.
 
+**Rezolus 6.x reads both formats and writes neither.** It writes `.dendro`
+archives, where each recording (a source in the archive's catalog) carries
+the same keys in its own metadata map, and its identity in its labels. A
+`recording` command that sets a key (`annotate`, `check --annotate`) edits a
+`.dendro` in place; given a `.rez` or `.parquet` it needs `-o <new>.dendro`,
+converts the recording there and edits the copy, and never changes the
+original. This document describes the keys as 5.x wrote them, for reading
+those files; where it shows how a key is set, the command is 6.x's unless it
+says a 5.x binary.
+
 This document covers *file-level* metadata. For per-column field metadata —
 which keys are storage keys, which become series labels, and the `__` rule for
 internal labels — see [labels.md](labels.md).
@@ -86,25 +96,24 @@ Structural differences from a single parquet file:
   the v2 format include a capacity walk and read millisecond-scale. The
   other per-cgroup counters (`CgroupCounters`) are summed in the sampler's
   refresh, and their window brackets that sum.
-- **Raw timestamps survive combining.** `parquet combine` on `.rez` inputs
-  assembles recordings **verbatim** (rows untouched, `dir`s deduped) — unlike
-  `.parquet` combine, nothing is quantized, so windows and sampling-jitter
-  fidelity are preserved. Mixing `.rez` and `.parquet` inputs is rejected.
+- **Raw timestamps survive combining.** `recording combine` converts a
+  `.rez` input to dendro and copies its rows unchanged, so windows and
+  sampling-jitter fidelity are preserved.
 
-Tool surface on a `.rez` (all four subcommands accept it):
+What 6.x's `recording` commands do with a `.rez`:
 
 | Command | `.rez` behavior |
 |---------|-----------------|
-| `parquet metadata` | Describes the manifest (`--json` for full JSON); `--file`/`--field` don't apply. |
-| `parquet annotate` | Requires `--queries <ext.json>` (no built-in template flow); embeds the validated `ServiceExtension` into **every** recording's manifest. The parquet-only flags (`--source`, `--node`, `--systeminfo`, events) don't apply. |
-| `parquet combine` | Assembles single-recording `.rez` inputs into one multi-recording `.rez` (verbatim; label-set model). |
-| `parquet filter` | Requires `--samplers a,b,...` — drops whole per-sampler tables not listed (the KPI-column filter no-ops on all-rezolus data). |
+| `recording metadata` | Describes the recordings, their labels and metadata, and each table (`--json` for JSON); `--file`/`--field` don't apply. |
+| `recording annotate` | Needs `-o <new>.dendro`: the archive is converted there and every recording of the copy gets the KPIs (`--queries`, required, or `--undo`), the events and `--systeminfo`. `--source`, `--node` and `--filter` are refused. |
+| `recording combine` | Converts each `.rez` input to dendro and copies its recordings into one `.dendro`, labels unchanged (`--ab` adds `arm`). |
+| `recording filter` | Needs `-o <new>.dendro`; keeps the samplers (`--samplers`) or metrics (`--metrics`) named. |
 
 ## Single-source vs combined files
 
 A "single-source" file comes from one recording (one rezolus agent, or one
-service endpoint). A "combined" file is produced by `parquet combine` and may
-hold multiple rezolus nodes and/or multiple service instances.
+service endpoint). A "combined" file was produced by a 5.x `parquet combine`
+and may hold multiple rezolus nodes and/or multiple service instances.
 
 Several keys live at the **top level** in single-source files but get nested
 under [`per_source_metadata.<source>.<sub_key>`](#per_source_metadata) in
@@ -129,38 +138,19 @@ Identifies the recording's source(s).
 
 **Set at record time:** Inferred automatically from the endpoint type; can
 also be overridden via `--metadata source=<name>`. For non-rezolus endpoints
-the source is what you tell it (or what's inferred from labels) — this is what
-[`parquet annotate`](#service_queries) keys off of when picking a built-in
-template.
+the source is what you tell it (or what's inferred from labels); the viewer
+picks a built-in KPI template by it.
 
-**Set or replace post-recording with `parquet annotate --source`:**
-
-```bash
-# Add a source label to a file that has none (so the bare-annotate
-# template-lookup flow works)
-target/release/rezolus recording annotate file.parquet --source vllm
-
-# Replace an existing source — refused without --overwrite to prevent
-# silent mislabelling
-target/release/rezolus recording annotate file.parquet --source sglang --overwrite
-```
-
-Setting `--source` is a no-op when the file already has the same value.
-Replacing a different value requires `--overwrite`. Used alone, `--source`
-*only* rewrites the `source` key — the template flow is not auto-triggered.
-To set the source and apply the matching template in one step, follow up
-with bare `parquet annotate file.parquet`, or pass `--queries`/`--filter`
-in the same invocation.
+**Not set after recording in 6.x.** A 5.x `recording annotate --source NAME`
+(`--overwrite` to replace one) rewrote this key. In a `.dendro` the source is
+a label of the recording, set when it is recorded (`record --endpoint
+URL,source=NAME`), and 6.x does not relabel a recording: `annotate --source`
+is refused. A parquet file's `source` becomes its recording's `source` label
+when it is converted (`recording upgrade`, or any edit given `-o`).
 
 **In a `.rez`** the source appears both as a recording label and in the
-recording's `metadata` map; it is always `rezolus` today (the format requires
-a rezolus/msgpack endpoint) and `annotate --source` does not apply.
-
-When `--overwrite` replaces the top-level `source`, any matching entry
-keyed by the *old* source name inside [`per_source_metadata`](#per_source_metadata)
-is renamed to the new value so the nested structure stays consistent.
-Other entries (e.g. `rezolus`) are left untouched. If `per_source_metadata`
-has no entry under the old source name, only the top-level key changes.
+recording's `metadata` map; it is always `rezolus` (the format required a
+rezolus/msgpack endpoint).
 
 ### `version`
 
@@ -258,9 +248,10 @@ for a metric in both), so the rows from before the restart keep theirs. A
 Collection interval in milliseconds, written as a decimal string (e.g.
 `"1000"`).
 
-This must be **identical across all inputs** before `parquet combine` will
-accept them — it's also what `combine` uses to quantize timestamps to a
-common grid. Mismatched intervals fail validation up front.
+A 5.x `recording combine` of parquet files required it to be **identical
+across all inputs**, and used it to quantize timestamps to a common grid. 6.x
+combines into a `.dendro` without either: each recording keeps its own
+interval and timestamps.
 
 **Set at record time** via the `--interval` flag on `rezolus record`.
 
@@ -287,12 +278,11 @@ SHOW SAMPLES (`rate_mode=raw`) returns points at the acquisition timestamps,
 but the jitter chart bypasses the query path, reading raw
 timestamps directly via `MetricsSource::sample_timestamps()` (served as
 `/api/v1/timestamps`) — the direct path works in every mode and without a
-rate query. Note also that **`.parquet` combine** quantizes timestamps to the
-common grid **on disk** — combining parquet files permanently discards the
-jitter signal regardless of time mode, so sampling-jitter analysis must run
-against the original single-source file. (`.rez` combine is exempt: it
-assembles recordings verbatim, so raw timestamps and acquisition windows
-survive.)
+rate query. Note also that a **combined parquet file** (from 5.x) had its
+timestamps quantized to the common grid **on disk**, so the jitter signal is
+gone from it whatever the time mode; run sampling-jitter analysis against the
+original single-source file. A 6.x `recording combine` copies rows unchanged,
+so raw timestamps and acquisition windows survive.
 
 **In a `.rez`** this key sits in each recording's manifest `metadata` map and
 describes the agent snapshot interval; individual sampler tables additionally
@@ -311,19 +301,22 @@ don't lose per-host data.
 
 **Set at record time** by the recorder when scraping a rezolus endpoint.
 
-**Set or replace post-recording with `parquet annotate --systeminfo`:**
+**Set or replace post-recording with `recording annotate --systeminfo`,**
+which stores it in every recording of a `.dendro`:
 
 ```bash
 # From a file
-target/release/rezolus recording annotate file.parquet --systeminfo sysinfo.json
+target/release/rezolus recording annotate run.dendro --systeminfo sysinfo.json
 
 # Or piped from a live agent
 curl -s http://agent:4241/systeminfo | \
-    target/release/rezolus recording annotate file.parquet --systeminfo -
+    target/release/rezolus recording annotate run.dendro --systeminfo -
+
+# A parquet file is not changed: the result is a new .dendro
+target/release/rezolus recording annotate file.parquet --systeminfo sysinfo.json -o file.dendro
 ```
 
-The value is validated as JSON before being written. Used alone, `--systeminfo`
-won't trigger the service-template flow.
+The value is validated as JSON before being written.
 
 ### `descriptions`
 
@@ -357,37 +350,37 @@ In combined files this moves under
 `per_source_metadata.<source>.<id>.service_queries` so each instance can
 carry its own KPI definitions.
 
-**Update with `parquet annotate`:**
+**Update with `recording annotate`:**
 
 ```bash
-# Use the built-in template that matches the file's `source`
-target/release/rezolus recording annotate file.parquet
+# Embed a KPI file into every recording of an archive
+target/release/rezolus recording annotate run.dendro --queries my_kpis.json
 
-# Use a custom JSON file
-target/release/rezolus recording annotate file.parquet --queries my_kpis.json
+# Remove the KPIs
+target/release/rezolus recording annotate run.dendro --undo
 
-# Also drop columns the KPIs don't touch (saves space)
-target/release/rezolus recording annotate file.parquet --filter
+# A parquet file or .rez is not changed: the result is a new .dendro
+target/release/rezolus recording annotate file.parquet --queries my_kpis.json -o file.dendro
 
-# Remove the annotation
-target/release/rezolus recording annotate file.parquet --undo
+# Drop what the KPIs don't touch (a parquet file with neither --samplers
+# nor --metrics keeps what its KPIs need)
+target/release/rezolus recording filter file.parquet -o slim.dendro
 ```
 
-Annotation validates each KPI by running its PromQL query against the file's
-data and sets `available: true|false` on each KPI accordingly.
-
-**On a `.rez`**, `--queries` is required (there is no template flow) and the
-validated `ServiceExtension` is embedded into **every** recording's manifest
-`metadata`, not a parquet footer.
+Annotation validates each KPI by running its PromQL query against each
+recording's data and sets `available: true|false` on each KPI accordingly.
+`--queries` is required: the 5.x flow that picked a built-in template from a
+parquet file's `source`, and `annotate --filter`, are gone (`--filter` is
+refused, naming `recording filter`).
 
 ### `node`
 
 Hostname/VM identifier for rezolus agent data. In combined files this lives
 under `per_source_metadata.rezolus.<node>.node`.
 
-The `parquet combine` step requires every rezolus input to have a unique node
-label. If the metadata key is missing, the filename stem is used as a
-fallback for rezolus files.
+A 5.x parquet `recording combine` required every rezolus input to have a
+unique node label, and used the filename stem when the key was missing. 6.x
+combines into a `.dendro`, where recordings are told apart by their labels.
 
 **Set at record time.** A parquet recording comes from a 5.x recorder; 6.x
 writes `.dendro`, where the same `--metadata node=web01` sets the key in each
@@ -403,18 +396,10 @@ target/release/rezolus record --url http://localhost:4241 -o web01.dendro --meta
 # node=NAME` writes the same `node` key, which is what combine reads.)
 ```
 
-**Update an existing file with `parquet annotate --node`:**
-
-```bash
-# Set or replace the node attribute on a file recorded without one
-target/release/rezolus recording annotate file.parquet --node web01
-```
-
-This is useful for service recordings where you want to record which host
-the service ran on (informational; combine still keys service columns by
-`instance`), or for retroactively labelling a rezolus file before
-`parquet combine`. The flag rewrites only the `node` key — it does not
-auto-apply a service-extension template.
+**Not set after recording in 6.x.** A 5.x `recording annotate --node NAME`
+rewrote this key in a parquet footer; 6.x refuses `--node`, since a
+recording's identity is its labels, set when it is recorded (`record
+--endpoint URL,host=NAME` or `--label`).
 
 ### `instance`
 
@@ -422,9 +407,9 @@ Process/container identifier for service data (vllm, llm-perf, sglang, ...).
 In combined files this lives under
 `per_source_metadata.<source>.<instance>.instance`.
 
-When `parquet combine` sees multiple files for the same source: either every
-file carries an `instance` label (must be unique within the source), or none
-do (combine auto-assigns `"0"`, `"1"`, ... in input order). Mixed is rejected.
+A 5.x parquet `recording combine` of several files of one source required
+either every file to carry an `instance` label (unique within the source) or
+none (it assigned `"0"`, `"1"`, ... in input order).
 
 **Set at record time** (a 5.x recorder for parquet; 6.x sets the same key in a
 `.dendro` recording's metadata):
@@ -439,17 +424,10 @@ target/release/rezolus record --url http://vllm-host:8000/metrics -o primary.par
 The default rezolus node the viewer should focus on when opening a combined
 file with multiple nodes. Only meaningful in combined files.
 
-**Set at combine time:**
-
-```bash
-target/release/rezolus recording combine \
-    web01.parquet web02.parquet llm-perf.parquet \
-    -o combined.parquet \
-    --pinned web01
-```
-
-Validation rejects `--pinned <name>` if no rezolus input has a matching `node`
-label.
+**Set at combine time by a 5.x binary** (`recording combine ... -o
+combined.parquet --pinned web01`, which rejected a name no rezolus input's
+`node` matched). 6.x refuses `--pinned`: it applied to the parquet row-merge,
+which 6.x does not write.
 
 ### `events`
 
@@ -489,20 +467,23 @@ nothing is validated. `duration_ns` lets an event span an interval rather
 than a point; `id` is a stable identifier used to dedupe across merges
 (later occurrences are dropped on combine).
 
-**Update with `parquet annotate`:**
+**Update with `recording annotate`:**
 
 ```bash
-target/release/rezolus recording annotate file.parquet --add-events events.json
+target/release/rezolus recording annotate run.dendro --add-events events.json
 
-cat events.json | target/release/rezolus recording annotate file.parquet --add-events -
+cat events.json | target/release/rezolus recording annotate run.dendro --add-events -
 
-target/release/rezolus recording annotate file.parquet \
+target/release/rezolus recording annotate run.dendro \
     --event 'time=2026-05-12T15:23Z,kind=restart,description="vllm restart",node=gpu01' \
     --event 'time=2026-05-12T16:00Z,kind=marker,description="benchmark start",label.run=ci-42'
 
-target/release/rezolus recording annotate file.parquet --clear-events
+target/release/rezolus recording annotate run.dendro --clear-events
 
-target/release/rezolus recording annotate file.parquet --clear-events --add-events new.json
+target/release/rezolus recording annotate run.dendro --clear-events --add-events new.json
+
+# A parquet file or .rez is not changed: the result is a new .dendro
+target/release/rezolus recording annotate file.parquet --add-events events.json -o file.dendro
 ```
 
 - `--add-events FILE` accepts JSON (`{"events":[...]}`), a bare JSON array,
@@ -523,11 +504,10 @@ target/release/rezolus recording annotate file.parquet --clear-events --add-even
   form `2026-05-12T15:23Z`) and humantime durations (`30s`, `1m30s`);
   canonical storage is always `u64` nanoseconds.
 
-`--add-events` / `--event` / `--clear-events` do not trigger the
-service-template flow.
-
-Events are a **`.parquet`-only** feature today: the `.rez` annotate path
-accepts only `--queries`, and the manifest has no events field.
+In a `.dendro` each recording keeps its events in its own metadata. A
+recording read from several sources (a source and its snapshot, which the
+readers present as one recording) shows the union of their events, deduped
+by `id`; `remove_events` drops an event from each source's own payload.
 
 ## `per_source_metadata`
 
@@ -574,20 +554,16 @@ mutators are:
 | Tool | What it can change |
 |------|--------------------|
 | `rezolus record --metadata k=v` | Anything written at recording time; `--metadata` sets any top-level key, `node` and `instance` included. (The dedicated `--node`/`--instance` flags were removed — they never wrote anything.) |
-| `rezolus recording annotate` | Adds/replaces/removes top-level `service_queries`; with `--node NAME` sets/replaces top-level `node`; with `--source NAME` (`--overwrite` to replace) sets/replaces top-level `source`; with `--systeminfo PATH` (or `-` for stdin) sets/replaces top-level `systeminfo`; with `--add-events PATH` / `--event KV` / `--clear-events` appends, inserts, or wipes one-off `events`. |
-| `rezolus recording combine --pinned` | Sets `pinned_node` on the output. |
-| `rezolus recording combine` | Merges and re-derives `source`, `descriptions`, `per_source_metadata`, etc. from the inputs. |
+| `rezolus recording annotate` | In each recording of a `.dendro`: adds/replaces `service_queries` (`--queries`) or removes it (`--undo`), sets/replaces `systeminfo` (`--systeminfo PATH`, or `-` for stdin), and appends, inserts or wipes `events` (`--add-events PATH` / `--event KV` / `--clear-events`). A `.rez` or `.parquet` needs `-o <new>.dendro`. |
+| `rezolus recording combine --ab` | Adds the `arm` label to each input's recordings. |
 
-For anything not covered above, the path is: read the current file with
-`parquet metadata --json`, write a small Rust binary that uses
-[`rewrite_parquet`](../src/parquet_tools/mod.rs) (or the `arrow` /
-`parquet` crates directly) to set the key, and emit a new file. The
-parquet writer always rewrites the entire footer, so there's no way to
-patch a single key in place.
+6.x has no tool that edits a `.rez` or a parquet file.
 
-## Example: `parquet combine`
+## Example: a 5.x `parquet combine`
 
-A worked example showing exactly what moves where. We start with three
+A worked example showing what a 5.x `recording combine` of parquet files
+moved where, for reading the combined files it wrote (6.x combines into a
+`.dendro` instead and writes no combined parquet). We start with three
 single-source recordings — two rezolus agents on different hosts and one
 vllm service instance — and combine them.
 
@@ -627,7 +603,7 @@ then annotated with `rezolus recording annotate vllm.parquet`:
 }
 ```
 
-### Command
+### Command (5.x)
 
 ```bash
 target/release/rezolus recording combine \
@@ -716,17 +692,16 @@ The `timestamp` and `duration` columns come from the first rezolus input
 
 ## Writer-side knobs (not metadata, but related)
 
-These are file-format settings every rezolus parquet writer applies. They're
-not in the KV map but matter when producing files that combine cleanly with
-others:
+These are file-format settings every 5.x rezolus parquet writer applied.
+They're not in the KV map but matter when producing parquet files of your own:
 
 - **Row group size:** `MAX_ROW_GROUP_SIZE = 50_000` (matches
   `metriken-exposition`'s default). All rezolus tools enforce this so
   combined files don't end up with one giant row group.
 - **Compression:** ZSTD on every column.
 
-If you write parquet from another tool that you intend to feed into
-`parquet combine`, match these settings to keep behaviour predictable.
+If you write parquet from another tool that you intend to read with rezolus
+or feed into `recording combine`, match these settings.
 
 ## Histogram columns: required column metadata
 

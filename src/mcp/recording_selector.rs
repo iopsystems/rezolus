@@ -340,7 +340,7 @@ pub(crate) fn describe_candidates_at(
                  names another\n\
                  {IND}recording in this archive. To compare them, label them by position: \
                  `rezolus recording\n\
-                 {IND}combine FILE --ab baseline={p} experiment={q} -o ab.rez`{others};\n\
+                 {IND}combine FILE --ab baseline={p} experiment={q} -o ab.dendro`{others};\n\
                  {IND}for a new capture, give each --endpoint its own source=NAME or \
                  arm=NAME.\n",
                 positions[i]

@@ -158,3 +158,95 @@ fn a_legacy_recording_is_annotated_into_a_new_dendro() {
         assert_eq!(std::fs::read(&input).unwrap(), before, "{name} changed");
     }
 }
+
+/// An edit written to a new `.dendro` is staged beside it and moved into
+/// place only when it succeeds: a bad `--event`, found after the copy or
+/// conversion, leaves no output and no staging directory.
+#[test]
+fn a_failed_edit_leaves_nothing_at_the_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let rez = committed_rez(dir.path(), "v3.rez");
+    let dendro = dendro_from_fixture(dir.path());
+    let entries = || {
+        let mut names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| !n.ends_with("-wal") && !n.ends_with("-shm"))
+            .collect();
+        names.sort();
+        names
+    };
+    for input in [&rez, &dendro] {
+        let before = entries();
+        let out = dir.path().join("out.dendro");
+        let run = rezolus(&[
+            "recording",
+            "annotate",
+            input.to_str().unwrap(),
+            "--event",
+            "garbage",
+            "-o",
+            out.to_str().unwrap(),
+        ]);
+        assert_eq!(run.status.code(), Some(1), "stderr: {}", stderr(&run));
+        assert!(!out.exists(), "{}: an output was left", input.display());
+        assert_eq!(entries(), before, "{}", input.display());
+    }
+}
+
+/// The parquet-footer flags: --source, --node and --filter are refused
+/// before anything is written, naming what to do instead; --undo removes
+/// the KPIs and --systeminfo stores a systeminfo JSON, in each recording.
+#[test]
+fn footer_flags_are_refused_or_applied_to_the_archive() {
+    let dir = tempfile::tempdir().unwrap();
+    let dendro = dendro_from_fixture(dir.path());
+    let before = std::fs::read(&dendro).unwrap();
+    for (flag, value, says) in [
+        ("--source", Some("x"), "rezolus record --endpoint"),
+        ("--node", Some("n"), "rezolus record --endpoint"),
+        ("--filter", None, "rezolus recording filter"),
+    ] {
+        let mut args = vec!["recording", "annotate", dendro.to_str().unwrap(), flag];
+        args.extend(value);
+        args.extend(["--event", "time=2026-01-01T00:00:00Z,description=x"]);
+        let out = rezolus(&args);
+        assert_eq!(out.status.code(), Some(1), "{flag}: {}", stderr(&out));
+        assert!(stderr(&out).contains(says), "{flag}: {}", stderr(&out));
+        assert!(std::fs::read(&dendro).unwrap() == before, "{flag} wrote");
+    }
+
+    let kpis = dir.path().join("kpis.json");
+    std::fs::write(
+        &kpis,
+        r#"{"service_name": "simple", "kpis": [{"role": "load", "title": "Depth",
+            "query": "queue_depth", "type": "gauge"}]}"#,
+    )
+    .unwrap();
+    let sysinfo = dir.path().join("sysinfo.json");
+    std::fs::write(&sysinfo, r#"{"os":"linux"}"#).unwrap();
+    let path = dendro.to_str().unwrap();
+    let run = |extra: &[&str]| {
+        let mut args = vec!["recording", "annotate", path];
+        args.extend_from_slice(extra);
+        let out = rezolus(&args);
+        assert!(out.status.success(), "{extra:?}: {}", stderr(&out));
+    };
+    let metadata = || -> serde_json::Value {
+        let out = rezolus(&["recording", "metadata", "-i", path, "--json"]);
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()["recordings"][0]
+            ["metadata"]
+            .clone()
+    };
+    run(&[
+        "--queries",
+        kpis.to_str().unwrap(),
+        "--systeminfo",
+        sysinfo.to_str().unwrap(),
+    ]);
+    let md = metadata();
+    assert!(md.get("service_queries").is_some(), "{md}");
+    assert_eq!(md["systeminfo"], r#"{"os":"linux"}"#);
+    run(&["--undo"]);
+    assert!(metadata().get("service_queries").is_none());
+}

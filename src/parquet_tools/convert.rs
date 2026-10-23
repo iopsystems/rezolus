@@ -312,7 +312,7 @@ fn parse_metadata(arg: &str) -> Result<(String, String), ConvertError> {
 
 /// What a JSON argument has to look like to be accepted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum JsonShape {
+pub(super) enum JsonShape {
     /// Any JSON value (`systeminfo` is an opaque blob to us).
     Any,
     /// An object whose values are all strings (`descriptions` is metric → help).
@@ -324,7 +324,11 @@ enum JsonShape {
 ///
 /// Validation happens before the conversion starts: a typo in a descriptions
 /// file should cost a second, not a full re-read of a multi-gigabyte recording.
-fn load_json(source: &Path, shape: JsonShape, what: &'static str) -> Result<String, ConvertError> {
+pub(super) fn load_json(
+    source: &Path,
+    shape: JsonShape,
+    what: &'static str,
+) -> Result<String, ConvertError> {
     let text = if source.as_os_str() == "-" {
         let mut buf = String::new();
         io::Read::read_to_string(&mut io::stdin(), &mut buf)?;

@@ -1157,6 +1157,16 @@ impl Server {
         cache.retain(|(p, _), _| *p != path);
     }
 
+    /// Drop every cached reader of the file a write reads and of the file
+    /// it writes, before it runs: a reader that has queried holds the
+    /// archive, and dendro refuses to open a held archive for writing.
+    fn evict_for_write(&self, parquet_file: &str, output: Option<&str>) {
+        self.evict(parquet_file);
+        if let Some(output) = output {
+            self.evict(output);
+        }
+    }
+
     /// `add_event`: build one `Event` from the arguments and append it to
     /// the recording the selector names.
     async fn add_event(&self, arguments: &Value) -> Result<String, Box<dyn std::error::Error>> {
@@ -1189,6 +1199,7 @@ impl Server {
             chart_id: None,
         };
         let output = opt_str(arguments, "output")?;
+        self.evict_for_write(parquet_file, output.as_deref());
         let report = crate::parquet_tools::events::add_events_selected(
             Path::new(parquet_file),
             output.as_deref().map(Path::new),
@@ -1241,6 +1252,7 @@ impl Server {
             source: opt_str(arguments, "source")?,
         };
         let output = opt_str(arguments, "output")?;
+        self.evict_for_write(parquet_file, output.as_deref());
         let report = crate::parquet_tools::events::remove_events_selected(
             Path::new(parquet_file),
             output.as_deref().map(Path::new),
@@ -1300,6 +1312,7 @@ impl Server {
                 "nothing to annotate: no violation windows".to_string()
             } else {
                 let output = opt_str(arguments, "output")?;
+                self.evict_for_write(parquet_file, output.as_deref());
                 let line = crate::parquet_tools::check::annotate_events(
                     path,
                     output.as_deref().map(Path::new),
@@ -2377,6 +2390,58 @@ mod tests {
             server.reader_cache.read().unwrap().is_empty(),
             "a reader opened before the write would report the old events"
         );
+    }
+
+    /// A query holds the archive through the cached reader, and dendro
+    /// refuses to open a held archive for writing, so every write tool must
+    /// drop the cached readers first: a query, then add_event, then
+    /// run_checks with annotate, then remove_events, on one server.
+    #[tokio::test]
+    async fn a_write_after_a_query_on_the_same_file_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one.dendro");
+        crate::mcp::tests::multi_recording(&path, &["redis"], &[true]);
+        let server = Server::with_options(ServerOptions {
+            allow_mutating: true,
+            ..Default::default()
+        });
+        let file = path.to_str().unwrap();
+        let query = json!({"parquet_file": file, "query": "sum(irate(cpu_cycles[2s]))"});
+        server.execute_query(&query).await.unwrap();
+        server
+            .add_event(
+                &json!({"parquet_file": file, "timestamp": 2.0, "description": "x", "id": "E1"}),
+            )
+            .await
+            .unwrap();
+
+        server.execute_query(&query).await.unwrap();
+        let out: Value = serde_json::from_str(
+            &server
+                .run_checks(&json!({
+                    "parquet_file": file,
+                    "annotate": true,
+                    "queries": {"service_name": "t", "kpis": [{
+                        "role": "r", "title": "rate", "type": "delta_counter",
+                        "query": "sum(irate(cpu_cycles[2s]))", "check": {"above": 0}}]},
+                }))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            out["annotated"]
+                .as_str()
+                .unwrap()
+                .contains("new check event"),
+            "{out}"
+        );
+
+        server.execute_query(&query).await.unwrap();
+        server
+            .remove_events(&json!({"parquet_file": file, "ids": ["E1"]}))
+            .await
+            .unwrap();
     }
 
     // ── export_query / viewer_link ───────────────────────────────────────

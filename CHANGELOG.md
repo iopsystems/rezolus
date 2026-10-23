@@ -163,7 +163,8 @@
     with a warning.
   - `snapshot` of a `.rez` writes a `.dendro`.
   - `upgrade` converts any `.rez` (v1, v2, v3) or `.parquet` into a
-    `.dendro` (`<input>.dendro` without `-o`); `--to v3` is refused.
+    `.dendro` (the input's name with `.dendro` for its extension, without
+    `-o`; `upgrade x.dendro` says it is already one); `--to v3` is refused.
   - `convert` turns a raw msgpack recording into a `.dendro`.
   - The MCP server's `add_event`, `remove_events` and `run_checks`
     (`annotate=true`) take an `output` path, required for a `.rez` or
@@ -332,11 +333,13 @@
   host.
 - **A single-source parquet's `source` is a series label.** Its series
   carry the file's `source`, as an archive recording's series carry its
-  recording's labels, so a KPI template carried in the parquet (llm-perf's,
-  or one written by `recording annotate`) whose queries select
-  `{source="llm-perf"}` matches them: `rezolus view run.parquet` draws those
-  KPIs where it listed them all as unavailable, and `rezolus mcp query`,
-  `recording check` and the static viewer read the same series. A combined
+  recording's labels, so a KPI template carried in the parquet (llm-perf's)
+  whose queries select `{source="llm-perf"}` matches them: `rezolus view
+  run.parquet` draws those KPIs where it listed them all as unavailable, and
+  `rezolus mcp query`, `recording check` and the static viewer read the same
+  series. The `.dendro` a parquet file is converted to (`recording annotate
+  run.parquet --queries kpis.json -o run.dendro`, `recording upgrade`) labels
+  its recording with the same `source`, so the template matches there too. A combined
   parquet, whose columns carry their own `source`, and a parquet any of
   whose series already carry a `source` label are read as before. A series
   that had no visible label now has `source`, so a chart of one such series
@@ -1037,10 +1040,12 @@
 
 ### Added
 
-- **Gauge histograms are read.** A `.dendro` holding gauge histograms
-  (metriken 0.11.4's `GaugeHistogram`) lists and queries them through every
-  viewer reader (`RezReader`, `LiveReader`, and the combined and per-recording
-  views).
+- **Gauge histograms are listed.** A `.dendro` holding gauge histograms
+  (metriken 0.11.4's `GaugeHistogram`) shows them in the viewer's metric
+  browser (as histograms, charted through the histogram functions) and in
+  `mcp describe-metrics` (their own section), through every reader the
+  viewers use (`RezReader`, `LiveReader`, and the combined and per-recording
+  views). `detect-anomalies` and `extract-features` do not cover them.
 - **`record --endpoint url,template=FILE` attaches a KPI template to an
   endpoint's recording.** The file, a `ServiceExtension` JSON as `recording
   annotate --queries` takes, is written into that recording's metadata as

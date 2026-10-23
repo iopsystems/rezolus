@@ -86,6 +86,7 @@ fn classify_sources(
     let mut metric_names: Vec<String> = reader.counter_names();
     metric_names.extend(reader.gauge_names());
     metric_names.extend(reader.histogram_names());
+    metric_names.extend(reader.gauge_histogram_names());
 
     let filename = reader.filename_or_default();
     let filename_stem = filename

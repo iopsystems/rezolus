@@ -93,6 +93,22 @@ pub(crate) fn convert_for(
     output: &Path,
     shown: &Path,
 ) -> Result<String, Box<dyn std::error::Error>> {
+    let summary = convert_quiet(input, output)?;
+    Ok(format!(
+        "converted {} ({}) {} {}: {summary}",
+        input.display(),
+        Container::of(input).name(),
+        if output == shown { "to" } else { "for" },
+        shown.display()
+    ))
+}
+
+/// Convert `input` to `output` and say what was written (sources,
+/// segments, rows), without naming either.
+pub(crate) fn convert_quiet(
+    input: &Path,
+    output: &Path,
+) -> Result<String, Box<dyn std::error::Error>> {
     use metriken_storage::to_dendro::{convert_path, ConvertedFrom};
     let container = Container::of(input);
     let summary = match container {
@@ -129,13 +145,7 @@ pub(crate) fn convert_for(
             .into())
         }
     };
-    Ok(format!(
-        "converted {} ({}) {} {}: {summary}",
-        input.display(),
-        container.name(),
-        if output == shown { "to" } else { "for" },
-        shown.display()
-    ))
+    Ok(summary)
 }
 
 /// Refuse `output` unless it names a new `.dendro`.
@@ -152,12 +162,40 @@ pub(crate) fn check_new_dendro(output: &Path) -> Result<(), String> {
             output.display()
         ));
     }
+    let dir = output
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    if !dir.is_dir() {
+        return Err(format!(
+            "{}: the directory {} does not exist",
+            output.display(),
+            dir.display()
+        ));
+    }
     Ok(())
 }
 
-/// `input` with its extension replaced by `.dendro` (`run.rez` →
-/// `run.dendro`, `run.parquet` → `run.dendro`).
+/// `input` with its recording extension replaced by `.dendro` (`run.rez`,
+/// `run.parquet`, `run.parquet.ab.tar`, `run.raw.zst` → `run.dendro`); any
+/// other extension is replaced as `Path::with_extension` replaces it.
 pub(crate) fn dendro_beside(input: &Path) -> PathBuf {
+    let name = input
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    for suffix in [
+        ".parquet.ab.tar",
+        ".ab.tar",
+        ".raw.zst",
+        ".rez",
+        ".parquet",
+        ".raw",
+    ] {
+        if let Some(stem) = name.strip_suffix(suffix).filter(|s| !s.is_empty()) {
+            return input.with_file_name(format!("{stem}.dendro"));
+        }
+    }
     input.with_extension("dendro")
 }
 
@@ -180,33 +218,104 @@ pub(crate) fn command_with_output(output: &Path) -> String {
         .join(" ")
 }
 
+/// Where an edit of a recording is written: [`edit_target`]'s result.
+///
+/// [`path`](Self::path) is the archive to edit. For an edit written to a new
+/// `.dendro` it is a staged file in a directory beside the output, and
+/// [`commit`](Self::commit) renames it into place once the edit succeeded;
+/// dropped without a commit, the staging directory goes and nothing is left
+/// at the output.
+pub(crate) struct EditTarget {
+    path: PathBuf,
+    note: Option<String>,
+    staged: Option<(tempfile::TempDir, PathBuf)>,
+}
+
+impl EditTarget {
+    /// The archive to edit.
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The path the edit ends up at, for messages: the output, or the input
+    /// edited in place.
+    pub(crate) fn shown(&self) -> &Path {
+        self.staged
+            .as_ref()
+            .map_or(self.path.as_path(), |(_, output)| output.as_path())
+    }
+
+    /// What was converted or copied, when anything was.
+    pub(crate) fn note(&self) -> Option<String> {
+        self.note.clone()
+    }
+
+    /// Move a staged edit to its output. The output must still not exist.
+    pub(crate) fn commit(self) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some((dir, output)) = self.staged {
+            if output.exists() {
+                return Err(format!(
+                    "{} already exists; refusing to replace it",
+                    output.display()
+                )
+                .into());
+            }
+            std::fs::rename(&self.path, &output)?;
+            drop(dir);
+        }
+        Ok(())
+    }
+}
+
+/// A staging directory beside `output`, so the final rename stays on one
+/// filesystem, and the staged file in it.
+pub(crate) fn stage_beside(
+    output: &Path,
+) -> Result<(tempfile::TempDir, PathBuf), Box<dyn std::error::Error>> {
+    let dir = output
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let staging = tempfile::tempdir_in(dir)
+        .map_err(|e| format!("{}: cannot write beside it ({e})", output.display()))?;
+    let staged = staging.path().join("edit.dendro");
+    Ok((staging, staged))
+}
+
 /// Where an edit of the recording at `input` is written.
 ///
 /// A dendro archive is edited in place, or with `output` the edit goes to a
-/// copy of it there. A legacy recording is not changed: it is converted to
+/// copy of it there. A legacy recording is not changed: it is converted for
 /// `output`, a new `.dendro`, and the edit goes there; without `output`,
-/// `refusal` says how to ask for one. The returned note, when there is one,
-/// says what was converted or copied.
+/// `refusal` says how to ask for one. A copy or conversion is staged beside
+/// `output` and moved there by [`EditTarget::commit`], so a failed edit
+/// leaves nothing at `output`.
 pub(crate) fn edit_target(
     input: &Path,
     output: Option<&Path>,
     refusal: impl FnOnce(&Path) -> String,
-) -> Result<(PathBuf, Option<String>), Box<dyn std::error::Error>> {
+) -> Result<EditTarget, Box<dyn std::error::Error>> {
     let container = Container::of(input);
     match (container, output) {
-        (Container::Dendro, None) => Ok((input.to_path_buf(), None)),
+        (Container::Dendro, None) => Ok(EditTarget {
+            path: input.to_path_buf(),
+            note: None,
+            staged: None,
+        }),
         (Container::Dendro, Some(output)) => {
             check_new_dendro(output)?;
+            let (dir, staged) = stage_beside(output)?;
             let src = dendro::archive::Archive::open(input)?;
-            crate::dendro_copy::copy(&src, output, &dendro::rewrite::CopySpec::everything())?;
-            Ok((
-                output.to_path_buf(),
-                Some(format!(
+            crate::dendro_copy::copy(&src, &staged, &dendro::rewrite::CopySpec::everything())?;
+            Ok(EditTarget {
+                path: staged,
+                note: Some(format!(
                     "copied {} to {}",
                     input.display(),
                     output.display()
                 )),
-            ))
+                staged: Some((dir, output.to_path_buf())),
+            })
         }
         (c, None) if c.is_legacy() => Err(format!(
             "{} is a {}; 6.x writes .dendro only and does not change it. Write the \
@@ -218,8 +327,18 @@ pub(crate) fn edit_target(
         .into()),
         (c, Some(output)) if c.is_legacy() => {
             check_new_dendro(output)?;
-            let note = convert(input, output)?;
-            Ok((output.to_path_buf(), Some(note)))
+            let (dir, staged) = stage_beside(output)?;
+            let summary = convert_quiet(input, &staged)?;
+            Ok(EditTarget {
+                path: staged,
+                note: Some(format!(
+                    "converted {} ({}) to {}: {summary}",
+                    input.display(),
+                    c.name(),
+                    output.display()
+                )),
+                staged: Some((dir, output.to_path_buf())),
+            })
         }
         _ => Err(format!(
             "{} is not a recording (.dendro, .rez or .parquet)",

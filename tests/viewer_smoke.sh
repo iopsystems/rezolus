@@ -232,6 +232,10 @@ case "$save_meta" in
     *"2 recording(s)"*) : ;;
     *) fail "compare save: not a 2-recording .dendro" "$save_meta" "2 recording(s)" "$LOGDIR/file.log" ;;
 esac
+# Each side is labelled with its arm, so the report reopens as the comparison.
+save_arms=$(./target/debug/rezolus recording metadata -i "$SAVE_RESP" --json \
+    | jq -r '[.recordings[].labels.arm] | join(",")')
+eq "compare save arms" "$save_arms" "baseline,experiment" "$LOGDIR/file.log"
 
 echo "==> reload the saved .dendro, it re-opens as a 2-capture compare and re-saves"
 PORT_ROUNDTRIP=18506

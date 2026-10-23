@@ -852,19 +852,23 @@ pub(crate) fn annotate_events(
     per_recording: Vec<Vec<Event>>,
     refusal: impl FnOnce(&Path) -> String,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let (target, note) = super::legacy::edit_target(path, output, refusal)?;
+    let edit = super::legacy::edit_target(path, output, refusal)?;
     let annotation = super::annotate::RezAnnotation {
         ext_json: None,
         events: None,
         per_recording_events: Some(per_recording),
-        per_recording_replace: None,
+        per_recording_remove: None,
+        undo_kpis: false,
+        systeminfo: None,
         report: super::annotate::ReportSink::capture(),
     };
-    super::annotate::annotate_archive(&target, &annotation)?;
+    super::annotate::annotate_archive_as(edit.path(), edit.shown(), &annotation)?;
     let line = annotation
         .report
         .captured()
-        .unwrap_or_else(|| format!("Annotated {:?}", target));
+        .unwrap_or_else(|| format!("Annotated {:?}", edit.shown()));
+    let note = edit.note();
+    edit.commit()?;
     Ok(match note {
         Some(note) => format!("{note}\n{line}"),
         None => line,

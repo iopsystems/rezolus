@@ -195,7 +195,8 @@ pub(crate) fn add_events_selected(
     // Resolved on the input first, so a selector that names nothing is
     // refused before anything is written.
     one_target(path, selector)?;
-    let (target_path, note) = super::legacy::edit_target(path, output, output_advice)?;
+    let edit = super::legacy::edit_target(path, output, output_advice)?;
+    let target_path = edit.path().to_path_buf();
     let (target, total) = one_target(&target_path, selector)?;
     // The same append the writer applies, run here first so the counts
     // and the resulting total can be reported; the writer repeats it
@@ -207,11 +208,15 @@ pub(crate) fn add_events_selected(
         ext_json: None,
         events: None,
         per_recording_events: Some(per),
-        per_recording_replace: None,
+        per_recording_remove: None,
+        undo_kpis: false,
+        systeminfo: None,
         report: super::annotate::ReportSink::capture(),
     };
     drop(target.reader);
-    super::annotate::annotate_archive(&target_path, &annotation)?;
+    super::annotate::annotate_archive_as(&target_path, edit.shown(), &annotation)?;
+    let note = edit.note();
+    edit.commit()?;
     Ok(WriteReport {
         recording: target.labels,
         counts: preview.counts,
@@ -251,7 +256,7 @@ impl RemoveFilter {
         self.ids.is_empty() && self.kind.is_none() && self.source.is_none()
     }
 
-    fn matches(&self, e: &Event) -> bool {
+    pub(crate) fn matches(&self, e: &Event) -> bool {
         (self.ids.is_empty()
             || e.id
                 .as_deref()
@@ -293,34 +298,35 @@ pub(crate) fn remove_events_selected(
             .into());
     }
     one_target(path, selector)?;
-    let (target_path, note) = super::legacy::edit_target(path, output, output_advice)?;
+    let edit = super::legacy::edit_target(path, output, output_advice)?;
+    let target_path = edit.path().to_path_buf();
     let (target, total) = one_target(&target_path, selector)?;
+    // The recording's events as a reader shows them: every source's, as one
+    // (`rez::reader`'s `group_metadata`). Each source is then filtered from
+    // its own payload by `annotate_archive`, so no source is given another's
+    // events. `removed` is counted after normalizing so that `removed +
+    // total` is what was there before.
     let existing = stored_events(target.reader.as_ref())?.unwrap_or_default();
-    let before = existing.events.len();
-    let kept: Vec<Event> = existing
-        .events
-        .into_iter()
-        .filter(|e| !filter.matches(e))
-        .collect();
-    // Every writer stores a normalized payload, so the kept subset already
-    // is one; normalizing again costs nothing and holds for a payload some
-    // other tool wrote unsorted. `removed` is counted after it so that
-    // `removed + total` is what was there before.
-    let mut payload = Events::new(kept);
-    payload.normalize();
-    let removed = before - payload.events.len();
-    let remaining = payload.events.len();
-    let mut per: Vec<Option<Events>> = vec![None; total];
-    per[target.index] = Some(payload);
+    let mut shown = existing.clone();
+    shown.normalize();
+    let before = shown.events.len();
+    let remaining = shown.events.iter().filter(|e| !filter.matches(e)).count();
+    let removed = before - remaining;
+    let mut per: Vec<Option<RemoveFilter>> = vec![None; total];
+    per[target.index] = Some(filter.clone());
     let annotation = super::annotate::RezAnnotation {
         ext_json: None,
         events: None,
         per_recording_events: None,
-        per_recording_replace: Some(per),
+        per_recording_remove: Some(per),
+        undo_kpis: false,
+        systeminfo: None,
         report: super::annotate::ReportSink::capture(),
     };
     drop(target.reader);
-    super::annotate::annotate_archive(&target_path, &annotation)?;
+    super::annotate::annotate_archive_as(&target_path, edit.shown(), &annotation)?;
+    let note = edit.note();
+    edit.commit()?;
     Ok(RemoveReport {
         recording: target.labels,
         removed,
@@ -944,5 +950,79 @@ mod tests {
         assert_eq!(appended.counts.unchanged, 1);
         assert_eq!(appended.events.events[0].duration_ns, Some(10));
         assert!(appended.counts.nothing_new());
+    }
+
+    /// A recording of two sources (a source and its snapshot, each annotated
+    /// alone) shows both sources' events, and removing one event drops it
+    /// from each source's own payload: the copy keeps the event only it
+    /// holds.
+    #[test]
+    fn a_recordings_sources_keep_their_own_events() {
+        use ::rez::fixtures::{counter, map, snap_counters, write_dendro, Finish, Source, ANCHOR};
+        use metriken_query::MetricsSource;
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.dendro");
+        let rows = (0..4u64)
+            .map(|i| {
+                let ts = ANCHOR + i * 1_000_000_000;
+                let w = Some(::rez::window::Window::new(ts - 50_000_000, ts));
+                (snap_counters(ts, vec![counter("ops", "s", i, w)]), ts)
+            })
+            .collect();
+        let source = Source {
+            labels: map(&[("source", "rezolus")]),
+            metadata: map(&[]),
+            rows,
+        };
+        write_dendro(&a, &[source], None, Finish::Finalized);
+        let any = crate::mcp::RecordingSelector::default();
+        let event = |id: &str| {
+            parse_inline_event(&format!("time={},id={id},description={id}", ANCHOR + 1)).unwrap()
+        };
+        add_events_selected(&a, None, &any, vec![event("E1")]).unwrap();
+        let copy = dir.path().join("copy.dendro");
+        crate::parquet_tools::snapshot_rez(&a, &copy).unwrap();
+        add_events_selected(&copy, None, &any, vec![event("E2")]).unwrap();
+        let grp = dir.path().join("grp.dendro");
+        crate::parquet_tools::combine::run_combine_for_test(&[a, copy], &grp).unwrap();
+
+        let shown = |path: &Path| -> Vec<String> {
+            let readers = crate::rez_reader::RezReader::open_recordings(
+                path,
+                metriken_storage::BufferPool::new(8 << 20),
+            )
+            .unwrap();
+            assert_eq!(readers.len(), 1, "a source and its copy are one recording");
+            readers[0]
+                .1
+                .file_metadata()
+                .get(crate::parquet_metadata::KEY_EVENTS)
+                .map(|s| serde_json::from_str::<Events>(s).unwrap().events)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|e| e.id)
+                .collect()
+        };
+        assert_eq!(shown(&grp), ["E1", "E2"]);
+
+        let filter = RemoveFilter {
+            ids: vec!["E1".to_string()],
+            ..Default::default()
+        };
+        let report = remove_events_selected(&grp, None, &any, &filter).unwrap();
+        assert_eq!((report.removed, report.total), (1, 1));
+        assert_eq!(shown(&grp), ["E2"]);
+        let per_source: Vec<Vec<String>> = crate::parquet_tools::annotate::source_metadata(&grp)
+            .iter()
+            .map(|m| {
+                m.get(crate::parquet_metadata::KEY_EVENTS)
+                    .map(|s| serde_json::from_str::<Events>(s).unwrap().events)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|e| e.id)
+                    .collect()
+            })
+            .collect();
+        assert_eq!(per_source, [vec![], vec!["E2".to_string()]]);
     }
 }

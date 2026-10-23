@@ -16,7 +16,7 @@ use metriken_storage::BufferPool;
 /// [`ArchiveReader`], opened from a path or bytes by content. Derefs to it,
 /// so its methods (`composition_sources`, `metric_metadata`, `complete`, ...)
 /// are this type's.
-pub struct RezReader(pub ArchiveReader);
+pub struct RezReader(pub ArchiveReader, Option<HashMap<String, String>>);
 
 impl std::ops::Deref for RezReader {
     type Target = ArchiveReader;
@@ -33,6 +33,72 @@ fn every_name(reader: &ArchiveReader) -> Vec<String> {
     let mut names = reader.all_names();
     names.extend(reader.gauge_histogram_names());
     names
+}
+
+/// The metadata key a recording's timeline events are stored under
+/// (`parquet_metadata::KEY_EVENTS` in the binary).
+const KEY_EVENTS: &str = "events";
+
+/// The metadata of a read group of several sources: the first source's,
+/// with `events` the union of every source's events. Events are records a
+/// source gains one at a time (an annotate of a copy, a check of the
+/// original), so the group shows each of them once: deduplicated by `id`,
+/// the first source's copy kept, and an event with no `id` kept unless an
+/// identical one is already there; sorted by timestamp. Every other key
+/// (KPIs, systeminfo, descriptions, the agent version) is a whole value with
+/// no merge rule; the sources of a group are copies of one recording or
+/// recordings of one agent process, which agree on them unless one was
+/// edited alone, and then the first source's (the archive's earliest) wins.
+/// A payload that does not parse is skipped, as a reader of one source
+/// would fail to read it.
+fn group_metadata(members: &[ArchiveReader]) -> HashMap<String, String> {
+    let mut metadata = members[0].file_metadata();
+    let mut events: Vec<serde_json::Value> = Vec::new();
+    let mut ids = std::collections::HashSet::new();
+    let mut payloads = 0;
+    for member in members {
+        let Some(raw) = member.file_metadata().remove(KEY_EVENTS) else {
+            continue;
+        };
+        let Ok(serde_json::Value::Object(mut payload)) = serde_json::from_str(&raw) else {
+            continue;
+        };
+        payloads += 1;
+        let Some(serde_json::Value::Array(list)) = payload.remove(KEY_EVENTS) else {
+            continue;
+        };
+        for event in list {
+            let fresh = match event.get("id").and_then(|v| v.as_str()) {
+                Some(id) if !id.is_empty() => ids.insert(id.to_string()),
+                _ => !events.contains(&event),
+            };
+            if fresh {
+                events.push(event);
+            }
+        }
+    }
+    if payloads > 1 {
+        events.sort_by_key(|e| {
+            (
+                e.get("timestamp").and_then(|t| t.as_u64()).unwrap_or(0),
+                e.get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            )
+        });
+        metadata.insert(
+            KEY_EVENTS.to_string(),
+            serde_json::json!({ KEY_EVENTS: events }).to_string(),
+        );
+    } else if payloads == 1 && !metadata.contains_key(KEY_EVENTS) {
+        // Only a later source has events.
+        metadata.insert(
+            KEY_EVENTS.to_string(),
+            serde_json::json!({ KEY_EVENTS: events }).to_string(),
+        );
+    }
+    metadata
 }
 
 /// `recordings`, one reader per archive source, joined into one reader per
@@ -52,7 +118,7 @@ fn read_groups(recordings: metriken_storage::LabeledRecordings) -> LabeledRecord
     if recordings.len() < 2 || !one_each {
         return recordings
             .into_iter()
-            .map(|(l, r)| (l, RezReader(r)))
+            .map(|(l, r)| (l, RezReader(r, None)))
             .collect();
     }
     let groups = {
@@ -90,13 +156,18 @@ fn read_groups(recordings: metriken_storage::LabeledRecordings) -> LabeledRecord
                 .iter()
                 .map(|&i| slots[i].take().expect("a source is in one read group"))
                 .collect();
-            let reader = if members.len() == 1 {
-                members.pop().expect("one member")
-            } else {
-                let filename = members[0].filename();
-                ArchiveReader::flatten(members, filename)
-            };
-            (group.labels, RezReader(reader))
+            if members.len() == 1 {
+                return (
+                    group.labels,
+                    RezReader(members.pop().expect("one member"), None),
+                );
+            }
+            let metadata = group_metadata(&members);
+            let filename = members[0].filename();
+            (
+                group.labels,
+                RezReader(ArchiveReader::flatten(members, filename), Some(metadata)),
+            )
         })
         .collect()
 }
@@ -114,9 +185,10 @@ impl RezReader {
         path: &Path,
         pool: Arc<BufferPool>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(RezReader(metriken_storage::rez::open::open_with_pool(
-            path, pool,
-        )?))
+        Ok(RezReader(
+            metriken_storage::rez::open::open_with_pool(path, pool)?,
+            None,
+        ))
     }
 
     /// [`open_recordings`](Self::open_recordings) for an archive that exists
@@ -172,6 +244,8 @@ impl RezReader {
                 .map(|t| t.recording_labels() as *const BTreeMap<String, String> as usize)
         };
         let ids: Vec<Option<usize>> = recordings.iter().map(|(_, r)| identity(&r.0)).collect();
+        // The first recording's metadata, its group's events merged.
+        let metadata = recordings.first().and_then(|(_, r)| r.1.clone());
         let joined =
             ArchiveReader::flatten(recordings.into_iter().map(|(_, r)| r.0).collect(), filename);
         let names = joined.all_names();
@@ -186,7 +260,7 @@ impl RezReader {
                 Some(joined.series_labels().of(table).inner.clone())
             })
             .collect();
-        (RezReader(joined), labels)
+        (RezReader(joined, metadata), labels)
     }
 }
 
@@ -265,7 +339,10 @@ impl MetricsSource for RezReader {
         self.0.metadata_get(key)
     }
     fn file_metadata(&self) -> HashMap<String, String> {
-        self.0.file_metadata()
+        match &self.1 {
+            Some(metadata) => metadata.clone(),
+            None => self.0.file_metadata(),
+        }
     }
     fn sample_timestamps(&self) -> Vec<u64> {
         self.0.sample_timestamps()
