@@ -30,7 +30,7 @@
         "inputSchema": {
           "properties": {
             "parquet_file": {
-              "description": "Path to the parquet file",
+              "description": "Path to the recording (.dendro)",
               "type": "string"
             },
             "recording": {
@@ -61,7 +61,7 @@
               "type": "string"
             },
             "parquet_file": {
-              "description": "Path to the parquet file",
+              "description": "Path to the recording (.dendro)",
               "type": "string"
             },
             "recording": {
@@ -86,7 +86,7 @@
         "inputSchema": {
           "properties": {
             "parquet_file": {
-              "description": "Path to the parquet file",
+              "description": "Path to the recording (.dendro)",
               "type": "string"
             },
             "recording": {
@@ -109,7 +109,7 @@
         "inputSchema": {
           "properties": {
             "parquet_file": {
-              "description": "Path to the parquet file",
+              "description": "Path to the recording (.dendro)",
               "type": "string"
             },
             "query": {
@@ -137,7 +137,7 @@
         "inputSchema": {
           "properties": {
             "parquet_file": {
-              "description": "Path to the parquet file",
+              "description": "Path to the recording (.dendro)",
               "type": "string"
             },
             "query": {
@@ -165,7 +165,7 @@
         "inputSchema": {
           "properties": {
             "parquet_file": {
-              "description": "Path to the recording (.dendro, .rez or .parquet)",
+              "description": "Path to the recording (.dendro)",
               "type": "string"
             },
             "recording": {
@@ -219,11 +219,11 @@
               "type": "string"
             },
             "output": {
-              "description": "A new .dendro to write the edited recording to. Required when parquet_file is a .rez or .parquet, which 6.x does not change (it is converted there and the copy written); for a .dendro, write a copy instead of editing it in place.",
+              "description": "A new .dendro to write the edited recording to, a copy, instead of editing it in place.",
               "type": "string"
             },
             "parquet_file": {
-              "description": "Path to the recording (.dendro, .rez or .parquet)",
+              "description": "Path to the recording (.dendro)",
               "type": "string"
             },
             "recording": {
@@ -255,7 +255,7 @@
         "name": "add_event"
       },
       {
-        "description": "Evaluate the recording's KPI checks (the `check` blocks embedded by `recording annotate --queries`, or the ones in `queries`) and return each verdict with its violation windows. With annotate=true the violation windows are also written into the recording as kind=check events, the same as `rezolus recording check --annotate` (into `output` for a .rez or .parquet). On a multi-recording archive with no `recording` selector every recording is evaluated and each gets its own verdicts, as the CLI does.",
+        "description": "Evaluate the recording's KPI checks (the `check` blocks embedded by `recording annotate --queries`, or the ones in `queries`) and return each verdict with its violation windows. With annotate=true the violation windows are also written into the recording as kind=check events, the same as `rezolus recording check --annotate`. On a multi-recording archive with no `recording` selector every recording is evaluated and each gets its own verdicts, as the CLI does.",
         "inputSchema": {
           "properties": {
             "annotate": {
@@ -263,11 +263,11 @@
               "type": "boolean"
             },
             "output": {
-              "description": "A new .dendro to write the edited recording to. Required when parquet_file is a .rez or .parquet, which 6.x does not change (it is converted there and the copy written); for a .dendro, write a copy instead of editing it in place.",
+              "description": "A new .dendro to write the edited recording to, a copy, instead of editing it in place.",
               "type": "string"
             },
             "parquet_file": {
-              "description": "Path to the recording (.dendro, .rez or .parquet)",
+              "description": "Path to the recording (.dendro)",
               "type": "string"
             },
             "queries": {
@@ -306,7 +306,7 @@
               "type": "string"
             },
             "parquet_file": {
-              "description": "Path to the recording (.dendro, .rez or .parquet)",
+              "description": "Path to the recording (.dendro)",
               "type": "string"
             },
             "query": {
@@ -431,11 +431,11 @@
               "type": "string"
             },
             "output": {
-              "description": "A new .dendro to write the edited recording to. Required when parquet_file is a .rez or .parquet, which 6.x does not change (it is converted there and the copy written); for a .dendro, write a copy instead of editing it in place.",
+              "description": "A new .dendro to write the edited recording to, a copy, instead of editing it in place.",
               "type": "string"
             },
             "parquet_file": {
-              "description": "Path to the recording (.dendro, .rez or .parquet)",
+              "description": "Path to the recording (.dendro)",
               "type": "string"
             },
             "recording": {
@@ -599,7 +599,7 @@
 {
   "error": {
     "code": -32000,
-    "message": "add_event: simple.parquet is a parquet recording; 6.x writes .dendro only and does not change it. Write the result to a new archive instead:\n  pass \"output\": \"simple.dendro\" (a new .dendro the edit is written to)"
+    "message": "add_event: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:\n  rezolus recording upgrade simple.parquet"
   },
   "id": 9,
   "jsonrpc": "2.0"
@@ -608,25 +608,12 @@
 {"id":10,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"description":"legacy","id":"e2","output":"events.dendro","parquet_file":"simple.parquet","timestamp":"2026-07-04T05:27:15Z"},"name":"add_event"}}
 --- response
 {
+  "error": {
+    "code": -32000,
+    "message": "add_event: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:\n  rezolus recording upgrade simple.parquet"
+  },
   "id": 10,
-  "jsonrpc": "2.0",
-  "result": {
-    "content": [
-      {
-        "text": {
-          "duration_ns": null,
-          "events_in_recording": 1,
-          "file": "events.dendro",
-          "id": "e2",
-          "outcome": "added",
-          "recording": {},
-          "report": "converted simple.parquet (parquet recording) to events.dendro: 1 source(s), 1 segment(s), 5 row(s)\nAnnotated \"events.dendro\": embedded 1 new check event(s) into 1 of 1 recording(s)",
-          "timestamp_ns": 1783142835000000000
-        },
-        "type": "text"
-      }
-    ]
-  }
+  "jsonrpc": "2.0"
 }
 === request
 {"id":11,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"description":"which","id":"e3","parquet_file":"multi.dendro","timestamp":1700000001},"name":"add_event"}}

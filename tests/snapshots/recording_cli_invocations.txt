@@ -85,7 +85,7 @@ Error: v2.dendro already exists; refusing to replace it
 --- exit 1
 --- stdout
 --- stderr
-Error: --to v3: 6.x writes .dendro only; `recording upgrade` converts to dendro (a v3 .rez is read as it is, so there is nothing to upgrade a tar to)
+Error: --to v3: `recording upgrade` converts to dendro, the only format written
 
 === rezolus recording upgrade simple.dendro -o again.dendro
 --- exit 1
@@ -97,94 +97,35 @@ Error: simple.dendro is already a dendro archive; there is nothing to upgrade
 --- exit 1
 --- stdout
 --- stderr
-Error: missing.rez is not a recording (.dendro, .rez or .parquet)
+Error: missing.rez is not a recording (a .dendro archive, or a .rez, .parquet or .parquet.ab.tar to upgrade)
 
 === rezolus recording metadata -i v3.rez
---- exit 0
+--- exit 1
 --- stdout
-.rez archive v3 (sqlite) — 1 recording(s)
-  recording rezolus-web-01 [host=web-01, source=rezolus]
-    clock anchor 2023-11-14T22:13:20.000Z, latest offset +0.000ms (4 observations)
-    a                           12 rows  ~1.000s  (3 segments)
-    b                           12 rows  ~1.000s  (3 segments)
 --- stderr
+Error: v3.rez is a v3 .rez archive, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade v3.rez
 
 === rezolus recording metadata -i v3.rez --json
---- exit 0
+--- exit 1
 --- stdout
-{
-  "container": "sqlite",
-  "recordings": [
-    {
-      "clock_anchor_wall_ns": 1700000000000000000,
-      "clock_offsets": [
-        [
-          1700000003000000000,
-          0
-        ],
-        [
-          1700000007000000000,
-          0
-        ],
-        [
-          1700000011000000000,
-          0
-        ],
-        [
-          1700000012000000000,
-          0
-        ]
-      ],
-      "complete": true,
-      "labels": {
-        "host": "web-01",
-        "source": "rezolus"
-      },
-      "metadata": {
-        "sampling_interval_ms": "1000"
-      },
-      "name": "rezolus-web-01",
-      "tables": [
-        {
-          "cadence_ns": 1000000000,
-          "live_wal_rows": 0,
-          "rows": 12,
-          "sampler": "a",
-          "segments": 3
-        },
-        {
-          "cadence_ns": 1000000000,
-          "live_wal_rows": 0,
-          "rows": 12,
-          "sampler": "b",
-          "segments": 3
-        }
-      ]
-    }
-  ],
-  "version": 3
-}
 --- stderr
+Error: v3.rez is a v3 .rez archive, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade v3.rez
 
 === rezolus recording metadata -i v2.rez
---- exit 0
+--- exit 1
 --- stdout
-.rez archive v2 — 1 recording(s)
-  recording rezolus-web-01 [host=web-01, source=rezolus]
-    a                           12 rows  ~1.000s
-    b                           12 rows  ~1.000s
 --- stderr
+Error: v2.rez is a v1/v2 (tar) .rez archive, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade v2.rez
 
 === rezolus recording metadata -i v3-live.rez
---- exit 0
+--- exit 1
 --- stdout
-.rez archive v3 (sqlite) — 1 recording(s)
-  recording rezolus-web-01 [host=web-01, source=rezolus]
-    ! not cleanly finalized — recovered from its write-ahead log; at most the final tick is missing
-    clock anchor 2023-11-14T22:13:20.000Z, latest offset +0.000ms (2 observations)
-    a/g                         12 rows  ~1.000s  (2 segments, 2 unsealed in WAL)
-    b/g                         12 rows  ~1.000s  (2 segments, 2 unsealed in WAL)
 --- stderr
+Error: v3-live.rez is a v3 .rez archive, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade v3-live.rez
 
 === rezolus recording metadata -i multi.dendro
 --- exit 0
@@ -232,193 +173,116 @@ dendro archive — 2 recording(s)
 --- stderr
 
 === rezolus recording metadata -i simple.parquet
---- exit 0
---- stdout
-File Metadata:
-  descriptions: {"http_requests_total":"Total HTTP requests","queue_depth":"Pending items"}
-  sampling_interval_ms: 1000
-  per_source_metadata: {"127.0.0.1-18651":{"first_sample_ns":1783142833001943000,"last_sample_ns":1783142837002256000}}
-  source: 127.0.0.1-18651
-
-Geometry:
-  Logical Table: 5 columns x 5 rows
-
-  Group | Rows | Bytes
-  ------+------+------
-  0     |    5 | 264 B
-  ------+------+------
-  Total |    5 | 264 B
-
-Schema (5 fields):
-  Name      | Type   | Metric Type | Other Metadata
-  ----------+--------+-------------+---------------
-  timestamp | UInt64 | timestamp   | unit=nanoseconds
-  duration  | UInt64 | duration    | unit=nanoseconds
-  0         | UInt64 | counter     | endpoint=http://127.0.0.1:18651/metrics, method=get, metric=http_requests_total, route=/, source=127.0.0.1-18651
-  1         | UInt64 | counter     | endpoint=http://127.0.0.1:18651/metrics, method=post, metric=http_requests_total, route=/api, source=127.0.0.1-18651
-  2         | Int64  | gauge       | endpoint=http://127.0.0.1:18651/metrics, metric=queue_depth, source=127.0.0.1-18651
---- stderr
-
-=== rezolus recording metadata -i simple.parquet --file --json
---- exit 0
---- stdout
-{
-  "file_metadata": {
-    "descriptions": {
-      "http_requests_total": "Total HTTP requests",
-      "queue_depth": "Pending items"
-    },
-    "per_source_metadata": {
-      "127.0.0.1-18651": {
-        "first_sample_ns": 1783142833001943000,
-        "last_sample_ns": 1783142837002256000
-      }
-    },
-    "sampling_interval_ms": 1000,
-    "source": "127.0.0.1-18651"
-  }
-}
---- stderr
-
-=== rezolus recording metadata -i simple.parquet --schema
---- exit 0
---- stdout
-Schema (5 fields):
-  Name      | Type   | Metric Type | Other Metadata
-  ----------+--------+-------------+---------------
-  timestamp | UInt64 | timestamp   | unit=nanoseconds
-  duration  | UInt64 | duration    | unit=nanoseconds
-  0         | UInt64 | counter     | endpoint=http://127.0.0.1:18651/metrics, method=get, metric=http_requests_total, route=/, source=127.0.0.1-18651
-  1         | UInt64 | counter     | endpoint=http://127.0.0.1:18651/metrics, method=post, metric=http_requests_total, route=/api, source=127.0.0.1-18651
-  2         | Int64  | gauge       | endpoint=http://127.0.0.1:18651/metrics, metric=queue_depth, source=127.0.0.1-18651
---- stderr
-
-=== rezolus recording metadata -i simple.parquet --geometry --json
---- exit 0
---- stdout
-{
-  "geometry": {
-    "num_columns": 5,
-    "num_rows": 5,
-    "row_groups": [
-      {
-        "index": 0,
-        "num_rows": 5,
-        "total_byte_size": 264
-      }
-    ]
-  }
-}
---- stderr
-
-=== rezolus recording metadata -i simple.parquet --field source
---- exit 0
---- stdout
-127.0.0.1-18651
---- stderr
-
-=== rezolus recording metadata -i simple.parquet --field no_such_key
 --- exit 1
 --- stdout
 --- stderr
-Error: no file-level metadata key "no_such_key"
+Error: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade simple.parquet
+
+=== rezolus recording metadata -i simple.parquet --file --json
+--- exit 2
+--- stdout
+--- stderr
+error: unexpected argument '--file' found
+
+Usage: rezolus recording metadata --input <input>
+
+For more information, try '--help'.
+
+=== rezolus recording metadata -i simple.parquet --schema
+--- exit 2
+--- stdout
+--- stderr
+error: unexpected argument '--schema' found
+
+Usage: rezolus recording metadata --input <input>
+
+For more information, try '--help'.
+
+=== rezolus recording metadata -i simple.parquet --geometry --json
+--- exit 2
+--- stdout
+--- stderr
+error: unexpected argument '--geometry' found
+
+Usage: rezolus recording metadata --input <input>
+
+For more information, try '--help'.
+
+=== rezolus recording metadata -i simple.parquet --field source
+--- exit 2
+--- stdout
+--- stderr
+error: unexpected argument '--field' found
+
+Usage: rezolus recording metadata --input <input>
+
+For more information, try '--help'.
+
+=== rezolus recording metadata -i simple.parquet --field no_such_key
+--- exit 2
+--- stdout
+--- stderr
+error: unexpected argument '--field' found
+
+Usage: rezolus recording metadata --input <input>
+
+For more information, try '--help'.
 
 === rezolus recording metadata -i missing.parquet
 --- exit 1
 --- stdout
 --- stderr
-Error: No such file or directory (os error 2)
+Error: missing.parquet: no such file
 
 === rezolus parquet metadata -i v3.rez
---- exit 0
---- stdout
-.rez archive v3 (sqlite) — 1 recording(s)
-  recording rezolus-web-01 [host=web-01, source=rezolus]
-    clock anchor 2023-11-14T22:13:20.000Z, latest offset +0.000ms (4 observations)
-    a                           12 rows  ~1.000s  (3 segments)
-    b                           12 rows  ~1.000s  (3 segments)
---- stderr
-
-=== rezolus recording check simple.parquet --queries pass.json
---- exit 0
---- stdout
-PASS          Queue depth low  above 10
-1 check: 1 passed, 0 failed, 0 warned, 0 indeterminate, 0 errors
---- stderr
-
-=== rezolus recording check simple.parquet --queries fail.json
 --- exit 1
 --- stdout
-FAIL          Queue depth bounded  above 2 for 2s  [2026-07-04T05:27:14Z..2026-07-04T05:27:18Z, 1 window]
-WARN          Queue depth sane  below 100  [2026-07-04T05:27:14Z..2026-07-04T05:27:18Z, 1 window]
-2 checks: 0 passed, 1 failed, 1 warned, 0 indeterminate, 0 errors
 --- stderr
+Error: v3.rez is a v3 .rez archive, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade v3.rez
+
+=== rezolus recording check simple.parquet --queries pass.json
+--- exit 2
+--- stdout
+--- stderr
+error: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade simple.parquet
+
+=== rezolus recording check simple.parquet --queries fail.json
+--- exit 2
+--- stdout
+--- stderr
+error: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade simple.parquet
 
 === rezolus recording check simple.parquet --queries error.json
 --- exit 2
 --- stdout
-ERROR         Ghost rate  above 1  error: query failed: Metric not found: no_such_metric
-FAIL          Queue depth bounded  above 2 for 2s  [2026-07-04T05:27:14Z..2026-07-04T05:27:18Z, 1 window]
-2 checks: 0 passed, 1 failed, 0 warned, 0 indeterminate, 1 error
 --- stderr
+error: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade simple.parquet
 
 === rezolus recording check simple.parquet --queries fail.json --json
---- exit 1
+--- exit 2
 --- stdout
-[
-  {
-    "title": "Queue depth bounded",
-    "query": "queue_depth",
-    "check": {
-      "above": 2.0,
-      "for": "2s",
-      "severity": "fail"
-    },
-    "status": "fail",
-    "windows": [
-      {
-        "start": "2026-07-04T05:27:14Z",
-        "end": "2026-07-04T05:27:18Z",
-        "start_ns": 1783142834000000000,
-        "duration_ns": 4000000000,
-        "points": 4
-      }
-    ],
-    "indeterminate": []
-  },
-  {
-    "title": "Queue depth sane",
-    "query": "queue_depth",
-    "check": {
-      "below": 100.0,
-      "severity": "warn"
-    },
-    "status": "warn",
-    "windows": [
-      {
-        "start": "2026-07-04T05:27:14Z",
-        "end": "2026-07-04T05:27:18Z",
-        "start_ns": 1783142834000000000,
-        "duration_ns": 4000000000,
-        "points": 4
-      }
-    ],
-    "indeterminate": []
-  }
-]
 --- stderr
+error: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade simple.parquet
 
 === rezolus recording check simple.parquet --queries no-checks.json
---- exit 0
+--- exit 2
 --- stdout
 --- stderr
-no checks to run: no KPI in simple.parquet carries a "check" (the --queries payload defines none)
+error: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade simple.parquet
 
 === rezolus recording check simple.parquet
---- exit 0
+--- exit 2
 --- stdout
 --- stderr
-no checks to run: no KPI in simple.parquet carries a "check" (embed one with `recording annotate --queries`, or pass --queries)
+error: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade simple.parquet
 
 === rezolus recording check simple.parquet --queries not-json.json
 --- exit 2
@@ -442,13 +306,77 @@ error: Recording file not found: missing.parquet
 --- exit 2
 --- stdout
 --- stderr
-error: simple.parquet is not a .rez archive and holds no recordings to select between; --recording applies only to a multi-recording .rez
+error: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade simple.parquet
 
 === rezolus recording check simple.parquet --queries pass.json --recording nonsense
 --- exit 2
 --- stdout
 --- stderr
 error: --recording expects key=value, got "nonsense" with no '='
+
+=== rezolus recording check simple.dendro --queries pass.json
+--- exit 0
+--- stdout
+[] PASS          Queue depth low  above 10
+1 check: 1 passed, 0 failed, 0 warned, 0 indeterminate, 0 errors
+--- stderr
+
+=== rezolus recording check simple.dendro --queries error.json
+--- exit 2
+--- stdout
+[] ERROR         Ghost rate  above 1  error: query failed: Parse error: query references no metric present in this .rez: sum(rate(no_such_metric[5s]))
+[] FAIL          Queue depth bounded  above 2 for 2s  [2026-07-04T05:27:14Z..2026-07-04T05:27:18Z, 1 window]
+2 checks: 0 passed, 1 failed, 0 warned, 0 indeterminate, 1 error
+--- stderr
+
+=== rezolus recording check simple.dendro --queries fail.json --json
+--- exit 1
+--- stdout
+[
+  {
+    "recording": {},
+    "title": "Queue depth bounded",
+    "query": "queue_depth",
+    "check": {
+      "above": 2.0,
+      "for": "2s",
+      "severity": "fail"
+    },
+    "status": "fail",
+    "windows": [
+      {
+        "start": "2026-07-04T05:27:14Z",
+        "end": "2026-07-04T05:27:18Z",
+        "start_ns": 1783142834000000000,
+        "duration_ns": 4000000000,
+        "points": 4
+      }
+    ],
+    "indeterminate": []
+  },
+  {
+    "recording": {},
+    "title": "Queue depth sane",
+    "query": "queue_depth",
+    "check": {
+      "below": 100.0,
+      "severity": "warn"
+    },
+    "status": "warn",
+    "windows": [
+      {
+        "start": "2026-07-04T05:27:14Z",
+        "end": "2026-07-04T05:27:18Z",
+        "start_ns": 1783142834000000000,
+        "duration_ns": 4000000000,
+        "points": 4
+      }
+    ],
+    "indeterminate": []
+  }
+]
+--- stderr
 
 === rezolus recording check simple.dendro --queries fail.json
 --- exit 1
@@ -480,22 +408,16 @@ error: no recording in multi.dendro matches --recording host=nowhere. It holds:
 === rezolus recording check simple.parquet --queries fail.json --annotate
 --- exit 2
 --- stdout
-FAIL          Queue depth bounded  above 2 for 2s  [2026-07-04T05:27:14Z..2026-07-04T05:27:18Z, 1 window]
-WARN          Queue depth sane  below 100  [2026-07-04T05:27:14Z..2026-07-04T05:27:18Z, 1 window]
-2 checks: 0 passed, 1 failed, 1 warned, 0 indeterminate, 0 errors
 --- stderr
-error: simple.parquet is a parquet recording; 6.x writes .dendro only and does not change it. Write the result to a new archive instead:
-  rezolus recording check simple.parquet --queries fail.json --annotate -o simple.dendro
+error: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade simple.parquet
 
 === rezolus recording check simple.parquet --queries fail.json --annotate -o checked.dendro
---- exit 1
+--- exit 2
 --- stdout
-FAIL          Queue depth bounded  above 2 for 2s  [2026-07-04T05:27:14Z..2026-07-04T05:27:18Z, 1 window]
-WARN          Queue depth sane  below 100  [2026-07-04T05:27:14Z..2026-07-04T05:27:18Z, 1 window]
-2 checks: 0 passed, 1 failed, 1 warned, 0 indeterminate, 0 errors
-converted simple.parquet (parquet recording) to checked.dendro: 1 source(s), 1 segment(s), 5 row(s)
-Annotated "checked.dendro": embedded 2 new check event(s) into 1 of 1 recording(s)
 --- stderr
+error: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade simple.parquet
 
 === rezolus recording check simple.dendro --queries fail.json --annotate --json
 --- exit 1
@@ -615,22 +537,22 @@ error: systeminfo is not valid: key must be a string at line 1 column 3
 --- exit 1
 --- stdout
 --- stderr
-error: simple.parquet is a parquet recording; 6.x writes .dendro only and does not change it. Write the result to a new archive instead:
-  rezolus recording annotate simple.parquet --queries pass.json -o simple.dendro
+error: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade simple.parquet
 
 === rezolus recording annotate v3.rez --queries pass.json
 --- exit 1
 --- stdout
 --- stderr
-error: v3.rez is a v3 .rez archive; 6.x writes .dendro only and does not change it. Write the result to a new archive instead:
-  rezolus recording annotate v3.rez --queries pass.json -o v3.dendro
+error: v3.rez is a v3 .rez archive, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade v3.rez
 
 === rezolus recording annotate simple.parquet --queries pass.json -o annotated.dendro
---- exit 0
+--- exit 1
 --- stdout
-converted simple.parquet (parquet recording) to annotated.dendro: 1 source(s), 1 segment(s), 5 row(s)
-Annotated "annotated.dendro": embedded 2 KPIs into 1 recording(s)
 --- stderr
+error: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade simple.parquet
 
 === rezolus recording annotate simple.dendro --queries pass.json
 --- exit 0
@@ -691,7 +613,7 @@ Annotated "copy.dendro": embedded 2 KPIs into 1 recording(s)
 --- exit 1
 --- stdout
 --- stderr
-error: missing.dendro is not a recording (.dendro, .rez or .parquet)
+error: missing.dendro is not a recording (a .dendro archive)
 
 === rezolus recording filter simple.dendro
 --- exit 1
@@ -703,13 +625,19 @@ error: filtering an archive requires --samplers <a,b,...> (samplers to keep) and
 --- exit 1
 --- stdout
 --- stderr
-error: failed to filter v3.rez: v3.rez is a v3 .rez archive; 6.x writes .dendro only and does not change it. Write the filtered recording to a new archive instead:
-  rezolus recording filter v3.rez --samplers a -o v3.dendro
+error: v3.rez is a v3 .rez archive, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade v3.rez
 
 === rezolus recording filter v3.rez --samplers a -o v3-a.dendro
+--- exit 1
+--- stdout
+--- stderr
+error: v3.rez is a v3 .rez archive, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade v3.rez
+
+=== rezolus recording filter v3.dendro --samplers a -o v3-a.dendro
 --- exit 0
 --- stdout
-converted v3.rez (v3 .rez archive) for v3-a.dendro: 1 source(s), 6 segment(s), 0 live WAL row(s), 4 clock offset(s)
 Filtered "v3-a.dendro": kept 1 of 2 tables
 --- stderr
 
@@ -717,7 +645,8 @@ Filtered "v3-a.dendro": kept 1 of 2 tables
 --- exit 1
 --- stdout
 --- stderr
-error: failed to filter v3.rez: v3-a.rez: 6.x writes .dendro archives only; give an output ending in .dendro
+error: v3.rez is a v3 .rez archive, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade v3.rez
 
 === rezolus recording filter v3-a.dendro --metrics mem_free -o v3-mem.dendro
 --- exit 1
@@ -738,24 +667,35 @@ Filtered "v3-ops.dendro": kept 1 of 2 tables
 error: failed to filter v3-a.dendro: no sampler named zzz in v3-a.dendro; it holds: a
 
 === rezolus recording filter simple.parquet --queries pass.json -o slim.dendro
---- exit 0
+--- exit 2
 --- stdout
-converted simple.parquet (parquet recording) for slim.dendro: 1 source(s), 1 segment(s), 5 row(s)
-Filtered "slim.dendro": kept 1 of 1 tables
 --- stderr
+error: unexpected argument '--queries' found
+
+  tip: a similar argument exists: '--metrics'
+
+Usage: rezolus recording filter --metrics <A,B,...> <FILE>
+
+For more information, try '--help'.
 
 === rezolus recording filter simple.parquet -o slim2.dendro
 --- exit 1
 --- stdout
 --- stderr
-error: no service extension found: use --queries to provide one
+error: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade simple.parquet
 
 === rezolus recording filter v3.dendro --samplers a --queries pass.json -o v3-q.dendro
---- exit 0
+--- exit 2
 --- stdout
-Filtered "v3-q.dendro": kept 1 of 2 tables
 --- stderr
-warning: --queries picks a parquet file's KPI metrics when neither --samplers nor --metrics is given; it is ignored here
+error: unexpected argument '--queries' found
+
+  tip: a similar argument exists: '--metrics'
+
+Usage: rezolus recording filter --samplers <A,B,...> --metrics <A,B,...> <FILE>
+
+For more information, try '--help'.
 
 === rezolus recording upgrade v3.rez -o in-place.dendro
 --- exit 0
@@ -797,12 +737,11 @@ dendro archive — 1 recording(s)
 --- stderr
 
 === rezolus recording check simple.parquet --templates tmpl
---- exit 1
+--- exit 2
 --- stdout
-FAIL          Queue depth bounded  above 2 for 2s  [2026-07-04T05:27:14Z..2026-07-04T05:27:18Z, 1 window]
-WARN          Queue depth sane  below 100  [2026-07-04T05:27:14Z..2026-07-04T05:27:18Z, 1 window]
-2 checks: 0 passed, 1 failed, 1 warned, 0 indeterminate, 0 errors
 --- stderr
+error: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade simple.parquet
 
 === rezolus recording check simple.dendro --templates tmpl
 --- exit 1
@@ -861,18 +800,16 @@ WARN          Queue depth sane  below 100  [2026-07-04T05:27:14Z..2026-07-04T05:
 --- stderr
 
 === rezolus recording filter simple.parquet --templates tmpl -o slim3.dendro
---- exit 0
+--- exit 2
 --- stdout
-converted simple.parquet (parquet recording) for slim3.dendro: 1 source(s), 1 segment(s), 5 row(s)
-Filtered "slim3.dendro": kept 1 of 1 tables
 --- stderr
+error: unexpected argument '--templates' found
 
-=== rezolus recording filter cachecannon.parquet -o cc-slim.dendro
---- exit 0
---- stdout
-converted cachecannon.parquet (parquet recording) for cc-slim.dendro: 1 source(s), 1 segment(s), 241 row(s)
-Filtered "cc-slim.dendro": kept 1 of 1 tables
---- stderr
+  tip: a similar argument exists: '--samplers'
+
+Usage: rezolus recording filter --samplers <A,B,...> <FILE>
+
+For more information, try '--help'.
 
 === rezolus recording combine v3.dendro -o one.dendro
 --- exit 1
@@ -924,11 +861,17 @@ dendro archive — 2 recording(s)
 --- stderr
 
 === rezolus recording combine v3.dendro simple.parquet --ab baseline=v3.dendro experiment=simple.parquet -o ab.dendro
+--- exit 1
+--- stdout
+--- stderr
+Error: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade simple.parquet
+
+=== rezolus recording combine v3.dendro simple.dendro --ab baseline=v3.dendro experiment=simple.dendro -o ab.dendro
 --- exit 0
 --- stdout
-converted 1 .rez or parquet input(s) to dendro for the assembly
 v3.dendro: arm=baseline
-simple.parquet: arm=experiment
+simple.dendro: arm=experiment
 stamped arm on 2 recording(s); the archive opens as an A/B comparison
 wrote ab.dendro with 2 recording(s) from 2 input(s)
 --- stderr
@@ -998,7 +941,7 @@ error: snapshot 0: data did not match any variant of untagged enum Snapshot
 --- exit 1
 --- stdout
 --- stderr
-error: out.parquet: 6.x writes .dendro archives only; give an output ending in .dendro
+error: out.parquet: the output is a .dendro archive; give a name ending in .dendro
 
 === rezolus recording convert missing.raw
 --- exit 1
@@ -1088,17 +1031,55 @@ dendro archive — 1 recording(s)
 --- stderr
 
 === rezolus recording snapshot v3-live.rez -o snap.dendro
+--- exit 1
+--- stdout
+--- stderr
+Error: v3-live.rez is a v3 .rez archive, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade v3-live.rez
+
+=== rezolus recording upgrade v3-live.rez -o live.dendro
 --- exit 0
 --- stdout
-converted v3-live.rez (v3 .rez archive) for snap.dendro: 1 source(s), 4 segment(s), 4 live WAL row(s), 2 clock offset(s)
+converted v3-live.rez (v3 .rez archive) to live.dendro: 1 source(s), 4 segment(s), 4 live WAL row(s), 2 clock offset(s)
+--- stderr
+
+=== rezolus recording snapshot live.dendro -o snap.dendro
+--- exit 0
+--- stdout
 Wrote snap.dendro
+--- stderr
+
+=== rezolus recording upgrade ab.parquet.ab.tar -o from-tarball.dendro
+--- exit 0
+--- stdout
+converted ab.parquet.ab.tar (.parquet.ab.tar A/B tarball) to from-tarball.dendro: 2 source(s) (arm=baseline: before, arm=experiment: after), 2 segment(s), 10 row(s)
+--- stderr
+
+=== rezolus recording metadata -i ab.parquet.ab.tar
+--- exit 1
+--- stdout
+--- stderr
+Error: ab.parquet.ab.tar is a .parquet.ab.tar A/B tarball, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade ab.parquet.ab.tar
+
+=== rezolus recording metadata -i from-tarball.dendro
+--- exit 0
+--- stdout
+dendro archive — 2 recording(s)
+  recording recording-baseline [arm=baseline]
+    clock anchor 2026-07-04T05:27:13.029Z
+    parquet                      5 rows  ~0.994s
+  recording recording-experiment [arm=experiment]
+    clock anchor 2026-07-04T05:27:13.029Z
+    parquet                      5 rows  ~0.994s
 --- stderr
 
 === rezolus recording snapshot v3-live.rez -o snap.rez
 --- exit 1
 --- stdout
 --- stderr
-Error: snap.rez: 6.x writes .dendro archives only; give an output ending in .dendro
+Error: v3-live.rez is a v3 .rez archive, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade v3-live.rez
 
 === rezolus recording snapshot snap.dendro -o snap2.dendro
 --- exit 0
@@ -1116,7 +1097,8 @@ Error: snap2.dendro already exists; refusing to replace it
 --- exit 1
 --- stdout
 --- stderr
-Error: simple.parquet is a parquet recording, not an archive (.dendro or .rez)
+Error: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade simple.parquet
 
 === rezolus recording metadata -i snap2.dendro
 --- exit 0
@@ -1156,5 +1138,6 @@ Failed to load recording: no recording in multi.dendro matches --recording host=
 --- exit 1
 --- stdout
 --- stderr
-Failed to load recording: simple.parquet is not a .rez archive and holds no recordings to select between; a recording selector applies only to a multi-recording .rez
+Failed to load recording: simple.parquet is a parquet recording, which rezolus no longer opens; convert it to a .dendro archive first:
+  rezolus recording upgrade simple.parquet
 

@@ -10,7 +10,7 @@ Commands:
   exporter   Serve a Rezolus agent's metrics on a Prometheus-compatible endpoint
   hindsight  Continuously record to a rolling on-disk buffer for after-the-fact snapshots
   mcp        Run Rezolus MCP server for AI analysis or execute analysis commands
-  recording  Inspect and transform Rezolus recordings (.dendro and .rez archives, .parquet files)
+  recording  Inspect and transform Rezolus recordings (.dendro archives)
   record     On-demand recording of metrics to a .dendro archive
   status     Fetch and display agent status (version, uptime, sampler health)
   view       Serve an interactive web dashboard for a recording or live agent
@@ -62,7 +62,7 @@ Commands:
   exporter   Serve a Rezolus agent's metrics on a Prometheus-compatible endpoint
   hindsight  Continuously record to a rolling on-disk buffer for after-the-fact snapshots
   mcp        Run Rezolus MCP server for AI analysis or execute analysis commands
-  recording  Inspect and transform Rezolus recordings (.dendro and .rez archives, .parquet files)
+  recording  Inspect and transform Rezolus recordings (.dendro archives)
   record     On-demand recording of metrics to a .dendro archive
   status     Fetch and display agent status (version, uptime, sampler health)
   view       Serve an interactive web dashboard for a recording or live agent
@@ -83,18 +83,18 @@ Options:
 === rezolus recording -h
 --- exit 0
 --- stdout
-Inspect and transform Rezolus recordings (.dendro and .rez archives, .parquet files)
+Inspect and transform Rezolus recordings (.dendro archives)
 
 Usage: rezolus recording <COMMAND>
 
 Commands:
-  annotate  Add service extension KPIs or events to a recording (.dendro; a .rez or .parquet into a new .dendro)
+  annotate  Add service extension KPIs or events to a .dendro recording
   check     Evaluate the checks a recording's KPIs carry and report a verdict per check
   combine   Combine recordings into one multi-recording .dendro archive
-  metadata  Display the metadata of a recording (.dendro or .rez archive, .parquet file)
+  metadata  Display the metadata of a .dendro recording
   convert   Convert a raw msgpack recording into a .dendro archive
-  filter    Shrink a recording to the samplers or metrics named (.dendro; a .rez or .parquet into a new .dendro)
-  upgrade   Convert a .rez archive or a .parquet recording to a .dendro archive
+  filter    Shrink a .dendro recording to the samplers or metrics named
+  upgrade   Convert a .rez archive, a .parquet recording or a .parquet.ab.tar to a .dendro archive
   snapshot  Copy an archive that is still being written, without stopping the writer
   help      Print this message or the help of the given subcommand(s)
 
@@ -105,22 +105,22 @@ Options:
 === rezolus recording --help
 --- exit 0
 --- stdout
-Offline operations on recordings: the .dendro archives `rezolus record` and
-`rezolus hindsight` write, and the .rez archives and .parquet files that 5.x
-releases wrote.
+Offline operations on recordings: the .dendro archives that
+`rezolus record` and `rezolus hindsight` write.
 
 SUBCOMMANDS:
-    metadata   Inspect a recording's metadata, schema, and geometry
+    metadata   Describe an archive's recordings, labels, metadata and tables
     annotate   Embed service-extension KPIs or events into a recording
     check      Evaluate the KPI checks a recording carries and report pass/fail verdicts
     combine    Combine recordings into one .dendro archive, optionally labelled as an A/B
-    convert    Turn a raw msgpack recording (from a 5.x `record -o out.raw`) into a .dendro
+    convert    Turn a raw msgpack recording (`record -o out.raw` in earlier releases) into a .dendro
     filter     Shrink a recording to the samplers or metrics named
     snapshot   Copy an archive that is still being written into a complete .dendro
-    upgrade    Convert a .rez archive or a .parquet file into a .dendro archive
+    upgrade    Convert a recording an earlier release wrote into a .dendro archive
 
-6.x writes .dendro archives only. A command that would change a .rez or a
-.parquet writes a new .dendro instead, given -o.
+Every subcommand but `upgrade` opens .dendro archives only. A .rez archive,
+a .parquet file or a .parquet.ab.tar A/B tarball is refused with the command
+that converts it: `rezolus recording upgrade FILE`.
 
 Run `rezolus recording <subcommand> --help` for per-subcommand examples.
 
@@ -129,13 +129,13 @@ Run `rezolus recording <subcommand> --help` for per-subcommand examples.
 Usage: rezolus recording <COMMAND>
 
 Commands:
-  annotate  Add service extension KPIs or events to a recording (.dendro; a .rez or .parquet into a new .dendro)
+  annotate  Add service extension KPIs or events to a .dendro recording
   check     Evaluate the checks a recording's KPIs carry and report a verdict per check
   combine   Combine recordings into one multi-recording .dendro archive
-  metadata  Display the metadata of a recording (.dendro or .rez archive, .parquet file)
+  metadata  Display the metadata of a .dendro recording
   convert   Convert a raw msgpack recording into a .dendro archive
-  filter    Shrink a recording to the samplers or metrics named (.dendro; a .rez or .parquet into a new .dendro)
-  upgrade   Convert a .rez archive or a .parquet recording to a .dendro archive
+  filter    Shrink a .dendro recording to the samplers or metrics named
+  upgrade   Convert a .rez archive, a .parquet recording or a .parquet.ab.tar to a .dendro archive
   snapshot  Copy an archive that is still being written, without stopping the writer
   help      Print this message or the help of the given subcommand(s)
 
@@ -147,15 +147,15 @@ Options:
 === rezolus recording annotate -h
 --- exit 0
 --- stdout
-Add service extension KPIs or events to a recording (.dendro; a .rez or .parquet into a new .dendro)
+Add service extension KPIs or events to a .dendro recording
 
 Usage: rezolus recording annotate [OPTIONS] <FILE>
 
 Arguments:
-  <FILE>  The recording to annotate (.dendro, or a .rez or .parquet with -o)
+  <FILE>  The recording to annotate (.dendro)
 
 Options:
-  -o, --output <PATH>      Write the annotated recording to this new .dendro instead of in place (required for a .rez or .parquet input)
+  -o, --output <PATH>      Write the annotated recording to this new .dendro instead of in place
       --queries <PATH>     Custom service extension JSON file (overrides built-in template)
       --undo               Remove the KPIs (service extension) from each recording
       --filter             Refused: filtered a parquet file's columns; use `rezolus recording filter`
@@ -176,12 +176,8 @@ Options:
 Embed metadata the viewer reads into each recording of a .dendro archive,
 in place: service-extension KPIs (--queries, or --undo to remove them),
 timeline events (--event/--add-events/--clear-events) and a systeminfo JSON
-(--systeminfo). At least one is required.
-
-A .rez archive or a .parquet file is not changed: 6.x writes .dendro only.
-Give -o <new.dendro> and the recording is converted there and the edit
-written to the copy; without -o the command is refused, naming the command
-to run. A .dendro with -o is copied there and the copy edited.
+(--systeminfo). At least one is required. With -o <new.dendro> the archive
+is copied there and the copy edited.
 
 --undo removes each recording's KPIs, and --systeminfo stores a systeminfo
 JSON in each recording. --source, --node and --filter edited a parquet
@@ -195,18 +191,18 @@ EXAMPLES:
     # Add a timeline event
     rezolus recording annotate run.dendro --event 'time=2026-05-12T15:23Z,kind=deploy,description="rollout"'
 
-    # Annotate a 5.x recording: the result is a new .dendro
-    rezolus recording annotate old.rez --queries kpis.json -o old.dendro
+    # Leave the original alone: write the annotated copy elsewhere
+    rezolus recording annotate run.dendro --queries kpis.json -o annotated.dendro
 
 Usage: rezolus recording annotate [OPTIONS] <FILE>
 
 Arguments:
   <FILE>
-          The recording to annotate (.dendro, or a .rez or .parquet with -o)
+          The recording to annotate (.dendro)
 
 Options:
   -o, --output <PATH>
-          Write the annotated recording to this new .dendro instead of in place (required for a .rez or .parquet input)
+          Write the annotated recording to this new .dendro instead of in place
 
       --queries <PATH>
           Custom service extension JSON file (overrides built-in template)
@@ -253,16 +249,15 @@ Evaluate the checks a recording's KPIs carry and report a verdict per check
 Usage: rezolus recording check [OPTIONS] <FILE>
 
 Arguments:
-  <FILE>  The recording to check (.parquet or .rez, told apart by content)
+  <FILE>  The recording to check (.dendro)
 
 Options:
       --queries <PATH>         Service-extension JSON whose KPI checks to run, instead of the recording's own
-      --recording <KEY=VALUE>  Which recording of a multi-recording .rez to check, as key=value (e.g. --recording source=redis)
+      --recording <KEY=VALUE>  Which recording of a multi-recording archive to check, as key=value (e.g. --recording source=redis)
                                Repeatable: the pairs are ANDed and must together name exactly one
-                               recording. Without it every recording is checked. Not accepted for
-                               a .parquet file.
+                               recording. Without it every recording is checked.
       --annotate               Write each FAIL/WARN window into the recording as a kind=check range event
-  -o, --output <PATH>          With --annotate, write the events into this new .dendro instead of the recording (required for a .rez or .parquet input)
+  -o, --output <PATH>          With --annotate, write the events into this new .dendro instead of the recording
       --json                   Print the verdicts as a JSON array instead of one line per check
       --templates <DIR>        Directory of service-extension template JSON files to use instead of the built-in set, for a recording with no embedded KPIs (matched to the recording's source metadata)
   -h, --help                   Print help (see more with '--help')
@@ -347,10 +342,9 @@ INDETERMINATE never fail the run. No checks at all is 0, with a note on
 stderr.
 
 MULTI-RECORDING ARCHIVE: with no --recording every recording is checked and
-each line is prefixed with its labels; --recording k=v (the selector
-`rezolus mcp` uses) narrows to one. A recording and its copies (one
-source copied, or recorded twice from one agent process) are one
-recording.
+each line is prefixed with its labels; --recording k=v narrows to one. A
+recording and its copies (one source copied, or recorded twice from one
+agent process) are one recording.
 
 --annotate writes each FAIL/WARN window into the recording as a range
 event: kind=check, timestamp=window start, duration_ns=span (the event
@@ -360,16 +354,13 @@ id is a hash of the title, the evaluated query, the condition and the
 window start: running again rewrites a window that grew and adds nothing
 for one that did not, and a window that no longer fires keeps its old
 event. The events go into the recording they were evaluated against (each
-recording its own when no --recording is given), in its sources' metadata.
-A .dendro is annotated in place, or into a copy with -o <new.dendro>. A .rez
-or .parquet is not changed: give -o <new.dendro> and it is converted there
-and the copy annotated; without -o the annotation is refused, naming the
-command to run. With --json the annotation report goes to stderr so stdout
-stays one JSON array.
+recording its own when no --recording is given), in its sources' metadata:
+in place, or into a copy with -o <new.dendro>. With --json the annotation
+report goes to stderr so stdout stays one JSON array.
 
---json prints an array with one object per check: `recording` (labels,
-.rez only), `title`, `query` (as evaluated), `check`, `status`, `windows`
-and `indeterminate` (each with `start` and `end` as RFC 3339, `start_ns`,
+--json prints an array with one object per check: `recording` (labels),
+`title`, `query` (as evaluated), `check`, `status`, `windows` and
+`indeterminate` (each with `start` and `end` as RFC 3339, `start_ns`,
 `duration_ns`, `points`), and `error` (ERROR only).
 
 EXAMPLES:
@@ -377,7 +368,7 @@ EXAMPLES:
     rezolus recording check run.dendro
 
     # Run checks from a file instead (nothing is written to the recording)
-    rezolus recording check run.parquet --queries kpis.json
+    rezolus recording check run.dendro --queries kpis.json
 
     # CI: fail the job on a violated check, and store the verdicts as events
     rezolus recording check run.dendro --annotate || exit 1
@@ -385,30 +376,26 @@ EXAMPLES:
     # One recording of a multi-recording archive, machine-readable
     rezolus recording check fleet.dendro --recording host=web-01 --json
 
-    # Annotate a 5.x recording's verdicts into a new .dendro
-    rezolus recording check old.rez --annotate -o old.dendro
-
 Usage: rezolus recording check [OPTIONS] <FILE>
 
 Arguments:
   <FILE>
-          The recording to check (.parquet or .rez, told apart by content)
+          The recording to check (.dendro)
 
 Options:
       --queries <PATH>
           Service-extension JSON whose KPI checks to run, instead of the recording's own
 
       --recording <KEY=VALUE>
-          Which recording of a multi-recording .rez to check, as key=value (e.g. --recording source=redis)
+          Which recording of a multi-recording archive to check, as key=value (e.g. --recording source=redis)
           Repeatable: the pairs are ANDed and must together name exactly one
-          recording. Without it every recording is checked. Not accepted for
-          a .parquet file.
+          recording. Without it every recording is checked.
 
       --annotate
           Write each FAIL/WARN window into the recording as a kind=check range event
 
   -o, --output <PATH>
-          With --annotate, write the events into this new .dendro instead of the recording (required for a .rez or .parquet input)
+          With --annotate, write the events into this new .dendro instead of the recording
 
       --json
           Print the verdicts as a JSON array instead of one line per check
@@ -428,45 +415,40 @@ Combine recordings into one multi-recording .dendro archive
 Usage: rezolus recording combine [OPTIONS] --output <output> <FILES>...
 
 Arguments:
-  <FILES>...  Input recordings: .dendro and .rez archives and .parquet files, in any mix
+  <FILES>...  Input recordings (.dendro)
 
 Options:
   -o, --output <output>    The .dendro archive to write; must not exist
-      --bypass-time-check  Applied to the parquet row-merge, which 6.x does not write; refused
-      --pinned <pinned>    Applied to the parquet row-merge, which 6.x does not write; refused
+      --bypass-time-check  Applied to the parquet row-merge, which is no longer written; refused
+      --pinned <pinned>    Applied to the parquet row-merge, which is no longer written; refused
       --ab <ab> <ab>       Mark the two inputs as the two arms of an A/B comparison: `--ab baseline=<input> experiment=<input>`. Each value names one input (the path as typed, or its file name), and every recording of that input is labelled arm=baseline or arm=experiment, so the viewer opens the archive as a comparison. An input recording that already carries a different arm is refused; the same arm is kept. With one archive input, each value is the position of one of its recordings. Without --ab the archive opens as one combined view.
-      --category <NAME>    Applied to the A/B tarball, which 6.x does not write; refused
+      --category <NAME>    Applied to the A/B tarball, which is no longer written; refused
   -h, --help               Print help (see more with '--help')
 --- stderr
 
 === rezolus recording combine --help
 --- exit 0
 --- stdout
-Assemble two or more recordings into one .dendro archive, a recording per
-input recording, which the viewer opens as one combined view. Requires at
-least two inputs (one archive with --ab, below) and an output (-o) ending
-in .dendro. 6.x writes .dendro only: an output ending in .parquet (the
-row-merge), .rez or .parquet.ab.tar is refused.
-
-Inputs may be any mix of .dendro archives, .rez archives (v1, v2 or v3)
-and .parquet files; a .rez or parquet input is converted to dendro on the
-way in, and is not changed. A parquet file becomes one recording labelled
-with its `source`. A recording and its copy (a snapshot, a hindsight dump)
-given together are read as one recording, as `rezolus view` reads them.
+Assemble two or more .dendro archives into one, a recording per input
+recording, which the viewer opens as one combined view. Requires at least
+two inputs (one archive with --ab, below) and an output (-o) ending in
+.dendro. A recording and its copy (a snapshot, a hindsight dump) given
+together are read as one recording, as `rezolus view` reads them.
 
 With `--ab baseline=<input> experiment=<input>` each input's recordings
 are labelled arm=baseline or arm=experiment and the viewer opens a
 baseline/experiment comparison; an input recording that already carries
-the other arm is refused, naming the input. With ONE archive input,
-`--ab baseline=0 experiment=1` labels its recordings by position (from 0,
-in the order `rezolus mcp describe-recording` lists them; every source of
-a recording, such as a source and its snapshot, takes its arm): the way to
-compare the two recordings of an archive combined before --ab existed,
-whose labels may be identical. With two inputs, each value is an input's
-path or file name; the source names the 5.x A/B tarball took are refused.
+the other arm is refused, naming the input. With two inputs, each value
+is an input's path or file name. With ONE archive input, each value is
+the position of one of its recordings, from 0,
+in the order `rezolus mcp describe-recording` lists them.
+Every source of a recording, such as a source and its snapshot, takes
+its arm. That is the way to compare the two recordings of an archive
+combined without --ab, whose labels may be identical.
 
 --pinned, --category and --bypass-time-check applied to the parquet
-row-merge and the A/B tarball, which 6.x does not write; they are refused.
+row-merge and the A/B tarball, which are no longer written; they are
+refused.
 
 EXAMPLES:
     # Two hosts recorded separately in one run: one combined view
@@ -475,33 +457,30 @@ EXAMPLES:
     # A/B compare two captures
     rezolus recording combine a.dendro b.dendro --ab baseline=a.dendro experiment=b.dendro -o ab.dendro
 
-    # 5.x captures: a .rez and two parquet files into one archive
-    rezolus recording combine agent.rez redis.parquet valkey.parquet -o run.dendro
-
-    # Label the two recordings of an older archive as an A/B, by position
-    rezolus recording combine old.rez --ab baseline=0 experiment=1 -o ab.dendro
+    # Label the two recordings of one archive as an A/B, by position
+    rezolus recording combine run.dendro --ab baseline=0 experiment=1 -o ab.dendro
 
 Usage: rezolus recording combine [OPTIONS] --output <output> <FILES>...
 
 Arguments:
   <FILES>...
-          Input recordings: .dendro and .rez archives and .parquet files, in any mix
+          Input recordings (.dendro)
 
 Options:
   -o, --output <output>
           The .dendro archive to write; must not exist
 
       --bypass-time-check
-          Applied to the parquet row-merge, which 6.x does not write; refused
+          Applied to the parquet row-merge, which is no longer written; refused
 
       --pinned <pinned>
-          Applied to the parquet row-merge, which 6.x does not write; refused
+          Applied to the parquet row-merge, which is no longer written; refused
 
       --ab <ab> <ab>
           Mark the two inputs as the two arms of an A/B comparison: `--ab baseline=<input> experiment=<input>`. Each value names one input (the path as typed, or its file name), and every recording of that input is labelled arm=baseline or arm=experiment, so the viewer opens the archive as a comparison. An input recording that already carries a different arm is refused; the same arm is kept. With one archive input, each value is the position of one of its recordings. Without --ab the archive opens as one combined view.
 
       --category <NAME>
-          Applied to the A/B tarball, which 6.x does not write; refused
+          Applied to the A/B tarball, which is no longer written; refused
 
   -h, --help
           Print help (see a summary with '-h')
@@ -510,16 +489,12 @@ Options:
 === rezolus recording metadata -h
 --- exit 0
 --- stdout
-Display the metadata of a recording (.dendro or .rez archive, .parquet file)
+Display the metadata of a .dendro recording
 
 Usage: rezolus recording metadata [OPTIONS] --input <input>
 
 Options:
-  -i, --input <input>  The recording (.dendro, .rez or .parquet)
-      --schema         Show only column-level metadata (schema)
-      --file           Show only file-level metadata
-      --geometry       Show only table geometry (shape and row group layout)
-      --field <KEY>    Print the value of a specific file-level metadata key
+  -i, --input <input>  The recording (.dendro)
       --json           Output in JSON format (for programmatic use)
   -h, --help           Print help (see more with '--help')
 --- stderr
@@ -527,16 +502,8 @@ Options:
 === rezolus recording metadata --help
 --- exit 0
 --- stdout
-Describe a recording. For a .dendro or .rez archive: its recordings, their
-labels and metadata, and each table with its cadence; --json emits the
-description as JSON.
-
-For a .parquet file: file-level key/values (source, sampling interval,
-systeminfo, descriptions, …), the column schema with each metric's type and
-labels, and table geometry (row/column counts and row-group layout). With no
-filter flag all sections are shown. Narrow with --file, --schema, or
---geometry; pull a single file-level value with --field <KEY>; add --json
-for machine-readable output.
+Describe a .dendro archive: its recordings, their labels and metadata, and
+each table with its cadence; --json emits the description as JSON.
 
 EXAMPLES:
     # Describe an archive
@@ -545,29 +512,11 @@ EXAMPLES:
     # The same, as JSON
     rezolus recording metadata -i rezolus.dendro --json
 
-    # Only a parquet file's file-level metadata, as JSON
-    rezolus recording metadata -i rezolus.parquet --file --json
-
-    # Just the value of one parquet metadata key
-    rezolus recording metadata -i rezolus.parquet --field source
-
 Usage: rezolus recording metadata [OPTIONS] --input <input>
 
 Options:
   -i, --input <input>
-          The recording (.dendro, .rez or .parquet)
-
-      --schema
-          Show only column-level metadata (schema)
-
-      --file
-          Show only file-level metadata
-
-      --geometry
-          Show only table geometry (shape and row group layout)
-
-      --field <KEY>
-          Print the value of a specific file-level metadata key
+          The recording (.dendro)
 
       --json
           Output in JSON format (for programmatic use)
@@ -591,7 +540,7 @@ Options:
       --interval <DURATION>   Sampling interval to stamp, as a number with a unit (ns, us, ms, s, m, h) -- 1s, 250ms. Stamped as whole milliseconds, rounded to the nearest; anything below 1ms is rejected. Default: inferred from the median gap between snapshot timestamps, or 1s if the recording holds fewer than two snapshots
       --systeminfo <PATH>     JSON hardware summary to embed, as served by the agent's /systeminfo endpoint; any JSON value is accepted and stored verbatim. Use - for stdin (only one of --systeminfo/--descriptions can read stdin)
       --descriptions <PATH>   Metric help text to embed, as served by the agent's /metrics/descriptions endpoint: a flat JSON object of name to string, {"cpu_usage":"CPU time by state"}. Use - for stdin (only one of --systeminfo/--descriptions can read stdin)
-  -m, --metadata <KEY=VALUE>  Add a file-level metadata tag as key=value; repeat for multiple tags. Split on the first =, so values may contain = and may be empty. Keys are free-form, but `source` is the one the viewer and MCP tools read to identify where a recording came from (it defaults to rezolus). Tags are applied after the two keys convert derives, `source` and `sampling_interval_ms`, so a tag with either name wins -- set the interval with --interval rather than -m sampling_interval_ms=
+  -m, --metadata <KEY=VALUE>  Add a file-level metadata tag as key=value; repeat for multiple tags. Split on the first =, so values may contain = and may be empty. Keys are free-form, but `source` is the one the viewer reads to identify where a recording came from (it defaults to rezolus). Tags are applied after the two keys convert derives, `source` and `sampling_interval_ms`, so a tag with either name wins -- set the interval with --interval rather than -m sampling_interval_ms=
       --force                 Overwrite the output file if it already exists (without this, an existing output is an error and nothing is written)
   -h, --help                  Print help (see more with '--help')
 --- stderr
@@ -599,10 +548,10 @@ Options:
 === rezolus recording convert --help
 --- exit 0
 --- stdout
-Convert a recording made with a 5.x `rezolus record -o out.raw` (concatenated
-msgpack snapshots, one per sampling tick) into a .dendro archive that the
-viewer, the MCP tools and the rest of `rezolus recording` can read. 6.x
-records .dendro only, so this is for raw recordings made before 6.0.
+Convert a raw recording (concatenated msgpack snapshots, one per sampling
+tick, as `rezolus record -o out.raw` wrote them in earlier releases)
+into a .dendro archive that the viewer and the rest of
+`rezolus recording` can read.
 
 The input may be plain or zstd-compressed; which one it is is detected from
 the file's contents, not its name. The output path defaults to the input
@@ -631,8 +580,8 @@ conversion time, to recover them. They can only be supplied here, which
 means reconverting the original raw input over the output (--force).
 
 EXAMPLES:
-    # The producing side, with a 5.x binary, for reference
-    rezolus record --url http://localhost:4241 -o rezolus.raw
+    # The producing side, with an earlier release, for reference
+    rezolus record --url http://AGENT -o rezolus.raw
 
     # Convert a compressed recording (writes rezolus.dendro)
     rezolus recording convert rezolus.raw.zst
@@ -644,16 +593,16 @@ EXAMPLES:
     rezolus recording convert rezolus.raw --interval 250ms
 
     # Save the two metadata blobs at record time, from the agent being recorded
-    curl -s http://localhost:4241/systeminfo > sysinfo.json
-    curl -s http://localhost:4241/metrics/descriptions > help.json
+    curl -s http://AGENT/systeminfo > sysinfo.json
+    curl -s http://AGENT/metrics/descriptions > help.json
 
     # ...then stamp them into the conversion
     rezolus recording convert rezolus.raw --systeminfo sysinfo.json --descriptions help.json
 
     # Or pipe one of them straight in, with - for stdin
-    curl -s http://localhost:4241/systeminfo | rezolus recording convert rezolus.raw --systeminfo -
+    curl -s http://AGENT/systeminfo | rezolus recording convert rezolus.raw --systeminfo -
 
-    # Tag the recording the way `record --metadata` would
+    # Tag the recording the way `rezolus record --metadata` would
     rezolus recording convert rezolus.raw -m source=llm-perf -m run=boat-7
 
     # Replace an output left by an earlier attempt
@@ -682,7 +631,7 @@ Options:
           Metric help text to embed, as served by the agent's /metrics/descriptions endpoint: a flat JSON object of name to string, {"cpu_usage":"CPU time by state"}. Use - for stdin (only one of --systeminfo/--descriptions can read stdin)
 
   -m, --metadata <KEY=VALUE>
-          Add a file-level metadata tag as key=value; repeat for multiple tags. Split on the first =, so values may contain = and may be empty. Keys are free-form, but `source` is the one the viewer and MCP tools read to identify where a recording came from (it defaults to rezolus). Tags are applied after the two keys convert derives, `source` and `sampling_interval_ms`, so a tag with either name wins -- set the interval with --interval rather than -m sampling_interval_ms=
+          Add a file-level metadata tag as key=value; repeat for multiple tags. Split on the first =, so values may contain = and may be empty. Keys are free-form, but `source` is the one the viewer reads to identify where a recording came from (it defaults to rezolus). Tags are applied after the two keys convert derives, `source` and `sampling_interval_ms`, so a tag with either name wins -- set the interval with --interval rather than -m sampling_interval_ms=
 
       --force
           Overwrite the output file if it already exists (without this, an existing output is an error and nothing is written)
@@ -694,17 +643,15 @@ Options:
 === rezolus recording filter -h
 --- exit 0
 --- stdout
-Shrink a recording to the samplers or metrics named (.dendro; a .rez or .parquet into a new .dendro)
+Shrink a .dendro recording to the samplers or metrics named
 
 Usage: rezolus recording filter [OPTIONS] <FILE>
 
 Arguments:
-  <FILE>  Recording to filter: a .dendro, or a .rez or .parquet with -o
+  <FILE>  Recording to filter (.dendro)
 
 Options:
-      --queries <PATH>      Custom service extension JSON file (overrides metadata/template)
-  -o, --output <PATH>       Write the filtered recording to this .dendro (default: rewrite a .dendro input in place; required for a .rez or .parquet)
-      --templates <DIR>     Directory containing service extension template JSON files
+  -o, --output <PATH>       Write the filtered recording to this new .dendro (default: rewrite the input in place)
       --samplers <A,B,...>  Comma-separated sampler names to KEEP; every other sampler's tables are dropped. Filtering is by sampler, so a sampler's group tables go together
       --metrics <A,B,...>   Comma-separated metric names to KEEP as COLUMNS; every other metric's columns are dropped and re-encoded. Timestamp and acquisition-window sidecars are always kept; a table left with none of the kept metrics is dropped. Combine with --samplers, or use either alone
   -h, --help                Print help (see more with '--help')
@@ -713,19 +660,14 @@ Options:
 === rezolus recording filter --help
 --- exit 0
 --- stdout
-Shrink a recording: --samplers keeps whole SAMPLERS (a sampler's group
+Shrink a .dendro recording: --samplers keeps whole SAMPLERS (a sampler's group
 tables go together) and --metrics keeps metric COLUMNS (re-encoding each
 table's segments, always keeping the timestamp and acquisition-window
 sidecars; a table left with none of the kept metrics is dropped). Use
-either alone or together; at least one is required, except for a parquet
-file, which with neither keeps what its service-extension KPIs need: the
-metrics its KPI queries name (from the file's annotation, a matching
-built-in template, or --queries) and every metric of the agent's columns.
+either alone or together; at least one is required.
 
-A .dendro is rewritten in place, or with -o/--output written to a new
-.dendro, leaving the original untouched. A .rez or .parquet is not changed:
-6.x writes .dendro only, so it needs -o <new.dendro>; it is converted and
-the filtered copy written there.
+The archive is rewritten in place, or with -o/--output written to a new
+.dendro, leaving the original untouched.
 
 EXAMPLES:
     # Keep only two samplers of a .dendro, writing a slimmed copy
@@ -734,27 +676,15 @@ EXAMPLES:
     # Keep only specific metric columns, in place
     rezolus recording filter capture.dendro --metrics cpu_usage,cpu_frequency
 
-    # A 5.x .rez: the filtered recording is a new .dendro
-    rezolus recording filter out.rez --samplers cpu_usage -o slim.dendro
-
-    # A parquet file, keeping what its KPIs need
-    rezolus recording filter service.parquet --queries ext.json -o slim.dendro
-
 Usage: rezolus recording filter [OPTIONS] <FILE>
 
 Arguments:
   <FILE>
-          Recording to filter: a .dendro, or a .rez or .parquet with -o
+          Recording to filter (.dendro)
 
 Options:
-      --queries <PATH>
-          Custom service extension JSON file (overrides metadata/template)
-
   -o, --output <PATH>
-          Write the filtered recording to this .dendro (default: rewrite a .dendro input in place; required for a .rez or .parquet)
-
-      --templates <DIR>
-          Directory containing service extension template JSON files
+          Write the filtered recording to this new .dendro (default: rewrite the input in place)
 
       --samplers <A,B,...>
           Comma-separated sampler names to KEEP; every other sampler's tables are dropped. Filtering is by sampler, so a sampler's group tables go together
@@ -769,16 +699,16 @@ Options:
 === rezolus recording upgrade -h
 --- exit 0
 --- stdout
-Convert a .rez archive or a .parquet recording to a .dendro archive
+Convert a .rez archive, a .parquet recording or a .parquet.ab.tar to a .dendro archive
 
 Usage: rezolus recording upgrade [OPTIONS] <FILE>
 
 Arguments:
-  <FILE>  The recording to convert: a .rez archive or a .parquet file
+  <FILE>  The recording to convert: a .rez archive, a .parquet file or a .parquet.ab.tar
 
 Options:
   -o, --output <DENDRO>  The .dendro to write (default: the input with a .dendro extension); must not exist
-      --to <FORMAT>      Target container: `dendro`, the only one 6.x writes (accepted for scripts that pass it) [default: dendro]
+      --to <FORMAT>      Target container: `dendro`, the only one written (accepted for scripts that pass it) [default: dendro]
   -h, --help             Print help (see more with '--help')
 --- stderr
 
@@ -786,15 +716,17 @@ Options:
 --- exit 0
 --- stdout
 Write a new .dendro archive holding a recording an earlier release wrote:
-a v1, v2 or v3 `.rez`, or a standalone `.parquet`. 6.x writes .dendro only
-and reads every older format; converting is how an old recording becomes
-one the `recording` tools edit in place.
+a v1, v2 or v3 `.rez`, a standalone `.parquet`, or a `.parquet.ab.tar`
+A/B tarball. Every other command opens .dendro archives only and refuses
+these with this command.
 
 A v3 `.rez`'s recordings become sources and its tables streams; segment,
 WAL and caller-row bytes are copied unchanged. A tar `.rez`'s recordings
 become sources with their labels, metadata, clock anchor and `complete`
 flag. A parquet file becomes one source, labelled with the file's
-`source` as the viewer labels it. Tar and parquet tables are re-encoded.
+`source` as the viewer labels it. An A/B tarball becomes two sources, its
+baseline labelled arm=baseline and its experiment arm=experiment, which
+the viewer opens as a comparison. Tar and parquet tables are re-encoded.
 
 The input is never changed. -o defaults to the input with its extension
 replaced by .dendro, and an existing output is refused.
@@ -806,18 +738,21 @@ EXAMPLES:
     # A parquet recording, to a chosen name
     rezolus recording upgrade capture.parquet -o capture.dendro
 
+    # An A/B tarball: writes ab.dendro, a two-arm comparison
+    rezolus recording upgrade ab.parquet.ab.tar
+
 Usage: rezolus recording upgrade [OPTIONS] <FILE>
 
 Arguments:
   <FILE>
-          The recording to convert: a .rez archive or a .parquet file
+          The recording to convert: a .rez archive, a .parquet file or a .parquet.ab.tar
 
 Options:
   -o, --output <DENDRO>
           The .dendro to write (default: the input with a .dendro extension); must not exist
 
       --to <FORMAT>
-          Target container: `dendro`, the only one 6.x writes (accepted for scripts that pass it)
+          Target container: `dendro`, the only one written (accepted for scripts that pass it)
           
           [default: dendro]
 
@@ -833,7 +768,7 @@ Copy an archive that is still being written, without stopping the writer
 Usage: rezolus recording snapshot --output <DENDRO> <FILE>
 
 Arguments:
-  <FILE>  The archive to snapshot (.dendro or .rez; may be open for writing)
+  <FILE>  The archive to snapshot (.dendro; may be open for writing)
 
 Options:
   -o, --output <DENDRO>  The .dendro to write. Must not already exist.
@@ -843,19 +778,18 @@ Options:
 === rezolus recording snapshot --help
 --- exit 0
 --- stdout
-Take a complete, standalone .dendro copy of an archive while a recorder
-or `hindsight` is still appending to it.
+Take a complete, standalone .dendro copy of an archive while
+a recorder or `hindsight` is still appending to it.
 
 WHY NOT `cp`: an archive is a SQLite database in WAL mode, so recent
 commits live in a `<file>-wal` SIDECAR until they are checkpointed into
 the archive. Copying the archive alone leaves them behind, and the copy
 reads as a recording that stopped early.
 
-A .dendro is copied in one read snapshot, its live tail sealed into the
-copy, so the copy holds no WAL rows. A .rez (v1, v2 or v3, which a 5.x
-recorder may still be writing) is converted to the .dendro, its sidecar
-read through. The writer is never paused and the original is not
-modified. The output must end in .dendro and must not exist.
+The archive is copied in one read snapshot, its live tail sealed into the
+copy, so the copy holds no WAL rows. The writer is never paused and the
+original is not modified. The output must end in .dendro and must not
+exist.
 
 The result is what to hand to someone else, upload to the static-site
 viewer (a browser is given one file and cannot see a sidecar), or keep
@@ -872,7 +806,7 @@ Usage: rezolus recording snapshot --output <DENDRO> <FILE>
 
 Arguments:
   <FILE>
-          The archive to snapshot (.dendro or .rez; may be open for writing)
+          The archive to snapshot (.dendro; may be open for writing)
 
 Options:
   -o, --output <DENDRO>
@@ -919,10 +853,11 @@ Options:
 === rezolus mcp --help
 --- exit 0
 --- stdout
-AI-assisted analysis of a recording — a .parquet file or a .rez archive, told
-apart by content rather than by name. With no subcommand, runs as a Model
-Context Protocol server over stdio for an LLM client. Each subcommand also runs
-one-shot from the CLI, printing the same analysis to stdout.
+AI-assisted analysis of a recording, a .dendro archive. With no subcommand,
+runs as a Model Context Protocol server over stdio for an LLM client. Each
+subcommand also runs one-shot from the CLI, printing the same analysis to
+stdout. A .rez archive or .parquet file from an earlier release is refused
+with the command that converts it: `rezolus recording upgrade FILE`.
 
 SUBCOMMANDS:
     describe-recording   Summarize a recording (source, version, time range, duration)
@@ -948,10 +883,10 @@ EXAMPLES:
     rezolus mcp
 
     # One-shot: list the metrics in a recording
-    rezolus mcp describe-metrics file.parquet
+    rezolus mcp describe-metrics file.dendro
 
     # One-shot: run a PromQL query
-    rezolus mcp query file.parquet "sum(irate(cpu_cycles[1m]))"
+    rezolus mcp query file.dendro "sum(irate(cpu_cycles[1m]))"
 
     # Register with Claude Code (user scope) and install the skill
     rezolus mcp install
@@ -1002,7 +937,7 @@ Analyze correlation between two metrics using the full recording
 Usage: rezolus mcp analyze-correlation [OPTIONS] <FILE> <QUERY1> <QUERY2>
 
 Arguments:
-  <FILE>    Recording to analyze: a .parquet file or a .rez archive
+  <FILE>    Recording to analyze: a .dendro archive
   <QUERY1>  First PromQL query (e.g., 'irate(cgroup_cpu_usage[1m])')
   <QUERY2>  Second PromQL query (e.g., 'cgroup_memory_used')
 
@@ -1015,8 +950,6 @@ Options:
                                comparison (recordings carrying `arm`), need it.
                                Run `rezolus mcp describe-recording FILE` with no --recording to list
                                an archive's recordings and the selector that picks each one.
-                               Not accepted for a .parquet file, which holds one recording and so has
-                               nothing to select between.
   -h, --help                   Print help (see more with '--help')
 --- stderr
 
@@ -1031,14 +964,14 @@ Both arguments are full PromQL expressions, not bare metric names; wrap
 counters in rate()/irate() as you would in a query.
 
 EXAMPLE:
-    rezolus mcp analyze-correlation file.parquet \
+    rezolus mcp analyze-correlation file.dendro \
         "irate(cgroup_cpu_usage[1m])" "cgroup_memory_used"
 
 Usage: rezolus mcp analyze-correlation [OPTIONS] <FILE> <QUERY1> <QUERY2>
 
 Arguments:
   <FILE>
-          Recording to analyze: a .parquet file or a .rez archive
+          Recording to analyze: a .dendro archive
 
   <QUERY1>
           First PromQL query (e.g., 'irate(cgroup_cpu_usage[1m])')
@@ -1056,8 +989,6 @@ Options:
           comparison (recordings carrying `arm`), need it.
           Run `rezolus mcp describe-recording FILE` with no --recording to list
           an archive's recordings and the selector that picks each one.
-          Not accepted for a .parquet file, which holds one recording and so has
-          nothing to select between.
 
   -h, --help
           Print help (see a summary with '-h')
@@ -1071,7 +1002,7 @@ Describe the contents of a recording file
 Usage: rezolus mcp describe-recording [OPTIONS] <FILE>
 
 Arguments:
-  <FILE>  Recording to describe: a .parquet file or a .rez archive
+  <FILE>  Recording to describe: a .dendro archive
 
 Options:
       --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
@@ -1082,8 +1013,6 @@ Options:
                                comparison (recordings carrying `arm`), need it.
                                Run `rezolus mcp describe-recording FILE` with no --recording to list
                                an archive's recordings and the selector that picks each one.
-                               Not accepted for a .parquet file, which holds one recording and so has
-                               nothing to select between.
   -h, --help                   Print help (see more with '--help')
 --- stderr
 
@@ -1095,13 +1024,13 @@ wall-clock time range it spans, and total duration. Start here to confirm
 you have the right file before querying it.
 
 EXAMPLE:
-    rezolus mcp describe-recording file.parquet
+    rezolus mcp describe-recording file.dendro
 
 Usage: rezolus mcp describe-recording [OPTIONS] <FILE>
 
 Arguments:
   <FILE>
-          Recording to describe: a .parquet file or a .rez archive
+          Recording to describe: a .dendro archive
 
 Options:
       --recording <KEY=VALUE>
@@ -1113,8 +1042,6 @@ Options:
           comparison (recordings carrying `arm`), need it.
           Run `rezolus mcp describe-recording FILE` with no --recording to list
           an archive's recordings and the selector that picks each one.
-          Not accepted for a .parquet file, which holds one recording and so has
-          nothing to select between.
 
   -h, --help
           Print help (see a summary with '-h')
@@ -1128,7 +1055,7 @@ List and describe all metrics available in a recording
 Usage: rezolus mcp describe-metrics [OPTIONS] <FILE>
 
 Arguments:
-  <FILE>  Recording to analyze: a .parquet file or a .rez archive
+  <FILE>  Recording to analyze: a .dendro archive
 
 Options:
       --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
@@ -1139,8 +1066,6 @@ Options:
                                comparison (recordings carrying `arm`), need it.
                                Run `rezolus mcp describe-recording FILE` with no --recording to list
                                an archive's recordings and the selector that picks each one.
-                               Not accepted for a .parquet file, which holds one recording and so has
-                               nothing to select between.
   -h, --help                   Print help (see more with '--help')
 --- stderr
 
@@ -1153,13 +1078,13 @@ find exact metric names and see how to phrase a PromQL expression for each
 type.
 
 EXAMPLE:
-    rezolus mcp describe-metrics file.parquet
+    rezolus mcp describe-metrics file.dendro
 
 Usage: rezolus mcp describe-metrics [OPTIONS] <FILE>
 
 Arguments:
   <FILE>
-          Recording to analyze: a .parquet file or a .rez archive
+          Recording to analyze: a .dendro archive
 
 Options:
       --recording <KEY=VALUE>
@@ -1171,8 +1096,6 @@ Options:
           comparison (recordings carrying `arm`), need it.
           Run `rezolus mcp describe-recording FILE` with no --recording to list
           an archive's recordings and the selector that picks each one.
-          Not accepted for a .parquet file, which holds one recording and so has
-          nothing to select between.
 
   -h, --help
           Print help (see a summary with '-h')
@@ -1186,7 +1109,7 @@ Detect anomalies in time series data using MAD, CUSUM, and FFT analysis
 Usage: rezolus mcp detect-anomalies [OPTIONS] <FILE> [QUERY]
 
 Arguments:
-  <FILE>   Recording to analyze: a .parquet file or a .rez archive
+  <FILE>   Recording to analyze: a .dendro archive
   [QUERY]  Optional PromQL query or metric name (e.g., 'cpu_usage' or 'sum(irate(cpu_cycles[1m]))')
            If omitted, analyzes all metrics in the recording
 
@@ -1199,8 +1122,6 @@ Options:
                                comparison (recordings carrying `arm`), need it.
                                Run `rezolus mcp describe-recording FILE` with no --recording to list
                                an archive's recordings and the selector that picks each one.
-                               Not accepted for a .parquet file, which holds one recording and so has
-                               nothing to select between.
   -h, --help                   Print help (see more with '--help')
 --- stderr
 
@@ -1214,16 +1135,16 @@ If QUERY is omitted, performs exhaustive analysis on all metrics in the recordin
 
 EXAMPLES:
     # Sweep every metric in the recording
-    rezolus mcp detect-anomalies out.rez
+    rezolus mcp detect-anomalies out.dendro
 
     # Focus on one metric
-    rezolus mcp detect-anomalies out.rez cpu_usage
+    rezolus mcp detect-anomalies out.dendro cpu_usage
 
 Usage: rezolus mcp detect-anomalies [OPTIONS] <FILE> [QUERY]
 
 Arguments:
   <FILE>
-          Recording to analyze: a .parquet file or a .rez archive
+          Recording to analyze: a .dendro archive
 
   [QUERY]
           Optional PromQL query or metric name (e.g., 'cpu_usage' or 'sum(irate(cpu_cycles[1m]))')
@@ -1239,8 +1160,6 @@ Options:
           comparison (recordings carrying `arm`), need it.
           Run `rezolus mcp describe-recording FILE` with no --recording to list
           an archive's recordings and the selector that picks each one.
-          Not accepted for a .parquet file, which holds one recording and so has
-          nothing to select between.
 
   -h, --help
           Print help (see a summary with '-h')
@@ -1254,7 +1173,7 @@ Execute a PromQL query against a recording and display results
 Usage: rezolus mcp query [OPTIONS] <FILE> <QUERY>
 
 Arguments:
-  <FILE>   Recording to query: a .parquet file or a .rez archive
+  <FILE>   Recording to query: a .dendro archive
   <QUERY>  PromQL query (e.g., 'sum(irate(cpu_cycles[1m]))')
 
 Options:
@@ -1266,8 +1185,6 @@ Options:
                                comparison (recordings carrying `arm`), need it.
                                Run `rezolus mcp describe-recording FILE` with no --recording to list
                                an archive's recordings and the selector that picks each one.
-                               Not accepted for a .parquet file, which holds one recording and so has
-                               nothing to select between.
   -h, --help                   Print help (see more with '--help')
 --- stderr
 
@@ -1289,16 +1206,16 @@ to show.
 
 EXAMPLES:
     # Total cycles per second across all CPUs
-    rezolus mcp query out.rez 'sum(irate(cpu_cycles[1m]))'
+    rezolus mcp query out.dendro 'sum(irate(cpu_cycles[1m]))'
 
     # A ratio: both operands' bands are combined
-    rezolus mcp query out.rez 'sum(irate(cpu_usage[1m])) / cpu_cores'
+    rezolus mcp query out.dendro 'sum(irate(cpu_usage[1m])) / cpu_cores'
 
 Usage: rezolus mcp query [OPTIONS] <FILE> <QUERY>
 
 Arguments:
   <FILE>
-          Recording to query: a .parquet file or a .rez archive
+          Recording to query: a .dendro archive
 
   <QUERY>
           PromQL query (e.g., 'sum(irate(cpu_cycles[1m]))')
@@ -1313,8 +1230,6 @@ Options:
           comparison (recordings carrying `arm`), need it.
           Run `rezolus mcp describe-recording FILE` with no --recording to list
           an archive's recordings and the selector that picks each one.
-          Not accepted for a .parquet file, which holds one recording and so has
-          nothing to select between.
 
   -h, --help
           Print help (see a summary with '-h')
@@ -1328,7 +1243,7 @@ Extract structured features from a recording as JSON
 Usage: rezolus mcp extract-features [OPTIONS] <FILE>
 
 Arguments:
-  <FILE>  Recording to analyze: a .parquet file or a .rez archive
+  <FILE>  Recording to analyze: a .dendro archive
 
 Options:
       --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
@@ -1339,8 +1254,6 @@ Options:
                                comparison (recordings carrying `arm`), need it.
                                Run `rezolus mcp describe-recording FILE` with no --recording to list
                                an archive's recordings and the selector that picks each one.
-                               Not accepted for a .parquet file, which holds one recording and so has
-                               nothing to select between.
   -h, --help                   Print help (see more with '--help')
 --- stderr
 
@@ -1351,16 +1264,16 @@ Produce a deterministic, versioned overview record of a recording's Rezolus-nati
 
 EXAMPLES:
     # Emit the feature record
-    rezolus mcp extract-features out.rez
+    rezolus mcp extract-features out.dendro
 
     # Keep it for an assessment step
-    rezolus mcp extract-features out.rez > features.json
+    rezolus mcp extract-features out.dendro > features.json
 
 Usage: rezolus mcp extract-features [OPTIONS] <FILE>
 
 Arguments:
   <FILE>
-          Recording to analyze: a .parquet file or a .rez archive
+          Recording to analyze: a .dendro archive
 
 Options:
       --recording <KEY=VALUE>
@@ -1372,8 +1285,6 @@ Options:
           comparison (recordings carrying `arm`), need it.
           Run `rezolus mcp describe-recording FILE` with no --recording to list
           an archive's recordings and the selector that picks each one.
-          Not accepted for a .parquet file, which holds one recording and so has
-          nothing to select between.
 
   -h, --help
           Print help (see a summary with '-h')
@@ -1458,18 +1369,18 @@ Options:
 === rezolus parquet -h
 --- exit 0
 --- stdout
-Inspect and transform Rezolus recordings (.dendro and .rez archives, .parquet files)
+Inspect and transform Rezolus recordings (.dendro archives)
 
 Usage: rezolus recording <COMMAND>
 
 Commands:
-  annotate  Add service extension KPIs or events to a recording (.dendro; a .rez or .parquet into a new .dendro)
+  annotate  Add service extension KPIs or events to a .dendro recording
   check     Evaluate the checks a recording's KPIs carry and report a verdict per check
   combine   Combine recordings into one multi-recording .dendro archive
-  metadata  Display the metadata of a recording (.dendro or .rez archive, .parquet file)
+  metadata  Display the metadata of a .dendro recording
   convert   Convert a raw msgpack recording into a .dendro archive
-  filter    Shrink a recording to the samplers or metrics named (.dendro; a .rez or .parquet into a new .dendro)
-  upgrade   Convert a .rez archive or a .parquet recording to a .dendro archive
+  filter    Shrink a .dendro recording to the samplers or metrics named
+  upgrade   Convert a .rez archive, a .parquet recording or a .parquet.ab.tar to a .dendro archive
   snapshot  Copy an archive that is still being written, without stopping the writer
   help      Print this message or the help of the given subcommand(s)
 
@@ -1480,22 +1391,22 @@ Options:
 === rezolus parquet --help
 --- exit 0
 --- stdout
-Offline operations on recordings: the .dendro archives `rezolus record` and
-`rezolus hindsight` write, and the .rez archives and .parquet files that 5.x
-releases wrote.
+Offline operations on recordings: the .dendro archives that
+`rezolus record` and `rezolus hindsight` write.
 
 SUBCOMMANDS:
-    metadata   Inspect a recording's metadata, schema, and geometry
+    metadata   Describe an archive's recordings, labels, metadata and tables
     annotate   Embed service-extension KPIs or events into a recording
     check      Evaluate the KPI checks a recording carries and report pass/fail verdicts
     combine    Combine recordings into one .dendro archive, optionally labelled as an A/B
-    convert    Turn a raw msgpack recording (from a 5.x `record -o out.raw`) into a .dendro
+    convert    Turn a raw msgpack recording (`record -o out.raw` in earlier releases) into a .dendro
     filter     Shrink a recording to the samplers or metrics named
     snapshot   Copy an archive that is still being written into a complete .dendro
-    upgrade    Convert a .rez archive or a .parquet file into a .dendro archive
+    upgrade    Convert a recording an earlier release wrote into a .dendro archive
 
-6.x writes .dendro archives only. A command that would change a .rez or a
-.parquet writes a new .dendro instead, given -o.
+Every subcommand but `upgrade` opens .dendro archives only. A .rez archive,
+a .parquet file or a .parquet.ab.tar A/B tarball is refused with the command
+that converts it: `rezolus recording upgrade FILE`.
 
 Run `rezolus recording <subcommand> --help` for per-subcommand examples.
 
@@ -1504,13 +1415,13 @@ Run `rezolus recording <subcommand> --help` for per-subcommand examples.
 Usage: rezolus recording <COMMAND>
 
 Commands:
-  annotate  Add service extension KPIs or events to a recording (.dendro; a .rez or .parquet into a new .dendro)
+  annotate  Add service extension KPIs or events to a .dendro recording
   check     Evaluate the checks a recording's KPIs carry and report a verdict per check
   combine   Combine recordings into one multi-recording .dendro archive
-  metadata  Display the metadata of a recording (.dendro or .rez archive, .parquet file)
+  metadata  Display the metadata of a .dendro recording
   convert   Convert a raw msgpack recording into a .dendro archive
-  filter    Shrink a recording to the samplers or metrics named (.dendro; a .rez or .parquet into a new .dendro)
-  upgrade   Convert a .rez archive or a .parquet recording to a .dendro archive
+  filter    Shrink a .dendro recording to the samplers or metrics named
+  upgrade   Convert a .rez archive, a .parquet recording or a .parquet.ab.tar to a .dendro archive
   snapshot  Copy an archive that is still being written, without stopping the writer
   help      Print this message or the help of the given subcommand(s)
 
@@ -1522,16 +1433,12 @@ Options:
 === rezolus parquet metadata -h
 --- exit 0
 --- stdout
-Display the metadata of a recording (.dendro or .rez archive, .parquet file)
+Display the metadata of a .dendro recording
 
 Usage: rezolus recording metadata [OPTIONS] --input <input>
 
 Options:
-  -i, --input <input>  The recording (.dendro, .rez or .parquet)
-      --schema         Show only column-level metadata (schema)
-      --file           Show only file-level metadata
-      --geometry       Show only table geometry (shape and row group layout)
-      --field <KEY>    Print the value of a specific file-level metadata key
+  -i, --input <input>  The recording (.dendro)
       --json           Output in JSON format (for programmatic use)
   -h, --help           Print help (see more with '--help')
 --- stderr
@@ -1539,16 +1446,8 @@ Options:
 === rezolus parquet metadata --help
 --- exit 0
 --- stdout
-Describe a recording. For a .dendro or .rez archive: its recordings, their
-labels and metadata, and each table with its cadence; --json emits the
-description as JSON.
-
-For a .parquet file: file-level key/values (source, sampling interval,
-systeminfo, descriptions, …), the column schema with each metric's type and
-labels, and table geometry (row/column counts and row-group layout). With no
-filter flag all sections are shown. Narrow with --file, --schema, or
---geometry; pull a single file-level value with --field <KEY>; add --json
-for machine-readable output.
+Describe a .dendro archive: its recordings, their labels and metadata, and
+each table with its cadence; --json emits the description as JSON.
 
 EXAMPLES:
     # Describe an archive
@@ -1557,29 +1456,11 @@ EXAMPLES:
     # The same, as JSON
     rezolus recording metadata -i rezolus.dendro --json
 
-    # Only a parquet file's file-level metadata, as JSON
-    rezolus recording metadata -i rezolus.parquet --file --json
-
-    # Just the value of one parquet metadata key
-    rezolus recording metadata -i rezolus.parquet --field source
-
 Usage: rezolus recording metadata [OPTIONS] --input <input>
 
 Options:
   -i, --input <input>
-          The recording (.dendro, .rez or .parquet)
-
-      --schema
-          Show only column-level metadata (schema)
-
-      --file
-          Show only file-level metadata
-
-      --geometry
-          Show only table geometry (shape and row group layout)
-
-      --field <KEY>
-          Print the value of a specific file-level metadata key
+          The recording (.dendro)
 
       --json
           Output in JSON format (for programmatic use)
