@@ -11,9 +11,6 @@ import {
     getTooltipFormatter,
     applyNoData,
     applyChartOption,
-    CHART_GRID_TOP_WITH_LEGEND,
-    COLORS,
-    FONTS,
 } from './base.js';
 import globalColorMapper from './util/colormap.js';
 import { buildBandSeries } from './line.js';
@@ -224,25 +221,11 @@ export function configureMultiSeriesChart(chart) {
         }
     }
 
+    // No legend: a per-entity chart can carry dozens of series, and a legend
+    // that wraps past one row covers the plot. The tooltip names every series
+    // at the cursor.
     const option = {
         ...baseOption,
-        grid: { ...baseOption.grid, top: String(CHART_GRID_TOP_WITH_LEGEND) },
-        legend: {
-            show: true,
-            top: '42',
-            right: '16',
-            icon: 'roundRect',
-            itemWidth: 10,
-            itemHeight: 10,
-            itemGap: 12,
-            // Only the named line series belong in the legend — the band fills
-            // added below carry no name.
-            data: series.map(s => s.name).filter(Boolean),
-            textStyle: {
-                color: COLORS.fgSecondary,
-                ...FONTS.legend,
-            },
-        },
         yAxis: getBaseYAxisOption(logScale, unitSystem),
         tooltip: {
             ...baseOption.tooltip,
