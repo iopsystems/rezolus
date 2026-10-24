@@ -18,6 +18,11 @@ permissions:
   pages: write
   id-token: write
 
+# Match cargo-build's Rust environment so the shared WASM cache can be reused.
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+
 concurrency:
   group: pages
   cancel-in-progress: true
@@ -35,8 +40,13 @@ jobs:
       - name: Add wasm32 target
         run: rustup target add wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm-viewer
       - name: Install wasm-pack
-        run: cargo install wasm-pack --version ^0.14 --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.14.0
+          fallback: none
       - name: Build WASM viewer
         run: ./crates/viewer/build.sh
       - name: Resolve symlinks
