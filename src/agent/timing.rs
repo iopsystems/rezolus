@@ -395,6 +395,16 @@ impl AcquisitionGroup {
     /// task own the group and call `acquire()`/`finish()`, not `refresh()`
     /// as well.
     pub(crate) fn acquire(&self) -> AcquisitionGuard<'_> {
+        assert!(
+            !self.caches_snapshots(),
+            "cached groups require acquire_blocking() on a blocking worker"
+        );
+        AcquisitionGuard::begin(&self.slot)
+    }
+
+    /// Acquire on a blocking worker. Cached groups may wait for a snapshot
+    /// copy, so this must not run on a Tokio async worker.
+    pub(crate) fn acquire_blocking(&self) -> AcquisitionGuard<'_> {
         let snapshot_write = self
             .caches_snapshots()
             .then(|| self.snapshot_lock.blocking_write());
@@ -550,7 +560,7 @@ mod tests {
         let group = AcquisitionGroup::new_cached_sparse("test", "cached");
         assert!(group.caches_snapshots());
         assert_eq!(group.snapshot_revision(), Some(0));
-        let guard = group.acquire();
+        let guard = group.acquire_blocking();
         assert_eq!(group.snapshot_revision(), None);
         assert!(group.try_snapshot_read().is_none());
         assert_eq!(group.window(), None); // Never waits for the active writer.
@@ -559,16 +569,38 @@ mod tests {
         let window = group.window();
         assert!(window.is_some());
         {
-            let _failed = group.acquire();
+            let _failed = group.acquire_blocking();
             assert_eq!(group.snapshot_revision(), None);
         }
         assert_eq!(group.snapshot_revision(), Some(4));
         assert_eq!(group.window(), window);
-        group.acquire().discard();
+        group.acquire_blocking().discard();
         assert_eq!(group.snapshot_revision(), Some(6));
         assert_eq!(group.window(), window);
         assert!(!AcquisitionGroup::new("test", "plain").caches_snapshots());
         assert!(!AcquisitionGroup::new_reader_stamped("test", "reader").caches_snapshots());
+    }
+
+    #[tokio::test]
+    async fn cached_acquisition_requires_the_explicit_blocking_api() {
+        let plain = AcquisitionGroup::new("test", "plain");
+        plain.acquire().finish();
+        let cached = std::sync::Arc::new(AcquisitionGroup::new_cached_sparse("test", "cached"));
+        let misuse = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cached.acquire()));
+        let error = misuse
+            .err()
+            .expect("async acquire must reject cached groups");
+        let message = error
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| error.downcast_ref::<String>().map(String::as_str))
+            .unwrap();
+        assert!(message.contains("acquire_blocking()"));
+        let worker = cached.clone();
+        tokio::task::spawn_blocking(move || worker.acquire_blocking().finish())
+            .await
+            .unwrap();
+        assert!(cached.window().is_some());
     }
 
     /// A window's begin is on the SOURCE's timeline, the same one rows are

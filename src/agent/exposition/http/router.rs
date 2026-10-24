@@ -158,11 +158,12 @@ impl Router for RezolusRouter {
                 membership: Membership::Present,
             });
         };
-        if self
-            .skipped
-            .lock()
-            .unwrap()
-            .contains(&(ag.sampler, ag.name))
+        if ag.caches_snapshots()
+            && self
+                .skipped
+                .lock()
+                .unwrap()
+                .contains(&(ag.sampler, ag.name))
         {
             return None;
         }

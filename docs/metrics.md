@@ -1033,12 +1033,20 @@ must be available; Rezolus does not enable controllers or change limits.
 | `cgroup_memory_swap_usage` | Gauge | bytes | `memory.swap.current`: swap usage, including descendants |
 | `cgroup_memory_stat` | Gauge | bytes | Byte-valued `memory.stat` fields, distinguished by `kind` |
 
-All series carry `name`, the full cgroup path relative to the mount (leading
-`/` included). Unlike BPF cgroup names, this path is not truncated at three
-components. Up to 4096 cgroups are tracked concurrently, independently of the
-kernel's numeric cgroup IDs. Discovery runs each sweep; deleted groups are
-removed and their slots reused. Excess groups trigger a warning. Missing files,
-unsupported fields, and failed reads yield absent values rather than zeros.
+All series carry `name`, the same display name used by BPF cgroup metrics:
+up to the last three path components, prefixed with `.../` for deeper paths.
+Components use BPF's 63-byte bound and systemd `\x2d` decoding, so the shared
+Cgroups selector matches both sources. The additional `path` label preserves
+the full path relative to `/sys/fs/cgroup`, with a leading `/`; use it to
+distinguish cgroups whose abbreviated names collide.
+
+Up to 4096 cgroups are tracked concurrently, independently of kernel cgroup
+IDs. Discovery runs each sweep; deleted groups are removed and their slots
+reused. Excess groups trigger a warning. In a successful sweep, missing files,
+unsupported fields, and failed individual reads yield absent values rather
+than zeros. If discovery fails or every attempted read fails, the entire
+previous observation (values, labels, and window) remains unchanged. An empty
+hierarchy is a successful sweep and removes the previous groups.
 
 The `kind` label includes `anon`, `file`, `kernel`, `shmem`, `sock`,
 `kernel_stack`, `pagetables`, `sec_pagetables`, `percpu`, `vmalloc`,

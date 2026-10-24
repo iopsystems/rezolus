@@ -297,3 +297,38 @@ generator parity and updated Cgroups golden files. The discovery and selector
 JavaScript tests, formatting and whitespace checks passed. Clippy completed
 with one pre-existing `manual_range_contains` warning in `src/mcp/link.rs`;
 strict `-D warnings` is blocked by that unchanged upstream warning.
+
+## Local review follow-up
+
+Addressed the correctness and local efficiency findings from the review of
+`c38166f8`:
+
+- Memory's `name` now uses the same shared formatter as BPF cgroup metrics,
+  including the last-three-component abbreviation, component length limit,
+  and systemd escape decoding. A separate `path` label retains the complete
+  cgroupfs path and distinguishes abbreviated-name collisions.
+- Sweeps stage a bounded set of readings before publishing. Failed discovery
+  or total read failure preserves the previous values, membership and window;
+  partial failures in a successful sweep remain absent values. Empty sweeps
+  still publish deletion. The production sweep helper is exercised directly
+  by the failure/recovery tests.
+- The blocking worker catches and logs panics, recovers poisoned state, and
+  releases an RAII in-flight lease. Retry respects the configured interval.
+- Cached groups use the explicit `acquire_blocking()` API. Ordinary
+  `acquire()` stays nonblocking and rejects cached groups with an actionable
+  error before reaching Tokio's blocking lock.
+- A shared test mutex serializes every test that mutates the memory metrics,
+  including the ignored capacity benchmark.
+- Routing checks the group's cache opt-in before touching the skip mutex, so
+  ordinary groups do not pay that extra lock. The skip set is moved into and
+  back out of the router, rather than cloned. Encoded-byte storage exists
+  only in the wide cache; the long cache uses a zero-sized encoding type.
+
+The suggestion to expose a skip-set argument in metriken-exposition is
+**deferred**. Its current public builder API does not expose that argument;
+changing it requires a separately reviewed dependency change and release.
+The local adapter is restricted to opted-in groups and holds its skip set
+constant across both registry passes. Revisit it when the dependency exposes
+an exclusion API. The existing PR description already scoped encoded-byte
+reuse to full binary responses; long-format streaming reuses observations,
+not MessagePack bodies.

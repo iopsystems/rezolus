@@ -18,8 +18,10 @@ const DEFAULT_INTERVAL: Duration = Duration::from_secs(60);
 use crate::agent::*;
 use metriken::GaugeGroup;
 use std::collections::{HashMap, HashSet};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, TryLockError};
 use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 
@@ -43,6 +45,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     Ok(Some(Box::new(CgroupMemory {
         state: Arc::new(Mutex::new(State::default())),
         interval,
+        reading: Arc::new(AtomicBool::new(false)),
     })))
 }
 
@@ -56,12 +59,12 @@ static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::sampl
 struct CgroupMemory {
     state: Arc<Mutex<State>>,
     interval: Duration,
+    reading: Arc<AtomicBool>,
 }
 
 #[derive(Default)]
 struct State {
     last_read: Option<Instant>,
-    reading: bool,
     slots: HashMap<PathBuf, usize>,
     warned_capacity: bool,
 }
@@ -73,52 +76,134 @@ impl Sampler for CgroupMemory {
     }
 
     async fn refresh(&self) {
-        // Never wait for a sweep on the async worker, and never queue a second
-        // sweep behind a slow first one. Cadence is measured from completion.
-        let Ok(mut state) = self.state.try_lock() else {
-            return;
-        };
-        if state.reading || state.last_read.is_some_and(|t| t.elapsed() < self.interval) {
-            return;
+        self.dispatch(|state| state.sweep(Path::new(ROOT)));
+    }
+}
+
+// The task owns this lease, so even unwinding releases its in-flight flag.
+struct InFlight(Arc<AtomicBool>);
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+impl CgroupMemory {
+    fn dispatch(
+        &self,
+        read: impl FnOnce(&mut State) -> std::io::Result<usize> + Send + 'static,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        if self
+            .reading
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return None;
         }
-        state.reading = true;
+        let in_flight = InFlight(self.reading.clone());
+        // Never wait for state on the async worker. A previous panic is logged
+        // by the worker below; recovering its mutex lets the next sweep retry.
+        let state = match self.state.try_lock() {
+            Ok(state) => state,
+            Err(TryLockError::Poisoned(e)) => e.into_inner(),
+            Err(TryLockError::WouldBlock) => return None,
+        };
+        if state.last_read.is_some_and(|t| t.elapsed() < self.interval) {
+            return None;
+        }
         drop(state);
         let state = self.state.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut state = state.lock().unwrap();
+        Some(tokio::task::spawn_blocking(move || {
+            let _in_flight = in_flight;
             let start = Instant::now();
-            let guard = CGROUP_MEMORY_ACQ.acquire();
-            match state.sample(Path::new(ROOT)) {
-                Ok(count) => {
-                    if count > 0 || state.slots.is_empty() {
-                        guard.finish();
-                    }
-                    debug!(
-                        "{NAME}: {count} cgroups sampled in {} us",
-                        start.elapsed().as_micros()
-                    );
-                }
-                Err(e) => debug!("{NAME}: sweep failed: {e}"),
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+                read(&mut state)
+            }));
+            match result {
+                Ok(Ok(count)) => debug!(
+                    "{NAME}: {count} cgroups sampled in {} us",
+                    start.elapsed().as_micros()
+                ),
+                Ok(Err(e)) => debug!("{NAME}: sweep failed: {e}"),
+                Err(_) => error!("{NAME}: sweep panicked; retrying after the configured interval"),
             }
-            state.last_read = Some(Instant::now());
-            state.reading = false;
-        });
+            state.lock().unwrap_or_else(|e| e.into_inner()).last_read = Some(Instant::now());
+        }))
     }
 }
 
 impl State {
+    fn sweep(&mut self, root: &Path) -> std::io::Result<usize> {
+        let guard = CGROUP_MEMORY_ACQ.acquire_blocking();
+        let result = self.sample(root);
+        if result.is_ok() {
+            guard.finish();
+        }
+        result
+    }
+
     fn sample(&mut self, root: &Path) -> std::io::Result<usize> {
         // Failure to access the mount must not stamp a successful acquisition.
         std::fs::read_dir(root)?;
-        let paths: HashSet<PathBuf> = WalkDir::new(root)
-            .min_depth(1)
-            .into_iter()
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| entry.file_type().is_dir())
-            .map(|entry| entry.into_path())
-            .filter(|path| path.join("memory.current").exists())
-            .collect();
+        let mut paths = HashSet::new();
+        for entry in WalkDir::new(root).min_depth(1) {
+            let entry = match entry {
+                Ok(entry) => entry,
+                // A cgroup can disappear during discovery.
+                Err(e)
+                    if e.io_error()
+                        .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    continue
+                }
+                Err(e) => return Err(std::io::Error::other(e)),
+            };
+            if entry.file_type().is_dir() && entry.path().join("memory.current").try_exists()? {
+                paths.insert(entry.into_path());
+            }
+        }
 
+        // Stage at most the active capacity before changing any published
+        // value or label. Total read failure must leave the previous window's
+        // values intact, including groups that disappeared during this sweep.
+        let retained = self
+            .slots
+            .keys()
+            .filter(|path| paths.contains(*path))
+            .count();
+        let targets = paths
+            .iter()
+            .filter(|path| self.slots.contains_key(*path))
+            .chain(
+                paths
+                    .iter()
+                    .filter(|path| !self.slots.contains_key(*path))
+                    .take(MAX_CGROUPS - retained),
+            );
+        let readings: Vec<_> = targets
+            .map(|path| {
+                let total = read_bytes(&path.join("memory.current"));
+                let swap = read_bytes(&path.join("memory.swap.current"));
+                let values = std::fs::read_to_string(path.join("memory.stat"))
+                    .map(|data| parse_stat(&data))
+                    .unwrap_or([None; KINDS.len()]);
+                (path, total, swap, values)
+            })
+            .collect();
+        let count = readings
+            .iter()
+            .filter(|(_, total, swap, values)| {
+                total.is_some() || swap.is_some() || values.iter().any(Option::is_some)
+            })
+            .count();
+        if count == 0 && !paths.is_empty() {
+            return Err(std::io::Error::other("all cgroup memory reads failed"));
+        }
+        if paths.len() > MAX_CGROUPS && !self.warned_capacity {
+            warn!("{NAME}: more than {MAX_CGROUPS} cgroups; excess groups are omitted");
+            self.warned_capacity = true;
+        }
         self.slots.retain(|path, slot| {
             if paths.contains(path) {
                 return true;
@@ -128,37 +213,23 @@ impl State {
         });
         let used: HashSet<usize> = self.slots.values().copied().collect();
         let mut free = (0..MAX_CGROUPS).filter(|slot| !used.contains(slot));
-        let mut count = 0;
-        for path in paths {
-            let slot = if let Some(slot) = self.slots.get(&path) {
+        for (path, total, swap, values) in readings {
+            let slot = if let Some(slot) = self.slots.get(path) {
                 *slot
             } else if let Some(slot) = free.next() {
                 self.slots.insert(path.clone(), slot);
-                let name = format!("/{}", path.strip_prefix(root).unwrap().to_string_lossy());
-                label_slot(slot, &name);
+                label_slot(slot, path.strip_prefix(root).unwrap());
                 slot
             } else {
-                if !self.warned_capacity {
-                    warn!("{NAME}: more than {MAX_CGROUPS} cgroups; excess groups are omitted");
-                    self.warned_capacity = true;
-                }
-                continue;
+                unreachable!("staged readings fit the active slot capacity");
             };
             // Missing/failed reads are absent, never zero or a previous value
             // wearing the new sweep's window. Optional fields vary by kernel.
-            let total = read_bytes(&path.join("memory.current"));
-            let swap = read_bytes(&path.join("memory.swap.current"));
             set_optional(&CGROUP_MEMORY_USAGE, slot, total);
             set_optional(&CGROUP_MEMORY_SWAP_USAGE, slot, swap);
-            let values = std::fs::read_to_string(path.join("memory.stat"))
-                .map(|data| parse_stat(&data))
-                .unwrap_or([None; KINDS.len()]);
             for (kind, value) in values.into_iter().enumerate() {
                 set_optional(CGROUP_MEMORY_STAT[kind], slot, value);
             }
-            count += usize::from(
-                total.is_some() || swap.is_some() || values.iter().any(Option::is_some),
-            );
         }
         Ok(count)
     }
@@ -193,12 +264,33 @@ fn set_optional(metric: &GaugeGroup, slot: usize, value: Option<i64>) {
     metric.set(slot, value.unwrap_or(i64::MIN));
 }
 
-fn label_slot(slot: usize, name: &str) {
-    for metric in [&CGROUP_MEMORY_USAGE, &CGROUP_MEMORY_SWAP_USAGE] {
-        metric.insert_metadata(slot, "name".into(), name.into());
-    }
-    for metric in CGROUP_MEMORY_STAT {
-        metric.insert_metadata(slot, "name".into(), name.into());
+/// Match BPF's last-three-component display name (63 bytes per component,
+/// including its systemd \x2d decoding). The full path remains a separate label.
+fn memory_name(relative: &Path) -> String {
+    let parts: Vec<_> = relative
+        .components()
+        .map(|c| c.as_os_str().as_encoded_bytes())
+        .collect();
+    let part = |back: usize| {
+        parts
+            .len()
+            .checked_sub(back + 1)
+            .map(|i| &parts[i][..parts[i].len().min(63)])
+            .unwrap_or(&[])
+    };
+    crate::agent::bpf::cgroup_name_label(part(0), part(1), part(2), parts.len() as i32)
+}
+
+fn label_slot(slot: usize, relative: &Path) {
+    let metadata = HashMap::from([
+        ("name".into(), memory_name(relative)),
+        ("path".into(), format!("/{}", relative.to_string_lossy())),
+    ]);
+    for metric in [&CGROUP_MEMORY_USAGE, &CGROUP_MEMORY_SWAP_USAGE]
+        .into_iter()
+        .chain(CGROUP_MEMORY_STAT.iter().copied())
+    {
+        metric.set_metadata(slot, metadata.clone());
     }
 }
 
@@ -217,18 +309,17 @@ fn clear_slot(slot: usize) {
 mod tests {
     use super::*;
 
+    // Both lifecycle and ignored capacity tests mutate the same metric statics.
+    static METRICS_LOCK: Mutex<()> = Mutex::new(());
+
     fn sample(state: &mut State, root: &Path) -> std::io::Result<usize> {
-        let guard = CGROUP_MEMORY_ACQ.acquire();
-        let result = state.sample(root);
-        if result.is_ok() {
-            guard.finish();
-        }
-        result
+        state.sweep(root)
     }
 
     #[test]
     #[ignore = "creates 4097 cgroupfs fixtures to measure a capacity-sized sweep"]
     fn capacity_sweep_cost() {
+        let _serial = METRICS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let root = tempfile::tempdir().unwrap();
         let stat = KINDS
             .iter()
@@ -253,7 +344,7 @@ mod tests {
         assert_eq!(state.slots.len(), MAX_CGROUPS);
         assert!(state.warned_capacity);
         assert_eq!(CGROUP_MEMORY_USAGE.metadata_snapshot().len(), MAX_CGROUPS);
-        let guard = CGROUP_MEMORY_ACQ.acquire();
+        let guard = CGROUP_MEMORY_ACQ.acquire_blocking();
         for slot in state.slots.values() {
             clear_slot(*slot);
         }
@@ -273,13 +364,117 @@ mod tests {
         assert_eq!(values.iter().flatten().count(), 3);
     }
 
-    // One test owns the process-global metric groups, so lifecycle operations
-    // cannot race another test writing these statics.
     #[test]
-    fn discovers_nested_cgroups_and_clears_missing_values_and_deleted_groups() {
+    fn names_match_bpf_depth_escaping_and_component_limits() {
+        for (path, expected) in [
+            ("one", "/one"),
+            ("one/two", "/one/two"),
+            ("one/two/three", "/one/two/three"),
+            ("one/two/three/four", ".../two/three/four"),
+            (r"a/b/c/foo\x2dbar.service", ".../b/c/foo-bar.service"),
+        ] {
+            assert_eq!(memory_name(Path::new(path)), expected);
+        }
+        let long = "x".repeat(90);
+        assert_eq!(
+            memory_name(Path::new(&long)),
+            format!("/{}", "x".repeat(63))
+        );
+    }
+
+    #[test]
+    fn failed_sweep_preserves_values_membership_and_window_until_recovery() {
+        let _serial = METRICS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        let parent = root.join("service.slice");
+        let existing = root.join("existing");
+        let vanished = root.join("vanished");
+        for path in [&existing, &vanished] {
+            std::fs::create_dir(path).unwrap();
+            std::fs::write(path.join("memory.current"), "4096").unwrap();
+        }
+        let mut state = State::default();
+        assert_eq!(state.sweep(root).unwrap(), 2);
+        let slots = state.slots.clone();
+        let window = CGROUP_MEMORY_ACQ.window().unwrap();
+        let metadata = CGROUP_MEMORY_USAGE.metadata_snapshot();
+        std::fs::remove_dir_all(&vanished).unwrap();
+        std::fs::write(existing.join("memory.current"), "invalid").unwrap();
+        let added = root.join("added");
+        std::fs::create_dir(&added).unwrap();
+        std::fs::write(added.join("memory.current"), "invalid").unwrap();
+        assert!(state.sweep(root).is_err());
+        assert_eq!(state.slots, slots);
+        assert_eq!(CGROUP_MEMORY_ACQ.window(), Some(window));
+        assert_eq!(CGROUP_MEMORY_USAGE.metadata_snapshot(), metadata);
+        for slot in slots.values() {
+            assert_eq!(CGROUP_MEMORY_USAGE.value(*slot), Some(4096));
+        }
+        // A successful sweep publishes both the new values and membership.
+        std::fs::write(existing.join("memory.current"), "8192").unwrap();
+        assert_eq!(state.sweep(root).unwrap(), 1);
+        assert!(CGROUP_MEMORY_ACQ.window().unwrap().end_ns > window.end_ns);
+        assert!(!state.slots.contains_key(&vanished));
+        assert_eq!(
+            CGROUP_MEMORY_USAGE.value(state.slots[&existing]),
+            Some(8192)
+        );
+        assert_eq!(CGROUP_MEMORY_USAGE.value(state.slots[&added]), None);
+        std::fs::remove_dir_all(&existing).unwrap();
+        std::fs::remove_dir_all(&added).unwrap();
+        assert_eq!(state.sweep(root).unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn panicked_worker_releases_lease_and_retries_after_interval() {
+        let sampler = CgroupMemory {
+            state: Arc::new(Mutex::new(State::default())),
+            interval: Duration::from_secs(60),
+            reading: Arc::new(AtomicBool::new(false)),
+        };
+        sampler
+            .dispatch(|_| panic!("injected read panic"))
+            .unwrap()
+            .await
+            .unwrap();
+        assert!(!sampler.reading.load(Ordering::Acquire));
+        assert!(sampler.state.is_poisoned());
+        assert!(sampler
+            .dispatch(|_| panic!("must respect retry interval"))
+            .is_none());
+        assert!(!sampler.reading.load(Ordering::Acquire));
+        sampler
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .last_read = None;
+        let recovered = Arc::new(AtomicBool::new(false));
+        let check = recovered.clone();
+        sampler
+            .dispatch(move |_| {
+                check.store(true, Ordering::Release);
+                Ok(0)
+            })
+            .unwrap()
+            .await
+            .unwrap();
+        assert!(recovered.load(Ordering::Acquire));
+        assert!(!sampler.reading.load(Ordering::Acquire));
+        assert!(sampler
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .last_read
+            .is_some());
+    }
+
+    // METRICS_LOCK serializes all tests that write the process-global groups.
+    #[test]
+    fn discovers_nested_cgroups_and_clears_missing_values_and_deleted_groups() {
+        let _serial = METRICS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let parent = root.join("outer.slice/user.slice/service.slice");
         let child = parent.join("worker.service");
         std::fs::create_dir_all(&child).unwrap();
         for (path, total, anon) in [(&parent, "16384", "8192"), (&child, "8192", "4096")] {
@@ -301,7 +496,11 @@ mod tests {
         assert_eq!(CGROUP_MEMORY_SWAP_USAGE.value(slot), Some(1024));
         assert_eq!(
             CGROUP_MEMORY_USAGE.load_metadata(slot).unwrap()["name"],
-            "/service.slice/worker.service"
+            ".../user.slice/service.slice/worker.service"
+        );
+        assert_eq!(
+            CGROUP_MEMORY_USAGE.load_metadata(slot).unwrap()["path"],
+            "/outer.slice/user.slice/service.slice/worker.service"
         );
         let anon = slot;
         assert_eq!(CGROUP_MEMORY_STAT[0].value(anon), Some(4096));
@@ -323,7 +522,7 @@ mod tests {
         let child_values = &group
             .occupants
             .iter()
-            .find(|o| o.labels["name"] == "/service.slice/worker.service")
+            .find(|o| o.labels["name"] == ".../user.slice/service.slice/worker.service")
             .unwrap()
             .gauges;
         for (column, value) in group.columns.gauges.iter().zip(child_values) {
@@ -363,7 +562,7 @@ mod tests {
         assert_eq!(CGROUP_MEMORY_STAT[0].value(anon), None);
         assert_eq!(
             CGROUP_MEMORY_USAGE.load_metadata(slot).unwrap()["name"],
-            "/service.slice/replacement.service"
+            ".../user.slice/service.slice/replacement.service"
         );
         assert!(sample(&mut state, &root.join("missing")).is_err());
         std::fs::remove_dir_all(parent).unwrap();

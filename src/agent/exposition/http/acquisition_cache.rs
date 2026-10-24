@@ -10,10 +10,10 @@ use std::time::Duration;
 
 type Key = (&'static str, &'static str);
 
-struct Cached<T> {
+struct Cached<T, Encoding = ()> {
     revision: u64,
     snapshot: Option<T>,
-    msgpack: OnceLock<Vec<u8>>,
+    encoding: Encoding,
 }
 
 #[derive(Default)]
@@ -23,7 +23,7 @@ struct Plan {
     refresh: HashMap<Key, u64>,
 }
 
-fn plan<T>(cache: &HashMap<String, Cached<T>>) -> Plan {
+fn plan<T, E>(cache: &HashMap<String, Cached<T, E>>) -> Plan {
     let mut plan = Plan::default();
     for (&key, group) in group_registry() {
         if !group.caches_snapshots() {
@@ -47,9 +47,9 @@ fn plan<T>(cache: &HashMap<String, Cached<T>>) -> Plan {
 /// Validate the revision and retain the last completed observation on a race.
 /// Production callers hold read guards through the build, preventing races
 /// inside the library's persistent schema and stream-occupant caches.
-fn finish<T: Clone>(
+fn finish<T: Clone, E: Default>(
     plan: &Plan,
-    cache: &mut HashMap<String, Cached<T>>,
+    cache: &mut HashMap<String, Cached<T, E>>,
     groups: &mut Vec<T>,
     name_of: impl Fn(&T) -> &str,
 ) -> bool {
@@ -62,7 +62,7 @@ fn finish<T: Clone>(
                 Cached {
                     revision: *revision,
                     snapshot: groups.iter().find(|g| name_of(g) == name).cloned(),
-                    msgpack: OnceLock::new(),
+                    encoding: Default::default(),
                 },
             );
         } else {
@@ -85,7 +85,7 @@ fn finish<T: Clone>(
 
 pub(crate) struct V3Builder {
     inner: GroupBuilder<RezolusRouter>,
-    wide: HashMap<String, Cached<GroupSnapshot>>,
+    wide: HashMap<String, Cached<GroupSnapshot, OnceLock<Vec<u8>>>>,
     long: HashMap<String, Cached<StreamGroup>>,
 }
 
@@ -105,9 +105,10 @@ impl V3Builder {
         extra: Vec<ExtraGroup>,
         metadata: HashMap<String, String>,
     ) -> SnapshotV3 {
-        let plan = plan(&self.wide);
-        *self.inner.router().skipped.lock().unwrap() = plan.skip.clone();
+        let mut plan = plan(&self.wide);
+        *self.inner.router().skipped.lock().unwrap() = std::mem::take(&mut plan.skip);
         let mut snapshot = self.inner.snapshot(stamp, duration, extra, metadata);
+        plan.skip = std::mem::take(&mut *self.inner.router().skipped.lock().unwrap());
         let raced = finish(&plan, &mut self.wide, &mut snapshot.groups, |g| &g.name);
         debug_assert!(
             !raced,
@@ -117,9 +118,10 @@ impl V3Builder {
     }
 
     pub(crate) fn build_stream(&mut self, extra: Vec<ExtraGroup>) -> Vec<StreamGroup> {
-        let plan = plan(&self.long);
-        *self.inner.router().skipped.lock().unwrap() = plan.skip.clone();
+        let mut plan = plan(&self.long);
+        *self.inner.router().skipped.lock().unwrap() = std::mem::take(&mut plan.skip);
         let mut groups = self.inner.build_stream(extra);
+        plan.skip = std::mem::take(&mut *self.inner.router().skipped.lock().unwrap());
         let raced = finish(&plan, &mut self.long, &mut groups, StreamGroup::name);
         debug_assert!(!raced, "read guards preserve stream occupant identity");
         groups
@@ -146,7 +148,7 @@ pub(super) fn encode_snapshot(snapshot: &Snapshot, cache: &V3Builder) -> anyhow:
     rmp::encode::write_array_len(&mut body, u32::try_from(s.groups.len())?)?;
     for group in &s.groups {
         if let Some(cached) = cache.wide.get(&group.name).filter(|c| c.matches(group)) {
-            let encoded = cached.msgpack.get_or_init(|| {
+            let encoded = cached.encoding.get_or_init(|| {
                 rmp_serde::encode::to_vec(group).expect("failed to serialize acquisition group")
             });
             body.extend_from_slice(encoded);
@@ -157,7 +159,7 @@ pub(super) fn encode_snapshot(snapshot: &Snapshot, cache: &V3Builder) -> anyhow:
     Ok(body)
 }
 
-impl Cached<GroupSnapshot> {
+impl Cached<GroupSnapshot, OnceLock<Vec<u8>>> {
     fn matches(&self, group: &GroupSnapshot) -> bool {
         let Some(previous) = &self.snapshot else {
             return false;
@@ -228,7 +230,7 @@ mod tests {
         };
         let mut cache = V3Builder::new();
         // A new client cannot see partially initialized data.
-        let guard = SLOW_CACHE_GROUP.acquire();
+        let guard = SLOW_CACHE_GROUP.acquire_blocking();
         SLOW_CACHE_GAUGE.set_metadata(999, [("name".into(), "/old".into())].into());
         SLOW_CACHE_GAUGE.set(999, 0);
         assert!(extract(&take(&mut cache)).is_none());
@@ -249,7 +251,7 @@ mod tests {
             encode_snapshot(&first, &cache).unwrap(),
             rmp_serde::to_vec(&first).unwrap()
         );
-        let encoded_ptr = cache.wide[NAME].msgpack.get().unwrap().as_ptr();
+        let encoded_ptr = cache.wide[NAME].encoding.get().unwrap().as_ptr();
         assert!(plan(&cache.wide).skip.contains(&KEY));
         let second = take(&mut cache);
         assert_eq!(extract(&second), Some(first_group.clone()));
@@ -259,12 +261,12 @@ mod tests {
         );
         assert_eq!(
             encoded_ptr,
-            cache.wide[NAME].msgpack.get().unwrap().as_ptr()
+            cache.wide[NAME].encoding.get().unwrap().as_ptr()
         );
 
         // Mid-update readers get the old complete observation, not new values
         // attached to old labels. A second builder has no previous data yet.
-        let guard = SLOW_CACHE_GROUP.acquire();
+        let guard = SLOW_CACHE_GROUP.acquire_blocking();
         SLOW_CACHE_GAUGE.set(999, 42);
         SLOW_CACHE_GAUGE.set_metadata(999, [("name".into(), "/new".into())].into());
         assert_eq!(extract(&take(&mut cache)), Some(first_group.clone()));
@@ -301,7 +303,7 @@ mod tests {
         );
 
         let window = changed_group.window;
-        let guard = SLOW_CACHE_GROUP.acquire();
+        let guard = SLOW_CACHE_GROUP.acquire_blocking();
         SLOW_CACHE_GAUGE.set(999, i64::MIN);
         guard.discard();
         let failed = take(&mut cache);
@@ -318,21 +320,21 @@ mod tests {
         );
 
         // Deterministically schedule a writer between the two revision checks.
-        let guard = SLOW_CACHE_GROUP.acquire();
+        let guard = SLOW_CACHE_GROUP.acquire_blocking();
         SLOW_CACHE_GAUGE.set(999, 10);
         guard.finish();
         let mut pending = plan(&cache.wide);
         pending.readers.clear();
         assert!(pending.refresh.contains_key(&KEY));
         let mut torn = vec![changed_group];
-        let in_flight = SLOW_CACHE_GROUP.acquire();
+        let in_flight = SLOW_CACHE_GROUP.acquire_blocking();
         SLOW_CACHE_GAUGE.set(999, 20);
         assert!(finish(&pending, &mut cache.wide, &mut torn, |g| &g.name));
         assert_eq!(torn, vec![failed_group]);
         in_flight.finish();
         assert_eq!(extract(&take(&mut cache)).unwrap().gauges, vec![Some(20)]);
 
-        let guard = SLOW_CACHE_GROUP.acquire();
+        let guard = SLOW_CACHE_GROUP.acquire_blocking();
         SLOW_CACHE_GAUGE.clear_metadata(999);
         SLOW_CACHE_GAUGE.set(999, i64::MIN);
         guard.finish();
@@ -373,7 +375,7 @@ mod tests {
                 Cached {
                     revision: 2,
                     snapshot: Some(group.clone()),
-                    msgpack: OnceLock::new(),
+                    encoding: Default::default(),
                 },
             );
             let mut groups = vec![group.clone(); count];
