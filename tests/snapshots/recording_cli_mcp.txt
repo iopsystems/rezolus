@@ -1,0 +1,881 @@
+=== request
+{"id":1,"jsonrpc":"2.0","method":"initialize","params":{}}
+--- response
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "result": {
+    "capabilities": {
+      "tools": {}
+    },
+    "protocolVersion": "2025-06-18",
+    "serverInfo": {
+      "name": "rezolus",
+      "version": "$VERSION"
+    }
+  }
+}
+=== request
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+=== request
+{"id":2,"jsonrpc":"2.0","method":"tools/list"}
+--- response
+{
+  "id": 2,
+  "jsonrpc": "2.0",
+  "result": {
+    "tools": [
+      {
+        "description": "Describe a Rezolus performance recording with version and duration information",
+        "inputSchema": {
+          "properties": {
+            "parquet_file": {
+              "description": "Path to the parquet file",
+              "type": "string"
+            },
+            "recording": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "type": "object"
+            }
+          },
+          "required": [
+            "parquet_file"
+          ],
+          "type": "object"
+        },
+        "name": "describe_recording"
+      },
+      {
+        "description": "Analyze correlation between two metrics using PromQL",
+        "inputSchema": {
+          "properties": {
+            "metric1": {
+              "description": "First metric PromQL expression",
+              "type": "string"
+            },
+            "metric2": {
+              "description": "Second metric PromQL expression",
+              "type": "string"
+            },
+            "parquet_file": {
+              "description": "Path to the parquet file",
+              "type": "string"
+            },
+            "recording": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "type": "object"
+            }
+          },
+          "required": [
+            "parquet_file",
+            "metric1",
+            "metric2"
+          ],
+          "type": "object"
+        },
+        "name": "analyze_correlation"
+      },
+      {
+        "description": "List and describe all metrics available in a Rezolus recording, organized by type",
+        "inputSchema": {
+          "properties": {
+            "parquet_file": {
+              "description": "Path to the parquet file",
+              "type": "string"
+            },
+            "recording": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "type": "object"
+            }
+          },
+          "required": [
+            "parquet_file"
+          ],
+          "type": "object"
+        },
+        "name": "describe_metrics"
+      },
+      {
+        "description": "Detect anomalies in one time series using MAD, CUSUM, and FFT analysis. The query must produce a SINGLE series: aggregate with sum() or add label matchers.",
+        "inputSchema": {
+          "properties": {
+            "parquet_file": {
+              "description": "Path to the parquet file",
+              "type": "string"
+            },
+            "query": {
+              "description": "PromQL query that produces a SINGLE time series. For COUNTERS (monotonically increasing), use irate() to get per-second rates, e.g., 'sum(irate(cpu_usage[1m]))'. For GAUGES (point-in-time values), query directly, e.g., 'sum(memory_available)'. For HISTOGRAMS, use histogram_quantile(), e.g., 'histogram_quantile(0.99, scheduler_runqueue_latency)'. ALWAYS use sum() or other aggregation to collapse multiple series into one. DO NOT use label selectors like {state=\"busy\"} unless you've confirmed those labels exist in describe_metrics output.",
+              "type": "string"
+            },
+            "recording": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "type": "object"
+            }
+          },
+          "required": [
+            "parquet_file",
+            "query"
+          ],
+          "type": "object"
+        },
+        "name": "detect_anomalies"
+      },
+      {
+        "description": "Execute a PromQL query and return results as JSON in the Prometheus format (resultType vector/matrix/scalar and result). Metric names come from describe_metrics. irate() and rate() values carry an uncertainty band from the acquisition window.",
+        "inputSchema": {
+          "properties": {
+            "parquet_file": {
+              "description": "Path to the parquet file",
+              "type": "string"
+            },
+            "query": {
+              "description": "PromQL query expression. For COUNTERS use irate(metric[1m]), for GAUGES query directly, for HISTOGRAMS use histogram_quantile(0.99, metric). Use sum(), avg(), etc. to aggregate multiple series.",
+              "type": "string"
+            },
+            "recording": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "type": "object"
+            }
+          },
+          "required": [
+            "parquet_file",
+            "query"
+          ],
+          "type": "object"
+        },
+        "name": "query"
+      },
+      {
+        "description": "Extract a versioned overview record, deterministic on a given host, of a recording's Rezolus-native features (per-metric stats, noise classification, anomalies, regime shifts, acquisition-window uncertainty, top-N correlations, resource rankings, subsystem coverage) as JSON. The record is the structured input for bottleneck assessment. Requires a recording of at least 10 seconds.",
+        "inputSchema": {
+          "properties": {
+            "parquet_file": {
+              "description": "Path to the recording (.dendro, .rez or .parquet)",
+              "type": "string"
+            },
+            "recording": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "type": "object"
+            }
+          },
+          "required": [
+            "parquet_file"
+          ],
+          "type": "object"
+        },
+        "name": "extract_features"
+      },
+      {
+        "description": "Mark an instant or a range in a recording with an event the viewer draws on its timeline. Additive: it never removes or changes an existing event. Returns the event id, which remove_events accepts.",
+        "inputSchema": {
+          "properties": {
+            "description": {
+              "description": "One line, what happened. Shown on the timeline.",
+              "type": "string"
+            },
+            "details": {
+              "description": "Longer text shown when the event is opened: what was observed, the query that found it.",
+              "type": "string"
+            },
+            "duration": {
+              "description": "Makes the event a range: humantime (30s, 2m) or seconds as a JSON number (never a digit-only string). Omit for an instant.",
+              "type": [
+                "string",
+                "number"
+              ]
+            },
+            "id": {
+              "description": "A stable id. Adding an event whose id is already present is a no-op (except that a kind=check event replaces a stored check event with the same id). Minted as mcp:<uuid> when omitted.",
+              "type": "string"
+            },
+            "instance": {
+              "description": "Scope the event to one service instance.",
+              "type": "string"
+            },
+            "kind": {
+              "description": "A short category such as deploy, incident, spike, or finding. Alignment and filters key on it.",
+              "type": "string"
+            },
+            "node": {
+              "description": "Scope the event to one node of a multi-node recording.",
+              "type": "string"
+            },
+            "output": {
+              "description": "A new .dendro to write the edited recording to. Required when parquet_file is a .rez or .parquet, which 6.x does not change (it is converted there and the copy written); for a .dendro, write a copy instead of editing it in place.",
+              "type": "string"
+            },
+            "parquet_file": {
+              "description": "Path to the recording (.dendro, .rez or .parquet)",
+              "type": "string"
+            },
+            "recording": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "type": "object"
+            },
+            "source": {
+              "description": "Who or what authored the event. Defaults to \"mcp\" so agent-written events can be filtered later.",
+              "type": "string"
+            },
+            "timestamp": {
+              "description": "When the event starts: an RFC 3339 string (e.g. 2026-09-28T14:03:11Z), or Unix seconds as a JSON number (never as a string: a digit-only string is refused as ambiguous).",
+              "type": [
+                "string",
+                "number"
+              ]
+            }
+          },
+          "required": [
+            "parquet_file",
+            "timestamp",
+            "description"
+          ],
+          "type": "object"
+        },
+        "name": "add_event"
+      },
+      {
+        "description": "Evaluate the recording's KPI checks (the `check` blocks embedded by `recording annotate --queries`, or the ones in `queries`) and return each verdict with its violation windows. With annotate=true the violation windows are also written into the recording as kind=check events, the same as `rezolus recording check --annotate` (into `output` for a .rez or .parquet). On a multi-recording archive with no `recording` selector every recording is evaluated and each gets its own verdicts, as the CLI does.",
+        "inputSchema": {
+          "properties": {
+            "annotate": {
+              "description": "Write the violation windows into the recording as events. Default false.",
+              "type": "boolean"
+            },
+            "output": {
+              "description": "A new .dendro to write the edited recording to. Required when parquet_file is a .rez or .parquet, which 6.x does not change (it is converted there and the copy written); for a .dendro, write a copy instead of editing it in place.",
+              "type": "string"
+            },
+            "parquet_file": {
+              "description": "Path to the recording (.dendro, .rez or .parquet)",
+              "type": "string"
+            },
+            "queries": {
+              "description": "A ServiceExtension object evaluated instead of the recording's embedded KPIs: {\"service_name\": \"...\", \"kpis\": [{\"role\": \"...\", \"title\": \"...\", \"query\": \"<PromQL producing ONE series>\", \"type\": \"gauge\"|\"counter\"|\"histogram\", \"check\": {\"above\": N} | {\"below\": N}, optional \"quantile\", \"for\" (seconds), \"severity\": \"fail\"|\"warn\"}]}.",
+              "type": "object"
+            },
+            "recording": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "type": "object"
+            }
+          },
+          "required": [
+            "parquet_file"
+          ],
+          "type": "object"
+        },
+        "name": "run_checks"
+      },
+      {
+        "description": "Run a PromQL range query over the whole recording and write the result as a CSV or parquet file under the server's export directory (`rezolus mcp --export-dir`), for analysis outside PromQL. Long form: one row per series and timestamp with columns series, timestamp (Unix seconds), value, lo, hi (the rate() uncertainty band, else empty). Returns the path. Refused without an export directory, never overwrites, the filename must be bare, and a result over 1,000,000 rows is refused with a hint to raise step or aggregate.",
+        "inputSchema": {
+          "properties": {
+            "filename": {
+              "description": "A bare file name (no directories); the format's extension is added when missing. Derived from the query when omitted.",
+              "type": "string"
+            },
+            "format": {
+              "description": "Default csv.",
+              "enum": [
+                "csv",
+                "parquet"
+              ],
+              "type": "string"
+            },
+            "parquet_file": {
+              "description": "Path to the recording (.dendro, .rez or .parquet)",
+              "type": "string"
+            },
+            "query": {
+              "description": "PromQL expression, as for the query tool. A heatmap result is refused: export histogram_quantile(...) of it instead.",
+              "type": "string"
+            },
+            "recording": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "type": "object"
+            },
+            "step": {
+              "description": "Evaluation step in seconds. Default 1.",
+              "type": "number"
+            }
+          },
+          "required": [
+            "parquet_file",
+            "query"
+          ],
+          "type": "object"
+        },
+        "name": "export_query"
+      },
+      {
+        "description": "Build a link that opens a running rezolus viewer at a section (or one chart) with the view state set: time range, time mode, node, GPU, cgroup, service instance, family baseline and compare anchors. Opens nothing and reads no recording. Returns the hash fragment and query string, and a full URL when viewer_url is given or the server was started with --viewer-url. Hand the URL to the person so they land on the chart you are describing.",
+        "inputSchema": {
+          "properties": {
+            "anchors": {
+              "additionalProperties": {
+                "type": [
+                  "integer",
+                  "string"
+                ]
+              },
+              "description": "Compare alignment per capture id (baseline, experiment, ...): signed milliseconds, or kind:<event kind> to align on that event.",
+              "type": "object"
+            },
+            "cgroup": {
+              "description": "cgroup names to select.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "chart_id": {
+              "description": "One chart's id within the section, to open that chart expanded.",
+              "type": "string"
+            },
+            "family": {
+              "description": "Family baseline in compare mode: envelope, or sigma:<k> (e.g. sigma:2).",
+              "type": "string"
+            },
+            "from": {
+              "description": "Range start: RFC 3339 or Unix seconds as a number. Give from and to together.",
+              "type": [
+                "string",
+                "number"
+              ]
+            },
+            "gpu": {
+              "description": "GPUs to select, each vendor:id or a bare id.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "instance": {
+              "description": "Service instance id, for a service section.",
+              "type": "string"
+            },
+            "node": {
+              "description": "Node to select in a multi-node recording.",
+              "type": "string"
+            },
+            "section": {
+              "description": "Dashboard section, e.g. overview, cpu, memory, scheduler, blockio, network, syscall, cgroups; a service section is service/<name>.",
+              "type": "string"
+            },
+            "time": {
+              "description": "raw opens the chart named by chart_id, which it requires, with a point at each sample's own timestamp. grid is the default and is omitted.",
+              "enum": [
+                "grid",
+                "raw"
+              ],
+              "type": "string"
+            },
+            "to": {
+              "description": "Range end, after from.",
+              "type": [
+                "string",
+                "number"
+              ]
+            },
+            "viewer_url": {
+              "description": "The viewer's address (http:// or https://, no fragment), e.g. http://127.0.0.1:4200, to get a full URL. Overrides --viewer-url.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "section"
+          ],
+          "type": "object"
+        },
+        "name": "viewer_link"
+      },
+      {
+        "description": "Remove events from a recording by id, kind, and/or source (every given field must match). Mutating: available only when the server was started with --allow-mutating. An empty filter is refused.",
+        "inputSchema": {
+          "properties": {
+            "ids": {
+              "description": "Event ids to remove (as returned by add_event, or check:<hash> for verdicts).",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "description": "Remove events of this kind.",
+              "type": "string"
+            },
+            "output": {
+              "description": "A new .dendro to write the edited recording to. Required when parquet_file is a .rez or .parquet, which 6.x does not change (it is converted there and the copy written); for a .dendro, write a copy instead of editing it in place.",
+              "type": "string"
+            },
+            "parquet_file": {
+              "description": "Path to the recording (.dendro, .rez or .parquet)",
+              "type": "string"
+            },
+            "recording": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Which recording to read from a multi-recording archive, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Without it, the recordings of one run are read together, each series under its recording's labels; a comparison (recordings carrying `arm`) needs one, and so does extract_features. Call describe_recording without it first to list them.",
+              "type": "object"
+            },
+            "source": {
+              "description": "Remove events with this source, e.g. mcp for every agent-written event.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "parquet_file"
+          ],
+          "type": "object"
+        },
+        "name": "remove_events"
+      }
+    ]
+  }
+}
+=== request
+{"id":3,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"parquet_file":"simple.dendro"},"name":"describe_recording"}}
+--- response
+{
+  "id": 3,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "Recording Information\n=====================\nFile: simple.dendro\nRezolus Version: unknown (recording predates agent-version capture)\nSource: 127.0.0.1-18651\nRecording Duration: 3s (4.0 seconds)\nStart Time: 2026-07-04 05:27:13 UTC (epoch: 1783142833)\nEnd Time: 2026-07-04 05:27:17 UTC (epoch: 1783142837)",
+        "type": "text"
+      }
+    ]
+  }
+}
+=== request
+{"id":4,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"parquet_file":"multi.dendro"},"name":"describe_recording"}}
+--- response
+{
+  "id": 4,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "multi.dendro holds 2 recordings of one run, read together: every series carries its recording's labels, so a matcher on one (`{host=\"...\"}`) selects its series. A recording and its copies (one source copied, or recorded twice from one agent process) are one recording, read once. Separate recordings whose labels are identical are told apart in queries by `__recording__` (the archive index of each one's first source), which no recording selector can name:\n  - host=web-01, source=rezolus\n    select with: recording {\"host\": \"web-01\"}\n  - host=web-02, source=rezolus\n    select with: recording {\"host\": \"web-02\"}\n\nRun any tool with one of the selectors above to read that recording alone.",
+        "type": "text"
+      }
+    ]
+  }
+}
+=== request
+{"id":5,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"parquet_file":"simple.dendro","query":"queue_depth"},"name":"query"}}
+--- response
+{
+  "id": 5,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "result": [
+            {
+              "metric": {
+                "__name__": "queue_depth",
+                "endpoint": "http://127.0.0.1:18651/metrics",
+                "source": "127.0.0.1-18651"
+              },
+              "values": [
+                [
+                  1783142834.0,
+                  3.0
+                ],
+                [
+                  1783142835.0,
+                  3.0
+                ],
+                [
+                  1783142836.0,
+                  3.0
+                ],
+                [
+                  1783142837.0,
+                  3.0
+                ]
+              ]
+            }
+          ],
+          "resultType": "matrix"
+        },
+        "type": "text"
+      }
+    ]
+  }
+}
+=== request
+{"id":6,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"description":"rollout","duration":"2s","id":"e1","kind":"deploy","parquet_file":"simple.dendro","timestamp":"2026-07-04T05:27:15Z"},"name":"add_event"}}
+--- response
+{
+  "id": 6,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "duration_ns": 2000000000,
+          "events_in_recording": 1,
+          "file": "simple.dendro",
+          "id": "e1",
+          "outcome": "added",
+          "recording": {},
+          "report": "Annotated \"simple.dendro\": embedded 1 new check event(s) into 1 of 1 recording(s)",
+          "timestamp_ns": 1783142835000000000
+        },
+        "type": "text"
+      }
+    ]
+  }
+}
+=== request
+{"id":7,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"description":"rollout","id":"e1","parquet_file":"simple.dendro","timestamp":"2026-07-04T05:27:15Z"},"name":"add_event"}}
+--- response
+{
+  "id": 7,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "duration_ns": null,
+          "events_in_recording": 1,
+          "file": "simple.dendro",
+          "id": "e1",
+          "outcome": "unchanged (an event with this id was already present)",
+          "recording": {},
+          "report": "Annotated \"simple.dendro\": nothing new; 1 check event(s) already present in 1 of 1 recording(s)",
+          "timestamp_ns": 1783142835000000000
+        },
+        "type": "text"
+      }
+    ]
+  }
+}
+=== request
+{"id":8,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"description":"digits","parquet_file":"simple.dendro","timestamp":"1783142835"},"name":"add_event"}}
+--- response
+{
+  "error": {
+    "code": -32000,
+    "message": "add_event: timestamp \"1783142835\" is a digit-only string, which is ambiguous (seconds or nanoseconds?); send Unix seconds as a number or an RFC 3339 string"
+  },
+  "id": 8,
+  "jsonrpc": "2.0"
+}
+=== request
+{"id":9,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"description":"legacy","id":"e2","parquet_file":"simple.parquet","timestamp":"2026-07-04T05:27:15Z"},"name":"add_event"}}
+--- response
+{
+  "error": {
+    "code": -32000,
+    "message": "add_event: simple.parquet is a parquet recording; 6.x writes .dendro only and does not change it. Write the result to a new archive instead:\n  pass \"output\": \"simple.dendro\" (a new .dendro the edit is written to)"
+  },
+  "id": 9,
+  "jsonrpc": "2.0"
+}
+=== request
+{"id":10,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"description":"legacy","id":"e2","output":"events.dendro","parquet_file":"simple.parquet","timestamp":"2026-07-04T05:27:15Z"},"name":"add_event"}}
+--- response
+{
+  "id": 10,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "duration_ns": null,
+          "events_in_recording": 1,
+          "file": "events.dendro",
+          "id": "e2",
+          "outcome": "added",
+          "recording": {},
+          "report": "converted simple.parquet (parquet recording) to events.dendro: 1 source(s), 1 segment(s), 5 row(s)\nAnnotated \"events.dendro\": embedded 1 new check event(s) into 1 of 1 recording(s)",
+          "timestamp_ns": 1783142835000000000
+        },
+        "type": "text"
+      }
+    ]
+  }
+}
+=== request
+{"id":11,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"description":"which","id":"e3","parquet_file":"multi.dendro","timestamp":1700000001},"name":"add_event"}}
+--- response
+{
+  "error": {
+    "code": -32000,
+    "message": "add_event: multi.dendro holds 2 recordings; name one with a recording selector:\n  - host=web-01, source=rezolus\n    select with: recording {\"host\": \"web-01\"}\n  - host=web-02, source=rezolus\n    select with: recording {\"host\": \"web-02\"}\n"
+  },
+  "id": 11,
+  "jsonrpc": "2.0"
+}
+=== request
+{"id":12,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"annotate":true,"parquet_file":"simple.dendro","queries":{"kpis":[{"check":{"above":2,"for":"2s"},"query":"queue_depth","role":"q","title":"Queue depth bounded","type":"gauge"},{"check":{"below":100,"severity":"warn"},"query":"queue_depth","role":"q","title":"Queue depth sane","type":"gauge"}],"service_name":"simple"}},"name":"run_checks"}}
+--- response
+{
+  "id": 12,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "annotated": "Annotated \"simple.dendro\": embedded 2 new check event(s) into 1 of 1 recording(s)",
+          "checks": [
+            {
+              "check": {
+                "above": 2.0,
+                "for": "2s",
+                "severity": "fail"
+              },
+              "indeterminate": [],
+              "query": "queue_depth",
+              "recording": {},
+              "status": "fail",
+              "title": "Queue depth bounded",
+              "windows": [
+                {
+                  "duration_ns": 4000000000,
+                  "end": "2026-07-04T05:27:18Z",
+                  "points": 4,
+                  "start": "2026-07-04T05:27:14Z",
+                  "start_ns": 1783142834000000000
+                }
+              ]
+            },
+            {
+              "check": {
+                "below": 100.0,
+                "severity": "warn"
+              },
+              "indeterminate": [],
+              "query": "queue_depth",
+              "recording": {},
+              "status": "warn",
+              "title": "Queue depth sane",
+              "windows": [
+                {
+                  "duration_ns": 4000000000,
+                  "end": "2026-07-04T05:27:18Z",
+                  "points": 4,
+                  "start": "2026-07-04T05:27:14Z",
+                  "start_ns": 1783142834000000000
+                }
+              ]
+            }
+          ],
+          "exit_code": 1,
+          "summary": {
+            "error": 0,
+            "fail": 1,
+            "indeterminate": 0,
+            "pass": 0,
+            "warn": 1
+          }
+        },
+        "type": "text"
+      }
+    ]
+  }
+}
+=== request
+{"id":13,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"annotate":true,"parquet_file":"simple.dendro","queries":{"kpis":[{"check":{"above":2,"for":"2s"},"query":"queue_depth","role":"q","title":"Queue depth bounded","type":"gauge"},{"check":{"below":100,"severity":"warn"},"query":"queue_depth","role":"q","title":"Queue depth sane","type":"gauge"}],"service_name":"simple"}},"name":"run_checks"}}
+--- response
+{
+  "id": 13,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "annotated": "Annotated \"simple.dendro\": nothing new; 2 check event(s) already present in 1 of 1 recording(s)",
+          "checks": [
+            {
+              "check": {
+                "above": 2.0,
+                "for": "2s",
+                "severity": "fail"
+              },
+              "indeterminate": [],
+              "query": "queue_depth",
+              "recording": {},
+              "status": "fail",
+              "title": "Queue depth bounded",
+              "windows": [
+                {
+                  "duration_ns": 4000000000,
+                  "end": "2026-07-04T05:27:18Z",
+                  "points": 4,
+                  "start": "2026-07-04T05:27:14Z",
+                  "start_ns": 1783142834000000000
+                }
+              ]
+            },
+            {
+              "check": {
+                "below": 100.0,
+                "severity": "warn"
+              },
+              "indeterminate": [],
+              "query": "queue_depth",
+              "recording": {},
+              "status": "warn",
+              "title": "Queue depth sane",
+              "windows": [
+                {
+                  "duration_ns": 4000000000,
+                  "end": "2026-07-04T05:27:18Z",
+                  "points": 4,
+                  "start": "2026-07-04T05:27:14Z",
+                  "start_ns": 1783142834000000000
+                }
+              ]
+            }
+          ],
+          "exit_code": 1,
+          "summary": {
+            "error": 0,
+            "fail": 1,
+            "indeterminate": 0,
+            "pass": 0,
+            "warn": 1
+          }
+        },
+        "type": "text"
+      }
+    ]
+  }
+}
+=== request
+{"id":14,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"parquet_file":"multi.dendro","recording":{"host":"nowhere"}},"name":"run_checks"}}
+--- response
+{
+  "error": {
+    "code": -32000,
+    "message": "run_checks: no recording in multi.dendro matches --recording host=nowhere. It holds:\n  - host=web-01, source=rezolus\n    select with: --recording host=web-01\n  - host=web-02, source=rezolus\n    select with: --recording host=web-02\n"
+  },
+  "id": 14,
+  "jsonrpc": "2.0"
+}
+=== request
+{"id":15,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"parquet_file":"simple.dendro"},"name":"run_checks"}}
+--- response
+{
+  "id": 15,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "checks": [],
+          "message": "no checks to run: no KPI in simple.dendro carries a \"check\" (embed one with `recording annotate --queries`, or pass queries)",
+          "summary": {
+            "error": 0,
+            "fail": 0,
+            "indeterminate": 0,
+            "pass": 0,
+            "warn": 0
+          }
+        },
+        "type": "text"
+      }
+    ]
+  }
+}
+=== request
+{"id":16,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"ids":["e1"],"parquet_file":"simple.dendro"},"name":"remove_events"}}
+--- response
+{
+  "id": 16,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "events_in_recording": 2,
+          "file": "simple.dendro",
+          "recording": {},
+          "removed": 1,
+          "report": "Annotated \"simple.dendro\": removed events from 1 of 1 recording(s) (2 event(s) remain)"
+        },
+        "type": "text"
+      }
+    ]
+  }
+}
+=== request
+{"id":17,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"parquet_file":"simple.dendro"},"name":"remove_events"}}
+--- response
+{
+  "error": {
+    "code": -32000,
+    "message": "remove_events: remove_events needs at least one of ids, kind or source; clearing every event is `recording annotate --clear-events`"
+  },
+  "id": 17,
+  "jsonrpc": "2.0"
+}
+=== request
+{"id":18,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"kind":"check","parquet_file":"simple.dendro"},"name":"remove_events"}}
+--- response
+{
+  "id": 18,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "events_in_recording": 0,
+          "file": "simple.dendro",
+          "recording": {},
+          "removed": 2,
+          "report": "Annotated \"simple.dendro\": removed events from 1 of 1 recording(s) (0 event(s) remain)"
+        },
+        "type": "text"
+      }
+    ]
+  }
+}
+=== request
+{"id":19,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"parquet_file":"simple.dendro"},"name":"describe_recording"}}
+--- response
+{
+  "id": 19,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "Recording Information\n=====================\nFile: simple.dendro\nRezolus Version: unknown (recording predates agent-version capture)\nSource: 127.0.0.1-18651\nRecording Duration: 3s (4.0 seconds)\nStart Time: 2026-07-04 05:27:13 UTC (epoch: 1783142833)\nEnd Time: 2026-07-04 05:27:17 UTC (epoch: 1783142837)",
+        "type": "text"
+      }
+    ]
+  }
+}

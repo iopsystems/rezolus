@@ -55,7 +55,8 @@ pub static TCP_RX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);
     description = "Distribution of the size of TCP packets transferred, ignoring fragmentation",
     metadata = { direction = "receive", unit = "bytes", acq_group = "tcp_traffic_sizes" }
 )]
-pub static TCP_RX_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static TCP_RX_SIZE: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "tcp_bytes",
@@ -76,7 +77,8 @@ pub static TCP_TX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);
     description = "Distribution of the size of TCP packets transferred, ignoring fragmentation",
     metadata = { direction = "transmit", unit = "bytes", acq_group = "tcp_traffic_sizes" }
 )]
-pub static TCP_TX_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static TCP_TX_SIZE: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "rezolus_bpf_run_count",

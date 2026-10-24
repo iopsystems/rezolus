@@ -259,8 +259,8 @@ const ViewerApi = {
         return backendRequest({ method: 'DELETE', url: '/api/v1/captures/experiment' });
     },
 
-    // POST the selection payload and stream the resulting parquet (or
-    // *.parquet.ab.tar in compare mode) back as bytes. Mirrors the
+    // POST the selection payload and stream the resulting .dendro report
+    // back as bytes. Mirrors the
     // WASM adapter's `saveWithSelection` shape so callers can stay
     // transport-agnostic. Server's Content-Type / Content-Disposition
     // tell us which extension to use on the download.
@@ -276,13 +276,12 @@ const ViewerApi = {
             throw new Error(`save failed (HTTP ${resp.status})${detail ? `: ${detail}` : ''}`);
         }
         const mime = resp.headers.get('content-type') || 'application/octet-stream';
-        // The server names the download (rezolus-report.dendro for a dendro
-        // source, .rez for a .rez source or a compare, .parquet for a single
-        // parquet); trust its extension rather than guessing from the MIME,
-        // which is octet-stream for all three.
+        // The server names the download (rezolus-report.dendro: a report is
+        // a .dendro whatever the source); trust its extension rather than
+        // guessing from the MIME, which is octet-stream.
         const disposition = resp.headers.get('content-disposition') || '';
         const named = /filename="?([^"]+)"?/.exec(disposition)?.[1] || '';
-        const extension = ['.dendro', '.rez'].find((e) => named.endsWith(e)) || '.parquet';
+        const extension = ['.dendro', '.rez'].find((e) => named.endsWith(e)) || '.dendro';
         const bytes = new Uint8Array(await resp.arrayBuffer());
         return { bytes, mime, extension };
     },

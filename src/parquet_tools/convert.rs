@@ -1,14 +1,16 @@
-//! `rezolus parquet convert` — turn a raw msgpack recording into parquet.
+//! `rezolus recording convert` — turn a raw msgpack recording into a
+//! `.dendro` archive.
 //!
-//! `rezolus record -f raw` writes concatenated msgpack snapshots: cheap to
-//! write and cheap to finalize, which is what a long unattended capture needs.
-//! Nothing downstream reads that format, though, so this is the offline
-//! complement — the conversion `record` would have done at finalize time, run
-//! after the fact against a file that has since been moved and compressed.
+//! A 5.x `rezolus record -o out.raw` wrote concatenated msgpack snapshots:
+//! cheap to write and cheap to finalize, which is what a long unattended
+//! capture needs. Nothing downstream reads that format, so this is the
+//! offline complement, written through metriken-storage's
+//! `MsgpackToArchive`, the archive writer `record` uses.
 //!
-//! See `docs/parquet-convert-design.md`.
+//! See `docs/parquet-convert-design.md` (written when the output was parquet).
 
-use metriken_storage::convert::{MsgpackToParquet, ParquetOptions};
+use ::dashboard::keys::{KEY_DESCRIPTIONS, KEY_SAMPLING_INTERVAL_MS, KEY_SOURCE, KEY_SYSTEMINFO};
+use metriken_storage::convert::MsgpackToArchive;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -60,9 +62,9 @@ fn sniff(path: &Path) -> io::Result<InputKind> {
     })
 }
 
-/// Where the parquet lands when `-o` was not given: the input path with a
-/// trailing `.zst` and then a trailing `.raw` removed, and `.parquet` appended.
-/// `rezolus.raw.zst` becomes `rezolus.parquet`.
+/// Where the archive lands when `-o` was not given: the input path with a
+/// trailing `.zst` and then a trailing `.raw` removed, and `.dendro` appended.
+/// `rezolus.raw.zst` becomes `rezolus.dendro`.
 fn default_output_path(input: &Path) -> PathBuf {
     let mut stem = input.to_path_buf();
     for ext in ["zst", "raw"] {
@@ -75,7 +77,7 @@ fn default_output_path(input: &Path) -> PathBuf {
     }
 
     let mut name = stem.into_os_string();
-    name.push(".parquet");
+    name.push(".dendro");
     PathBuf::from(name)
 }
 
@@ -198,20 +200,25 @@ fn infer_interval(reader: &mut (impl io::Read + io::Seek)) -> Option<Inferred> {
 pub(crate) struct ConvertOptions {
     /// Explicit `--interval`; `None` means infer from the snapshots.
     pub interval: Option<Duration>,
-    /// Validated JSON for the `systeminfo` footer key.
+    /// Validated JSON for the `systeminfo` metadata key.
     pub systeminfo: Option<String>,
-    /// Validated JSON for the `descriptions` footer key.
+    /// Validated JSON for the `descriptions` metadata key.
     pub descriptions: Option<String>,
     /// Repeatable `--metadata key=value`, in the order given.
     pub metadata: Vec<(String, String)>,
     /// Overwrite an existing output.
     pub force: bool,
+    /// The `source` label and metadata a recording gets when `metadata`
+    /// names none (`Host::convert_source`); none when `None`.
+    pub default_source: Option<String>,
+    /// The program name the refusals spell commands with.
+    pub program: String,
 }
 
 /// What a successful conversion did, for the summary line.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Converted {
-    pub rows: i64,
+    pub rows: u64,
     pub interval: Duration,
     /// False when `--interval` supplied the value.
     pub interval_inferred: bool,
@@ -222,16 +229,19 @@ pub(crate) struct Converted {
 
 #[derive(Debug)]
 pub(crate) enum ConvertError {
-    /// The input is already parquet — there is nothing to convert.
-    InputIsParquet,
+    /// The input is a parquet file, which `recording upgrade` converts.
+    /// Each of these three carries the program name its message spells
+    /// `recording upgrade` with.
+    InputIsParquet(String),
     /// The input is a tar archive, most likely a `.rez`.
-    InputIsTar,
+    InputIsTar(String),
     /// The input is a SQLite archive: a v3 `.rez` or a dendro archive.
-    InputIsArchive,
+    InputIsArchive(String),
     /// The output exists and `--force` was not given.
     OutputExists(PathBuf),
     Io(io::Error),
-    /// The msgpack stream could not be read, or parquet could not be written.
+    /// The msgpack stream could not be read, or the archive could not be
+    /// written.
     Stream(String),
     /// A `--systeminfo` / `--descriptions` argument was not the JSON it must be.
     InvalidJson {
@@ -241,26 +251,34 @@ pub(crate) enum ConvertError {
     /// A `--metadata` argument was not `key=value`.
     BadMetadata(String),
     /// An explicit `--interval` below the millisecond resolution the
-    /// `sampling_interval_ms` footer key can represent.
+    /// `sampling_interval_ms` metadata key can represent.
     IntervalTooSmall(Duration),
+    /// `-o` does not end in `.dendro`.
+    NotDendro(PathBuf),
 }
 
 impl std::fmt::Display for ConvertError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InputIsParquet => write!(
+            Self::InputIsParquet(program) => write!(
                 f,
-                "input is already a parquet file; no conversion is needed"
+                "input is a parquet file, not a raw recording; convert it to .dendro \
+                 with `{program} recording upgrade`"
             ),
-            Self::InputIsTar => write!(
+            Self::InputIsTar(program) => write!(
                 f,
-                "input is a tar archive (a .rez?), not a raw recording; \
-                 a .rez cannot be converted to parquet"
+                "input is a tar archive (a .rez?), not a raw recording; convert a .rez \
+                 to .dendro with `{program} recording upgrade`"
             ),
-            Self::InputIsArchive => write!(
+            Self::InputIsArchive(program) => write!(
                 f,
                 "input is a .rez or dendro archive, not a raw recording; \
-                 convert takes raw recordings only"
+                 convert takes raw recordings only (`{program} recording upgrade` converts a .rez)"
+            ),
+            Self::NotDendro(p) => write!(
+                f,
+                "{}: 6.x writes .dendro archives only; give an output ending in .dendro",
+                p.display()
             ),
             Self::OutputExists(p) => {
                 write!(f, "output {} already exists (use --force)", p.display())
@@ -302,7 +320,7 @@ fn parse_metadata(arg: &str) -> Result<(String, String), ConvertError> {
 
 /// What a JSON argument has to look like to be accepted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum JsonShape {
+pub(super) enum JsonShape {
     /// Any JSON value (`systeminfo` is an opaque blob to us).
     Any,
     /// An object whose values are all strings (`descriptions` is metric → help).
@@ -314,7 +332,11 @@ enum JsonShape {
 ///
 /// Validation happens before the conversion starts: a typo in a descriptions
 /// file should cost a second, not a full re-read of a multi-gigabyte recording.
-fn load_json(source: &Path, shape: JsonShape, what: &'static str) -> Result<String, ConvertError> {
+pub(super) fn load_json(
+    source: &Path,
+    shape: JsonShape,
+    what: &'static str,
+) -> Result<String, ConvertError> {
     let text = if source.as_os_str() == "-" {
         let mut buf = String::new();
         io::Read::read_to_string(&mut io::stdin(), &mut buf)?;
@@ -363,27 +385,36 @@ fn interval_millis(interval: Duration) -> Result<u64, ConvertError> {
     Ok((interval.as_nanos() as f64 / 1e6).round() as u64)
 }
 
-/// Assemble the converter with the file-level metadata keys
-/// `recorder::build_parquet_converter` writes, so a converted recording is
-/// indistinguishable from one `record -f parquet` produced.
-///
-/// `source` is stamped before the user's `--metadata`, which lets
-/// `--metadata source=…` override it — the same precedence `record` gives.
-fn build_converter(interval_ms: u64, opts: &ConvertOptions) -> MsgpackToParquet {
-    let mut converter = MsgpackToParquet::with_options(
-        ParquetOptions::new().max_batch_size(crate::parquet_metadata::MAX_ROW_GROUP_SIZE),
-    )
-    .metadata("sampling_interval_ms".to_string(), interval_ms.to_string())
-    .metadata("source".to_string(), "rezolus".to_string());
+/// Assemble the converter with the keys a recording `record` writes carries:
+/// `sampling_interval_ms` in its metadata and the default source
+/// (`source=rezolus` for rezolus) as its label and in its metadata,
+/// `--metadata source=...` replacing both, the same precedence `record`
+/// gives.
+fn build_converter(interval_ms: u64, opts: &ConvertOptions) -> MsgpackToArchive {
+    let source = opts
+        .metadata
+        .iter()
+        .rev()
+        .find(|(k, _)| k == KEY_SOURCE)
+        .map(|(_, v)| v.clone())
+        .or_else(|| opts.default_source.clone());
+    let mut converter = MsgpackToArchive::new();
+    if let Some(source) = &source {
+        converter = converter.label(KEY_SOURCE, source.clone());
+    }
+    converter = converter.metadata(KEY_SAMPLING_INTERVAL_MS, interval_ms.to_string());
+    if let Some(source) = source {
+        converter = converter.metadata(KEY_SOURCE, source);
+    }
 
     for (key, value) in &opts.metadata {
         converter = converter.metadata(key.clone(), value.clone());
     }
     if let Some(json) = &opts.systeminfo {
-        converter = converter.metadata("systeminfo".to_string(), json.clone());
+        converter = converter.metadata(KEY_SYSTEMINFO, json.clone());
     }
     if let Some(json) = &opts.descriptions {
-        converter = converter.metadata("descriptions".to_string(), json.clone());
+        converter = converter.metadata(KEY_DESCRIPTIONS, json.clone());
     }
 
     converter
@@ -416,33 +447,7 @@ fn decompress_beside_output(
     Ok((tmp, handle))
 }
 
-/// Relax the staged file's 0600 to whatever plain file creation yields here.
-///
-/// `NamedTempFile` is deliberately private and `persist` keeps that mode, so a
-/// converted recording would otherwise be unreadable by the group that can read
-/// a `record`-written one.
-///
-/// The mode comes from a reference file created in the same directory rather
-/// than from the process umask, which cannot be read without temporarily
-/// setting it.
-#[cfg(unix)]
-fn apply_default_permissions(target: &Path, dir: &Path) -> io::Result<()> {
-    let reference = dir.join(format!(".rezolus-convert-{}.perm", std::process::id()));
-    let mode = {
-        let _f = std::fs::File::create(&reference)?;
-        std::fs::metadata(&reference)?.permissions()
-    };
-    let _ = std::fs::remove_file(&reference);
-
-    std::fs::set_permissions(target, mode)
-}
-
-#[cfg(not(unix))]
-fn apply_default_permissions(_target: &Path, _dir: &Path) -> io::Result<()> {
-    Ok(())
-}
-
-/// Convert a raw recording at `input` into a parquet file at `output`.
+/// Convert a raw recording at `input` into a `.dendro` archive at `output`.
 fn convert_file(
     input: &Path,
     output: &Path,
@@ -450,6 +455,9 @@ fn convert_file(
 ) -> Result<Converted, ConvertError> {
     use io::Seek;
 
+    if output.extension().and_then(|e| e.to_str()) != Some("dendro") {
+        return Err(ConvertError::NotDendro(output.to_path_buf()));
+    }
     if output.exists() && !opts.force {
         return Err(ConvertError::OutputExists(output.to_path_buf()));
     }
@@ -461,9 +469,9 @@ fn convert_file(
     }
 
     match sniff(input)? {
-        InputKind::Parquet => Err(ConvertError::InputIsParquet),
-        InputKind::Tar => Err(ConvertError::InputIsTar),
-        InputKind::Sqlite => Err(ConvertError::InputIsArchive),
+        InputKind::Parquet => Err(ConvertError::InputIsParquet(opts.program.clone())),
+        InputKind::Tar => Err(ConvertError::InputIsTar(opts.program.clone())),
+        InputKind::Sqlite => Err(ConvertError::InputIsArchive(opts.program.clone())),
         kind => {
             let out_dir = output
                 .parent()
@@ -495,16 +503,23 @@ fn convert_file(
             // the failure is checked here rather than assumed away.
             source.rewind()?;
 
-            // Write through a temp file so a failure part-way leaves no
-            // half-written parquet for the next command to pick up.
-            let staged = tempfile::NamedTempFile::new_in(out_dir)?;
-            let rows = build_converter(interval_millis(interval)?, opts)
-                .convert_file_handle(source, staged.as_file().try_clone()?)
+            // Write through a staging directory beside the output so a
+            // failure part-way leaves no half-written archive for the next
+            // command to pick up, and --force replaces the old output only
+            // once the new one is complete.
+            let staging = super::legacy::staging_dir(output)
                 .map_err(|e| ConvertError::Stream(e.to_string()))?;
-            staged
-                .persist(output)
-                .map_err(|e| ConvertError::Io(e.error))?;
-            apply_default_permissions(output, out_dir)?;
+            let staged = staging.path().join("converted.dendro");
+            let rows = build_converter(interval_millis(interval)?, opts)
+                .convert_reader(source, &staged)
+                .map_err(|e| ConvertError::Stream(e.to_string()))?;
+            if opts.force {
+                // --force replaces the old output, once the new one is whole.
+                std::fs::rename(&staged, output)?;
+            } else {
+                super::legacy::publish(&staged, output)
+                    .map_err(|e| ConvertError::Stream(e.to_string()))?;
+            }
 
             Ok(Converted {
                 rows,
@@ -518,40 +533,48 @@ fn convert_file(
 
 /// Gather the options from parsed arguments, validating everything that can be
 /// validated before the conversion starts reading.
-fn options_from_args(args: &clap::ArgMatches) -> Result<ConvertOptions, ConvertError> {
+fn options_from_args(
+    host: &super::Host,
+    args: &super::cli::ConvertArgs,
+) -> Result<ConvertOptions, ConvertError> {
     let metadata = args
-        .get_many::<String>("metadata")
-        .unwrap_or_default()
+        .metadata
+        .iter()
         .map(|s| parse_metadata(s))
         .collect::<Result<Vec<_>, _>>()?;
 
     let systeminfo = args
-        .get_one::<PathBuf>("systeminfo")
+        .systeminfo
+        .as_deref()
         .map(|p| load_json(p, JsonShape::Any, "systeminfo"))
         .transpose()?;
 
     let descriptions = args
-        .get_one::<PathBuf>("descriptions")
+        .descriptions
+        .as_deref()
         .map(|p| load_json(p, JsonShape::StringMap, "descriptions"))
         .transpose()?;
 
     Ok(ConvertOptions {
-        interval: args.get_one::<humantime::Duration>("interval").map(|d| **d),
+        interval: args.interval.map(|d| *d),
         systeminfo,
         descriptions,
         metadata,
-        force: args.get_flag("force"),
+        force: args.force,
+        default_source: Some(host.agent.to_string()),
+        program: host.program.to_string(),
     })
 }
 
-pub(crate) fn run(args: &clap::ArgMatches) {
-    let input = args.get_one::<PathBuf>("FILE").expect("FILE is required");
+/// Returns the process exit status.
+pub(crate) fn run(host: &super::Host, args: &super::cli::ConvertArgs) -> i32 {
+    let input = &args.file;
     let output = args
-        .get_one::<PathBuf>("output")
-        .cloned()
+        .output
+        .clone()
         .unwrap_or_else(|| default_output_path(input));
 
-    let result = options_from_args(args).and_then(|opts| {
+    let result = options_from_args(host, args).and_then(|opts| {
         let done = convert_file(input, &output, &opts)?;
         Ok((done, opts))
     });
@@ -599,26 +622,18 @@ pub(crate) fn run(args: &clap::ArgMatches) {
             .flatten()
             .collect();
             if !missing.is_empty() {
-                // `annotate` is only offered for systeminfo: it has no
-                // --descriptions route, so naming it for both would send the
-                // reader after a flag that does not exist.
-                let recovery = if opts.systeminfo.is_none() {
-                    " `rezolus recording annotate <file> --systeminfo <path>` can add the \
-                     hardware summary later; descriptions can only be set here."
-                } else {
-                    " Descriptions can only be set here, by reconverting with --force."
-                };
                 println!(
-                    "Note: no {} in the output — a raw recording does not carry {}.{}",
+                    "Note: no {} in the output — a raw recording does not carry {}. \
+                     They can only be set here, by reconverting with --force.",
                     missing.join(" or "),
                     if missing.len() == 1 { "it" } else { "them" },
-                    recovery,
                 );
             }
+            0
         }
         Err(e) => {
             eprintln!("error: {e}");
-            std::process::exit(1);
+            1
         }
     }
 }
@@ -627,6 +642,16 @@ pub(crate) fn run(args: &clap::ArgMatches) {
 mod tests {
     use super::*;
     use std::io::{Cursor, Seek, Write};
+
+    /// The options rezolus's CLI starts from: `source=rezolus` unless
+    /// `--metadata` names one.
+    fn opts() -> ConvertOptions {
+        ConvertOptions {
+            default_source: Some("rezolus".to_string()),
+            program: "rezolus".to_string(),
+            ..Default::default()
+        }
+    }
 
     /// A SQLite archive, `.rez` v3 or dendro, is named as one rather than
     /// failing later as undecodable msgpack.
@@ -699,7 +724,7 @@ mod tests {
     fn default_output_strips_zst_and_raw() {
         assert_eq!(
             default_output_path(Path::new("/logs/run7/rezolus.raw.zst")),
-            PathBuf::from("/logs/run7/rezolus.parquet")
+            PathBuf::from("/logs/run7/rezolus.dendro")
         );
     }
 
@@ -707,7 +732,7 @@ mod tests {
     fn default_output_strips_raw_alone() {
         assert_eq!(
             default_output_path(Path::new("rezolus.raw")),
-            PathBuf::from("rezolus.parquet")
+            PathBuf::from("rezolus.dendro")
         );
     }
 
@@ -715,7 +740,7 @@ mod tests {
     fn default_output_appends_to_an_extensionless_name() {
         assert_eq!(
             default_output_path(Path::new("capture")),
-            PathBuf::from("capture.parquet")
+            PathBuf::from("capture.dendro")
         );
     }
 
@@ -725,7 +750,7 @@ mod tests {
         // output can never collide with the input we are still reading.
         assert_eq!(
             default_output_path(Path::new("capture.msgpack")),
-            PathBuf::from("capture.msgpack.parquet")
+            PathBuf::from("capture.msgpack.dendro")
         );
     }
 
@@ -751,6 +776,7 @@ mod tests {
                 )],
                 gauges: Vec::new(),
                 histograms: Vec::new(),
+                gauge_histograms: Vec::new(),
             });
             out.extend_from_slice(&Snapshot::to_msgpack(&snap).unwrap());
         }
@@ -863,11 +889,11 @@ mod tests {
         let base = 1_786_645_704_000_000_000u64;
         let ts = [base, base + 1_000_000_000, base + 30_000_000_000];
         let input = write_input(dir.path(), "r.raw", &raw_stream(&ts));
-        let output = dir.path().join("out.parquet");
+        let output = dir.path().join("out.dendro");
 
         let opts = ConvertOptions {
             interval: Some(Duration::from_millis(1000)),
-            ..Default::default()
+            ..opts()
         };
         let done = convert_file(&input, &output, &opts).unwrap();
 
@@ -880,9 +906,9 @@ mod tests {
         // available, not a failure.
         let dir = tempfile::tempdir().unwrap();
         let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(5, 500_000)));
-        let output = dir.path().join("out.parquet");
+        let output = dir.path().join("out.dendro");
 
-        let done = convert_file(&input, &output, &ConvertOptions::default()).unwrap();
+        let done = convert_file(&input, &output, &opts()).unwrap();
 
         assert!(done.concern.is_some());
         assert_eq!(
@@ -903,13 +929,32 @@ mod tests {
         assert_eq!(r.stream_position().unwrap(), 0);
     }
 
-    /// File-level metadata of a parquet file, as a lookup.
+    /// The converted archive's one source's metadata, with its `source`
+    /// label under `label:source`.
     fn footer(path: &Path) -> std::collections::HashMap<String, String> {
-        crate::parquet_tools::read_file_metadata(path)
+        let sources = dendro::archive::Archive::open(path)
             .unwrap()
-            .into_iter()
-            .filter_map(|kv| kv.value.map(|v| (kv.key, v)))
-            .collect()
+            .read_sources()
+            .unwrap();
+        assert_eq!(sources.len(), 1);
+        let mut out: std::collections::HashMap<String, String> =
+            sources[0].meta.metadata.clone().into_iter().collect();
+        if let Some(source) = sources[0].meta.labels.get("source") {
+            out.insert("label:source".to_string(), source.clone());
+        }
+        out
+    }
+
+    /// An output that does not end in `.dendro` is refused before anything
+    /// is read: 6.x writes .dendro only.
+    #[test]
+    fn a_parquet_output_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(2, 1_000_000_000)));
+        let output = dir.path().join("out.parquet");
+        let err = convert_file(&input, &output, &opts()).unwrap_err();
+        assert!(matches!(err, ConvertError::NotDendro(_)), "got {err:?}");
+        assert!(!output.exists());
     }
 
     /// Write `bytes` into `dir` as `name`.
@@ -927,9 +972,9 @@ mod tests {
             "rezolus.raw",
             &raw_stream(&cadence(3, 1_000_000_000)),
         );
-        let output = dir.path().join("out.parquet");
+        let output = dir.path().join("out.dendro");
 
-        let done = convert_file(&input, &output, &ConvertOptions::default()).unwrap();
+        let done = convert_file(&input, &output, &opts()).unwrap();
 
         assert_eq!(done.rows, 3);
         assert_eq!(done.interval, Duration::from_millis(1000));
@@ -941,21 +986,25 @@ mod tests {
             Some("1000")
         );
         assert_eq!(meta.get("source").map(String::as_str), Some("rezolus"));
+        assert_eq!(
+            meta.get("label:source").map(String::as_str),
+            Some("rezolus")
+        );
     }
 
     #[cfg(unix)]
     #[test]
     fn output_permissions_match_a_normally_created_file() {
-        // The conversion stages through a temp file, which is 0600. A recording
+        // The conversion stages through a temp directory. A recording
         // that lands unreadable by the group that has to analyze it is a
         // regression against `record`, which creates its output normally.
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
         let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(2, 1_000_000_000)));
-        let output = dir.path().join("out.parquet");
+        let output = dir.path().join("out.dendro");
 
-        convert_file(&input, &output, &ConvertOptions::default()).unwrap();
+        convert_file(&input, &output, &opts()).unwrap();
 
         let reference = dir.path().join("reference");
         std::fs::File::create(&reference).unwrap();
@@ -974,9 +1023,9 @@ mod tests {
             "rezolus.raw.zst",
             &zstd::encode_all(Cursor::new(&raw), 3).unwrap(),
         );
-        let output = dir.path().join("out.parquet");
+        let output = dir.path().join("out.dendro");
 
-        let done = convert_file(&input, &output, &ConvertOptions::default()).unwrap();
+        let done = convert_file(&input, &output, &opts()).unwrap();
 
         assert_eq!(done.rows, 4);
         assert_eq!(
@@ -989,13 +1038,13 @@ mod tests {
     fn stamps_systeminfo_descriptions_and_user_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(2, 1_000_000_000)));
-        let output = dir.path().join("out.parquet");
+        let output = dir.path().join("out.dendro");
 
         let opts = ConvertOptions {
             systeminfo: Some(r#"{"os":"linux"}"#.to_string()),
             descriptions: Some(r#"{"cpu_cycles":"CPU cycles"}"#.to_string()),
             metadata: vec![("run".to_string(), "boat-7".to_string())],
-            ..Default::default()
+            ..opts()
         };
         convert_file(&input, &output, &opts).unwrap();
 
@@ -1015,16 +1064,20 @@ mod tests {
     fn user_metadata_can_override_the_source() {
         let dir = tempfile::tempdir().unwrap();
         let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(2, 1_000_000_000)));
-        let output = dir.path().join("out.parquet");
+        let output = dir.path().join("out.dendro");
 
         let opts = ConvertOptions {
             metadata: vec![("source".to_string(), "llm-perf".to_string())],
-            ..Default::default()
+            ..opts()
         };
         convert_file(&input, &output, &opts).unwrap();
 
         let meta = footer(&output);
         assert_eq!(meta.get("source").map(String::as_str), Some("llm-perf"));
+        assert_eq!(
+            meta.get("label:source").map(String::as_str),
+            Some("llm-perf")
+        );
     }
 
     #[test]
@@ -1032,11 +1085,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // Snapshots are 1s apart, but the operator says the recording is 5s.
         let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(3, 1_000_000_000)));
-        let output = dir.path().join("out.parquet");
+        let output = dir.path().join("out.dendro");
 
         let opts = ConvertOptions {
             interval: Some(Duration::from_millis(5000)),
-            ..Default::default()
+            ..opts()
         };
         let done = convert_file(&input, &output, &opts).unwrap();
 
@@ -1057,11 +1110,11 @@ mod tests {
         // divided by a zero interval. Refuse rather than write that.
         let dir = tempfile::tempdir().unwrap();
         let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(2, 500_000)));
-        let output = dir.path().join("out.parquet");
+        let output = dir.path().join("out.dendro");
 
         let opts = ConvertOptions {
             interval: Some(Duration::from_micros(500)),
-            ..Default::default()
+            ..opts()
         };
         let err = convert_file(&input, &output, &opts).unwrap_err();
 
@@ -1077,11 +1130,11 @@ mod tests {
         // 1.5ms is representable-ish; truncation would call it 1ms.
         let dir = tempfile::tempdir().unwrap();
         let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(2, 1_500_000)));
-        let output = dir.path().join("out.parquet");
+        let output = dir.path().join("out.dendro");
 
         let opts = ConvertOptions {
             interval: Some(Duration::from_micros(1500)),
-            ..Default::default()
+            ..opts()
         };
         convert_file(&input, &output, &opts).unwrap();
 
@@ -1097,9 +1150,9 @@ mod tests {
     fn single_snapshot_recording_falls_back_to_one_second() {
         let dir = tempfile::tempdir().unwrap();
         let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(1, 1_000_000_000)));
-        let output = dir.path().join("out.parquet");
+        let output = dir.path().join("out.dendro");
 
-        let done = convert_file(&input, &output, &ConvertOptions::default()).unwrap();
+        let done = convert_file(&input, &output, &opts()).unwrap();
 
         assert_eq!(done.interval, Duration::from_millis(1000));
         assert!(done.interval_inferred);
@@ -1109,9 +1162,9 @@ mod tests {
     fn refuses_to_overwrite_an_existing_output() {
         let dir = tempfile::tempdir().unwrap();
         let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(2, 1_000_000_000)));
-        let output = write_input(dir.path(), "out.parquet", b"precious");
+        let output = write_input(dir.path(), "out.dendro", b"precious");
 
-        let err = convert_file(&input, &output, &ConvertOptions::default()).unwrap_err();
+        let err = convert_file(&input, &output, &opts()).unwrap_err();
 
         assert!(matches!(err, ConvertError::OutputExists(_)), "got {err:?}");
         assert_eq!(std::fs::read(&output).unwrap(), b"precious");
@@ -1121,11 +1174,11 @@ mod tests {
     fn force_overwrites_an_existing_output() {
         let dir = tempfile::tempdir().unwrap();
         let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(2, 1_000_000_000)));
-        let output = write_input(dir.path(), "out.parquet", b"stale");
+        let output = write_input(dir.path(), "out.dendro", b"stale");
 
         let opts = ConvertOptions {
             force: true,
-            ..Default::default()
+            ..opts()
         };
         convert_file(&input, &output, &opts).unwrap();
 
@@ -1139,13 +1192,11 @@ mod tests {
     fn rejects_a_parquet_input() {
         let dir = tempfile::tempdir().unwrap();
         let input = write_input(dir.path(), "already.parquet", b"PAR1\x00\x00");
-        let err = convert_file(
-            &input,
-            &dir.path().join("out.parquet"),
-            &ConvertOptions::default(),
-        )
-        .unwrap_err();
-        assert!(matches!(err, ConvertError::InputIsParquet), "got {err:?}");
+        let err = convert_file(&input, &dir.path().join("out.dendro"), &opts()).unwrap_err();
+        assert!(
+            matches!(err, ConvertError::InputIsParquet(_)),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -1156,13 +1207,8 @@ mod tests {
         tar[257..262].copy_from_slice(b"ustar");
         let input = write_input(dir.path(), "capture.rez", &tar);
 
-        let err = convert_file(
-            &input,
-            &dir.path().join("out.parquet"),
-            &ConvertOptions::default(),
-        )
-        .unwrap_err();
-        assert!(matches!(err, ConvertError::InputIsTar), "got {err:?}");
+        let err = convert_file(&input, &dir.path().join("out.dendro"), &opts()).unwrap_err();
+        assert!(matches!(err, ConvertError::InputIsTar(_)), "got {err:?}");
     }
 
     #[test]
@@ -1171,14 +1217,14 @@ mod tests {
         let mut bytes = raw_stream(&cadence(3, 1_000_000_000));
         bytes.truncate(bytes.len() - 5);
         let input = write_input(dir.path(), "cut.raw", &bytes);
-        let output = dir.path().join("out.parquet");
+        let output = dir.path().join("out.dendro");
 
-        let err = convert_file(&input, &output, &ConvertOptions::default()).unwrap_err();
+        let err = convert_file(&input, &output, &opts()).unwrap_err();
 
         assert!(matches!(err, ConvertError::Stream(_)), "got {err:?}");
         assert!(
             !output.exists(),
-            "a failed conversion must not leave a partial parquet behind"
+            "a failed conversion must not leave a partial archive behind"
         );
     }
 

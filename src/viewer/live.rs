@@ -290,6 +290,13 @@ impl Recording {
                     ));
                     break;
                 }
+                mr::Event::LabelsNotApplied { labels, .. } => {
+                    warn!(
+                        "{label}: its {} label(s) arrived late; the live view shows the \
+                         recording without them",
+                        labels.keys().cloned().collect::<Vec<_>>().join("/")
+                    );
+                }
                 mr::Event::Failed { error } => {
                     error!("{label}: the live recording stopped: {error}");
                     self.stop(format!("writing the live archive failed: {error}"));
@@ -316,14 +323,14 @@ mod tests {
     use metriken_query::MetricsSource;
 
     fn buffer(path: &Path) -> HindsightBuffer {
-        let seed = crate::recorder::rez_v3_writer::ManifestSeed {
+        let seed = crate::hindsight::buffer::Seed {
             labels: [("source".to_string(), "rezolus".to_string())]
                 .into_iter()
                 .collect(),
             metadata: Default::default(),
             clock_anchor_wall_ns: ANCHOR,
         };
-        let policy = crate::recorder::seal_policy::SealPolicy {
+        let policy = dendro::seal::SealPolicy {
             max_rows: 4,
             ..Default::default()
         };

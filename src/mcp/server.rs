@@ -225,7 +225,7 @@ fn read_tools() -> Vec<Value> {
                 "properties": {
                     "parquet_file": {
                         "type": "string",
-                        "description": "Path to the recording (parquet or .rez)"
+                        "description": "Path to the recording (.dendro, .rez or .parquet)"
                     },
                     "recording": {
                         "type": "object",
@@ -262,8 +262,9 @@ fn additive_tools() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "parquet_file": {"type": "string", "description": "Path to the recording (parquet or .rez)"},
+                    "parquet_file": {"type": "string", "description": "Path to the recording (.dendro, .rez or .parquet)"},
                     "recording": recording_property(),
+                    "output": {"type": "string", "description": "A new .dendro to write the edited recording to. Required when parquet_file is a .rez or .parquet, which 6.x does not change (it is converted there and the copy written); for a .dendro, write a copy instead of editing it in place."},
                     "timestamp": {"type": ["string", "number"], "description": "When the event starts: an RFC 3339 string (e.g. 2026-09-28T14:03:11Z), or Unix seconds as a JSON number (never as a string: a digit-only string is refused as ambiguous)."},
                     "description": {"type": "string", "description": "One line, what happened. Shown on the timeline."},
                     "kind": {"type": "string", "description": "A short category such as deploy, incident, spike, or finding. Alignment and filters key on it."},
@@ -279,14 +280,15 @@ fn additive_tools() -> Vec<Value> {
         }),
         json!({
             "name": "run_checks",
-            "description": "Evaluate the recording's KPI checks (the `check` blocks embedded by `recording annotate --queries`, or the ones in `queries`) and return each verdict with its violation windows. With annotate=true the violation windows are also written into the recording as kind=check events, the same as `rezolus recording check --annotate`. On a multi-recording .rez with no `recording` selector every recording is evaluated and each gets its own verdicts, as the CLI does.",
+            "description": "Evaluate the recording's KPI checks (the `check` blocks embedded by `recording annotate --queries`, or the ones in `queries`) and return each verdict with its violation windows. With annotate=true the violation windows are also written into the recording as kind=check events, the same as `rezolus recording check --annotate` (into `output` for a .rez or .parquet). On a multi-recording archive with no `recording` selector every recording is evaluated and each gets its own verdicts, as the CLI does.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "parquet_file": {"type": "string", "description": "Path to the recording (parquet or .rez)"},
+                    "parquet_file": {"type": "string", "description": "Path to the recording (.dendro, .rez or .parquet)"},
                     "recording": recording_property(),
                     "queries": {"type": "object", "description": "A ServiceExtension object evaluated instead of the recording's embedded KPIs: {\"service_name\": \"...\", \"kpis\": [{\"role\": \"...\", \"title\": \"...\", \"query\": \"<PromQL producing ONE series>\", \"type\": \"gauge\"|\"counter\"|\"histogram\", \"check\": {\"above\": N} | {\"below\": N}, optional \"quantile\", \"for\" (seconds), \"severity\": \"fail\"|\"warn\"}]}."},
-                    "annotate": {"type": "boolean", "description": "Write the violation windows into the recording as events. Default false."}
+                    "annotate": {"type": "boolean", "description": "Write the violation windows into the recording as events. Default false."},
+                    "output": {"type": "string", "description": "A new .dendro to write the edited recording to. Required when parquet_file is a .rez or .parquet, which 6.x does not change (it is converted there and the copy written); for a .dendro, write a copy instead of editing it in place."}
                 },
                 "required": ["parquet_file"]
             }
@@ -297,7 +299,7 @@ fn additive_tools() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "parquet_file": {"type": "string", "description": "Path to the recording (parquet or .rez)"},
+                    "parquet_file": {"type": "string", "description": "Path to the recording (.dendro, .rez or .parquet)"},
                     "recording": recording_property(),
                     "query": {"type": "string", "description": "PromQL expression, as for the query tool. A heatmap result is refused: export histogram_quantile(...) of it instead."},
                     "format": {"type": "string", "enum": ["csv", "parquet"], "description": "Default csv."},
@@ -342,8 +344,9 @@ fn mutating_tools() -> Vec<Value> {
         "inputSchema": {
             "type": "object",
             "properties": {
-                "parquet_file": {"type": "string", "description": "Path to the recording (parquet or .rez)"},
+                "parquet_file": {"type": "string", "description": "Path to the recording (.dendro, .rez or .parquet)"},
                 "recording": recording_property(),
+                "output": {"type": "string", "description": "A new .dendro to write the edited recording to. Required when parquet_file is a .rez or .parquet, which 6.x does not change (it is converted there and the copy written); for a .dendro, write a copy instead of editing it in place."},
                 "ids": {"type": "array", "items": {"type": "string"}, "description": "Event ids to remove (as returned by add_event, or check:<hash> for verdicts)."},
                 "kind": {"type": "string", "description": "Remove events of this kind."},
                 "source": {"type": "string", "description": "Remove events with this source, e.g. mcp for every agent-written event."}
@@ -1154,6 +1157,16 @@ impl Server {
         cache.retain(|(p, _), _| *p != path);
     }
 
+    /// Drop every cached reader of the file a write reads and of the file
+    /// it writes, before it runs: a reader that has queried holds the
+    /// archive, and dendro refuses to open a held archive for writing.
+    fn evict_for_write(&self, parquet_file: &str, output: Option<&str>) {
+        self.evict(parquet_file);
+        if let Some(output) = output {
+            self.evict(output);
+        }
+    }
+
     /// `add_event`: build one `Event` from the arguments and append it to
     /// the recording the selector names.
     async fn add_event(&self, arguments: &Value) -> Result<String, Box<dyn std::error::Error>> {
@@ -1185,12 +1198,16 @@ impl Server {
             id: Some(id.clone()),
             chart_id: None,
         };
+        let output = opt_str(arguments, "output")?;
+        self.evict_for_write(parquet_file, output.as_deref());
         let report = crate::parquet_tools::events::add_events_selected(
             Path::new(parquet_file),
+            output.as_deref().map(Path::new),
             &selector,
             vec![event],
+            env!("CARGO_BIN_NAME"),
         )?;
-        self.evict(parquet_file);
+        self.evict(output.as_deref().unwrap_or(parquet_file));
         let outcome = if report.counts.new > 0 {
             "added"
         } else if report.counts.updated > 0 {
@@ -1205,9 +1222,9 @@ impl Server {
             "outcome": outcome,
             "recording": report.recording,
             "events_in_recording": report.total,
-            "file": parquet_file,
-            // The writer's own line, which is where a v1/v2 tar archive
-            // says it was upgraded to v3 on the way.
+            "file": output.as_deref().unwrap_or(parquet_file),
+            // The writer's own line, after the line saying what a legacy
+            // input was converted to.
             "report": report.report,
         }))?)
     }
@@ -1235,17 +1252,21 @@ impl Server {
             kind: opt_str(arguments, "kind")?,
             source: opt_str(arguments, "source")?,
         };
+        let output = opt_str(arguments, "output")?;
+        self.evict_for_write(parquet_file, output.as_deref());
         let report = crate::parquet_tools::events::remove_events_selected(
             Path::new(parquet_file),
+            output.as_deref().map(Path::new),
             &selector,
             &filter,
+            env!("CARGO_BIN_NAME"),
         )?;
-        self.evict(parquet_file);
+        self.evict(output.as_deref().unwrap_or(parquet_file));
         Ok(serde_json::to_string_pretty(&json!({
             "removed": report.removed,
             "recording": report.recording,
             "events_in_recording": report.total,
-            "file": parquet_file,
+            "file": output.as_deref().unwrap_or(parquet_file),
             "report": report.report,
         }))?)
     }
@@ -1278,7 +1299,11 @@ impl Server {
             &selector,
             override_ext.as_ref(),
             &registry,
+            env!("CARGO_BIN_NAME"),
         )?;
+        for notice in &run.notices {
+            crate::viewer::metadata::warn_once(notice.clone());
+        }
         if run.checks_seen == 0 {
             return Ok(serde_json::to_string_pretty(&json!({
                 "checks": [],
@@ -1292,12 +1317,21 @@ impl Server {
             annotated = Some(if n == 0 {
                 "nothing to annotate: no violation windows".to_string()
             } else {
+                let output = opt_str(arguments, "output")?;
+                self.evict_for_write(parquet_file, output.as_deref());
                 let line = crate::parquet_tools::check::annotate_events(
                     path,
-                    run.format,
+                    output.as_deref().map(Path::new),
                     run.per_recording_events.clone(),
+                    |suggested| {
+                        format!(
+                            "pass \"output\": {:?} (a new .dendro the events are written to)",
+                            suggested.display().to_string()
+                        )
+                    },
+                    env!("CARGO_BIN_NAME"),
                 )?;
-                self.evict(parquet_file);
+                self.evict(output.as_deref().unwrap_or(parquet_file));
                 line
             });
         }
@@ -1453,10 +1487,10 @@ mod tests {
     #[tokio::test]
     async fn get_reader_refuses_a_multi_recording_archive() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
+        let path = dir.path().join("ab.dendro");
         // `arm` makes it a comparison, which needs a selector; an archive of
         // one run is read combined (`a_one_run_archive_is_read_combined`).
-        crate::mcp::tests::multi_recording_rez_with_arms(
+        crate::mcp::tests::multi_recording_with_arms(
             &path,
             &["redis", "valkey"],
             &[Some("ab"), Some("ab")],
@@ -1487,8 +1521,7 @@ mod tests {
     #[tokio::test]
     async fn get_reader_opens_v3_sqlite_rez() {
         let dir = tempfile::tempdir().unwrap();
-        let rez_path = dir.path().join("rec.rez");
-        crate::recorder::rez::recorder_tests_support::empty_v3_rez(&rez_path);
+        let rez_path = ::rez::fixtures::committed_rez("v3.rez", dir.path());
         assert_eq!(
             crate::recorder::rez::detect_rez_format(&rez_path).unwrap(),
             crate::recorder::rez::RezFormat::V3Sqlite,
@@ -1561,8 +1594,8 @@ mod tests {
     #[tokio::test]
     async fn the_server_honors_a_recording_selector() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
-        crate::mcp::tests::multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let path = dir.path().join("ab.dendro");
+        crate::mcp::tests::multi_recording(&path, &["redis", "valkey"], &[true, true]);
 
         let server = Server::new();
         let args = serde_json::json!({
@@ -1589,8 +1622,8 @@ mod tests {
     #[tokio::test]
     async fn two_recordings_of_one_archive_do_not_share_a_cache_entry() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
-        crate::mcp::tests::multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let path = dir.path().join("ab.dendro");
+        crate::mcp::tests::multi_recording(&path, &["redis", "valkey"], &[true, true]);
         let p = path.to_str().unwrap();
 
         let server = Server::new();
@@ -1628,8 +1661,8 @@ mod tests {
     #[tokio::test]
     async fn equivalent_selectors_share_one_reader() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
-        crate::mcp::tests::multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let path = dir.path().join("ab.dendro");
+        crate::mcp::tests::multi_recording(&path, &["redis", "valkey"], &[true, true]);
         let p = path.to_str().unwrap();
 
         let server = Server::new();
@@ -1680,16 +1713,23 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        // Precondition: the OLD identity really would have conflated them.
+        // Precondition: the OLD identity, each `k=v` joined by `\u{1}`,
+        // really would have conflated them.
+        let flattened = |m: &BTreeMap<String, String>| {
+            m.iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join("\u{1}")
+        };
         assert_eq!(
-            crate::recorder::seal_policy::recording_stagger_key(&a),
-            crate::recorder::seal_policy::recording_stagger_key(&b),
+            flattened(&a),
+            flattened(&b),
             "fixture must actually exercise the aliasing the fix removes",
         );
 
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("collide.rez");
-        crate::mcp::tests::multi_recording_rez_with_labels(&path, &[a, b]);
+        let path = dir.path().join("collide.dendro");
+        crate::mcp::tests::multi_recording_with_labels(&path, &[a, b]);
         let p = path.to_str().unwrap();
 
         let server = Server::new();
@@ -1728,8 +1768,8 @@ mod tests {
     #[tokio::test]
     async fn server_listings_render_the_json_selector_not_the_cli_flag() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
-        crate::mcp::tests::multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let path = dir.path().join("ab.dendro");
+        crate::mcp::tests::multi_recording(&path, &["redis", "valkey"], &[true, true]);
         let args = json!({"parquet_file": path.to_str().unwrap()});
 
         let server = Server::new();
@@ -1773,8 +1813,8 @@ mod tests {
     #[tokio::test]
     async fn server_errors_render_the_json_selector_not_the_cli_flag() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
-        crate::mcp::tests::multi_recording_rez_with_arms(
+        let path = dir.path().join("ab.dendro");
+        crate::mcp::tests::multi_recording_with_arms(
             &path,
             &["redis", "valkey"],
             &[Some("ab"), Some("ab")],
@@ -1825,8 +1865,8 @@ mod tests {
     #[tokio::test]
     async fn an_explicit_null_recording_means_no_selector() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("one.rez");
-        crate::mcp::tests::multi_recording_rez(&path, &["redis"], &[true]);
+        let path = dir.path().join("one.dendro");
+        crate::mcp::tests::multi_recording(&path, &["redis"], &[true]);
 
         let server = Server::new();
         let args = json!({"parquet_file": path.to_str().unwrap(), "recording": null});
@@ -1908,8 +1948,8 @@ mod tests {
     #[tokio::test]
     async fn every_handler_honors_the_recording_selector() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
-        crate::mcp::tests::multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let path = dir.path().join("ab.dendro");
+        crate::mcp::tests::multi_recording(&path, &["redis", "valkey"], &[true, true]);
         let p = path.to_str().unwrap();
 
         let server = Server::new();
@@ -1973,9 +2013,11 @@ mod tests {
             .collect()
     }
 
+    /// Each source's events in the dendro archive at `path`.
     fn stored_events(path: &std::path::Path) -> Vec<Vec<crate::viewer::Event>> {
-        let db = crate::recorder::rez_sqlite::RezDb::open(path).unwrap();
-        db.read_recordings()
+        dendro::archive::Archive::open(path)
+            .unwrap()
+            .read_sources()
             .unwrap()
             .into_iter()
             .map(|r| {
@@ -2012,8 +2054,8 @@ mod tests {
     #[tokio::test]
     async fn a_mutating_call_without_the_flag_is_refused_naming_the_flag() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("one.rez");
-        crate::mcp::tests::multi_recording_rez(&path, &["redis"], &[true]);
+        let path = dir.path().join("one.dendro");
+        crate::mcp::tests::multi_recording(&path, &["redis"], &[true]);
         let mut server = Server::new();
         let reply = server
             .handle_message(json!({
@@ -2031,8 +2073,8 @@ mod tests {
     #[tokio::test]
     async fn add_event_lands_in_the_recording_and_is_idempotent_by_id() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("one.rez");
-        crate::mcp::tests::multi_recording_rez(&path, &["redis"], &[true]);
+        let path = dir.path().join("one.dendro");
+        crate::mcp::tests::multi_recording(&path, &["redis"], &[true]);
         let server = Server::new();
         let args = json!({
             "parquet_file": path.to_str().unwrap(),
@@ -2086,8 +2128,8 @@ mod tests {
     #[tokio::test]
     async fn add_event_refuses_ambiguous_timestamps_and_durations() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("one.rez");
-        crate::mcp::tests::multi_recording_rez(&path, &["redis"], &[true]);
+        let path = dir.path().join("one.dendro");
+        crate::mcp::tests::multi_recording(&path, &["redis"], &[true]);
         let server = Server::new();
         let file = path.to_str().unwrap();
         let attempt = |ts: Value, dur: Option<Value>| {
@@ -2140,11 +2182,11 @@ mod tests {
     #[tokio::test]
     async fn a_write_through_another_spelling_of_the_path_evicts_too() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("one.rez");
-        crate::mcp::tests::multi_recording_rez(&path, &["redis"], &[true]);
+        let path = dir.path().join("one.dendro");
+        crate::mcp::tests::multi_recording(&path, &["redis"], &[true]);
         let server = Server::new();
         // `dir/./one.rez` and `dir/one.rez` name one file.
-        let dotted = dir.path().join(".").join("one.rez");
+        let dotted = dir.path().join(".").join("one.dendro");
         server
             .get_reader_selected(
                 dotted.to_str().unwrap(),
@@ -2163,8 +2205,8 @@ mod tests {
     #[tokio::test]
     async fn add_event_writes_only_the_selected_recording_and_refuses_an_ambiguous_one() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ab.rez");
-        crate::mcp::tests::multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let path = dir.path().join("ab.dendro");
+        crate::mcp::tests::multi_recording(&path, &["redis", "valkey"], &[true, true]);
         let server = Server::new();
         let base = json!({
             "parquet_file": path.to_str().unwrap(),
@@ -2194,8 +2236,8 @@ mod tests {
     #[tokio::test]
     async fn remove_events_filters_by_id_kind_and_source_and_refuses_an_empty_filter() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("one.rez");
-        crate::mcp::tests::multi_recording_rez(&path, &["redis"], &[true]);
+        let path = dir.path().join("one.dendro");
+        crate::mcp::tests::multi_recording(&path, &["redis"], &[true]);
         let server = Server::with_options(ServerOptions {
             allow_mutating: true,
             ..Default::default()
@@ -2266,9 +2308,11 @@ mod tests {
             .remove_events(&json!({"parquet_file": file, "ids": ["f3"]}))
             .await
             .unwrap();
-        let db = crate::recorder::rez_sqlite::RezDb::open(&path).unwrap();
-        let recs = db.read_recordings().unwrap();
-        assert!(!recs[0]
+        let sources = dendro::archive::Archive::open(&path)
+            .unwrap()
+            .read_sources()
+            .unwrap();
+        assert!(!sources[0]
             .meta
             .metadata
             .contains_key(crate::parquet_metadata::KEY_EVENTS));
@@ -2277,8 +2321,8 @@ mod tests {
     #[tokio::test]
     async fn run_checks_reports_nothing_to_run_or_each_verdict() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("one.rez");
-        crate::mcp::tests::multi_recording_rez(&path, &["redis"], &[true]);
+        let path = dir.path().join("one.dendro");
+        crate::mcp::tests::multi_recording(&path, &["redis"], &[true]);
         let server = Server::new();
         let file = path.to_str().unwrap();
 
@@ -2336,8 +2380,8 @@ mod tests {
     #[tokio::test]
     async fn a_write_evicts_the_cached_reader_for_that_file() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("one.rez");
-        crate::mcp::tests::multi_recording_rez(&path, &["redis"], &[true]);
+        let path = dir.path().join("one.dendro");
+        crate::mcp::tests::multi_recording(&path, &["redis"], &[true]);
         let server = Server::new();
         let file = path.to_str().unwrap();
         server
@@ -2353,6 +2397,58 @@ mod tests {
             server.reader_cache.read().unwrap().is_empty(),
             "a reader opened before the write would report the old events"
         );
+    }
+
+    /// A query holds the archive through the cached reader, and dendro
+    /// refuses to open a held archive for writing, so every write tool must
+    /// drop the cached readers first: a query, then add_event, then
+    /// run_checks with annotate, then remove_events, on one server.
+    #[tokio::test]
+    async fn a_write_after_a_query_on_the_same_file_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one.dendro");
+        crate::mcp::tests::multi_recording(&path, &["redis"], &[true]);
+        let server = Server::with_options(ServerOptions {
+            allow_mutating: true,
+            ..Default::default()
+        });
+        let file = path.to_str().unwrap();
+        let query = json!({"parquet_file": file, "query": "sum(irate(cpu_cycles[2s]))"});
+        server.execute_query(&query).await.unwrap();
+        server
+            .add_event(
+                &json!({"parquet_file": file, "timestamp": 2.0, "description": "x", "id": "E1"}),
+            )
+            .await
+            .unwrap();
+
+        server.execute_query(&query).await.unwrap();
+        let out: Value = serde_json::from_str(
+            &server
+                .run_checks(&json!({
+                    "parquet_file": file,
+                    "annotate": true,
+                    "queries": {"service_name": "t", "kpis": [{
+                        "role": "r", "title": "rate", "type": "delta_counter",
+                        "query": "sum(irate(cpu_cycles[2s]))", "check": {"above": 0}}]},
+                }))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            out["annotated"]
+                .as_str()
+                .unwrap()
+                .contains("new check event"),
+            "{out}"
+        );
+
+        server.execute_query(&query).await.unwrap();
+        server
+            .remove_events(&json!({"parquet_file": file, "ids": ["E1"]}))
+            .await
+            .unwrap();
     }
 
     // ── export_query / viewer_link ───────────────────────────────────────

@@ -98,22 +98,24 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
     description = "Distribution of the amount of time tasks were waiting in the runqueue",
     metadata = { unit = "nanoseconds", acq_group = "scheduler_runqueue_runqlat" }
 )]
-pub static SCHEDULER_RUNQUEUE_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static SCHEDULER_RUNQUEUE_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "scheduler_running",
     description = "Distribution of the amount of time tasks were on-CPU",
     metadata = { unit = "nanoseconds", acq_group = "scheduler_runqueue_running" }
 )]
-pub static SCHEDULER_RUNNING: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static SCHEDULER_RUNNING: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "scheduler_offcpu",
     description = "Distribution of the amount of time tasks were off-CPU",
     metadata = { unit = "nanoseconds", acq_group = "scheduler_runqueue_offcpu" }
 )]
-pub static SCHEDULER_OFFCPU: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static SCHEDULER_OFFCPU: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "scheduler_context_switch",

@@ -174,6 +174,12 @@ impl MetricsSource for Routed {
     fn histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
         self.primary.histogram_labels(name)
     }
+    fn gauge_histogram_names(&self) -> Vec<String> {
+        self.primary.gauge_histogram_names()
+    }
+    fn gauge_histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
+        self.primary.gauge_histogram_labels(name)
+    }
     fn sample_timestamps(&self) -> Vec<u64> {
         self.primary.sample_timestamps()
     }
@@ -1023,6 +1029,7 @@ pub enum Kind {
     Counter,
     Gauge,
     Histogram,
+    GaugeHistogram,
 }
 
 /// The archive behind a combined source, for answering one recording's
@@ -1074,6 +1081,7 @@ fn holds(table: &metriken_storage::reader::SamplerReader, kind: Kind, name: &str
         Kind::Counter => table.holds_counter(name),
         Kind::Gauge => table.holds_gauge(name),
         Kind::Histogram => table.holds_histogram(name),
+        Kind::GaugeHistogram => table.holds_gauge_histogram(name),
     }
 }
 
@@ -1092,6 +1100,7 @@ fn table_labels(
         Kind::Counter => source.counter_labels(name),
         Kind::Gauge => source.gauge_labels(name),
         Kind::Histogram => source.histogram_labels(name),
+        Kind::GaugeHistogram => source.gauge_histogram_labels(name),
     };
     for set in &mut sets {
         metriken_storage::labeled::add_labels_map(set, extra);
@@ -1137,6 +1146,7 @@ fn scoped_labels(
     matchers: &[Matcher],
 ) -> Vec<BTreeMap<String, String>> {
     let extras = archive.series_labels();
+    let mut seen = std::collections::HashSet::new();
     archive
         .owners_of(&[name.to_string()])
         .into_iter()
@@ -1144,6 +1154,10 @@ fn scoped_labels(
         .filter(|t| table_passes(&extras.of(t).inner, matchers) != Some(false))
         .flat_map(|t| table_labels(t, extras.of(t), kind, name))
         .filter(|l| matchers.iter().all(|m| m.matches(l)))
+        // The sources of one read group (a recording and its copy) carry one
+        // label set, so their tables list a series once each; it is listed
+        // once, as the archive's own listing does.
+        .filter(|l| seen.insert(l.clone()))
         .collect()
 }
 
@@ -1176,6 +1190,7 @@ impl<'a> Scoped<'a> {
             Kind::Counter => self.inner.counter_names(),
             Kind::Gauge => self.inner.gauge_names(),
             Kind::Histogram => self.inner.histogram_names(),
+            Kind::GaugeHistogram => self.inner.gauge_histogram_names(),
         };
         if self.scope.matchers.is_empty() {
             return names;
@@ -1195,6 +1210,7 @@ impl<'a> Scoped<'a> {
             Kind::Counter => self.inner.counter_labels(name),
             Kind::Gauge => self.inner.gauge_labels(name),
             Kind::Histogram => self.inner.histogram_labels(name),
+            Kind::GaugeHistogram => self.inner.gauge_histogram_labels(name),
         }
     }
 
@@ -1289,6 +1305,12 @@ impl MetricsSource for Scoped<'_> {
     fn histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
         self.labels(Kind::Histogram, name)
     }
+    fn gauge_histogram_names(&self) -> Vec<String> {
+        self.names(Kind::GaugeHistogram)
+    }
+    fn gauge_histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
+        self.labels(Kind::GaugeHistogram, name)
+    }
     fn sample_timestamps(&self) -> Vec<u64> {
         self.inner.sample_timestamps()
     }
@@ -1296,23 +1318,15 @@ impl MetricsSource for Scoped<'_> {
 
 // ── A parquet file's source as a series label ───────────────────────────
 
-/// `reader` with its file-level `source` as a label on every series, as an
-/// archive recording's series carry its recording's labels, so a template
-/// written for an archive (`{source="llm-perf"}`) matches the same producer's
-/// parquet. A selector on `source` is decided against the file's value.
-///
-/// `reader` unchanged when its `source` does not name one source (a
-/// combined parquet's is a JSON array, and its columns carry their own
-/// `source`), or when any of its series already carries a `source` label: the
-/// reader's composition replaces a series' own value rather than keeping it
-/// under `exported_source`, as an archive does, and the second needs
-/// metriken-storage's `LabeledSource` behind a `ParquetReader`.
-pub fn label_parquet_by_source(
-    reader: metriken_query::ParquetReader,
-) -> metriken_query::ParquetReader {
-    let source = MetricsSource::source(&reader);
+/// The `source` label [`label_parquet_by_source`] gives `reader`'s series:
+/// the file's `source` when it names one source and no series carries a
+/// `source` label of its own; `None` otherwise. A parquet file converted to
+/// `.dendro` gets its source labelled with it, so it presents as the file
+/// does.
+pub fn parquet_source_label(reader: &metriken_query::ParquetReader) -> Option<String> {
+    let source = MetricsSource::source(reader);
     if !crate::source_templates::is_one_source_name(&source) {
-        return reader;
+        return None;
     }
     let carries_source =
         |labels: Vec<BTreeMap<String, String>>| labels.iter().any(|l| l.contains_key("source"));
@@ -1328,9 +1342,26 @@ pub fn label_parquet_by_source(
             .histogram_names()
             .iter()
             .any(|n| carries_source(reader.histogram_labels(n)));
-    if native {
+    (!native).then_some(source)
+}
+
+/// `reader` with its file-level `source` as a label on every series, as an
+/// archive recording's series carry its recording's labels, so a template
+/// written for an archive (`{source="llm-perf"}`) matches the same producer's
+/// parquet. A selector on `source` is decided against the file's value.
+///
+/// `reader` unchanged when its `source` does not name one source (a
+/// combined parquet's is a JSON array, and its columns carry their own
+/// `source`), or when any of its series already carries a `source` label: the
+/// reader's composition replaces a series' own value rather than keeping it
+/// under `exported_source`, as an archive does, and the second needs
+/// metriken-storage's `LabeledSource` behind a `ParquetReader`.
+pub fn label_parquet_by_source(
+    reader: metriken_query::ParquetReader,
+) -> metriken_query::ParquetReader {
+    let Some(source) = parquet_source_label(&reader) else {
         return reader;
-    }
+    };
     let filename = reader.filename().map(str::to_string);
     let labels: BTreeMap<String, String> = [("source".to_string(), source)].into();
     let reader = std::sync::Arc::new(reader);
@@ -1365,6 +1396,49 @@ mod tests {
             store.set_metadata(*k, *v);
         }
         store
+    }
+
+    /// `Routed` and `Scoped` forward the two gauge-histogram listings, which
+    /// `MetricsSource` defaults to empty: a gauge histogram held by the
+    /// source shows through both, and `Scoped` keeps only its recording's
+    /// series.
+    #[test]
+    fn a_gauge_histogram_shows_through_routed_and_scoped() {
+        let host = |h: &str| -> BTreeMap<String, String> {
+            [("host".to_string(), h.to_string())].into_iter().collect()
+        };
+        let store = metriken_query::MemoryStore::builder().build();
+        for h in ["a", "b"] {
+            store
+                .insert_gauge_histogram_series(
+                    "depth",
+                    host(h),
+                    ::histogram::Config::new(2, 8).unwrap(),
+                    vec![1_000_000_000],
+                    vec![metriken_storage::HistogramSnapshot {
+                        index: vec![1],
+                        count: vec![1],
+                    }],
+                )
+                .unwrap();
+        }
+        let store: Arc<dyn MetricsSource> = Arc::new(store);
+        assert_eq!(store.gauge_histogram_names(), ["depth"]);
+
+        let routed = Routed::new(Arc::clone(&store), Vec::new());
+        assert_eq!(routed.gauge_histogram_names(), ["depth"]);
+        assert_eq!(routed.gauge_histogram_labels("depth").len(), 2);
+
+        let matchers = scope_matchers(&[host("a"), host("b")]);
+        let scope = Scope {
+            matchers: matchers[0].clone(),
+            header: Header::of(&*store),
+            metadata: HashMap::new(),
+            catalog: None,
+        };
+        let scoped = Scoped::new(&*store, &scope);
+        assert_eq!(scoped.gauge_histogram_names(), ["depth"]);
+        assert_eq!(scoped.gauge_histogram_labels("depth"), [host("a")]);
     }
 
     /// The baseline capture spans its own rows, which the experiment's are

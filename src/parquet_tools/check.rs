@@ -23,19 +23,18 @@
 //! defined the check changes. See
 //! `docs/journal/2026-09-28-checks-with-verdicts.md`.
 
-use clap::ArgMatches;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use metriken_query::{MatrixSample, MetricsSource, QueryResult};
 
-use crate::mcp::{
+use super::select::{
     describe_candidates, render_labels, RecordingSelector, SelectError, SelectorSyntax,
 };
-use crate::recorder::rez::RezFormat;
-use crate::viewer::{Event, ServiceExtension, TemplateRegistry};
+use ::dashboard::{Event, ServiceExtension, TemplateRegistry};
 use dashboard::{Bound, Check, Kpi, Severity};
+use metriken_storage::rez::rez::RezFormat;
 
 /// Exit status when a check with `severity: fail` failed.
 pub(super) const EXIT_FAIL: i32 = 1;
@@ -551,12 +550,13 @@ pub(crate) struct Target {
 pub(crate) fn open_targets(
     path: &Path,
     selector: &RecordingSelector,
+    program: &str,
 ) -> Result<(RezFormat, Vec<Target>, usize), String> {
     if !path.exists() {
         return Err(format!("Recording file not found: {}", path.display()));
     }
     let pool = metriken_storage::BufferPool::new(256 * 1024 * 1024);
-    let format = crate::recorder::rez::detect_rez_format(path).unwrap_or(RezFormat::NotRez);
+    let format = metriken_storage::rez::rez::detect_rez_format(path).unwrap_or(RezFormat::NotRez);
     if format == RezFormat::NotRez {
         if !selector.is_empty() {
             return Err(format!(
@@ -579,7 +579,7 @@ pub(crate) fn open_targets(
         ));
     }
 
-    let recordings = crate::rez_reader::RezReader::open_recordings(path, pool)
+    let recordings = ::rez::reader::RezReader::open_recordings(path, pool)
         .map_err(|e| format!("failed to load {}: {e}", path.display()))?;
     if recordings.is_empty() {
         return Err(format!("{} holds no recordings", path.display()));
@@ -597,7 +597,7 @@ pub(crate) fn open_targets(
                     "no recording in {} matches {}. It holds:\n{}",
                     path.display(),
                     selector.render(syntax),
-                    describe_candidates(&all, &[], syntax)
+                    describe_candidates(&all, &[], syntax, program)
                 ));
             }
             Err(SelectError::Ambiguous(hits)) => {
@@ -606,7 +606,7 @@ pub(crate) fn open_targets(
                     selector.render(syntax),
                     hits.len(),
                     path.display(),
-                    describe_candidates(&all, &hits, syntax)
+                    describe_candidates(&all, &hits, syntax, program)
                 ));
             }
         }
@@ -626,28 +626,32 @@ pub(crate) fn open_targets(
 
 /// The KPIs carrying a check for one recording: from `--queries` when
 /// given, else from the recording's own metadata through the viewer's
-/// lookup (`capture_service_extensions`), with the recording's own template
-/// winning over the registry's.
+/// lookup (`dashboard::source_templates::service_extensions_from_metadata`),
+/// with the recording's own template winning over the registry's. Also
+/// returns what the lookup had to say (a template that did not parse, an
+/// unknown `unit_system`), for the caller to log or not.
 fn checked_kpis(
     reader: &dyn MetricsSource,
     override_ext: Option<&ServiceExtension>,
     registry: &TemplateRegistry,
-) -> Vec<Kpi> {
-    let exts: Vec<ServiceExtension> = match override_ext {
-        Some(ext) => vec![ext.clone()],
-        None => crate::viewer::metadata::capture_service_extensions(
-            reader,
-            registry,
-            ::dashboard::source_templates::TemplatePreference::Archive,
-        )
-        .into_iter()
-        .map(|(_, ext)| ext)
-        .collect(),
+) -> (Vec<Kpi>, Vec<String>) {
+    let (exts, notices): (Vec<ServiceExtension>, Vec<String>) = match override_ext {
+        Some(ext) => (vec![ext.clone()], Vec::new()),
+        None => {
+            let (exts, notices) = ::dashboard::source_templates::service_extensions_from_metadata(
+                &reader.file_metadata(),
+                registry,
+                ::dashboard::source_templates::TemplatePreference::Archive,
+            );
+            (exts.into_iter().map(|(_, ext)| ext).collect(), notices)
+        }
     };
-    exts.into_iter()
+    let kpis = exts
+        .into_iter()
         .flat_map(|ext| ext.kpis)
         .filter(|kpi| kpi.check.is_some())
-        .collect()
+        .collect();
+    (kpis, notices)
 }
 
 fn load_queries(path: &Path) -> Result<ServiceExtension, String> {
@@ -658,8 +662,12 @@ fn load_queries(path: &Path) -> Result<ServiceExtension, String> {
 }
 
 /// Returns the process exit status.
-pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) -> i32 {
-    match run_inner(args, registry) {
+pub(super) fn run(
+    host: &super::Host,
+    args: &super::cli::CheckArgs,
+    registry: &TemplateRegistry,
+) -> i32 {
+    match run_inner(host.program, args, registry) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("error: {e}");
@@ -675,10 +683,13 @@ pub(crate) struct CheckRun {
     /// Each recording's verdict events in catalog order, one entry per
     /// recording of the archive (empty for the ones not evaluated).
     pub(crate) per_recording_events: Vec<Vec<Event>>,
-    pub(crate) format: RezFormat,
     /// KPIs carrying a check, across the evaluated recordings. Zero means
     /// there was nothing to run, which is not a failure.
     pub(crate) checks_seen: usize,
+    /// What the template lookup reported for the evaluated recordings (a
+    /// template that did not parse, an unknown `unit_system`). `recording
+    /// check` prints none of them; the MCP server logs each once.
+    pub(crate) notices: Vec<String>,
 }
 
 /// Pass/warn/fail/indeterminate/error counts over a run's results.
@@ -740,14 +751,17 @@ pub(crate) fn run_checks(
     selector: &RecordingSelector,
     override_ext: Option<&ServiceExtension>,
     registry: &TemplateRegistry,
+    program: &str,
 ) -> Result<CheckRun, String> {
-    let (format, targets, total_recordings) = open_targets(path, selector)?;
+    let (_, targets, total_recordings) = open_targets(path, selector, program)?;
 
     let mut results: Vec<CheckResult> = Vec::new();
     let mut per_recording_events: Vec<Vec<Event>> = vec![Vec::new(); total_recordings];
     let mut checks_seen = 0usize;
+    let mut notices = Vec::new();
     for target in &targets {
-        let kpis = checked_kpis(target.reader.as_ref(), override_ext, registry);
+        let (kpis, said) = checked_kpis(target.reader.as_ref(), override_ext, registry);
+        notices.extend(said);
         checks_seen += kpis.len();
         for kpi in &kpis {
             let check = kpi.check.as_ref().expect("filtered to KPIs with a check");
@@ -761,27 +775,23 @@ pub(crate) fn run_checks(
     Ok(CheckRun {
         results,
         per_recording_events,
-        format,
         checks_seen,
+        notices,
     })
 }
 
-fn run_inner(args: &ArgMatches, registry: &TemplateRegistry) -> Result<i32, String> {
-    let path = args.get_one::<PathBuf>("FILE").expect("clap requires FILE");
-    let json = args.get_flag("json");
-    let annotate = args.get_flag("annotate");
-    let selector = RecordingSelector::parse(
-        "--recording",
-        args.get_many::<String>("RECORDING")
-            .map(|it| it.cloned().collect::<Vec<_>>())
-            .unwrap_or_default(),
-    )?;
-    let override_ext = args
-        .get_one::<PathBuf>("queries")
-        .map(|p| load_queries(p))
-        .transpose()?;
+fn run_inner(
+    program: &str,
+    args: &super::cli::CheckArgs,
+    registry: &TemplateRegistry,
+) -> Result<i32, String> {
+    let path = &args.file;
+    let json = args.json;
+    let annotate = args.annotate;
+    let selector = RecordingSelector::parse("--recording", args.recording.clone())?;
+    let override_ext = args.queries.as_deref().map(load_queries).transpose()?;
 
-    let run = run_checks(path, &selector, override_ext.as_ref(), registry)?;
+    let run = run_checks(path, &selector, override_ext.as_ref(), registry, program)?;
 
     if run.checks_seen == 0 {
         eprintln!(
@@ -822,8 +832,15 @@ fn run_inner(args: &ArgMatches, registry: &TemplateRegistry) -> Result<i32, Stri
             eprintln!("nothing to annotate: no violation windows");
         } else {
             // With --json, stdout is the array and nothing else.
-            let line = annotate_events(path, run.format, run.per_recording_events.clone())
-                .map_err(|e| e.to_string())?;
+            let output = args.output.as_deref();
+            let line = annotate_events(
+                path,
+                output,
+                run.per_recording_events.clone(),
+                super::legacy::command_with_output,
+                program,
+            )
+            .map_err(|e| e.to_string())?;
             if json {
                 eprintln!("{line}");
             } else {
@@ -836,42 +853,41 @@ fn run_inner(args: &ArgMatches, registry: &TemplateRegistry) -> Result<i32, Stri
 }
 
 /// Write the violation windows into the recording as events, through the
-/// same code `recording annotate` uses for each container. Returns the
-/// report line; the caller decides which stream it goes to.
+/// writer `recording annotate` uses: into the dendro archive at `path`, or
+/// with `output` into a new `.dendro` there (a legacy `.rez` or parquet input
+/// needs one: it is converted there first, and without one the refusal
+/// `refusal` builds names the way to give it). `per_recording` is indexed
+/// as [`open_targets`] lists the recordings. Returns the report line; the
+/// caller decides which stream it goes to.
 pub(crate) fn annotate_events(
     path: &Path,
-    format: RezFormat,
+    output: Option<&Path>,
     per_recording: Vec<Vec<Event>>,
+    refusal: impl FnOnce(&Path) -> String,
+    program: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    if format == RezFormat::NotRez {
-        let events = per_recording.into_iter().flatten().collect();
-        let appended = super::events::append_to_parquet(path, events)?;
-        return Ok(if appended.counts.nothing_new() {
-            format!(
-                "Annotated {:?}: nothing new; {} check event(s) already present",
-                path, appended.counts.unchanged
-            )
-        } else {
-            format!(
-                "Annotated {:?}: {} ({} event(s) total)",
-                path,
-                appended.counts.describe(),
-                appended.events.events.len()
-            )
-        });
-    }
+    let edit = super::legacy::edit_target(path, output, refusal)?;
     let annotation = super::annotate::RezAnnotation {
+        program,
         ext_json: None,
         events: None,
         per_recording_events: Some(per_recording),
-        per_recording_replace: None,
+        per_recording_remove: None,
+        undo_kpis: false,
+        systeminfo: None,
         report: super::annotate::ReportSink::capture(),
     };
-    super::annotate::annotate_rez_any(path, format, &annotation)?;
-    Ok(annotation
+    super::annotate::annotate_archive_as(edit.path(), edit.shown(), &annotation)?;
+    let line = annotation
         .report
         .captured()
-        .unwrap_or_else(|| format!("Annotated {:?}", path)))
+        .unwrap_or_else(|| format!("Annotated {:?}", edit.shown()));
+    let note = edit.note();
+    edit.commit()?;
+    Ok(match note {
+        Some(note) => format!("{note}\n{line}"),
+        None => line,
+    })
 }
 
 #[cfg(test)]

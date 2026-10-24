@@ -11,6 +11,7 @@ use metriken_storage::BufferPool;
 /// by how many row groups fit alongside them. 64 MB is a conservative
 /// default — enough for a moderate recording without crowding the JS heap.
 const WASM_CACHE_SIZE_BYTES: usize = 64 * 1024 * 1024;
+use dashboard::keys::{KEY_DESCRIPTIONS, KEY_PER_SOURCE_METADATA, KEY_SYSTEMINFO};
 use dashboard::source_templates::TemplatePreference;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -23,8 +24,6 @@ fn preference(prefer_registry: bool) -> TemplatePreference {
         TemplatePreference::Archive
     }
 }
-
-mod report_save;
 
 /// The anchor capture's id — what an absent `?capture=` resolves to, never
 /// renamed. Mirrors the server registry's `BASELINE_ID`.
@@ -88,6 +87,7 @@ fn classify_sources(
     let mut metric_names: Vec<String> = reader.counter_names();
     metric_names.extend(reader.gauge_names());
     metric_names.extend(reader.histogram_names());
+    metric_names.extend(reader.gauge_histogram_names());
 
     let filename = reader.filename_or_default();
     let filename_stem = filename
@@ -243,7 +243,7 @@ pub struct Viewer {
     beside: Vec<dashboard::dashboard::Beside>,
     /// The labels of the archive recording this capture reads, when it is a
     /// comparison's baseline: a report is saved onto it
-    /// (`report_save::build_rez_report_from_rez`'s `anchor`).
+    /// (`report_save::build_report`'s `anchor`).
     anchor_labels: Option<std::collections::BTreeMap<String, String>>,
     /// For a combined capture, the archive its reader joins, which answers
     /// each recording's catalog without opening other recordings' tables
@@ -535,9 +535,9 @@ impl Viewer {
     pub fn metrics(&self, source: Option<String>) -> String {
         let resolved_source = source.clone().unwrap_or_else(|| self.reader.source());
         let meta = serde_json::json!({
-            "descriptions": self.file_metadata.get("descriptions")
+            "descriptions": self.file_metadata.get(KEY_DESCRIPTIONS)
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
-            "per_source_metadata": self.file_metadata.get("per_source_metadata")
+            "per_source_metadata": self.file_metadata.get(KEY_PER_SOURCE_METADATA)
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
         });
         let descriptions = dashboard::metric_catalog::resolve_descriptions(&meta, &resolved_source);
@@ -583,7 +583,7 @@ impl Viewer {
 
     fn own_systeminfo(&self) -> Option<String> {
         // Try multi-node first
-        if let Some(psm_str) = self.file_metadata.get("per_source_metadata")
+        if let Some(psm_str) = self.file_metadata.get(KEY_PER_SOURCE_METADATA)
             && let Ok(psm) =
                 serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
             && let Some(rez_group) = psm.get("rezolus").and_then(|v| v.as_object())
@@ -594,7 +594,7 @@ impl Viewer {
                     Some(o) => o,
                     None => continue,
                 };
-                let sysinfo_val = match obj.get("systeminfo") {
+                let sysinfo_val = match obj.get(KEY_SYSTEMINFO) {
                     Some(v) => v,
                     None => continue,
                 };
@@ -609,7 +609,7 @@ impl Viewer {
             return self.combined_systeminfo.clone();
         }
         // Fall back to flat systeminfo
-        self.file_metadata.get("systeminfo").cloned()
+        self.file_metadata.get(KEY_SYSTEMINFO).cloned()
     }
 
     /// Returns selection JSON from parquet file metadata, or null
@@ -870,6 +870,26 @@ impl Viewer {
 fn serialize_lean_section(mut value: serde_json::Value) -> Option<String> {
     strip_sections_from_section_body(&mut value);
     serde_json::to_string(&value).ok()
+}
+
+/// The largest recording, in bytes, the browser saves a report of. A report
+/// is built in memory: the upload, the archive converted from it and the
+/// report's bytes, about three times the recording, against wasm32's 4 GiB
+/// address space. Above it the save is refused ([`report_too_large`]).
+pub const MAX_REPORT_SOURCE_BYTES: usize = 1 << 30;
+
+/// The refusal for a Save as Report of a `size`-byte recording, when it is
+/// over [`MAX_REPORT_SOURCE_BYTES`].
+fn report_too_large(size: usize) -> Option<String> {
+    (size > MAX_REPORT_SOURCE_BYTES).then(|| {
+        format!(
+            "this recording is {:.1} GiB; the browser saves a report of at most 1 GiB, \
+             since it holds about three copies in memory. Save the report from `rezolus \
+             view` (the server viewer reads the file from disk), or convert the file with \
+             `rezolus recording upgrade` and shrink it with `rezolus recording filter` first",
+            size as f64 / (1u64 << 30) as f64
+        )
+    })
 }
 
 /// Registry wrapping up to two `Viewer` instances keyed by capture id
@@ -1372,11 +1392,13 @@ impl WasmCaptureRegistry {
     }
 
     /// Produce the bytes that the server's `/api/v1/save_with_selection`
-    /// would return. When only the baseline is attached, returns a
-    /// trimmed (or untrimmed, per `payload.trim_columns`) parquet.
-    /// When both slots are attached, returns a `*.parquet.ab.tar` with
-    /// each side trimmed independently. The JS caller wraps the bytes
-    /// in a Blob and triggers a download — no HTTP needed.
+    /// would return: a `.dendro` report of the loaded recordings
+    /// (`report_save::build_report`), converted in the browser from a `.rez`
+    /// (tar or v3) or parquet source. A v3 `.rez` upload carries its own WAL
+    /// table but not SQLite's `-wal` sidecar, so a copy taken from under a
+    /// running recorder can hold fewer rows than `rezolus view` reads from
+    /// the file. The JS caller
+    /// wraps the bytes in a Blob and triggers a download — no HTTP needed.
     pub fn save_with_selection(&self, payload_json: &str) -> Result<Vec<u8>, JsValue> {
         use std::collections::BTreeSet;
         let payload: report_save::ReportPayload = serde_json::from_str(payload_json)
@@ -1394,98 +1416,66 @@ impl WasmCaptureRegistry {
             serde_json::to_string(&serde_json::json!({ "events": &payload.events })).ok()
         };
 
-        // `.rez` source (single or A/B): trim the archive itself and embed the
-        // selection — the same output the server produces for a `.rez` source.
-        if let Some(rez_bytes) = &self.rez_source {
-            let keep: Option<BTreeSet<String>> = payload.trim_columns.then(|| {
-                let mut set: BTreeSet<String> = ::report_save::resolve_kept_columns(
-                    &payload,
-                    baseline.reader.as_ref(),
-                    ::report_save::Side::Baseline,
-                )
-                .into_iter()
-                .collect();
-                for (_, viewer) in &self.others {
-                    set.extend(::report_save::resolve_kept_columns(
-                        &payload,
-                        viewer.reader.as_ref(),
-                        ::report_save::Side::Experiment,
-                    ));
-                }
-                set
-            });
-            return ::report_save::build_rez_report_from_rez(
-                rez_bytes,
-                baseline.anchor_labels.as_ref(),
-                keep.as_ref(),
-                range,
-                payload_json,
-                events_json.as_deref(),
+        // The kept columns across every attached capture — the baseline as
+        // baseline, the rest as experiment — as the server unions them.
+        let keep: Option<BTreeSet<String>> = payload.trim_columns.then(|| {
+            let mut set: BTreeSet<String> = ::report_save::resolve_kept_columns(
+                &payload,
+                baseline.reader.as_ref(),
+                ::report_save::Side::Baseline,
             )
-            .map_err(|e| JsValue::from_str(&e));
+            .into_iter()
+            .collect();
+            for (_, viewer) in &self.others {
+                set.extend(::report_save::resolve_kept_columns(
+                    &payload,
+                    viewer.reader.as_ref(),
+                    ::report_save::Side::Experiment,
+                ));
+            }
+            set
+        });
+
+        let size = match &self.rez_source {
+            Some(archive) => archive.len(),
+            None => {
+                baseline.source_bytes.len() + self.experiment().map_or(0, |e| e.source_bytes.len())
+            }
+        };
+        if let Some(refusal) = report_too_large(size) {
+            return Err(JsValue::from_str(&refusal));
         }
 
-        match self.experiment() {
-            // Parquet compare: assemble a 2-recording `.rez` report (one
-            // recording per side), replacing the `.parquet.ab.tar`.
-            Some(experiment) => {
-                let resolve = |viewer: &Viewer, side| -> Option<BTreeSet<String>> {
-                    payload.trim_columns.then(|| {
-                        ::report_save::resolve_kept_columns(&payload, viewer.reader.as_ref(), side)
-                            .into_iter()
-                            .collect()
-                    })
-                };
-                let baseline_keep = resolve(baseline, ::report_save::Side::Baseline);
-                let experiment_keep = resolve(experiment, ::report_save::Side::Experiment);
-                let sides = [
-                    ::report_save::ParquetReportSide {
-                        bytes: &baseline.source_bytes,
-                        keep_metrics: baseline_keep.as_ref(),
-                    },
-                    ::report_save::ParquetReportSide {
-                        bytes: &experiment.source_bytes,
-                        keep_metrics: experiment_keep.as_ref(),
-                    },
-                ];
-                ::report_save::build_rez_report_from_parquets(
-                    &sides,
-                    payload.trim_columns,
-                    range,
-                    payload_json,
-                    events_json.as_deref(),
-                )
-                .map_err(|e| JsValue::from_str(&e))
+        let source = if let Some(archive) = &self.rez_source {
+            if metriken_storage::DendroCatalog::is_archive_bytes(archive) {
+                ::report_save::ReportSource::Dendro(archive)
+            } else if rez::rez::looks_like_v3(archive) {
+                ::report_save::ReportSource::RezV3(archive)
+            } else {
+                ::report_save::ReportSource::RezTar(archive)
             }
-            // A single parquet stays a parquet report — the tarball only ever
-            // existed for the compare case.
-            None => report_save::save_single_parquet(
-                baseline.source_bytes.clone(),
-                &payload,
-                payload_json,
-                baseline.reader.as_ref(),
-                payload.trim_columns,
-            )
-            .map_err(|e| JsValue::from_str(&e)),
-        }
+        } else {
+            let mut files: Vec<&[u8]> = vec![&baseline.source_bytes];
+            if let Some(experiment) = self.experiment() {
+                files.push(&experiment.source_bytes);
+            }
+            ::report_save::ReportSource::Parquet(files)
+        };
+        ::report_save::build_report(
+            source,
+            baseline.anchor_labels.as_ref(),
+            keep.as_ref(),
+            range,
+            payload_json,
+            events_json.as_deref(),
+        )
+        .map_err(|e| JsValue::from_str(&e))
     }
 
-    /// The download extension a Save-as-Report produces for the loaded dataset:
-    /// `.dendro` for a dendro source, `.rez` for a `.rez` source or a parquet
-    /// compare, `.parquet` for a single parquet. The JS adapter uses it to
-    /// name the download.
+    /// The download extension a Save-as-Report produces: `.dendro`, the one
+    /// container 6.x writes. The JS adapter uses it to name the download.
     pub fn report_extension(&self) -> String {
-        if self
-            .rez_source
-            .as_ref()
-            .is_some_and(|b| metriken_storage::DendroCatalog::is_archive_bytes(b))
-        {
-            ".dendro".to_string()
-        } else if self.rez_source.is_some() || !self.others.is_empty() {
-            ".rez".to_string()
-        } else {
-            ".parquet".to_string()
-        }
+        ".dendro".to_string()
     }
 
     /// The attached capture with wire id `capture`, or `None`.
@@ -1632,7 +1622,7 @@ fn validate_service_extensions_inline(
 /// Parses `per_source_metadata` and adds `nodes`, `node_versions`, and
 /// `service_instances` so the frontend doesn't have to duplicate this logic.
 fn enrich_with_multi_node_info(map: &mut serde_json::Map<String, serde_json::Value>) {
-    let psm = match map.get("per_source_metadata").and_then(|v| v.as_object()) {
+    let psm = match map.get(KEY_PER_SOURCE_METADATA).and_then(|v| v.as_object()) {
         Some(psm) => psm.clone(),
         None => return,
     };
@@ -1728,34 +1718,31 @@ mod tests {
         assert_eq!(value["groups"], serde_json::json!([]));
     }
 
-    /// Build a multi-recording `.rez` and hand back its bytes, the way a
-    /// browser receives one: a blob, with no file behind it.
-    fn rez_bytes(recordings: &[(&str, &str)]) -> Vec<u8> {
+    /// Build a multi-recording dendro archive and hand back its bytes, the
+    /// way a browser receives one: a blob, with no file behind it.
+    fn archive_bytes(recordings: &[(&str, &str)]) -> Vec<u8> {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("fleet.rez");
-        rez::rez::recorder_tests_support::multi_recording_v3_rez(&path, recordings);
+        let path = dir.path().join("fleet.dendro");
+        rez::fixtures::multi_recording(&path, recordings);
         std::fs::read(&path).unwrap()
     }
 
+    /// The committed `.rez` archive `name`, as bytes
+    /// (`rez::fixtures::committed_rez`).
+    fn committed_rez_bytes(name: &str) -> Vec<u8> {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::read(rez::fixtures::committed_rez(name, dir.path())).unwrap()
+    }
+
     /// A one-recording `.dendro`, as bytes, whose source is `source` and whose
-    /// source metadata also holds `extra`. Built as a `.rez` and converted,
-    /// which carries the recording's metadata into the dendro source's.
+    /// source metadata also holds `extra`.
     fn dendro_bytes(source: &str, extra: &[(&str, &str)]) -> Vec<u8> {
         let dir = tempfile::tempdir().unwrap();
-        let rez_path = dir.path().join("rec.rez");
-        rez::rez::recorder_tests_support::multi_recording_v3_rez(&rez_path, &[(source, "web-01")]);
-        {
-            let db = rez::rez_sqlite::RezDb::open(&rez_path).unwrap();
-            let recs = db.read_recordings().unwrap();
-            let mut md = recs[0].meta.metadata.clone();
-            for (k, v) in extra {
-                md.insert(k.to_string(), v.to_string());
-            }
-            db.update_recording_metadata(recs[0].id, &md).unwrap();
-        }
-        let dendro_path = dir.path().join("rec.dendro");
-        rez::to_dendro::convert_v3_to_dendro(&rez_path, &dendro_path).unwrap();
-        std::fs::read(&dendro_path).unwrap()
+        let path = dir.path().join("rec.dendro");
+        let mut sources = rez::fixtures::multi_recording_sources(&[(source, "web-01")]);
+        sources[0].metadata.extend(rez::fixtures::map(extra));
+        rez::fixtures::write_dendro(&path, &sources, None, rez::fixtures::Finish::Finalized);
+        std::fs::read(&path).unwrap()
     }
 
     fn titled_template(service: &str, title: &str) -> serde_json::Value {
@@ -1910,26 +1897,19 @@ mod tests {
     #[test]
     fn a_rez_with_manifest_selection_and_events_surfaces_them() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("fleet.rez");
-        rez::rez::recorder_tests_support::multi_recording_v3_rez(
-            &path,
-            &[("redis", "web-01"), ("valkey", "web-01")],
-        );
+        let path = rez::fixtures::committed_rez("v3-multi.rez", dir.path());
         // Embed into the anchor recording's manifest (id order is stable).
-        {
-            let db = rez::rez_sqlite::RezDb::open(&path).unwrap();
-            let recs = db.read_recordings().unwrap();
-            let mut md = recs[0].meta.metadata.clone();
-            md.insert(
-                "selection".to_string(),
-                r#"{"entries":[{"query":"cpu_usage"}]}"#.to_string(),
-            );
-            md.insert(
-                "events".to_string(),
-                r#"{"events":[{"timestamp":1000000000,"description":"rollout"}]}"#.to_string(),
-            );
-            db.update_recording_metadata(recs[0].id, &md).unwrap();
-        }
+        rez::fixtures::add_rez_metadata(
+            &path,
+            0,
+            &[
+                ("selection", r#"{"entries":[{"query":"cpu_usage"}]}"#),
+                (
+                    "events",
+                    r#"{"events":[{"timestamp":1000000000,"description":"rollout"}]}"#,
+                ),
+            ],
+        );
         let bytes = std::fs::read(&path).unwrap();
 
         let mut reg = WasmCaptureRegistry::new();
@@ -1947,19 +1927,19 @@ mod tests {
         );
     }
 
-    /// A `.rez` of two recordings attached as a comparison fills both slots
-    /// — the same mapping `rezolus view --baseline .. --experiment ..` makes
-    /// for the same file. Loading one arm into one slot would show an A/B
-    /// archive as a single capture with nothing on screen saying half of it
-    /// is missing.
+    /// An archive of two recordings attached as a comparison fills both
+    /// slots — the same mapping `rezolus view --baseline .. --experiment ..`
+    /// makes for the same file. Loading one arm into one slot would show an
+    /// A/B archive as a single capture with nothing on screen saying half of
+    /// it is missing.
     #[test]
-    fn a_two_recording_rez_fills_both_capture_slots() {
+    fn a_two_recording_archive_fills_both_capture_slots() {
         let mut reg = WasmCaptureRegistry::new();
         reg.set_compare_requested(true);
         reg.attach(
             "baseline",
-            &rez_bytes(&[("redis", "web-01"), ("valkey", "web-01")]),
-            "fleet.rez",
+            &archive_bytes(&[("redis", "web-01"), ("valkey", "web-01")]),
+            "fleet.dendro",
         )
         .unwrap();
 
@@ -1990,6 +1970,30 @@ mod tests {
         assert_eq!(reg.notices(), "[]");
     }
 
+    /// A two-recording `.rez` fills both slots too, each recording named by
+    /// the label that tells them apart.
+    #[test]
+    fn a_two_recording_rez_fills_both_capture_slots() {
+        let mut reg = WasmCaptureRegistry::new();
+        reg.set_compare_requested(true);
+        reg.attach(
+            "baseline",
+            &committed_rez_bytes("v3-multi.rez"),
+            "fleet.rez",
+        )
+        .unwrap();
+        assert!(reg.has("baseline") && reg.has("experiment"));
+        assert_eq!(
+            reg.slot("baseline").unwrap().alias.as_deref(),
+            Some("web-01")
+        );
+        assert_eq!(
+            reg.slot("experiment").unwrap().alias.as_deref(),
+            Some("web-02")
+        );
+        assert_eq!(reg.notices(), "[]");
+    }
+
     /// An archive of two hosts of one run, from either entry point, is one
     /// combined capture: the built-in sections once per host, the second
     /// host's routes keyed `@h2`, each section's queries restricted to its
@@ -1998,7 +2002,7 @@ mod tests {
     fn a_one_run_archive_is_one_combined_capture() {
         use rez::fixtures::{Recording, one_run};
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("run.rez");
+        let path = dir.path().join("run.dendro");
         let host = |labels, cpus| Recording {
             labels,
             metadata: &[("source", "rezolus")],
@@ -2015,9 +2019,9 @@ mod tests {
         );
         let bytes = std::fs::read(&path).unwrap();
 
-        let single = Viewer::new(&bytes, "run.rez").expect("one run opens as one capture");
+        let single = Viewer::new(&bytes, "run.dendro").expect("one run opens as one capture");
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &bytes, "run.rez").unwrap();
+        reg.attach("baseline", &bytes, "run.dendro").unwrap();
         assert!(!reg.has("experiment"));
         // The archive answers each recording's catalog questions.
         assert!(single.catalog.is_some());
@@ -2044,7 +2048,7 @@ mod tests {
 
         let mut compare = WasmCaptureRegistry::new();
         compare.set_compare_requested(true);
-        compare.attach("baseline", &bytes, "run.rez").unwrap();
+        compare.attach("baseline", &bytes, "run.dendro").unwrap();
         assert!(compare.has("experiment"));
     }
 
@@ -2079,12 +2083,12 @@ mod tests {
         reg.set_compare_requested(true);
         reg.attach(
             "baseline",
-            &rez_bytes(&[
+            &archive_bytes(&[
                 ("redis", "web-01"),
                 ("valkey", "web-01"),
                 ("envoy", "web-01"),
             ]),
-            "fleet.rez",
+            "fleet.dendro",
         )
         .unwrap();
         let captures: Vec<serde_json::Value> = serde_json::from_str(&reg.captures()).unwrap();
@@ -2124,41 +2128,13 @@ mod tests {
     /// early.
     #[test]
     fn an_unfinalized_archive_says_it_is_unfinalized() {
-        use rez::rez::recorder_tests_support::{counter, snap};
-        use rez::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("live.rez");
-        let seed = ManifestSeed {
-            labels: [("source".to_string(), "rezolus".to_string())]
-                .into_iter()
-                .collect(),
-            metadata: Default::default(),
-            clock_anchor_wall_ns: 1_000_000_000,
-        };
-        let (archive, writer) = RezArchive::single(&path, seed).unwrap();
-        let mut rec = StreamRecorderV3::new(writer);
-        rec.ingest(
-            &snap(
-                1_000_000_000,
-                vec![counter("cpu_cycles", "cpu_usage", 1, None)],
-            ),
-            1_000_000_000,
-            0,
-        )
-        .unwrap();
-        rec.sync().unwrap();
-        // A consistent single file, the way `hindsight` takes one — the copy a
-        // browser can actually be handed. Still not finalized.
-        let snapshot = dir.path().join("snapshot.rez");
-        rez::rez_sqlite::RezDb::open(&path)
-            .unwrap()
-            .vacuum_into(&snapshot)
-            .unwrap();
+        // `v3-live.rez`: a consistent single file taken while its writer
+        // held it (`VACUUM INTO`, the way `hindsight` took one), the copy a
+        // browser can actually be handed. Not finalized.
+        let snapshot_bytes = committed_rez_bytes("v3-live.rez");
 
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &std::fs::read(&snapshot).unwrap(), "live.rez")
-            .unwrap();
+        reg.attach("baseline", &snapshot_bytes, "live.rez").unwrap();
         assert!(reg.has("baseline"));
 
         let notices: Vec<String> = serde_json::from_str(&reg.notices()).unwrap();
@@ -2173,9 +2149,6 @@ mod tests {
             "the notice must name what a single file cannot carry: {}",
             notices[0]
         );
-
-        drop(rec);
-        drop(archive);
     }
 
     /// And a finalized one says nothing — a notice on every ordinary recording
@@ -2183,8 +2156,12 @@ mod tests {
     #[test]
     fn a_finalized_archive_raises_no_notice() {
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &rez_bytes(&[("redis", "web-01")]), "one.rez")
-            .unwrap();
+        reg.attach(
+            "baseline",
+            &archive_bytes(&[("redis", "web-01")]),
+            "one.dendro",
+        )
+        .unwrap();
         assert_eq!(reg.notices(), "[]");
     }
 
@@ -2262,7 +2239,7 @@ mod tests {
     #[test]
     fn a_single_recording_rez_is_one_capture() {
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &rez_bytes(&[("redis", "web-01")]), "one.rez")
+        reg.attach("baseline", &committed_rez_bytes("v3.rez"), "one.rez")
             .unwrap();
         assert!(reg.has("baseline"));
         assert!(!reg.has("experiment"));
@@ -2285,28 +2262,25 @@ mod tests {
     /// an empty download.
     #[test]
     fn a_capture_from_an_archive_reports_that_it_cannot_be_saved() {
-        let rez = Viewer::new(&rez_bytes(&[("redis", "web-01")]), "one.rez").unwrap();
-        assert!(!rez.can_save());
+        let archive = Viewer::new(&archive_bytes(&[("redis", "web-01")]), "one.dendro").unwrap();
+        assert!(!archive.can_save());
         let parquet = Viewer::new(&parquet_bytes(), "capture.parquet").unwrap();
         assert!(parquet.can_save());
     }
 
-    /// One parquet table's bytes — a real parquet, produced by the same
-    /// writer that fills a `.rez` segment.
+    /// One parquet table's bytes — a real parquet: the one sealed segment
+    /// of a dendro archive's only stream.
     fn parquet_bytes() -> Vec<u8> {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("one.rez");
-        rez::rez::recorder_tests_support::multi_recording_v3_rez(&path, &[("redis", "web-01")]);
-        let readers =
-            rez::reader::RezReader::open_recordings(&path, BufferPool::new(8 * 1024 * 1024))
-                .unwrap();
-        // Pull the single table's segment bytes back out of the archive.
-        let db = rez::rez_sqlite::RezDb::open(&path).unwrap();
-        let rec = db.read_recordings().unwrap().remove(0);
-        let sampler = db.all_samplers(rec.id).unwrap().remove(0);
-        drop(readers);
-        let metas = db.read_segment_meta(rec.id, &sampler).unwrap();
-        db.read_segment_bytes(rec.id, &sampler, metas[0].0)
+        let path = dir.path().join("one.dendro");
+        rez::fixtures::multi_recording(&path, &[("redis", "web-01")]);
+        use metriken_storage::Catalog;
+        let catalog = metriken_storage::DendroCatalog::open(&path).unwrap();
+        let source = catalog.sources().unwrap().remove(0).id;
+        let stream = catalog.tables(source).unwrap().remove(0);
+        let metas = catalog.segment_meta(source, &stream).unwrap();
+        catalog
+            .segment_bytes(source, &stream, metas[0].0)
             .unwrap()
             .expect("the fixture seals one segment")
     }
@@ -2319,43 +2293,80 @@ mod tests {
         assert_eq!(json, "[]");
     }
 
-    /// A `.rez` source saves a `.rez` report: the archive is trimmed/copied in
-    /// the browser (no filesystem) and the selection is embedded. This is the
-    /// browser half of the server's `.rez` Save-as-Report.
+    /// Save as Report refuses a recording over 1 GiB, naming the server
+    /// viewer and the tools that make it smaller, and takes one at the limit.
     #[test]
-    fn a_rez_source_saves_a_rez_report() {
-        let mut reg = WasmCaptureRegistry::new();
-        reg.attach(
-            "baseline",
-            &rez_bytes(&[("redis", "web-01"), ("valkey", "web-01")]),
-            "fleet.rez",
-        )
-        .unwrap();
-        assert_eq!(reg.report_extension(), ".rez");
-
-        // trim_columns=false keeps every column, so the report is a full copy
-        // with the selection embedded — no query engine needed for the test.
-        let out = reg
-            .save_with_selection(r#"{"entries":[],"trim_columns":false}"#)
-            .unwrap();
-        let db = rez::rez_sqlite::RezDb::open_bytes(out).unwrap();
-        let recs = db.read_recordings().unwrap();
-        assert_eq!(recs.len(), 2, "the report keeps both recordings");
-        assert!(
-            recs[0].meta.metadata.contains_key("selection"),
-            "the selection is embedded on the anchor"
-        );
+    fn a_report_of_a_recording_over_a_gib_is_refused() {
+        assert!(report_too_large(MAX_REPORT_SOURCE_BYTES).is_none());
+        let refusal = report_too_large(MAX_REPORT_SOURCE_BYTES + 1).unwrap();
+        assert!(refusal.contains("rezolus view"), "{refusal}");
+        assert!(refusal.contains("rezolus recording upgrade"), "{refusal}");
     }
 
-    /// A single parquet still reports `.parquet`; only a `.rez` source or a
-    /// compare produces `.rez`.
+    /// Every report is a `.dendro`. A dendro source, a tar or v3 `.rez` and
+    /// a parquet save one in the browser (no filesystem), the selection
+    /// embedded on the anchor.
     #[test]
-    fn report_extension_tracks_the_source_kind() {
-        // A 1-recording `.rez` is still a `.rez` source.
-        let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &rez_bytes(&[("redis", "web-01")]), "one.rez")
+    fn every_source_saves_a_dendro_report() {
+        use metriken_query::MetricsSource;
+        let body = r#"{"entries":[],"trim_columns":false}"#;
+        let saved = |bytes: &[u8], name: &str| {
+            let mut reg = WasmCaptureRegistry::new();
+            reg.attach("baseline", bytes, name).unwrap();
+            assert_eq!(reg.report_extension(), ".dendro");
+            // trim_columns=false keeps every column, so the report is a full
+            // copy with the selection embedded — no query engine needed.
+            let out = reg.save_with_selection(body).unwrap();
+            assert!(metriken_storage::DendroCatalog::is_archive_bytes(&out));
+            rez::reader::RezReader::open_recordings_from_bytes(out, BufferPool::new(8 << 20))
+                .unwrap()
+        };
+        let report = saved(
+            &archive_bytes(&[("redis", "web-01"), ("valkey", "web-01")]),
+            "fleet.dendro",
+        );
+        assert_eq!(report.len(), 2, "the report keeps both recordings");
+        assert!(
+            report[0].1.file_metadata().contains_key("selection"),
+            "the selection is embedded on the anchor"
+        );
+        assert_eq!(saved(&committed_rez_bytes("v2.rez"), "old.rez").len(), 1);
+        assert_eq!(
+            saved(&committed_rez_bytes("v3-multi.rez"), "multi.rez").len(),
+            2
+        );
+        assert_eq!(saved(&parquet_bytes(), "capture.parquet").len(), 1);
+
+        // A v3 report holds every row the `.rez` reads: segments and WAL
+        // rows (`v3-live.rez`), and WAL rows alone (`v3-wal-only.rez`).
+        // Counted as the points of a 1 s rate over the whole recording,
+        // whose rows are a second apart.
+        let rows = |readers: &rez::reader::LabeledRecordings| -> usize {
+            readers
+                .iter()
+                .map(|(_, r)| {
+                    let (start, end) = r.time_range().unwrap();
+                    let result = r.query_range("irate(ops[5s])", start, end, 1.0).unwrap();
+                    serde_json::to_value(result).unwrap()["result"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|s| s["values"].as_array().unwrap().len())
+                        .sum::<usize>()
+                })
+                .sum()
+        };
+        for name in ["v3-live.rez", "v3-wal-only.rez"] {
+            let bytes = committed_rez_bytes(name);
+            let source = rez::reader::RezReader::open_recordings_from_bytes(
+                bytes.clone(),
+                BufferPool::new(8 << 20),
+            )
             .unwrap();
-        assert_eq!(reg.report_extension(), ".rez");
+            let want = rows(&source);
+            assert!(want > 0, "{name}: the fixture holds rows");
+            assert_eq!(rows(&saved(&bytes, name)), want, "{name}");
+        }
     }
 
     /// The Rezolus template with `edit` applied to its CPU section.

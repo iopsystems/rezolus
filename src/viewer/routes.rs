@@ -891,6 +891,12 @@ mod query_slot_tests {
         fn histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
             MetricsSource::histogram_labels(&self.inner, name)
         }
+        fn gauge_histogram_names(&self) -> Vec<String> {
+            MetricsSource::gauge_histogram_names(&self.inner)
+        }
+        fn gauge_histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
+            MetricsSource::gauge_histogram_labels(&self.inner, name)
+        }
         fn time_range_ns(&self) -> Option<(u64, u64)> {
             MetricsSource::time_range_ns(&self.inner)
         }

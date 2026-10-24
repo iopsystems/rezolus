@@ -6,7 +6,7 @@ use tracing::trace;
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{MapCore, MapFlags, OpenObject, PrintLevel, RingBuffer, RingBufferBuilder};
 use metriken::group::SlotIdentity;
-use metriken::{CounterGroup, LazyCounter, RwLockHistogram};
+use metriken::{CounterGroup, LazyCounter, RwLockCounterHistogram};
 
 use crate::agent::timing::AcquisitionGroup;
 use perf_event::ReadFormat;
@@ -499,7 +499,7 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     )>,
     histograms: Vec<(
         &'static str,
-        &'static RwLockHistogram,
+        &'static RwLockCounterHistogram,
         &'static AcquisitionGroup,
     )>,
     maps: Vec<(&'static str, Vec<u64>)>,
@@ -1382,7 +1382,7 @@ where
     pub fn histogram(
         mut self,
         name: &'static str,
-        histogram: &'static RwLockHistogram,
+        histogram: &'static RwLockCounterHistogram,
         group: &'static AcquisitionGroup,
     ) -> Self {
         self.histograms.push((name, histogram, group));

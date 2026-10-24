@@ -22,8 +22,8 @@ static LATENCY_ACQ_REG: &'static AcquisitionGroup = &LATENCY_ACQ;
     description = "Distribution of latency for establishing outbound connections (active open)",
     metadata = { unit = "nanoseconds", acq_group = "tcp_connect_latency_latency" }
 )]
-pub static TCP_CONNECT_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static TCP_CONNECT_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "rezolus_bpf_run_count",

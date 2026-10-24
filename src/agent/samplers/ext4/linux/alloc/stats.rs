@@ -64,8 +64,8 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
     description = "Distribution of the length of each extent the block allocator returned, in filesystem blocks. Allocations shorter than the request are a file being split across extents",
     metadata = { unit = "blocks", acq_group = "ext4_alloc_allocation_sizes" }
 )]
-pub static EXT4_ALLOCATION_SIZE: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, HISTOGRAM_MAX);
+pub static EXT4_ALLOCATION_SIZE: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, HISTOGRAM_MAX);
 
 #[metric(
     name = "ext4_allocations",

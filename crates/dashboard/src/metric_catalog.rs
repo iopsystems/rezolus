@@ -91,6 +91,13 @@ pub fn assemble_catalog(
         let labels = data.histogram_labels(&name);
         out.push(info_for(&name, "histogram", labels, descriptions));
     }
+    // A gauge histogram (a distribution read as it is at each sample, never
+    // differenced) is listed as a histogram: the viewer charts both through
+    // the histogram functions, which take either kind.
+    for name in data.gauge_histogram_names() {
+        let labels = data.gauge_histogram_labels(&name);
+        out.push(info_for(&name, "histogram", labels, descriptions));
+    }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
 }
@@ -236,5 +243,28 @@ mod tests {
     fn description_is_none_for_empty_map() {
         let info = info_for("m", "gauge", vec![], &desc(&[]));
         assert!(info.description.is_none());
+    }
+
+    /// A gauge histogram is in the catalog, as a histogram, so the metric
+    /// browser charts it through the histogram functions.
+    #[test]
+    fn a_gauge_histogram_is_listed_as_a_histogram() {
+        let store = metriken_query::MemoryStore::builder().build();
+        store
+            .insert_gauge_histogram_series(
+                "depth",
+                std::collections::BTreeMap::<String, String>::new(),
+                ::histogram::Config::new(2, 8).unwrap(),
+                vec![1_000_000_000],
+                vec![metriken_storage::HistogramSnapshot {
+                    index: vec![1],
+                    count: vec![1],
+                }],
+            )
+            .unwrap();
+        let catalog = assemble_catalog(&store, &serde_json::Map::new(), None);
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].name, "depth");
+        assert_eq!(catalog[0].metric_type, "histogram");
     }
 }

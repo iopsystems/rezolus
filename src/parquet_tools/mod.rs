@@ -1,1087 +1,102 @@
 pub(crate) mod annotate;
 pub(crate) mod check;
+mod cli;
 pub(crate) mod combine;
 mod convert;
 pub(crate) mod events;
 mod filter;
+pub(crate) mod legacy;
 pub(crate) mod metadata;
+pub(crate) mod select;
 
 use arrow::datatypes::SchemaRef;
-use clap::{value_parser, ArgMatches, Command};
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
-use parquet::file::metadata::KeyValue;
 use parquet::file::metadata::ParquetMetaData;
 use std::path::Path;
-use std::path::PathBuf;
 use std::sync::Arc;
 
-pub fn command() -> Command {
-    // `recording` is the name; `parquet` is kept as an alias because it is
-    // what every existing script types. The rename is not cosmetic — these
-    // subcommands stopped being parquet-specific once `.rez` arrived, and
-    // `rezolus recording upgrade old.rez` describes neither its input nor its
-    // output. A `.rez` holds parquet segments, but the file you hand these
-    // commands is a recording.
-    Command::new("recording")
-        .alias("parquet")
-        .about("Inspect and transform Rezolus recordings (.dendro and .rez archives, .parquet files)")
-        .long_about(
-            "Offline operations on recordings: the .dendro archives `rezolus record` and\n\
-             `rezolus hindsight` write, and the .rez archives and .parquet files that 5.x\n\
-             releases wrote.\n\n\
-             SUBCOMMANDS:\n    \
-             metadata   Inspect a file's file-level/column metadata, schema, and geometry\n    \
-             annotate   Embed service-extension KPIs, events, or source/node tags into a file\n    \
-             check      Evaluate the KPI checks a recording carries and report pass/fail verdicts\n    \
-             combine    Merge multiple files (multi-node / multi-instance), assemble an A/B .dendro or .rez, or build a legacy A/B tarball\n    \
-             convert    Turn a raw msgpack recording (from a 5.x `record -o out.raw`) into parquet\n    \
-             filter     Shrink a recording: parquet columns its KPIs do not need, or .dendro/.rez samplers and metrics\n    \
-             upgrade    Convert a v1/v2 (tar) `.rez` archive to the v3 (SQLite) container\n\n\
-             Run `rezolus recording <subcommand> --help` for per-subcommand examples.\n\n\
-             `rezolus parquet ...` still works and does the same thing.",
-        )
-        .subcommand_required(true)
-        .subcommand(
-            Command::new("annotate")
-                .about("Add service extension KPIs, events or source/node tags to a recording (.parquet or .rez)")
-                .long_about(
-                    "Rewrite a parquet recording in place, adding metadata the viewer reads.\n\
-                     Use it to attach service-extension KPI dashboards, tag the file's\n\
-                     source/node identity, embed a systeminfo blob, or record timeline events.\n\n\
-                     By default KPIs come from the built-in template matching the file's source;\n\
-                     override with --queries <file.json>. --undo strips a prior annotation.\n\n\
-                     A .rez archive is also accepted: --queries embeds a ServiceExtension (KPIs)\n\
-                     and the event flags (--event/--add-events/--clear-events) embed timeline\n\
-                     events, both into each recording's manifest metadata. Since a .rez is\n\
-                     source=rezolus with no built-in template, at least one of --queries or the\n\
-                     event flags is required. Either container works, and what is left behind is\n\
-                     always v3 (SQLite): annotating is a rewrite, so a v1/v2 tar archive is\n\
-                     upgraded on the way through and says so.\n\n\
-                     EXAMPLES:\n    \
-                     # Attach KPIs from the built-in template for this file's source\n    \
-                     rezolus recording annotate rezolus.parquet\n\n    \
-                     # Attach KPIs from a custom service-extension JSON file\n    \
-                     rezolus recording annotate rezolus.parquet --queries ext.json\n\n    \
-                     # Attach KPIs and also drop columns the KPIs don't need\n    \
-                     rezolus recording annotate rezolus.parquet --queries ext.json --filter\n\n    \
-                     # Set the source name on a file that has none\n    \
-                     rezolus recording annotate service.parquet --source vllm\n\n    \
-                     # Add a single timeline event\n    \
-                     rezolus recording annotate rezolus.parquet --event 'time=2026-05-12T15:23Z,kind=restart,description=\"deploy\"'\n\n    \
-                     # Remove a previously added annotation\n    \
-                     rezolus recording annotate rezolus.parquet --undo\n\n    \
-                     # Embed KPIs into each recording of a .rez archive\n    \
-                     rezolus recording annotate out.rez --queries kpis.json\n\n    \
-                     # Add a timeline event to each recording of a .rez archive\n    \
-                     rezolus recording annotate out.rez --event 'time=2026-05-12T15:23Z,kind=deploy,description=\"rollout\"'",
-                )
-                .arg(
-                    clap::Arg::new("FILE")
-                        .help("Parquet file to annotate")
-                        .value_parser(value_parser!(PathBuf))
-                        .required(true)
-                        .index(1),
-                )
-                .arg(
-                    clap::Arg::new("queries")
-                        .long("queries")
-                        .value_name("PATH")
-                        .help("Custom service extension JSON file (overrides built-in template)")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Set),
-                )
-                .arg(
-                    clap::Arg::new("undo")
-                        .long("undo")
-                        .help("Remove service extension annotation from the parquet file")
-                        .action(clap::ArgAction::SetTrue)
-                        .conflicts_with("queries"),
-                )
-                .arg(
-                    clap::Arg::new("filter")
-                        .long("filter")
-                        .help("Also filter columns to only those needed by the service extension KPIs")
-                        .action(clap::ArgAction::SetTrue)
-                        .conflicts_with("undo"),
-                )
-                .arg(
-                    clap::Arg::new("templates")
-                        .long("templates")
-                        .value_name("DIR")
-                        .help("Directory containing service extension template JSON files")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Set),
-                )
-                .arg(
-                    clap::Arg::new("node")
-                        .long("node")
-                        .value_name("NAME")
-                        .help("Set the node attribute on this parquet file")
-                        .value_parser(value_parser!(String))
-                        .action(clap::ArgAction::Set),
-                )
-                .arg(
-                    clap::Arg::new("source")
-                        .long("source")
-                        .value_name("NAME")
-                        .help("Set the source attribute (use with --overwrite to replace an existing one)")
-                        .value_parser(value_parser!(String))
-                        .action(clap::ArgAction::Set)
-                        .conflicts_with("undo"),
-                )
-                .arg(
-                    clap::Arg::new("overwrite")
-                        .long("overwrite")
-                        .help("Allow --source to replace an existing source value")
-                        .action(clap::ArgAction::SetTrue)
-                        .requires("source"),
-                )
-                .arg(
-                    clap::Arg::new("systeminfo")
-                        .long("systeminfo")
-                        .value_name("PATH")
-                        .help("Embed systeminfo JSON from PATH (or '-' for stdin) into the parquet footer")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Set)
-                        .conflicts_with("undo"),
-                )
-                .arg(
-                    clap::Arg::new("add-events")
-                        .long("add-events")
-                        .value_name("PATH")
-                        .help("Add one-off events from a JSON/JSONL file (or '-' for stdin). Repeatable.")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Append)
-                        .conflicts_with("undo"),
-                )
-                .arg(
-                    clap::Arg::new("event")
-                        .long("event")
-                        .value_name("KV")
-                        .help("Add a single event inline, e.g. 'time=2026-05-12T15:23Z,kind=restart,description=\"...\"'. \
-                               Add duration=30s (or duration_ns=N) for a range that the viewer shades from time to \
-                               time+duration. Repeatable.")
-                        .value_parser(value_parser!(String))
-                        .action(clap::ArgAction::Append)
-                        .conflicts_with("undo"),
-                )
-                .arg(
-                    clap::Arg::new("clear-events")
-                        .long("clear-events")
-                        .help("Remove existing events before applying --add-events / --event")
-                        .action(clap::ArgAction::SetTrue)
-                        .conflicts_with("undo"),
-                ),
-        )
-        .subcommand(
-            Command::new("check")
-                .about("Evaluate the checks a recording's KPIs carry and report a verdict per check")
-                .long_about(
-                    "Run every KPI check over a recording and print one line per check\n\
-                     (PASS / WARN / FAIL / INDETERMINATE / ERROR), then a summary line.\n\n\
-                     THE FILE: checks live on KPIs in a service-extension JSON file, the same\n\
-                     file `recording annotate --queries` embeds for the viewer's KPI dashboard:\n\n    \
-                     {\n      \
-                       \"service_name\": \"myservice\",\n      \
-                       \"kpis\": [\n        \
-                         {\"role\": \"latency\", \"title\": \"p99 request latency\",\n         \
-                          \"query\": \"request_latency_seconds\", \"type\": \"histogram\",\n         \
-                          \"check\": {\"above\": 0.25, \"quantile\": 0.99, \"for\": \"10s\"}},\n        \
-                         {\"role\": \"throughput\", \"title\": \"Request rate\",\n         \
-                          \"query\": \"sum(irate(http_requests_total[10s]))\", \"type\": \"delta_counter\",\n         \
-                          \"check\": {\"below\": 100, \"severity\": \"warn\"}}\n      \
-                       ]\n    \
-                     }\n\n\
-                     `service_name` (required) names the service; `aliases` (a list) and\n\
-                     `service_metadata` (a map) are optional. Each KPI needs `role` (any word;\n\
-                     it groups charts on the dashboard), `title` (keep it unique in the file:\n\
-                     it names the check in output and events), `query` (PromQL) and `type`:\n\
-                     `gauge`, `histogram`, or a counter kind (`delta_counter`, `counter`).\n\
-                     Any other `type` is charted as a counter and evaluated as written.\n\
-                     Optional: `description`, `unit_system`, `subtype`, `percentiles`,\n\
-                     `subgroup`, `subgroup_description`, `full_width`, `denominator`, `check`.\n\
-                     A KPI without `check` is a chart only and is skipped here.\n\n\
-                     THE CHECK: exactly one of `above` / `below` is the threshold, compared in\n\
-                     the query's own unit (seconds for the histogram above, requests per\n\
-                     second for the rate); the comparison is strict, so a value equal to the\n\
-                     threshold passes. `for` (default 0s) is the shortest run that counts,\n\
-                     written as 500ms, 10s, 1m30s, 2h, 1d, 1.5s, or a bare number of seconds.\n\
-                     `severity` is `fail` (default) or `warn`. A histogram KPI needs `quantile`\n\
-                     in (0, 1]: its query names the raw histogram and the check evaluates\n\
-                     histogram_quantile(<quantile>, <query>) itself, so leave\n\
-                     histogram_quantile out of the query. `quantile` on any other type is an\n\
-                     ERROR. Unknown keys inside `check` are rejected.\n\n\
-                     WHICH CHECKS RUN: the KPIs embedded in the recording (by\n\
-                     `recording annotate --queries`); else the built-in template whose\n\
-                     `service_name` or `aliases` match the recording's `source` metadata, the\n\
-                     same lookup the viewer makes. --templates <DIR> uses the template JSON\n\
-                     files in DIR instead of the built-in set for that fallback. --queries\n\
-                     <file> runs that file's checks instead of either, and writes nothing.\n\n\
-                     HOW A CHECK IS EVALUATED: the query runs over the whole recording through\n\
-                     the same engine as `rezolus mcp query`, on a grid of one point per step\n\
-                     (the recording's sampling interval, at most 1s), and must yield exactly\n\
-                     one series (aggregate with sum(...) or add label matchers if it yields\n\
-                     several). A query that matches nothing is an ERROR, not a pass. Each\n\
-                     point is classified: where a value carries an acquisition-window\n\
-                     uncertainty band (rate(), irate(), histogram quantiles) the band is\n\
-                     compared, so `above` fires only when the whole band is above the\n\
-                     threshold and `below` only when it is entirely below; a point whose band\n\
-                     straddles the threshold, or one interpolated across a span the recording\n\
-                     never observed, is INDETERMINATE. A run is consecutive points that do\n\
-                     not pass; a passing point, or a gap of more than 1.5 steps between\n\
-                     points (the engine emits no point where the recording has no data),\n\
-                     ends it. A run violates only if every point in it violates; one\n\
-                     indeterminate point makes the whole run indeterminate, so a long\n\
-                     violation with an intermittent straddle is one long INDETERMINATE window\n\
-                     rather than short violations that never reach `for`. The step is the grid\n\
-                     step or the series' own point spacing, whichever is coarser (a 10 s\n\
-                     sampler on a 1 s grid yields a point per 10 s, each spanning 10 s). A run's\n\
-                     span is (last point - first point + step); it is a window when\n\
-                     span >= for. A check with a violating window is FAIL (WARN for severity\n\
-                     warn) even if it also has indeterminate windows; with only indeterminate\n\
-                     windows it is INDETERMINATE; otherwise PASS.\n\n\
-                     EXIT STATUS: 2 if any check could not be evaluated (or the command itself\n\
-                     failed), else 1 if any check with severity `fail` failed, else 0. WARN and\n\
-                     INDETERMINATE never fail the run. No checks at all is 0, with a note on\n\
-                     stderr.\n\n\
-                     MULTI-RECORDING .rez: with no --recording every recording is checked and\n\
-                     each line is prefixed with its labels; --recording k=v (the selector\n\
-                     `rezolus mcp` uses) narrows to one.\n\n\
-                     --annotate writes each FAIL/WARN window into the recording as a range\n\
-                     event: kind=check, timestamp=window start, duration_ns=span (the event\n\
-                     ends one step after the last violating point), description=the KPI title,\n\
-                     details=the condition and, on a second line, the check as JSON. The event\n\
-                     id is a hash of the title, the evaluated query, the condition and the\n\
-                     window start: running again rewrites a window that grew and adds nothing\n\
-                     for one that did not, and a window that no longer fires keeps its old\n\
-                     event. On a .rez the events go into the recording they were evaluated\n\
-                     against (each recording its own when no --recording is given); on parquet\n\
-                     into the footer. A v1/v2 (tar) .rez is rewritten to v3 (SQLite) in place,\n\
-                     as `recording annotate` does; a dendro archive gets them in its sources'\n\
-                     metadata. With --json the annotation report goes to stderr so stdout stays\n\
-                     one JSON array.\n\n\
-                     --json prints an array with one object per check: `recording` (labels,\n\
-                     .rez only), `title`, `query` (as evaluated), `check`, `status`, `windows`\n\
-                     and `indeterminate` (each with `start` and `end` as RFC 3339, `start_ns`,\n\
-                     `duration_ns`, `points`), and `error` (ERROR only).\n\n\
-                     EXAMPLES:\n    \
-                     # Run the checks a recording already carries\n    \
-                     rezolus recording check run.rez\n\n    \
-                     # Run checks from a file instead (nothing is written to the recording)\n    \
-                     rezolus recording check run.parquet --queries kpis.json\n\n    \
-                     # CI: fail the job on a violated check, and store the verdicts as events\n    \
-                     rezolus recording check run.rez --annotate || exit 1\n\n    \
-                     # One recording of a multi-recording archive, machine-readable\n    \
-                     rezolus recording check fleet.rez --recording host=web-01 --json",
-                )
-                .arg(
-                    clap::Arg::new("FILE")
-                        .help("The recording to check (.parquet or .rez, told apart by content)")
-                        .value_parser(value_parser!(PathBuf))
-                        .required(true)
-                        .index(1),
-                )
-                .arg(
-                    clap::Arg::new("queries")
-                        .long("queries")
-                        .value_name("PATH")
-                        .help("Service-extension JSON whose KPI checks to run, instead of the recording's own")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Set),
-                )
-                .arg(
-                    clap::Arg::new("RECORDING")
-                        .long("recording")
-                        .value_name("KEY=VALUE")
-                        .help(
-                            "Which recording of a multi-recording .rez to check, as key=value (e.g. --recording source=redis)\n\
-                             Repeatable: the pairs are ANDed and must together name exactly one\n\
-                             recording. Without it every recording is checked. Not accepted for\n\
-                             a .parquet file.",
-                        )
-                        .action(clap::ArgAction::Append),
-                )
-                .arg(
-                    clap::Arg::new("annotate")
-                        .long("annotate")
-                        .help("Write each FAIL/WARN window into the recording as a kind=check range event")
-                        .action(clap::ArgAction::SetTrue),
-                )
-                .arg(
-                    clap::Arg::new("json")
-                        .long("json")
-                        .help("Print the verdicts as a JSON array instead of one line per check")
-                        .action(clap::ArgAction::SetTrue),
-                )
-                .arg(
-                    clap::Arg::new("templates")
-                        .long("templates")
-                        .value_name("DIR")
-                        .help("Directory of service-extension template JSON files to use instead of the built-in set, for a recording with no embedded KPIs (matched to the recording's source metadata)")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Set),
-                ),
-        )
-        .subcommand(
-            Command::new("combine")
-                .about("Combine recordings: multi-node/multi-instance parquet, a multi-recording .dendro or .rez, or an A/B tarball (legacy)")
-                .long_about(
-                    "Merge two or more recordings into a single file. Requires at least two\n\
-                     inputs (one archive with --ab, below) and an output path (-o).\n\n\
-                     Default (row-merge): joins the inputs on timestamp into one recording — use\n\
-                     it to stitch together multiple rezolus nodes and/or per-instance service\n\
-                     files so the viewer shows them together.\n\n\
-                     Archive output: give a `.rez` (or `.dendro`, below) output path and combine\n\
-                     assembles the inputs into one multi-recording archive, a recording per\n\
-                     input, which the viewer opens as one combined view. With `--ab\n\
-                     baseline=<input> experiment=<input>` each input's recordings are labelled\n\
-                     arm=baseline or arm=experiment and the viewer opens a baseline/experiment\n\
-                     comparison; an input recording that already carries the other arm is\n\
-                     refused, naming the input. With ONE archive input, `--ab baseline=0\n\
-                     experiment=1` labels its recordings by position (from 0, in the order\n\
-                     `rezolus mcp describe-recording` lists them): the way to compare the two\n\
-                     recordings of an archive combined before --ab existed, whose labels may be\n\
-                     identical.\n\
-                     `.rez` inputs keep each side's per-sampler cadence and real acquisition\n\
-                     windows (v1/v2 tar inputs are upgraded to v3 on the way in). `.parquet`\n\
-                     inputs are ingested too — each becomes one recording, split into a table\n\
-                     per sampler; a parquet has no acquisition windows, so those recordings are\n\
-                     WINDOWLESS and the viewer/query engine shows no rate uncertainty band for\n\
-                     them (the honest outcome — the windows were never recorded). Inputs must be\n\
-                     all `.rez` or all `.parquet`, not a mix.\n\n\
-                     .dendro output: give a `.dendro` output path and combine assembles `.dendro`\n\
-                     and `.rez` inputs, in any mix, into one dendro archive with a recording per\n\
-                     input. A `.dendro` input can only be combined into a `.dendro` output, and a\n\
-                     `.parquet` input cannot be: combine parquet into a `.rez` first, then\n\
-                     convert it with `recording upgrade --to dendro`.\n\n\
-                     --ab (tarball, legacy): packages exactly two parquet captures unmodified\n\
-                     into a combined-A/B tarball. The output should end in `.parquet.ab.tar`, and\n\
-                     you map each side with `baseline=<src> experiment=<src>` where <src> is a\n\
-                     file's embedded SOURCE NAME (not its filename) — set with `annotate\n\
-                     --source`, seen with `recording metadata --field source`. Superseded by a\n\
-                     `.rez` output (above), which needs no source mapping; kept for readers that\n\
-                     only speak the tarball.\n\n\
-                     EXAMPLES:\n    \
-                     # Row-merge a rezolus agent file with a service file\n    \
-                     rezolus recording combine rezolus.parquet service.parquet -o combined.parquet\n\n    \
-                     # Merge several rezolus nodes, pinning which one the viewer shows first\n    \
-                     rezolus recording combine node1.parquet node2.parquet -o cluster.parquet --pinned node1\n\n    \
-                     # A/B compare two rezolus .rez captures (PREFERRED)\n    \
-                     rezolus recording combine a.rez b.rez --ab baseline=a.rez experiment=b.rez -o ab.rez\n\n    \
-                     # A/B compare two .dendro captures\n    \
-                     rezolus recording combine a.dendro b.dendro --ab baseline=a.dendro experiment=b.dendro -o ab.dendro\n\n    \
-                     # Two hosts recorded separately in one run: one combined view\n    \
-                     rezolus recording combine web-01.dendro web-02.dendro -o run.dendro\n\n    \
-                     # Label the two recordings of an older archive as an A/B, by position\n    \
-                     rezolus recording combine old.rez --ab baseline=0 experiment=1 -o ab.rez\n\n    \
-                     # A/B compare two parquet captures into one .rez (windowless recordings)\n    \
-                     rezolus recording combine redis.parquet valkey.parquet --ab baseline=redis.parquet experiment=valkey.parquet -o ab.rez\n\n    \
-                     # A/B tarball (legacy) — a combined tarball rather than a .rez\n    \
-                     rezolus recording combine a.parquet b.parquet --ab baseline=redis experiment=valkey -o out.parquet.ab.tar",
-                )
-                .arg(
-                    clap::Arg::new("FILES")
-                        .help("Input recordings: .parquet files (rezolus agent and/or service files), or .dendro and .rez archives")
-                        .value_parser(value_parser!(PathBuf))
-                        .required(true)
-                        .num_args(1..)
-                        .index(1),
-                )
-                .arg(
-                    clap::Arg::new("output")
-                        .short('o')
-                        .long("output")
-                        .help("Output path; the extension picks the result: .parquet (row-merge), .rez or .dendro (multi-recording archive), .parquet.ab.tar (with --ab)")
-                        .value_parser(value_parser!(PathBuf))
-                        .required(true),
-                )
-                .arg(
-                    clap::Arg::new("bypass-time-check")
-                        .long("bypass-time-check")
-                        .help("Skip the timestamp alignment quality check")
-                        .action(clap::ArgAction::SetTrue),
-                )
-                .arg(
-                    clap::Arg::new("pinned")
-                        .long("pinned")
-                        .help("Default rezolus node to display in the viewer (node name or filename)")
-                        .value_parser(clap::value_parser!(String)),
-                )
-                .arg(
-                    clap::Arg::new("ab")
-                        .long("ab")
-                        .help(
-                            "Mark the two inputs as the two arms of an A/B comparison: \
-                             `--ab baseline=<input> experiment=<input>`. Into a .rez or \
-                             .dendro output, each value names one input (the path as \
-                             typed, or its file name), and every recording of that input \
-                             is labelled arm=baseline or arm=experiment, so the viewer \
-                             opens the archive as a comparison. An input recording that \
-                             already carries a different arm is refused; the same arm is \
-                             kept. Without --ab the archive opens as one combined view. \
-                             Into a `.parquet.ab.tar` output (legacy, parquet inputs \
-                             only), each value names one of the inputs' source names, and \
-                             the captures are stored unmodified next to an `ab.json` \
-                             manifest. Requires exactly two input files.",
-                        )
-                        .value_parser(value_parser!(String))
-                        .num_args(2)
-                        .action(clap::ArgAction::Append),
-                )
-                .arg(
-                    clap::Arg::new("category")
-                        .long("category")
-                        .value_name("NAME")
-                        .help(
-                            "Category template name to embed in the AB \
-                             tarball's manifest (e.g. `inference-library`). \
-                             The viewer auto-applies it on load when the \
-                             user did not pass `--category` themselves. \
-                             Only meaningful with `--ab`; not validated \
-                             against the template registry at combine time.",
-                        )
-                        .value_parser(value_parser!(String))
-                        .requires("ab"),
-                ),
-        )
-        .subcommand(
-            Command::new("metadata")
-                .about("Display file and column metadata for a recording (.parquet, or a .rez manifest)")
-                .long_about(
-                    "Print the metadata of a parquet recording: file-level key/values (source,\n\
-                     sampling interval, systeminfo, descriptions, …), the column schema with\n\
-                     each metric's type and labels, and table geometry (row/column counts and\n\
-                     row-group layout).\n\n\
-                     With no filter flag all sections are shown. Narrow with --file, --schema, or\n\
-                     --geometry; pull a single file-level value with --field <KEY>; add --json for\n\
-                     machine-readable output.\n\n\
-                     A .rez archive is also accepted: it describes the manifest instead (the\n\
-                     recordings, their labels, and each per-sampler table with its cadence);\n\
-                     --json emits the raw manifest.\n\n\
-                     EXAMPLES:\n    \
-                     # Everything about a recording\n    \
-                     rezolus recording metadata -i rezolus.parquet\n\n    \
-                     # Only file-level metadata, as JSON\n    \
-                     rezolus recording metadata -i rezolus.parquet --file --json\n\n    \
-                     # Just the value of one metadata key\n    \
-                     rezolus recording metadata -i rezolus.parquet --field source\n\n    \
-                     # Describe a .rez archive's manifest\n    \
-                     rezolus recording metadata -i out.rez",
-                )
-                .arg(
-                    clap::Arg::new("input")
-                        .short('i')
-                        .long("input")
-                        .help("Input parquet file")
-                        .value_parser(value_parser!(PathBuf))
-                        .required(true),
-                )
-                .arg(
-                    clap::Arg::new("schema")
-                        .long("schema")
-                        .help("Show only column-level metadata (schema)")
-                        .action(clap::ArgAction::SetTrue),
-                )
-                .arg(
-                    clap::Arg::new("file")
-                        .long("file")
-                        .help("Show only file-level metadata")
-                        .action(clap::ArgAction::SetTrue),
-                )
-                .arg(
-                    clap::Arg::new("geometry")
-                        .long("geometry")
-                        .help("Show only table geometry (shape and row group layout)")
-                        .action(clap::ArgAction::SetTrue),
-                )
-                .arg(
-                    clap::Arg::new("field")
-                        .long("field")
-                        .help("Print the value of a specific file-level metadata key")
-                        .value_name("KEY")
-                        .action(clap::ArgAction::Set),
-                )
-                .arg(
-                    clap::Arg::new("json")
-                        .long("json")
-                        .help("Output in JSON format (for programmatic use)")
-                        .action(clap::ArgAction::SetTrue),
-                ),
-        )
-        .subcommand(
-            Command::new("convert")
-                .about("Convert a raw msgpack recording into parquet")
-                .long_about(
-                    "Convert a recording made with a 5.x `rezolus record -o out.raw` (concatenated\n\
-                     msgpack snapshots, one per sampling tick) into a parquet file that the\n\
-                     viewer, the MCP tools and the rest of `rezolus recording` can read. 6.x\n\
-                     records .dendro only, so this is for raw recordings made before 6.0.\n\n\
-                     The input may be plain or zstd-compressed; which one it is is detected from\n\
-                     the file's contents, not its name. The output path defaults to the input\n\
-                     with a trailing .zst and then a trailing .raw stripped, and .parquet\n\
-                     appended: rezolus.raw.zst becomes rezolus.parquet, and a name with neither\n\
-                     suffix just gains one (capture.msgpack becomes capture.msgpack.parquet).\n\n\
-                     The sampling interval stamped into the file is inferred from the median gap\n\
-                     between snapshot timestamps unless --interval says otherwise. A recording\n\
-                     with fewer than two snapshots falls back to 1s, so pass --interval if such a\n\
-                     recording was made at another cadence. Inference warns on stderr when the\n\
-                     sampled gaps have no dominant cadence, or when they are closer together than\n\
-                     the whole milliseconds the stamped value can hold; the conversion still\n\
-                     succeeds in both cases.\n\n\
-                     A raw recording carries no systeminfo or metric descriptions: the recorder\n\
-                     fetches those over HTTP from the running rezolus agent while recording (its\n\
-                     /systeminfo and /metrics/descriptions endpoints) and they never enter the\n\
-                     snapshot stream. Without them the conversion still succeeds and every metric\n\
-                     still queries normally; what you lose is the viewer's hardware panel and the\n\
-                     help text beside each metric. Prefer stamping them here in one pass if you\n\
-                     saved them -- and if that agent is still running, the same two endpoints can\n\
-                     be curled now, at conversion time, to recover them. Afterwards, `rezolus recording annotate\n\
-                     <file> --systeminfo <path>` can still add the hardware summary, but there is\n\
-                     no annotate route for descriptions: those can only be supplied here, which\n\
-                     means reconverting the original raw input over the output (--force).\n\n\
-                     A .rez archive cannot be produced from a raw recording: it needs per-sampler\n\
-                     cadence and acquisition windows that a raw snapshot stream never carried.\n\n\
-                     EXAMPLES:\n    \
-                     # The producing side, with a 5.x binary, for reference\n    \
-                     rezolus record --url http://localhost:4241 -o rezolus.raw\n\n    \
-                     # Convert a compressed recording (writes rezolus.parquet)\n    \
-                     rezolus recording convert rezolus.raw.zst\n\n    \
-                     # Choose the output path\n    \
-                     rezolus recording convert rezolus.raw -o run7.parquet\n\n    \
-                     # A recording made at a non-default cadence\n    \
-                     rezolus recording convert rezolus.raw --interval 250ms\n\n    \
-                     # Save the two metadata blobs at record time, from the agent being recorded\n    \
-                     curl -s http://localhost:4241/systeminfo > sysinfo.json\n    \
-                     curl -s http://localhost:4241/metrics/descriptions > help.json\n\n    \
-                     # ...then stamp them into the conversion\n    \
-                     rezolus recording convert rezolus.raw --systeminfo sysinfo.json --descriptions help.json\n\n    \
-                     # Or pipe one of them straight in, with - for stdin\n    \
-                     curl -s http://localhost:4241/systeminfo | rezolus recording convert rezolus.raw --systeminfo -\n\n    \
-                     # Tag the recording the way `record --metadata` would\n    \
-                     rezolus recording convert rezolus.raw -m source=llm-perf -m run=boat-7\n\n    \
-                     # Replace an output left by an earlier attempt\n    \
-                     rezolus recording convert rezolus.raw --force\n\n    \
-                     # Descriptions were missed the first time -- reconvert over the old output\n    \
-                     rezolus recording convert rezolus.raw --descriptions help.json --force",
-                )
-                .arg(
-                    clap::Arg::new("FILE")
-                        .help("Raw recording to convert (plain or zstd-compressed). Must be a real file; stdin is not accepted here")
-                        .value_parser(value_parser!(PathBuf))
-                        .required(true)
-                        .index(1),
-                )
-                .arg(
-                    clap::Arg::new("output")
-                        .short('o')
-                        .long("output")
-                        .value_name("PATH")
-                        .help("Output parquet path (default: input with a trailing .zst then .raw stripped and .parquet appended). Refuses to overwrite an existing file unless --force")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Set),
-                )
-                .arg(
-                    // `--interval` must never gain a `-i` alias: `parquet
-                    // metadata -i` means the input file, so `convert -i
-                    // recording.raw` would parse a path as a duration and
-                    // report "expected number at 0".
-                    clap::Arg::new("interval")
-                        .long("interval")
-                        .value_name("DURATION")
-                        .help("Sampling interval to stamp, as a number with a unit (ns, us, ms, s, m, h) -- 1s, 250ms. Stamped as whole milliseconds, rounded to the nearest; anything below 1ms is rejected. Default: inferred from the median gap between snapshot timestamps, or 1s if the recording holds fewer than two snapshots")
-                        .value_parser(value_parser!(humantime::Duration))
-                        .action(clap::ArgAction::Set),
-                )
-                .arg(
-                    clap::Arg::new("systeminfo")
-                        .long("systeminfo")
-                        .value_name("PATH")
-                        .help("JSON hardware summary to embed, as served by the agent's /systeminfo endpoint; any JSON value is accepted and stored verbatim. Use - for stdin (only one of --systeminfo/--descriptions can read stdin)")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Set),
-                )
-                .arg(
-                    clap::Arg::new("descriptions")
-                        .long("descriptions")
-                        .value_name("PATH")
-                        .help("Metric help text to embed, as served by the agent's /metrics/descriptions endpoint: a flat JSON object of name to string, {\"cpu_usage\":\"CPU time by state\"}. Use - for stdin (only one of --systeminfo/--descriptions can read stdin)")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Set),
-                )
-                .arg(
-                    clap::Arg::new("metadata")
-                        .short('m')
-                        .long("metadata")
-                        .value_name("KEY=VALUE")
-                        .help("Add a file-level metadata tag as key=value; repeat for multiple tags. Split on the first =, so values may contain = and may be empty. Keys are free-form, but `source` is the one the viewer and MCP tools read to identify where a recording came from (it defaults to rezolus). Tags are applied after the two keys convert derives, `source` and `sampling_interval_ms`, so a tag with either name wins -- set the interval with --interval rather than -m sampling_interval_ms=")
-                        .action(clap::ArgAction::Append),
-                )
-                .arg(
-                    clap::Arg::new("force")
-                        .long("force")
-                        .help("Overwrite the output file if it already exists (without this, an existing output is an error and nothing is written)")
-                        .action(clap::ArgAction::SetTrue),
-                ),
-        )
-        .subcommand(
-            Command::new("filter")
-                .about("Shrink a recording to what its KPIs need: parquet columns, or .dendro/.rez samplers and metrics")
-                .long_about(
-                    "Shrink a recording by dropping what its service-extension KPIs do not need.\n\n\
-                     For a parquet file that means metric COLUMNS: the KPI set comes from the\n\
-                     file's embedded annotation (or a matching built-in template), and --queries\n\
-                     overrides it.\n\n\
-                     For a .dendro or .rez archive there is no KPI column set to filter against\n\
-                     (it is all-rezolus data), so you name what to keep directly: --samplers\n\
-                     keeps whole SAMPLERS (a sampler's group tables go together) and --metrics\n\
-                     keeps metric COLUMNS (re-encoding each table's segments, always keeping the\n\
-                     timestamp and acquisition-window sidecars; a table left with none of the\n\
-                     kept metrics is dropped). Use either alone or together; at least one is\n\
-                     required, and both are ignored for parquet. The output is in the input's\n\
-                     container, whatever its extension: a .dendro input writes a .dendro\n\
-                     archive, and a .rez input (v2 tar or v3) writes a v3 (SQLite) .rez.\n\n\
-                     By default the input is rewritten in place; pass -o/--output to write a new\n\
-                     file and leave the original untouched.\n\n\
-                     EXAMPLES:\n    \
-                     # Filter in place using the file's embedded KPIs\n    \
-                     rezolus recording filter rezolus.parquet\n\n    \
-                     # Write a slimmed copy, keeping the original\n    \
-                     rezolus recording filter rezolus.parquet -o slim.parquet\n\n    \
-                     # Filter to the columns a custom KPI set needs\n    \
-                     rezolus recording filter rezolus.parquet --queries ext.json -o slim.parquet\n\n    \
-                     # Keep only two samplers of a .dendro, writing a slimmed copy\n    \
-                     rezolus recording filter capture.dendro --samplers cpu_usage,scheduler -o slim.dendro\n\n    \
-                     # Keep only two samplers of a .rez, writing a slimmed copy\n    \
-                     rezolus recording filter out.rez --samplers cpu_usage,scheduler -o slim.rez\n\n    \
-                     # Keep only specific metric columns of a .rez\n    \
-                     rezolus recording filter out.rez --metrics cpu_usage,cpu_frequency -o slim.rez",
-                )
-                .arg(
-                    clap::Arg::new("FILE")
-                        .help("Recording to filter: a .parquet file, or a .dendro or .rez archive (which needs --samplers and/or --metrics)")
-                        .value_parser(value_parser!(PathBuf))
-                        .required(true)
-                        .index(1),
-                )
-                .arg(
-                    clap::Arg::new("queries")
-                        .long("queries")
-                        .value_name("PATH")
-                        .help("Custom service extension JSON file (overrides metadata/template)")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Set),
-                )
-                .arg(
-                    clap::Arg::new("output")
-                        .short('o')
-                        .long("output")
-                        .value_name("PATH")
-                        .help("Output file path (default: overwrite input file in-place)")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Set),
-                )
-                .arg(
-                    clap::Arg::new("templates")
-                        .long("templates")
-                        .value_name("DIR")
-                        .help("Directory containing service extension template JSON files")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Set),
-                )
-                .arg(
-                    clap::Arg::new("samplers")
-                        .long("samplers")
-                        .value_name("A,B,...")
-                        .help("For .dendro and .rez archives: comma-separated sampler names to KEEP; every other sampler's tables are dropped (ignored for parquet). Filtering is by sampler, so a sampler's group tables go together. The output is in the input's container: .dendro for a .dendro input, v3 (SQLite) for a .rez")
-                        .value_parser(value_parser!(String))
-                        .action(clap::ArgAction::Set),
-                )
-                .arg(
-                    clap::Arg::new("metrics")
-                        .long("metrics")
-                        .value_name("A,B,...")
-                        .help("For .dendro and .rez archives: comma-separated metric names to KEEP as COLUMNS; every other metric's columns are dropped and re-encoded (ignored for parquet). Timestamp and acquisition-window sidecars are always kept; a table left with none of the kept metrics is dropped. Combine with --samplers, or use either alone (at least one is required for an archive)")
-                        .value_parser(value_parser!(String))
-                        .action(clap::ArgAction::Set),
-                ),
-        )
-        .subcommand(
-            Command::new("upgrade")
-                .about("Upgrade a v1/v2 (tar) .rez archive to the v3 (SQLite) container, or convert one to dendro")
-                .long_about(
-                    "Rewrite a v1 or v2 `.rez` (a tar archive) as a v3 `.rez` (a single\n\
-                     SQLite file), the container the recorder and hindsight write today.\n\n\
-                     Segment parquet BLOBs are carried across byte-for-byte: the container\n\
-                     changes, the data does not. Labels, per-recording metadata and the\n\
-                     `complete` flag come with them, so an archive recovered from a\n\
-                     checkpoint still reads as recovered rather than being laundered into a\n\
-                     clean one.\n\n\
-                     `combine`, `filter` and `annotate` already upgrade a tar input on the\n\
-                     way through. This is for upgrading an archive on its own, without\n\
-                     otherwise changing it. A v3 input is refused rather than copied:\n\
-                     \"upgrade\" on something already current is far more likely a mistaken\n\
-                     path than a request for a duplicate.\n\n\
-                     WITH `--to dendro`: write a dendro archive, the container rezolus 6.0\n\
-                     is planned to write (#1224). Takes a v1, v2 or v3 `.rez`. Recordings\n\
-                     become sources and tables become streams; segment, WAL and caller-row\n\
-                     bytes are copied unchanged, and WAL rows a segment already holds are\n\
-                     dropped. `-o` is required and must not exist, and the input is never\n\
-                     replaced: releases before this one refuse a dendro archive.\n\n\
-                     EXAMPLES:\n    \
-                     # Upgrade in place\n    \
-                     rezolus recording upgrade old.rez\n\n    \
-                     # ...or leave the original alone\n    \
-                     rezolus recording upgrade old.rez -o new.rez\n\n    \
-                     # Convert to a dendro archive\n    \
-                     rezolus recording upgrade --to dendro capture.rez -o capture.dendro",
-                )
-                .arg(
-                    clap::Arg::new("FILE")
-                        .help("The .rez archive to upgrade")
-                        .required(true)
-                        .value_parser(value_parser!(PathBuf)),
-                )
-                .arg(
-                    clap::Arg::new("output")
-                        .short('o')
-                        .long("output")
-                        .value_name("REZ")
-                        .help("Write here instead of replacing the input in place (required with --to dendro)")
-                        .value_parser(value_parser!(PathBuf))
-                        .required_if_eq("to", "dendro"),
-                )
-                .arg(
-                    clap::Arg::new("to")
-                        .long("to")
-                        .value_name("FORMAT")
-                        .help("Target container: `v3` (a v3 .rez, the default) or `dendro`")
-                        .value_parser(["v3", "dendro"])
-                        .default_value("v3"),
-                ),
-        )
-        .subcommand(
-            Command::new("snapshot")
-                .about("Copy a .rez that is still being written, without stopping the writer")
-                .long_about(
-                    "Take a complete, standalone copy of a `.rez` archive while a recorder\n\
-                     or `hindsight` is still appending to it.\n\n\
-                     WHY NOT `cp`: a v3 `.rez` is a SQLite database in WAL mode, so recent\n\
-                     commits live in a `<file>-wal` SIDECAR until they are checkpointed into\n\
-                     the archive. Copying the archive alone leaves them behind — measured at\n\
-                     123 ticks (~2 minutes at a 1s interval) on a 2000-tick recording, with\n\
-                     a sidecar larger than the archive itself. The copy is not corrupt, it\n\
-                     is simply older, which is the worse failure: it reads as a recording\n\
-                     that stopped early.\n\n\
-                     This reads the archive the way every other reader does — sidecar\n\
-                     included — and writes one consistent file. The writer is never paused\n\
-                     and the original is not modified.\n\n\
-                     The result is what to hand to someone else, upload to the static-site\n\
-                     viewer (a browser is given one file and cannot see a sidecar), or keep\n\
-                     as an incident artifact. A v1/v2 tar archive has no sidecar, so this is\n\
-                     a plain copy for those.\n\n\
-                     EXAMPLES:\n    \
-                     # Grab the last N minutes of a running hindsight buffer\n    \
-                     rezolus recording snapshot /var/lib/rezolus/hindsight.rez -o incident.rez\n\n    \
-                     # ...or of a `rezolus record` still in progress\n    \
-                     rezolus recording snapshot rezolus.rez -o so-far.rez",
-                )
-                .arg(
-                    clap::Arg::new("FILE")
-                        .help("The .rez archive to snapshot (may be open for writing)")
-                        .required(true)
-                        .value_parser(value_parser!(PathBuf)),
-                )
-                .arg(
-                    clap::Arg::new("output")
-                        .short('o')
-                        .long("output")
-                        .value_name("REZ")
-                        .required(true)
-                        .help("Where to write the snapshot. Must not already exist.")
-                        .value_parser(value_parser!(PathBuf)),
-                ),
-        )
-}
+pub use cli::{Host, Recording, TableFlag};
 
-/// Copy a live `.rez` into one complete standalone file.
+/// Copy an archive that may still be written into one complete standalone
+/// `.dendro` at `output`, which must end in `.dendro` and not exist.
 ///
-/// **The point is SQLite's `-wal` sidecar.** A v3 archive is a SQLite database
+/// **The point is SQLite's `-wal` sidecar.** An archive is a SQLite database
 /// in WAL mode: commits land in `<file>-wal` and are checkpointed into the
 /// archive in batches, so the archive on its own is a consistent view as of
-/// the last checkpoint and nothing newer. `cp` takes that older view — and it
-/// is not detectably wrong, it just ends early. `VACUUM INTO` reads through a
-/// normal read transaction (sidecar included, writer un-paused) and writes a
-/// single file with everything in it.
-///
-/// A v1/v2 tar archive has no sidecar and no writer that appends in place, so
-/// there the honest implementation is a plain copy.
+/// the last checkpoint and nothing newer. `cp` takes that older view, and it
+/// is not detectably wrong, it just ends early. A dendro archive is copied in
+/// one read snapshot (sidecar included, writer un-paused) with its live tail
+/// sealed; a `.rez` is converted, read through a normal connection, which
+/// reads the sidecar too.
 pub(crate) fn snapshot_rez(
     path: &std::path::Path,
     output: &std::path::Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::recorder::rez::{detect_rez_format, RezFormat};
-
-    if output.exists() {
-        return Err(format!("{} already exists", output.display()).into());
-    }
-    if metriken_storage::DendroCatalog::is_archive(path).unwrap_or(false) {
-        // A sealed copy: the live tail is encoded into the copy's last
-        // segments, so the snapshot has no WAL rows for a reader to rebuild.
-        // Staged beside the output so a failed copy leaves nothing there.
-        let dir = output.parent().filter(|p| !p.as_os_str().is_empty());
-        let staging = match dir {
-            Some(dir) => tempfile::tempdir_in(dir),
-            None => tempfile::tempdir(),
-        }?;
-        let staged = staging.path().join("snapshot.dendro");
-        let src = dendro::archive::Archive::open(path)?;
-        crate::dendro_copy::copy(&src, &staged, &dendro::rewrite::CopySpec::everything())?;
-        drop(src);
-        std::fs::rename(&staged, output)?;
-        println!("Wrote {}", output.display());
-        return Ok(());
-    }
-    match detect_rez_format(path).unwrap_or(RezFormat::NotRez) {
-        RezFormat::V3Sqlite => {
-            crate::recorder::rez_sqlite::RezDb::open(path)?.vacuum_into(output)?;
+    use legacy::Container;
+    legacy::check_new_dendro(output)?;
+    // Staged beside the output so a failed copy leaves nothing there.
+    let staging = legacy::staging_dir(output)?;
+    let staged = staging.path().join("snapshot.dendro");
+    match Container::of(path) {
+        Container::Dendro => {
+            let src = dendro::archive::Archive::open(path)?;
+            crate::dendro_copy::copy(&src, &staged, &dendro::rewrite::CopySpec::everything())?;
         }
-        RezFormat::V2Tar => {
-            std::fs::copy(path, output)?;
+        Container::RezV3 | Container::RezTar => {
+            println!("{}", legacy::convert_for(path, &staged, output)?);
         }
-        RezFormat::NotRez => {
-            return Err(format!("{} is not a .rez archive", path.display()).into());
+        c => {
+            return Err(format!(
+                "{} is a {}, not an archive (.dendro or .rez)",
+                path.display(),
+                c.name()
+            )
+            .into())
         }
     }
+    legacy::publish(&staged, output)?;
     println!("Wrote {}", output.display());
     Ok(())
 }
 
-/// Rewrite a v1/v2 (tar) `.rez` as a v3 (SQLite) one.
-///
-/// Refuses a v3 input rather than silently copying it: "upgrade" on something
-/// already current is far more likely a mistaken path than a request for a
-/// byte-for-byte duplicate.
-fn upgrade_rez(
-    path: &std::path::Path,
-    output: Option<&std::path::Path>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::recorder::rez::{detect_rez_format, RezFormat};
-
-    match detect_rez_format(path).unwrap_or(RezFormat::NotRez) {
-        RezFormat::V2Tar => {}
-        RezFormat::V3Sqlite
-            if metriken_storage::DendroCatalog::is_archive(path).unwrap_or(false) =>
-        {
-            return Err(format!(
-                "{} is a dendro archive; there is nothing to upgrade",
-                path.display()
-            )
-            .into())
-        }
-        RezFormat::V3Sqlite => {
-            return Err(format!(
-                "{} is already a v3 (SQLite) archive; there is nothing to upgrade",
-                path.display()
-            )
-            .into())
-        }
-        RezFormat::NotRez => return Err(format!("{} is not a .rez archive", path.display()).into()),
-    }
-
-    // Staged beside the destination so the rename that publishes it is atomic
-    // and on the same filesystem, and so an in-place upgrade never leaves a
-    // half-written archive where the original was.
-    let dest = output.unwrap_or(path);
-    let dir = dest.parent().filter(|p| !p.as_os_str().is_empty());
-    let staging = match dir {
-        Some(dir) => tempfile::tempdir_in(dir),
-        None => tempfile::tempdir(),
-    }?;
-    let staged = staging.path().join("upgraded.rez");
-
-    let recordings = crate::recorder::rez_v3_rewrite::upgrade_tar_to_v3(path, &staged)?;
-    std::fs::rename(&staged, dest)?;
-    println!(
-        "upgraded {:?} to a v3 (SQLite) archive: {} recording(s)",
-        dest, recordings
-    );
-    Ok(())
-}
-
-/// Convert a `.rez` (any version) into a new dendro archive at `output`.
-///
-/// Never in place and never over an existing file: `view` and `mcp` read the
-/// result, but the `recording` tools and earlier releases do not, so
-/// replacing an archive with it would lose the only copy they can open.
+/// Convert the legacy recording at `path` (any `.rez`, or a parquet file)
+/// into a new dendro archive at `output`, or beside `path` with a `.dendro`
+/// extension. Never in place and never over an existing file.
 fn upgrade_to_dendro(
     path: &std::path::Path,
-    output: &std::path::Path,
+    output: Option<&std::path::Path>,
+    to: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::recorder::rez::{detect_rez_format, RezFormat};
-
-    if output.exists() {
+    if to != "dendro" {
         return Err(format!(
-            "{} already exists; refusing to replace it",
-            output.display()
+            "--to {to}: 6.x writes .dendro only; `recording upgrade` converts to dendro \
+             (a v3 .rez is read as it is, so there is nothing to upgrade a tar to)"
         )
         .into());
     }
-    if metriken_storage::DendroCatalog::is_archive(path).unwrap_or(false) {
-        return Err(format!("{} is already a dendro archive", path.display()).into());
+    if legacy::Container::of(path) == legacy::Container::Dendro {
+        return Err(format!(
+            "{} is already a dendro archive; there is nothing to upgrade",
+            path.display()
+        )
+        .into());
     }
-    let dir = output.parent().filter(|p| !p.as_os_str().is_empty());
-    let staging = match dir {
-        Some(dir) => tempfile::tempdir_in(dir),
-        None => tempfile::tempdir(),
-    }?;
-
-    // A tar archive goes through the v3 upgrade first, into the staging dir.
-    let v3 = match detect_rez_format(path).unwrap_or(RezFormat::NotRez) {
-        RezFormat::V3Sqlite => path.to_path_buf(),
-        RezFormat::V2Tar => {
-            let upgraded = staging.path().join("upgraded.rez");
-            crate::recorder::rez_v3_rewrite::upgrade_tar_to_v3(path, &upgraded)?;
-            upgraded
-        }
-        RezFormat::NotRez => return Err(format!("{} is not a .rez archive", path.display()).into()),
-    };
-
-    let staged = staging.path().join("converted.dendro");
-    let done = rez::to_dendro::convert_v3_to_dendro(&v3, &staged)?;
-    std::fs::rename(&staged, output)?;
+    let output = output
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| legacy::dendro_beside(path));
+    legacy::check_new_dendro(&output)?;
+    // Staged beside the output and moved there whole, so a failed
+    // conversion leaves nothing at the output.
+    let (_staging, staged) = legacy::stage_beside(&output)?;
+    let summary = legacy::convert_quiet(path, &staged)?;
+    legacy::publish(&staged, &output)?;
     println!(
-        "converted {:?} to a dendro archive at {:?}: {} source(s), {} segment(s), \
-         {} live WAL row(s), {} caller row(s), {} clock offset(s)",
-        path,
-        output,
-        done.sources,
-        done.segments,
-        done.wal_rows,
-        done.caller_rows,
-        done.clock_offsets
+        "converted {} ({}) to {}: {summary}",
+        path.display(),
+        legacy::Container::of(path).name(),
+        output.display()
     );
     Ok(())
-}
-
-pub fn run(args: ArgMatches) {
-    use crate::viewer::load_template_registry;
-
-    let result = match args.subcommand() {
-        Some(("annotate", sub_args)) => {
-            let registry = load_template_registry(
-                sub_args
-                    .get_one::<PathBuf>("templates")
-                    .map(|p| p.as_path()),
-            );
-            annotate::run(sub_args, &registry);
-            return;
-        }
-        Some(("check", sub_args)) => {
-            let registry = load_template_registry(
-                sub_args
-                    .get_one::<PathBuf>("templates")
-                    .map(|p| p.as_path()),
-            );
-            std::process::exit(check::run(sub_args, &registry));
-        }
-        Some(("combine", sub_args)) => combine::run(sub_args),
-        Some(("convert", sub_args)) => {
-            convert::run(sub_args);
-            return;
-        }
-        Some(("filter", sub_args)) => {
-            let registry = load_template_registry(
-                sub_args
-                    .get_one::<PathBuf>("templates")
-                    .map(|p| p.as_path()),
-            );
-            filter::run(sub_args, &registry);
-            return;
-        }
-        Some(("metadata", sub_args)) => metadata::run(sub_args),
-        Some(("upgrade", sub_args)) => {
-            let path = sub_args.get_one::<PathBuf>("FILE").unwrap();
-            let output = sub_args.get_one::<PathBuf>("output").map(|p| p.as_path());
-            match sub_args.get_one::<String>("to").map(String::as_str) {
-                Some("dendro") => upgrade_to_dendro(path, output.expect("clap requires -o")),
-                _ => upgrade_rez(path, output),
-            }
-        }
-        Some(("snapshot", sub_args)) => {
-            let path = sub_args.get_one::<PathBuf>("FILE").unwrap();
-            let output = sub_args.get_one::<PathBuf>("output").unwrap();
-            snapshot_rez(path, output)
-        }
-        _ => unreachable!(),
-    };
-
-    if let Err(e) = result {
-        eprintln!("Error: {e}");
-        std::process::exit(1);
-    }
-}
-
-/// Read file-level key-value metadata from a parquet file footer.
-pub(crate) fn read_file_metadata(
-    path: impl AsRef<Path>,
-) -> Result<Vec<KeyValue>, Box<dyn std::error::Error>> {
-    use parquet::file::reader::FileReader;
-    use parquet::file::serialized_reader::SerializedFileReader;
-
-    let reader = SerializedFileReader::new(std::fs::File::open(path)?)?;
-    Ok(reader
-        .metadata()
-        .file_metadata()
-        .key_value_metadata()
-        .cloned()
-        .unwrap_or_default())
-}
-
-/// Rewrite a parquet file with updated metadata, optionally projecting columns.
-/// Returns the serialized parquet bytes.
-///
-/// If `projection` is `Some`, only the columns at those indices are kept and
-/// the output schema is projected accordingly.  If `None`, all columns are
-/// passed through unchanged.
-pub(crate) fn rewrite_parquet(
-    path: impl AsRef<Path>,
-    kv_meta: Vec<KeyValue>,
-    projection: Option<&[usize]>,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    use parquet::arrow::ArrowWriter;
-    use parquet::file::properties::WriterProperties;
-
-    let builder = ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(path)?)?;
-    let schema = builder.schema().clone();
-    let reader = builder.build()?;
-
-    let output_schema = match projection {
-        Some(indices) => Arc::new(schema.project(indices)?),
-        None => schema,
-    };
-
-    let props = WriterProperties::builder()
-        .set_key_value_metadata(Some(kv_meta))
-        .set_max_row_group_row_count(Some(crate::parquet_metadata::MAX_ROW_GROUP_SIZE))
-        .set_compression(parquet::basic::Compression::ZSTD(Default::default()))
-        .build();
-
-    let mut buf = Vec::new();
-    {
-        let mut writer =
-            ArrowWriter::try_new(std::io::Cursor::new(&mut buf), output_schema, Some(props))?;
-        for batch in reader {
-            let batch = batch?;
-            let batch = match projection {
-                Some(indices) => batch.project(indices)?,
-                None => batch,
-            };
-            writer.write(&batch)?;
-        }
-        writer.close()?;
-    }
-
-    Ok(buf)
 }
 
 fn read_parquet_footer(
@@ -1096,95 +111,46 @@ fn read_parquet_footer(
     Ok((metadata, schema, reader))
 }
 
+/// A [`Host`] for this module's tests, spelled as rezolus's, and the parse
+/// the CLI makes.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::{Host, Recording};
+    use ::dashboard::TemplateRegistry;
+    use std::path::Path;
+
+    fn registry(dir: Option<&Path>) -> TemplateRegistry {
+        match dir {
+            Some(dir) => TemplateRegistry::load(dir).unwrap_or_else(|_| TemplateRegistry::empty()),
+            None => TemplateRegistry::empty(),
+        }
+    }
+
+    pub(crate) fn host() -> Host<'static> {
+        Host::new("rezolus", &registry)
+            .display_name("Rezolus")
+            .agent("rezolus")
+            .alias("parquet")
+            .table_flag(super::TableFlag::Samplers)
+            .list_recordings("rezolus mcp describe-recording")
+            .record("rezolus record")
+            .hindsight("rezolus hindsight")
+            .view("rezolus view")
+            .mcp("rezolus mcp")
+            .buffer_path("/var/lib/rezolus/hindsight.dendro")
+    }
+
+    /// `args` (the program name first, then a subcommand) parsed as the CLI
+    /// parses them.
+    pub(crate) fn parse(args: impl IntoIterator<Item = String>) -> Recording {
+        use clap::FromArgMatches;
+        let matches = host().command().try_get_matches_from(args).unwrap();
+        Recording::from_arg_matches(&matches).unwrap()
+    }
+}
+
 #[cfg(test)]
 mod command_name_tests {
-    /// `parquet` keeps working as an alias for `recording`.
-    ///
-    /// The whole reason `snapshot` exists: a plain copy of a live v3 archive
-    /// silently ends early, because SQLite's `-wal` sidecar holds commits not
-    /// yet checkpointed into the archive. Measured at 123 ticks behind on a
-    /// 2000-tick recording — with a sidecar LARGER than the archive.
-    ///
-    /// So this asserts the difference, not just that the snapshot opens: the
-    /// snapshot must reach the last tick, and the `cp` must not. If a future
-    /// change made a plain copy complete (an aggressive checkpoint, say), the
-    /// second half fails and this command's rationale needs revisiting —
-    /// which is exactly when someone should look.
-    #[test]
-    fn a_snapshot_carries_what_a_plain_copy_leaves_in_the_sidecar() {
-        use ::rez::rez::recorder_tests_support::{counter, snap};
-        use ::rez::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
-
-        let dir = tempfile::tempdir().unwrap();
-        let live = dir.path().join("live.rez");
-        let seed = ManifestSeed {
-            labels: [("source".to_string(), "rezolus".to_string())]
-                .into_iter()
-                .collect(),
-            metadata: Default::default(),
-            clock_anchor_wall_ns: 1_000_000_000,
-        };
-        let (archive, writer) = RezArchive::single(&live, seed).unwrap();
-        let mut rec = StreamRecorderV3::new(writer);
-
-        // Enough ticks, wide enough, to push past the WAL autocheckpoint and
-        // leave a real sidecar behind. A handful of rows would all still be in
-        // the sidecar and the copy would have no catalog at all — a different
-        // (and already covered) failure.
-        let ticks = 2_000u64;
-        for t in 0..ticks {
-            let ts = 1_000_000_000 * (t + 1);
-            let cells: Vec<_> = (0..40)
-                .map(|m| counter(&format!("m{m}"), "cpu_usage", t + m, None))
-                .collect();
-            rec.ingest(&snap(ts, cells), ts, 0).unwrap();
-        }
-        rec.sync().unwrap();
-
-        let last_ts = 1_000_000_000 * ticks;
-        let snapshot = dir.path().join("snap.rez");
-        super::snapshot_rez(&live, &snapshot).unwrap();
-        let plain_copy = dir.path().join("copy.rez");
-        std::fs::copy(&live, &plain_copy).unwrap();
-
-        // How far each one's newest row reaches.
-        let reach = |p: &std::path::Path| -> Option<u64> {
-            let db = ::rez::rez_sqlite::RezDb::open(p).ok()?;
-            let rec = db.read_recordings().ok()?.into_iter().next()?;
-            db.live_wal_span(rec.id, "cpu_usage").ok()?.last_ts
-        };
-
-        assert_eq!(
-            reach(&snapshot),
-            Some(last_ts),
-            "a snapshot must reach the last committed tick"
-        );
-        let copied = reach(&plain_copy).expect("the copy is readable, just older");
-        assert!(
-            copied < last_ts,
-            "the premise of this command: a plain copy should be behind, but it \
-             reached {copied} of {last_ts}"
-        );
-
-        drop(rec);
-        drop(archive);
-    }
-
-    /// Refuses to overwrite: the output is an incident artifact, and clobbering
-    /// one silently is worse than making the caller pick a name.
-    #[test]
-    fn a_snapshot_will_not_overwrite_an_existing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let live = dir.path().join("live.rez");
-        ::rez::rez::recorder_tests_support::empty_v3_rez(&live);
-        let out = dir.path().join("taken.rez");
-        std::fs::write(&out, b"do not clobber me").unwrap();
-
-        let err = super::snapshot_rez(&live, &out).expect_err("must refuse");
-        assert!(err.to_string().contains("already exists"), "{err}");
-        assert_eq!(std::fs::read(&out).unwrap(), b"do not clobber me");
-    }
-
     /// The rename is the point — these subcommands stopped being
     /// parquet-specific once `.rez` arrived — but every existing script and
     /// runbook types `rezolus recording ...`, and breaking those to make a name
@@ -1193,7 +159,7 @@ mod command_name_tests {
     /// `main`'s dispatch needs only one arm.
     #[test]
     fn parquet_still_reaches_the_recording_subcommand() {
-        let app = clap::Command::new("rezolus").subcommand(super::command());
+        let app = clap::Command::new("rezolus").subcommand(super::test_support::host().command());
 
         for spelling in ["recording", "parquet"] {
             let m = app
@@ -1211,46 +177,99 @@ mod command_name_tests {
     }
 }
 
+/// `filter` shows one spelling of its table selection and accepts the
+/// other hidden: rezolus shows `--samplers`, a host without samplers shows
+/// `--tables`.
+#[cfg(test)]
+mod table_flag_tests {
+    fn filter_help(samplers: bool) -> String {
+        let flag = if samplers {
+            super::TableFlag::Samplers
+        } else {
+            super::TableFlag::Tables
+        };
+        let mut cmd = super::test_support::host().table_flag(flag).command();
+        cmd.find_subcommand_mut("filter")
+            .expect("filter")
+            .render_long_help()
+            .to_string()
+    }
+
+    #[test]
+    fn one_spelling_is_shown_and_both_parse() {
+        let rezolus = filter_help(true);
+        assert!(rezolus.contains("--samplers <A,B,...>"), "{rezolus}");
+        assert!(!rezolus.contains("--tables"), "{rezolus}");
+        let other = filter_help(false);
+        assert!(other.contains("--tables <A,B,...>"), "{other}");
+        assert!(!other.contains("--samplers <"), "{other}");
+        for flag in ["--samplers", "--tables"] {
+            let parsed = super::test_support::parse(
+                ["rezolus", "filter", "x.dendro", flag, "a"].map(String::from),
+            );
+            let super::Recording::Filter(args) = parsed else {
+                panic!("not a filter");
+            };
+            assert_eq!(
+                (args.samplers.is_some(), args.tables.is_some()),
+                (flag == "--samplers", flag == "--tables")
+            );
+        }
+    }
+}
+
+/// A host with none of rezolus's commands renders help that names none of
+/// them, and every placeholder is filled.
+#[cfg(test)]
+mod other_host_tests {
+    fn empty(_: Option<&std::path::Path>) -> ::dashboard::TemplateRegistry {
+        ::dashboard::TemplateRegistry::empty()
+    }
+
+    #[test]
+    fn help_names_only_the_host() {
+        let host = super::Host::new("othertool", &empty);
+        let mut cmd = host.command();
+        let mut texts = vec![cmd.render_long_help().to_string()];
+        let names: Vec<String> = cmd
+            .get_subcommands()
+            .map(|c| c.get_name().to_string())
+            .collect();
+        for name in names {
+            let sub = cmd.find_subcommand_mut(&name).expect("listed");
+            texts.push(sub.render_long_help().to_string());
+            texts.push(sub.render_help().to_string());
+        }
+        for text in texts {
+            assert!(!text.to_lowercase().contains("rezolus"), "{text}");
+            for placeholder in ["{program}", "{agent}", "{table_", "{writers}", "{viewer}"] {
+                assert!(!text.contains(placeholder), "{placeholder} in {text}");
+            }
+            assert!(!text.contains("--samplers <"), "{text}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod upgrade_to_dendro_tests {
     use super::upgrade_to_dendro;
-    use ::rez::rez::recorder_tests_support::{counter, snap};
     use dendro::archive::Archive;
 
-    /// A v2 tar archive with two samplers, built the way the old recorder
-    /// wrote one.
+    /// The committed v2 tar archive (`rez::fixtures::committed_rez`): one
+    /// recording, tables `a` and `b`, written whole by the old recorder.
     fn tar_rez(dir: &std::path::Path) -> std::path::PathBuf {
-        use crate::recorder::rez::{detect_rez_format, RezFormat, RezRecorder};
-        let labels: std::collections::BTreeMap<String, String> =
-            [("source".to_string(), "rezolus".to_string())]
-                .into_iter()
-                .collect();
-        let mut r = RezRecorder::new(labels.clone(), labels, "rezolus".to_string());
-        for i in 0..3u64 {
-            let ts = 1_000_000_000 * (i + 1);
-            r.ingest(
-                &snap(
-                    ts,
-                    vec![
-                        counter("cpu_cycles", "cpu_usage", i, None),
-                        counter("reads", "blockio_requests", i, None),
-                    ],
-                ),
-                ts,
-            );
-        }
-        let path = dir.join("old.rez");
-        r.finalize(&path).unwrap();
+        use metriken_storage::rez::rez::{detect_rez_format, RezFormat};
+        let path = ::rez::fixtures::committed_rez("v2.rez", dir);
         assert_eq!(detect_rez_format(&path).unwrap(), RezFormat::V2Tar);
         path
     }
 
     #[test]
-    fn a_tar_archive_converts_through_the_v3_upgrade() {
+    fn a_tar_archive_converts_to_dendro() {
         let dir = tempfile::tempdir().unwrap();
         let src = tar_rez(dir.path());
         let dest = dir.path().join("out.dendro");
-        upgrade_to_dendro(&src, &dest).unwrap();
+        upgrade_to_dendro(&src, Some(&dest), "dendro").unwrap();
 
         // Before anything opens the output: a reader's connection leaves
         // `-wal`/`-shm` files of its own, and the claim here is that the
@@ -1260,7 +279,7 @@ mod upgrade_to_dendro_tests {
             .map(|e| e.unwrap().file_name().into_string().unwrap())
             .collect();
         names.sort();
-        assert_eq!(names, vec!["old.rez".to_string(), "out.dendro".to_string()]);
+        assert_eq!(names, vec!["out.dendro".to_string(), "v2.rez".to_string()]);
 
         let out = Archive::open(&dest).unwrap();
         let sources = out.read_sources().unwrap();
@@ -1268,7 +287,7 @@ mod upgrade_to_dendro_tests {
         assert!(sources[0].complete);
         assert_eq!(
             out.all_streams(sources[0].id).unwrap(),
-            vec!["blockio_requests".to_string(), "cpu_usage".to_string()]
+            vec!["a".to_string(), "b".to_string()]
         );
     }
 
@@ -1278,15 +297,58 @@ mod upgrade_to_dendro_tests {
         let src = tar_rez(dir.path());
         let dest = dir.path().join("out.dendro");
         std::fs::write(&dest, b"keep me").unwrap();
-        let err = upgrade_to_dendro(&src, &dest).unwrap_err().to_string();
+        let err = upgrade_to_dendro(&src, Some(&dest), "dendro")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("already exists"), "{err}");
         assert_eq!(std::fs::read(&dest).unwrap(), b"keep me");
+    }
+
+    /// Without `-o` the output is the input with a `.dendro` extension, and
+    /// `--to v3` is refused: 6.x writes .dendro only.
+    #[test]
+    fn the_default_output_is_beside_the_input_and_v3_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = tar_rez(dir.path());
+        let err = upgrade_to_dendro(&src, None, "v3").unwrap_err().to_string();
+        assert!(err.contains(".dendro only"), "{err}");
+        upgrade_to_dendro(&src, None, "dendro").unwrap();
+        assert!(dir.path().join("v2.dendro").exists());
+    }
+
+    /// Every legacy fixture converts, and the archive answers what the
+    /// original answers.
+    #[test]
+    fn each_legacy_fixture_converts_and_answers_the_same() {
+        use metriken_query::MetricsSource;
+        let dir = tempfile::tempdir().unwrap();
+        let pool = || metriken_storage::BufferPool::new(64 * 1024 * 1024);
+        for name in ["v2.rez", "v3.rez", "v3-live.rez", "v3-multi.rez"] {
+            let src = ::rez::fixtures::committed_rez(name, dir.path());
+            let dest = dir.path().join(format!("{name}.dendro"));
+            upgrade_to_dendro(&src, Some(&dest), "dendro").unwrap();
+            let a = ::rez::reader::RezReader::open_recordings(&src, pool()).unwrap();
+            let b = ::rez::reader::RezReader::open_recordings(&dest, pool()).unwrap();
+            assert_eq!(a.len(), b.len(), "{name}");
+            for ((la, ra), (lb, rb)) in a.iter().zip(&b) {
+                assert_eq!(la, lb, "{name}");
+                let (start, end) = ra.time_range().unwrap();
+                for q in ["mem_free", "irate(ops[2s])", "histogram_count(lat)"] {
+                    let answer = |r: &dyn MetricsSource| {
+                        r.query_range(q, start, end, 1.0)
+                            .map(|v| serde_json::to_value(v).unwrap())
+                            .ok()
+                    };
+                    assert_eq!(answer(ra), answer(rb), "{name}: {q}");
+                }
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod dendro_command_tests {
-    use super::{snapshot_rez, upgrade_rez, upgrade_to_dendro};
+    use super::{snapshot_rez, upgrade_to_dendro};
     use crate::dendro_copy::fixtures;
     use dendro::archive::Archive;
 
@@ -1329,11 +391,39 @@ mod dendro_command_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("rec.dendro");
         fixtures::recorded(&path, 4, true);
-        let err = upgrade_rez(&path, None).unwrap_err().to_string();
-        assert!(err.contains("is a dendro archive"), "{err}");
-        let err = upgrade_to_dendro(&path, &dir.path().join("out.dendro"))
+        let err = upgrade_to_dendro(&path, Some(&dir.path().join("out.dendro")), "dendro")
             .unwrap_err()
             .to_string();
         assert!(err.contains("already a dendro archive"), "{err}");
+    }
+
+    /// `snapshot` of a `.rez` (one a 5.x recorder may still be writing)
+    /// writes a `.dendro` holding every row the `.rez` reads, its live tail
+    /// included; an output not ending in `.dendro`, or one that exists, is
+    /// refused.
+    #[test]
+    fn a_rez_snapshot_is_a_dendro() {
+        use metriken_query::MetricsSource;
+        let dir = tempfile::tempdir().unwrap();
+        let live = ::rez::fixtures::committed_rez("v3-live.rez", dir.path());
+        let err = snapshot_rez(&live, &dir.path().join("snap.rez"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(".dendro archives only"), "{err}");
+        let out = dir.path().join("snap.dendro");
+        snapshot_rez(&live, &out).unwrap();
+        let pool = || metriken_storage::BufferPool::new(16 * 1024 * 1024);
+        let a = ::rez::reader::RezReader::open_recordings(&live, pool()).unwrap();
+        let b = ::rez::reader::RezReader::open_recordings(&out, pool()).unwrap();
+        assert_eq!(a[0].1.time_range_ns(), b[0].1.time_range_ns());
+        std::fs::write(dir.path().join("taken.dendro"), b"do not clobber me").unwrap();
+        let err = snapshot_rez(&live, &dir.path().join("taken.dendro"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("already exists"), "{err}");
+        assert_eq!(
+            std::fs::read(dir.path().join("taken.dendro")).unwrap(),
+            b"do not clobber me"
+        );
     }
 }

@@ -14,7 +14,11 @@ use std::path::Path;
 
 use tempfile::TempDir;
 
-use crate::parquet_tools::combine::{AB_BASELINE_NAME, AB_EXPERIMENT_NAME, AB_MANIFEST_NAME};
+// The entry names of an A/B tarball, which 5.x `recording combine --ab`
+// wrote. 6.x reads them and writes none.
+const AB_MANIFEST_NAME: &str = "ab.json";
+const AB_BASELINE_NAME: &str = "baseline.parquet";
+const AB_EXPERIMENT_NAME: &str = "experiment.parquet";
 
 /// Result of extracting a combined-A/B tar. The tempdir is held to keep
 /// both parquet paths alive — drop deletes everything.

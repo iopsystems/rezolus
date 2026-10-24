@@ -27,13 +27,7 @@ fn enabled() -> bool {
 /// explicitly opted into with `enabled = true` in their own `[samplers.<name>]`
 /// section. Reserved for samplers whose cost makes accidental activation
 /// (e.g. via an absent/commented config) unacceptable.
-const OPT_IN_SAMPLERS: &[&str] = &[
-    "ext4_ops",
-    "gpu_amd_pmu",
-    "hw_sensors",
-    "memory_pagecache",
-    "xfs_log",
-];
+const OPT_IN_SAMPLERS: &[&str] = &["ext4_ops", "gpu_amd_pmu", "memory_pagecache", "xfs_log"];
 
 /// An old sampler, the part of the merged sampler it became, and whether it
 /// had a per-cgroup path (so its `cgroup_attribution` carries over).
@@ -638,7 +632,9 @@ mod tests {
         );
         // A normal sampler does follow defaults=true.
         assert!(c.enabled("cpu_usage"));
-        assert!(!c.enabled("hw_sensors"));
+        // hw_sensors follows the defaults: its device reads run off the
+        // scrape path at its own interval.
+        assert!(c.enabled("hw_sensors"));
         // The request-path ext4 sampler is opt-in for its probe cost.
         assert!(!c.enabled("ext4_ops"));
     }
@@ -654,12 +650,20 @@ mod tests {
     fn opt_in_sampler_on_only_when_explicitly_enabled() {
         let c = config("[defaults]\nenabled = true\n\n[samplers.gpu_amd_pmu]\nenabled = true\n");
         assert!(c.enabled("gpu_amd_pmu"));
-        let c = config("[samplers.hw_sensors]\nenabled = true\ninterval = \"7s\"\n");
+    }
+
+    #[test]
+    fn hw_sensors_takes_its_interval_and_can_be_turned_off() {
+        let c = config("[samplers.hw_sensors]\ninterval = \"7s\"\n");
         assert!(c.enabled("hw_sensors"));
         assert_eq!(
             c.sampler_interval("hw_sensors"),
             Some(Duration::from_secs(7))
         );
+        let c = config("[samplers.hw_sensors]\nenabled = false\n");
+        assert!(!c.enabled("hw_sensors"));
+        let c = config("[defaults]\nenabled = false\n");
+        assert!(!c.enabled("hw_sensors"));
     }
 
     #[test]

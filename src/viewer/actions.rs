@@ -908,7 +908,6 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
 struct ReportSources {
     /// Every attached capture, anchor first.
     captures: Vec<Arc<dyn MetricsSource>>,
-    baseline: Arc<dyn MetricsSource>,
     /// The experiment parquet's path and data, when one is attached.
     experiment: Option<(PathBuf, Arc<dyn MetricsSource>)>,
     /// The labels of the archive recording the baseline reads
@@ -925,7 +924,6 @@ impl ReportSources {
                 .iter()
                 .filter_map(|id| state.captures.get_by_id(id))
                 .collect(),
-            baseline: state.baseline_data(),
             experiment: state
                 .resolve_experiment_parquet_path()
                 .zip(state.captures.get(CaptureId::Experiment)),
@@ -935,8 +933,7 @@ impl ReportSources {
 }
 
 /// Build the report for the recording at `path` and name its download: a
-/// `.dendro` for a dendro source, a `.rez` for a `.rez` source or a parquet
-/// compare, a `.parquet` for a single parquet.
+/// `.dendro`, whatever the source (`viewer::report_save::build_report`).
 fn build_report(
     sources: &ReportSources,
     path: &std::path::Path,
@@ -951,103 +948,46 @@ fn build_report(
         serde_json::to_string(&serde_json::json!({ "events": &payload.events })).ok()
     };
 
-    // Archive source (`.rez` or dendro): save a trimmed archive in the same
-    // container, one archive for a single recording or a 2-recording A/B.
-    // This branch comes first because the compare and single branches read
-    // the source as parquet.
-    if crate::recorder::rez::detect_rez_format(path)
-        .map(|f| f != crate::recorder::rez::RezFormat::NotRez)
-        .unwrap_or(false)
-    {
-        // Union the kept columns across every attached capture — the anchor
-        // as baseline, the rest as experiment — so a 2-recording A/B keeps
-        // both sides' queried metrics. A slightly looser set than a
-        // per-recording trim, but never lossy.
-        let keep: Option<std::collections::BTreeSet<String>> = trim_columns.then(|| {
-            let mut set = std::collections::BTreeSet::new();
-            for (i, source) in sources.captures.iter().enumerate() {
-                let side = if i == 0 {
-                    ::report_save::Side::Baseline
-                } else {
-                    ::report_save::Side::Experiment
-                };
-                set.extend(::report_save::resolve_kept_columns(
-                    payload,
-                    source.as_ref(),
-                    side,
-                ));
-            }
-            set
-        });
-        let result = super::report_save_rez::build_rez_report(
-            path,
-            sources.anchor.as_ref(),
-            keep.as_ref(),
-            range,
-            selection_json,
-            events_json.as_deref(),
-        );
-        let dendro = metriken_storage::DendroCatalog::is_archive(path).unwrap_or(false);
-        let name = if dendro {
-            "rezolus-report.dendro"
-        } else {
-            "rezolus-report.rez"
-        };
-        return (result, name);
-    }
+    // Union the kept columns across every attached capture — the anchor as
+    // baseline, the rest as experiment — so an A/B keeps both sides' queried
+    // metrics. A slightly looser set than a per-recording trim, but never
+    // lossy.
+    let keep: Option<std::collections::BTreeSet<String>> = trim_columns.then(|| {
+        let mut set = std::collections::BTreeSet::new();
+        for (i, source) in sources.captures.iter().enumerate() {
+            let side = if i == 0 {
+                ::report_save::Side::Baseline
+            } else {
+                ::report_save::Side::Experiment
+            };
+            set.extend(::report_save::resolve_kept_columns(
+                payload,
+                source.as_ref(),
+                side,
+            ));
+        }
+        set
+    });
 
-    // Compare mode (two parquet sources): assemble a 2-recording `.rez`
-    // report, one recording per side, instead of a `.parquet.ab.tar`. A
-    // `.rez` source never reaches here — it returned above. Labels come from
-    // each parquet's own source metadata, so there is no manifest to
-    // synthesize.
-    let baseline_data = &sources.baseline;
-    if let Some((experiment_path, experiment_data)) = &sources.experiment {
-        let keep = |data: &dyn MetricsSource, side| -> Option<std::collections::BTreeSet<String>> {
-            trim_columns.then(|| {
-                ::report_save::resolve_kept_columns(payload, data, side)
-                    .into_iter()
-                    .collect()
-            })
-        };
-        let baseline_keep = keep(baseline_data.as_ref(), ::report_save::Side::Baseline);
-        let experiment_keep = keep(experiment_data.as_ref(), ::report_save::Side::Experiment);
-        let result = (|| -> Result<Vec<u8>, String> {
-            let baseline_bytes =
-                std::fs::read(path).map_err(|e| format!("failed to read baseline: {e}"))?;
-            let experiment_bytes = std::fs::read(experiment_path)
-                .map_err(|e| format!("failed to read experiment: {e}"))?;
-            let sides = [
-                ::report_save::ParquetReportSide {
-                    bytes: &baseline_bytes,
-                    keep_metrics: baseline_keep.as_ref(),
-                },
-                ::report_save::ParquetReportSide {
-                    bytes: &experiment_bytes,
-                    keep_metrics: experiment_keep.as_ref(),
-                },
-            ];
-            ::report_save::build_rez_report_from_parquets(
-                &sides,
-                trim_columns,
-                range,
-                selection_json,
-                events_json.as_deref(),
-            )
-        })();
-        return (result, "rezolus-report.rez");
+    // An archive source is one file; a parquet compare is the baseline's
+    // file and the experiment's, one recording each.
+    let archive = crate::parquet_tools::legacy::Container::of(path)
+        != crate::parquet_tools::legacy::Container::Parquet;
+    let mut paths: Vec<&std::path::Path> = vec![path];
+    if !archive {
+        if let Some((experiment_path, _)) = &sources.experiment {
+            paths.push(experiment_path);
+        }
     }
-
-    // Single-capture save.
-    let result = report_save::save_single_parquet(
-        path,
-        payload,
+    let result = super::report_save::build_report(
+        &paths,
+        sources.anchor.as_ref(),
+        keep.as_ref(),
+        range,
         selection_json,
-        baseline_data.as_ref(),
-        trim_columns,
-    )
-    .map_err(|e| e.to_string());
-    (result, "rezolus-report.parquet")
+        events_json.as_deref(),
+    );
+    (result, "rezolus-report.dendro")
 }
 
 /// Convert a `spawn_blocking` outcome into a download Response, logging
@@ -1099,7 +1039,7 @@ mod tests {
     #[test]
     fn an_uploaded_comparison_fills_its_slots_by_arm() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("rev.rez");
+        let path = dir.path().join("rev.dendro");
         let labels: Vec<std::collections::BTreeMap<String, String>> =
             [("s0", "experiment"), ("s1", "baseline")]
                 .iter()
@@ -1110,9 +1050,9 @@ mod tests {
                         .collect()
                 })
                 .collect();
-        crate::mcp::tests::multi_recording_rez_with_labels(&path, &labels);
+        crate::mcp::tests::multi_recording_with_labels(&path, &labels);
         let state = upload_only_state();
-        let _ = ingest_rez_from_path(&state, path, "rev.rez".to_string());
+        let _ = ingest_rez_from_path(&state, path, "rev.dendro".to_string());
         let meta = |id: &str| state.captures.file_metadata_by_id(id).unwrap();
         assert!(meta("baseline").contains("s1"), "{}", meta("baseline"));
         assert!(meta("experiment").contains("s0"), "{}", meta("experiment"));
@@ -1123,7 +1063,7 @@ mod tests {
     #[test]
     fn an_upload_with_one_arm_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("one.rez");
+        let path = dir.path().join("one.dendro");
         let labels: Vec<std::collections::BTreeMap<String, String>> = vec![
             [("source".to_string(), "a".to_string())].into(),
             [
@@ -1132,9 +1072,9 @@ mod tests {
             ]
             .into(),
         ];
-        crate::mcp::tests::multi_recording_rez_with_labels(&path, &labels);
+        crate::mcp::tests::multi_recording_with_labels(&path, &labels);
         let state = upload_only_state();
-        let Json(reply) = ingest_rez_from_path(&state, path, "one.rez".to_string());
+        let Json(reply) = ingest_rez_from_path(&state, path, "one.dendro".to_string());
         let reply = serde_json::to_value(&reply).unwrap();
         assert_eq!(reply["status"], "error", "{reply}");
         assert!(state.captures.get_by_id("experiment").is_none());
@@ -1147,7 +1087,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = crate::viewer::combined_test::concurrent_ab(dir.path());
         let state = upload_only_state();
-        let _ = ingest_rez_from_path(&state, path, "conc.rez".to_string());
+        let _ = ingest_rez_from_path(&state, path, "conc.dendro".to_string());
         let meta = |id: &str| state.captures.file_metadata_by_id(id).unwrap();
         assert!(meta("baseline").contains("svcA"), "{}", meta("baseline"));
         assert!(
@@ -1177,8 +1117,8 @@ mod tests {
         let path = crate::viewer::combined_test::concurrent_ab(dir.path());
         let keep: std::collections::BTreeSet<String> =
             ["cpu_usage".to_string()].into_iter().collect();
-        let bytes = ::report_save::build_rez_report_from_rez(
-            &std::fs::read(&path).unwrap(),
+        let bytes = ::report_save::build_report(
+            ::report_save::ReportSource::Dendro(&std::fs::read(&path).unwrap()),
             None,
             Some(&keep),
             None,
@@ -1186,10 +1126,10 @@ mod tests {
             Some(r#"{"events":[{"timestamp":1700000002000000000,"description":"old"}]}"#),
         )
         .unwrap();
-        let report = dir.path().join("report.rez");
+        let report = dir.path().join("report.dendro");
         std::fs::write(&report, bytes).unwrap();
         let state = upload_only_state();
-        let _ = ingest_rez_from_path(&state, report, "report.rez".to_string());
+        let _ = ingest_rez_from_path(&state, report, "report.dendro".to_string());
         assert_eq!(state.selection.read().as_deref(), Some(r#"{"entries":[]}"#));
         assert_eq!(
             state.trimmed_report_marker.read().as_deref(),
@@ -1211,19 +1151,20 @@ mod tests {
             .to_vec()
     }
 
-    /// The `source` of each recording of a `.rez` that carries a selection.
+    /// The `source` of each recording of a dendro report that carries a
+    /// selection.
     fn marked(bytes: &[u8]) -> Vec<String> {
-        crate::recorder::rez_sqlite::RezDb::open_bytes(bytes.to_vec())
+        dendro::archive::Archive::open_bytes(bytes.to_vec())
             .unwrap()
-            .read_recordings()
+            .read_sources()
             .unwrap()
             .into_iter()
-            .filter(|r| {
-                r.meta
+            .filter(|s| {
+                s.meta
                     .metadata
                     .contains_key(crate::parquet_metadata::KEY_SELECTION)
             })
-            .map(|r| r.meta.labels["source"].clone())
+            .map(|s| s.meta.labels["source"].clone())
             .collect()
     }
 
@@ -1234,7 +1175,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = crate::viewer::combined_test::concurrent_ab(dir.path());
         let state = upload_only_state();
-        let _ = ingest_rez_from_path(&state, path.clone(), "conc.rez".to_string());
+        let _ = ingest_rez_from_path(&state, path.clone(), "conc.dendro".to_string());
         *state.parquet_path.write() = Some(path);
         let bytes = save(&state, r#"{"entries":[],"trim_columns":false}"#).await;
         assert_eq!(marked(&bytes), ["svcA"]);
@@ -1252,7 +1193,7 @@ mod tests {
         use crate::parquet_metadata::{KEY_EVENTS, KEY_REPORT};
         use rez::fixtures::{one_run, Recording};
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("unarmed.rez");
+        let path = dir.path().join("unarmed.dendro");
         let rec = |labels: &'static [(&'static str, &'static str)], cpus| Recording {
             labels,
             metadata: &[("source", "rezolus")],
@@ -1275,7 +1216,7 @@ mod tests {
         let body = r#"{"entries":[],"trim_columns":true,"events":[{"timestamp":1700000002000000000,"description":"rollout"}]}"#;
         let bytes = save(&state, body).await;
         assert_eq!(marked(&bytes), ["svcA"]);
-        let report = dir.path().join("report.rez");
+        let report = dir.path().join("report.dendro");
         std::fs::write(&report, &bytes).unwrap();
 
         let check = |state: &AppState, how: &str| {
@@ -1297,14 +1238,14 @@ mod tests {
         assert!(!reopened.members.read().is_empty(), "opens combined");
         check(&reopened, "file mode");
         let uploaded = upload_only_state();
-        let _ = ingest_rez_from_path(&uploaded, report.clone(), "report.rez".to_string());
+        let _ = ingest_rez_from_path(&uploaded, report.clone(), "report.dendro".to_string());
         check(&uploaded, "upload");
         assert!(uploaded.combined_catalog.read().is_some());
         uploaded.replace_baseline(uploaded.baseline_data());
         assert!(uploaded.combined_catalog.read().is_none());
 
         let mut reg = viewer::WasmCaptureRegistry::new();
-        reg.attach("baseline", &bytes, "report.rez").unwrap();
+        reg.attach("baseline", &bytes, "report.dendro").unwrap();
         assert_eq!(reg.selection("baseline").as_deref(), Some(body));
         let meta: serde_json::Value =
             serde_json::from_str(&reg.file_metadata_json("baseline").unwrap()).unwrap();
@@ -1315,8 +1256,8 @@ mod tests {
         // from the comparison: only svcA carries a report.
         let keep: std::collections::BTreeSet<String> =
             ["cpu_usage".to_string()].into_iter().collect();
-        let old = ::report_save::build_rez_report_from_rez(
-            &std::fs::read(&path).unwrap(),
+        let old = ::report_save::build_report(
+            ::report_save::ReportSource::Dendro(&std::fs::read(&path).unwrap()),
             None,
             Some(&keep),
             None,
@@ -1325,7 +1266,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(marked(&old), ["rezolus"]);
-        let old_path = dir.path().join("old.rez");
+        let old_path = dir.path().join("old.dendro");
         std::fs::write(&old_path, &old).unwrap();
         let state = Arc::new(crate::viewer::combined_test::view(
             &old_path,
@@ -1333,8 +1274,8 @@ mod tests {
         ));
         let again = save(&state, body).await;
         assert_eq!(marked(&again), ["svcA"]);
-        let db = crate::recorder::rez_sqlite::RezDb::open_bytes(again).unwrap();
-        for r in db.read_recordings().unwrap() {
+        let archive = dendro::archive::Archive::open_bytes(again).unwrap();
+        for r in archive.read_sources().unwrap() {
             let has = |k: &str| r.meta.metadata.contains_key(k);
             let anchor = r.meta.labels["source"] == "svcA";
             assert_eq!(has(KEY_EVENTS), anchor, "{:?}", r.meta.labels);
@@ -1348,7 +1289,7 @@ mod tests {
     fn an_uploaded_beside_recording_without_labels_is_named_by_position() {
         use rez::fixtures::{one_run, Recording};
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("pos.rez");
+        let path = dir.path().join("pos.dendro");
         let rec = |labels: &'static [(&'static str, &'static str)]| Recording {
             labels,
             metadata: &[("source", "rezolus")],
@@ -1367,7 +1308,7 @@ mod tests {
         for state in [
             {
                 let state = upload_only_state();
-                let _ = ingest_rez_from_path(&state, path.clone(), "pos.rez".to_string());
+                let _ = ingest_rez_from_path(&state, path.clone(), "pos.dendro".to_string());
                 state
             },
             Arc::new(crate::viewer::combined_test::view(&path, &[])),
@@ -1386,14 +1327,12 @@ mod tests {
         }
     }
 
-    /// Save as Report of a `.rez` source returns a `.rez` report carrying the
-    /// selection, through the handler.
+    /// Save as Report of a `.rez` source returns a `.dendro` report carrying
+    /// the selection, through the handler.
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn save_with_selection_returns_a_rez_report_for_a_rez_source() {
-        use crate::recorder::rez::recorder_tests_support::populated_v3_rez;
+    async fn save_with_selection_returns_a_dendro_report_for_a_rez_source() {
         let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("src.rez");
-        populated_v3_rez(&src, "baseline", &["cpu_usage"], 4);
+        let src = ::rez::fixtures::committed_rez("v3.rez", dir.path());
         let state = upload_only_state();
         *state.parquet_path.write() = Some(src);
 
@@ -1406,12 +1345,15 @@ mod tests {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default()
             .to_string();
-        assert!(disposition.contains("rezolus-report.rez"), "{disposition}");
+        assert!(
+            disposition.contains("rezolus-report.dendro"),
+            "{disposition}"
+        );
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        let db = crate::recorder::rez_sqlite::RezDb::open_bytes(bytes.to_vec()).unwrap();
-        let md = &db.read_recordings().unwrap()[0].meta.metadata;
+        let archive = dendro::archive::Archive::open_bytes(bytes.to_vec()).unwrap();
+        let md = &archive.read_sources().unwrap()[0].meta.metadata;
         assert_eq!(
             md.get(crate::parquet_metadata::KEY_SELECTION)
                 .map(String::as_str),
@@ -1430,8 +1372,7 @@ mod tests {
     #[tokio::test]
     async fn upload_parquet_accepts_v3_sqlite_rez() {
         let dir = tempfile::tempdir().unwrap();
-        let rez_path = dir.path().join("rec.rez");
-        crate::recorder::rez::recorder_tests_support::empty_v3_rez(&rez_path);
+        let rez_path = ::rez::fixtures::committed_rez("v3.rez", dir.path());
         assert_eq!(
             crate::recorder::rez::detect_rez_format(&rez_path).unwrap(),
             crate::recorder::rez::RezFormat::V3Sqlite,

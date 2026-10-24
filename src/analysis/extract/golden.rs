@@ -1,5 +1,5 @@
 //! End-to-end golden-record, determinism, and structural tests over
-//! synthesized `.rez` recordings. The golden's expected document was
+//! synthesized dendro recordings. The golden's expected document was
 //! captured from a reviewed first run (stats depend on PromQL rate() edge
 //! behavior and cannot be hand-authored); the invariant tests below hold
 //! independently of the capture.
@@ -15,7 +15,6 @@ use metriken::Window;
 use metriken_exposition::{Counter, Gauge, Snapshot, SnapshotV2};
 
 use crate::analysis::extract::Provenance;
-use crate::recorder::rez::RezRecorder;
 
 const NS: u64 = 1_000_000_000;
 
@@ -56,7 +55,27 @@ fn snap_with_histograms(
         counters,
         gauges,
         histograms,
+        gauge_histograms: Vec::new(),
     })
+}
+
+/// A finalized dendro archive of one source at `path`, holding `rows`.
+fn write(
+    path: &std::path::Path,
+    metadata: BTreeMap<String, String>,
+    labels: BTreeMap<String, String>,
+    rows: Vec<(Snapshot, u64)>,
+) {
+    ::rez::fixtures::write_dendro(
+        path,
+        &[::rez::fixtures::Source {
+            labels,
+            metadata,
+            rows,
+        }],
+        None,
+        ::rez::fixtures::Finish::Finalized,
+    );
 }
 
 /// 121 snapshots at exactly 1s cadence (120s duration, interval 1.0):
@@ -64,25 +83,23 @@ fn snap_with_histograms(
 /// - `test_stepped` (scheduler): +10/s until t=60, +1000/s after
 /// - `test_depth` (scheduler): constant gauge 5
 fn build_fixture() -> (tempfile::TempDir, std::path::PathBuf) {
-    let mut recorder = RezRecorder::new(
-        [
-            ("source".to_string(), "rezolus".to_string()),
-            ("sampling_interval_ms".to_string(), "1000".to_string()),
-        ]
+    let metadata: BTreeMap<String, String> = [
+        ("source".to_string(), "rezolus".to_string()),
+        ("sampling_interval_ms".to_string(), "1000".to_string()),
+    ]
+    .into_iter()
+    .collect::<BTreeMap<_, _>>();
+    let source_labels: BTreeMap<String, String> = [("source".to_string(), "rezolus".to_string())]
         .into_iter()
-        .collect::<BTreeMap<_, _>>(),
-        [("source".to_string(), "rezolus".to_string())]
-            .into_iter()
-            .collect::<BTreeMap<_, _>>(),
-        "rezolus".to_string(),
-    );
+        .collect::<BTreeMap<_, _>>();
+    let mut rows = Vec::new();
     let mut stepped: u64 = 0;
     for i in 0..121u64 {
         let ts = NS * (i + 1);
         let window = Some(Window::new(ts - 50_000_000, ts));
         stepped += if i < 60 { 10 } else { 1000 };
-        recorder.ingest(
-            &snap(
+        rows.push((
+            snap(
                 ts,
                 vec![
                     Counter::new(
@@ -106,11 +123,11 @@ fn build_fixture() -> (tempfile::TempDir, std::path::PathBuf) {
                 .with_window(window)],
             ),
             ts,
-        );
+        ));
     }
     let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("fixture.rez");
-    recorder.finalize(&path).expect("finalize");
+    let path = dir.path().join("fixture.dendro");
+    write(&path, metadata, source_labels, rows);
     (dir, path)
 }
 
@@ -120,18 +137,16 @@ fn build_fixture() -> (tempfile::TempDir, std::path::PathBuf) {
 /// separate from `build_fixture` so the golden/determinism/invariant tests
 /// above are unaffected if this attempt is ever pared back.
 fn build_fixture_with_histogram() -> (tempfile::TempDir, std::path::PathBuf) {
-    let mut recorder = RezRecorder::new(
-        [
-            ("source".to_string(), "rezolus".to_string()),
-            ("sampling_interval_ms".to_string(), "1000".to_string()),
-        ]
+    let metadata: BTreeMap<String, String> = [
+        ("source".to_string(), "rezolus".to_string()),
+        ("sampling_interval_ms".to_string(), "1000".to_string()),
+    ]
+    .into_iter()
+    .collect::<BTreeMap<_, _>>();
+    let source_labels: BTreeMap<String, String> = [("source".to_string(), "rezolus".to_string())]
         .into_iter()
-        .collect::<BTreeMap<_, _>>(),
-        [("source".to_string(), "rezolus".to_string())]
-            .into_iter()
-            .collect::<BTreeMap<_, _>>(),
-        "rezolus".to_string(),
-    );
+        .collect::<BTreeMap<_, _>>();
+    let mut rows = Vec::new();
     for i in 0..121u64 {
         let ts = NS * (i + 1);
         let window = Some(Window::new(ts - 50_000_000, ts));
@@ -141,8 +156,8 @@ fn build_fixture_with_histogram() -> (tempfile::TempDir, std::path::PathBuf) {
         for v in [10 + i, 20 + i, 30 + i * 2] {
             h.increment(v).expect("increment");
         }
-        recorder.ingest(
-            &snap_with_histograms(
+        rows.push((
+            snap_with_histograms(
                 ts,
                 vec![],
                 vec![],
@@ -154,11 +169,11 @@ fn build_fixture_with_histogram() -> (tempfile::TempDir, std::path::PathBuf) {
                 .with_window(window)],
             ),
             ts,
-        );
+        ));
     }
     let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("fixture_hist.rez");
-    recorder.finalize(&path).expect("finalize");
+    let path = dir.path().join("fixture_hist.dendro");
+    write(&path, metadata, source_labels, rows);
     (dir, path)
 }
 
@@ -170,23 +185,21 @@ fn build_fixture_with_histogram() -> (tempfile::TempDir, std::path::PathBuf) {
 /// Sampler attribution then has only the metric NAME to go on, which is
 /// exactly the inference `Provenance` decides whether to trust.
 fn build_unlabeled_fixture(source: &str) -> (tempfile::TempDir, std::path::PathBuf) {
-    let mut recorder = RezRecorder::new(
-        [
-            ("source".to_string(), source.to_string()),
-            ("sampling_interval_ms".to_string(), "1000".to_string()),
-        ]
+    let metadata: BTreeMap<String, String> = [
+        ("source".to_string(), source.to_string()),
+        ("sampling_interval_ms".to_string(), "1000".to_string()),
+    ]
+    .into_iter()
+    .collect::<BTreeMap<_, _>>();
+    let source_labels: BTreeMap<String, String> = [("source".to_string(), source.to_string())]
         .into_iter()
-        .collect::<BTreeMap<_, _>>(),
-        [("source".to_string(), source.to_string())]
-            .into_iter()
-            .collect::<BTreeMap<_, _>>(),
-        source.to_string(),
-    );
+        .collect::<BTreeMap<_, _>>();
+    let mut rows = Vec::new();
     for i in 0..121u64 {
         let ts = NS * (i + 1);
         let window = Some(Window::new(ts - 50_000_000, ts));
-        recorder.ingest(
-            &snap(
+        rows.push((
+            snap(
                 ts,
                 vec![Counter::new(
                     "cpu_cycles".to_string(),
@@ -199,11 +212,11 @@ fn build_unlabeled_fixture(source: &str) -> (tempfile::TempDir, std::path::PathB
                 vec![],
             ),
             ts,
-        );
+        ));
     }
     let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("unlabeled.rez");
-    recorder.finalize(&path).expect("finalize");
+    let path = dir.path().join("unlabeled.dendro");
+    write(&path, metadata, source_labels, rows);
     (dir, path)
 }
 

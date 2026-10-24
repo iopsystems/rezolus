@@ -209,6 +209,79 @@ fn standard_channels_fan_rpm_pwm_and_cooling_state_are_read_from_files() {
 }
 
 #[test]
+fn drive_hwmon_chips_are_left_to_drivehealth() {
+    let root = tempfile::tempdir().unwrap();
+    for (n, chip) in ["nvme", "drivetemp", "k10temp"].iter().enumerate() {
+        let hwmon = root.path().join(format!("class/hwmon/hwmon{n}"));
+        write(hwmon.join("name"), chip);
+        write(hwmon.join("temp1_input"), "45000");
+    }
+    let chips: Vec<_> = discover(root.path())
+        .descriptors
+        .into_iter()
+        .map(|d| d.chip)
+        .collect();
+    assert_eq!(chips, ["k10temp"]);
+}
+
+#[test]
+fn acpi_processor_cooling_devices_are_not_read() {
+    let root = tempfile::tempdir().unwrap();
+    for (n, kind) in ["Processor", "Processor", "pwm-fan"].iter().enumerate() {
+        let cooling = root.path().join(format!("class/thermal/cooling_device{n}"));
+        write(cooling.join("type"), kind);
+        write(cooling.join("cur_state"), "0");
+    }
+    let chips: Vec<_> = discover(root.path())
+        .descriptors
+        .into_iter()
+        .map(|d| d.chip)
+        .collect();
+    assert_eq!(chips, ["pwm-fan"]);
+}
+
+#[test]
+fn asusec_empty_temperature_headers_are_not_read() {
+    let root = tempfile::tempdir().unwrap();
+    make_hwmon(
+        root.path(),
+        "asusec",
+        &[
+            ("temp1_input", "76000"),
+            ("temp1_label", "Chipset"),
+            ("temp6_input", "-40000"),
+            ("temp6_label", "Water_In"),
+            ("fan1_input", "837"),
+        ],
+    );
+    // Another chip's -40 °C is a reading, not an empty header.
+    let other = root.path().join("class/hwmon/hwmon1");
+    write(other.join("name"), "generic");
+    write(other.join("temp1_input"), "-40000");
+    write(other.join("temp1_label"), "outdoor");
+    let found = discover(root.path());
+    let channels: Vec<_> = found
+        .descriptors
+        .iter()
+        .map(|d| {
+            (
+                d.chip.as_str(),
+                d.family,
+                d.label.clone().unwrap_or_default(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        channels,
+        [
+            ("asusec", Family::Temperature, "Chipset".to_string()),
+            ("generic", Family::Temperature, "outdoor".to_string()),
+            ("asusec", Family::FanSpeed, String::new()),
+        ]
+    );
+}
+
+#[test]
 fn disabled_faulted_missing_and_malformed_inputs_are_absent_not_zero() {
     let root = tempfile::tempdir().unwrap();
     let hwmon = make_hwmon(

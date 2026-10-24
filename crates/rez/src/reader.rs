@@ -16,7 +16,7 @@ use metriken_storage::BufferPool;
 /// [`ArchiveReader`], opened from a path or bytes by content. Derefs to it,
 /// so its methods (`composition_sources`, `metric_metadata`, `complete`, ...)
 /// are this type's.
-pub struct RezReader(pub ArchiveReader);
+pub struct RezReader(pub ArchiveReader, Option<HashMap<String, String>>);
 
 impl std::ops::Deref for RezReader {
     type Target = ArchiveReader;
@@ -28,10 +28,145 @@ impl std::ops::Deref for RezReader {
 /// One `RezReader` per recording, paired with that recording's label set.
 pub type LabeledRecordings = Vec<(BTreeMap<String, String>, RezReader)>;
 
-fn wrap(readers: metriken_storage::LabeledRecordings) -> LabeledRecordings {
-    readers
+/// The metadata key a recording's timeline events are stored under
+/// (`parquet_metadata::KEY_EVENTS` in the binary).
+const KEY_EVENTS: &str = "events";
+
+/// The metadata of a read group of several sources. `events` is the union
+/// of every source's events: events are records a source gains one at a
+/// time (an annotate of a copy, a check of the original), so the group
+/// shows each of them once, deduplicated by `id` (the first source's copy
+/// kept), an event with no `id` kept unless an identical one is already
+/// there, sorted by timestamp. Every other key (KPIs, systeminfo,
+/// descriptions, the agent version) is a whole value with no merge rule, and
+/// is taken from the first source (in archive order) that has it: the
+/// sources of a group are copies of one recording or recordings of one
+/// agent process, so they agree on a key both hold unless one was edited
+/// alone, and a key only one holds (KPIs annotated onto a snapshot before it
+/// was combined with its original) is the group's whichever order they were
+/// combined in. So removing KPIs from one copy (`recording annotate --undo`)
+/// does not remove them from a combined recording whose other source still
+/// has them; annotate the combined recording instead, which edits every
+/// source. A payload that does not parse is skipped, as a reader of one
+/// source would fail to read it.
+fn group_metadata(members: &[ArchiveReader]) -> HashMap<String, String> {
+    let mut metadata: HashMap<String, String> = HashMap::new();
+    for member in members {
+        for (key, value) in member.file_metadata() {
+            metadata.entry(key).or_insert(value);
+        }
+    }
+    let mut events: Vec<serde_json::Value> = Vec::new();
+    let mut ids = std::collections::HashSet::new();
+    let mut payloads = 0;
+    for member in members {
+        let Some(raw) = member.file_metadata().remove(KEY_EVENTS) else {
+            continue;
+        };
+        let Ok(serde_json::Value::Object(mut payload)) = serde_json::from_str(&raw) else {
+            continue;
+        };
+        payloads += 1;
+        let Some(serde_json::Value::Array(list)) = payload.remove(KEY_EVENTS) else {
+            continue;
+        };
+        for event in list {
+            let fresh = match event.get("id").and_then(|v| v.as_str()) {
+                Some(id) if !id.is_empty() => ids.insert(id.to_string()),
+                _ => !events.contains(&event),
+            };
+            if fresh {
+                events.push(event);
+            }
+        }
+    }
+    // One payload is already in `metadata` as it is.
+    if payloads > 1 {
+        events.sort_by_key(|e| {
+            (
+                e.get("timestamp").and_then(|t| t.as_u64()).unwrap_or(0),
+                e.get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            )
+        });
+        metadata.insert(
+            KEY_EVENTS.to_string(),
+            serde_json::json!({ KEY_EVENTS: events }).to_string(),
+        );
+    }
+    metadata
+}
+
+/// `recordings`, one reader per archive source, joined into one reader per
+/// read group (`metriken_storage::process::read_groups`): a source and its
+/// copies (one uuid), and sources of one producer epoch over overlapping
+/// time, are one recording, labelled with the group's labels. A source in no
+/// group stays a recording of its own. The grouping is the one
+/// `ArchiveReader::read_groups` makes over the same sources joined, so a
+/// group read here answers as it does inside a combined reader.
+///
+/// What a caller sees as "a recording" (the viewer's slots and members, the
+/// MCP and `recording check` selectors) is a read group; a writer that edits
+/// sources maps a group back to them through its reader's
+/// `ArchiveReader::sources`.
+fn read_groups(recordings: metriken_storage::LabeledRecordings) -> LabeledRecordings {
+    let one_each = recordings.iter().all(|(_, r)| r.sources().len() == 1);
+    if recordings.len() < 2 || !one_each {
+        return recordings
+            .into_iter()
+            .map(|(l, r)| (l, RezReader(r, None)))
+            .collect();
+    }
+    let groups = {
+        let infos: Vec<metriken_storage::process::SourceInfo> = recordings
+            .iter()
+            .map(|(_, r)| r.sources()[0].clone())
+            .collect();
+        let tables: Vec<Vec<&metriken_storage::reader::SamplerReader>> = recordings
+            .iter()
+            .map(|(_, r)| r.owners_of(&r.all_names()))
+            .collect();
+        // As `ArchiveReader::process_groups` asks: a source holds a row in
+        // the range when any of its tables does, and cannot tell when none
+        // does and one cannot tell.
+        let formed = metriken_storage::process::form(&infos, &mut |source, lo, hi| {
+            let mut unknown = false;
+            for t in &tables[source] {
+                match t.has_row_in(lo, hi) {
+                    Some(true) => return Some(true),
+                    Some(false) => {}
+                    None => unknown = true,
+                }
+            }
+            (!unknown).then_some(false)
+        });
+        metriken_storage::process::read_groups(&infos, &formed)
+    };
+    let mut slots: Vec<Option<ArchiveReader>> =
+        recordings.into_iter().map(|(_, r)| Some(r)).collect();
+    groups
         .into_iter()
-        .map(|(l, r)| (l, RezReader(r)))
+        .map(|group| {
+            let mut members: Vec<ArchiveReader> = group
+                .sources
+                .iter()
+                .map(|&i| slots[i].take().expect("a source is in one read group"))
+                .collect();
+            if members.len() == 1 {
+                return (
+                    group.labels,
+                    RezReader(members.pop().expect("one member"), None),
+                );
+            }
+            let metadata = group_metadata(&members);
+            let filename = members[0].filename();
+            (
+                group.labels,
+                RezReader(ArchiveReader::flatten(members, filename), Some(metadata)),
+            )
+        })
         .collect()
 }
 
@@ -48,9 +183,10 @@ impl RezReader {
         path: &Path,
         pool: Arc<BufferPool>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(RezReader(metriken_storage::rez::open::open_with_pool(
-            path, pool,
-        )?))
+        Ok(RezReader(
+            metriken_storage::rez::open::open_with_pool(path, pool)?,
+            None,
+        ))
     }
 
     /// [`open_recordings`](Self::open_recordings) for an archive that exists
@@ -60,7 +196,7 @@ impl RezReader {
         bytes: Vec<u8>,
         pool: Arc<BufferPool>,
     ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
-        Ok(wrap(
+        Ok(read_groups(
             metriken_storage::rez::open::open_recordings_from_bytes(bytes, pool)?,
         ))
     }
@@ -68,11 +204,14 @@ impl RezReader {
     /// Open an archive as one `RezReader` **per recording**, paired with that
     /// recording's labels. Used by the viewer to map a 2-recording archive
     /// onto baseline/experiment without cross-recording name collisions.
+    ///
+    /// A recording is a read group of the archive's sources (`read_groups`
+    /// above): a source and its copies are one.
     pub fn open_recordings(
         path: &Path,
         pool: Arc<BufferPool>,
     ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
-        Ok(wrap(metriken_storage::rez::open::open_recordings(
+        Ok(read_groups(metriken_storage::rez::open::open_recordings(
             path, pool,
         )?))
     }
@@ -103,6 +242,8 @@ impl RezReader {
                 .map(|t| t.recording_labels() as *const BTreeMap<String, String> as usize)
         };
         let ids: Vec<Option<usize>> = recordings.iter().map(|(_, r)| identity(&r.0)).collect();
+        // The first recording's metadata, its group's events merged.
+        let metadata = recordings.first().and_then(|(_, r)| r.1.clone());
         let joined =
             ArchiveReader::flatten(recordings.into_iter().map(|(_, r)| r.0).collect(), filename);
         let names = joined.all_names();
@@ -117,7 +258,7 @@ impl RezReader {
                 Some(joined.series_labels().of(table).inner.clone())
             })
             .collect();
-        (RezReader(joined), labels)
+        (RezReader(joined, metadata), labels)
     }
 }
 
@@ -168,6 +309,12 @@ impl MetricsSource for RezReader {
     fn histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
         self.0.histogram_labels(name)
     }
+    fn gauge_histogram_names(&self) -> Vec<String> {
+        self.0.gauge_histogram_names()
+    }
+    fn gauge_histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
+        self.0.gauge_histogram_labels(name)
+    }
     fn time_range(&self) -> Option<(f64, f64)> {
         self.0.time_range()
     }
@@ -190,7 +337,10 @@ impl MetricsSource for RezReader {
         self.0.metadata_get(key)
     }
     fn file_metadata(&self) -> HashMap<String, String> {
-        self.0.file_metadata()
+        match &self.1 {
+            Some(metadata) => metadata.clone(),
+            None => self.0.file_metadata(),
+        }
     }
     fn sample_timestamps(&self) -> Vec<u64> {
         self.0.sample_timestamps()
@@ -200,26 +350,16 @@ impl MetricsSource for RezReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rez::{self, RezRecorder};
+    use crate::fixtures::{self, Finish, Source};
+    use crate::rez;
     use crate::rez_sqlite::RezDb;
     use crate::window::Window;
     use metriken_exposition::{Counter, Gauge, Snapshot, SnapshotV2};
     use metriken_query::RateMode;
-    use metriken_storage::rez::open::table_segments;
     use std::time::SystemTime;
 
     fn counter(name: &str, sampler: &str, v: u64, w: Option<Window>) -> Counter {
-        Counter::new(
-            name.to_string(),
-            v,
-            [
-                ("metric".to_string(), name.to_string()),
-                ("sampler".to_string(), sampler.to_string()),
-            ]
-            .into_iter()
-            .collect(),
-        )
-        .with_window(w)
+        fixtures::counter(name, sampler, v, w)
     }
 
     /// Two readers of one recording answer alike: names, labels, span,
@@ -281,36 +421,20 @@ mod tests {
     }
 
     fn gauge(name: &str, sampler: &str, v: i64, w: Option<Window>) -> Gauge {
-        Gauge::new(
-            name.to_string(),
-            v,
-            [
-                ("metric".to_string(), name.to_string()),
-                ("sampler".to_string(), sampler.to_string()),
-            ]
-            .into_iter()
-            .collect(),
-        )
-        .with_window(w)
+        fixtures::gauge(name, sampler, v, w)
     }
 
     fn snap(ts: u64, counters: Vec<Counter>, gauges: Vec<Gauge>) -> Snapshot {
-        Snapshot::V2(SnapshotV2 {
-            systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
-            duration: std::time::Duration::ZERO,
-            metadata: HashMap::new(),
-            counters,
-            gauges,
-            histograms: Vec::new(),
-        })
+        fixtures::snap(ts, counters, gauges)
     }
 
     /// The fixture's rows as `(snapshot, timestamp)`: two samplers
     /// (`cpu_usage` = the `cpu_cycles` counter plus the `frequency` gauge,
     /// `blockio_requests` = the `reads` counter), one row per second.
     ///
-    /// Shared by the atomic and streaming builders below so a segmented archive
-    /// can be compared against a single-segment one holding the *same* rows.
+    /// Shared by the single-segment and segmented builders below so a
+    /// segmented archive can be compared against a single-segment one holding
+    /// the *same* rows.
     fn fixture_rows(n: u64) -> Vec<(Snapshot, u64)> {
         (0..n)
             .map(|i| {
@@ -338,71 +462,72 @@ mod tests {
     }
 
     fn rez_labels() -> BTreeMap<String, String> {
-        [("source".to_string(), "rezolus".to_string())]
-            .into_iter()
-            .collect()
+        fixtures::map(&[("source", "rezolus")])
     }
 
-    /// Write `rows` as a single-segment archive (the atomic writer).
-    fn write_atomic_rez(rows: &[(Snapshot, u64)], out: &std::path::Path) {
-        let mut r = RezRecorder::new(rez_labels(), rez_labels(), "rezolus".to_string());
-        for (s, ts) in rows {
-            r.ingest(s, *ts);
+    /// One `source=rezolus` source of `rows`, `source` also in its metadata.
+    fn rezolus_source(rows: &[(Snapshot, u64)]) -> Source {
+        Source {
+            labels: rez_labels(),
+            metadata: rez_labels(),
+            rows: rows.to_vec(),
         }
-        r.finalize(out).unwrap();
     }
 
-    /// Write the same `rows` through the streaming writer with a tiny row cap,
-    /// so every table seals into several segments.
-    fn write_streamed_rez(rows: &[(Snapshot, u64)], max_rows: usize, out: &std::path::Path) {
-        use crate::rez_stream::{ManifestSeed, RezWriterHandle, StreamRecorder};
-        use crate::seal_policy::SealPolicy;
+    /// Write `rows` as a finalized archive whose every stream is one segment.
+    fn write_one_segment(rows: &[(Snapshot, u64)], out: &std::path::Path) {
+        fixtures::write_dendro(out, &[rezolus_source(rows)], None, Finish::Finalized);
+    }
 
-        let handle = RezWriterHandle::create(
+    /// Write the same `rows` sealed every `max_rows` rows, so every stream
+    /// is several segments.
+    fn write_segmented(rows: &[(Snapshot, u64)], max_rows: usize, out: &std::path::Path) {
+        fixtures::write_dendro(
             out,
-            ManifestSeed {
-                dir: "rezolus".to_string(),
-                labels: rez_labels(),
-                metadata: rez_labels(),
-                clock_anchor_wall_ns: 1_700_000_000_000_000_000,
-            },
-        )
-        .unwrap();
-        let mut rec = StreamRecorder::with_policy(
-            handle,
-            SealPolicy {
-                max_bytes: usize::MAX,
-                max_rows,
-                max_age: std::time::Duration::from_secs(3600),
-            },
+            &[rezolus_source(rows)],
+            Some(max_rows),
+            Finish::Finalized,
         );
-        let mut last_ts = 0;
-        for (s, ts) in rows {
-            rec.ingest(s, *ts, 0);
-            rec.maybe_seal().unwrap();
-            last_ts = *ts;
-        }
-        rec.finalize((last_ts, 0)).unwrap();
     }
 
-    /// `sampler -> segment count` for a written archive.
+    /// `stream -> segment count` of an archive's only source.
     fn segment_counts(path: &std::path::Path) -> BTreeMap<String, usize> {
-        let (manifest, _) = crate::rez::read_archive_bytes(path).unwrap();
-        manifest.recordings[0]
-            .tables
-            .iter()
-            .map(|t| (t.sampler.clone(), t.segment_files().len()))
-            .collect()
+        let mut counts = fixtures::segment_counts(path);
+        assert_eq!(counts.len(), 1, "one source");
+        counts.pop().unwrap()
     }
 
-    /// Build a 2-sampler .rez fixture on disk; return (tempdir, path).
+    /// A 2-recording archive of one rows set, labelled `arm=arm0` and
+    /// `arm=arm1`: the two recordings hold the same rows.
+    fn two_arm_archive(rows: &[(Snapshot, u64)], out: &std::path::Path) {
+        let arm = |a: &str| Source {
+            labels: fixtures::map(&[("source", "rezolus"), ("arm", a)]),
+            metadata: rez_labels(),
+            rows: rows.to_vec(),
+        };
+        fixtures::write_dendro(out, &[arm("arm0"), arm("arm1")], None, Finish::Finalized);
+    }
+
+    /// A 2-recording v2 tar `.rez`, labelled `arm=arm0` and `arm=arm1`
+    /// beside `source=rezolus,host=web-01`, each holding the committed
+    /// `v2.rez`'s rows (`ops`, `mem_free`, `lat`, 12 ticks from 1700000000 s).
+    fn two_arm_tar(out: &std::path::Path) {
+        fixtures::tar_rez(
+            out,
+            &[
+                &[("source", "rezolus"), ("host", "web-01"), ("arm", "arm0")],
+                &[("source", "rezolus"), ("host", "web-01"), ("arm", "arm1")],
+            ],
+        );
+    }
+
     /// Two samplers publishing the SAME metric name — the `gpu_amd_smi` /
     /// `gpu_nvidia` shape, where both vendors declare vendor-neutral names and
     /// only one populates on any given host.
     pub(super) fn two_sampler_rez_sharing_a_metric_name() -> (tempfile::TempDir, std::path::PathBuf)
     {
         let dir = tempfile::tempdir().unwrap();
-        let out = dir.path().join("shared.rez");
+        let out = dir.path().join("shared.dendro");
         let rows: Vec<(Snapshot, u64)> = (0..3u64)
             .map(|i| {
                 let ts = 1_000_000_000 * (i + 1);
@@ -420,14 +545,15 @@ mod tests {
                 )
             })
             .collect();
-        write_atomic_rez(&rows, &out);
+        write_one_segment(&rows, &out);
         (dir, out)
     }
 
+    /// A finalized 2-sampler archive of [`fixture_rows`]`(3)`.
     pub(super) fn two_sampler_rez() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        let out = dir.path().join("two.rez");
-        write_atomic_rez(&fixture_rows(3), &out);
+        let out = dir.path().join("two.dendro");
+        write_one_segment(&fixture_rows(3), &out);
         (dir, out)
     }
 
@@ -468,88 +594,149 @@ mod tests {
         );
     }
 
-    /// A single-sampler `.rez` holding one histogram, `n` rows, counts rising
-    /// so a delta-based histogram scalar has something to report. Written
-    /// through the STREAMING writer with a small row cap so the table is
-    /// multi-segment and `RezReader` opens it with the segment-aware source —
-    /// the reader that implements the `__run__` conflict policy.
-    fn segmented_histogram_rez(n: u64, max_rows: usize, out: &std::path::Path) {
-        use crate::rez_stream::{ManifestSeed, RezWriterHandle, StreamRecorder};
-        use crate::seal_policy::SealPolicy;
-        use metriken_exposition::Histogram as ExpHistogram;
-
-        let handle = RezWriterHandle::create(
-            out,
-            ManifestSeed {
-                dir: "rezolus".to_string(),
-                labels: rez_labels(),
-                metadata: rez_labels(),
-                clock_anchor_wall_ns: 1_700_000_000_000_000_000,
-            },
-        )
-        .unwrap();
-        let mut rec = StreamRecorder::with_policy(
-            handle,
-            SealPolicy {
-                max_bytes: usize::MAX,
-                max_rows,
-                max_age: std::time::Duration::from_secs(3600),
-            },
-        );
-        let mut last_ts = 0;
-        for i in 0..n {
-            let ts = 1_000_000_000 * (i + 1);
-            let mut h = ::histogram::Histogram::new(7, 64).unwrap();
-            for _ in 0..=i {
-                h.increment(1_000).unwrap();
+    /// A read group's metadata takes each key from the first source, in
+    /// archive order, that has it: a key both hold is the first's, and a key
+    /// only the second holds is the group's.
+    #[test]
+    fn a_groups_metadata_is_the_first_source_holding_each_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("twice.dendro");
+        let source = |k: &str, only: Option<&str>| {
+            let mut metadata = fixtures::map(&[("producer_epoch", "E"), ("k", k)]);
+            if let Some(only) = only {
+                metadata.insert("only".to_string(), only.to_string());
             }
-            let hist = ExpHistogram::new(
-                "latency".to_string(),
-                h,
-                [
-                    ("metric".to_string(), "latency".to_string()),
-                    ("sampler".to_string(), "scheduler_runqueue".to_string()),
-                    // The query engine keys histogram decoding off these, as
-                    // the agent's own snapshots carry them.
-                    ("grouping_power".to_string(), "7".to_string()),
-                    ("max_value_power".to_string(), "64".to_string()),
-                ]
-                .into_iter()
-                .collect(),
-            )
-            .with_window(Some(Window::new(ts - 50_000_000, ts)));
-            let snapshot = Snapshot::V2(SnapshotV2 {
-                systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
-                duration: std::time::Duration::ZERO,
-                metadata: HashMap::new(),
-                counters: Vec::new(),
-                gauges: Vec::new(),
-                histograms: vec![hist],
-            });
-            rec.ingest(&snapshot, ts, 0);
-            rec.maybe_seal().unwrap();
-            last_ts = ts;
+            Source {
+                labels: fixtures::map(&[("source", "rezolus")]),
+                metadata,
+                rows: (0..4u64)
+                    .map(|i| {
+                        let ts = fixtures::ANCHOR + i * 1_000_000_000;
+                        let w = Some(Window::new(ts - 50_000_000, ts));
+                        (
+                            fixtures::snap_counters(ts, vec![fixtures::counter("ops", "s", i, w)]),
+                            ts,
+                        )
+                    })
+                    .collect(),
+            }
+        };
+        fixtures::write_dendro(
+            &path,
+            &[source("first", None), source("second", Some("x"))],
+            None,
+            Finish::Finalized,
+        );
+        let readers = RezReader::open_recordings(&path, BufferPool::new(8 << 20)).unwrap();
+        assert_eq!(readers.len(), 1, "one epoch, overlapping: one recording");
+        let md = readers[0].1.file_metadata();
+        assert_eq!(md.get("k").map(String::as_str), Some("first"));
+        assert_eq!(md.get("only").map(String::as_str), Some("x"));
+    }
+
+    /// A gauge histogram shows through `RezReader` and `LiveReader`, which
+    /// forward the two gauge-histogram listings `MetricsSource` defaults to
+    /// empty, and its quantiles read.
+    #[test]
+    fn a_gauge_histogram_shows_through_rez_and_live_readers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gh.dendro");
+        let rows = (0..4u64)
+            .map(|i| {
+                let ts = fixtures::ANCHOR + i * 1_000_000_000;
+                (
+                    fixtures::snap_gauge_histogram(ts, "depth", "queue", 100 + i),
+                    ts,
+                )
+            })
+            .collect();
+        let source = Source {
+            labels: fixtures::map(&[("source", "rezolus")]),
+            metadata: fixtures::map(&[]),
+            rows,
+        };
+        fixtures::write_dendro(&path, &[source], None, Finish::Finalized);
+
+        let readers = RezReader::open_recordings(&path, BufferPool::new(8 << 20)).unwrap();
+        let live = crate::live::LiveReader::open(&path, None, BufferPool::new(8 << 20)).unwrap();
+        for (what, reader) in [
+            ("RezReader", &readers[0].1 as &dyn MetricsSource),
+            ("LiveReader", &live as &dyn MetricsSource),
+        ] {
+            assert_eq!(reader.gauge_histogram_names(), ["depth"], "{what}");
+            assert!(reader.histogram_names().is_empty(), "{what}");
+            let labels = reader.gauge_histogram_labels("depth");
+            assert_eq!(labels.len(), 1, "{what}: {labels:?}");
+            let (start, end) = reader.time_range().unwrap();
+            let q = reader
+                .query_range("histogram_quantile(0.5, depth)", start, end, 1.0)
+                .unwrap();
+            let json = serde_json::to_string(&q).unwrap();
+            assert!(json.contains("\"values\":[["), "{what}: {json}");
         }
-        rec.finalize((last_ts, 0)).unwrap();
+    }
+
+    /// A single-sampler archive holding one histogram, `n` rows, counts
+    /// rising so a delta-based histogram scalar has something to report.
+    /// Sealed every `max_rows` rows so the table is multi-segment and
+    /// `RezReader` opens it with the segment-aware source — the reader that
+    /// implements the `__run__` conflict policy.
+    fn segmented_histogram_rez(n: u64, max_rows: usize, out: &std::path::Path) {
+        use metriken_exposition::Histogram as ExpHistogram;
+        let rows: Vec<(Snapshot, u64)> = (0..n)
+            .map(|i| {
+                let ts = 1_000_000_000 * (i + 1);
+                let mut h = ::histogram::Histogram::new(7, 64).unwrap();
+                for _ in 0..=i {
+                    h.increment(1_000).unwrap();
+                }
+                let hist = ExpHistogram::new(
+                    "latency".to_string(),
+                    h,
+                    [
+                        ("metric".to_string(), "latency".to_string()),
+                        ("sampler".to_string(), "scheduler_runqueue".to_string()),
+                        // The query engine keys histogram decoding off these,
+                        // as the agent's own snapshots carry them.
+                        ("grouping_power".to_string(), "7".to_string()),
+                        ("max_value_power".to_string(), "64".to_string()),
+                    ]
+                    .into_iter()
+                    .collect(),
+                )
+                .with_window(Some(Window::new(ts - 50_000_000, ts)));
+                let snapshot = Snapshot::V2(SnapshotV2 {
+                    systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
+                    duration: std::time::Duration::ZERO,
+                    metadata: HashMap::new(),
+                    counters: Vec::new(),
+                    gauges: Vec::new(),
+                    histograms: vec![hist],
+                    gauge_histograms: Vec::new(),
+                });
+                (snapshot, ts)
+            })
+            .collect();
+        write_segmented(&rows, max_rows, out);
     }
 
     /// End-to-end check of the segmented conflict policy's escape hatch through
     /// the *front door*. `RezReader` routes every query through `columns()`
     /// first, and `columns()` requires every filter key to be present on the
     /// label set — so a `__run__`-qualified selector that `column_map` does not
-    /// tag is rejected as "references no metric present in this .rez" long
+    /// tag is rejected as "references no metric present in this archive" long
     /// before `query_range` sees it. A dashboard pinning `__run__="0"` for
     /// stability across an A/B pair must keep working on the side that never
     /// drifted.
     ///
     /// Segmented tables only: `__run__` is a segment-splice concept, so a
-    /// single-segment table (the atomic writer, or a slow sampler that never
-    /// rolled) is opened with the plain `ParquetReader` and knows nothing
+    /// single-segment table (sealed only at finalize, or a slow sampler that
+    /// never rolled) is opened with the plain `ParquetReader` and knows nothing
     /// about it.
     #[test]
     fn run_qualified_histogram_query_routes_through_rez_reader() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("hist.rez");
+        let path = dir.path().join("hist.dendro");
         segmented_histogram_rez(6, 2, &path);
         assert!(
             segment_counts(&path)["scheduler_runqueue"] > 1,
@@ -576,39 +763,65 @@ mod tests {
         assert!(q.is_ok(), "pinned histogram query should resolve: {q:?}");
     }
 
+    /// One reader per recording, from a tar (`read_recordings`, then one
+    /// in-memory reader per recording) and from a dendro archive (its
+    /// catalog's sources).
     #[test]
     fn open_recordings_returns_one_reader_per_recording() {
-        // Build a 2-recording .rez by reading a 1-recording fixture and writing
-        // it twice under distinct dirs/arms via write_archive_bytes.
-        let (_d, p) = two_sampler_rez();
-        let (m, rb) = crate::rez::read_archive_bytes(&p).unwrap();
-        let rec0 = m.recordings.into_iter().next().unwrap();
-        let bytes0: Vec<Vec<Vec<u8>>> = rb
-            .into_iter()
-            .next()
-            .unwrap()
-            .tables
-            .into_iter()
-            .map(|(_, b)| b)
-            .collect();
-
-        let mut a = rec0.clone();
-        a.dir = "arm0".to_string();
-        a.labels.insert("arm".to_string(), "arm0".to_string());
-        let mut b = rec0.clone();
-        b.dir = "arm1".to_string();
-        b.labels.insert("arm".to_string(), "arm1".to_string());
-
         let d = tempfile::tempdir().unwrap();
-        let out = d.path().join("two_rec.rez");
-        crate::rez::write_archive_bytes(&out, &[(a, bytes0.clone()), (b, bytes0)]).unwrap();
+        let tar = d.path().join("two_rec.rez");
+        two_arm_tar(&tar);
+        let dendro = d.path().join("two_rec.dendro");
+        two_arm_archive(&fixture_rows(3), &dendro);
 
-        let pool = BufferPool::new(64 * 1024 * 1024);
-        let readers = RezReader::open_recordings(&out, pool).unwrap();
-        assert_eq!(readers.len(), 2);
-        assert_eq!(readers[0].0.get("arm").map(String::as_str), Some("arm0"));
-        assert_eq!(readers[1].0.get("arm").map(String::as_str), Some("arm1"));
-        assert!(!readers[0].1.counter_names().is_empty());
+        for out in [&tar, &dendro] {
+            let pool = BufferPool::new(64 * 1024 * 1024);
+            let readers = RezReader::open_recordings(out, pool).unwrap();
+            assert_eq!(readers.len(), 2, "{}", out.display());
+            assert_eq!(readers[0].0.get("arm").map(String::as_str), Some("arm0"));
+            assert_eq!(readers[1].0.get("arm").map(String::as_str), Some("arm1"));
+            assert!(!readers[0].1.counter_names().is_empty());
+        }
+    }
+
+    /// The labels of a 2-recording archive opened from disk and from bytes,
+    /// and for each recording its names, span, sample timestamps, metadata
+    /// and the value of `query` at its last row, so a reader that opened the
+    /// wrong recording is visible.
+    fn assert_bytes_match_disk(path: &std::path::Path, query: &str) {
+        let from_disk =
+            RezReader::open_recordings(path, BufferPool::new(16 * 1024 * 1024)).unwrap();
+        let from_bytes = RezReader::open_recordings_from_bytes(
+            std::fs::read(path).unwrap(),
+            BufferPool::new(16 * 1024 * 1024),
+        )
+        .unwrap();
+
+        assert_eq!(from_disk.len(), 2, "fixture sanity: two recordings");
+        assert_eq!(from_bytes.len(), from_disk.len());
+        let last_value = |r: &RezReader| {
+            let (_, end) = r.time_range().unwrap();
+            serde_json::to_value(r.query(query, Some(end)).unwrap()).unwrap()
+        };
+        let mut values = Vec::new();
+        for ((disk_labels, disk), (byte_labels, bytes)) in from_disk.iter().zip(&from_bytes) {
+            assert_eq!(byte_labels, disk_labels);
+            assert_eq!(bytes.counter_names(), disk.counter_names());
+            assert_eq!(bytes.gauge_names(), disk.gauge_names());
+            assert_eq!(bytes.time_range(), disk.time_range());
+            assert_eq!(bytes.file_metadata(), disk.file_metadata());
+            assert_eq!(bytes.sample_timestamps(), disk.sample_timestamps());
+            // By VALUE, not merely "some series came back": the fixture's
+            // two recordings hold different numbers, so a byte-backed reader
+            // that opened the wrong recording would still answer here.
+            let value = last_value(bytes);
+            assert_eq!(value, last_value(disk));
+            values.push(value);
+        }
+        assert_ne!(
+            values[0], values[1],
+            "fixture sanity: the recordings differ"
+        );
     }
 
     /// Reading an archive from BYTES has to answer exactly what reading the
@@ -620,34 +833,43 @@ mod tests {
     #[test]
     fn a_v3_archive_read_from_bytes_matches_the_same_archive_read_from_disk() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("fleet.rez");
-        crate::rez::recorder_tests_support::multi_recording_v3_rez(
-            &path,
-            &[("redis", "web-01"), ("valkey", "web-01")],
+        assert_bytes_match_disk(
+            &fixtures::committed_rez("v3-multi.rez", dir.path()),
+            "mem_free",
         );
+    }
 
-        let from_disk =
-            RezReader::open_recordings(&path, BufferPool::new(16 * 1024 * 1024)).unwrap();
-        let from_bytes = RezReader::open_recordings_from_bytes(
-            std::fs::read(&path).unwrap(),
-            BufferPool::new(16 * 1024 * 1024),
-        )
-        .unwrap();
-
-        assert_eq!(from_bytes.len(), from_disk.len());
-        for ((disk_labels, disk), (byte_labels, bytes)) in from_disk.iter().zip(&from_bytes) {
-            assert_eq!(byte_labels, disk_labels);
-            assert_eq!(bytes.counter_names(), disk.counter_names());
-            assert_eq!(bytes.time_range(), disk.time_range());
-            // By VALUE, not merely "some series came back": the two arms of
-            // this fixture hold different numbers, so a byte-backed reader
-            // that opened the wrong recording would still answer here.
-            // Identity, not merely "some series came back": the fixture's two
-            // arms both hold `cpu_cycles`, so an assertion that data exists
-            // would pass even if the byte-backed reader opened the wrong one.
-            assert_eq!(bytes.metadata_get("source"), disk.metadata_get("source"));
-            assert_eq!(bytes.sample_timestamps(), disk.sample_timestamps());
-        }
+    /// [`a_v3_archive_read_from_bytes_matches_the_same_archive_read_from_disk`]
+    /// for a dendro archive of two recordings with different values.
+    #[test]
+    fn a_dendro_archive_read_from_bytes_matches_the_same_archive_read_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fleet.dendro");
+        let host = |host: &str, scale: u64| Source {
+            labels: fixtures::map(&[("source", "rezolus"), ("host", host)]),
+            metadata: fixtures::map(&[("source", "rezolus")]),
+            rows: (0..3u64)
+                .map(|t| {
+                    let ts = 1_000_000_000 * (t + 1);
+                    let w = Some(Window::new(ts - 50_000_000, ts));
+                    (
+                        snap(
+                            ts,
+                            vec![counter("cpu_cycles", "cpu_usage", scale * t, w)],
+                            vec![gauge("frequency", "cpu_usage", (scale + t) as i64, w)],
+                        ),
+                        ts,
+                    )
+                })
+                .collect(),
+        };
+        fixtures::write_dendro(
+            &path,
+            &[host("web-01", 1_000), host("web-02", 2_000)],
+            None,
+            Finish::Finalized,
+        );
+        assert_bytes_match_disk(&path, "frequency");
     }
 
     /// The bytes a browser holds are the main database file alone — a `-wal`
@@ -656,49 +878,70 @@ mod tests {
     /// image: a hindsight snapshot's newest data is exactly there, and
     /// silently reading only sealed segments would under-report the window an
     /// incident is in.
+    ///
+    /// `v3-live.rez` holds sealed segments and live WAL rows (12 ticks at five
+    /// rows a segment, copied with `VACUUM INTO` while its writer held it).
     #[test]
     fn a_live_wal_tail_survives_the_trip_through_bytes() {
-        use crate::rez::recorder_tests_support::{counter, snap};
-        use crate::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
-
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("live.rez");
-        let seed = ManifestSeed {
-            labels: [("source".to_string(), "rezolus".to_string())]
-                .into_iter()
-                .collect(),
-            metadata: Default::default(),
-            clock_anchor_wall_ns: 1_000_000_000,
-        };
-        let (archive, writer) = RezArchive::single(&path, seed).unwrap();
-        let mut rec = StreamRecorderV3::new(writer);
-        for t in 0..3u64 {
-            let ts = 1_000_000_000 * (t + 1);
-            rec.ingest(
-                &snap(ts, vec![counter("cpu_cycles", "cpu_usage", t, None)]),
-                ts,
-                0,
-            )
-            .unwrap();
-        }
-        // Committed but NOT sealed: the rows are in the `wal` table, and no
-        // segment holds them.
-        rec.sync().unwrap();
-
-        // Snapshot the live archive the way `hindsight` does. A raw copy of a
-        // file a writer still holds is NOT the same thing — its committed
-        // pages are in the `-wal` sidecar, which a single blob does not carry,
-        // and reading one gets "no such table: recordings" rather than a
-        // partial answer. `VACUUM INTO` produces a consistent single file, and
-        // that is what a browser is ever handed.
-        let snapshot = dir.path().join("snapshot.rez");
-        crate::rez_sqlite::RezDb::open(&path)
-            .unwrap()
-            .vacuum_into(&snapshot)
-            .unwrap();
+        let path = fixtures::committed_rez("v3-live.rez", dir.path());
+        let db = RezDb::open(&path).unwrap();
+        let rid = db.read_recordings().unwrap()[0].id;
+        assert!(
+            !db.live_wal(rid, "a/g").unwrap().is_empty(),
+            "fixture sanity: the table has live WAL rows"
+        );
+        drop(db);
 
         let readers = RezReader::open_recordings_from_bytes(
-            std::fs::read(&snapshot).unwrap(),
+            std::fs::read(&path).unwrap(),
+            BufferPool::new(16 * 1024 * 1024),
+        )
+        .unwrap();
+        assert_eq!(readers.len(), 1);
+        let reader = &readers[0].1;
+        assert!(
+            reader.counter_names().iter().any(|n| n == "ops"),
+            "{:?}",
+            reader.counter_names()
+        );
+        assert_eq!(
+            reader.time_range_ns().map(|(_, end)| end),
+            Some(1_700_000_011_000_000_000),
+            "the unsealed ticks must be visible from bytes"
+        );
+    }
+
+    /// [`a_live_wal_tail_survives_the_trip_through_bytes`] for a dendro
+    /// archive whose rows are all in its WAL: a recording joined without
+    /// finalizing, whose last connection folded SQLite's sidecar into the
+    /// file.
+    #[test]
+    fn a_dendro_wal_tail_survives_the_trip_through_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("live.dendro");
+        let rows: Vec<(Snapshot, u64)> = (0..3u64)
+            .map(|t| {
+                let ts = 1_000_000_000 * (t + 1);
+                (
+                    snap(
+                        ts,
+                        vec![counter("cpu_cycles", "cpu_usage", t, None)],
+                        vec![],
+                    ),
+                    ts,
+                )
+            })
+            .collect();
+        fixtures::write_dendro(&path, &[Source::rezolus(rows)], None, Finish::Live);
+        assert_eq!(
+            segment_counts(&path).get("cpu_usage"),
+            Some(&0),
+            "fixture sanity: nothing is sealed"
+        );
+
+        let readers = RezReader::open_recordings_from_bytes(
+            std::fs::read(&path).unwrap(),
             BufferPool::new(16 * 1024 * 1024),
         )
         .unwrap();
@@ -712,9 +955,6 @@ mod tests {
             "an unsealed table must still be visible from bytes: {:?}",
             readers[0].1.counter_names()
         );
-
-        drop(rec);
-        drop(archive);
     }
 
     /// A raw copy of an archive a writer still holds is a valid SQLite file
@@ -722,45 +962,36 @@ mod tests {
     /// `-wal` sidecar, a second file a single blob does not carry. Say that,
     /// rather than letting it surface as "no such table: recordings", which
     /// reads like corruption.
+    ///
+    /// The copy is reproduced without a `.rez` writer: a database in WAL mode
+    /// whose only table is still in its sidecar, read as one file while the
+    /// connection that wrote it is open, which is what a copy taken from
+    /// under a 5.x recorder holds.
     #[test]
     fn a_copy_taken_mid_write_says_what_went_wrong() {
-        use crate::rez::recorder_tests_support::{counter, snap};
-        use crate::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
-
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("live.rez");
-        let seed = ManifestSeed {
-            labels: [("source".to_string(), "rezolus".to_string())]
-                .into_iter()
-                .collect(),
-            metadata: Default::default(),
-            clock_anchor_wall_ns: 1_000_000_000,
-        };
-        let (archive, writer) = RezArchive::single(&path, seed).unwrap();
-        let mut rec = StreamRecorderV3::new(writer);
-        rec.ingest(
-            &snap(
-                1_000_000_000,
-                vec![counter("cpu_cycles", "cpu_usage", 1, None)],
-            ),
-            1_000_000_000,
-            0,
-        )
-        .unwrap();
-        rec.sync().unwrap();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+        conn.execute_batch("CREATE TABLE recordings (id INTEGER PRIMARY KEY)")
+            .unwrap();
+        let copy = std::fs::read(&path).unwrap();
+        assert!(
+            dir.path().join("live.rez-wal").exists(),
+            "fixture sanity: the table is in the sidecar"
+        );
 
-        let err = match RezReader::open_recordings_from_bytes(
-            std::fs::read(&path).unwrap(),
-            BufferPool::new(8 * 1024 * 1024),
-        ) {
-            Ok(_) => panic!("a mid-write copy has no catalog in it"),
-            Err(e) => e.to_string(),
-        };
+        let err =
+            match RezReader::open_recordings_from_bytes(copy, BufferPool::new(8 * 1024 * 1024)) {
+                Ok(_) => panic!("a mid-write copy has no catalog in it"),
+                Err(e) => e.to_string(),
+            };
         assert!(err.contains("-wal"), "{err}");
         assert!(err.contains("still being written"), "{err}");
-
-        drop(rec);
-        drop(archive);
+        drop(conn);
     }
 
     /// A v2 tar archive reaches the same entry point — the caller has an
@@ -768,7 +999,8 @@ mod tests {
     /// content on both paths.
     #[test]
     fn a_v2_tar_archive_also_opens_from_bytes() {
-        let (_d, p) = two_sampler_rez();
+        let dir = tempfile::tempdir().unwrap();
+        let p = fixtures::committed_rez("v2.rez", dir.path());
         let from_bytes = RezReader::open_recordings_from_bytes(
             std::fs::read(&p).unwrap(),
             BufferPool::new(16 * 1024 * 1024),
@@ -780,20 +1012,16 @@ mod tests {
 
     /// The v3/SQLite twin of the tar refusal below.
     ///
-    /// The two flattening branches of `open_with_pool` reach their recording
-    /// count by DIFFERENT routes, so pinning one proves nothing about the
-    /// other — and v3 is the branch that matters: `parquet combine` emits v3,
-    /// and `record --endpoint a --endpoint b` writes a multi-recording v3
-    /// archive directly. The tar test below covers `from_recordings`; this one
-    /// covers `from_v3`.
+    /// The flattening branches of `open_with_pool` reach their recording
+    /// count by DIFFERENT routes (a tar through `read_recordings` and one
+    /// in-memory reader per recording, a v3 `.rez` or a dendro archive
+    /// through its catalog's sources), so pinning one proves nothing about
+    /// the other. The test below covers the tar and dendro routes; this one
+    /// covers v3.
     #[test]
     fn composition_sources_refuse_a_flattened_multi_recording_v3_archive() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("fleet.rez");
-        crate::rez::recorder_tests_support::multi_recording_v3_rez(
-            &path,
-            &[("redis", "web-01"), ("valkey", "web-01")],
-        );
+        let path = fixtures::committed_rez("v3-multi.rez", dir.path());
 
         let pool = BufferPool::new(16 * 1024 * 1024);
         let flattened = RezReader::open_with_pool(&path, Arc::clone(&pool)).unwrap();
@@ -833,118 +1061,167 @@ mod tests {
     /// every neighbouring comment here is legitimately about the other one.
     #[test]
     fn composition_sources_refuse_a_flattened_multi_recording_reader() {
-        let (_d, p) = two_sampler_rez();
-        let (m, rb) = crate::rez::read_archive_bytes(&p).unwrap();
-        let rec0 = m.recordings.into_iter().next().unwrap();
-        let bytes0: Vec<Vec<Vec<u8>>> = rb
-            .into_iter()
-            .next()
-            .unwrap()
-            .tables
-            .into_iter()
-            .map(|(_, b)| b)
-            .collect();
-
-        let mut a = rec0.clone();
-        a.dir = "arm0".to_string();
-        a.labels.insert("arm".to_string(), "arm0".to_string());
-        let mut b = rec0.clone();
-        b.dir = "arm1".to_string();
-        b.labels.insert("arm".to_string(), "arm1".to_string());
-
         let d = tempfile::tempdir().unwrap();
-        let out = d.path().join("two_rec.rez");
-        crate::rez::write_archive_bytes(&out, &[(a, bytes0.clone()), (b, bytes0)]).unwrap();
+        let tar = d.path().join("two_rec.rez");
+        two_arm_tar(&tar);
+        let dendro = d.path().join("two_rec.dendro");
+        two_arm_archive(&fixture_rows(3), &dendro);
 
-        let pool = BufferPool::new(64 * 1024 * 1024);
-        // The flattening path — NOT open_recordings.
-        let flattened = RezReader::open_with_pool(&out, Arc::clone(&pool)).unwrap();
-        // `CompositionSource` is opaque and not `Debug`, so match rather than
-        // `expect_err`.
-        let err = match flattened.composition_sources() {
-            Ok(_) => panic!("composing a flattened 2-recording reader must refuse"),
-            Err(e) => e,
-        };
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("open_recordings"),
-            "the error must point at the entry point that works: {msg}"
-        );
-
-        // ...and the same archive opened per recording composes fine, proving
-        // the refusal is about flattening and not about the fixture.
-        let per_recording = RezReader::open_recordings(&out, pool).unwrap();
-        assert_eq!(per_recording.len(), 2);
-        for (_labels, reader) in &per_recording {
+        for out in [&tar, &dendro] {
+            let pool = BufferPool::new(64 * 1024 * 1024);
+            // The flattening path — NOT open_recordings.
+            let flattened = RezReader::open_with_pool(out, Arc::clone(&pool)).unwrap();
+            // `CompositionSource` is opaque and not `Debug`, so match rather
+            // than `expect_err`.
+            let err = match flattened.composition_sources() {
+                Ok(_) => panic!(
+                    "composing a flattened 2-recording reader must refuse: {}",
+                    out.display()
+                ),
+                Err(e) => e,
+            };
+            let msg = format!("{err}");
             assert!(
-                !reader.composition_sources().unwrap().is_empty(),
-                "each recording composes on its own"
+                msg.contains("open_recordings"),
+                "the error must point at the entry point that works: {msg}"
             );
+
+            // ...and the same archive opened per recording composes fine,
+            // proving the refusal is about flattening and not about the
+            // fixture.
+            let per_recording = RezReader::open_recordings(out, pool).unwrap();
+            assert_eq!(per_recording.len(), 2);
+            for (_labels, reader) in &per_recording {
+                assert!(
+                    !reader.composition_sources().unwrap().is_empty(),
+                    "each recording composes on its own"
+                );
+            }
         }
     }
 
-    /// Over a flattened 2-recording archive (`recording combine a.rez b.rez`
-    /// builds one), a metric present in every recording's `cpu_usage` table
-    /// is answered from all of them, each series under its recording's
-    /// labels, never from one recording alone.
+    /// Over a flattened 2-recording archive (`recording combine` builds
+    /// one), a metric present in every recording's table is answered from
+    /// all of them, each series under its recording's labels, never from one
+    /// recording alone: a dendro archive, and a tar, whose recordings are
+    /// read through a different route.
     #[test]
     fn multi_recording_same_sampler_query_answers_from_every_recording() {
-        let (_d, p) = two_sampler_rez();
-        let (m, rb) = crate::rez::read_archive_bytes(&p).unwrap();
-        let rec0 = m.recordings.into_iter().next().unwrap();
-        let bytes0: Vec<Vec<Vec<u8>>> = rb
-            .into_iter()
-            .next()
-            .unwrap()
-            .tables
-            .into_iter()
-            .map(|(_, b)| b)
-            .collect();
-
-        let mut a = rec0.clone();
-        a.dir = "arm0".to_string();
-        a.labels.insert("arm".to_string(), "arm0".to_string());
-        let mut b = rec0.clone();
-        b.dir = "arm1".to_string();
-        b.labels.insert("arm".to_string(), "arm1".to_string());
-
+        // `(archive, the same rows as one recording, counter)`.
+        let (_d, single_dendro) = two_sampler_rez();
         let d = tempfile::tempdir().unwrap();
-        let out = d.path().join("two_rec.rez");
-        crate::rez::write_archive_bytes(&out, &[(a, bytes0.clone()), (b, bytes0)]).unwrap();
+        let dendro = d.path().join("two_rec.dendro");
+        two_arm_archive(&fixture_rows(3), &dendro);
+        let tar = d.path().join("two_rec.rez");
+        two_arm_tar(&tar);
+        let single_tar = fixtures::committed_rez("v2.rez", d.path());
 
-        let pool = BufferPool::new(64 * 1024 * 1024);
-        // The flattening path — NOT open_recordings.
-        let reader = RezReader::open_with_pool(&out, pool).unwrap();
+        for (out, single, counter) in [
+            (&dendro, &single_dendro, "cpu_cycles"),
+            (&tar, &single_tar, "ops"),
+        ] {
+            let pool = BufferPool::new(64 * 1024 * 1024);
+            // The flattening path — NOT open_recordings.
+            let reader = RezReader::open_with_pool(out, pool).unwrap();
+            let (start, end) = reader.time_range().unwrap();
 
-        // `cpu_cycles` lives in the `cpu_usage` table of both recordings,
-        // which hold the same rows.
-        let QueryResult::Matrix { result } = reader
-            .query_range("sum by (arm) (irate(cpu_cycles[2s]))", 0.0, 10.0, 1.0)
-            .unwrap()
-        else {
-            panic!("expected a matrix");
-        };
-        let mut arms: Vec<(&str, &Vec<(f64, f64)>)> = result
-            .iter()
-            .map(|s| (s.metric["arm"].as_str(), &s.values))
-            .collect();
-        arms.sort_by_key(|(arm, _)| *arm);
+            let QueryResult::Matrix { result } = reader
+                .query_range(
+                    &format!("sum by (arm) (irate({counter}[2s]))"),
+                    start,
+                    end,
+                    1.0,
+                )
+                .unwrap()
+            else {
+                panic!("expected a matrix");
+            };
+            let mut arms: Vec<(&str, &Vec<(f64, f64)>)> = result
+                .iter()
+                .map(|s| (s.metric["arm"].as_str(), &s.values))
+                .collect();
+            arms.sort_by_key(|(arm, _)| *arm);
+            assert_eq!(
+                arms.iter().map(|(arm, _)| *arm).collect::<Vec<_>>(),
+                ["arm0", "arm1"],
+                "{}",
+                out.display()
+            );
+            assert!(!arms[0].1.is_empty());
+            assert_eq!(arms[0].1, arms[1].1, "both recordings hold the same rows");
+
+            // A single-recording archive of the same data gives that series.
+            let single =
+                RezReader::open_with_pool(single, BufferPool::new(64 * 1024 * 1024)).unwrap();
+            let QueryResult::Matrix { result } = single
+                .query_range(&format!("sum(irate({counter}[2s]))"), start, end, 1.0)
+                .unwrap()
+            else {
+                panic!("expected a matrix");
+            };
+            assert_eq!(&result[0].values, arms[0].1, "{}", out.display());
+        }
+
+        // And a sum across the tar's recordings counts both: `mem_free` is
+        // 1000 - t in each, so 2 * 989 at 11 s.
+        let reader = RezReader::open_with_pool(&tar, BufferPool::new(64 * 1024 * 1024)).unwrap();
+        let json = serde_json::to_value(
+            reader
+                .query("sum(mem_free)", Some(1_700_000_011.0))
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
-            arms.iter().map(|(arm, _)| *arm).collect::<Vec<_>>(),
-            ["arm0", "arm1"]
+            json["result"][0]["value"][1].as_f64(),
+            Some(1978.0),
+            "{json}"
         );
-        assert!(!arms[0].1.is_empty());
-        assert_eq!(arms[0].1, arms[1].1, "both recordings hold the same rows");
+    }
 
-        // A single-recording archive of the same data gives that series.
-        let single = RezReader::open_with_pool(&p, BufferPool::new(64 * 1024 * 1024)).unwrap();
-        let QueryResult::Matrix { result } = single
-            .query_range("sum(irate(cpu_cycles[2s]))", 0.0, 10.0, 1.0)
-            .unwrap()
-        else {
-            panic!("expected a matrix");
-        };
-        assert_eq!(&result[0].values, arms[0].1);
+    /// A `.rez` table with no sealed segment, only WAL rows (a quiet sampler
+    /// inside its first seal period when a 5.x recorder stopped), opens and
+    /// answers by path and from bytes: `v3-live.rez` with `b/g`'s segments
+    /// removed, leaving its ticks 10 and 11.
+    #[test]
+    fn a_rez_table_with_no_sealed_segment_reads_by_path_and_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("quiet.rez");
+        fixtures::edited_rez(
+            "v3-live.rez",
+            &path,
+            "DELETE FROM segments WHERE sampler = 'b/g';",
+        );
+        let db = RezDb::open(&path).unwrap();
+        let rid = db.read_recordings().unwrap()[0].id;
+        assert!(
+            db.read_segments(rid, "b/g").unwrap().is_empty()
+                && !db.live_wal(rid, "b/g").unwrap().is_empty(),
+            "fixture sanity: `b/g` is WAL rows only"
+        );
+        drop(db);
+        let by_path = RezReader::open_with_pool(&path, BufferPool::new(16 * 1024 * 1024)).unwrap();
+        let mut by_bytes = RezReader::open_recordings_from_bytes(
+            std::fs::read(&path).unwrap(),
+            BufferPool::new(16 * 1024 * 1024),
+        )
+        .unwrap();
+        assert_eq!(by_bytes.len(), 1);
+        let by_bytes = by_bytes.pop().unwrap().1;
+        for (how, reader) in [("path", &by_path), ("bytes", &by_bytes)] {
+            assert!(
+                reader.gauge_names().iter().any(|n| n == "mem_free"),
+                "{how}: {:?}",
+                reader.gauge_names()
+            );
+            let json =
+                serde_json::to_value(reader.query("mem_free", Some(1_700_000_011.0)).unwrap())
+                    .unwrap();
+            assert_eq!(
+                json["result"][0]["value"][1].as_f64(),
+                Some(989.0),
+                "{how}: {json}"
+            );
+        }
     }
 
     /// The whole point of the splice design: a segmented table must answer
@@ -955,10 +1232,10 @@ mod tests {
     fn segmented_rez_queries_match_single_segment_equivalent() {
         let rows = fixture_rows(6);
         let dir = tempfile::tempdir().unwrap();
-        let single = dir.path().join("single.rez");
-        let segmented = dir.path().join("segmented.rez");
-        write_atomic_rez(&rows, &single);
-        write_streamed_rez(&rows, 2, &segmented);
+        let single = dir.path().join("single.dendro");
+        let segmented = dir.path().join("segmented.dendro");
+        write_one_segment(&rows, &single);
+        write_segmented(&rows, 2, &segmented);
 
         // The fixtures must actually differ in segmentation, or this proves
         // nothing.
@@ -1027,7 +1304,7 @@ mod tests {
     #[test]
     fn mixed_single_and_multi_segment_tables_are_queryable() {
         let dir = tempfile::tempdir().unwrap();
-        let out = dir.path().join("mixed.rez");
+        let out = dir.path().join("mixed.dendro");
         // `blockio_requests` reports once per 3 polls, so it accumulates one
         // row for every 3 `cpu_usage` rows and never reaches the row cap.
         let rows: Vec<(Snapshot, u64)> = (0..6u64)
@@ -1050,7 +1327,7 @@ mod tests {
                 )
             })
             .collect();
-        write_streamed_rez(&rows, 2, &out);
+        write_segmented(&rows, 2, &out);
 
         let counts = segment_counts(&out);
         assert_eq!(counts.get("cpu_usage"), Some(&3), "{counts:?}");
@@ -1103,77 +1380,44 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------
-    // The v3 (SQLite) container. Same reader, same sub-sources — what is new
-    // is that the newest "segment" of a table may be materialized from the
-    // live WAL instead of read from `segments`.
+    // An archive being written: a table's newest "segment" may be
+    // materialized from the live WAL instead of read from `segments`.
     // ---------------------------------------------------------------------
 
-    mod v3 {
+    mod wal_tail {
         use super::*;
-        use crate::rez_sqlite::WalRow;
-        use crate::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
-        use crate::seal_policy::SealPolicy;
-        use crate::wal::{encode_wal_row, WalCell, WalValue};
+        use dendro::archive::{Archive, ArchiveMut};
         use metriken_exposition::Histogram as ExpHistogram;
+        use metriken_storage::Catalog;
 
-        const ANCHOR: u64 = 1_700_000_000_000_000_000;
-
-        fn seed() -> ManifestSeed {
-            ManifestSeed {
-                labels: rez_labels(),
-                metadata: rez_labels(),
-                clock_anchor_wall_ns: ANCHOR,
-            }
-        }
-
-        fn policy(max_rows: usize) -> SealPolicy {
-            SealPolicy {
-                max_bytes: usize::MAX,
-                max_rows,
-                max_age: std::time::Duration::from_secs(3600),
-            }
-        }
-
-        /// A recorder plus the archive owning its writer thread. The archive
-        /// must outlive the recorder — dropping it stops the writer — and
-        /// joining it is what flushes everything queued to disk.
-        fn recorder(path: &std::path::Path, max_rows: usize) -> (RezArchive, StreamRecorderV3) {
-            let (archive, writer) = RezArchive::single(path, seed()).unwrap();
-            (
-                archive,
-                StreamRecorderV3::with_policy(writer, policy(max_rows)),
-            )
-        }
-
-        /// Ingest `rows` through the v3 writer at `max_rows` per segment.
-        /// `finalize` decides whether the recording ends cleanly (every tail
-        /// sealed, WAL empty) or is dropped mid-flight (tail live in the WAL).
+        /// Write `rows` sealed every `max_rows` rows (`usize::MAX`: only at
+        /// finalize). `finalize` decides whether the recording ends cleanly
+        /// (every tail sealed, WAL empty) or is left mid-flight (tail live in
+        /// the WAL).
         fn write_v3(
             rows: &[(Snapshot, u64)],
             max_rows: usize,
             finalize: bool,
             out: &std::path::Path,
         ) {
-            let (archive, mut rec) = recorder(out, max_rows);
-            let mut last_ts = 0;
-            for (s, ts) in rows {
-                rec.ingest(s, *ts, 0).unwrap();
-                rec.maybe_seal().unwrap();
-                last_ts = *ts;
-            }
-            if finalize {
-                archive.finalize_single_rec(rec, (last_ts, 0)).unwrap();
+            let seal = (max_rows != usize::MAX).then_some(max_rows);
+            let finish = if finalize {
+                Finish::Finalized
             } else {
-                // Mid-flight: the tail stays live in the WAL. The archive is
-                // still joined, so what WAS committed reaches disk — dropping
-                // the handle alone no longer stops the writer.
-                drop(rec);
-                drop(archive);
-            }
+                Finish::Live
+            };
+            fixtures::write_dendro(out, &[rezolus_source(rows)], seal, finish);
         }
 
         fn open(path: &std::path::Path) -> RezReader {
             RezReader::open_with_pool(path, BufferPool::new(64 * 1024 * 1024)).unwrap()
+        }
+
+        /// The only source's id.
+        fn only_source(archive: &Archive) -> i64 {
+            let sources = archive.read_sources().unwrap();
+            assert_eq!(sources.len(), 1);
+            sources[0].id
         }
 
         /// A consumer building a metric catalog needs what a metric MEANS, not
@@ -1231,7 +1475,7 @@ mod tests {
                 .collect();
 
             let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("described.rez");
+            let path = dir.path().join("described.dendro");
             write_v3(&rows, 2, true, &path);
 
             let catalog = open(&path).metric_metadata();
@@ -1269,8 +1513,8 @@ mod tests {
         #[test]
         fn composition_sources_merge_recordings_under_distinct_labels() {
             let dir = tempfile::tempdir().unwrap();
-            let a_path = dir.path().join("a.rez");
-            let b_path = dir.path().join("b.rez");
+            let a_path = dir.path().join("a.dendro");
+            let b_path = dir.path().join("b.dendro");
             write_v3(&fixture_rows(6), 2, true, &a_path);
             write_v3(&fixture_rows(6), 2, true, &b_path);
 
@@ -1306,7 +1550,7 @@ mod tests {
             assert_eq!(jobs, vec!["a".to_string(), "b".to_string()]);
         }
 
-        /// A `.rez` is readable while it is being written, and hindsight's
+        /// An archive is readable while it is being written, and hindsight's
         /// retention deletes as it goes — so a table that had rows when the
         /// reader probed it can have none by the time a query opens it.
         ///
@@ -1320,7 +1564,7 @@ mod tests {
         fn a_table_evicted_between_probe_and_query_does_not_panic() {
             let rows = fixture_rows(6);
             let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("live.rez");
+            let path = dir.path().join("live.dendro");
             write_v3(&rows, 2, true, &path);
 
             // Probe: names and spans are read now, readers are not built.
@@ -1333,16 +1577,14 @@ mod tests {
             // ...and then retention takes every row, as it does on a rolling
             // buffer whose lookback has passed a quiet sampler by.
             {
-                let mut db = RezDb::open(&path).unwrap();
-                let rid = db.read_recordings().unwrap()[0].id;
-                // Not `u64::MAX`: `evict` binds the cutoff as `i64`, so
-                // that wraps to -1 and deletes nothing.
-                db.evict_before(rid, i64::MAX as u64).unwrap();
+                let mut db = ArchiveMut::open(&path).unwrap();
+                let id = db.read_sources().unwrap()[0].id;
+                db.evict_before(id, i64::MAX).unwrap();
                 assert!(
-                    db.all_samplers(rid)
+                    db.all_streams(id)
                         .unwrap()
                         .iter()
-                        .all(|s| db.read_segments(rid, s).unwrap().is_empty()),
+                        .all(|s| db.read_segment_meta(id, s).unwrap().is_empty()),
                     "fixture sanity: every segment is gone"
                 );
             }
@@ -1370,7 +1612,7 @@ mod tests {
         fn evicting_one_table_leaves_the_others_answering() {
             let rows = fixture_rows(6);
             let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("live.rez");
+            let path = dir.path().join("live.dendro");
             write_v3(&rows, 2, true, &path);
 
             let reader = open(&path);
@@ -1380,16 +1622,10 @@ mod tests {
             // Evict only `blockio_requests`, as retention would for the
             // sampler that stopped producing rows first.
             {
-                let rid = RezDb::open(&path).unwrap().read_recordings().unwrap()[0].id;
-                // Straight through rusqlite rather than adding a test-only
-                // hook to `RezDb`: retention is per-sampler here, which
-                // `evict_before` (time-based, whole-recording) cannot express.
-                let conn = rusqlite::Connection::open(&path).unwrap();
-                conn.execute(
-                    "DELETE FROM segments WHERE recording_id = ?1 AND sampler = ?2",
-                    rusqlite::params![rid, "blockio_requests"],
-                )
-                .unwrap();
+                let mut db = ArchiveMut::open(&path).unwrap();
+                let id = db.read_sources().unwrap()[0].id;
+                db.evict_streams_before(id, i64::MAX, &|s| s == "blockio_requests")
+                    .unwrap();
             }
 
             // The survivor answers, with real values. The fixture's rows are
@@ -1414,62 +1650,62 @@ mod tests {
                 .is_err());
         }
 
-        /// `sampler -> sealed segment count` straight from the catalog, so a
+        /// `stream -> sealed segment count` straight from the catalog, so a
         /// fixture's segmentation can be asserted instead of assumed.
         fn sealed_counts(path: &std::path::Path) -> BTreeMap<String, usize> {
-            let db = RezDb::open(path).unwrap();
+            segment_counts(path)
+        }
+
+        /// Live (unsealed) WAL row timestamps for `stream`.
+        fn live_ts(path: &std::path::Path, stream: &str) -> Vec<u64> {
+            let archive = Archive::open(path).unwrap();
+            let id = only_source(&archive);
+            archive
+                .live_wal(id, stream)
+                .unwrap()
+                .iter()
+                .map(|r| r.ts as u64)
+                .collect()
+        }
+
+        #[test]
+        fn v3_and_v2_queries_agree_on_identical_data() {
+            // The container changed; the answers must not. The committed
+            // `v2.rez` (one segment per table) and `v3.rez` (four rows a
+            // segment) hold the same twelve ticks, and every question the
+            // reader can be asked must come back the same — including a
+            // rate() window narrow enough that most evaluation points draw
+            // their two samples from different segments.
+            let dir = tempfile::tempdir().unwrap();
+            let v2 = fixtures::committed_rez("v2.rez", dir.path());
+            let v3 = fixtures::committed_rez("v3.rez", dir.path());
+
+            let db = RezDb::open(&v3).unwrap();
             let rid = db.read_recordings().unwrap()[0].id;
-            db.all_samplers(rid)
+            let counts: BTreeMap<String, usize> = db
+                .all_samplers(rid)
                 .unwrap()
                 .into_iter()
                 .map(|s| {
                     let n = db.read_segments(rid, &s).unwrap().len();
                     (s, n)
                 })
-                .collect()
-        }
-
-        /// Live (unsealed) WAL row timestamps for `sampler`.
-        fn live_ts(path: &std::path::Path, sampler: &str) -> Vec<u64> {
-            let db = RezDb::open(path).unwrap();
-            let rid = db.read_recordings().unwrap()[0].id;
-            db.live_wal(rid, sampler)
-                .unwrap()
-                .iter()
-                .map(|r| r.ts)
-                .collect()
-        }
-
-        #[test]
-        fn v3_and_v2_queries_agree_on_identical_data() {
-            // The container changed; the answers must not. Same rows through
-            // both writers, and every question the reader can be asked must
-            // come back the same — including a rate() window narrow enough
-            // that most evaluation points draw their two samples from
-            // different segments.
-            let rows = fixture_rows(6);
-            let dir = tempfile::tempdir().unwrap();
-            let v2 = dir.path().join("v2.rez");
-            let v3 = dir.path().join("v3.rez");
-            write_atomic_rez(&rows, &v2);
-            write_v3(&rows, 2, true, &v3);
-
+                .collect();
             assert_eq!(
-                sealed_counts(&v3),
-                [
-                    ("blockio_requests".to_string(), 3),
-                    ("cpu_usage".to_string(), 3)
-                ]
-                .into_iter()
-                .collect::<BTreeMap<_, _>>(),
-                "6 rows at max_rows=2 → 3 segments per table, so the splice \
-                 is actually exercised"
+                counts,
+                [("a".to_string(), 3), ("b".to_string(), 3)]
+                    .into_iter()
+                    .collect::<BTreeMap<_, _>>(),
+                "12 rows at four a segment → 3 segments per table, so the \
+                 splice is actually exercised"
             );
+            drop(db);
 
             let a = open(&v2);
             let b = open(&v3);
             assert_eq!(a.counter_names(), b.counter_names());
             assert_eq!(a.gauge_names(), b.gauge_names());
+            assert_eq!(a.histogram_names(), b.histogram_names());
             assert_eq!(a.time_range_ns(), b.time_range_ns());
 
             let (start, end) = a.time_range().unwrap();
@@ -1483,15 +1719,16 @@ mod tests {
                 );
                 ra
             };
-            same("frequency");
-            let rate = same("rate(cpu_cycles[2s])");
+            same("mem_free");
+            let rate = same("rate(ops[2s])");
             let json = serde_json::to_value(&rate).unwrap();
             let values = json["result"][0]["values"].as_array().unwrap();
             assert!(
                 values.iter().any(|v| v[1] != "0"),
                 "the boundary-spanning rate must produce non-zero values: {json}"
             );
-            same("rate(reads[3s])");
+            same("irate(ops[5s])");
+            same("histogram_count(lat)");
         }
 
         #[test]
@@ -1503,7 +1740,7 @@ mod tests {
             // that is still being written.
             let rows = fixture_rows(5);
             let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("tail.rez");
+            let path = dir.path().join("tail.dendro");
             // max_rows=2 → ticks 1..4 seal into two segments; tick 5 is a
             // live, unsealed tail.
             write_v3(&rows, 2, false, &path);
@@ -1543,31 +1780,28 @@ mod tests {
             // tables from `samplers()` would not know it exists — and would
             // silently drop exactly the tables the container swap was for.
             let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("quiet.rez");
-            // `max_rows = 4` (the stagger reduces the target by
-            // `(4 / 128) * bucket = 0`, so it is exactly 4). `cpu_usage`
-            // advances every tick and seals twice over 8 ticks; `drivehealth`
-            // advances every third tick, so it accumulates 3 rows and never
-            // reaches the threshold.
-            let (archive, mut rec) = recorder(&path, 4);
-            for i in 0..8u64 {
-                let ts = 1_000_000_000 * (i + 1);
-                let w = Some(Window::new(ts - 50_000_000, ts));
-                let slow_end = 1_000_000_000 * (i / 3 + 1);
-                let slow = Some(Window::new(slow_end - 50_000_000, slow_end));
-                let s = snap(
-                    ts,
-                    vec![
-                        counter("cpu_cycles", "cpu_usage", i * 1_000, w),
-                        counter("temperature", "drivehealth", 40 + i, slow),
-                    ],
-                    Vec::new(),
-                );
-                rec.ingest(&s, ts, 0).unwrap();
-                rec.maybe_seal().unwrap();
-            }
-            drop(rec);
-            drop(archive);
+            let path = dir.path().join("quiet.dendro");
+            // Sealed every 4 rows: `cpu_usage` advances every tick and
+            // seals twice over 8 ticks; `drivehealth` advances every third
+            // tick, so it accumulates 3 rows and never reaches the threshold.
+            let rows: Vec<(Snapshot, u64)> = (0..8u64)
+                .map(|i| {
+                    let ts = 1_000_000_000 * (i + 1);
+                    let w = Some(Window::new(ts - 50_000_000, ts));
+                    let slow_end = 1_000_000_000 * (i / 3 + 1);
+                    let slow = Some(Window::new(slow_end - 50_000_000, slow_end));
+                    let s = snap(
+                        ts,
+                        vec![
+                            counter("cpu_cycles", "cpu_usage", i * 1_000, w),
+                            counter("temperature", "drivehealth", 40 + i, slow),
+                        ],
+                        Vec::new(),
+                    );
+                    (s, ts)
+                })
+                .collect();
+            write_v3(&rows, 4, false, &path);
 
             let counts = sealed_counts(&path);
             assert_eq!(counts.get("cpu_usage"), Some(&2), "{counts:?}");
@@ -1618,13 +1852,23 @@ mod tests {
         }
 
         /// Every segment the READER would open for `sampler`, decoded — the
-        /// sealed ones plus the materialized tail, assembled by the production
-        /// helper rather than re-derived here.
+        /// sealed ones in order, then the live WAL tail materialized as the
+        /// newest, through the catalog and `materialize_wal_tail` the reader
+        /// uses.
         fn decoded_segments(path: &std::path::Path, sampler: &str) -> Vec<rez::RezTable> {
-            let db = RezDb::open(path).unwrap();
-            let rid = db.read_recordings().unwrap()[0].id;
-            table_segments(&db, rid, sampler)
+            let catalog = metriken_storage::DendroCatalog::open(path).unwrap();
+            let id = catalog.sources().unwrap()[0].id;
+            let mut bytes: Vec<Vec<u8>> = catalog
+                .segment_meta(id, sampler)
                 .unwrap()
+                .into_iter()
+                .map(|(seq, _)| catalog.segment_bytes(id, sampler, seq).unwrap().unwrap())
+                .collect();
+            let live = catalog.live_wal(id, sampler).unwrap();
+            if let Some(tail) = crate::wal::materialize_wal_tail(sampler, &live).unwrap() {
+                bytes.push(tail.bytes);
+            }
+            bytes
                 .into_iter()
                 .map(|b| rez::read_table_parquet(sampler.to_string(), b).unwrap())
                 .collect()
@@ -1674,8 +1918,8 @@ mod tests {
             // tail). The two segments must be indistinguishable.
             let rows = fixture_rows(4);
             let dir = tempfile::tempdir().unwrap();
-            let sealed = dir.path().join("sealed.rez");
-            let tail = dir.path().join("tail.rez");
+            let sealed = dir.path().join("sealed.dendro");
+            let tail = dir.path().join("tail.dendro");
             write_v3(&rows, 4, true, &sealed);
             write_v3(&rows, usize::MAX, false, &tail);
 
@@ -1773,6 +2017,7 @@ mod tests {
                         counters: Vec::new(),
                         gauges: Vec::new(),
                         histograms: vec![hist],
+                        gauge_histograms: Vec::new(),
                     });
                     (s, ts)
                 })
@@ -1786,8 +2031,8 @@ mod tests {
             // the column would come back the wrong shape and the reader would
             // not name it a histogram at all.
             let dir = tempfile::tempdir().unwrap();
-            let sealed = dir.path().join("hsealed.rez");
-            let tail = dir.path().join("htail.rez");
+            let sealed = dir.path().join("hsealed.dendro");
+            let tail = dir.path().join("htail.dendro");
             let rows = histogram_rows(4);
             write_v3(&rows, 4, true, &sealed);
             write_v3(&rows, usize::MAX, false, &tail);
@@ -1839,29 +2084,29 @@ mod tests {
             // already cover, and the reader must rely on exactly that.
             let rows = fixture_rows(7);
             let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("killed.rez");
+            let path = dir.path().join("killed.dendro");
             write_v3(&rows, 2, false, &path);
 
             let want: Vec<u64> = (1..=7).map(|i| 1_000_000_000 * i).collect();
             assert_eq!(sealed_counts(&path)["cpu_usage"], 3, "6 rows sealed");
             assert_eq!(live_ts(&path, "cpu_usage"), vec![7_000_000_000]);
 
-            // The crash window, reproduced. The prune runs OUTSIDE the seal
-            // transaction (inside it measured p90 78 ms), so a recording
-            // killed between the commit and the delete keeps WAL rows a
-            // sealed segment already covers. The in-process writer always
+            // The crash window, reproduced. A recording killed between a
+            // seal's commit and its WAL prune keeps WAL rows a sealed segment
+            // already covers. The in-process writer always
             // gets to its prune, so that straddle has to be put back by hand
             // — and without it this test cannot tell `live_wal` from
             // `read_wal` at all.
             {
-                let mut db = RezDb::open(&path).unwrap();
-                let rid = db.read_recordings().unwrap()[0].id;
-                let straddling: Vec<WalRow> = (1..=6u64)
+                use crate::wal::{encode_wal_row, WalCell, WalValue};
+                let mut db = ArchiveMut::open(&path).unwrap();
+                let id = db.read_sources().unwrap()[0].id;
+                let straddling: Vec<dendro::archive::WalRow> = (1..=6u64)
                     .map(|i| {
                         let ts = 1_000_000_000 * i;
-                        WalRow {
-                            sampler: "cpu_usage".to_string(),
-                            ts,
+                        dendro::archive::WalRow {
+                            stream: "cpu_usage".to_string(),
+                            ts: ts as i64,
                             wall_offset: 0,
                             row: encode_wal_row(&[WalCell {
                                 name: "cpu_cycles".to_string(),
@@ -1880,14 +2125,14 @@ mod tests {
                         }
                     })
                     .collect();
-                db.insert_wal_rows(rid, &straddling).unwrap();
+                db.insert_wal_rows(id, &straddling).unwrap();
                 assert_eq!(
-                    db.read_wal(rid, "cpu_usage").unwrap().len(),
+                    db.read_wal(id, "cpu_usage").unwrap().len(),
                     7,
                     "the raw WAL now straddles the sealed watermark"
                 );
                 assert_eq!(
-                    db.live_wal(rid, "cpu_usage").unwrap().len(),
+                    db.live_wal(id, "cpu_usage").unwrap().len(),
                     1,
                     "…but only one row is past it"
                 );
@@ -1931,8 +2176,8 @@ mod tests {
 
         // -------------------------------------------------------------
         // Native V3 acquisition-group ingest: end-to-end proof that Part A's
-        // table-level window columns and this writer agree — a group table
-        // sealed by `StreamRecorderV3` must answer `rate()` with real
+        // table-level window columns and the writer agree — a group table
+        // sealed by metriken-storage's `ArchiveWriter` must answer `rate()` with real
         // uncertainty bands, the same way a V2 per-metric-sidecar table does.
         // -------------------------------------------------------------
 
@@ -1954,6 +2199,7 @@ mod tests {
                     .collect(),
                 gauges: Vec::new(),
                 histograms: Vec::new(),
+                gauge_histograms: Vec::new(),
             }
         }
 
@@ -1976,6 +2222,7 @@ mod tests {
                     })
                     .collect(),
                 histograms: Vec::new(),
+                gauge_histograms: Vec::new(),
             }
         }
 
@@ -1999,6 +2246,7 @@ mod tests {
                         .collect(),
                     })
                     .collect(),
+                gauge_histograms: Vec::new(),
             }
         }
 
@@ -2008,8 +2256,8 @@ mod tests {
         /// so a `rate()` query narrow enough to span segment boundaries is
         /// exercised the same way. The schema is sent on every tick: this
         /// fixture is about proving the write/read path agrees, not about
-        /// exercising the schema-hash cache (see `rez_v3_writer`'s own tests
-        /// for that).
+        /// exercising the schema-hash cache (metriken-storage's writer tests
+        /// cover that).
         fn group_fixture_rows(n: u64) -> Vec<(Snapshot, u64)> {
             let schema = std::sync::Arc::new(group_schema(&["cpu_cycles"], "cpu_usage"));
             (0..n)
@@ -2024,6 +2272,7 @@ mod tests {
                         counters: vec![Some(i)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
+                        gauge_histograms: Vec::new(),
                     };
                     let s = Snapshot::V3(SnapshotV3 {
                         systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2038,47 +2287,49 @@ mod tests {
 
         /// A dendro archive converted from a `.rez` (#1301) reads as the
         /// `.rez` did, for every kind and across tables, from a path and
-        /// from bytes.
+        /// from bytes: a finalized v3 of V2 sampler tables, and a live v3 of
+        /// group tables with a WAL tail.
         #[test]
         fn a_dendro_conversion_answers_every_kind_the_same() {
             let dir = tempfile::tempdir().unwrap();
-            let rez = dir.path().join("mixed.rez");
-            let dendro = dir.path().join("mixed.dendro");
-            write_mixed_kinds(&rez);
-            crate::to_dendro::convert_v3_to_dendro(&rez, &dendro).unwrap();
-            assert_eq!(
-                crate::catalog::Container::of_path(&dendro).unwrap(),
-                Some(crate::catalog::Container::Dendro)
-            );
-            let queries = [
-                "rate(cpu_cycles[2s])",
-                "frequency",
-                "histogram_mean(latency)",
-                "histogram_count(latency)",
-                "sum(rate(cpu_cycles[2s])) + sum(frequency)",
-            ];
-            assert_same_answers(&open(&rez), &open(&dendro), &queries);
+            for name in ["v3.rez", "v3-live.rez"] {
+                let rez = fixtures::committed_rez(name, dir.path());
+                let dendro = dir.path().join(format!("{name}.dendro"));
+                crate::to_dendro::convert_v3_to_dendro(&rez, &dendro).unwrap();
+                assert_eq!(
+                    crate::catalog::Container::of_path(&dendro).unwrap(),
+                    Some(crate::catalog::Container::Dendro)
+                );
+                let queries = [
+                    "rate(ops[2s])",
+                    "mem_free",
+                    "histogram_mean(lat)",
+                    "histogram_count(lat)",
+                    "sum(rate(ops[2s])) + sum(mem_free)",
+                ];
+                assert_same_answers(&open(&rez), &open(&dendro), &queries);
 
-            let from_bytes = |p: &std::path::Path| {
-                let mut r = RezReader::open_recordings_from_bytes(
-                    std::fs::read(p).unwrap(),
-                    BufferPool::new(64 * 1024 * 1024),
-                )
-                .unwrap();
-                assert_eq!(r.len(), 1);
-                r.pop().unwrap()
-            };
-            let (la, a) = from_bytes(&rez);
-            let (lb, b) = from_bytes(&dendro);
-            assert_eq!(la, lb, "recording labels");
-            assert_same_answers(&a, &b, &queries);
+                let from_bytes = |p: &std::path::Path| {
+                    let mut r = RezReader::open_recordings_from_bytes(
+                        std::fs::read(p).unwrap(),
+                        BufferPool::new(64 * 1024 * 1024),
+                    )
+                    .unwrap();
+                    assert_eq!(r.len(), 1);
+                    r.pop().unwrap()
+                };
+                let (la, a) = from_bytes(&rez);
+                let (lb, b) = from_bytes(&dendro);
+                assert_eq!(la, lb, "recording labels");
+                assert_same_answers(&a, &b, &queries);
+            }
         }
 
         #[test]
         fn a_native_v3_group_table_answers_rate_with_uncertainty_bands() {
             let rows = group_fixture_rows(6);
             let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("groups.rez");
+            let path = dir.path().join("groups.dendro");
             // max_rows=2 forces multiple segments, so the splice at segment
             // boundaries is exercised the same way `v3_and_v2_queries_agree`
             // exercises it for the sampler-keyed path.
@@ -2111,9 +2362,9 @@ mod tests {
             // reports as `[lo, hi]` for rate()/irate(). Its presence here —
             // resolved with no special-case "this is a group table" logic on
             // the reader's part — is the proof that Part A's table-level
-            // `:window_begin`/`:window_width` columns and this writer's
+            // `:window_begin`/`:window_width` columns and the writer's
             // group-table layout actually agree end to end: the bare pair
-            // this writer emitted (not a per-metric sidecar) is what fed it.
+            // the writer emitted (not a per-metric sidecar) is what fed it.
             let intervals = json["result"][0]["intervals"]
                 .as_array()
                 .expect("a rate() query over a windowed group table must carry bands");
@@ -2148,6 +2399,7 @@ mod tests {
                         counters: vec![Some(i * 1_000)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
+                        gauge_histograms: Vec::new(),
                     };
                     let softirq = GroupSnapshot {
                         name: "cpu_usage/softirq".to_string(),
@@ -2157,6 +2409,7 @@ mod tests {
                         counters: vec![Some(i * 10)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
+                        gauge_histograms: Vec::new(),
                     };
                     let s = Snapshot::V3(SnapshotV3 {
                         systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2198,9 +2451,9 @@ mod tests {
             let v3_rows = two_group_fixture_rows_v3(9);
             let v2_rows = two_group_fixture_rows_v2(9);
             let dir = tempfile::tempdir().unwrap();
-            let v2_path = dir.path().join("v2.rez");
-            let v3_path = dir.path().join("v3.rez");
-            write_atomic_rez(&v2_rows, &v2_path);
+            let v2_path = dir.path().join("v2.dendro");
+            let v3_path = dir.path().join("v3.dendro");
+            write_one_segment(&v2_rows, &v2_path);
             // max_rows=2 also forces each group table into several segments,
             // so the union is exercised across a segment boundary too.
             write_v3(&v3_rows, 2, true, &v3_path);
@@ -2296,7 +2549,7 @@ mod tests {
             let sched_schema =
                 std::sync::Arc::new(histogram_group_schema(&["latency"], "cpu_usage"));
             let n = 6u64;
-            let (_archive, mut rec) = recorder(path, 2); // force multiple segments per table
+            let mut rows = Vec::new();
             for i in 0..n {
                 let ts = 1_000_000_000 * (i + 1);
                 let w = Some(Window::new(ts - 50_000_000, ts));
@@ -2312,6 +2565,7 @@ mod tests {
                     counters: vec![Some(i * 1_000)],
                     gauges: Vec::new(),
                     histograms: Vec::new(),
+                    gauge_histograms: Vec::new(),
                 };
                 let freq = GroupSnapshot {
                     name: "cpu_usage/freq".to_string(),
@@ -2321,6 +2575,7 @@ mod tests {
                     counters: Vec::new(),
                     gauges: vec![Some(2_000 + i as i64)],
                     histograms: Vec::new(),
+                    gauge_histograms: Vec::new(),
                 };
                 let sched = GroupSnapshot {
                     name: "cpu_usage/sched".to_string(),
@@ -2330,6 +2585,7 @@ mod tests {
                     counters: Vec::new(),
                     gauges: Vec::new(),
                     histograms: vec![Some(h)],
+                    gauge_histograms: Vec::new(),
                 };
                 let s = Snapshot::V3(SnapshotV3 {
                     systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2337,18 +2593,15 @@ mod tests {
                     metadata: HashMap::new(),
                     groups: vec![percpu, freq, sched],
                 });
-                rec.ingest(&s, ts, 0).unwrap();
-                rec.maybe_seal().unwrap();
+                rows.push((s, ts));
             }
-            _archive
-                .finalize_single_rec(rec, (1_000_000_000 * n, 0))
-                .unwrap();
+            write_v3(&rows, 2, true, path); // force multiple segments per table
         }
 
         #[test]
         fn cross_group_query_spans_counter_gauge_and_histogram() {
             let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("mixed_kinds.rez");
+            let path = dir.path().join("mixed_kinds.dendro");
             write_mixed_kinds(&path);
 
             let counts = sealed_counts(&path);
@@ -2434,6 +2687,7 @@ mod tests {
                         counters: vec![Some(i * 1_000)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
+                        gauge_histograms: Vec::new(),
                     };
                     let softirq = GroupSnapshot {
                         name: "cpu_usage/softirq".to_string(),
@@ -2443,6 +2697,7 @@ mod tests {
                         counters: vec![Some(i * 10)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
+                        gauge_histograms: Vec::new(),
                     };
                     let s = Snapshot::V3(SnapshotV3 {
                         systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2455,7 +2710,7 @@ mod tests {
                 .collect();
 
             let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("widths.rez");
+            let path = dir.path().join("widths.dendro");
             write_v3(&rows, 2, true, &path);
 
             // Non-vacuous: the fixture's OWN sealed tables really do carry
@@ -2556,6 +2811,7 @@ mod tests {
                         counters: vec![Some(i * 1_000)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
+                        gauge_histograms: Vec::new(),
                     };
                     let softirq = GroupSnapshot {
                         name: "cpu_usage/softirq".to_string(),
@@ -2565,6 +2821,7 @@ mod tests {
                         counters: vec![Some(i / 3)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
+                        gauge_histograms: Vec::new(),
                     };
                     let s = Snapshot::V3(SnapshotV3 {
                         systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
@@ -2577,7 +2834,7 @@ mod tests {
                 .collect();
 
             let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("skips.rez");
+            let path = dir.path().join("skips.dendro");
             write_v3(&rows, usize::MAX, true, &path);
 
             let softirq_seg = decoded_table(&path, "cpu_usage/softirq");
@@ -2657,8 +2914,8 @@ mod tests {
             // recording — one agent, one tick — so they union now, with each
             // side's band widened to the span of both reads.
             let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("mixed.rez");
-            let (_archive, mut rec) = recorder(&path, usize::MAX);
+            let path = dir.path().join("mixed.dendro");
+            let mut rows = Vec::new();
             let cpu_schema = std::sync::Arc::new(group_schema(&["cpu_cycles"], "cpu_usage"));
             let softirq_schema = std::sync::Arc::new(group_schema(&["cpu_softirq"], "cpu_usage"));
             for i in 0..3u64 {
@@ -2673,6 +2930,7 @@ mod tests {
                         counters: vec![Some(i * 1_000)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
+                        gauge_histograms: Vec::new(),
                     },
                     GroupSnapshot {
                         name: "cpu_usage/softirq".to_string(),
@@ -2682,6 +2940,7 @@ mod tests {
                         counters: vec![Some(i)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
+                        gauge_histograms: Vec::new(),
                     },
                 ];
                 let s = Snapshot::V3(SnapshotV3 {
@@ -2690,31 +2949,22 @@ mod tests {
                     metadata: HashMap::new(),
                     groups,
                 });
-                rec.ingest(&s, ts, 0).unwrap();
+                rows.push((s, ts));
                 // A totally different, V2-shaped sampler in the SAME
-                // recording — `StreamRecorderV3::ingest` dispatches each call
-                // by its own snapshot's variant, so a V2 tick mixed into an
+                // recording, at the same instant: the writer stages each
+                // snapshot by its own variant, so a V2 tick mixed into an
                 // otherwise-V3 recording lands in the ordinary sampler-keyed
                 // path unchanged.
-                rec.ingest(
-                    &snap(
+                rows.push((
+                    snap(
                         ts,
                         vec![counter("reads", "blockio_requests", i, w)],
                         Vec::new(),
                     ),
                     ts,
-                    0,
-                )
-                .unwrap();
-                rec.maybe_seal().unwrap();
+                ));
             }
-            // Through the archive: `finalize` only QUEUES the completion,
-            // and it is the writer thread that seals the tails. Reading the
-            // file without joining races that seal, and a table whose
-            // segments have not landed yet reopens with none at all.
-            _archive
-                .finalize_single_rec(rec, (3_000_000_000, 0))
-                .unwrap();
+            write_v3(&rows, usize::MAX, true, &path);
 
             let reader = open(&path);
             assert!(
@@ -2797,8 +3047,8 @@ mod tests {
             })
             .collect();
         let dir = tempfile::tempdir().unwrap();
-        let out = dir.path().join("cross_cadence.rez");
-        write_atomic_rez(&rows, &out);
+        let out = dir.path().join("cross_cadence.dendro");
+        write_one_segment(&rows, &out);
         (dir, out)
     }
 
@@ -3012,38 +3262,25 @@ mod tests {
     /// only that table.
     #[test]
     fn composition_children_open_their_table_on_first_use() {
-        use crate::rez::recorder_tests_support::{counter, snap};
-        use crate::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
-
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("lazy.rez");
-        let seed = ManifestSeed {
-            labels: [("source".to_string(), "rezolus".to_string())]
-                .into_iter()
-                .collect(),
-            metadata: Default::default(),
-            clock_anchor_wall_ns: 1_000_000_000,
-        };
-        let (archive, writer) = RezArchive::single(&path, seed).unwrap();
-        let mut rec = StreamRecorderV3::new(writer);
-        for t in 0..3u64 {
-            let ts = 1_000_000_000 * (t + 1);
-            rec.ingest(
-                &snap(
+        let path = dir.path().join("lazy.dendro");
+        let rows: Vec<(Snapshot, u64)> = (0..3u64)
+            .map(|t| {
+                let ts = 1_000_000_000 * (t + 1);
+                (
+                    snap(
+                        ts,
+                        vec![
+                            counter("cpu_cycles", "cpu_usage", t * 10, None),
+                            counter("net_bytes", "network_traffic", t * 3, None),
+                        ],
+                        Vec::new(),
+                    ),
                     ts,
-                    vec![
-                        counter("cpu_cycles", "cpu_usage", t * 10, None),
-                        counter("net_bytes", "network_traffic", t * 3, None),
-                    ],
-                ),
-                ts,
-                0,
-            )
-            .unwrap();
-        }
-        rec.sync().unwrap();
-        drop(rec);
-        drop(archive);
+                )
+            })
+            .collect();
+        fixtures::write_dendro(&path, &[Source::rezolus(rows)], None, Finish::Live);
 
         let mut readers =
             RezReader::open_recordings(&path, BufferPool::new(16 * 1024 * 1024)).unwrap();
@@ -3091,13 +3328,14 @@ mod tests {
 
     /// A table carrying the identity index a 5.x `record --stream` wrote
     /// reads exactly as the same table without it: the index is no longer
-    /// read, and the labels come from each segment's columns.
+    /// read, and the labels come from each segment's columns. A `.rez` of
+    /// that recording converted to dendro (`recording upgrade --to dendro`)
+    /// carries the index in the dendro archive's `caller_rows`.
     mod caller_rows_ignored {
         use super::*;
-        use crate::rez_sqlite::TickBatch;
-        use crate::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
-        use crate::seal_policy::SealPolicy;
+        use dendro::archive::{ArchiveMut, CallerRow};
         use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, SnapshotV3};
+        use metriken_storage::{ArchiveWriter, WriterConfig};
         use std::time::Duration;
 
         const STREAM: &str = "fake/ops";
@@ -3112,10 +3350,7 @@ mod tests {
         }
 
         fn labels(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-            pairs
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect()
+            fixtures::map(pairs)
         }
 
         /// Which occupant slot 0 has at `tick`.
@@ -3147,30 +3382,37 @@ mod tests {
                 counters: vec![member(0, slot0_comm(tick)), member(1, "nginx")],
                 gauges: Vec::new(),
                 histograms: Vec::new(),
+                gauge_histograms: Vec::new(),
             }
         }
 
         /// Write `TICKS` ticks of one two-slot group, slot 0 changing hands at
         /// `HANDOVER`, sealed every two rows so the table is several segments
-        /// plus a WAL tail. With `with_index` the table also has `caller_rows`,
-        /// as `record --stream -o out.rez` wrote them before 6.0; they are
-        /// inserted after the rows, since nothing in 6.0 writes them.
+        /// plus a WAL tail. The group is written wide, one column per slot,
+        /// as a 5.x `.rez` held it. With `with_index` the table also has
+        /// `caller_rows`, as `record --stream -o out.rez` wrote them before
+        /// 6.0; they are inserted after the rows, since nothing in 6.0 writes
+        /// them.
         fn write(path: &Path, labelled: bool, with_index: bool) {
-            let seed = ManifestSeed {
-                labels: labels(&[("source", "rezolus")]),
-                metadata: labels(&[("sampling_interval_ms", "1000")]),
-                clock_anchor_wall_ns: ts(0),
-            };
-            let (mut archive, writer) = RezArchive::single(path, seed).unwrap();
-            let rid = writer.recording_id();
-            let mut rec = StreamRecorderV3::with_policy(
-                writer,
-                SealPolicy {
+            let config = WriterConfig {
+                seal: dendro::seal::SealPolicy {
                     max_bytes: usize::MAX,
                     max_rows: 2,
                     max_age: Duration::from_secs(3600),
+                    ..dendro::seal::SealPolicy::default()
                 },
-            );
+                long_groups: false,
+                ..WriterConfig::default()
+            };
+            let mut writer = ArchiveWriter::create(path, config).unwrap();
+            let mut rec = writer
+                .add_source(
+                    labels(&[("source", "rezolus")]),
+                    labels(&[("sampling_interval_ms", "1000")]),
+                    ts(0),
+                )
+                .unwrap();
+            let id = rec.source_id();
             for tick in 0..TICKS {
                 let sch = schema(tick, labelled);
                 let g = GroupSnapshot {
@@ -3192,6 +3434,7 @@ mod tests {
                     ],
                     gauges: Vec::new(),
                     histograms: Vec::new(),
+                    gauge_histograms: Vec::new(),
                 };
                 let snap = Snapshot::V3(SnapshotV3 {
                     systemtime: SystemTime::UNIX_EPOCH + Duration::from_nanos(ts(tick)),
@@ -3199,25 +3442,30 @@ mod tests {
                     metadata: HashMap::new(),
                     groups: vec![g],
                 });
-                let rows = rec.stage(&snap, ts(tick), 0).unwrap();
-                archive
-                    .wal_tick(vec![TickBatch {
-                        recording_id: rid,
-                        rows,
-                    }])
-                    .unwrap();
+                let staged = rec.stage(&snap, ts(tick), 0).unwrap();
+                writer.commit(vec![staged]).unwrap();
                 rec.maybe_seal().unwrap();
             }
             rec.sync().unwrap();
             drop(rec);
-            drop(archive);
+            writer.join().unwrap();
+            drop(writer);
             if with_index {
                 // The bytes are not decoded any more; any blob stands for the
                 // index a 5.x `record --stream` wrote.
-                let entries: Vec<(u64, Vec<u8>)> =
-                    vec![(ts(0), b"full".to_vec()), (ts(HANDOVER), b"delta".to_vec())];
-                let mut db = RezDb::open(path).unwrap();
-                db.transaction(|tx| tx.insert_caller_rows(rid, STREAM, &entries))
+                let entries = [
+                    CallerRow {
+                        ts: ts(0) as i64,
+                        blob: b"full".to_vec(),
+                    },
+                    CallerRow {
+                        ts: ts(HANDOVER) as i64,
+                        blob: b"delta".to_vec(),
+                    },
+                ];
+                ArchiveMut::open(path)
+                    .unwrap()
+                    .insert_caller_rows(id, STREAM, &entries)
                     .unwrap();
             }
         }
@@ -3252,19 +3500,19 @@ mod tests {
         #[test]
         fn an_archive_with_an_identity_index_reads_as_one_without() {
             let dir = tempfile::tempdir().unwrap();
-            let plain = dir.path().join("plain.rez");
-            let indexed = dir.path().join("indexed.rez");
+            let plain = dir.path().join("plain.dendro");
+            let indexed = dir.path().join("indexed.dendro");
             write(&plain, true, false);
             write(&indexed, true, true);
 
             // The fixture really carries the index, and on the table queried.
-            let db = RezDb::open(&indexed).unwrap();
-            let rid = db.read_recordings().unwrap()[0].id;
+            let archive = dendro::archive::Archive::open(&indexed).unwrap();
+            let id = archive.read_sources().unwrap()[0].id;
             assert_eq!(
-                db.caller_row_streams(rid).unwrap(),
+                archive.caller_row_streams(id).unwrap(),
                 vec![STREAM.to_string()]
             );
-            drop(db);
+            drop(archive);
 
             let plain = open(&plain);
             let indexed = open(&indexed);
@@ -3290,13 +3538,54 @@ mod tests {
             assert_eq!(indexed.time_range_ns(), plain.time_range_ns());
         }
 
+        /// The same for a `.rez`: the committed `v3-live.rez` with caller
+        /// rows added on its group table `a/g` (a 5.x `record --stream` wrote
+        /// them for groups) reads as the file without them.
+        #[test]
+        fn a_rez_with_an_identity_index_reads_as_one_without() {
+            let dir = tempfile::tempdir().unwrap();
+            let plain = fixtures::committed_rez("v3-live.rez", dir.path());
+            let indexed = dir.path().join("indexed.rez");
+            std::fs::copy(&plain, &indexed).unwrap();
+            {
+                let conn = rusqlite::Connection::open(&indexed).unwrap();
+                let rid: i64 = conn
+                    .query_row("SELECT id FROM recordings", [], |row| row.get(0))
+                    .unwrap();
+                // The table as `RezDb` created it; the bytes are not decoded.
+                let rows = [
+                    (1_700_000_000_000_000_000i64, &b"full"[..]),
+                    (1_700_000_003_000_000_000, &b"delta"[..]),
+                ];
+                for (t, blob) in rows {
+                    conn.execute(
+                        "INSERT INTO caller_rows (recording_id, stream, ts, seq, blob) \
+                         VALUES (?1, ?2, ?3, 0, ?4)",
+                        rusqlite::params![rid, "a/g", t, blob],
+                    )
+                    .unwrap();
+                }
+            }
+            let db = RezDb::open(&indexed).unwrap();
+            let rid = db.read_recordings().unwrap()[0].id;
+            assert_eq!(db.caller_row_streams(rid).unwrap(), vec!["a/g".to_string()]);
+            drop(db);
+
+            let (plain, indexed) = (open(&plain), open(&indexed));
+            assert_same_answers(
+                &plain,
+                &indexed,
+                &["rate(ops[2s])", "mem_free", "histogram_count(lat)"],
+            );
+        }
+
         /// What the dropped index loses: members that carry no labels, the
         /// index being the one place a slot's occupant was named. Slot 0 reads
         /// as one series across the handover, with no `comm`.
         #[test]
         fn an_index_only_archive_reads_unsplit() {
             let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("index-only.rez");
+            let path = dir.path().join("index-only.dendro");
             write(&path, false, true);
             let got = series(&open(&path));
             assert_eq!(got.len(), 2, "one series per slot: {got:?}");
@@ -3543,7 +3832,7 @@ mod tests {
                 db.insert_segment(id, TABLE, seq as u64, &meta(r, rows), &bytes)
                     .unwrap();
             }
-            let props = crate::rez::segment_writer_props;
+            let props = metriken_storage::table::segment_writer_props;
             let first: Vec<(u64, &Occupant)> = set
                 .iter()
                 .filter(|(_, l)| *l.start() <= 4)

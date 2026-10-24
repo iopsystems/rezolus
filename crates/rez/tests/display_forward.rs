@@ -11,9 +11,8 @@ use std::time::{Duration, SystemTime};
 
 use metriken_exposition::{Counter, Snapshot, SnapshotV2};
 use metriken_query::{DisplayOptions, MetricsSource, QueryOptions, QueryResult};
-use metriken_storage::BufferPool;
+use metriken_storage::{ArchiveWriter, BufferPool, WriterConfig};
 use rez::reader::RezReader;
-use rez::rez::RezRecorder;
 
 /// The system allocator, tracking bytes held and their peak.
 struct Counting;
@@ -55,7 +54,10 @@ fn archive(path: &std::path::Path) {
     let labels: BTreeMap<String, String> = [("source".to_string(), "rezolus".to_string())]
         .into_iter()
         .collect();
-    let mut r = RezRecorder::new(labels.clone(), labels, "rezolus".to_string());
+    let mut writer = ArchiveWriter::create(path, WriterConfig::default()).unwrap();
+    let mut r = writer
+        .add_source(labels.clone(), labels, 1_000_000_000)
+        .unwrap();
     for i in 0..ROWS {
         let ts = 1_000_000_000 * (i + 1);
         let counters = (0..SERIES)
@@ -81,16 +83,19 @@ fn archive(path: &std::path::Path) {
             counters,
             gauges: Vec::new(),
             histograms: Vec::new(),
+            gauge_histograms: Vec::new(),
         });
-        r.ingest(&snapshot, ts);
+        let staged = r.stage(&snapshot, ts, 0).unwrap();
+        writer.commit(vec![staged]).unwrap();
     }
-    r.finalize(path).unwrap();
+    r.finalize((1_000_000_000 * ROWS, 0)).unwrap();
+    writer.join().unwrap();
 }
 
 #[test]
 fn a_display_query_is_reduced_as_it_is_computed() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("display.rez");
+    let path = dir.path().join("display.dendro");
     archive(&path);
     let reader = RezReader::open_with_pool(&path, BufferPool::new(64 << 20)).unwrap();
     let (start, end) = reader.time_range().unwrap();

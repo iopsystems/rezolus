@@ -1,18 +1,18 @@
 //! Save-as-Report machinery shared between the server viewer
 //! (`rezolus view`) and the static-site WASM viewer.
 //!
-//! Both consumers project a source parquet onto the columns referenced
-//! by a saved selection's queries (the "trim"), stamp the selection
-//! JSON in the footer, and optionally repack a combined-A/B tarball.
-//! The only API difference between the two is path-in vs bytes-in;
-//! this crate operates uniformly on [`bytes::Bytes`] (the type
-//! `metriken-query`'s `Tsdb::load_from_bytes` already uses), so the
-//! server reads its parquet from disk into bytes before calling
-//! through, and the WASM viewer reuses the bytes it already holds.
+//! A report is a `.dendro` archive: the recordings the page shows, trimmed
+//! to the columns its saved selection queries (the "trim") and to its time
+//! range, with the selection, the report marker and the events embedded on
+//! the baseline's recording. A dendro source is copied; a tar `.rez` and
+//! standalone parquet files are converted into the report in memory
+//! (metriken-storage's `to_dendro`), so the browser builds the same report
+//! the server does. A v3 `.rez` is converted by path, which only the server
+//! has (`legacy::convert` there), and handed in as a dendro archive. Both
+//! consumers work on bytes; the server reads its file first.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use arrow::datatypes::Field;
 use bytes::Bytes;
 use dashboard::Event;
 use metriken_query::MetricsSource;
@@ -27,18 +27,15 @@ use tracing::warn;
 
 // ── Constants ────────────────────────────────────────────────────────
 
-/// File-level marker: parquet was column-trimmed by Save as Report.
+/// Recording-level marker: the report was column-trimmed by Save as Report.
 pub const KEY_REPORT: &str = "report";
 pub const REPORT_VALUE_TRIMMED: &str = "trimmed";
 pub const KEY_SELECTION: &str = "selection";
-pub const KEY_DESCRIPTIONS: &str = "descriptions";
-pub const KEY_EVENTS: &str = "events";
+pub use dashboard::keys::{KEY_DESCRIPTIONS, KEY_EVENTS};
 
-/// Row group size for saved reports; stays consistent with what the recorder
-/// produces (`rezolus::parquet_metadata::MAX_ROW_GROUP_SIZE`). Kept smaller
-/// than metriken-exposition's 50k default so the viewer's windowed (zoom)
-/// reads decode far fewer row groups — see that constant for the measured
-/// drill-down/size tradeoff.
+/// Row group size of the in-memory parquet a time range cuts a parquet
+/// source to before it is converted
+/// (`rezolus::parquet_metadata::MAX_ROW_GROUP_SIZE`).
 pub const MAX_ROW_GROUP_SIZE: usize = 1800;
 
 // ── Payload types ────────────────────────────────────────────────────
@@ -126,20 +123,6 @@ pub enum Side {
     Experiment,
 }
 
-/// Serializes `events` into the wire shape `{"events":[...]}` and
-/// returns the JSON string. Returns `None` for empty input so callers
-/// can skip the footer key entirely (matches the spec's "byte-identical
-/// output for empty events" guarantee).
-fn events_payload_json(events: &[Event]) -> Option<String> {
-    if events.is_empty() {
-        return None;
-    }
-    Some(
-        serde_json::to_string(&serde_json::json!({ "events": events }))
-            .expect("Event serializes deterministically"),
-    )
-}
-
 // ── Column resolution ────────────────────────────────────────────────
 
 /// Resolve every entry's query against `source`, union the returned
@@ -173,98 +156,130 @@ pub fn resolve_kept_columns(
     out
 }
 
-// ── Top-level save entry points ──────────────────────────────────────
+// ── Building a report ────────────────────────────────────────────────
 
-/// Project the source parquet down to the saved selection's columns
-/// (when `trim_columns` is true), or just embed the selection JSON in
-/// the footer (when false), keeping only the rows inside the payload's
-/// [`time_range`](ReportPayload::time_range). Returns the new parquet bytes
-/// ready to stream / download.
-pub fn save_single_parquet(
-    source_bytes: Bytes,
-    payload: &ReportPayload,
+/// What a report is built from.
+pub enum ReportSource<'a> {
+    /// A dendro archive's bytes.
+    Dendro(&'a [u8]),
+    /// A v1 or v2 (tar) `.rez`'s bytes.
+    RezTar(&'a [u8]),
+    /// A v3 (SQLite) `.rez`'s bytes, its own WAL table included. The server
+    /// converts a v3 `.rez` by path instead, which also reads SQLite's
+    /// `-wal` sidecar beside the file.
+    RezV3(&'a [u8]),
+    /// Standalone parquet files' bytes, a recording each, baseline first.
+    /// Two files are a compare: the report labels them `arm=baseline` and
+    /// `arm=experiment`, so it reopens as the comparison it was saved from.
+    Parquet(Vec<&'a [u8]>),
+}
+
+/// Build a dendro report of `source`: every recording copied (trimmed to
+/// `keep_metrics` when `Some`), the selection, the report marker (when
+/// trimmed) and the events embedded on the recording labelled `anchor` (the
+/// baseline capture's; else the first), and only what `range` holds.
+/// Returns the archive's bytes.
+///
+/// `range` keeps the segments overlapping it from an archive, a segment
+/// copied whole, so the report holds rows up to a segment's span beyond
+/// each end; a parquet source is cut to the rows inside it before it is
+/// converted. An error when `range` keeps nothing.
+pub fn build_report(
+    source: ReportSource<'_>,
+    anchor: Option<&BTreeMap<String, String>>,
+    keep_metrics: Option<&BTreeSet<String>>,
+    range: Option<TimeRange>,
     selection_json: &str,
-    source: &dyn MetricsSource,
-    trim_columns: bool,
+    events_json: Option<&str>,
 ) -> Result<Vec<u8>, String> {
-    let events_json = events_payload_json(&payload.events);
-    let rows = payload.time_range()?;
-    if trim_columns {
-        let kept = resolve_kept_columns(payload, source, Side::Baseline);
-        trim_parquet_to_columns(
-            source_bytes,
-            &kept,
-            selection_json,
-            events_json.as_deref(),
-            rows,
-        )
-    } else {
-        embed_selection_in_parquet(source_bytes, selection_json, events_json.as_deref(), rows)
+    use dendro::archive::{Archive, ArchiveMut};
+    let err = |e: Box<dyn std::error::Error + Send + Sync>| e.to_string();
+    match source {
+        ReportSource::Dendro(bytes) => {
+            let src = Archive::open_bytes(bytes.to_vec()).map_err(|e| e.to_string())?;
+            build_dendro_report(
+                &src,
+                anchor,
+                keep_metrics,
+                range,
+                selection_json,
+                events_json,
+            )
+        }
+        ReportSource::RezTar(bytes) => {
+            let mut converted = ArchiveMut::create_in_memory().map_err(|e| e.to_string())?;
+            metriken_storage::rez::to_dendro::convert_tar_into(
+                std::io::Cursor::new(bytes),
+                &mut converted,
+                &metriken_storage::WriterConfig::default(),
+            )
+            .map_err(err)?;
+            build_dendro_report(
+                &converted,
+                anchor,
+                keep_metrics,
+                range,
+                selection_json,
+                events_json,
+            )
+        }
+        ReportSource::RezV3(bytes) => {
+            let db = metriken_storage::rez::rez_sqlite::RezDb::open_bytes(bytes.to_vec())?;
+            let mut converted = ArchiveMut::create_in_memory().map_err(|e| e.to_string())?;
+            metriken_storage::rez::to_dendro::convert_v3_into(&db, &mut converted).map_err(err)?;
+            build_dendro_report(
+                &converted,
+                anchor,
+                keep_metrics,
+                range,
+                selection_json,
+                events_json,
+            )
+        }
+        ReportSource::Parquet(files) => {
+            let mut converted = ArchiveMut::create_in_memory().map_err(|e| e.to_string())?;
+            let arms: &[&str] = if files.len() == 2 {
+                &["baseline", "experiment"]
+            } else {
+                &[]
+            };
+            for (i, bytes) in files.iter().enumerate() {
+                let cut = match range {
+                    Some(r) => Bytes::from(parquet_rows_in(bytes, r)?),
+                    None => Bytes::copy_from_slice(bytes),
+                };
+                let mut converter = parquet_converter(&cut);
+                if let Some(arm) = arms.get(i) {
+                    converter = converter.label("arm", *arm);
+                }
+                converter.convert_into(cut, &mut converted).map_err(err)?;
+            }
+            // The rows are already cut, so the copy keeps every segment.
+            build_dendro_report(
+                &converted,
+                anchor,
+                keep_metrics,
+                None,
+                selection_json,
+                events_json,
+            )
+        }
     }
 }
 
-/// Trim each per-side parquet independently (or embed-only when
-/// `trim_columns` is false) and repack into a `*.parquet.ab.tar`. The
-/// caller-supplied `manifest_bytes` (typically `serde_json::to_vec_pretty`
-/// of an `AbContainers`) is written into the tar verbatim; this crate
-/// doesn't need to know the manifest's shape.
-#[allow(clippy::too_many_arguments)]
-pub fn save_combined_ab_tarball(
-    baseline_bytes: Bytes,
-    experiment_bytes: Bytes,
-    payload: &ReportPayload,
-    selection_json: &str,
-    baseline_source: &dyn MetricsSource,
-    experiment_source: &dyn MetricsSource,
-    manifest_bytes: &[u8],
-    trim_columns: bool,
-) -> Result<Vec<u8>, String> {
-    let events_json = events_payload_json(&payload.events);
-    let rows = payload.time_range()?;
-    let (baseline_out, experiment_out) = if trim_columns {
-        let baseline_kept = resolve_kept_columns(payload, baseline_source, Side::Baseline);
-        let experiment_kept = resolve_kept_columns(payload, experiment_source, Side::Experiment);
-        (
-            trim_parquet_to_columns(
-                baseline_bytes,
-                &baseline_kept,
-                selection_json,
-                events_json.as_deref(),
-                rows,
-            )?,
-            trim_parquet_to_columns(
-                experiment_bytes,
-                &experiment_kept,
-                selection_json,
-                events_json.as_deref(),
-                rows,
-            )?,
-        )
-    } else {
-        (
-            embed_selection_in_parquet(
-                baseline_bytes,
-                selection_json,
-                events_json.as_deref(),
-                rows,
-            )?,
-            embed_selection_in_parquet(
-                experiment_bytes,
-                selection_json,
-                events_json.as_deref(),
-                rows,
-            )?,
-        )
-    };
-
-    let mut buf: Vec<u8> = Vec::new();
-    let mut builder = tar::Builder::new(&mut buf);
-    builder.mode(tar::HeaderMode::Deterministic);
-    append_tar_entry(&mut builder, "baseline.parquet", &baseline_out)?;
-    append_tar_entry(&mut builder, "experiment.parquet", &experiment_out)?;
-    append_tar_entry(&mut builder, "ab.json", manifest_bytes)?;
-    builder.into_inner().map_err(|e| e.to_string())?;
-    Ok(buf)
+/// The converter for the parquet file `bytes`: its source labelled as the
+/// viewer labels the file when it reads it
+/// (`dashboard::combined::parquet_source_label`), so the report presents as
+/// the file did.
+fn parquet_converter(bytes: &Bytes) -> metriken_storage::to_dendro::ParquetToArchive {
+    let converter = metriken_storage::to_dendro::ParquetToArchive::new();
+    match metriken_query::ParquetReader::open_bytes(bytes.clone())
+        .ok()
+        .and_then(|r| dashboard::combined::parquet_source_label(&r))
+    {
+        Some(source) => converter.label("source", source),
+        None => converter,
+    }
 }
 
 // ── Internals ────────────────────────────────────────────────────────
@@ -277,109 +292,6 @@ fn read_file_metadata(bytes: Bytes) -> Result<Vec<KeyValue>, String> {
         .key_value_metadata()
         .cloned()
         .unwrap_or_default())
-}
-
-fn embed_selection_in_parquet(
-    source_bytes: Bytes,
-    selection_json: &str,
-    events_json: Option<&str>,
-    rows: Option<TimeRange>,
-) -> Result<Vec<u8>, String> {
-    let mut kv_meta = read_file_metadata(source_bytes.clone())?;
-    kv_meta.retain(|kv| kv.key != KEY_SELECTION && kv.key != KEY_EVENTS);
-    kv_meta.push(KeyValue {
-        key: KEY_SELECTION.to_string(),
-        value: Some(selection_json.to_string()),
-    });
-    if let Some(events) = events_json {
-        kv_meta.push(KeyValue {
-            key: KEY_EVENTS.to_string(),
-            value: Some(events.to_string()),
-        });
-    }
-    rewrite_parquet_bytes(source_bytes, kv_meta, None, rows)
-}
-
-fn trim_parquet_to_columns(
-    source_bytes: Bytes,
-    kept: &HashSet<String>,
-    selection_json: &str,
-    events_json: Option<&str>,
-    rows: Option<TimeRange>,
-) -> Result<Vec<u8>, String> {
-    let builder = ParquetRecordBatchReaderBuilder::try_new(source_bytes.clone())
-        .map_err(|e| e.to_string())?;
-    let schema = builder.schema().clone();
-    drop(builder);
-
-    let indices: Vec<usize> = schema
-        .fields()
-        .iter()
-        .enumerate()
-        .filter(|(_, f)| keep_field(f, kept))
-        .map(|(i, _)| i)
-        .collect();
-    if indices.is_empty() {
-        return Err("trim produced an empty column set (source missing timestamp?)".to_string());
-    }
-
-    let mut kv_meta = read_file_metadata(source_bytes.clone())?;
-    kv_meta.retain(|kv| kv.key != KEY_SELECTION && kv.key != KEY_REPORT && kv.key != KEY_EVENTS);
-    kv_meta.push(KeyValue {
-        key: KEY_REPORT.to_string(),
-        value: Some(REPORT_VALUE_TRIMMED.to_string()),
-    });
-    kv_meta.push(KeyValue {
-        key: KEY_SELECTION.to_string(),
-        value: Some(selection_json.to_string()),
-    });
-    if let Some(events) = events_json {
-        kv_meta.push(KeyValue {
-            key: KEY_EVENTS.to_string(),
-            value: Some(events.to_string()),
-        });
-    }
-
-    let kept_names: BTreeSet<&str> = indices
-        .iter()
-        .flat_map(|&i| {
-            let f = schema.field(i);
-            std::iter::once(f.name().as_str()).chain(f.metadata().get("metric").map(String::as_str))
-        })
-        .collect();
-    filter_descriptions(&mut kv_meta, &kept_names);
-
-    rewrite_parquet_bytes(source_bytes, kv_meta, Some(&indices), rows)
-}
-
-/// Mirror of `parquet filter`'s field-keep predicate: exact name, base
-/// before `:` (e.g. `foo` for `foo:buckets`), or the `metric` metadata
-/// fallback for Prometheus-sourced columns whose physical name is a
-/// numeric ID.
-fn keep_field(f: &Field, kept: &HashSet<String>) -> bool {
-    let name = f.name();
-    kept.contains(name)
-        || name
-            .split_once(':')
-            .is_some_and(|(base, _)| kept.contains(base))
-        || f.metadata().get("metric").is_some_and(|m| kept.contains(m))
-}
-
-fn filter_descriptions(kv_meta: &mut [KeyValue], kept_names: &BTreeSet<&str>) {
-    let Some(entry) = kv_meta.iter_mut().find(|kv| kv.key == KEY_DESCRIPTIONS) else {
-        return;
-    };
-    let Some(value) = entry.value.as_deref() else {
-        return;
-    };
-    let Ok(mut map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(value)
-    else {
-        return;
-    };
-    map.retain(|k, _| kept_names.contains(k.as_str()));
-    if let Ok(filtered) = serde_json::to_string(&map) {
-        entry.value = Some(filtered);
-    }
 }
 
 /// Rewrite a parquet with `kv_meta` as its footer, keeping the columns in
@@ -463,77 +375,12 @@ fn filter_rows(
     arrow::compute::filter_record_batch(batch, &mask).map_err(|e| e.to_string())
 }
 
-/// `bytes` with only the rows inside `range`, footer unchanged.
+/// `bytes` with only the rows inside `range`, footer unchanged: an
+/// in-memory parquet, converted into the report.
 fn parquet_rows_in(bytes: &[u8], range: TimeRange) -> Result<Vec<u8>, String> {
     let bytes = Bytes::copy_from_slice(bytes);
     let kv_meta = read_file_metadata(bytes.clone())?;
     rewrite_parquet_bytes(bytes, kv_meta, None, Some(range))
-}
-
-fn append_tar_entry<W: std::io::Write>(
-    builder: &mut tar::Builder<W>,
-    name: &str,
-    data: &[u8],
-) -> Result<(), String> {
-    let mut header = tar::Header::new_gnu();
-    header.set_path(name).map_err(|e| e.to_string())?;
-    header.set_size(data.len() as u64);
-    header.set_mode(0o644);
-    header.set_cksum();
-    builder.append(&header, data).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-// ── `.rez` reports ───────────────────────────────────────────────────
-//
-// A `.rez` source (or a parquet compare) saves to a `.rez` report rather than
-// a trimmed parquet or a `.parquet.ab.tar`. Everything here is built IN MEMORY
-// (`RezDb::create_in_memory` → `serialize`) and metriken-free, so the browser
-// viewer runs it too. `keep_metrics` is the resolved column set the caller
-// derived from the selection (via [`resolve_kept_columns`]); the caller owns
-// column resolution because only it has the `MetricsSource`.
-
-/// Embed the selection / events / report marker onto the anchor recording:
-/// the one labelled `anchor` (the baseline capture's recording), else the
-/// first in catalog order. `trimmed` stamps `KEY_REPORT`
-/// so a reloaded archive opens straight to the Report view; an untrimmed save
-/// carries the selection but no marker, matching the parquet footer path.
-fn embed_rez_report_markers(
-    db: &rez::rez_sqlite::RezDb,
-    anchor: Option<&BTreeMap<String, String>>,
-    trimmed: bool,
-    selection_json: &str,
-    events_json: Option<&str>,
-) -> Result<(), String> {
-    let recordings = db.read_recordings()?;
-    let anchor = anchored(&recordings, anchor, |r| &r.meta.labels).ok_or_else(|| {
-        "report has no recordings (source was empty or fully trimmed)".to_string()
-    })?;
-    let mut metadata = anchor.meta.metadata.clone();
-    metadata.insert(KEY_SELECTION.to_string(), selection_json.to_string());
-    if trimmed {
-        metadata.insert(KEY_REPORT.to_string(), REPORT_VALUE_TRIMMED.to_string());
-    }
-    match events_json {
-        Some(events) => {
-            metadata.insert(KEY_EVENTS.to_string(), events.to_string());
-        }
-        // A save with no events must not leave a stale payload behind.
-        None => {
-            metadata.remove(KEY_EVENTS);
-        }
-    }
-    db.update_recording_metadata(anchor.id, &metadata)?;
-    // Only the anchor carries a report: one copied from an earlier report
-    // onto another recording would be read instead on reload. A recording's
-    // own events stay ([`strip_report_keys`]).
-    for other in recordings.iter().filter(|r| r.id != anchor.id) {
-        let mut metadata = other.meta.metadata.clone();
-        if strip_report_keys(&mut metadata) {
-            db.update_recording_metadata(other.id, &metadata)?;
-        }
-    }
-    Ok(())
 }
 
 /// Remove an earlier report's keys from `metadata`. A recording without a
@@ -559,82 +406,7 @@ fn anchored<'a, T>(
         .or_else(|| items.first())
 }
 
-/// Build a `.rez` report from a `.rez` source's bytes: copy every recording
-/// (trimming to `keep_metrics` when `Some`) and embed the selection on the
-/// recording labelled `anchor` (the baseline capture's; else the first).
-/// Returns the new archive's bytes.
-///
-/// `range` keeps the segments overlapping it. A segment is copied whole, so
-/// the report holds rows up to a segment's span beyond each end of `range`.
-/// A dendro source with long tables is copied from [`OCCUPANT_RESTATE_NS`]
-/// before `range`. An error when `range` keeps no segment.
-pub fn build_rez_report_from_rez(
-    source_bytes: &[u8],
-    anchor: Option<&BTreeMap<String, String>>,
-    keep_metrics: Option<&BTreeSet<String>>,
-    range: Option<TimeRange>,
-    selection_json: &str,
-    events_json: Option<&str>,
-) -> Result<Vec<u8>, String> {
-    use rez::rez_sqlite::RezDb;
-    use rez::rez_v3_rewrite::{copy_recordings_into, CopySpec};
-
-    if metriken_storage::DendroCatalog::is_archive_bytes(source_bytes) {
-        return build_dendro_report(
-            source_bytes,
-            anchor,
-            keep_metrics,
-            range,
-            selection_json,
-            events_json,
-        );
-    }
-    let src = RezDb::open_bytes(source_bytes.to_vec())?;
-    let mut dst = RezDb::create_in_memory()?;
-    dst.transaction(|tx| {
-        src.read_snapshot(|src| {
-            copy_recordings_into(
-                src,
-                tx,
-                &CopySpec {
-                    keep_metrics,
-                    start: range.map_or(0, |r| r.start_ns),
-                    end: range.map_or(u64::MAX, |r| r.end_ns),
-                    ..CopySpec::everything()
-                },
-            )
-            .map(|_| ())
-        })
-    })?;
-    if range.is_some() {
-        let mut rows = 0u64;
-        for rec in dst.read_recordings()? {
-            for table in dst.all_samplers(rec.id)? {
-                rows += dst
-                    .segments_overlapping(rec.id, &table, 0, u64::MAX)?
-                    .iter()
-                    .map(|seg| seg.meta.rows)
-                    .sum::<u64>();
-                rows += dst.live_wal_span(rec.id, &table)?.rows;
-            }
-        }
-        if rows == 0 {
-            return Err("the time range holds no rows".to_string());
-        }
-    }
-    embed_rez_report_markers(
-        &dst,
-        anchor,
-        keep_metrics.is_some(),
-        selection_json,
-        events_json,
-    )?;
-    dst.serialize()
-}
-
-/// [`build_rez_report_from_rez`] for a dendro archive: a dendro report.
-///
-/// The same assembly, in memory: every source copied through dendro's
+/// A dendro report of `src`, in memory: every source copied through dendro's
 /// `copy_sources_into` (trimmed with metriken-storage's `KeepMetrics` when
 /// `keep_metrics` is `Some`, which keeps a long table long and its occupant
 /// stream whole), each stream's live tail sealed with metriken-storage's
@@ -648,19 +420,18 @@ pub fn build_rez_report_from_rez(
 /// uses. The lead applies when the source has a long table, whether or not
 /// `keep_metrics` keeps one.
 fn build_dendro_report(
-    source_bytes: &[u8],
+    src: &dendro::archive::Archive,
     anchor: Option<&BTreeMap<String, String>>,
     keep_metrics: Option<&BTreeSet<String>>,
     range: Option<TimeRange>,
     selection_json: &str,
     events_json: Option<&str>,
 ) -> Result<Vec<u8>, String> {
-    use dendro::archive::{Archive, ArchiveMut};
+    use dendro::archive::ArchiveMut;
     use dendro::rewrite::{copy_sources_into, ColumnFilter, CopySpec};
     use rez::occupants::table_of;
     let err = |e: dendro::Error| e.to_string();
 
-    let src = Archive::open_bytes(source_bytes.to_vec()).map_err(err)?;
     let mut names = Vec::new();
     for s in src.read_sources().map_err(err)? {
         names.extend(src.all_streams(s.id).map_err(err)?);
@@ -750,7 +521,9 @@ fn build_dendro_report(
     }
     dst.update_source_metadata(anchor.id, &metadata)
         .map_err(err)?;
-    // Only the anchor carries a report (as in `embed_rez_report_markers`).
+    // Only the anchor carries a report: one copied from an earlier report
+    // onto another recording would be read instead on reload. A recording's
+    // own events stay ([`strip_report_keys`]).
     for other in sources.iter().filter(|s| s.id != anchor.id) {
         let mut metadata = other.meta.metadata.clone();
         if strip_report_keys(&mut metadata) {
@@ -766,46 +539,6 @@ fn build_dendro_report(
 /// `restate_every_ns`, which needs the writer and so is not reachable from
 /// here. The binary's tests pin the two together.
 pub const OCCUPANT_RESTATE_NS: u64 = 300_000_000_000;
-
-/// One side of a parquet compare: its bytes and the columns to keep (`None`
-/// keeps all — an untrimmed save).
-pub struct ParquetReportSide<'a> {
-    pub bytes: &'a [u8],
-    pub keep_metrics: Option<&'a BTreeSet<String>>,
-}
-
-/// Build a `.rez` report by ingesting parquet sides, each as one windowless
-/// recording — the `.rez` replacement for a `.parquet.ab.tar`. `trimmed`
-/// stamps the report marker (true when the sides were column-projected).
-/// `range` keeps only the rows inside it, on every side.
-pub fn build_rez_report_from_parquets(
-    sides: &[ParquetReportSide<'_>],
-    trimmed: bool,
-    range: Option<TimeRange>,
-    selection_json: &str,
-    events_json: Option<&str>,
-) -> Result<Vec<u8>, String> {
-    use rez::parquet_ingest::ingest_parquet_bytes;
-    use rez::rez_sqlite::RezDb;
-
-    let ranged: Vec<Vec<u8>> = match range {
-        Some(r) => sides
-            .iter()
-            .map(|side| parquet_rows_in(side.bytes, r))
-            .collect::<Result<_, _>>()?,
-        None => Vec::new(),
-    };
-    let mut dst = RezDb::create_in_memory()?;
-    dst.transaction(|tx| {
-        for (i, side) in sides.iter().enumerate() {
-            let bytes = ranged.get(i).map_or(side.bytes, Vec::as_slice);
-            ingest_parquet_bytes(bytes, tx, side.keep_metrics)?;
-        }
-        Ok(())
-    })?;
-    embed_rez_report_markers(&dst, None, trimmed, selection_json, events_json)?;
-    dst.serialize()
-}
 
 #[cfg(test)]
 mod tests {
@@ -865,23 +598,69 @@ mod tests {
         (bytes, reader)
     }
 
-    fn schema_names(bytes: &[u8]) -> Vec<String> {
-        let b = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(bytes.to_vec())).unwrap();
-        b.schema()
-            .fields()
-            .iter()
-            .map(|f| f.name().clone())
+    /// Each source of a dendro report: its labels, its metadata, and its
+    /// streams' column names.
+    type SourceShape = (
+        BTreeMap<String, String>,
+        BTreeMap<String, String>,
+        BTreeSet<String>,
+    );
+
+    /// What each source of the dendro archive `bytes` holds.
+    fn sources_of(bytes: Vec<u8>) -> Vec<SourceShape> {
+        use metriken_storage::Catalog;
+        let archive = dendro::archive::Archive::open_bytes(bytes.clone()).unwrap();
+        let catalog = metriken_storage::DendroCatalog::open_bytes(bytes).unwrap();
+        archive
+            .read_sources()
+            .unwrap()
+            .into_iter()
+            .map(|s| {
+                let mut columns = BTreeSet::new();
+                for table in catalog.tables(s.id).unwrap() {
+                    for (seq, _) in catalog.segment_meta(s.id, &table).unwrap() {
+                        let bytes = catalog.segment_bytes(s.id, &table, seq).unwrap().unwrap();
+                        let b =
+                            ParquetRecordBatchReaderBuilder::try_new(Bytes::from(bytes)).unwrap();
+                        columns.extend(b.schema().fields().iter().map(|f| f.name().clone()));
+                    }
+                }
+                (s.meta.labels, s.meta.metadata, columns)
+            })
             .collect()
     }
 
-    fn footer_kv(bytes: &[u8]) -> Vec<KeyValue> {
-        let reader = SerializedFileReader::new(Bytes::from(bytes.to_vec())).unwrap();
-        reader
-            .metadata()
-            .file_metadata()
-            .key_value_metadata()
-            .cloned()
-            .unwrap_or_default()
+    /// The row timestamps of every segment of the dendro archive `bytes`.
+    fn report_timestamps(bytes: Vec<u8>) -> Vec<u64> {
+        use metriken_storage::Catalog;
+        let catalog = metriken_storage::DendroCatalog::open_bytes(bytes).unwrap();
+        let mut out = Vec::new();
+        for source in catalog.sources().unwrap() {
+            for table in catalog.tables(source.id).unwrap() {
+                for (seq, _) in catalog.segment_meta(source.id, &table).unwrap() {
+                    let bytes = catalog
+                        .segment_bytes(source.id, &table, seq)
+                        .unwrap()
+                        .unwrap();
+                    let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(bytes))
+                        .unwrap()
+                        .build()
+                        .unwrap();
+                    for batch in reader {
+                        let batch = batch.unwrap();
+                        let col = batch.schema().index_of("timestamp").unwrap();
+                        let ts = batch
+                            .column(col)
+                            .as_any()
+                            .downcast_ref::<UInt64Array>()
+                            .unwrap();
+                        out.extend(ts.values().iter().copied());
+                    }
+                }
+            }
+        }
+        out.sort_unstable();
+        out
     }
 
     #[test]
@@ -981,8 +760,11 @@ mod tests {
         assert!(!payload.trim_columns);
     }
 
+    /// A single parquet saves a dendro report of one source, labelled with
+    /// the file's `source`, trimmed to the columns kept, with the selection
+    /// and the report marker on it.
     #[test]
-    fn single_parquet_round_trip_trims_to_one_column() {
+    fn a_parquet_saves_a_trimmed_dendro_report() {
         let (bytes, reader) = build_test(true);
         let payload = ReportPayload {
             entries: vec![ReportEntry {
@@ -993,53 +775,54 @@ mod tests {
             events: vec![],
             trim_range_ms: None,
         };
+        let keep: BTreeSet<String> = resolve_kept_columns(&payload, &reader, Side::Baseline)
+            .into_iter()
+            .collect();
         let body = r#"{"version":1,"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
-        let out = save_single_parquet(bytes, &payload, body, &reader, true).unwrap();
-        assert_eq!(schema_names(&out), vec!["timestamp", "duration", "m_a"]);
-        let kv = footer_kv(&out);
+        let out = build_report(
+            ReportSource::Parquet(vec![&bytes]),
+            None,
+            Some(&keep),
+            None,
+            body,
+            None,
+        )
+        .unwrap();
+        let sources = sources_of(out);
+        assert_eq!(sources.len(), 1);
+        let (labels, metadata, columns) = &sources[0];
+        assert_eq!(labels.get("source").map(String::as_str), Some("svc"));
+        assert_eq!(metadata.get(KEY_SELECTION).map(String::as_str), Some(body));
         assert_eq!(
-            kv.iter()
-                .find(|kv| kv.key == KEY_REPORT)
-                .and_then(|kv| kv.value.as_deref()),
+            metadata.get(KEY_REPORT).map(String::as_str),
             Some(REPORT_VALUE_TRIMMED)
         );
-        assert_eq!(
-            kv.iter()
-                .find(|kv| kv.key == KEY_SELECTION)
-                .and_then(|kv| kv.value.as_deref()),
-            Some(body)
-        );
+        assert!(columns.contains("m_a"), "{columns:?}");
+        assert!(!columns.contains("m_b"), "{columns:?}");
     }
 
+    /// An untrimmed save keeps every column and stamps no report marker,
+    /// and its events go on the anchor.
     #[test]
-    fn save_with_trim_columns_false_preserves_all_columns_and_skips_marker() {
-        let (bytes, reader) = build_test(true);
-        let payload = ReportPayload {
-            entries: vec![ReportEntry {
-                promql_query: "m_a".into(),
-                promql_query_experiment: None,
-            }],
-            trim_columns: false,
-            events: vec![],
-            trim_range_ms: None,
-        };
-        let selection = r#"{"version":1,"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
-        let out = save_single_parquet(bytes, &payload, selection, &reader, false).unwrap();
-        assert_eq!(
-            schema_names(&out),
-            vec!["timestamp", "duration", "m_a", "m_b"]
-        );
-        let kv = footer_kv(&out);
+    fn an_untrimmed_save_keeps_every_column_and_no_marker() {
+        let (bytes, _reader) = build_test(true);
+        let events = r#"{"events":[{"timestamp":1000000000,"description":"x"}]}"#;
+        let out = build_report(
+            ReportSource::Parquet(vec![&bytes]),
+            None,
+            None,
+            None,
+            "{}",
+            Some(events),
+        )
+        .unwrap();
+        let (_, metadata, columns) = &sources_of(out)[0];
         assert!(
-            !kv.iter().any(|kv| kv.key == KEY_REPORT),
-            "untrimmed save must not stamp KEY_REPORT"
+            columns.contains("m_a") && columns.contains("m_b"),
+            "{columns:?}"
         );
-        assert_eq!(
-            kv.iter()
-                .find(|kv| kv.key == KEY_SELECTION)
-                .and_then(|kv| kv.value.as_deref()),
-            Some(selection)
-        );
+        assert!(!metadata.contains_key(KEY_REPORT));
+        assert_eq!(metadata.get(KEY_EVENTS).map(String::as_str), Some(events));
     }
 
     #[test]
@@ -1064,204 +847,6 @@ mod tests {
         assert_eq!(payload.events[0].chart_id.as_deref(), Some("queue_depth"));
         assert_eq!(payload.events[1].chart_id, None);
     }
-
-    #[test]
-    fn combined_ab_round_trip_trims_each_side_and_repacks() {
-        let (bytes_a, reader_a) = build_test(true);
-        let (bytes_b, reader_b) = build_test(true);
-        let payload = ReportPayload {
-            entries: vec![ReportEntry {
-                promql_query: "m_a".into(),
-                promql_query_experiment: Some("m_b".into()),
-            }],
-            trim_columns: true,
-            events: vec![],
-            trim_range_ms: None,
-        };
-        let body = r#"{"version":1,"entries":[]}"#;
-        // Manifest bytes are opaque to this crate; just hand it a valid
-        // JSON blob and verify it lands in the tar.
-        let manifest_bytes = br#"{"version":1,"baseline":{"alias":"a","sources":["svc"]},"experiment":{"alias":"b","sources":["svc"]}}"#;
-
-        let out = save_combined_ab_tarball(
-            bytes_a,
-            bytes_b,
-            &payload,
-            body,
-            &reader_a,
-            &reader_b,
-            manifest_bytes,
-            true,
-        )
-        .unwrap();
-
-        let mut archive = tar::Archive::new(std::io::Cursor::new(&out));
-        let mut baseline_bytes: Vec<u8> = Vec::new();
-        let mut experiment_bytes: Vec<u8> = Vec::new();
-        let mut ab_json: Vec<u8> = Vec::new();
-        let mut names = Vec::new();
-        for entry in archive.entries().unwrap() {
-            let mut entry = entry.unwrap();
-            let p = entry.path().unwrap().to_path_buf();
-            let name = p.file_name().unwrap().to_string_lossy().to_string();
-            names.push(name.clone());
-            match name.as_str() {
-                "baseline.parquet" => std::io::copy(&mut entry, &mut baseline_bytes)
-                    .map(|_| ())
-                    .unwrap(),
-                "experiment.parquet" => std::io::copy(&mut entry, &mut experiment_bytes)
-                    .map(|_| ())
-                    .unwrap(),
-                "ab.json" => std::io::copy(&mut entry, &mut ab_json).map(|_| ()).unwrap(),
-                _ => {}
-            }
-        }
-        assert!(names.iter().any(|n| n == "baseline.parquet"));
-        assert!(names.iter().any(|n| n == "experiment.parquet"));
-        assert!(names.iter().any(|n| n == "ab.json"));
-        assert_eq!(ab_json.as_slice(), manifest_bytes);
-        assert_eq!(
-            schema_names(&baseline_bytes),
-            vec!["timestamp", "duration", "m_a"]
-        );
-        assert_eq!(
-            schema_names(&experiment_bytes),
-            vec!["timestamp", "duration", "m_b"]
-        );
-    }
-
-    #[test]
-    fn save_single_parquet_writes_key_events_when_payload_has_events() {
-        let (bytes, reader) = build_test(true);
-        let payload = ReportPayload {
-            entries: vec![ReportEntry {
-                promql_query: "m_a".into(),
-                promql_query_experiment: None,
-            }],
-            trim_columns: true,
-            events: vec![Event {
-                timestamp: 1_715_625_600_000_000_000,
-                description: "deploy".into(),
-                kind: Some("deploy".into()),
-                details: None,
-                source: Some("svc".into()),
-                node: None,
-                instance: None,
-                labels: Default::default(),
-                duration_ns: None,
-                id: None,
-                chart_id: Some("c1".into()),
-            }],
-            trim_range_ms: None,
-        };
-        let body = r#"{"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
-        let out = save_single_parquet(bytes, &payload, body, &reader, true).unwrap();
-        let kv = footer_kv(&out);
-        let events_value = kv
-            .iter()
-            .find(|kv| kv.key == "events")
-            .and_then(|kv| kv.value.as_deref())
-            .expect("KEY_EVENTS must be written when payload carries events");
-        let parsed: serde_json::Value = serde_json::from_str(events_value).unwrap();
-        let arr = parsed["events"].as_array().unwrap();
-        assert_eq!(arr.len(), 1);
-        assert_eq!(arr[0]["description"], "deploy");
-        assert_eq!(arr[0]["chart_id"], "c1");
-    }
-
-    #[test]
-    fn save_single_parquet_skips_key_events_when_no_events() {
-        let (bytes, reader) = build_test(true);
-        let payload = ReportPayload {
-            entries: vec![ReportEntry {
-                promql_query: "m_a".into(),
-                promql_query_experiment: None,
-            }],
-            trim_columns: true,
-            events: vec![],
-            trim_range_ms: None,
-        };
-        let body = r#"{"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
-        let out = save_single_parquet(bytes, &payload, body, &reader, true).unwrap();
-        let kv = footer_kv(&out);
-        assert!(
-            !kv.iter().any(|kv| kv.key == "events"),
-            "KEY_EVENTS must not be written when payload has no events"
-        );
-    }
-
-    #[test]
-    fn combined_ab_writes_events_to_both_sides() {
-        let (bytes_a, reader_a) = build_test(true);
-        let (bytes_b, reader_b) = build_test(true);
-        let payload = ReportPayload {
-            entries: vec![ReportEntry {
-                promql_query: "m_a".into(),
-                promql_query_experiment: Some("m_b".into()),
-            }],
-            trim_columns: true,
-            events: vec![Event {
-                timestamp: 1,
-                description: "deploy".into(),
-                kind: None,
-                details: None,
-                source: None,
-                node: None,
-                instance: None,
-                labels: Default::default(),
-                duration_ns: None,
-                id: None,
-                chart_id: None,
-            }],
-            trim_range_ms: None,
-        };
-        let body = r#"{"entries":[]}"#;
-        let manifest_bytes = br#"{"version":1,"baseline":{"alias":"a","sources":["svc"]},"experiment":{"alias":"b","sources":["svc"]}}"#;
-        let out = save_combined_ab_tarball(
-            bytes_a,
-            bytes_b,
-            &payload,
-            body,
-            &reader_a,
-            &reader_b,
-            manifest_bytes,
-            true,
-        )
-        .unwrap();
-
-        let mut archive = tar::Archive::new(std::io::Cursor::new(&out));
-        let mut baseline_bytes: Vec<u8> = Vec::new();
-        let mut experiment_bytes: Vec<u8> = Vec::new();
-        for entry in archive.entries().unwrap() {
-            let mut entry = entry.unwrap();
-            let p = entry.path().unwrap().to_path_buf();
-            let name = p.file_name().unwrap().to_string_lossy().to_string();
-            match name.as_str() {
-                "baseline.parquet" => {
-                    std::io::copy(&mut entry, &mut baseline_bytes).unwrap();
-                }
-                "experiment.parquet" => {
-                    std::io::copy(&mut entry, &mut experiment_bytes).unwrap();
-                }
-                _ => {}
-            }
-        }
-        for (label, bytes) in [
-            ("baseline", &baseline_bytes),
-            ("experiment", &experiment_bytes),
-        ] {
-            let kv = footer_kv(bytes);
-            let val = kv
-                .iter()
-                .find(|kv| kv.key == "events")
-                .and_then(|kv| kv.value.as_deref())
-                .unwrap_or_else(|| panic!("{label} side missing KEY_EVENTS"));
-            let parsed: serde_json::Value = serde_json::from_str(val).unwrap();
-            assert_eq!(parsed["events"].as_array().unwrap().len(), 1);
-        }
-    }
-
-    // ── `.rez` report builders ──
 
     fn rez_test_parquet(source: &str, sampler: &str, metric: &str) -> Vec<u8> {
         use arrow::array::UInt64Array;
@@ -1308,101 +893,131 @@ mod tests {
         buf
     }
 
-    /// A parquet compare assembles a 2-recording `.rez` report; when trimmed it
-    /// stamps the report marker and embeds the selection on the anchor.
+    /// A parquet compare saves a 2-source dendro report, one source per
+    /// side labelled with its `source` and its `arm`, the markers on the
+    /// first.
     #[test]
-    fn parquet_compare_builds_a_two_recording_rez_report() {
-        use rez::rez_sqlite::RezDb;
+    fn a_parquet_compare_saves_a_two_source_report() {
         let a = rez_test_parquet("redis", "cpu_usage", "cpu_cycles");
         let b = rez_test_parquet("valkey", "cpu_usage", "cpu_cycles");
-        let sides = [
-            ParquetReportSide {
-                bytes: &a,
-                keep_metrics: None,
-            },
-            ParquetReportSide {
-                bytes: &b,
-                keep_metrics: None,
-            },
-        ];
-        let out =
-            build_rez_report_from_parquets(&sides, true, None, r#"{"entries":[]}"#, None).unwrap();
-
-        let db = RezDb::open_bytes(out).unwrap();
-        let recs = db.read_recordings().unwrap();
-        assert_eq!(recs.len(), 2, "one recording per parquet side");
-        let anchor = &recs[0].meta.metadata;
+        let keep: BTreeSet<String> = ["cpu_cycles".to_string()].into_iter().collect();
+        let out = build_report(
+            ReportSource::Parquet(vec![&a, &b]),
+            None,
+            Some(&keep),
+            None,
+            r#"{"entries":[]}"#,
+            None,
+        )
+        .unwrap();
+        let sources = sources_of(out);
+        let names: Vec<&str> = sources.iter().map(|s| s.0["source"].as_str()).collect();
+        assert_eq!(names, ["redis", "valkey"]);
+        let arms: Vec<&str> = sources.iter().map(|s| s.0["arm"].as_str()).collect();
+        assert_eq!(arms, ["baseline", "experiment"], "it reopens as a compare");
         assert_eq!(
-            anchor.get(KEY_SELECTION).map(String::as_str),
+            sources[0].1.get(KEY_SELECTION).map(String::as_str),
             Some(r#"{"entries":[]}"#)
         );
-        assert_eq!(
-            anchor.get(KEY_REPORT).map(String::as_str),
-            Some(REPORT_VALUE_TRIMMED)
-        );
+        assert!(!sources[1].1.contains_key(KEY_SELECTION));
     }
 
-    /// The from-rez builder trims a `.rez` source and re-embeds a new
-    /// selection; here the source is itself built by the parquet path, so the
-    /// two shared builders round-trip together.
+    /// A dendro source is copied, and saving again from a report moves the
+    /// markers to the new anchor: an earlier report's keys leave the others.
     #[test]
-    fn from_rez_trims_and_reembeds_selection() {
-        use rez::rez_sqlite::RezDb;
+    fn a_report_saved_again_keeps_one_anchor() {
         let a = rez_test_parquet("redis", "cpu_usage", "cpu_cycles");
-        let source = build_rez_report_from_parquets(
-            &[ParquetReportSide {
-                bytes: &a,
-                keep_metrics: None,
-            }],
-            false,
+        let b = rez_test_parquet("valkey", "cpu_usage", "cpu_cycles");
+        let first = build_report(
+            ReportSource::Parquet(vec![&a, &b]),
+            None,
+            None,
             None,
             "{}",
             None,
         )
         .unwrap();
-        // Untrimmed parquet build carries no report marker.
-        {
-            let db = RezDb::open_bytes(source.clone()).unwrap();
-            assert!(!db.read_recordings().unwrap()[0]
-                .meta
-                .metadata
-                .contains_key(KEY_REPORT));
-        }
-
-        let keep: BTreeSet<String> = ["cpu_cycles".to_string()].into_iter().collect();
-        let out =
-            build_rez_report_from_rez(&source, None, Some(&keep), None, r#"{"entries":[1]}"#, None)
-                .unwrap();
-        let db = RezDb::open_bytes(out).unwrap();
-        let md = &db.read_recordings().unwrap()[0].meta.metadata;
-        assert_eq!(
-            md.get(KEY_SELECTION).map(String::as_str),
-            Some(r#"{"entries":[1]}"#)
-        );
-        assert_eq!(
-            md.get(KEY_REPORT).map(String::as_str),
-            Some(REPORT_VALUE_TRIMMED)
-        );
+        let anchor: BTreeMap<String, String> = [
+            ("arm".to_string(), "experiment".to_string()),
+            ("source".to_string(), "valkey".to_string()),
+        ]
+        .into();
+        let again = build_report(
+            ReportSource::Dendro(&first),
+            Some(&anchor),
+            None,
+            None,
+            r#"{"entries":[1]}"#,
+            None,
+        )
+        .unwrap();
+        let sources = sources_of(again);
+        let marked: Vec<&str> = sources
+            .iter()
+            .filter(|s| s.1.contains_key(KEY_SELECTION))
+            .map(|s| s.0["source"].as_str())
+            .collect();
+        assert_eq!(marked, ["valkey"]);
     }
 
-    /// The timestamps (ns) of a parquet's rows.
-    fn row_timestamps(bytes: &[u8]) -> Vec<u64> {
-        let reader = ParquetRecordBatchReaderBuilder::try_new(Bytes::copy_from_slice(bytes))
+    /// A v3 `.rez` converts into the report in memory, as the browser saves
+    /// one: the committed `v3-multi.rez`'s two recordings, with their labels,
+    /// and `v3-live.rez`'s rows still in its WAL table.
+    #[test]
+    fn a_v3_rez_saves_a_dendro_report() {
+        let fixture = |name: &str| {
+            std::fs::read(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../rez/tests/fixtures/rez")
+                    .join(name),
+            )
             .unwrap()
-            .build()
-            .unwrap();
-        let mut out = Vec::new();
-        for batch in reader {
-            let batch = batch.unwrap();
-            let col = batch.schema().index_of("timestamp").unwrap();
-            let ts = batch
-                .column(col)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .unwrap();
-            out.extend(ts.values().iter().copied());
-        }
-        out
+        };
+        let out = build_report(
+            ReportSource::RezV3(&fixture("v3-multi.rez")),
+            None,
+            None,
+            None,
+            "{}",
+            None,
+        )
+        .unwrap();
+        let sources = sources_of(out);
+        assert_eq!(sources.len(), 2);
+        assert_eq!(
+            sources[0].1.get(KEY_SELECTION).map(String::as_str),
+            Some("{}")
+        );
+        let live = build_report(
+            ReportSource::RezV3(&fixture("v3-live.rez")),
+            None,
+            None,
+            None,
+            "{}",
+            None,
+        )
+        .unwrap();
+        assert_eq!(sources_of(live).len(), 1);
+    }
+
+    /// A tar `.rez` source converts into the report in memory, as the
+    /// browser saves one: the committed `v2.rez`'s one recording, with its
+    /// labels.
+    #[test]
+    fn a_tar_rez_saves_a_dendro_report() {
+        let tar = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../rez/tests/fixtures/rez/v2.rez"),
+        )
+        .unwrap();
+        let out = build_report(ReportSource::RezTar(&tar), None, None, None, "{}", None).unwrap();
+        let sources = sources_of(out);
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].0.get("host").map(String::as_str), Some("web-01"));
+        assert_eq!(
+            sources[0].1.get(KEY_SELECTION).map(String::as_str),
+            Some("{}")
+        );
     }
 
     fn ranged_payload(start: f64, end: f64, trim_columns: bool) -> ReportPayload {
@@ -1440,75 +1055,40 @@ mod tests {
         );
     }
 
-    /// A range keeps only the rows inside it, with or without a column trim.
+    /// A range keeps only a parquet's rows inside it.
     #[test]
-    fn single_parquet_keeps_only_rows_in_the_range() {
+    fn a_parquet_report_keeps_only_rows_in_the_range() {
         let sec = 1_000_000_000u64;
-        for trim_columns in [true, false] {
-            let (bytes, reader) = build_test(true);
-            let payload = ranged_payload(1500.0, 3000.0, trim_columns);
-            let out = save_single_parquet(bytes, &payload, "{}", &reader, trim_columns).unwrap();
-            assert_eq!(
-                row_timestamps(&out),
-                vec![2 * sec, 3 * sec],
-                "trim_columns={trim_columns}"
-            );
-        }
+        let (bytes, _reader) = build_test(true);
+        let range = ranged_payload(1500.0, 3000.0, false).time_range().unwrap();
+        let out = build_report(
+            ReportSource::Parquet(vec![&bytes]),
+            None,
+            None,
+            range,
+            "{}",
+            None,
+        )
+        .unwrap();
+        assert_eq!(report_timestamps(out), vec![2 * sec, 3 * sec]);
     }
 
     #[test]
     fn a_range_holding_no_rows_is_an_error() {
-        let (bytes, reader) = build_test(true);
-        let payload = ranged_payload(10_000.0, 20_000.0, true);
-        let err = save_single_parquet(bytes, &payload, "{}", &reader, true).unwrap_err();
+        let (bytes, _reader) = build_test(true);
+        let range = ranged_payload(10_000.0, 20_000.0, true)
+            .time_range()
+            .unwrap();
+        let err = build_report(
+            ReportSource::Parquet(vec![&bytes]),
+            None,
+            None,
+            range,
+            "{}",
+            None,
+        )
+        .unwrap_err();
         assert!(err.contains("no rows"), "{err}");
-    }
-
-    /// A parquet compare keeps only each side's rows inside the range.
-    #[test]
-    fn parquet_compare_keeps_only_rows_in_the_range() {
-        use rez::rez_sqlite::RezDb;
-        let a = rez_test_parquet("redis", "cpu_usage", "cpu_cycles");
-        let b = rez_test_parquet("valkey", "cpu_usage", "cpu_cycles");
-        let all = row_timestamps(&a);
-        assert!(all.len() >= 3, "fixture has rows to cut: {all:?}");
-        let (lo, hi) = (all[1], all[all.len() - 2]);
-        let sides = [
-            ParquetReportSide {
-                bytes: &a,
-                keep_metrics: None,
-            },
-            ParquetReportSide {
-                bytes: &b,
-                keep_metrics: None,
-            },
-        ];
-        let range = TimeRange {
-            start_ns: lo,
-            end_ns: hi,
-        };
-        let out = build_rez_report_from_parquets(&sides, false, Some(range), "{}", None).unwrap();
-        let db = RezDb::open_bytes(out).unwrap();
-        let recs = db.read_recordings().unwrap();
-        assert_eq!(recs.len(), 2);
-        for rec in &recs {
-            let tables = db.all_samplers(rec.id).unwrap();
-            assert!(!tables.is_empty());
-            for table in tables {
-                for seg in db
-                    .segments_overlapping(rec.id, &table, 0, u64::MAX)
-                    .unwrap()
-                {
-                    let m = &seg.meta;
-                    assert!(
-                        m.first_ts >= lo && m.last_ts <= hi,
-                        "{table}: {}..{} outside {lo}..{hi}",
-                        m.first_ts,
-                        m.last_ts
-                    );
-                }
-            }
-        }
     }
 
     /// A window whose ends came through browser f64 seconds keeps the rows

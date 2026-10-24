@@ -12,7 +12,7 @@ use super::state::AppState;
 /// Two Rezolus agents of one run: `h1` with one CPU 25% busy, agent 6.0.0;
 /// `h2` with two CPUs 75% busy, agent 5.9.0.
 pub(crate) fn two_hosts(dir: &Path) -> PathBuf {
-    let path = dir.join("run.rez");
+    let path = dir.join("run.dendro");
     one_run(
         &path,
         &[
@@ -54,7 +54,7 @@ pub(crate) fn svc_template() -> String {
 /// A Rezolus agent and a service of one run, on one host; the service's
 /// recording carries [`svc_template`] as its `service_queries`.
 pub(crate) fn agent_and_service(dir: &Path) -> PathBuf {
-    let path = dir.join("svc.rez");
+    let path = dir.join("svc.dendro");
     let template = svc_template();
     one_run(
         &path,
@@ -269,7 +269,7 @@ fn the_wasm_viewer_renders_a_combined_archive_as_the_server_does() {
     for path in [two_hosts(dir.path()), agent_and_service(dir.path())] {
         let state = view(&path, &[]);
         let mut reg = viewer::WasmCaptureRegistry::new();
-        reg.attach("baseline", &std::fs::read(&path).unwrap(), "run.rez")
+        reg.attach("baseline", &std::fs::read(&path).unwrap(), "run.dendro")
             .unwrap();
         reg.init_templates("baseline", "[]").unwrap();
         assert!(!reg.has("experiment"));
@@ -311,7 +311,7 @@ fn the_wasm_viewer_renders_a_combined_archive_as_the_server_does() {
 #[test]
 fn recordings_with_equal_labels_are_kept_apart() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("twins.rez");
+    let path = dir.path().join("twins.dendro");
     let twin = |cpus, busy_ns| Recording {
         labels: &[("source", "rezolus")],
         metadata: &[("source", "rezolus")],
@@ -355,7 +355,7 @@ fn recordings_with_equal_labels_are_kept_apart() {
 #[test]
 fn an_instance_lists_only_its_own_metrics() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("run.rez");
+    let path = dir.path().join("run.dendro");
     one_run(
         &path,
         &[
@@ -396,7 +396,7 @@ fn an_instance_lists_only_its_own_metrics() {
 #[test]
 fn each_instance_has_its_own_throughput_and_systeminfo() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("run.rez");
+    let path = dir.path().join("run.dendro");
     let template = svc_template();
     one_run(
         &path,
@@ -446,7 +446,7 @@ fn each_instance_has_its_own_throughput_and_systeminfo() {
     assert_eq!(info["h2"]["hostname"], "h2");
 
     let mut reg = viewer::WasmCaptureRegistry::new();
-    reg.attach("baseline", &std::fs::read(&path).unwrap(), "run.rez")
+    reg.attach("baseline", &std::fs::read(&path).unwrap(), "run.dendro")
         .unwrap();
     let wasm: serde_json::Value =
         serde_json::from_str(&reg.systeminfo("baseline").unwrap()).unwrap();
@@ -459,7 +459,7 @@ fn each_instance_has_its_own_throughput_and_systeminfo() {
 #[test]
 fn a_recording_without_the_others_label_reads_only_its_series() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("run.rez");
+    let path = dir.path().join("run.dendro");
     one_run(
         &path,
         &[
@@ -511,7 +511,7 @@ fn a_recording_without_the_others_label_reads_only_its_series() {
 #[test]
 fn a_recording_without_a_label_two_others_carry_reads_only_its_series() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("run.rez");
+    let path = dir.path().join("run.dendro");
     let rec = |labels, busy_ns| Recording {
         labels,
         metadata: &[("source", "rezolus")],
@@ -555,7 +555,7 @@ fn armed(dir: &Path, name: &str, arms: &[&str]) -> PathBuf {
             .into()
         })
         .collect();
-    crate::mcp::tests::multi_recording_rez_with_labels(&path, &labels);
+    crate::mcp::tests::multi_recording_with_labels(&path, &labels);
     path
 }
 
@@ -565,19 +565,19 @@ fn armed(dir: &Path, name: &str, arms: &[&str]) -> PathBuf {
 #[test]
 fn the_arms_fill_the_slots_in_both_viewers() {
     let dir = tempfile::tempdir().unwrap();
-    let reversed = armed(dir.path(), "rev.rez", &["experiment", "baseline"]);
+    let reversed = armed(dir.path(), "rev.dendro", &["experiment", "baseline"]);
     let state = view(&reversed, &[]);
     let meta = |id: &str| state.captures.file_metadata_by_id(id).unwrap();
     assert!(meta("baseline").contains("s1"), "{}", meta("baseline"));
     assert!(meta("experiment").contains("s0"), "{}", meta("experiment"));
 
     let mut reg = viewer::WasmCaptureRegistry::new();
-    reg.attach("baseline", &std::fs::read(&reversed).unwrap(), "rev.rez")
+    reg.attach("baseline", &std::fs::read(&reversed).unwrap(), "rev.dendro")
         .unwrap();
     assert!(reg.file_metadata_json("baseline").unwrap().contains("s1"));
     assert!(reg.file_metadata_json("experiment").unwrap().contains("s0"));
 
-    let shared = armed(dir.path(), "shared.rez", &["baseline", "baseline"]);
+    let shared = armed(dir.path(), "shared.dendro", &["baseline", "baseline"]);
     let labels: Vec<_> = crate::rez_reader::RezReader::open_recordings(
         &shared,
         metriken_storage::BufferPool::new(1 << 24),
@@ -604,7 +604,7 @@ pub(crate) const SVC_B_EVENTS: &str =
 /// [`svc_template`], and a Rezolus agent without one on the same host (with
 /// systeminfo), recorded in one run.
 pub(crate) fn concurrent_ab(dir: &Path) -> PathBuf {
-    let path = dir.join("conc.rez");
+    let path = dir.join("conc.dendro");
     let template = svc_template();
     one_run(
         &path,
@@ -725,7 +725,7 @@ fn a_concurrent_ab_shows_the_unarmed_agent_beside_it() {
     assert!((svc[0] - 10.0).abs() < 1e-9, "{svc:?}");
 
     let mut reg = viewer::WasmCaptureRegistry::new();
-    reg.attach("baseline", &std::fs::read(&path).unwrap(), "conc.rez")
+    reg.attach("baseline", &std::fs::read(&path).unwrap(), "conc.dendro")
         .unwrap();
     reg.init_templates("baseline", "[]").unwrap();
     // Before the combined regeneration the baseline's own sections already
@@ -767,7 +767,7 @@ fn a_concurrent_ab_shows_the_unarmed_agent_beside_it() {
 #[test]
 fn a_comparison_without_services_lands_on_the_agent_overview() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("plain.rez");
+    let path = dir.path().join("plain.dendro");
     let template: &'static str = Box::leak(svc_template().into_boxed_str());
     let svc_d: &'static [(&'static str, &'static str)] =
         Box::leak(vec![("source", "svcD"), ("service_queries", template)].into_boxed_slice());
@@ -878,7 +878,7 @@ fn one_arm_among_unarmed_recordings_is_refused() {
 #[test]
 fn a_comparison_of_agents_keeps_the_usual_landing() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("agents.rez");
+    let path = dir.path().join("agents.dendro");
     let agent = |labels: &'static [(&'static str, &'static str)]| Recording {
         labels,
         metadata: &[("source", "rezolus")],
@@ -902,7 +902,7 @@ fn a_comparison_of_agents_keeps_the_usual_landing() {
     drop(store);
 
     let mut reg = viewer::WasmCaptureRegistry::new();
-    reg.attach("baseline", &std::fs::read(&path).unwrap(), "agents.rez")
+    reg.attach("baseline", &std::fs::read(&path).unwrap(), "agents.dendro")
         .unwrap();
     reg.init_templates("baseline", "[]").unwrap();
     let wasm: Vec<serde_json::Value> =
@@ -916,7 +916,7 @@ fn a_comparison_of_agents_keeps_the_usual_landing() {
 #[test]
 fn a_beside_recordings_template_notice_is_reported() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("bad.rez");
+    let path = dir.path().join("bad.dendro");
     let svc = |labels: &'static [(&'static str, &'static str)],
                metadata: &'static [(&'static str, &'static str)]| Recording {
         labels,
@@ -952,7 +952,7 @@ fn a_beside_recordings_template_notice_is_reported() {
         ],
     );
     let mut reg = viewer::WasmCaptureRegistry::new();
-    reg.attach("baseline", &std::fs::read(&path).unwrap(), "bad.rez")
+    reg.attach("baseline", &std::fs::read(&path).unwrap(), "bad.dendro")
         .unwrap();
     reg.init_templates("baseline", "[]").unwrap();
     reg.init_templates("experiment", "[]").unwrap();
@@ -974,20 +974,18 @@ fn a_beside_recordings_template_notice_is_reported() {
 
 /// A report saved from the concurrent A/B (the agent first in the archive,
 /// unarmed) lands on the baseline's recording, svcA's, and a fresh viewer
-/// of it opens in report mode with the pins; in both viewers, from a `.rez`
-/// and from a dendro archive (`report_save`'s dendro path). A report saved
-/// before that, onto the archive's first recording, reopens the same.
+/// of it opens in report mode with the pins, in both viewers
+/// (`report_save`'s dendro path). A report saved before that, onto the
+/// archive's first recording, reopens the same.
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn a_report_of_the_concurrent_ab_reopens_with_its_pins() {
     let dir = tempfile::tempdir().unwrap();
-    let rez = concurrent_ab(dir.path());
-    let dendro = dir.path().join("conc.dendro");
-    rez::to_dendro::convert_v3_to_dendro(&rez, &dendro).unwrap();
-    report_round_trip(dir.path(), &rez, "rez").await;
-    report_round_trip(dir.path(), &dendro, "dendro").await;
+    let dendro = concurrent_ab(dir.path());
+    report_round_trip(dir.path(), &dendro).await;
 }
 
-async fn report_round_trip(dir: &Path, path: &Path, ext: &str) {
+async fn report_round_trip(dir: &Path, path: &Path) {
+    let ext = "dendro";
     use crate::parquet_metadata::{KEY_EVENTS, KEY_REPORT, KEY_SELECTION};
     let body = r#"{"entries":[{"chartId":"busy-pct","section":"cpu@h","promql_query":"irate(cpu_usage{__capture__=\"h\"}[5m])","single_capture":true}],"trim_columns":true}"#;
 
@@ -1017,41 +1015,21 @@ async fn report_round_trip(dir: &Path, path: &Path, ext: &str) {
     };
     // The experiment's own events, in a report: kept by every save.
     let svc_b_events = |bytes: &[u8]| -> Option<String> {
-        let events = |m: &std::collections::BTreeMap<String, String>| m.get(KEY_EVENTS).cloned();
-        if ext == "dendro" {
-            let archive = dendro::archive::Archive::open_bytes(bytes.to_vec()).unwrap();
-            let sources = archive.read_sources().unwrap();
-            let svc = sources.iter().find(|s| s.meta.labels["source"] == "svcB")?;
-            events(&svc.meta.metadata)
-        } else {
-            let db = crate::recorder::rez_sqlite::RezDb::open_bytes(bytes.to_vec()).unwrap();
-            let recordings = db.read_recordings().unwrap();
-            let svc = recordings
-                .iter()
-                .find(|r| r.meta.labels["source"] == "svcB")?;
-            events(&svc.meta.metadata)
-        }
+        let archive = dendro::archive::Archive::open_bytes(bytes.to_vec()).unwrap();
+        let sources = archive.read_sources().unwrap();
+        let svc = sources.iter().find(|s| s.meta.labels["source"] == "svcB")?;
+        svc.meta.metadata.get(KEY_EVENTS).cloned()
     };
     // The `source` of each recording a report's markers are on.
     let marked = |bytes: &[u8]| -> Vec<String> {
-        if ext == "dendro" {
-            let archive = dendro::archive::Archive::open_bytes(bytes.to_vec()).unwrap();
-            archive
-                .read_sources()
-                .unwrap()
-                .into_iter()
-                .filter(|s| s.meta.metadata.contains_key(KEY_SELECTION))
-                .map(|s| s.meta.labels["source"].clone())
-                .collect()
-        } else {
-            let db = crate::recorder::rez_sqlite::RezDb::open_bytes(bytes.to_vec()).unwrap();
-            db.read_recordings()
-                .unwrap()
-                .into_iter()
-                .filter(|r| r.meta.metadata.contains_key(KEY_SELECTION))
-                .map(|r| r.meta.labels["source"].clone())
-                .collect()
-        }
+        let archive = dendro::archive::Archive::open_bytes(bytes.to_vec()).unwrap();
+        archive
+            .read_sources()
+            .unwrap()
+            .into_iter()
+            .filter(|s| s.meta.metadata.contains_key(KEY_SELECTION))
+            .map(|s| s.meta.labels["source"].clone())
+            .collect()
     };
 
     let state = std::sync::Arc::new(view(path, &[]));
@@ -1083,8 +1061,8 @@ async fn report_round_trip(dir: &Path, path: &Path, ext: &str) {
 
     // Saved onto the archive's first recording, as before the fix.
     let keep: std::collections::BTreeSet<String> = ["cpu_usage".to_string()].into_iter().collect();
-    let old = ::report_save::build_rez_report_from_rez(
-        &std::fs::read(path).unwrap(),
+    let old = ::report_save::build_report(
+        ::report_save::ReportSource::Dendro(&std::fs::read(path).unwrap()),
         None,
         Some(&keep),
         None,
@@ -1131,7 +1109,7 @@ async fn report_round_trip(dir: &Path, path: &Path, ext: &str) {
 #[test]
 fn an_agent_baseline_without_cpu_usage_keeps_the_usual_landing() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("nocpu.rez");
+    let path = dir.path().join("nocpu.dendro");
     let agent = |labels: &'static [(&'static str, &'static str)]| Recording {
         labels,
         metadata: &[("source", "rezolus")],
@@ -1166,7 +1144,7 @@ fn an_agent_baseline_without_cpu_usage_keeps_the_usual_landing() {
 fn a_recordings_catalog_opens_only_its_own_tables() {
     use std::sync::Arc;
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("hosts.rez");
+    let path = dir.path().join("hosts.dendro");
     let agent = |labels: &'static [(&'static str, &'static str)]| Recording {
         labels,
         metadata: &[("source", "rezolus")],
@@ -1299,6 +1277,7 @@ fn dual(i: u64, kind: Held) -> metriken_exposition::Snapshot {
         counters: only(Held::Counter),
         gauges: only(Held::Gauge),
         histograms: only(Held::Histogram),
+        gauge_histograms: Vec::new(),
     };
     let mut histogram = ::histogram::Histogram::new(7, 64).unwrap();
     histogram.increment(1_000 + i).unwrap();
@@ -1323,6 +1302,7 @@ fn dual(i: u64, kind: Held) -> metriken_exposition::Snapshot {
                 Held::Histogram => vec![Some(histogram)],
                 _ => Vec::new(),
             },
+            gauge_histograms: Vec::new(),
         }],
     })
 }

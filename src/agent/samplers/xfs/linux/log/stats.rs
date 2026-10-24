@@ -70,16 +70,16 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
     description = "Distribution of the time a transaction slept waiting for XFS log space (one xfs_log_grant_sleep to its xfs_log_grant_wake), in nanoseconds",
     metadata = { unit = "nanoseconds", wait = "space", acq_group = "xfs_log_latencies" }
 )]
-pub static XFS_LOG_WAIT_LATENCY_SPACE: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static XFS_LOG_WAIT_LATENCY_SPACE: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "xfs_log_wait_latency",
     description = "Distribution of the time an XFS log force took (xfs_log_force or xfs_log_force_seq, entry to return), in nanoseconds: the log write an fsync waits for; a force without XFS_LOG_SYNC returns once the write is issued and sits in the low tail",
     metadata = { unit = "nanoseconds", wait = "force", acq_group = "xfs_log_latencies" }
 )]
-pub static XFS_LOG_WAIT_LATENCY_FORCE: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static XFS_LOG_WAIT_LATENCY_FORCE: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 /*
  * per filesystem: one `CounterGroup` per metric, one entry per filesystem slot

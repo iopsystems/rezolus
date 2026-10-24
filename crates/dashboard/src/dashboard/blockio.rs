@@ -225,6 +225,7 @@ mod tests {
                 counters,
                 gauges: vec![],
                 histograms: hist_snapshots,
+                gauge_histograms: Vec::new(),
             });
             store.ingest_snapshot(snapshot);
         }

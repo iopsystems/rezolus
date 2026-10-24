@@ -512,7 +512,7 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
 - **Viewer shows only the first two recordings** — **PARTLY DONE**. `rezolus
   view` now takes `--baseline k=v` / `--experiment k=v` (repeatable, ANDed,
   subset match — the same selector semantics as the MCP `--recording` flag,
-  sharing `src/mcp/recording_selector.rs`), so which two arms of a 3+-recording
+  sharing `src/parquet_tools/select.rs`), so which two arms of a 3+-recording
   `.rez` fill the A/B slots is a choice rather than manifest order. Each flag
   must name exactly one recording; matching none or several is refused with a
   listing, never narrowed to a first match. The default with no flags is
@@ -1569,7 +1569,7 @@ Source: [Events as ranges, phases, and alignment anchors](journal/2026-09-28-eve
   into every recording of a multi-recording `.rez`, so a hand-written
   `run_start` on a combined archive lands at one instant in both and
   alignment is a no-op. Parse with `RecordingSelector::parse(pairs,
-  "--recording")` (`src/mcp/recording_selector.rs`), resolve against the
+  "--recording")` (`src/parquet_tools/select.rs`), resolve against the
   `(labels, reader)` pairs the loop in `src/parquet_tools/annotate.rs`
   already has, skip non-matching recordings. Recorder-emitted run events
   differ per run already, which is why this waits.
