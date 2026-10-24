@@ -29,11 +29,18 @@ struct task_info {
     // bpf_ktime_get_ns() when sent. task_info and task_exit travel on
     // separate ringbufs, so userspace orders the two by this.
     u64 ts;
+    // task->start_time: the instance these labels describe, as the
+    // task_start_times marker records it
+    u64 start_time;
 };
 
 // Task exit notification
 struct task_exit {
     u32 pid;
+    // The task's tgid when signal->live read 0 at this exit (every thread of
+    // the group has entered do_exit), else 0. Userspace releases every slot
+    // labelled with that tgid by a task_info older than this exit.
+    u32 dead_tgid;
     // bpf_ktime_get_ns() when sent; see task_info.ts
     u64 ts;
 };
@@ -48,6 +55,7 @@ struct task_exit {
 static __always_inline void populate_task_info(struct task_struct* task, struct task_info* info) {
     info->pid = BPF_CORE_READ(task, pid);
     info->tgid = BPF_CORE_READ(task, tgid);
+    info->start_time = BPF_CORE_READ(task, start_time);
 
     bpf_probe_read_kernel_str(&info->comm, TASK_COMM_LEN, BPF_CORE_READ(task, comm));
 
