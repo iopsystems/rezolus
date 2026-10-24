@@ -15,14 +15,13 @@ const NAME: &str = "memory_cgroup";
 const ROOT: &str = "/sys/fs/cgroup";
 const DEFAULT_INTERVAL: Duration = Duration::from_secs(60);
 
+use crate::agent::samplers::blocking::{recover_lock, BlockingWorker, Cadence};
 use crate::agent::*;
 use anyhow::Context;
 use metriken::GaugeGroup;
 use std::collections::{HashMap, HashSet};
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, TryLockError};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 
@@ -46,8 +45,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     );
     Ok(Some(Box::new(CgroupMemory {
         state: Arc::new(Mutex::new(State::default())),
-        interval,
-        reading: Arc::new(AtomicBool::new(false)),
+        worker: BlockingWorker::new(NAME, interval, Cadence::FromCompletion),
     })))
 }
 
@@ -92,13 +90,11 @@ static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::sampl
 
 struct CgroupMemory {
     state: Arc<Mutex<State>>,
-    interval: Duration,
-    reading: Arc<AtomicBool>,
+    worker: BlockingWorker,
 }
 
 #[derive(Default)]
 struct State {
-    last_read: Option<Instant>,
     slots: HashMap<PathBuf, usize>,
     warned_capacity: bool,
 }
@@ -114,58 +110,25 @@ impl Sampler for CgroupMemory {
     }
 }
 
-// The task owns this lease, so even unwinding releases its in-flight flag.
-struct InFlight(Arc<AtomicBool>);
-impl Drop for InFlight {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
-
 impl CgroupMemory {
     fn dispatch(
         &self,
         read: impl FnOnce(&mut State) -> std::io::Result<usize> + Send + 'static,
     ) -> Option<tokio::task::JoinHandle<()>> {
-        if self
-            .reading
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return None;
-        }
-        let in_flight = InFlight(self.reading.clone());
-        // Never wait for state on the async worker. A previous panic is logged
-        // by the worker below; recovering its mutex lets the next sweep retry.
-        let state = match self.state.try_lock() {
-            Ok(state) => state,
-            Err(TryLockError::Poisoned(e)) => e.into_inner(),
-            Err(TryLockError::WouldBlock) => return None,
-        };
-        if state.last_read.is_some_and(|t| t.elapsed() < self.interval) {
-            return None;
-        }
-        drop(state);
+        let permit = self.worker.try_acquire()?;
         let state = self.state.clone();
-        Some(tokio::task::spawn_blocking(move || {
-            let _in_flight = in_flight;
+        Some(permit.spawn(move || {
             let start = Instant::now();
-            let result = catch_unwind(AssertUnwindSafe(|| {
-                let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-                read(&mut state)
-            }));
-            match result {
-                Ok(Ok(count)) => debug!(
+            match read(&mut recover_lock(&state)) {
+                Ok(count) => debug!(
                     "{NAME}: {count} cgroups sampled in {} us",
                     start.elapsed().as_micros()
                 ),
-                Ok(Err(e)) => warn!(
+                Err(e) => warn!(
                     "{NAME}: sweep failed: {e}; retaining the previous observation and \
                      retrying after the configured interval"
                 ),
-                Err(_) => error!("{NAME}: sweep panicked; retrying after the configured interval"),
             }
-            state.lock().unwrap_or_else(|e| e.into_inner()).last_read = Some(Instant::now());
         }))
     }
 }
@@ -518,49 +481,6 @@ mod tests {
         std::fs::remove_dir_all(&existing).unwrap();
         std::fs::remove_dir_all(&added).unwrap();
         assert_eq!(state.sweep(root).unwrap(), 0);
-    }
-
-    #[tokio::test]
-    async fn panicked_worker_releases_lease_and_retries_after_interval() {
-        let sampler = CgroupMemory {
-            state: Arc::new(Mutex::new(State::default())),
-            interval: Duration::from_secs(60),
-            reading: Arc::new(AtomicBool::new(false)),
-        };
-        sampler
-            .dispatch(|_| panic!("injected read panic"))
-            .unwrap()
-            .await
-            .unwrap();
-        assert!(!sampler.reading.load(Ordering::Acquire));
-        assert!(sampler.state.is_poisoned());
-        assert!(sampler
-            .dispatch(|_| panic!("must respect retry interval"))
-            .is_none());
-        assert!(!sampler.reading.load(Ordering::Acquire));
-        sampler
-            .state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .last_read = None;
-        let recovered = Arc::new(AtomicBool::new(false));
-        let check = recovered.clone();
-        sampler
-            .dispatch(move |_| {
-                check.store(true, Ordering::Release);
-                Ok(0)
-            })
-            .unwrap()
-            .await
-            .unwrap();
-        assert!(recovered.load(Ordering::Acquire));
-        assert!(!sampler.reading.load(Ordering::Acquire));
-        assert!(sampler
-            .state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .last_read
-            .is_some());
     }
 
     // Hold the registry lock across both mutations and stream assertions.

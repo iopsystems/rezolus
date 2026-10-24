@@ -5,6 +5,8 @@ use async_trait::async_trait;
 use linkme::distributed_slice;
 use std::sync::Arc;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod blocking;
 mod blockio;
 mod cpu;
 #[cfg(target_os = "linux")]
