@@ -12,22 +12,16 @@ import { discoverCgroups } from './cgroup_discovery.js';
 
 // Why a cgroup cannot be selected, or null when it can. A selection reaches
 // the query engine as a regex matcher, `name=~"a|b"`: promql-parser unquotes
-// the string and requires a valid regex, then metriken-storage
+// the string and requires it to compile as a regex, then metriken-storage
 // `match_pattern` compares each `|`-separated alternative with the name
-// literally. A name containing `|` is split, and one that is not a valid
-// regex fails the query. JavaScript's `u`-mode RegExp stands in for the
-// engine's regex syntax.
-export const cgroupUnselectableReason = (name) => {
-    if (name.includes('|')) {
-        return 'Cannot be selected: the query engine reads "|" in a name as a separator';
-    }
-    try {
-        new RegExp(name, 'u');
-    } catch (_) {
-        return 'Cannot be selected: the query engine requires the name to be a valid regular expression';
-    }
-    return null;
-};
+// literally, after turning `\.` into `.`. A name made of letters, digits,
+// `/ _ . : @ - = , ~ %` and `\xHH` escapes (systemd's escaped characters)
+// compiles and compares equal to itself; those characters cover systemd
+// units, container ids and pod names. Any other name is not offered.
+const SELECTABLE = /^(?:[A-Za-z0-9/_.:@=,~%-]|\\x[0-9A-Fa-f]{2})*$/;
+export const cgroupUnselectableReason = (name) => (SELECTABLE.test(name)
+    ? null
+    : 'Cannot be selected: the name has characters the query engine\'s matcher cannot express');
 
 // A name inside a PromQL double-quoted string: backslashes and quotes escaped,
 // so the string unquotes to the name itself (a systemd `\x2d` stays `\x2d`).
@@ -106,9 +100,12 @@ let persistedOriginalQueries = null; // Map<string, string>
 // available list arrives (fetchAvailableCgroups); unknown ones are dropped
 // there with a warning rather than left to render empty charts.
 export const seedSelectedCgroups = (names) => {
-    persistedSelectedCgroups = new Set(
-        (Array.isArray(names) ? names : []).filter((n) => typeof n === 'string' && n !== ''),
-    );
+    const seeded = (Array.isArray(names) ? names : []).filter((n) => typeof n === 'string' && n !== '');
+    const unusable = seeded.filter((n) => cgroupUnselectableReason(n));
+    if (unusable.length > 0) {
+        console.warn(`[cgroups] dropping selection the query engine cannot match: ${unusable.join(', ')}`);
+    }
+    persistedSelectedCgroups = new Set(seeded.filter((n) => !cgroupUnselectableReason(n)));
 };
 
 // The selection as the pattern the selector substitutes for
@@ -296,6 +293,7 @@ export const CgroupSelector = {
         const unselected = Array.from(st.availableCgroups)
             .filter((cg) => !st.selectedCgroups.has(cg))
             .sort();
+        const selectable = unselected.filter((cg) => !cgroupUnselectableReason(cg));
         const selected = Array.from(st.selectedCgroups).sort();
 
         const leftItems = st.loading
@@ -326,8 +324,8 @@ export const CgroupSelector = {
                         st.leftSelected.size === 0,
                         () => this.transfer(vnode, st.leftSelected, 'add')),
                     transferBtn('>>', '⇊', 'Move all to individual',
-                        unselected.length === 0,
-                        () => this.transfer(vnode, unselected, 'add')),
+                        selectable.length === 0,
+                        () => this.transfer(vnode, selectable, 'add')),
                     transferBtn('<<', '⇈', 'Move all to aggregate',
                         selected.length === 0,
                         () => this.transfer(vnode, selected, 'remove')),

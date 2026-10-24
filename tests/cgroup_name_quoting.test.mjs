@@ -23,12 +23,23 @@ test("a systemd \\x2d escape keeps its backslash through the PromQL string", () 
     assert.equal(cgroupUnselectableReason(name), null);
 });
 
-test('a double quote is escaped', () => {
-    assert.equal(cgroupPattern(['/a"b']), '/a\\"b');
+test('every allowed character, and a mix of real names, is selectable', () => {
+    for (const name of [
+        '/system.slice/ssh.service',
+        '.../machine-qemu-2-guest.scope/libvirt/vcpu3',
+        '/system.slice/docker-0123abcdef.scope',
+        '/kubepods.slice/kubepods-burstable.slice/pod1234_5678',
+        '/a:b@c=d,e~f%g-h_i.j\\x2dk',
+    ]) {
+        assert.equal(cgroupUnselectableReason(name), null, name);
+    }
 });
 
 test('names the engine cannot match are left out and say why', () => {
-    for (const name of ['/a|b', '/a[b', '/a(b', '*x']) {
+    // Each of these either splits on "|", fails to compile as a regex in the
+    // engine (lookarounds, \\0, \\c, unbalanced brackets), has a quote, or
+    // contains the "\\." that match_pattern rewrites.
+    for (const name of ['/a|b', '/a[b', '/a(b', '*x', '/a"b', '/a(?=x)', '/a\\0', '/a\\cJ', '/a\\.b', '/a{b']) {
         assert.match(cgroupUnselectableReason(name), /^Cannot be selected/, name);
     }
     assert.equal(cgroupPattern(['/ok', '/a|b', '/a[b']), '/ok');
