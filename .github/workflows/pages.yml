@@ -12,6 +12,8 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/pages.yml'
+      - '.github/actions/setup-wasm/**'
+      - '.github/actions/setup-rust/**'
 
 permissions:
   contents: read
@@ -31,12 +33,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v5
-      - uses: ./.github/actions/setup-rust
-      - name: Add wasm32 target
-        run: rustup target add wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - name: Install wasm-pack
-        run: cargo install wasm-pack --version ^0.14 --locked
+      - uses: ./.github/actions/setup-wasm
       - name: Build WASM viewer
         run: ./crates/viewer/build.sh
       - name: Resolve symlinks

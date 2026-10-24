@@ -1,0 +1,25 @@
+name: setup-wasm
+description: Shared WASM toolchain and dependency cache for CI, Pages and releases
+
+runs:
+  using: composite
+  steps:
+    - name: Normalize Rust cache environment
+      shell: bash
+      run: |
+        echo 'CARGO_TERM_COLOR=always' >> "$GITHUB_ENV"
+        echo 'RUST_BACKTRACE=full' >> "$GITHUB_ENV"
+    - uses: ./.github/actions/setup-rust
+    - name: Add wasm32 target
+      shell: bash
+      run: rustup target add wasm32-unknown-unknown
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: wasm-viewer
+    # Pin the shipping bundle to the version validated in CI. A prebuilt tool
+    # avoids resolving/compiling the tool's dependencies on cold runners.
+    - name: Install wasm-pack
+      uses: taiki-e/install-action@v2
+      with:
+        tool: wasm-pack@0.14.0
+        fallback: none
