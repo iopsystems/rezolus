@@ -222,12 +222,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: install wasm-pack
-        run: cargo install wasm-pack --version ^0.14 --locked
+      - uses: ./.github/actions/setup-wasm
 
       - name: build wasm viewer
         run: ./crates/viewer/build.sh
