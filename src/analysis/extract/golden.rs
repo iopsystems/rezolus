@@ -55,6 +55,7 @@ fn snap_with_histograms(
         counters,
         gauges,
         histograms,
+        gauge_histograms: Vec::new(),
     })
 }
 

@@ -201,16 +201,13 @@ const ViewerApi = {
     },
 
     // Mirror of the server's POST /api/v1/save_with_selection. The
-    // WASM registry projects the source bytes locally and returns
-    // either a parquet (single capture) or a `*.parquet.ab.tar`
-    // (compare mode). The Blob's MIME is best-effort; the file
-    // extension is the load-bearing signal for the browser download.
+    // WASM registry builds a .dendro report of the loaded recordings
+    // locally. The Blob's MIME is best-effort; the file extension is what
+    // the browser download is named by.
     async saveWithSelection(payload) {
         ensureAttached('baseline');
         const bytes = registry.save_with_selection(JSON.stringify(payload));
-        // The registry decides the output shape: `.dendro` for a dendro
-        // source, `.rez` for a `.rez` source or a parquet compare, `.parquet`
-        // for a single parquet.
+        // `.dendro`: the one container a report is.
         const extension = registry.report_extension();
         return { bytes, mime: 'application/octet-stream', extension };
     },

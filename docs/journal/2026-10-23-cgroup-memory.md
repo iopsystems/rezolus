@@ -300,8 +300,8 @@ strict `-D warnings` is blocked by that unchanged upstream warning.
 
 ## Local review follow-up
 
-Addressed the correctness and local efficiency findings from the review of
-`c38166f8`:
+Commit `f0c3c588` addresses the correctness and local efficiency findings
+from the review of `c38166f8`:
 
 - Memory's `name` now uses the same shared formatter as BPF cgroup metrics,
   including the last-three-component abbreviation, component length limit,
@@ -332,3 +332,16 @@ constant across both registry passes. Revisit it when the dependency exposes
 an exclusion API. The existing PR description already scoped encoded-byte
 reuse to full binary responses; long-format streaming reuses observations,
 not MessagePack bodies.
+
+The follow-up also merges `main` at `bffcf842`, preserving the new default-on
+sensor configuration. The merged metriken release adds gauge histograms;
+encoded-group matching now checks those values too, and the canonical-byte
+regression primes the old cached body before changing only a gauge histogram.
+
+Validation of the review fixes: 1189 root tests passed before the main merge,
+and all six cgroup tests passed with the ignored capacity test enabled on
+four test threads. After merging main and adapting to gauge histograms, the
+root suite passed all 1130 tests (12 ignored), and the dashboard suite passed
+249 (four ignored). The changed test total reflects upstream's recording-tool
+refactor. Cgroup JavaScript tests, formatting and PR-diff whitespace checks
+passed. Clippy completed with the same pre-existing warning in `src/mcp/link.rs`.

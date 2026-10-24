@@ -743,7 +743,8 @@ mod tests {
 
         // `recording metadata` — dispatched by content, not by extension, and
         // handed a file that is still being written.
-        let described = crate::parquet_tools::metadata::describe_rez_string_at(&path).unwrap();
+        let described =
+            crate::parquet_tools::metadata::describe_rez_string_at(&path, "rezolus").unwrap();
         assert!(
             described.contains("cpu_usage"),
             "the metadata tool must name the buffer's tables: {described}"
@@ -995,6 +996,7 @@ mod tests {
             window: Some(metriken::Window::new(ts - SECOND / 2, ts)),
             gauges: Vec::new(),
             histograms: Vec::new(),
+            gauge_histograms: Vec::new(),
         };
         (
             Snapshot::V3(SnapshotV3 {

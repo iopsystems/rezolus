@@ -3,10 +3,11 @@ use crate::*;
 use clap::{ArgMatches, Command};
 use std::path::PathBuf;
 
-mod recording_selector;
-pub(crate) use recording_selector::{
-    describe_candidates, describe_candidates_at, render_labels, RecordingSelector, SelectError,
-    SelectorSyntax,
+// The recording selector lives with the `recording` tools, which use it
+// for `check --recording`; MCP and the viewer reach it through here.
+pub(crate) use crate::parquet_tools::select::{
+    self as recording_selector, describe_candidates, describe_candidates_at, render_labels,
+    shell_word, RecordingSelector, SelectError, SelectorSyntax,
 };
 
 pub mod anomaly_detection;
@@ -369,7 +370,13 @@ pub(crate) fn open_source_with_pool_labeled(
             };
             return Err(OpenError::other(format!(
                 "{lead}. {listing_lead}\n{}",
-                describe_candidates_at(&universe, &universe_idx, &[], syntax)
+                describe_candidates_at(
+                    &universe,
+                    &universe_idx,
+                    &[],
+                    syntax,
+                    env!("CARGO_BIN_NAME")
+                )
             )));
         }
         Err(SelectError::Ambiguous(hits)) => {
@@ -398,7 +405,13 @@ pub(crate) fn open_source_with_pool_labeled(
             };
             let message = format!(
                 "{lead}\n{}",
-                describe_candidates_at(&universe, &universe_idx, &hits, syntax)
+                describe_candidates_at(
+                    &universe,
+                    &universe_idx,
+                    &hits,
+                    syntax,
+                    env!("CARGO_BIN_NAME")
+                )
             );
             // Only the NO-SELECTOR case is `NeedsSelection`: it is the one a
             // caller may legitimately render as something other than a
@@ -702,9 +715,11 @@ pub(crate) fn describe_recording_output(
             format!(
                 "{} holds {} recordings of one run, read together: every series carries its \
                  recording's labels, so a matcher on one (`{{host=\"...\"}}`) selects its \
-                 series. Recordings whose labels are identical are told apart in queries by \
-                 `__recording__` (each one's index in the archive), which no recording \
-                 selector can name:",
+                 series. A recording and its copies (one source copied, or recorded twice \
+                 from one agent process) are one recording, read once. Separate recordings \
+                 whose labels are identical are told apart in queries by `__recording__` \
+                 (the archive index of each one's first source), which no recording selector \
+                 can name:",
                 file.display(),
                 opened.combined.len()
             ),
@@ -793,8 +808,10 @@ fn listing(
         Some("No recording in this archive can be selected by labels.")
     };
     let body = match positions {
-        Some(positions) => describe_candidates_at(recordings, positions, &[], syntax),
-        None => describe_candidates(recordings, &[], syntax),
+        Some(positions) => {
+            describe_candidates_at(recordings, positions, &[], syntax, env!("CARGO_BIN_NAME"))
+        }
+        None => describe_candidates(recordings, &[], syntax, env!("CARGO_BIN_NAME")),
     };
     match close {
         Some(close) => format!("{lead}\n{body}\n{close}"),

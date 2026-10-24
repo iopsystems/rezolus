@@ -24,8 +24,8 @@ parquet = { version = "60.0.0", default-features = false, features = [
     "arrow",
     "simdutf8",
     "zstd",
-    # `Compression::LZ4_RAW`, the codec `.rez` segments are written with. Pulls
-    # in `lz4_flex` (pure Rust, no C). See `rez::segment_writer_props`.
+    # `Compression::LZ4_RAW`, the codec `.rez` segments were written with.
+    # Pulls in `lz4_flex` (pure Rust, no C).
     "lz4",
 ] }
 rusqlite = { version = "0.40", features = ["bundled", "blob", "serialize"] }
@@ -60,7 +60,7 @@ write = [
 # Fixture builders used by the binary crate's tests. Not `#[cfg(test)]`,
 # because a `#[cfg(test)]` module in THIS crate is invisible to the crate
 # under test next door.
-test-support = ["write", "metriken-storage/test-support"]
+test-support = ["write"]
 
 # Builds only with `test-support`, which is what supplies the fixture builders
 # it calls. Declared rather than left implicit because `--all-targets` compiles

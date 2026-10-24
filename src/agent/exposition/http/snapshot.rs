@@ -606,6 +606,7 @@ fn create(
         counters: Vec::new(),
         gauges: Vec::new(),
         histograms: Vec::new(),
+        gauge_histograms: Vec::new(),
     };
 
     let sampler_mods = crate::agent::samplers::sampler_modules();
@@ -722,7 +723,7 @@ fn create(
         let mut metadata: HashMap<String, String> = metadata.into_iter().collect();
 
         // Migrated metrics (wave 1+: plain `LazyCounter`/`CounterGroup`/
-        // `RwLockHistogram` stamped by an `AcquisitionGroup` instead of a
+        // `RwLockCounterHistogram` stamped by an `AcquisitionGroup` instead of a
         // per-metric `Windowed*` wrapper) carry `acq_group` in their static
         // metadata but no per-metric window of their own —
         // `value_with_window()`/`load_with_window(idx)` fall through to the
@@ -2504,7 +2505,7 @@ mod tests {
         );
     }
 
-    // A `HistogramGroup`-typed metric: its `Value::HistogramGroup` isn't a
+    // A `CounterHistogramGroup`-typed metric: its `Value::CounterHistogramGroup` isn't a
     // kind `create_v3` (or V2's `create`) knows how to expose, so it falls
     // into the match's `_ => {}` arm — the group it routes to gets a
     // `GroupBuilder` (created for the window read at first touch) but
@@ -2520,8 +2521,8 @@ mod tests {
         name = "snapshot_v3_unhandled_probe",
         metadata = { acq_group = "unhandled_probe" }
     )]
-    static V3_UNHANDLED_HISTOGRAM_GROUP: metriken::HistogramGroup =
-        metriken::HistogramGroup::new(2, 7, 32);
+    static V3_UNHANDLED_HISTOGRAM_GROUP: metriken::CounterHistogramGroup =
+        metriken::CounterHistogramGroup::new(2, 7, 32);
 
     #[test]
     fn group_with_only_unhandled_value_metrics_is_not_emitted() {

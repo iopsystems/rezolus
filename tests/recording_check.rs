@@ -4,8 +4,9 @@
 //! what the viewer reads back, so both are exercised through the real binary
 //! against the small `simple_capture.parquet` fixture (five samples of a
 //! gauge `queue_depth`, constant at 3, and a counter `http_requests_total`
-//! with two label sets). A two-recording `.rez` is assembled from copies of
-//! that fixture with `recording annotate --source` and `recording combine`.
+//! with two label sets). `--annotate` writes into a dendro archive, so the
+//! tests that annotate run on the fixture converted with `recording upgrade`;
+//! a two-recording archive is two copies combined with `--ab`.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -182,25 +183,71 @@ fn json_output_is_an_array_of_verdicts() {
     assert_eq!(w["points"], 4);
 }
 
-fn events_of_parquet(path: &Path) -> Vec<serde_json::Value> {
+/// A `.dendro` converted from a copy of the fixture.
+fn dendro_fixture(dir: &Path) -> PathBuf {
+    let dendro = dir.join("copy.dendro");
     let out = rezolus(&[
         "recording",
-        "metadata",
-        "-i",
-        path.to_str().unwrap(),
-        "--field",
-        "events",
+        "upgrade",
+        fixture().to_str().unwrap(),
+        "-o",
+        dendro.to_str().unwrap(),
     ]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
-    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("events JSON");
-    v["events"].as_array().expect("events array").clone()
+    dendro
+}
+
+/// The events of a one-recording archive's recording.
+fn events_of(path: &Path) -> Vec<serde_json::Value> {
+    let recordings = rez_recordings(path);
+    assert_eq!(recordings.len(), 1);
+    match recordings[0]["metadata"]
+        .get("events")
+        .and_then(|s| s.as_str())
+    {
+        Some(events) => serde_json::from_str::<serde_json::Value>(events).unwrap()["events"]
+            .as_array()
+            .expect("events array")
+            .clone(),
+        None => Vec::new(),
+    }
+}
+
+/// A parquet file is not changed by `--annotate`: without `-o` it is
+/// refused, naming the command to run; with `-o` the events go into a new
+/// `.dendro`.
+#[test]
+fn annotate_on_a_parquet_writes_a_new_dendro() {
+    let dir = tempfile::tempdir().unwrap();
+    let copy = dir.path().join("copy.parquet");
+    std::fs::copy(fixture(), &copy).unwrap();
+    let before = std::fs::read(&copy).unwrap();
+    let queries = write_queries(dir.path(), "q.json", FAILING);
+    let mut args = vec![
+        "recording",
+        "check",
+        copy.to_str().unwrap(),
+        "--queries",
+        queries.to_str().unwrap(),
+        "--annotate",
+    ];
+    let out = rezolus(&args);
+    assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
+    let advice = format!("-o {}", dir.path().join("copy.dendro").display());
+    assert!(stderr(&out).contains(&advice), "{}", stderr(&out));
+
+    let dendro = dir.path().join("copy.dendro");
+    args.extend(["-o", dendro.to_str().unwrap()]);
+    let out = rezolus(&args);
+    assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
+    assert_eq!(events_of(&dendro).len(), 1);
+    assert_eq!(std::fs::read(&copy).unwrap(), before);
 }
 
 #[test]
 fn annotate_writes_check_events_once_per_window() {
     let dir = tempfile::tempdir().unwrap();
-    let copy = dir.path().join("copy.parquet");
-    std::fs::copy(fixture(), &copy).unwrap();
+    let copy = dendro_fixture(dir.path());
     let queries = write_queries(dir.path(), "q.json", &[PASSING, FAILING, WARNING].join(","));
     let args = [
         "recording",
@@ -219,7 +266,7 @@ fn annotate_writes_check_events_once_per_window() {
         stdout(&out)
     );
 
-    let events = events_of_parquet(&copy);
+    let events = events_of(&copy);
     assert_eq!(
         events.len(),
         2,
@@ -254,7 +301,7 @@ fn annotate_writes_check_events_once_per_window() {
         "{}",
         stdout(&out)
     );
-    assert_eq!(events_of_parquet(&copy).len(), 2);
+    assert_eq!(events_of(&copy).len(), 2);
 
     // With --json the annotation report leaves stdout to the array.
     let out = rezolus(&[
@@ -275,8 +322,7 @@ fn annotate_writes_check_events_once_per_window() {
 #[test]
 fn two_checks_with_one_title_write_two_events() {
     let dir = tempfile::tempdir().unwrap();
-    let copy = dir.path().join("copy.parquet");
-    std::fs::copy(fixture(), &copy).unwrap();
+    let copy = dendro_fixture(dir.path());
     // Same title, same condition, same window, different queries: two checks.
     let queries = write_queries(
         dir.path(),
@@ -298,38 +344,32 @@ fn two_checks_with_one_title_write_two_events() {
         "{}",
         stdout(&out)
     );
-    let events = events_of_parquet(&copy);
+    let events = events_of(&copy);
     assert_eq!(events.len(), 2, "{events:?}");
     assert_ne!(events[0]["id"], events[1]["id"]);
 }
 
-/// A two-recording `.rez` from two copies of the fixture with different
-/// `source` labels.
+/// A two-recording `.dendro` from two copies of the fixture, labelled
+/// arm=baseline and arm=experiment.
 fn two_recording_rez(dir: &Path) -> PathBuf {
     let a = dir.join("a.parquet");
     let b = dir.join("b.parquet");
     std::fs::copy(fixture(), &a).unwrap();
     std::fs::copy(fixture(), &b).unwrap();
-    let out = rezolus(&[
-        "recording",
-        "annotate",
-        b.to_str().unwrap(),
-        "--source",
-        "other",
-        "--overwrite",
-    ]);
-    assert!(out.status.success(), "stderr: {}", stderr(&out));
-    let rez = dir.join("ab.rez");
+    let ab = dir.join("ab.dendro");
     let out = rezolus(&[
         "recording",
         "combine",
         a.to_str().unwrap(),
         b.to_str().unwrap(),
+        "--ab",
+        "baseline=a.parquet",
+        "experiment=b.parquet",
         "-o",
-        rez.to_str().unwrap(),
+        ab.to_str().unwrap(),
     ]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
-    rez
+    ab
 }
 
 fn rez_recordings(path: &Path) -> Vec<serde_json::Value> {
@@ -346,7 +386,7 @@ fn rez_recordings(path: &Path) -> Vec<serde_json::Value> {
 }
 
 #[test]
-fn a_multi_recording_rez_is_checked_whole_or_by_selector() {
+fn a_multi_recording_archive_is_checked_whole_or_by_selector() {
     let dir = tempfile::tempdir().unwrap();
     let rez = two_recording_rez(dir.path());
     let queries = write_queries(dir.path(), "q.json", &[PASSING, FAILING].join(","));
@@ -361,14 +401,15 @@ fn a_multi_recording_rez_is_checked_whole_or_by_selector() {
     ]);
     assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
     let text = stdout(&out);
+    let line = |arm: &str, verdict: &str| {
+        text.lines()
+            .any(|l| l.starts_with('[') && l.contains(&format!("arm={arm}")) && l.contains(verdict))
+    };
     assert!(
-        text.contains("[source=other] FAIL          Queue depth bounded"),
+        line("experiment", "FAIL          Queue depth bounded"),
         "{text}"
     );
-    assert!(
-        text.contains("[source=127.0.0.1-18651] PASS          Queue depth low"),
-        "{text}"
-    );
+    assert!(line("baseline", "PASS          Queue depth low"), "{text}");
     assert!(text.contains("4 checks: 2 passed, 2 failed"), "{text}");
 
     // A selector that names nothing lists the recordings and exits 2.
@@ -379,11 +420,11 @@ fn a_multi_recording_rez_is_checked_whole_or_by_selector() {
         "--queries",
         queries.to_str().unwrap(),
         "--recording",
-        "source=nope",
+        "arm=nope",
     ]);
     assert_eq!(out.status.code(), Some(2));
     assert!(
-        stderr(&out).contains("--recording source=other"),
+        stderr(&out).contains("--recording arm=experiment"),
         "{}",
         stderr(&out)
     );
@@ -396,12 +437,12 @@ fn a_multi_recording_rez_is_checked_whole_or_by_selector() {
         "--queries",
         queries.to_str().unwrap(),
         "--recording",
-        "source=other",
+        "arm=experiment",
         "--annotate",
     ]);
     assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
     let text = stdout(&out);
-    assert!(!text.contains("source=127.0.0.1-18651"), "{text}");
+    assert!(!text.contains("arm=baseline"), "{text}");
     assert!(text.contains("1 new check event(s)"), "{text}");
     assert!(text.contains("into 1 of 2 recording(s)"), "{text}");
 
@@ -409,7 +450,7 @@ fn a_multi_recording_rez_is_checked_whole_or_by_selector() {
     assert_eq!(recordings.len(), 2);
     for rec in &recordings {
         let events = rec["metadata"].get("events").and_then(|s| s.as_str());
-        if rec["labels"]["source"] == "other" {
+        if rec["labels"]["arm"] == "experiment" {
             let payload: serde_json::Value =
                 serde_json::from_str(events.expect("the selected recording has events")).unwrap();
             let events = payload["events"].as_array().unwrap();
@@ -421,7 +462,7 @@ fn a_multi_recording_rez_is_checked_whole_or_by_selector() {
         }
     }
 
-    // JSON output on a .rez names the recording each verdict belongs to.
+    // JSON output on an archive names the recording each verdict belongs to.
     let out = rezolus(&[
         "recording",
         "check",
@@ -431,16 +472,13 @@ fn a_multi_recording_rez_is_checked_whole_or_by_selector() {
         "--json",
     ]);
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
-    let sources: Vec<&str> = v
+    let arms: Vec<&str> = v
         .as_array()
         .unwrap()
         .iter()
-        .map(|r| r["recording"]["source"].as_str().unwrap())
+        .map(|r| r["recording"]["arm"].as_str().unwrap())
         .collect();
-    assert_eq!(
-        sources,
-        ["127.0.0.1-18651", "127.0.0.1-18651", "other", "other"]
-    );
+    assert_eq!(arms, ["baseline", "baseline", "experiment", "experiment"]);
 }
 
 #[test]
@@ -474,53 +512,48 @@ fn an_invalid_check_in_the_queries_file_is_refused() {
     assert!(stderr(&out).contains("exactly one"), "{}", stderr(&out));
 }
 
-/// A dendro archive takes `check --annotate` as a `.rez` does: the events go
-/// into the selected source's metadata, and `recording metadata --json`
-/// reads them back out of the dendro catalog.
+/// A recording read from a source and its snapshot carries a key only one
+/// of them holds: KPIs annotated onto the snapshot are the recording's
+/// whichever order the two are combined in, and `recording check` runs them.
 #[test]
-fn check_annotates_a_dendro_archive() {
+fn kpis_on_a_snapshot_are_the_combined_recordings() {
     let dir = tempfile::tempdir().unwrap();
-    let rez = two_recording_rez(dir.path());
-    let dendro = dir.path().join("ab.dendro");
+    let a = dendro_fixture(dir.path());
+    let copy = dir.path().join("snap.dendro");
     let out = rezolus(&[
         "recording",
-        "upgrade",
-        "--to",
-        "dendro",
-        rez.to_str().unwrap(),
+        "snapshot",
+        a.to_str().unwrap(),
         "-o",
-        dendro.to_str().unwrap(),
+        copy.to_str().unwrap(),
     ]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
-    let queries = write_queries(dir.path(), "q.json", &[PASSING, FAILING].join(","));
-
+    let queries = write_queries(dir.path(), "q.json", FAILING);
     let out = rezolus(&[
         "recording",
-        "check",
-        dendro.to_str().unwrap(),
+        "annotate",
+        copy.to_str().unwrap(),
         "--queries",
         queries.to_str().unwrap(),
-        "--recording",
-        "source=other",
-        "--annotate",
     ]);
-    assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
-    assert!(
-        stdout(&out).contains("1 new check event(s)"),
-        "{}",
-        stdout(&out)
-    );
-
-    let recordings = rez_recordings(&dendro);
-    assert_eq!(recordings.len(), 2);
-    for rec in &recordings {
-        let events = rec["metadata"].get("events").and_then(|s| s.as_str());
-        if rec["labels"]["source"] == "other" {
-            let payload: serde_json::Value =
-                serde_json::from_str(events.expect("the selected source has events")).unwrap();
-            assert_eq!(payload["events"].as_array().unwrap().len(), 1);
-        } else {
-            assert!(events.is_none(), "the other source is untouched: {rec}");
-        }
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    for (name, first, second) in [("ac.dendro", &a, &copy), ("ca.dendro", &copy, &a)] {
+        let combined = dir.path().join(name);
+        let out = rezolus(&[
+            "recording",
+            "combine",
+            first.to_str().unwrap(),
+            second.to_str().unwrap(),
+            "-o",
+            combined.to_str().unwrap(),
+        ]);
+        assert!(out.status.success(), "{name}: {}", stderr(&out));
+        let out = rezolus(&["recording", "check", combined.to_str().unwrap()]);
+        assert_eq!(out.status.code(), Some(1), "{name}: {}", stderr(&out));
+        assert!(
+            stdout(&out).contains("FAIL          Queue depth bounded"),
+            "{name}: {}",
+            stdout(&out)
+        );
     }
 }

@@ -409,12 +409,14 @@ enabled = false
 # cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
 
 # Read-only Linux thermal, hwmon and cooling-device telemetry: temperatures,
-# power, bus voltage/current, fan RPM/PWM and cooling state. This sampler is
-# opt-in only. Reads run on the blocking pool at `interval` (default 5s) and
-# sysfs capabilities are rediscovered every 60s; no hardware controls are
-# written. Missing permissions or unavailable channels appear as absent values.
+# power, bus voltage/current, fan RPM/PWM and cooling state. Reads run on the
+# blocking pool at `interval` (default 5s) and sysfs capabilities are
+# rediscovered every 60s; no hardware controls are written. Missing permissions
+# or unavailable channels appear as absent values. Drive temperatures come from
+# drivehealth (which needs root), so `nvme` and `drivetemp` hwmon chips are not
+# read here.
 [samplers.hw_sensors]
-enabled = false
+# enabled = false
 # interval = "5s"
 
 # BPF sampler that instruments syscall enter and exit to gather syscall counts

@@ -2,7 +2,7 @@
 # tests/viewer_smoke.sh — end-to-end smoke test for `rezolus view`.
 #
 # Spawns the viewer in five configurations (upload-only, file mode, A/B
-# file mode, N-way 3-recording .rez, proxy enabled) on adjacent ports, hits
+# file mode, N-way 3-recording .dendro, proxy enabled) on adjacent ports, hits
 # the public API
 # endpoints, and asserts the expected mode + payload shape. Also covers
 # experiment attach / detach via /api/v1/captures/experiment.
@@ -162,21 +162,14 @@ unknown=$(curl -fsS "http://127.0.0.1:$PORT_AB/api/v1/metadata?capture=nope")
 eq "unknown capture errors"  "$(echo "$unknown" | jq -r .status)"     "error"    "$LOGDIR/ab.log"
 eq "unknown capture type"    "$(echo "$unknown" | jq -r .errorType)"  "capture_not_found" "$LOGDIR/ab.log"
 
-echo "==> N-way (N > 2): a 3-recording .rez enumerates three captures"
+echo "==> N-way (N > 2): a 3-recording archive opens as one combined view"
+# Without `arm` labels the recordings of an archive are one combined view:
+# one capture, every recording's series in it under its `source`.
 ncaps=$(curl -fsS "http://127.0.0.1:$PORT_NWAY/api/v1/captures")
-eq "N-way captures count"    "$(echo "$ncaps" | jq -r 'length')"       "3"        "$LOGDIR/nway.log"
-# Named-from-labels ids: the anchor keeps `baseline`, its A/B partner keeps
-# `experiment`, and the third is named from its discriminating label (`envoy`).
-eq "N-way id 0"              "$(echo "$ncaps" | jq -r '.[0].id')"       "baseline"   "$LOGDIR/nway.log"
-eq "N-way id 1"              "$(echo "$ncaps" | jq -r '.[1].id')"       "experiment" "$LOGDIR/nway.log"
-eq "N-way id 2"              "$(echo "$ncaps" | jq -r '.[2].id')"       "envoy"      "$LOGDIR/nway.log"
-eq "N-way alias 0"          "$(echo "$ncaps" | jq -r '.[0].alias')"    "redis"      "$LOGDIR/nway.log"
-eq "N-way alias 2"          "$(echo "$ncaps" | jq -r '.[2].alias')"    "envoy"      "$LOGDIR/nway.log"
-# The third capture routes by its named id — the fix that stopped `?capture=`
-# collapsing an unknown/extra arm to the baseline. It must resolve, and an
-# unknown id must still error.
-nmeta=$(curl -fsS "http://127.0.0.1:$PORT_NWAY/api/v1/metadata?capture=envoy")
-eq "N-way envoy metadata"    "$(echo "$nmeta" | jq -r .status)"        "success"    "$LOGDIR/nway.log"
+eq "N-way captures count"    "$(echo "$ncaps" | jq -r 'length')"       "1"        "$LOGDIR/nway.log"
+eq "N-way capture id"        "$(echo "$ncaps" | jq -r '.[0].id')"      "baseline" "$LOGDIR/nway.log"
+nq=$(curl -fsS "http://127.0.0.1:$PORT_NWAY/api/v1/query_range?query=sum%20by%20(source)%20(irate(cpu_cycles%5B2s%5D))&start=0&end=2000000000&step=1")
+eq "N-way series per recording" "$(echo "$nq" | jq -r '[.data.result[].metric.source] | sort | join(",")')" "envoy,redis,valkey" "$LOGDIR/nway.log"
 nbad=$(curl -fsS "http://127.0.0.1:$PORT_NWAY/api/v1/metadata?capture=nope")
 eq "N-way unknown errors"    "$(echo "$nbad" | jq -r .errorType)"      "capture_not_found" "$LOGDIR/nway.log"
 
@@ -224,23 +217,27 @@ sleep 1
 mode=$(mode_at $PORT_FILE)
 eq "experiment attached → compare_mode" "$(echo "$mode" | jq -r .compare_mode)" "true" "$LOGDIR/file.log"
 
-echo "==> POST /api/v1/save_with_selection in two-file compare returns a .rez"
-# A compare save now assembles a 2-recording .rez, not a .parquet.ab.tar.
-SAVE_RESP="$LOGDIR/two-file-save.rez"
+echo "==> POST /api/v1/save_with_selection in two-file compare returns a .dendro"
+# A report is a .dendro; a compare save holds both sides as recordings.
+SAVE_RESP="$LOGDIR/two-file-save.dendro"
 curl -fsS -X POST \
     -H 'Content-Type: application/json' \
     -d '{"entries":[{"chartId":"smoke","section":"overview","sectionName":"Overview","groupName":"smoke","promql_query":"cpu_cores","chartOpts":{}}],"trim_columns":false}' \
     "http://127.0.0.1:$PORT_FILE/api/v1/save_with_selection" \
     -o "$SAVE_RESP"
 
-# It must be a valid v3 `.rez` holding both sides as recordings.
+# It must be a .dendro archive holding both sides as recordings.
 save_meta=$(./target/debug/rezolus recording metadata -i "$SAVE_RESP" 2>&1)
 case "$save_meta" in
     *"2 recording(s)"*) : ;;
-    *) fail "compare save: not a 2-recording .rez" "$save_meta" "2 recording(s)" "$LOGDIR/file.log" ;;
+    *) fail "compare save: not a 2-recording .dendro" "$save_meta" "2 recording(s)" "$LOGDIR/file.log" ;;
 esac
+# Each side is labelled with its arm, so the report reopens as the comparison.
+save_arms=$(./target/debug/rezolus recording metadata -i "$SAVE_RESP" --json \
+    | jq -r '[.recordings[].labels.arm] | join(",")')
+eq "compare save arms" "$save_arms" "baseline,experiment" "$LOGDIR/file.log"
 
-echo "==> reload the saved .rez, it re-opens as a 2-capture compare and re-saves"
+echo "==> reload the saved .dendro, it re-opens as a 2-capture compare and re-saves"
 PORT_ROUNDTRIP=18506
 ./target/debug/rezolus view "$SAVE_RESP" \
     --listen 127.0.0.1:$PORT_ROUNDTRIP \
@@ -261,8 +258,8 @@ rtsel=$(curl -fsS "http://127.0.0.1:$PORT_ROUNDTRIP/api/v1/selection")
 echo "$rtsel" | jq -e '.entries | length > 0' >/dev/null \
     || fail "round-trip: saved selection did not survive" "$(echo "$rtsel" | head -c 160)" "non-empty .entries" "$LOGDIR/roundtrip.log"
 
-# Saving again still yields a valid 2-recording .rez.
-ROUNDTRIP_RESP="$LOGDIR/two-file-save-2.rez"
+# Saving again still yields a 2-recording .dendro.
+ROUNDTRIP_RESP="$LOGDIR/two-file-save-2.dendro"
 curl -fsS -X POST \
     -H 'Content-Type: application/json' \
     -d '{"entries":[{"chartId":"smoke","section":"overview","sectionName":"Overview","groupName":"smoke","promql_query":"cpu_cores","chartOpts":{}}],"trim_columns":false}' \
@@ -271,7 +268,7 @@ curl -fsS -X POST \
 rt_meta=$(./target/debug/rezolus recording metadata -i "$ROUNDTRIP_RESP" 2>&1)
 case "$rt_meta" in
     *"2 recording(s)"*) : ;;
-    *) fail "round-trip re-save: not a 2-recording .rez" "$rt_meta" "2 recording(s)" "$LOGDIR/roundtrip.log" ;;
+    *) fail "round-trip re-save: not a 2-recording .dendro" "$rt_meta" "2 recording(s)" "$LOGDIR/roundtrip.log" ;;
 esac
 
 kill $PID_ROUNDTRIP 2>/dev/null || true
@@ -317,9 +314,9 @@ if grep -E "(\bselectionStore\b|\bSelectionView\b|\bpersistSelection\b)" >/dev/n
 fi
 
 PORT_AB_COMBINED=18508
-COMBINED_AB_TAR="$LOGDIR/combined-ab.parquet.ab.tar"
+COMBINED_AB="$LOGDIR/combined-ab.dendro"
 
-echo "==> parquet combine --ab produces a *.parquet.ab.tar tarball"
+echo "==> recording combine --ab writes a .dendro the viewer opens as a compare"
 # Single-source fixtures so --ab can unambiguously assign each input to a
 # side. Generated at test time (see `examples/gen_ab_fixtures.rs`) rather
 # than checked in — keeps the tree free of binary blobs whose meaning
@@ -329,22 +326,22 @@ AB_B="$LOGDIR/ab_source_b.parquet"
 ./target/debug/examples/gen_ab_fixtures "$AB_A" "$AB_B" \
     > "$LOGDIR/gen-ab.log" 2>&1 \
     || fail "gen_ab_fixtures failed" "$(cat "$LOGDIR/gen-ab.log")" "exit 0" "$LOGDIR/gen-ab.log"
-./target/debug/rezolus parquet combine \
+./target/debug/rezolus recording combine \
     "$AB_A" \
     "$AB_B" \
-    -o "$COMBINED_AB_TAR" \
-    --ab baseline=source-a experiment=source-b \
+    -o "$COMBINED_AB" \
+    --ab baseline=ab_source_a.parquet experiment=ab_source_b.parquet \
     > "$LOGDIR/combine-ab.log" 2>&1 \
-    || fail "parquet combine --ab failed" "$(cat "$LOGDIR/combine-ab.log")" "exit 0" "$LOGDIR/combine-ab.log"
+    || fail "recording combine --ab failed" "$(cat "$LOGDIR/combine-ab.log")" "exit 0" "$LOGDIR/combine-ab.log"
+# The 5.x outputs are refused, naming the .dendro to write.
+if ./target/debug/rezolus recording combine "$AB_A" "$AB_B" -o "$LOGDIR/x.parquet.ab.tar" \
+    --ab baseline=ab_source_a.parquet experiment=ab_source_b.parquet > "$LOGDIR/combine-tar.log" 2>&1; then
+    fail "combine to a .parquet.ab.tar was not refused" "exit 0" "exit 1" "$LOGDIR/combine-tar.log"
+fi
+grep -q '.dendro' "$LOGDIR/combine-tar.log" \
+    || fail "the refusal does not name .dendro" "$(cat "$LOGDIR/combine-tar.log")" ".dendro" "$LOGDIR/combine-tar.log"
 
-ab_listing=$(tar tf "$COMBINED_AB_TAR" 2>&1 | tr '\n' ' ')
-case "$ab_listing" in
-    *baseline.parquet*experiment.parquet*ab.json*|*baseline.parquet*ab.json*experiment.parquet*|*experiment.parquet*baseline.parquet*ab.json*|*experiment.parquet*ab.json*baseline.parquet*|*ab.json*baseline.parquet*experiment.parquet*|*ab.json*experiment.parquet*baseline.parquet*) : ;;
-    *) fail "combined-AB tarball missing expected entries" "$ab_listing" "baseline.parquet, experiment.parquet, ab.json" "$LOGDIR/combine-ab.log" ;;
-esac
-
-echo "==> viewer auto-detects combined-AB tarball and reports compare_mode"
-./target/debug/rezolus view "$COMBINED_AB_TAR" \
+./target/debug/rezolus view "$COMBINED_AB" \
     --listen 127.0.0.1:$PORT_AB_COMBINED \
     > "$LOGDIR/ab-combined.log" 2>&1 &
 PID_AB_COMBINED=$!
@@ -357,11 +354,10 @@ wait_for_port $PORT_AB_COMBINED || {
 }
 
 mode=$(curl -fsS "http://127.0.0.1:$PORT_AB_COMBINED/api/v1/mode")
-eq "combined-AB combined_ab"  "$(echo "$mode" | jq -r .combined_ab)"  "true" "$LOGDIR/ab-combined.log"
 eq "combined-AB compare_mode" "$(echo "$mode" | jq -r .compare_mode)" "true" "$LOGDIR/ab-combined.log"
 eq "combined-AB loaded"       "$(echo "$mode" | jq -r .loaded)"       "true" "$LOGDIR/ab-combined.log"
 
-echo "==> Save as Report produces a trimmed parquet"
+echo "==> Save as Report produces a trimmed .dendro"
 PORT_REPORT=18505
 # Pin one chart and POST a tiny selection that touches one column.
 SELECTION=$(cat <<JSON
@@ -374,13 +370,15 @@ SELECTION=$(cat <<JSON
 }
 JSON
 )
-REPORT_PARQUET="$LOGDIR/report.parquet"
+REPORT_PARQUET="$LOGDIR/report.dendro"
 curl -fsS -X POST -H 'content-type: application/json' \
      -d "$SELECTION" \
      "http://127.0.0.1:$PORT_FILE/api/v1/save_with_selection" \
      --output "$REPORT_PARQUET" \
      || fail "save_with_selection failed" "" "exit 0" "$LOGDIR/file.log"
-[ -s "$REPORT_PARQUET" ] || fail "report parquet is empty" "0" ">0" "$LOGDIR/file.log"
+[ -s "$REPORT_PARQUET" ] || fail "report is empty" "0" ">0" "$LOGDIR/file.log"
+head -c 16 "$REPORT_PARQUET" | grep -q 'SQLite format 3' \
+    || fail "report is not a .dendro (SQLite) archive" "$(head -c 16 "$REPORT_PARQUET" | od -c | head -1)" "SQLite format 3" "$LOGDIR/file.log"
 
 echo "==> trimmed report loads in a fresh viewer with report mode active"
 ./target/debug/rezolus view "$REPORT_PARQUET" \

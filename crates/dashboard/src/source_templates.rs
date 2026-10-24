@@ -48,15 +48,10 @@ use crate::{ServiceExtension, TemplateRegistry};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
-// Format keys owned by the binary's `src/parquet_metadata.rs`, duplicated as
-// literals for the same reason as in `source_kind.rs`: this crate cannot
-// depend on the binary.
-const KEY_SOURCE: &str = "source";
-const KEY_PER_SOURCE_METADATA: &str = "per_source_metadata";
-/// The KPI template key, top level or nested under `per_source_metadata`.
-pub const KEY_SERVICE_QUERIES: &str = "service_queries";
-/// The section template key; see the module docs.
-pub const KEY_DASHBOARD: &str = "dashboard";
+/// The KPI template key, top level or nested under `per_source_metadata`;
+/// the section template key (see the module docs).
+pub use crate::keys::{KEY_DASHBOARD, KEY_SERVICE_QUERIES};
+use crate::keys::{KEY_PER_SOURCE_METADATA, KEY_SOURCE};
 
 /// The largest `dashboard` value a viewer parses. The Rezolus template is
 /// about 106 KB; [`SectionTemplate::parse`] has no size limit of its own.
@@ -234,6 +229,37 @@ pub fn resolve_source_templates(
     out
 }
 
+/// The KPI templates for one source's metadata map: a parquet footer's
+/// key/values, a `.rez` recording's manifest metadata, or a dendro source's
+/// metadata, as `MetricsSource::file_metadata` returns each. Both viewers
+/// and `rezolus recording check` go through here, so a recording's embedded
+/// KPIs resolve the same way wherever they are read.
+///
+/// Order: top-level `service_queries`, then
+/// `per_source_metadata.<source>.<entry>.service_queries`, then the registry
+/// by source name ([`resolve_source_templates`]). A template in the metadata
+/// wins over the registry's unless `preference` is `Registry`. A template
+/// that does not parse falls back to the registry. The second element is
+/// what a reader should log: [`SourceTemplates::notices`], then one notice
+/// per KPI whose `unit_system` the viewer does not know (it renders with its
+/// default `count` scaling).
+pub fn service_extensions_from_metadata(
+    metadata: &HashMap<String, String>,
+    registry: &TemplateRegistry,
+    preference: TemplatePreference,
+) -> (Vec<(String, ServiceExtension)>, Vec<String>) {
+    let resolved = resolve_source_templates(metadata, registry, preference);
+    let mut notices = resolved.notices;
+    for (source, ext) in &resolved.service_exts {
+        for e in ext.unknown_unit_systems() {
+            notices.push(format!(
+                "service template for {source:?}: {e}; rendering it with the default `count` scaling"
+            ));
+        }
+    }
+    (resolved.service_exts, notices)
+}
+
 /// Where the section template a source renders with came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DashboardOrigin {
@@ -405,6 +431,56 @@ pub(crate) fn is_one_source_name(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The lookup returns the resolver's notices first, then one per KPI
+    /// whose `unit_system` no viewer knows; the extension is still returned.
+    #[test]
+    fn service_extensions_carry_their_notices() {
+        let metadata: HashMap<String, String> = [
+            ("source", "svc"),
+            (
+                "service_queries",
+                r#"{"service_name": "svc", "kpis": [{"role": "load", "title": "Depth",
+                    "query": "q", "type": "gauge", "unit_system": "furlongs"}]}"#,
+            ),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let (exts, notices) = service_extensions_from_metadata(
+            &metadata,
+            &TemplateRegistry::empty(),
+            TemplatePreference::Archive,
+        );
+        assert_eq!(exts.len(), 1);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(
+            notices[0].starts_with("service template for \"svc\": "),
+            "{notices:?}"
+        );
+        assert!(notices[0].contains("furlongs"), "{notices:?}");
+
+        let broken: HashMap<String, String> = [("source", "svc"), ("service_queries", "{")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let (exts, notices) = service_extensions_from_metadata(
+            &broken,
+            &TemplateRegistry::empty(),
+            TemplatePreference::Archive,
+        );
+        assert!(exts.is_empty());
+        assert_eq!(
+            notices,
+            resolve_source_templates(
+                &broken,
+                &TemplateRegistry::empty(),
+                TemplatePreference::Archive
+            )
+            .notices
+        );
+        assert_eq!(notices.len(), 1, "{notices:?}");
+    }
 
     fn ext(name: &str, title: &str) -> ServiceExtension {
         serde_json::from_value(serde_json::json!({

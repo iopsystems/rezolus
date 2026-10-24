@@ -11,12 +11,9 @@
 use crate::dashboard::SourceEntry;
 use std::collections::HashSet;
 
-// Format keys owned by the binary's `src/parquet_metadata.rs`. Duplicated as
-// literals here because the `dashboard` crate can't depend on the binary
-// crate (the WASM viewer builds it standalone). These are the on-disk parquet
-// footer contract, not internal names — they change rarely and in lockstep.
-const KEY_SOURCE: &str = "source";
-const KEY_PER_SOURCE_METADATA: &str = "per_source_metadata";
+use crate::keys::{KEY_PER_SOURCE_METADATA, KEY_SOURCE};
+// Owned by the binary's `src/parquet_metadata.rs`, which only rezolus
+// writes; duplicated here because this crate cannot depend on the binary.
 const NESTED_SAMPLER_STATUS: &str = "sampler_status";
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

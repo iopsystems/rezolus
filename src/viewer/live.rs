@@ -290,6 +290,13 @@ impl Recording {
                     ));
                     break;
                 }
+                mr::Event::LabelsNotApplied { labels, .. } => {
+                    warn!(
+                        "{label}: its {} label(s) arrived late; the live view shows the \
+                         recording without them",
+                        labels.keys().cloned().collect::<Vec<_>>().join("/")
+                    );
+                }
                 mr::Event::Failed { error } => {
                     error!("{label}: the live recording stopped: {error}");
                     self.stop(format!("writing the live archive failed: {error}"));

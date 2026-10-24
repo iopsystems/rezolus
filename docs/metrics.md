@@ -583,7 +583,8 @@ this is the most expensive of the ext4 samplers: measured at +4,070
 instructions and +2.3 µs per write-plus-fsync pair (four probes) on a
 `null_blk` fsync bench, 12% of the CPU at a saturating 450 K operations per
 second, about 4.5% of one core at 20 K fsync/s. It is one of the samplers the
-`[defaults]` section never turns on (with `gpu_amd_pmu` and `hw_sensors`):
+`[defaults]` section never turns on (with `gpu_amd_pmu`, `memory_pagecache`
+and `xfs_log`):
 enable it with `[samplers.ext4_ops] enabled = true` when that cost is
 acceptable for the workload; the journal entry has the bench.
 
@@ -846,7 +847,7 @@ loaded program when off.
 **Opt-in.** The force pair runs on every fsync, so this costs on the request
 path; the journal entry (`docs/journal/2026-09-29-xfs-samplers.md`) has the
 bench. It is one of the samplers the `[defaults]` section never turns on
-(with `ext4_ops`, `gpu_amd_pmu` and `hw_sensors`): enable it with
+(with `ext4_ops`, `gpu_amd_pmu` and `memory_pagecache`): enable it with
 `[samplers.xfs_log] enabled = true`.
 
 Kernel support: task local storage became usable from tracing programs in
@@ -1482,12 +1483,13 @@ CPU migration.
 
 The Linux `hw_sensors` sampler monitors hardware health: temperature, power,
 voltage, current, fans, and cooling state. It reads thermal zones, hwmon
-channels, and thermal cooling devices. It is **opt-in**, including when `[defaults] enabled = true`:
+channels, and thermal cooling devices. It follows `[defaults]` like other
+samplers; to set its read interval or turn it off:
 
 ```toml
 [samplers.hw_sensors]
-enabled = true
 interval = "5s"
+# enabled = false
 ```
 
 Reads run in a nonoverlapping blocking task, dispatched by consumer activity
@@ -1497,8 +1499,42 @@ Failed, disabled, faulted, removed or unreadable measurements are absent from
 the live endpoint rather than zero. If every channel in a family fails, its
 last successful acquisition window remains unchanged; a recorder that
 deduplicates windows can retain the previous observation without an outage
-marker. A sysfs read can invoke hardware access, so this sampler's cost must
-be measured on the target before fleet-wide enablement.
+marker. A sysfs read can invoke hardware access, so a slow driver costs the
+background worker time on every sweep, not the scrape path. `nvme` and
+`drivetemp` hwmon chips and ACPI `Processor` cooling devices (one per logical
+CPU) are not read. Each drive hwmon read sends the drive a command, and
+`drivehealth` reads each drive's temperature at its own interval; for NVMe that
+is the Composite temperature, and the per-sensor temperatures the `nvme` hwmon
+chip also exposes are not collected. `drivehealth` needs root to open the drive
+devices, so an agent that does not run as root has no drive temperatures. A
+family holds at most 256 sensor identities; a host with more temperature
+channels than that, such as `coretemp` on a 256-core part, logs a warning and
+omits the rest.
+
+Measured with rezolus 5.28.0 on 2026-10-21, with only `hw_sensors` and
+`rezolus_rusage` enabled, at a 5 second interval, one scrape per second for
+150 seconds, against the same run with it off
+(docs/journal/2026-09-17-sensors.md has the full data):
+
+| Host | Values | Sweep p50 / max | Extra agent CPU |
+| --- | ---: | --- | --- |
+| EPYC 4564P, `bnxt_en` NIC (incl. 32 `Processor` cooling devices) | 41 | 21.9 / 45.7 ms | 120 ms (0.08% of a core) |
+| Threadripper 1950X, 2 NVMe (incl. NVMe hwmon and 32 `Processor` cooling devices) | 44 | 26.6 / 33.4 ms | 40 ms (0.03%) |
+| Threadripper 3970X, ASUS ROG Zenith II Extreme (incl. NVMe hwmon and 64 `Processor` cooling devices) | 93 | 323 / 354 ms | 83 ms (0.06%) |
+| Raspberry Pi 4B (×2) | 4 | 0.17–0.18 / 0.36–11.8 ms | at most 34 ms (0.02%); the controls differed by up to 22 ms |
+
+Most of the EPYC sweep is one `bnxt_en` port's temperature, at 20.9 ms per
+read (median of 100); the other port takes 0.7 ms. The 1950X run
+predates the `nvme` skip: its NVMe hwmon channels read at 7.6 and 14.4 ms
+(median of 100, 10 ms apart), and its sweeps include them. Nearly all of the
+3970X sweep is the `asusec` embedded-controller driver: one read per refresh
+takes about 300 ms, and the rest about 30 µs; its NIC's MAC temperature adds
+about 18 ms. About 2.8 ms of each sweep is CPU; the
+rest is the worker waiting.
+
+`asusec` reports -40 °C for a temperature header with nothing connected.
+Such a channel gets no slot and is not read on each sweep; discovery reads it
+every 60 seconds and adds it once it reports another value.
 
 Each family identifies a native channel with `sensor`, `source`, `chip`,
 `channel`, and a native `label` when supplied by the kernel. `board_model` and

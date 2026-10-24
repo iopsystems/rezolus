@@ -30,7 +30,6 @@ fn enabled() -> bool {
 const OPT_IN_SAMPLERS: &[&str] = &[
     "ext4_ops",
     "gpu_amd_pmu",
-    "hw_sensors",
     "memory_cgroup",
     "memory_pagecache",
     "xfs_log",
@@ -638,6 +637,7 @@ mod tests {
         }
         // A normal sampler does follow defaults=true.
         assert!(c.enabled("cpu_usage"));
+        assert!(c.enabled("hw_sensors"));
     }
 
     #[test]
@@ -661,11 +661,20 @@ mod tests {
                 assert!(c.enabled(name));
             }
         }
-        let c = config("[samplers.hw_sensors]\nenabled = true\ninterval = \"7s\"\n");
+    }
+
+    #[test]
+    fn hw_sensors_takes_its_interval_and_can_be_turned_off() {
+        let c = config("[samplers.hw_sensors]\ninterval = \"7s\"\n");
+        assert!(c.enabled("hw_sensors"));
         assert_eq!(
             c.sampler_interval("hw_sensors"),
             Some(Duration::from_secs(7))
         );
+        let c = config("[samplers.hw_sensors]\nenabled = false\n");
+        assert!(!c.enabled("hw_sensors"));
+        let c = config("[defaults]\nenabled = false\n");
+        assert!(!c.enabled("hw_sensors"));
     }
 
     #[test]

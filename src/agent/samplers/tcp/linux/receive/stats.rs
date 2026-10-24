@@ -29,14 +29,16 @@ static SRTT_ACQ_REG: &'static AcquisitionGroup = &SRTT_ACQ;
     description = "Distribution of TCP latency jitter",
     metadata = { unit = "nanoseconds", acq_group = "tcp_receive_jitter" }
 )]
-pub static TCP_JITTER: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static TCP_JITTER: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "tcp_srtt",
     description = "Distribution of TCP smoothed round-trip time",
     metadata = { unit = "nanoseconds", acq_group = "tcp_receive_srtt" }
 )]
-pub static TCP_SRTT: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static TCP_SRTT: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "rezolus_bpf_run_count",

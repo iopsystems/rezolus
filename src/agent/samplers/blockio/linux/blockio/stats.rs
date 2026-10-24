@@ -76,29 +76,32 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
     description = "Distribution of blockio operation sizes in bytes",
     metadata = { op = "read", unit = "bytes", acq_group = "blockio_requests_sizes" }
 )]
-pub static BLOCKIO_READ_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_READ_SIZE: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_size",
     description = "Distribution of blockio operation sizes in bytes",
     metadata = { op = "write", unit = "bytes", acq_group = "blockio_requests_sizes" }
 )]
-pub static BLOCKIO_WRITE_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_WRITE_SIZE: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_size",
     description = "Distribution of blockio operation sizes in bytes",
     metadata = { op = "flush", unit = "bytes", acq_group = "blockio_requests_sizes" }
 )]
-pub static BLOCKIO_FLUSH_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_FLUSH_SIZE: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_size",
     description = "Distribution of blockio operation sizes in bytes",
     metadata = { op = "discard", unit = "bytes", acq_group = "blockio_requests_sizes" }
 )]
-pub static BLOCKIO_DISCARD_SIZE: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_DISCARD_SIZE: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_operations",
@@ -442,93 +445,93 @@ static TOTAL_LATENCIES_ACQ_REG: &'static AcquisitionGroup = &TOTAL_LATENCIES_ACQ
     description = "Distribution of block IO device service latency in nanoseconds, from the moment the device began servicing the request until it completed. Excludes time spent waiting in the queue — see blockio_queue_latency. Recordings made before this metric was renamed carry the same measurement under the name blockio_latency",
     metadata = { op = "read", unit = "nanoseconds", acq_group = "blockio_latency_device_latencies" }
 )]
-pub static BLOCKIO_READ_DEVICE_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_READ_DEVICE_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_device_latency",
     description = "Distribution of block IO device service latency in nanoseconds, from the moment the device began servicing the request until it completed. Excludes time spent waiting in the queue — see blockio_queue_latency. Recordings made before this metric was renamed carry the same measurement under the name blockio_latency",
     metadata = { op = "write", unit = "nanoseconds", acq_group = "blockio_latency_device_latencies" }
 )]
-pub static BLOCKIO_WRITE_DEVICE_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_WRITE_DEVICE_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_device_latency",
     description = "Distribution of block IO device service latency in nanoseconds, from the moment the device began servicing the request until it completed. Excludes time spent waiting in the queue — see blockio_queue_latency. Recordings made before this metric was renamed carry the same measurement under the name blockio_latency",
     metadata = { op = "flush", unit = "nanoseconds", acq_group = "blockio_latency_device_latencies" }
 )]
-pub static BLOCKIO_FLUSH_DEVICE_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_FLUSH_DEVICE_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_device_latency",
     description = "Distribution of block IO device service latency in nanoseconds, from the moment the device began servicing the request until it completed. Excludes time spent waiting in the queue — see blockio_queue_latency. Recordings made before this metric was renamed carry the same measurement under the name blockio_latency",
     metadata = { op = "discard", unit = "nanoseconds", acq_group = "blockio_latency_device_latencies" }
 )]
-pub static BLOCKIO_DISCARD_DEVICE_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_DISCARD_DEVICE_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_queue_latency",
     description = "Distribution of time block IO requests spent queued before the device began servicing them, in nanoseconds. This is the component that grows under device saturation, where service latency alone stays flat",
     metadata = { op = "read", unit = "nanoseconds", acq_group = "blockio_latency_queue_latencies" }
 )]
-pub static BLOCKIO_READ_QUEUE_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_READ_QUEUE_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_queue_latency",
     description = "Distribution of time block IO requests spent queued before the device began servicing them, in nanoseconds. This is the component that grows under device saturation, where service latency alone stays flat",
     metadata = { op = "write", unit = "nanoseconds", acq_group = "blockio_latency_queue_latencies" }
 )]
-pub static BLOCKIO_WRITE_QUEUE_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_WRITE_QUEUE_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_queue_latency",
     description = "Distribution of time block IO requests spent queued before the device began servicing them, in nanoseconds. This is the component that grows under device saturation, where service latency alone stays flat",
     metadata = { op = "flush", unit = "nanoseconds", acq_group = "blockio_latency_queue_latencies" }
 )]
-pub static BLOCKIO_FLUSH_QUEUE_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_FLUSH_QUEUE_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_queue_latency",
     description = "Distribution of time block IO requests spent queued before the device began servicing them, in nanoseconds. This is the component that grows under device saturation, where service latency alone stays flat",
     metadata = { op = "discard", unit = "nanoseconds", acq_group = "blockio_latency_queue_latencies" }
 )]
-pub static BLOCKIO_DISCARD_QUEUE_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_DISCARD_QUEUE_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_total_latency",
     description = "Distribution of end-to-end block IO latency in nanoseconds, from the request entering the queue until it completed — the queue and device phases together. Measured directly rather than summed, because two histograms cannot be added",
     metadata = { op = "read", unit = "nanoseconds", acq_group = "blockio_latency_total_latencies" }
 )]
-pub static BLOCKIO_READ_TOTAL_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_READ_TOTAL_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_total_latency",
     description = "Distribution of end-to-end block IO latency in nanoseconds, from the request entering the queue until it completed — the queue and device phases together. Measured directly rather than summed, because two histograms cannot be added",
     metadata = { op = "write", unit = "nanoseconds", acq_group = "blockio_latency_total_latencies" }
 )]
-pub static BLOCKIO_WRITE_TOTAL_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_WRITE_TOTAL_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_total_latency",
     description = "Distribution of end-to-end block IO latency in nanoseconds, from the request entering the queue until it completed — the queue and device phases together. Measured directly rather than summed, because two histograms cannot be added",
     metadata = { op = "flush", unit = "nanoseconds", acq_group = "blockio_latency_total_latencies" }
 )]
-pub static BLOCKIO_FLUSH_TOTAL_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_FLUSH_TOTAL_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_total_latency",
     description = "Distribution of end-to-end block IO latency in nanoseconds, from the request entering the queue until it completed — the queue and device phases together. Measured directly rather than summed, because two histograms cannot be added",
     metadata = { op = "discard", unit = "nanoseconds", acq_group = "blockio_latency_total_latencies" }
 )]
-pub static BLOCKIO_DISCARD_TOTAL_LATENCY: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+pub static BLOCKIO_DISCARD_TOTAL_LATENCY: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);

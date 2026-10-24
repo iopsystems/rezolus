@@ -8,6 +8,9 @@ use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// The value, in m°C, asus-ec-sensors reports for an empty temperature header.
+const ASUSEC_EMPTY_HEADER: i64 = -40_000;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Family {
     Temperature,
@@ -237,6 +240,12 @@ fn discover_cooling(sysfs: &Path, found: &mut Discovery) {
                 continue;
             }
         };
+        // ACPI registers one `Processor` cooling device per logical CPU, its
+        // throttling state. On a host with more CPUs than MAX_SENSORS they
+        // would exhaust the family, and every read adds to the sweep.
+        if chip == "Processor" {
+            continue;
+        }
         let value = node.join("cur_state");
         if !value.exists() {
             continue;
@@ -271,6 +280,13 @@ fn discover_hwmon(sysfs: &Path, board: &Board, found: &mut Discovery) {
                 continue;
             }
         };
+        // A read of an `nvme` or `drivetemp` hwmon channel sends the drive a
+        // command. drivehealth reads each drive's temperature (for NVMe, the
+        // Composite temperature) with its own command every 60s by default;
+        // NVMe's per-sensor temperatures (`temp2` and up) are not collected.
+        if matches!(chip.as_str(), "nvme" | "drivetemp") {
+            continue;
+        }
         let device = device_identity(sysfs, &node, true);
         let names = attribute_names(&node, &mut found.errors);
 
@@ -369,6 +385,15 @@ fn discover_hwmon(sysfs: &Path, board: &Board, found: &mut Discovery) {
                 && device == "/devices/platform/bus@0/c600000.i2c/i2c-2/2-0044")
                 .then(|| "system".to_string());
             if let Some(input) = direct_spec(&node, &channel, "_input") {
+                // asus-ec-sensors reports -40 °C for a temperature header with
+                // nothing connected. Such a channel gets no slot; rediscovery
+                // finds it once a sensor is plugged in.
+                if chip == "asusec"
+                    && family == Family::Temperature
+                    && input.read().ok() == Some(ASUSEC_EMPTY_HEADER)
+                {
+                    continue;
+                }
                 add_with_device(
                     found,
                     &device,

@@ -179,6 +179,7 @@ impl Cached<GroupSnapshot, OnceLock<Vec<u8>>> {
             && previous.counters == group.counters
             && previous.gauges == group.gauges
             && previous.histograms == group.histograms
+            && previous.gauge_histograms == group.gauge_histograms
     }
 }
 
@@ -358,6 +359,10 @@ mod tests {
                 metadata: BTreeMap::new(),
             }],
             histograms: vec![],
+            gauge_histograms: vec![MetricDesc {
+                name: "gauge_histogram".into(),
+                metadata: BTreeMap::new(),
+            }],
         });
         let group = GroupSnapshot {
             name: "test/group".into(),
@@ -367,6 +372,7 @@ mod tests {
             counters: vec![Some(u64::MAX)],
             gauges: vec![Some(-42)],
             histograms: vec![],
+            gauge_histograms: vec![None],
         };
         for count in [0, 1, 15, 16, 17, 255, 256] {
             let mut cache = V3Builder::new();
@@ -378,10 +384,17 @@ mod tests {
                     encoding: Default::default(),
                 },
             );
+            let priming = Snapshot::V3(SnapshotV3 {
+                systemtime: SystemTime::UNIX_EPOCH,
+                duration: Duration::ZERO,
+                metadata: HashMap::new(),
+                groups: vec![group.clone()],
+            });
+            encode_snapshot(&priming, &cache).unwrap();
             let mut groups = vec![group.clone(); count];
             // Mix cached and uncached groups in the same response.
             if let Some(last) = groups.last_mut() {
-                last.gauges[0] = None;
+                last.gauge_histograms[0] = Some(histogram::Histogram::new(3, 8).unwrap());
             }
             let snapshot = Snapshot::V3(SnapshotV3 {
                 systemtime: SystemTime::UNIX_EPOCH,
@@ -402,6 +415,7 @@ mod tests {
             counters: vec![],
             gauges: vec![],
             histograms: vec![],
+            gauge_histograms: vec![],
         });
         assert_eq!(
             encode_snapshot(&legacy, &V3Builder::new()).unwrap(),

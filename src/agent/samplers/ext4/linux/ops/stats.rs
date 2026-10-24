@@ -71,32 +71,32 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
     description = "Distribution of the time an fsync or fdatasync held the calling thread inside ext4, in nanoseconds",
     metadata = { unit = "nanoseconds", op = "fsync", acq_group = "ext4_ops_latencies" }
 )]
-pub static EXT4_OP_LATENCY_FSYNC: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static EXT4_OP_LATENCY_FSYNC: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "ext4_op_latency",
     description = "Distribution of the time an unlink held the calling thread inside ext4, in nanoseconds",
     metadata = { unit = "nanoseconds", op = "unlink", acq_group = "ext4_ops_latencies" }
 )]
-pub static EXT4_OP_LATENCY_UNLINK: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static EXT4_OP_LATENCY_UNLINK: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "ext4_op_latency",
     description = "Distribution of the time a write held the calling thread inside ext4 (ext4_file_write_iter, buffered or direct), in nanoseconds",
     metadata = { unit = "nanoseconds", op = "write", acq_group = "ext4_ops_latencies" }
 )]
-pub static EXT4_OP_LATENCY_WRITE: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static EXT4_OP_LATENCY_WRITE: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 #[metric(
     name = "ext4_op_latency",
     description = "Distribution of the time a rename held the calling thread inside ext4 (ext4_rename2), in nanoseconds",
     metadata = { unit = "nanoseconds", op = "rename", acq_group = "ext4_ops_latencies" }
 )]
-pub static EXT4_OP_LATENCY_RENAME: RwLockHistogram =
-    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+pub static EXT4_OP_LATENCY_RENAME: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 /*
  * per filesystem: one `CounterGroup` per metric, one entry per filesystem slot
