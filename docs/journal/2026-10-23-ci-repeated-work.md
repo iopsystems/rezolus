@@ -29,23 +29,42 @@ the new workflow's total elapsed time.
 
 - Restrict the documentation step to `cargo test --doc`. Keep the first
   native test pass, the separate native viewer tests, the all-targets build
-  and both smoke tests. The smoke steps use the agent already produced by
-  the all-targets build instead of invoking Cargo again.
+  and both smoke tests. The smoke steps retain plain builds: the local review
+  caught that `--all-targets` unifies dev-dependency features such as
+  `rez/test-support` into the earlier binary. Both debug and release smoke
+  tests should exercise the plain-build artifact.
 - Install pinned cargo-audit 0.22.2 and wasm-pack 0.14.0 binaries through
   the existing `taiki-e/install-action@v2`, with source fallback disabled.
-  Audit no longer restores an agent build cache. CI and Pages use the same
-  wasm-pack version, retaining the binaryen version expected by build.sh.
+  Audit no longer restores an agent build cache. CI, Pages and the tag-time
+  viewer release share `.github/actions/setup-wasm`, so the shipping bundle
+  uses the same wasm-pack pin, Rust environment and dependency cache as CI.
+  The pin retains the binaryen version expected by build.sh. Pages also
+  rebuilds when either shared setup action changes.
 - Share dependency caches between the two Clippy jobs, with clippy-deny
-  as the writer, and between WASM validation and Pages. Match the Rust
-  environment in both WASM jobs because rust-cache hashes it. Set native
+  as the writer even on lint failure (`cache-on-failure: true`), and across
+  the three WASM build paths. Match the Rust environment in those jobs
+  because rust-cache hashes it. Set native
   release overrides before computing the native cache key. Cache keys still
   include rust-cache's platform, compiler and dependency/environment hashes.
 - Cancel a superseded run of the same PR. Push runs have distinct groups
   so new main/release commits do not cancel earlier release validation.
-- Make `verify all tests pass` wait for audit and wasm-viewer too, and reject
+- Make `verify all tests pass` wait for wasm-viewer too, and reject
   skipped prerequisites as well as failures and cancellations. Preserve the
   existing native check names, including their formerly implicit trailing
-  separator, for compatibility with required status checks.
+  separator, for compatibility with required status checks; renaming requires
+  coordinating the main/release branch rulesets. Audit remains its independent
+  status, preserving the existing advisory policy. The initial revision added
+  it to the aggregate gate; review caught that this also made a new advisory
+  or database fetch outage block the aggregate status, so that change was
+  withdrawn. Advisory database caching remains separate work.
+
+The cleaned-up `check` cache key intentionally replaces `check-`, costing one
+cold population. The version is alpha.65 against main's alpha.64, as required
+by repository policy. PR #1537 also proposes alpha.65 and #1542 is stacked at
+alpha.66. No merge order is assumed: after either independent PR lands, the
+other must refresh main and bump again, then the sampler stack must be rebased
+and its revision checked. Identical version edits alone will not force a
+merge conflict, so a clean merge is not evidence that the revision is current.
 
 The local review exchange found test isolation and timing issues on the
 sampler stack. This pass keeps the integration suite and its failure gates;
@@ -60,13 +79,17 @@ jobs retain their current independent failure behavior.
 
 ## Validation
 
-`actionlint` 1.7.12 passes for both modified workflows (ShellCheck is not
+`actionlint` 1.7.12 passes for all three modified workflows (ShellCheck is not
 installed locally). The exact doctest selection, with `--offline` added,
 passes for dashboard, report-save, rez and systeminfo; there are currently
 zero runnable examples. Locked Cargo metadata and whitespace checks pass.
-The pinned tools have published Linux x86_64 release assets. Hosted cache
-hits, installer execution and the unchanged platform matrix still need the
-PR run; no end-to-end speedup is claimed before that measurement.
+The pinned tools have published Linux x86_64 release assets. The initial
+[hosted run 40062328051](https://github.com/iopsystems/rezolus/actions/runs/40062328051)
+passed every job, including both tool installers and the platform matrix.
+The review fixes need a new hosted run. Pages and tag-time release execution,
+cross-workflow cache hits and cache saving after a lint failure have not been
+observed in that PR run. The composite's steps also pass actionlint when
+expanded into a temporary workflow, and its shell snippets pass `bash -n`.
 
 Installer and cache behavior follow the upstream
 [install-action documentation](https://github.com/taiki-e/install-action#usage)

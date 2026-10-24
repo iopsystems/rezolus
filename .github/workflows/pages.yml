@@ -12,16 +12,13 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/pages.yml'
+      - '.github/actions/setup-wasm/**'
+      - '.github/actions/setup-rust/**'
 
 permissions:
   contents: read
   pages: write
   id-token: write
-
-# Match cargo-build's Rust environment so the shared WASM cache can be reused.
-env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: full
 
 concurrency:
   group: pages
@@ -36,17 +33,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v5
-      - uses: ./.github/actions/setup-rust
-      - name: Add wasm32 target
-        run: rustup target add wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: wasm-viewer
-      - name: Install wasm-pack
-        uses: taiki-e/install-action@v2
-        with:
-          tool: wasm-pack@0.14.0
-          fallback: none
+      - uses: ./.github/actions/setup-wasm
       - name: Build WASM viewer
         run: ./crates/viewer/build.sh
       - name: Resolve symlinks

@@ -106,6 +106,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: clippy
+          # Keep dependency caches even when a lint fails the gate.
+          cache-on-failure: true
       - name: Install dependencies
         shell: bash
         run: |
@@ -174,17 +176,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: ./.github/actions/setup-rust
-      - name: Add wasm32 target
-        run: rustup target add wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: wasm-viewer
-      - name: Install wasm-pack
-        uses: taiki-e/install-action@v2
-        with:
-          tool: wasm-pack@0.14.0
-          fallback: none
+      - uses: ./.github/actions/setup-wasm
       - name: Install wabt
         run: |
           # Drop the unused Chrome apt source; see the note in `check`.
@@ -269,6 +261,7 @@ jobs:
   # The setup job selects debug-only PR builds and both profiles on pushes.
   build:
     # Keep the existing check names (including the empty former feature suffix).
+    # Rename only together with any required status checks in main/release rulesets.
     name: build-${{ matrix.os }}-${{ matrix.profile }}-
     needs: setup
     runs-on: ${{ matrix.os }}
@@ -332,11 +325,13 @@ jobs:
         shell: bash
         run: |
           cargo test --workspace --exclude viewer ${{ env.FEATURE_FLAGS }} --doc --locked -- --test-threads 16
-      # The workspace --all-targets build above already produced the agent.
+      # Rebuild without test targets: --all-targets unifies dev-dependency
+      # features (including rez/test-support) into the earlier agent binary.
       - name: smoketest
         if: ${{ matrix.profile == 'release' }}
         shell: bash
         run: |
+          cargo build ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }}
           sudo ./target/release/rezolus config/agent.toml & echo $! > agent.pid
           sleep 15
           ./target/release/rezolus record --duration 30s --url http://127.0.0.1:4241 -o long.dendro
@@ -369,6 +364,7 @@ jobs:
         if: ${{ matrix.profile == 'debug' }}
         shell: bash
         run: |
+          cargo build ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }}
           sudo ./target/debug/rezolus config/agent.toml & echo $! > agent.pid
           sleep 15
           ./target/debug/rezolus record --duration 30s --url http://127.0.0.1:4241 -o long.dendro
@@ -410,7 +406,6 @@ jobs:
       - clippy
       - clippy-deny
       - clippy-upload
-      - audit
       - wasm-viewer
 
     steps:
