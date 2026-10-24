@@ -469,16 +469,10 @@ echo "$sections_json" | jq -e '[.data.sections[].route] | any(startswith("/sourc
 echo "$sections_json" | jq -e '[.data.sections[].route] | any(. == "/cpu") | not' >/dev/null \
     || fail "simple-capture sections has /cpu built-in (should be suppressed)" "$sections_json" "no /cpu route" "$LOGDIR/simple.log"
 
-echo "==> simple-capture: /api/v1/timestamps returns a timestamps array"
-# metriken-query 0.42.1's ArchiveReader has no sample_timestamps, so a .dendro
-# answers with an empty array; a parquet was the only input with timestamps.
-# Check the shape, and say so while the array is empty.
+echo "==> simple-capture: /api/v1/timestamps returns non-empty timestamps array"
 timestamps_json=$(curl -fsS "$BASE/api/v1/timestamps?source=127.0.0.1-18651")
-echo "$timestamps_json" | jq -e '.timestamps | type == "array"' >/dev/null \
-    || fail "simple-capture timestamps not an array" "$timestamps_json" ".timestamps array" "$LOGDIR/simple.log"
-if echo "$timestamps_json" | jq -e '.timestamps | length == 0' >/dev/null; then
-    echo "    NOTE: timestamps empty (no sample_timestamps for an archive)"
-fi
+echo "$timestamps_json" | jq -e '.timestamps | length > 0' >/dev/null \
+    || fail "simple-capture timestamps empty" "$timestamps_json" "non-empty .timestamps" "$LOGDIR/simple.log"
 
 echo "==> a legacy file is refused with the command that converts it"
 LEGACY=tests/fixtures/legacy/simple_capture.parquet

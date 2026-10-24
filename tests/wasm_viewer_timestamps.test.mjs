@@ -1,9 +1,9 @@
 // Parity guard: the WASM viewer's `timestamps()` passthrough must return the
 // same raw, un-gridded per-sample collection timestamps as the server's
 // `/api/v1/timestamps` endpoint. Both backends read `MetricsSource::
-// sample_timestamps()` off the same `ParquetReader` and wrap it in the same
-// `{"source","timestamps"}` shape, so identity holds by construction — this
-// test only pins the WASM side's shape and sanity-checks the fixture's
+// sample_timestamps()` off the recording's `ArchiveReader` and wrap it in the
+// same `{"source","timestamps"}` shape, so identity holds by construction —
+// this test only pins the WASM side's shape and sanity-checks the fixture's
 // values (real jitter, not a synthetic grid).
 //
 // Requires the WASM bundle to be built first: `./crates/viewer/build.sh`.
@@ -33,14 +33,7 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
 
     const recording = fs.readFileSync(path.join(repoRoot, 'tests/fixtures/upgraded/simple_capture.dendro'));
 
-    // metriken-query 0.42.1 implements MetricsSource for ArchiveReader without
-    // sample_timestamps, so the trait default (an empty Vec) answers for every
-    // .dendro. A parquet was the only input with timestamps, and the viewer
-    // no longer opens one. Marked todo, not removed, until the archive reader
-    // returns its rows' timestamps.
-    test('WASM timestamps returns raw jittered timestamps', {
-        todo: 'ArchiveReader has no sample_timestamps (metriken-query 0.42.1)',
-    }, () => {
+    test('WASM timestamps returns raw jittered timestamps', () => {
         const registry = new WasmCaptureRegistry();
         registry.attach('baseline', new Uint8Array(recording), 'simple_capture.dendro');
 

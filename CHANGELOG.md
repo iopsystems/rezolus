@@ -309,6 +309,13 @@
   metriken-storage 0.5.2, metriken-query 0.42.1, metriken-recorder 0.5.1.** The
   counting histogram types are named for their kind (`AtomicCounterHistogram`,
   `RwLockCounterHistogram`, `CounterHistogramGroup`).
+- **The sample-timestamp (jitter) plot works for a `.dendro` recording**
+  (metriken-query 0.42.2, metriken-storage 0.5.4); it was empty for every
+  `.dendro`. It plots the instants at which the recording's first source
+  with rows was read, in any sampler; a second recorder of the same agent
+  is not merged in. The first request after the viewer opens or refreshes
+  a recording reads every table's timestamps (the read took 6.6 s on a
+  9.6 h, 49-table recording); later requests reuse them.
 - **A recording and its copies are read once.** metriken-query 0.42 forms
   process groups: sources that share a uuid (a source and its snapshot or
   hindsight dump), or share a `producer_epoch` and overlap in time (one agent
