@@ -111,6 +111,7 @@ default: see [cpu_usage](#cpu_usage).
   - [gpu_nvidia](#gpu_nvidia)
   - [gpu_intel_pmu](#gpu_intel_pmu)
 - [Memory](#memory)
+  - [memory_cgroup](#memory_cgroup)
   - [memory_meminfo](#memory_meminfo)
   - [memory_pagecache](#memory_pagecache)
   - [memory_slabinfo](#memory_slabinfo)
@@ -992,6 +993,88 @@ there is no VRAM bandwidth counter in this PMU.
 ## Memory
 
 Metrics related to system memory usage.
+
+### memory_cgroup
+
+Samples Linux cgroup v2 memory accounting under `/sys/fs/cgroup`. Explicitly
+opt in with `[samplers.memory_cgroup] enabled = true`; `[defaults] enabled`
+does not enable this sampler. The configurable interval defaults to `"60s"`:
+
+```toml
+[samplers.memory_cgroup]
+enabled = true
+interval = "60s"
+```
+
+Reads run on a blocking worker independently of the scrape cadence; snapshots
+retain the previous observation and its acquisition window between reads.
+The first scrape dispatches a read immediately; subsequent scrapes dispatch
+another only after the interval has elapsed since the previous sweep finished.
+This is useful for memory trends and leak detection, but can miss short spikes
+and cgroups created and destroyed between sweeps. Discovery and deletion are
+also observed only on a sweep. A shorter interval trades collection cost for
+finer time resolution.
+
+The agent caches each completed acquisition across both wide snapshots and
+long-format stream builds. Binary snapshots also reuse the group's encoded
+MessagePack bytes. Full `/metrics/binary` responses still include up to 30
+series per cgroup and copy/transmit the entire schema; caching reduces CPU
+cost, not the size of that endpoint's response. The native stream sends
+schemas/occupants as needed and deduplicates unchanged acquisition windows.
+The sampler remains opt-in because collection, retained state, and full
+snapshot exports add overhead. See the
+[design review and historical 5.x measurements](journal/2026-10-23-cgroup-memory.md).
+
+Cgroup v1 and the hierarchy root are not supported. The memory controller
+must be available; Rezolus does not enable controllers or change limits.
+
+| Metric | Type | Unit | Description |
+|--------|------|------|-------------|
+| `cgroup_memory_usage` | Gauge | bytes | `memory.current`: resident memory charged to the cgroup, including descendants |
+| `cgroup_memory_swap_usage` | Gauge | bytes | `memory.swap.current`: swap usage, including descendants |
+| `cgroup_memory_stat` | Gauge | bytes | Byte-valued `memory.stat` fields, distinguished by `kind` |
+
+All series carry `name`, the same display name used by BPF cgroup metrics:
+up to the last three path components, prefixed with `.../` for deeper paths.
+Components use BPF's 63-byte bound and systemd `\x2d` decoding, so the shared
+Cgroups selector matches both sources. The additional `path` label preserves
+the full path relative to `/sys/fs/cgroup`, with a leading `/`; use it to
+distinguish cgroups whose abbreviated names collide.
+
+Up to 4096 cgroups are tracked concurrently, independently of kernel cgroup
+IDs. Discovery runs each sweep; deleted groups are removed and their slots
+reused. Excess groups trigger a warning. In a successful sweep, missing files,
+unsupported fields, and failed individual reads yield absent values rather
+than zeros. If discovery fails or every attempted read fails, the entire
+previous observation (values, labels, and window) remains unchanged. An empty
+hierarchy is a successful sweep and removes the previous groups.
+
+The `kind` label includes `anon`, `file`, `kernel`, `shmem`, `sock`,
+`kernel_stack`, `pagetables`, `sec_pagetables`, `percpu`, `vmalloc`,
+`slab`, `slab_reclaimable`, `slab_unreclaimable`, `file_mapped`, `file_dirty`,
+`file_writeback`, `anon_thp`, `file_thp`, `shmem_thp`, `active_anon`,
+`inactive_anon`, `active_file`, `inactive_file`, `unevictable`, `swapcached`,
+`zswap`, `zswapped`, and `hugetlb`, when exposed by the running kernel.
+Page counts and event counters in `memory.stat` are excluded.
+
+These are overlapping views, **not additive buckets**: `file` includes shared
+memory/tmpfs (`shmem`), `kernel` includes slab/page tables/stacks, and dirty,
+mapped, active/inactive, and huge-page fields describe subsets. There is no
+standalone per-cgroup equivalent of the host's `Buffers` metric; file cache,
+socket buffers, and kernel/slab accounting provide the relevant views.
+Parent cgroups include their children, so do not sum ancestors and descendants.
+The Cgroups dashboard plots memory only for individual selected cgroups to
+avoid that double-counting. For example:
+
+```promql
+cgroup_memory_usage{name="/system.slice/example.service"}
+cgroup_memory_stat{name="/system.slice/example.service",kind="anon"}
+```
+
+See the [kernel memory controller documentation](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files)
+for precise accounting semantics. Sampling is not atomic across files, and
+kernel accounting may lag allocations; breakdowns need not exactly match
+`memory.current` at an instant.
 
 ### memory_meminfo
 

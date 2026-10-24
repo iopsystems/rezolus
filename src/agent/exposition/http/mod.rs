@@ -14,6 +14,7 @@ use tower_http::{compression::CompressionLayer, decompression::RequestDecompress
 /// the `/status` handler.
 static STATUS_TTL_SECONDS: OnceLock<u64> = OnceLock::new();
 
+mod acquisition_cache;
 /// Tests of the agent's rows through metriken-exposition's frame producer
 /// and back through the recorder's subscriber.
 #[cfg(test)]
@@ -22,6 +23,29 @@ mod router;
 mod snapshot;
 
 pub use snapshot::SnapshotBuilder;
+
+/// Serialize sampler metric mutations with snapshot and contract tests.
+#[cfg(test)]
+pub(crate) fn test_registry() -> TestRegistryGuard {
+    TestRegistryGuard {
+        _guard: snapshot::BUILDER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()),
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct TestRegistryGuard {
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl TestRegistryGuard {
+    /// Build registered sampler columns without reacquiring the registry lock.
+    pub(crate) fn stream_groups(&self) -> Vec<metriken_exposition::group_builder::StreamGroup> {
+        acquisition_cache::V3Builder::new().build_stream(vec![])
+    }
+}
 
 pub async fn serve(
     config: Arc<Config>,

@@ -26,6 +26,45 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         }
     };
 
+    // Memory accounting includes descendants. Keep individual subtree series;
+    // summing non-selected ancestors and children would double-count memory.
+    if individual {
+        group.plot_promql(
+            PlotOpts::gauge(
+                "Memory (Including Descendants)",
+                "individual-memory",
+                Unit::Bytes,
+            ),
+            format!("cgroup_memory_usage{{{filter}}}"),
+        );
+        group.plot_promql(
+            PlotOpts::gauge(
+                "Swap (Including Descendants)",
+                "individual-memory-swap",
+                Unit::Bytes,
+            ),
+            format!("cgroup_memory_swap_usage{{{filter}}}"),
+        );
+        for (kind, title) in [
+            ("anon", "Anonymous Pages"),
+            ("file", "File Cache (Includes Shared Memory)"),
+            ("shmem", "Shared Memory / tmpfs"),
+            ("kernel", "Kernel Memory"),
+            ("sock", "Socket Buffers"),
+            ("slab_reclaimable", "Reclaimable Slab"),
+            ("slab_unreclaimable", "Unreclaimable Slab"),
+            ("pagetables", "Page Tables"),
+            ("kernel_stack", "Kernel Stacks"),
+            ("file_dirty", "Dirty File Pages"),
+            ("file_writeback", "File Pages Under Writeback"),
+        ] {
+            group.plot_promql(
+                PlotOpts::gauge(title, format!("individual-memory-{kind}"), Unit::Bytes),
+                format!("cgroup_memory_stat{{kind=\"{kind}\",{filter}}}"),
+            );
+        }
+    }
+
     group.plot_promql(
         PlotOpts::counter(
             "Total CPU Cores",
@@ -164,7 +203,10 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 "cgroup_cpu_cycles",
                 "cgroup_cpu_instructions",
                 "cgroup_cpu_tlb_flush",
-                "cgroup_syscall"
+                "cgroup_syscall",
+                "cgroup_memory_usage",
+                "cgroup_memory_swap_usage",
+                "cgroup_memory_stat"
             ]
         }),
     );

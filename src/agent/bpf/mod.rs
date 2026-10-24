@@ -1589,6 +1589,48 @@ pub fn pid_slot(pid: usize) -> usize {
     (pid & !511) | (pid.wrapping_mul(PID_SLOT_MULTIPLIER) & 511)
 }
 
+/// The display identity shared by BPF and cgroupfs samplers. BPF supplies
+/// NUL-terminated, 64-byte components; cgroupfs callers apply that same bound.
+pub(crate) fn cgroup_name_label(
+    name: &[u8],
+    parent: &[u8],
+    grandparent: &[u8],
+    level: i32,
+) -> String {
+    let name = std::str::from_utf8(name)
+        .unwrap_or("")
+        .trim_end_matches(char::from(0))
+        .replace("\\x2d", "-");
+
+    let pname = std::str::from_utf8(parent)
+        .unwrap_or("")
+        .trim_end_matches(char::from(0))
+        .replace("\\x2d", "-");
+
+    let gpname = std::str::from_utf8(grandparent)
+        .unwrap_or("")
+        .trim_end_matches(char::from(0))
+        .replace("\\x2d", "-");
+
+    // Construct hierarchical path based on level and available parent names
+    if name == "/" {
+        // Root cgroup - just use "/"
+        "/".to_string()
+    } else if !gpname.is_empty() {
+        if level > 3 {
+            format!(".../{gpname}/{pname}/{name}")
+        } else {
+            format!("/{gpname}/{pname}/{name}")
+        }
+    } else if !pname.is_empty() {
+        format!("/{pname}/{name}")
+    } else if !name.is_empty() {
+        format!("/{name}")
+    } else {
+        "".to_string()
+    }
+}
+
 pub fn process_cgroup_info<T>(data: &[u8], identity: &'static metriken::group::SlotIdentity) -> i32
 where
     T: CgroupInfo + plain::Plain + Default,
@@ -1596,38 +1638,12 @@ where
     let mut cgroup_info = T::default();
 
     if plain::copy_from_bytes(&mut cgroup_info, data).is_ok() {
-        let name = std::str::from_utf8(cgroup_info.name())
-            .unwrap_or("")
-            .trim_end_matches(char::from(0))
-            .replace("\\x2d", "-");
-
-        let pname = std::str::from_utf8(cgroup_info.pname())
-            .unwrap_or("")
-            .trim_end_matches(char::from(0))
-            .replace("\\x2d", "-");
-
-        let gpname = std::str::from_utf8(cgroup_info.gpname())
-            .unwrap_or("")
-            .trim_end_matches(char::from(0))
-            .replace("\\x2d", "-");
-
-        // Construct hierarchical path based on level and available parent names
-        let path = if name == "/" {
-            // Root cgroup - just use "/"
-            "/".to_string()
-        } else if !gpname.is_empty() {
-            if cgroup_info.level() > 3 {
-                format!(".../{gpname}/{pname}/{name}")
-            } else {
-                format!("/{gpname}/{pname}/{name}")
-            }
-        } else if !pname.is_empty() {
-            format!("/{pname}/{name}")
-        } else if !name.is_empty() {
-            format!("/{name}")
-        } else {
-            "".to_string()
-        };
+        let path = cgroup_name_label(
+            cgroup_info.name(),
+            cgroup_info.pname(),
+            cgroup_info.gpname(),
+            cgroup_info.level(),
+        );
 
         // Written through `SlotIdentity`, which mints a new `__uid__` when the
         // name changes, so a renamed cgroup is a new series.

@@ -3602,7 +3602,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "6.0.0-alpha.65"
+version = "6.0.0-alpha.66"
 dependencies = [
  "allan",
  "anyhow",
@@ -3657,6 +3657,7 @@ dependencies = [
  "report-save",
  "reqwest",
  "rez",
+ "rmp",
  "rmp-serde",
  "rusqlite",
  "rustfft",
