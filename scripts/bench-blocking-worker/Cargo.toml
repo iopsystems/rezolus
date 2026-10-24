@@ -1,0 +1,18 @@
+[package]
+name = "bench-blocking-worker"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone: measuring admission must not rebuild the agent or device libraries.
+[workspace]
+
+[[bin]]
+name = "bench-blocking-worker"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+log = "=0.4.34"
+tokio = { version = "=1.53.1", features = ["rt"] }

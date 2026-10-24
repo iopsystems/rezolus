@@ -16,8 +16,8 @@ use tokio::task::JoinHandle;
 
 #[derive(Clone, Copy)]
 pub(super) enum Cadence {
-    FromDispatch,
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    FromDispatch,
     FromCompletion,
 }
 
@@ -62,7 +62,9 @@ impl BlockingWorker {
 
     #[cfg(all(test, target_os = "linux"))]
     pub(super) fn is_running(&self) -> bool {
-        recover_lock(&self.schedule).running_since.is_some()
+        recover_lock(self.name, &self.schedule)
+            .running_since
+            .is_some()
     }
 
     fn try_acquire_at(&self, now: Instant) -> Option<Permit> {
@@ -91,30 +93,41 @@ impl BlockingWorker {
         {
             return None;
         }
-        schedule.last = Some(now);
+        let previous_last = schedule.last.replace(now);
         schedule.running_since = Some(now);
         schedule.stuck_warned = false;
         Some(Permit {
             worker: self.clone(),
-            panicked: false,
+            previous_last,
+            outcome: Some(Outcome::Queued),
         })
     }
 }
 
 /// Keep the permit in the queued closure, so even cancellation before execution
-/// releases it. Dropping a permit without spawning also releases admission.
+/// releases it without consuming an interval. Dropping an unspawned permit has
+/// the same effect. Once work starts, its cadence applies even if reads fail.
 pub(super) struct Permit {
     worker: BlockingWorker,
-    panicked: bool,
+    previous_last: Option<Instant>,
+    outcome: Option<Outcome>,
+}
+
+#[derive(Clone, Copy)]
+enum Outcome {
+    Queued,
+    Ran,
+    Panicked,
 }
 
 impl Permit {
     pub(super) fn spawn(mut self, work: impl FnOnce() + Send + 'static) -> JoinHandle<()> {
         tokio::task::spawn_blocking(move || {
+            self.outcome = Some(Outcome::Ran);
             if catch_unwind(AssertUnwindSafe(work)).is_err() {
-                self.panicked = true;
+                self.outcome = Some(Outcome::Panicked);
                 error!(
-                    "{}: sweep panicked; retrying after the configured interval",
+                    "{}: sweep unwound; next admission delayed by the configured interval",
                     self.worker.name
                 );
             }
@@ -122,28 +135,44 @@ impl Permit {
             drop(self);
         })
     }
-}
 
-impl Drop for Permit {
-    fn drop(&mut self) {
-        let mut schedule = recover_lock(&self.worker.schedule);
-        // A panic always gets a full retry interval, even if this sampler
-        // normally measures cadence from dispatch and the sweep ran longer.
-        if self.panicked || matches!(self.worker.cadence, Cadence::FromCompletion) {
-            schedule.last = Some(Instant::now());
+    fn finish_at(&mut self, now: Instant) {
+        let Some(outcome) = self.outcome.take() else {
+            return;
+        };
+        // This short lock is taken on completion, not around device work. An
+        // admission racing it may skip one consumer tick instead of waiting.
+        let mut schedule = recover_lock(self.worker.name, &self.worker.schedule);
+        match outcome {
+            Outcome::Queued => schedule.last = self.previous_last,
+            // An unwinding panic always gets a full retry interval, including
+            // a dispatch-based sampler whose sweep ran longer than its interval.
+            Outcome::Panicked => schedule.last = Some(now),
+            Outcome::Ran if matches!(self.worker.cadence, Cadence::FromCompletion) => {
+                schedule.last = Some(now);
+            }
+            Outcome::Ran => {}
         }
         schedule.running_since = None;
     }
 }
 
+impl Drop for Permit {
+    fn drop(&mut self) {
+        self.finish_at(Instant::now());
+    }
+}
+
 /// Recover state on the blocking worker, retaining slot ownership after an
 /// unwind. Callers must tolerate partially updated state; this is not rollback.
-pub(super) fn recover_lock<T>(state: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(super) fn recover_lock<'a, T>(name: &str, state: &'a Mutex<T>) -> MutexGuard<'a, T> {
     state.lock().unwrap_or_else(|e| {
         state.clear_poison();
+        warn!("{name}: recovering poisoned state after an unwind; retaining existing state");
         e.into_inner()
     })
 }
 
 #[cfg(test)]
+#[path = "blocking/tests.rs"]
 mod tests;
