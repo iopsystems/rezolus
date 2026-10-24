@@ -288,7 +288,6 @@ pub struct AppState {
     /// SHA-256 hex digest of the source parquet file (file mode only).
     pub file_checksum: RwLock<Option<String>>,
     pub proxy: ProxyState,
-    pub combined_ab_marker: RwLock<Option<crate::parquet_metadata::AbContainers>>,
     pub trimmed_report_marker: RwLock<Option<String>>,
     /// Shared LRU row-group cache for all `ParquetReader`s in this process.
     ///
@@ -366,7 +365,6 @@ impl AppState {
             selection: RwLock::new(None),
             file_checksum: RwLock::new(None),
             proxy: ProxyState::default(),
-            combined_ab_marker: RwLock::new(None),
             trimmed_report_marker: RwLock::new(None),
             pool,
             queries: Arc::new(tokio::sync::Semaphore::new(default_query_concurrency())),
@@ -445,10 +443,6 @@ impl AppState {
     /// the file is finalized or removed, or the baseline is replaced.
     pub fn following(&self) -> bool {
         self.follow.lock().as_ref().is_some_and(|f| f.active())
-    }
-
-    pub fn combined_ab(&self) -> bool {
-        self.combined_ab_marker.read().is_some()
     }
 
     /// Single lookup that hides the CLI-vs-HTTP-attach split; CLI wins.

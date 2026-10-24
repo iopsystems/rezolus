@@ -277,7 +277,7 @@ impl std::fmt::Display for ConvertError {
             ),
             Self::NotDendro(p) => write!(
                 f,
-                "{}: 6.x writes .dendro archives only; give an output ending in .dendro",
+                "{}: the output is a .dendro archive; give a name ending in .dendro",
                 p.display()
             ),
             Self::OutputExists(p) => {

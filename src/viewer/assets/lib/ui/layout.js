@@ -114,12 +114,13 @@ const FILE_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="non
 
 // Open a one-shot hidden <input type=file> and forward the selected
 // file to the caller's onPick. Returns an onclick handler so the site
-// can wire it directly to a button. Accepts both bare parquets and
-// combined-A/B tarballs (`.parquet.ab.tar`).
+// can wire it directly to a button. Offers `.dendro` archives; a file of
+// another kind is refused by the backend with the command that converts
+// it.
 export const openParquetPicker = (onPick) => () => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.parquet,.rez,.dendro,.ab.tar,.tar,application/octet-stream,application/x-tar';
+    input.accept = '.dendro,application/octet-stream';
     input.onchange = async () => {
         const file = input.files && input.files[0];
         if (file && onPick) await onPick(file);
@@ -214,7 +215,7 @@ const TopNav = {
                     ]),
                     onLoad && m(`button.compare-load.${cls}`, {
                         onclick: openParquetPicker(onLoad),
-                        title: `Replace ${label} parquet`,
+                        title: `Replace ${label} recording`,
                     }, m.trust(UPLOAD_ICON_SVG)),
                 ]);
                 // Summary (always visible): dot + label for each capture.
@@ -284,8 +285,8 @@ const TopNav = {
                 attrs.onUploadParquet && !liveMode && m('button.transport-btn.import-btn', {
                     onclick: openParquetPicker(attrs.onUploadParquet),
                     title: compareMode
-                        ? 'Replace current view (parquet or combined-A/B tarball)'
-                        : 'Upload parquet or combined-A/B tarball',
+                        ? 'Replace current view (a .dendro recording)'
+                        : 'Upload a .dendro recording',
                 }, [
                     m('span', 'Load Parquet'),
                     m.trust(UPLOAD_ICON_SVG),
@@ -298,7 +299,7 @@ const TopNav = {
                         ? (loadedSelectionStore.loadedFrom
                             ? `Loaded: ${loadedSelectionStore.loadedFrom} — click to replace`
                             : 'Import selection JSON')
-                        : 'Load a parquet file first',
+                        : 'Load a recording first',
                 }, [
                     m('span', 'Load Selection'),
                     m.trust(UPLOAD_ICON_SVG),
@@ -316,7 +317,7 @@ const TopNav = {
                     }, m.trust('<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect x="2" y="2" width="12" height="12" rx="1"/></svg>')),
                     m('button.transport-btn.save-btn', {
                         onclick: attrs.onSaveCapture,
-                        title: 'Save capture as parquet',
+                        title: 'Save capture as .dendro',
                     }, m.trust('<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8m0 0l-3-3m3 3l3-3"/><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/></svg>')),
                 ]),
             ]),

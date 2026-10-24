@@ -170,8 +170,31 @@ fn read_groups(recordings: metriken_storage::LabeledRecordings) -> LabeledRecord
         .collect()
 }
 
+/// The refusal of a file that is not a dendro archive, for a caller that has
+/// not checked first ([`crate::container::require_dendro`] spells the
+/// command with the program's name).
+fn refusal(what: &str, container: crate::container::Container) -> String {
+    if container.is_legacy() {
+        format!(
+            "{what} is a {}, not a .dendro archive; convert it with `recording upgrade`",
+            container.name()
+        )
+    } else {
+        format!("{what} is not a recording (a .dendro archive)")
+    }
+}
+
+fn dendro_only(path: &Path) -> Result<(), String> {
+    match crate::container::Container::of_path(path) {
+        crate::container::Container::Dendro => Ok(()),
+        c => Err(refusal(&path.display().to_string(), c)),
+    }
+}
+
 impl RezReader {
-    /// Open an archive at `path`, flattening every recording into one view.
+    /// Open the dendro archive at `path`, flattening every recording into
+    /// one view. Any other file is refused (`recording upgrade` converts
+    /// the formats earlier releases wrote).
     ///
     /// A query over the flattened view is answered from every recording,
     /// each series under its recording's labels; the tests below pin that,
@@ -183,6 +206,7 @@ impl RezReader {
         path: &Path,
         pool: Arc<BufferPool>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        dendro_only(path)?;
         Ok(RezReader(
             metriken_storage::rez::open::open_with_pool(path, pool)?,
             None,
@@ -190,18 +214,22 @@ impl RezReader {
     }
 
     /// [`open_recordings`](Self::open_recordings) for an archive that exists
-    /// only as bytes: the browser's entry point. Containers are recognized
-    /// by content, as for a path.
+    /// only as bytes: the browser's entry point. The bytes must be a dendro
+    /// archive, recognized by content as for a path.
     pub fn open_recordings_from_bytes(
         bytes: Vec<u8>,
         pool: Arc<BufferPool>,
     ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
+        let container = crate::container::Container::of_bytes(&bytes);
+        if container != crate::container::Container::Dendro {
+            return Err(refusal("the recording", container).into());
+        }
         Ok(read_groups(
             metriken_storage::rez::open::open_recordings_from_bytes(bytes, pool)?,
         ))
     }
 
-    /// Open an archive as one `RezReader` **per recording**, paired with that
+    /// Open a dendro archive as one `RezReader` **per recording**, paired with that
     /// recording's labels. Used by the viewer to map a 2-recording archive
     /// onto baseline/experiment without cross-recording name collisions.
     ///
@@ -211,6 +239,7 @@ impl RezReader {
         path: &Path,
         pool: Arc<BufferPool>,
     ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
+        dendro_only(path)?;
         Ok(read_groups(metriken_storage::rez::open::open_recordings(
             path, pool,
         )?))
@@ -218,6 +247,12 @@ impl RezReader {
 }
 
 impl RezReader {
+    /// This recording, reporting `filename` as its file name: the name a
+    /// browser upload was given, rather than the recording's slug.
+    pub fn with_filename(self, filename: String) -> Self {
+        RezReader(ArchiveReader::flatten(vec![self.0], Some(filename)), self.1)
+    }
+
     /// Join `recordings` into one reader, the combined view of an archive
     /// that holds several recordings of one run: a query is answered from
     /// every recording, each series under its recording's labels (and
@@ -349,6 +384,67 @@ impl MetricsSource for RezReader {
 
 #[cfg(test)]
 mod tests {
+    /// The legacy formats read as `recording upgrade` reads them, through
+    /// metriken-storage's container dispatch and this module's read groups:
+    /// what these tests compare a conversion against. `RezReader` itself
+    /// opens dendro archives only (`legacy_files_are_refused` below).
+    pub(super) mod legacy {
+        use super::super::{read_groups, LabeledRecordings, RezReader};
+        use metriken_storage::BufferPool;
+        use std::path::Path;
+        use std::sync::Arc;
+
+        pub(crate) fn open_recordings(
+            path: &Path,
+            pool: Arc<BufferPool>,
+        ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
+            Ok(read_groups(metriken_storage::rez::open::open_recordings(
+                path, pool,
+            )?))
+        }
+
+        pub(crate) fn open_recordings_from_bytes(
+            bytes: Vec<u8>,
+            pool: Arc<BufferPool>,
+        ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
+            Ok(read_groups(
+                metriken_storage::rez::open::open_recordings_from_bytes(bytes, pool)?,
+            ))
+        }
+
+        pub(crate) fn open_with_pool(
+            path: &Path,
+            pool: Arc<BufferPool>,
+        ) -> Result<RezReader, Box<dyn std::error::Error>> {
+            Ok(RezReader(
+                metriken_storage::rez::open::open_with_pool(path, pool)?,
+                None,
+            ))
+        }
+    }
+
+    /// Every legacy fixture is refused by path and by bytes, naming the
+    /// upgrade.
+    #[test]
+    fn legacy_files_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["v2.rez", "v3.rez", "v3-live.rez", "v3-multi.rez"] {
+            let path = crate::fixtures::committed_rez(name, dir.path());
+            let pool = || BufferPool::new(8 << 20);
+            let err = RezReader::open_recordings(&path, pool())
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(err.contains("recording upgrade"), "{name}: {err}");
+            assert!(RezReader::open_with_pool(&path, pool()).is_err(), "{name}");
+            let err = RezReader::open_recordings_from_bytes(std::fs::read(&path).unwrap(), pool())
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(err.contains("recording upgrade"), "{name}: {err}");
+        }
+    }
+
     use super::*;
     use crate::fixtures::{self, Finish, Source};
     use crate::rez;
@@ -776,7 +872,7 @@ mod tests {
 
         for out in [&tar, &dendro] {
             let pool = BufferPool::new(64 * 1024 * 1024);
-            let readers = RezReader::open_recordings(out, pool).unwrap();
+            let readers = legacy::open_recordings(out, pool).unwrap();
             assert_eq!(readers.len(), 2, "{}", out.display());
             assert_eq!(readers[0].0.get("arm").map(String::as_str), Some("arm0"));
             assert_eq!(readers[1].0.get("arm").map(String::as_str), Some("arm1"));
@@ -789,9 +885,8 @@ mod tests {
     /// and the value of `query` at its last row, so a reader that opened the
     /// wrong recording is visible.
     fn assert_bytes_match_disk(path: &std::path::Path, query: &str) {
-        let from_disk =
-            RezReader::open_recordings(path, BufferPool::new(16 * 1024 * 1024)).unwrap();
-        let from_bytes = RezReader::open_recordings_from_bytes(
+        let from_disk = legacy::open_recordings(path, BufferPool::new(16 * 1024 * 1024)).unwrap();
+        let from_bytes = legacy::open_recordings_from_bytes(
             std::fs::read(path).unwrap(),
             BufferPool::new(16 * 1024 * 1024),
         )
@@ -893,7 +988,7 @@ mod tests {
         );
         drop(db);
 
-        let readers = RezReader::open_recordings_from_bytes(
+        let readers = legacy::open_recordings_from_bytes(
             std::fs::read(&path).unwrap(),
             BufferPool::new(16 * 1024 * 1024),
         )
@@ -984,11 +1079,10 @@ mod tests {
             "fixture sanity: the table is in the sidecar"
         );
 
-        let err =
-            match RezReader::open_recordings_from_bytes(copy, BufferPool::new(8 * 1024 * 1024)) {
-                Ok(_) => panic!("a mid-write copy has no catalog in it"),
-                Err(e) => e.to_string(),
-            };
+        let err = match legacy::open_recordings_from_bytes(copy, BufferPool::new(8 * 1024 * 1024)) {
+            Ok(_) => panic!("a mid-write copy has no catalog in it"),
+            Err(e) => e.to_string(),
+        };
         assert!(err.contains("-wal"), "{err}");
         assert!(err.contains("still being written"), "{err}");
         drop(conn);
@@ -1001,7 +1095,7 @@ mod tests {
     fn a_v2_tar_archive_also_opens_from_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let p = fixtures::committed_rez("v2.rez", dir.path());
-        let from_bytes = RezReader::open_recordings_from_bytes(
+        let from_bytes = legacy::open_recordings_from_bytes(
             std::fs::read(&p).unwrap(),
             BufferPool::new(16 * 1024 * 1024),
         )
@@ -1024,7 +1118,7 @@ mod tests {
         let path = fixtures::committed_rez("v3-multi.rez", dir.path());
 
         let pool = BufferPool::new(16 * 1024 * 1024);
-        let flattened = RezReader::open_with_pool(&path, Arc::clone(&pool)).unwrap();
+        let flattened = legacy::open_with_pool(&path, Arc::clone(&pool)).unwrap();
         let err = match flattened.composition_sources() {
             Ok(_) => panic!("composing a flattened 2-recording v3 archive must refuse"),
             Err(e) => e,
@@ -1035,7 +1129,7 @@ mod tests {
         );
 
         // Per recording, each composes on its own.
-        let per_recording = RezReader::open_recordings(&path, pool).unwrap();
+        let per_recording = legacy::open_recordings(&path, pool).unwrap();
         assert_eq!(per_recording.len(), 2);
         for (_labels, reader) in &per_recording {
             assert!(reader.composition_sources().is_ok());
@@ -1070,7 +1164,7 @@ mod tests {
         for out in [&tar, &dendro] {
             let pool = BufferPool::new(64 * 1024 * 1024);
             // The flattening path — NOT open_recordings.
-            let flattened = RezReader::open_with_pool(out, Arc::clone(&pool)).unwrap();
+            let flattened = legacy::open_with_pool(out, Arc::clone(&pool)).unwrap();
             // `CompositionSource` is opaque and not `Debug`, so match rather
             // than `expect_err`.
             let err = match flattened.composition_sources() {
@@ -1089,7 +1183,7 @@ mod tests {
             // ...and the same archive opened per recording composes fine,
             // proving the refusal is about flattening and not about the
             // fixture.
-            let per_recording = RezReader::open_recordings(out, pool).unwrap();
+            let per_recording = legacy::open_recordings(out, pool).unwrap();
             assert_eq!(per_recording.len(), 2);
             for (_labels, reader) in &per_recording {
                 assert!(
@@ -1122,7 +1216,7 @@ mod tests {
         ] {
             let pool = BufferPool::new(64 * 1024 * 1024);
             // The flattening path — NOT open_recordings.
-            let reader = RezReader::open_with_pool(out, pool).unwrap();
+            let reader = legacy::open_with_pool(out, pool).unwrap();
             let (start, end) = reader.time_range().unwrap();
 
             let QueryResult::Matrix { result } = reader
@@ -1151,8 +1245,7 @@ mod tests {
             assert_eq!(arms[0].1, arms[1].1, "both recordings hold the same rows");
 
             // A single-recording archive of the same data gives that series.
-            let single =
-                RezReader::open_with_pool(single, BufferPool::new(64 * 1024 * 1024)).unwrap();
+            let single = legacy::open_with_pool(single, BufferPool::new(64 * 1024 * 1024)).unwrap();
             let QueryResult::Matrix { result } = single
                 .query_range(&format!("sum(irate({counter}[2s]))"), start, end, 1.0)
                 .unwrap()
@@ -1164,7 +1257,7 @@ mod tests {
 
         // And a sum across the tar's recordings counts both: `mem_free` is
         // 1000 - t in each, so 2 * 989 at 11 s.
-        let reader = RezReader::open_with_pool(&tar, BufferPool::new(64 * 1024 * 1024)).unwrap();
+        let reader = legacy::open_with_pool(&tar, BufferPool::new(64 * 1024 * 1024)).unwrap();
         let json = serde_json::to_value(
             reader
                 .query("sum(mem_free)", Some(1_700_000_011.0))
@@ -1199,8 +1292,8 @@ mod tests {
             "fixture sanity: `b/g` is WAL rows only"
         );
         drop(db);
-        let by_path = RezReader::open_with_pool(&path, BufferPool::new(16 * 1024 * 1024)).unwrap();
-        let mut by_bytes = RezReader::open_recordings_from_bytes(
+        let by_path = legacy::open_with_pool(&path, BufferPool::new(16 * 1024 * 1024)).unwrap();
+        let mut by_bytes = legacy::open_recordings_from_bytes(
             std::fs::read(&path).unwrap(),
             BufferPool::new(16 * 1024 * 1024),
         )
@@ -1410,7 +1503,7 @@ mod tests {
         }
 
         fn open(path: &std::path::Path) -> RezReader {
-            RezReader::open_with_pool(path, BufferPool::new(64 * 1024 * 1024)).unwrap()
+            super::legacy::open_with_pool(path, BufferPool::new(64 * 1024 * 1024)).unwrap()
         }
 
         /// The only source's id.
@@ -2310,7 +2403,7 @@ mod tests {
                 assert_same_answers(&open(&rez), &open(&dendro), &queries);
 
                 let from_bytes = |p: &std::path::Path| {
-                    let mut r = RezReader::open_recordings_from_bytes(
+                    let mut r = legacy::open_recordings_from_bytes(
                         std::fs::read(p).unwrap(),
                         BufferPool::new(64 * 1024 * 1024),
                     )
@@ -3472,7 +3565,7 @@ mod tests {
 
         fn open(path: &Path) -> RezReader {
             let mut readers =
-                RezReader::open_recordings(path, BufferPool::new(16 * 1024 * 1024)).unwrap();
+                super::legacy::open_recordings(path, BufferPool::new(16 * 1024 * 1024)).unwrap();
             assert_eq!(readers.len(), 1);
             readers.pop().unwrap().1
         }
@@ -3879,7 +3972,7 @@ mod tests {
         }
 
         fn open(path: &Path) -> RezReader {
-            RezReader::open_with_pool(path, BufferPool::new(64 * 1024 * 1024)).unwrap()
+            super::legacy::open_with_pool(path, BufferPool::new(64 * 1024 * 1024)).unwrap()
         }
 
         /// A result with `__occupant__` taken off every series and the series

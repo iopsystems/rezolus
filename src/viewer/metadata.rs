@@ -1,15 +1,10 @@
-//! Parquet metadata extraction and dashboard regeneration.
-//!
-//! All file-level inspection (systeminfo, selection, multi-node info,
-//! service-extension lookup, file checksum) lives here, plus the
+//! Capture metadata (service-extension lookup, file checksum) and the
 //! `regenerate_dashboards` orchestrator that re-derives the section map
 //! whenever a capture is attached/detached.
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use parquet::file::reader::FileReader;
-use parquet::file::serialized_reader::SerializedFileReader;
 use tracing::warn;
 
 use super::capture_registry::CaptureId;
@@ -20,164 +15,6 @@ use ::dashboard::section_template::SectionTemplate;
 use ::dashboard::source_templates::TemplatePreference;
 use ::dashboard::{self, CategoryExtension, ServiceExtension, TemplateRegistry};
 use std::sync::Arc;
-
-/// Read systeminfo, selection, and the full key-value map (with
-/// pre-computed multi-node enrichment) from a parquet file's metadata.
-pub fn extract_parquet_metadata(path: &Path) -> (Option<String>, Option<String>, Option<String>) {
-    std::fs::File::open(path)
-        .ok()
-        .and_then(|f| {
-            let reader = SerializedFileReader::new(f).ok()?;
-            let kv = reader.metadata().file_metadata().key_value_metadata()?;
-            let sysinfo = kv
-                .iter()
-                .find(|kv| kv.key == "systeminfo")
-                .and_then(|kv| kv.value.clone());
-            let sel = kv
-                .iter()
-                .find(|kv| kv.key == "selection")
-                .and_then(|kv| kv.value.clone());
-
-            let mut map = serde_json::Map::new();
-            for pair in kv {
-                if let Some(ref val) = pair.value {
-                    let json_val = serde_json::from_str(val)
-                        .unwrap_or_else(|_| serde_json::Value::String(val.clone()));
-                    map.insert(pair.key.clone(), json_val);
-                }
-            }
-            enrich_with_multi_node_info(&mut map);
-            let file_meta = serde_json::to_string(&serde_json::Value::Object(map)).ok();
-
-            Some((sysinfo, sel, file_meta))
-        })
-        .unwrap_or((None, None, None))
-}
-
-/// Pre-compute multi-node info (nodes list, version map, service
-/// instances) from `per_source_metadata` so the JS frontend doesn't
-/// re-parse it.
-fn enrich_with_multi_node_info(map: &mut serde_json::Map<String, serde_json::Value>) {
-    let psm = match map.get("per_source_metadata").and_then(|v| v.as_object()) {
-        Some(psm) => psm.clone(),
-        None => return,
-    };
-
-    let mut nodes = Vec::new();
-    let mut node_versions = serde_json::Map::new();
-    if let Some(rez_group) = psm.get("rezolus").and_then(|v| v.as_object()) {
-        for (sub_key, entry) in rez_group {
-            let Some(obj) = entry.as_object() else {
-                continue;
-            };
-            let node_name = obj.get("node").and_then(|v| v.as_str()).unwrap_or(sub_key);
-            if !nodes.contains(&node_name.to_string()) {
-                nodes.push(node_name.to_string());
-            }
-            if let Some(version) = obj.get("version").and_then(|v| v.as_str()) {
-                node_versions.insert(
-                    node_name.to_string(),
-                    serde_json::Value::String(version.to_string()),
-                );
-            }
-        }
-    }
-
-    let mut service_instances = serde_json::Map::new();
-    for (source, group) in &psm {
-        if source == "rezolus" {
-            continue;
-        }
-        let Some(group_obj) = group.as_object() else {
-            continue;
-        };
-        let mut instances = Vec::new();
-        for (sub_key, entry) in group_obj {
-            let Some(obj) = entry.as_object() else {
-                continue;
-            };
-            let instance_id = obj
-                .get("instance")
-                .and_then(|v| v.as_str())
-                .unwrap_or(sub_key);
-            let node = obj.get("node").and_then(|v| v.as_str());
-            let mut inst = serde_json::Map::new();
-            inst.insert(
-                "id".into(),
-                serde_json::Value::String(instance_id.to_string()),
-            );
-            inst.insert(
-                "node".into(),
-                node.map(|n| serde_json::Value::String(n.to_string()))
-                    .unwrap_or(serde_json::Value::Null),
-            );
-            instances.push(serde_json::Value::Object(inst));
-        }
-        if !instances.is_empty() {
-            service_instances.insert(source.clone(), serde_json::Value::Array(instances));
-        }
-    }
-
-    map.insert(
-        "nodes".into(),
-        serde_json::Value::Array(nodes.into_iter().map(serde_json::Value::String).collect()),
-    );
-    if !node_versions.is_empty() {
-        map.insert(
-            "node_versions".into(),
-            serde_json::Value::Object(node_versions),
-        );
-    }
-    if !service_instances.is_empty() {
-        map.insert(
-            "service_instances".into(),
-            serde_json::Value::Object(service_instances),
-        );
-    }
-}
-
-/// When the parquet has multi-node systeminfo (>1 rezolus node), assemble
-/// it into a JSON object keyed by node name. Returns `None` for
-/// single-node files; the caller falls back to the flat top-level
-/// `systeminfo` key.
-pub fn build_multinode_systeminfo(path: &Path) -> Option<String> {
-    use crate::parquet_metadata::KEY_PER_SOURCE_METADATA;
-
-    let f = std::fs::File::open(path).ok()?;
-    let reader = SerializedFileReader::new(f).ok()?;
-    let kv = reader.metadata().file_metadata().key_value_metadata()?;
-
-    let psm_json = kv
-        .iter()
-        .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
-        .and_then(|kv| kv.value.as_ref())?;
-
-    let psm: serde_json::Map<String, serde_json::Value> = serde_json::from_str(psm_json).ok()?;
-
-    let mut nodes = serde_json::Map::new();
-    if let Some(rez_group) = psm.get("rezolus").and_then(|v| v.as_object()) {
-        for (node_key, entry) in rez_group {
-            let Some(obj) = entry.as_object() else {
-                continue;
-            };
-            let Some(sysinfo_val) = obj.get("systeminfo") else {
-                continue;
-            };
-            let node_name = obj
-                .get("node")
-                .and_then(|v| v.as_str())
-                .map(String::from)
-                .unwrap_or_else(|| node_key.clone());
-            nodes.insert(node_name, sysinfo_val.clone());
-        }
-    }
-
-    if nodes.len() > 1 {
-        serde_json::to_string(&serde_json::Value::Object(nodes)).ok()
-    } else {
-        None
-    }
-}
 
 /// SHA-256 of the parquet file body, excluding footer metadata so the
 /// digest is stable across selection annotations. Layout:
@@ -223,33 +60,6 @@ pub fn compute_file_checksum(path: &Path) -> Option<String> {
                 .collect(),
         )
     })()
-}
-
-/// Service-extension lookup over a parquet file's footer. See
-/// [`service_extensions_from_metadata`] for the order.
-///
-/// The returned source keys come purely from the parquet's metadata —
-/// CLI legend labels are display-only and don't influence template
-/// binding.
-pub fn extract_service_extension_metadata(
-    path: &Path,
-    registry: &TemplateRegistry,
-    preference: TemplatePreference,
-) -> Vec<(String, ServiceExtension)> {
-    let Ok(f) = std::fs::File::open(path) else {
-        return Vec::new();
-    };
-    let Ok(reader) = SerializedFileReader::new(f) else {
-        return Vec::new();
-    };
-    let Some(kv) = reader.metadata().file_metadata().key_value_metadata() else {
-        return Vec::new();
-    };
-    let metadata: HashMap<String, String> = kv
-        .iter()
-        .filter_map(|kv| Some((kv.key.clone(), kv.value.clone()?)))
-        .collect();
-    service_extensions_from_metadata(&metadata, registry, preference)
 }
 
 /// The KPI templates for one source's metadata map

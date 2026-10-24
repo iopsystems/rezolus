@@ -715,7 +715,7 @@ const exportJSON = async (store, attrs) => {
             attrs.baselineAlias || attrs.filename,
             attrs.experimentAlias || attrs.experimentFilename,
         ) + '-selection'
-        : (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-selection';
+        : (attrs.filename || 'rezolus-capture').replace(/\.(dendro|parquet)$/, '') + '-selection';
     const result = await showSaveModal(defaultPrefix, '.json');
     if (!result) return;
     const filename = result.filename;

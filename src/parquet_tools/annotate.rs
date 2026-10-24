@@ -77,8 +77,7 @@ fn run_inner(host: &super::Host, args: &super::cli::AnnotateArgs) -> Result<(), 
         );
     }
 
-    let target = legacy::edit_target(path, output, legacy::command_with_output)
-        .map_err(|e| e.to_string())?;
+    let target = legacy::edit_target(path, output, program).map_err(|e| e.to_string())?;
 
     let events = events_requested.then(|| EventOps {
         add_files: &event_files,
@@ -230,8 +229,8 @@ pub(crate) struct EventOps<'a> {
 }
 
 /// Embed KPIs and/or events into the recordings of the dendro archive at
-/// `path`. A legacy recording is refused: an edit of one is written to a new
-/// `.dendro` (`legacy::edit_target`).
+/// `path`. Any other file is refused, one an earlier release wrote with the
+/// `upgrade` command.
 ///
 /// Unlike `combine` and `filter` this rewrites nothing: KPIs and events are
 /// catalog columns, so annotating is an `UPDATE` per source. No segment is
@@ -256,18 +255,7 @@ pub(crate) fn annotate_archive_as(
     use ::dashboard::keys::KEY_EVENTS;
     use ::dashboard::Events;
 
-    let container = legacy::Container::of(path);
-    if container != legacy::Container::Dendro {
-        return Err(format!(
-            "{} is a {}, which 6.x does not change; convert it with `{} recording \
-             upgrade {}` and annotate the .dendro",
-            path.display(),
-            container.name(),
-            annotation.program,
-            crate::parquet_tools::select::shell_word(&path.display().to_string())
-        )
-        .into());
-    }
+    ::rez::container::require_dendro(path, annotation.program)?;
 
     let pool = metriken_storage::BufferPool::new(256 * 1024 * 1024);
     let readers = ::rez::reader::RezReader::open_recordings(path, pool)?;
@@ -771,7 +759,7 @@ mod tests {
         let a = dir.path().join("a.dendro");
         crate::dendro_copy::fixtures::recorded(&a, 6, true);
         let copy = dir.path().join("copy.dendro");
-        crate::parquet_tools::snapshot_rez(&a, &copy).unwrap();
+        crate::parquet_tools::snapshot_rez(&a, &copy, "rezolus").unwrap();
         let both = dir.path().join("both.dendro");
         crate::parquet_tools::combine::run_combine_for_test(&[a, copy], &both).unwrap();
         assert_eq!(source_metadata(&both).len(), 2, "two sources");

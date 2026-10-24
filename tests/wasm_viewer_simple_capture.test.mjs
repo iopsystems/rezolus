@@ -1,5 +1,5 @@
 // Parity guard: the WASM viewer must classify a non-Rezolus "simple capture"
-// parquet the same way the axum server does — surfacing a `source:` nav entry
+// recording the same way the axum server does — surfacing a `source:` nav entry
 // and suppressing the empty Rezolus built-in sections. Both backends share
 // `dashboard::source_kind::classify_sources`; this test pins the WASM side so a
 // future change can't silently regress it back to "built-ins only" (Bug 2).
@@ -29,11 +29,11 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
     const { initSync, WasmCaptureRegistry } = await import(pathToFileURL(wasmJsCopy).href);
     initSync({ module: fs.readFileSync(pkgWasm) });
 
-    const parquet = fs.readFileSync(path.join(repoRoot, 'site/viewer/data/simple_capture.parquet'));
+    const recording = fs.readFileSync(path.join(repoRoot, 'tests/fixtures/upgraded/simple_capture.dendro'));
 
     const sectionsFor = (setup) => {
         const registry = new WasmCaptureRegistry();
-        registry.attach('baseline', new Uint8Array(parquet), 'simple_capture.parquet');
+        registry.attach('baseline', new Uint8Array(recording), 'simple_capture.dendro');
         setup(registry);
         const json = registry.get_sections('baseline');
         return JSON.parse(json);

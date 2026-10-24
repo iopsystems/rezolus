@@ -69,12 +69,12 @@ const Dropzone = {
                     m('path', { d: 'M12 16V4m0 0L8 8m4-4l4 4', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
                     m('path', { d: 'M2 17l.621 2.485A2 2 0 004.561 21h14.878a2 2 0 001.94-1.515L22 17', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
                 ]),
-            m('p', label || 'Drag & drop a .parquet or .rez file here'),
+            m('p', label || 'Drag & drop a .dendro recording here'),
             !disabled && !checked && m('label.upload-btn', [
                 'Choose File',
                 m('input', {
                     type: 'file',
-                    accept: '.parquet,.rez',
+                    accept: '.dendro',
                     style: 'display:none',
                     onchange: (e) => {
                         const file = e.target.files[0];
@@ -91,8 +91,8 @@ const Dropzone = {
 // active drop target.
 //
 // Props:
-//   onBaselineFile(file)     — attach baseline parquet
-//   onExperimentFile(file)   — attach experiment parquet
+//   onBaselineFile(file)     — attach baseline recording
+//   onExperimentFile(file)   — attach experiment recording
 //   baselineAttached: bool
 //   baselineFilename: string?
 //   experimentAttached: bool
@@ -110,14 +110,14 @@ const CompareLanding = {
         return m('div.upload-container', [
             m('div.upload-card', [
                 m('h1.upload-title', 'Rezolus Viewer — Compare'),
-                m('p.upload-subtitle', 'Drop two parquet captures to compare them side-by-side.'),
+                m('p.upload-subtitle', 'Drop two .dendro recordings to compare them side-by-side.'),
                 m('div.landing-dual', [
                     m('div.landing-slot', [
                         m('h3', 'Baseline'),
                         m(Dropzone, {
                             label: baselineAttached
                                 ? (baselineFilename ? `\u2714 ${baselineFilename}` : '\u2714 baseline loaded')
-                                : 'Drop baseline.parquet',
+                                : 'Drop baseline.dendro',
                             disabled: baselineAttached || loading,
                             checked: baselineAttached,
                             onDrop: onBaselineFile,
@@ -129,7 +129,7 @@ const CompareLanding = {
                             label: experimentAttached
                                 ? (experimentFilename ? `\u2714 ${experimentFilename}` : '\u2714 experiment loaded')
                                 : (baselineAttached
-                                    ? 'Drop experiment.parquet'
+                                    ? 'Drop experiment.dendro'
                                     : 'Load baseline first'),
                             disabled: !baselineAttached || experimentAttached || loading,
                             checked: experimentAttached,
@@ -204,13 +204,13 @@ const FileUpload = {
                 m('path', { d: 'M12 16V4m0 0L8 8m4-4l4 4', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
                 m('path', { d: 'M2 17l.621 2.485A2 2 0 004.561 21h14.878a2 2 0 001.94-1.515L22 17', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
             ]),
-            m('p', 'Drag & drop a .parquet or .rez file here'),
+            m('p', 'Drag & drop a .dendro recording here'),
             m('p.upload-or', 'or'),
             m('label.upload-btn', [
                 'Choose File',
                 m('input', {
                     type: 'file',
-                    accept: '.parquet,.rez',
+                    accept: '.dendro',
                     style: 'display:none',
                     onchange: (e) => {
                         const file = e.target.files[0];
@@ -249,10 +249,10 @@ const FileUpload = {
         })[urlMode];
 
         const urlGroup = attrs.onLoadUrl && m('div.upload-connect', [
-            m('p.upload-connect-label', 'Load a parquet from URL'),
+            m('p.upload-connect-label', 'Load a recording from URL'),
             m('textarea.connect-input.connect-textarea', {
                 rows: 4,
-                placeholder: 'https://example.com/recording.parquet\n— or —\nalias=URL, alias=URL\n(comma-separate two for A/B compare mode)',
+                placeholder: 'https://example.com/recording.dendro\n— or —\nalias=URL, alias=URL\n(comma-separate two for A/B compare mode)',
                 value: parquetUrl,
                 disabled: loading || urlDisabled,
                 oninput: (e) => { parquetUrl = e.target.value; },
@@ -284,7 +284,7 @@ const FileUpload = {
             m('div.upload-card', [
                 m('h1.upload-title', 'Rezolus Viewer'),
                 m('p.upload-subtitle', onFile
-                    ? 'Drop a rezolus-recorded parquet file for no-code charts.'
+                    ? 'Drop a rezolus-recorded .dendro file for no-code charts.'
                     : 'Explore system metrics and service KPIs.'),
                 demosSection,
                 exploreSection,

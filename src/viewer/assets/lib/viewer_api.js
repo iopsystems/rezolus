@@ -93,7 +93,7 @@ const ViewerApi = {
                 serialize: (v) => v,
                 headers: {
                     'Content-Type': 'application/octet-stream',
-                    'x-rezolus-filename': file.name || 'upload.parquet',
+                    'x-rezolus-filename': file.name || 'upload.dendro',
                 },
             });
         } catch (e) {
@@ -242,7 +242,7 @@ const ViewerApi = {
                 serialize: (v) => v,
                 headers: {
                     'Content-Type': 'application/octet-stream',
-                    'x-rezolus-filename': file.name || 'experiment.parquet',
+                    'x-rezolus-filename': file.name || 'experiment.dendro',
                 },
             });
         } catch (e) {

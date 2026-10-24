@@ -227,7 +227,9 @@ async fn mode(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
         "following": state.following(),
         "loaded": loaded,
         "compare_mode": state.captures.experiment_attached(),
-        "combined_ab": state.combined_ab(),
+        // A 5.x `.parquet.ab.tar` opened as one locked comparison; the
+        // viewer no longer opens one (`recording upgrade` converts it).
+        "combined_ab": false,
         "report": state.is_trimmed_report(),
         "category": state.category_name.read().clone(),
         "url_loading": url_loading,

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use metriken_query::{MetricsSource, ParquetReader, QueryOptions};
+use metriken_query::{MetricsSource, QueryOptions};
 use metriken_storage::BufferPool;
 
 /// Buffer pool budget for the WASM viewer: 64 MB.
@@ -103,16 +103,43 @@ fn classify_sources(
     )
 }
 
-/// Open every recording of a `.rez` held as bytes.
+/// The refusal of an upload that is not a dendro archive. The browser
+/// cannot convert one: a recording an earlier release wrote is converted on
+/// the user's machine, with the command named here, and the `.dendro`
+/// opened instead.
+fn not_dendro(filename: &str, container: rez::container::Container) -> String {
+    if container.is_legacy() {
+        format!(
+            "{filename} is a {}, which this viewer does not open. Convert it to a .dendro \
+             on your machine, then open the .dendro:\n  rezolus recording upgrade {}",
+            container.name(),
+            rez::container::shell_word(filename)
+        )
+    } else {
+        format!("{filename} is not a recording (a .dendro archive)")
+    }
+}
+
+/// Open every recording of a dendro archive held as bytes.
 ///
 /// The one place the browser turns an uploaded archive into readers, so both
 /// entry points — a single capture and the two-slot registry — agree on what
-/// the file contains.
-fn open_rez(data: &[u8], pool: Arc<BufferPool>) -> Result<rez::reader::LabeledRecordings, JsValue> {
+/// the file contains. Any other file is refused ([`not_dendro`]).
+fn open_rez(
+    data: &[u8],
+    filename: &str,
+    pool: Arc<BufferPool>,
+) -> Result<rez::reader::LabeledRecordings, JsValue> {
+    let container = rez::container::Container::of_bytes(data);
+    if container != rez::container::Container::Dendro {
+        return Err(JsValue::from_str(&not_dendro(filename, container)));
+    }
     let recordings = rez::reader::RezReader::open_recordings_from_bytes(data.to_vec(), pool)
-        .map_err(|e| JsValue::from_str(&format!("Failed to load .rez archive: {e}")))?;
+        .map_err(|e| JsValue::from_str(&format!("Failed to load {filename}: {e}")))?;
     if recordings.is_empty() {
-        return Err(JsValue::from_str("empty .rez archive (no recordings)"));
+        return Err(JsValue::from_str(&format!(
+            "{filename} holds no recordings"
+        )));
     }
     Ok(recordings)
 }
@@ -295,45 +322,35 @@ impl Viewer {
     pub fn new(data: &[u8], filename: &str) -> Result<Viewer, JsValue> {
         let pool = BufferPool::new(WASM_CACHE_SIZE_BYTES);
 
-        // `.rez` is recognized by CONTENT, not by the name the browser gives
-        // us: a file dragged in may be called anything, and the server viewer
-        // sniffs the container the same way.
-        if rez::rez::detect_rez_format_bytes(data) != rez::rez::RezFormat::NotRez {
-            let mut recordings = open_rez(data, Arc::clone(&pool))?;
-            // An archive of one run is one capture: its recordings joined.
-            if opens_combined(&recordings, false) {
-                return Ok(Self::combined(recordings, pool));
-            }
-            if recordings.len() > 1 {
-                // One `Viewer` is one capture. Silently taking the first
-                // recording would show one arm of an A/B under the whole
-                // archive's name — the failure this format's readers refuse
-                // everywhere else. `WasmCaptureRegistry::attach` is the entry
-                // point that can fill both slots.
-                return Err(JsValue::from_str(&format!(
-                    "{filename} holds {} recordings of a comparison; open it as a comparison \
-                     rather than a single capture",
-                    recordings.len()
-                )));
-            }
-            let (_, reader) = recordings.remove(0);
-            return Ok(Self::from_source(
-                Arc::new(reader),
-                pool,
-                Bytes::new(),
-                filename,
-            ));
+        // The archive is recognized by CONTENT, not by the name the browser
+        // gives us: a file dragged in may be called anything, and the server
+        // viewer sniffs the container the same way.
+        let mut recordings = open_rez(data, filename, Arc::clone(&pool))?;
+        // An archive of one run is one capture: its recordings joined.
+        if opens_combined(&recordings, false) {
+            return Ok(Self::combined(recordings, pool));
         }
-
-        let bytes = Bytes::from(data.to_vec());
-        let source_bytes = bytes.clone();
-        let reader: Arc<dyn MetricsSource> = Arc::new(
-            ParquetReader::open_bytes_with_pool(bytes, Arc::clone(&pool))
-                .map(dashboard::combined::label_parquet_by_source)
-                .map_err(|e| JsValue::from_str(&format!("Failed to load parquet: {}", e)))?
-                .with_filename(filename.to_string()),
-        );
-        Ok(Self::from_source_bytes(reader, pool, source_bytes))
+        if recordings.len() > 1 {
+            // One `Viewer` is one capture. Silently taking the first
+            // recording would show one arm of an A/B under the whole
+            // archive's name — the failure this format's readers refuse
+            // everywhere else. `WasmCaptureRegistry::attach` is the entry
+            // point that can fill both slots.
+            return Err(JsValue::from_str(&format!(
+                "{filename} holds {} recordings of a comparison; open it as a comparison \
+                 rather than a single capture",
+                recordings.len()
+            )));
+        }
+        let (_, reader) = recordings.remove(0);
+        // The archive's bytes are kept: a report of a two-file comparison
+        // is built from both captures' archives.
+        Ok(Self::from_source(
+            Arc::new(reader),
+            pool,
+            Bytes::copy_from_slice(data),
+            filename,
+        ))
     }
 
     /// One capture over every recording of an archive that opens
@@ -470,12 +487,10 @@ impl Viewer {
         self.template_preference = preference(prefer);
     }
 
-    /// Whether Save as Report can re-encode this capture.
-    ///
-    /// False for one opened out of a `.rez`: the projection re-encodes the
-    /// capture's original parquet, and an archive is many tables rather than
-    /// one file. Reported rather than attempted, so the UI can say why instead
-    /// of handing back an empty download.
+    /// Whether Save as Report can build a report of this capture alone:
+    /// true for a capture opened from its own one-recording archive, whose
+    /// bytes it keeps. A capture that is one recording of a larger archive is
+    /// saved through that archive (`WasmCaptureRegistry`) instead.
     pub fn can_save(&self) -> bool {
         !self.source_bytes.is_empty()
     }
@@ -952,44 +967,54 @@ impl WasmCaptureRegistry {
     /// Attach a capture under the given slot ("baseline" or "experiment").
     /// Replaces any previously attached capture in that slot.
     ///
-    /// A multi-recording `.rez` is the exception: it carries a whole
+    /// A multi-recording archive attached as the baseline carries a whole
     /// comparison itself, so it attaches EVERY recording (under the shared
     /// id/alias scheme) and the requested slot id is ignored. That is the same
-    /// mapping `rezolus view` makes for the same file.
+    /// mapping `rezolus view` makes for the same file. Attached as the
+    /// experiment of a two-file comparison, an archive must be one recording;
+    /// several are refused, naming `recording combine --ab`.
     pub fn attach(&mut self, capture: &str, data: &[u8], filename: &str) -> Result<(), JsValue> {
         self.notices.clear();
-        if rez::rez::detect_rez_format_bytes(data) != rez::rez::RezFormat::NotRez {
-            // Retain the archive bytes: a Save-as-Report from a `.rez` source
-            // trims THIS archive rather than reassembling from per-capture
-            // parquet bytes (which a `.rez` capture does not have).
+        let pool = BufferPool::new(WASM_CACHE_SIZE_BYTES);
+        let recordings = open_rez(data, filename, Arc::clone(&pool))?;
+        if capture != "baseline" && recordings.len() > 1 {
+            return Err(JsValue::from_str(&format!(
+                "{filename} holds {} recordings; the experiment of a two-file comparison is \
+                 one recording. Label the recordings to compare in one archive instead:\n  \
+                 rezolus recording combine BASELINE.dendro {file} --ab \
+                 baseline=BASELINE.dendro experiment={file} -o ab.dendro",
+                recordings.len(),
+                file = rez::container::shell_word(filename)
+            )));
+        }
+        self.notices
+            .extend(incomplete_notice(&recordings, filename));
+        if recordings.len() >= 2 {
+            // A report of this capture is a report of THIS archive.
             self.rez_source = Some(Bytes::copy_from_slice(data));
-            let pool = BufferPool::new(WASM_CACHE_SIZE_BYTES);
-            let recordings = open_rez(data, Arc::clone(&pool))?;
-            self.notices
-                .extend(incomplete_notice(&recordings, filename));
             if opens_combined(&recordings, self.compare_requested) {
                 let viewer = Viewer::combined(recordings, pool);
                 self.others.clear();
                 self.set_capture(capture, viewer);
                 return Ok(());
             }
-            if recordings.len() >= 2 {
-                return self.attach_rez_comparison(recordings, pool, filename);
-            }
-            // Opened here rather than handed to `Viewer::new`, which would
-            // read the archive a second time.
-            let (_, reader) = recordings
-                .into_iter()
-                .next()
-                .expect("open_rez rejects an empty archive");
-            let viewer = Viewer::from_source(Arc::new(reader), pool, Bytes::new(), filename);
-            self.set_capture(capture, viewer);
-            return Ok(());
+            return self.attach_rez_comparison(recordings, pool, filename);
         }
-        // A parquet capture: the dataset is parquet-backed, so a report is
-        // assembled from per-capture parquet bytes, not a `.rez` source.
-        self.rez_source = None;
-        let viewer = Viewer::new(data, filename)?;
+        // One recording, a capture of its own: a report is built from its
+        // archive, or from both captures' archives in a two-file comparison.
+        if capture == "baseline" {
+            self.rez_source = None;
+        }
+        let (_, reader) = recordings
+            .into_iter()
+            .next()
+            .expect("open_rez rejects an empty archive");
+        let viewer = Viewer::from_source(
+            Arc::new(reader.with_filename(filename.to_string())),
+            pool,
+            Bytes::copy_from_slice(data),
+            filename,
+        );
         self.set_capture(capture, viewer);
         Ok(())
     }
@@ -1446,20 +1471,13 @@ impl WasmCaptureRegistry {
             return Err(JsValue::from_str(&refusal));
         }
 
-        let source = if let Some(archive) = &self.rez_source {
-            if metriken_storage::DendroCatalog::is_archive_bytes(archive) {
-                ::report_save::ReportSource::Dendro(archive)
-            } else if rez::rez::looks_like_v3(archive) {
-                ::report_save::ReportSource::RezV3(archive)
-            } else {
-                ::report_save::ReportSource::RezTar(archive)
-            }
-        } else {
-            let mut files: Vec<&[u8]> = vec![&baseline.source_bytes];
-            if let Some(experiment) = self.experiment() {
-                files.push(&experiment.source_bytes);
-            }
-            ::report_save::ReportSource::Parquet(files)
+        let source = match (&self.rez_source, self.experiment()) {
+            (Some(archive), _) => ::report_save::ReportSource::Dendro(archive),
+            (None, Some(experiment)) => ::report_save::ReportSource::Compare {
+                baseline: &baseline.source_bytes,
+                experiment: &experiment.source_bytes,
+            },
+            (None, None) => ::report_save::ReportSource::Dendro(&baseline.source_bytes),
         };
         ::report_save::build_report(
             source,
@@ -1727,11 +1745,32 @@ mod tests {
         std::fs::read(&path).unwrap()
     }
 
-    /// The committed `.rez` archive `name`, as bytes
-    /// (`rez::fixtures::committed_rez`).
+    /// The committed `.rez` archive `name` upgraded to a `.dendro`, as
+    /// bytes: what a user opens after `recording upgrade`.
     fn committed_rez_bytes(name: &str) -> Vec<u8> {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::read(rez::fixtures::committed_rez(name, dir.path())).unwrap()
+        let rez = rez::fixtures::committed_rez(name, dir.path());
+        let out = dir.path().join("upgraded.dendro");
+        metriken_storage::to_dendro::convert_path(&rez, &out).unwrap();
+        std::fs::read(&out).unwrap()
+    }
+
+    /// A legacy upload is refused with the command that converts it on the
+    /// user's machine; anything else is named as not a recording. (The
+    /// refusal itself is a `JsValue`, which only a wasm32 build can make.)
+    #[test]
+    fn a_legacy_upload_names_the_upgrade() {
+        let dir = tempfile::tempdir().unwrap();
+        let bytes = std::fs::read(rez::fixtures::committed_rez("v3.rez", dir.path())).unwrap();
+        let container = rez::container::Container::of_bytes(&bytes);
+        let msg = not_dendro("my run.rez", container);
+        assert!(
+            msg.ends_with("rezolus recording upgrade 'my run.rez'"),
+            "{msg}"
+        );
+        assert!(
+            not_dendro("x.txt", rez::container::Container::Unknown).contains("not a recording")
+        );
     }
 
     /// A one-recording `.dendro`, as bytes, whose source is `source` and whose
@@ -1888,7 +1927,8 @@ mod tests {
         assert!(notices[0].contains("does not parse"), "{notices:?}");
     }
 
-    /// Selection and events embedded in a `.rez` recording's manifest are
+    /// Selection and events embedded in a recording's metadata (here a
+    /// `.rez` recording's manifest, upgraded) are
     /// surfaced by the WASM backend with no rez-specific code: `Viewer` reads
     /// the whole `reader.file_metadata()` map, so `selection()` and
     /// `file_metadata_json()` return them the moment the manifest carries the
@@ -1910,10 +1950,12 @@ mod tests {
                 ),
             ],
         );
-        let bytes = std::fs::read(&path).unwrap();
+        let upgraded = dir.path().join("fleet.dendro");
+        metriken_storage::to_dendro::convert_path(&path, &upgraded).unwrap();
+        let bytes = std::fs::read(&upgraded).unwrap();
 
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &bytes, "fleet.rez").unwrap();
+        reg.attach("baseline", &bytes, "fleet.dendro").unwrap();
 
         assert!(
             reg.selection("baseline")
@@ -2171,11 +2213,11 @@ mod tests {
     #[test]
     fn the_registry_holds_more_than_two_captures() {
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &parquet_bytes(), "base.parquet")
+        reg.attach("baseline", &one_recording(), "base.dendro")
             .unwrap();
-        reg.attach("redis", &parquet_bytes(), "redis.parquet")
+        reg.attach("redis", &one_recording(), "redis.dendro")
             .unwrap();
-        reg.attach("valkey", &parquet_bytes(), "valkey.parquet")
+        reg.attach("valkey", &one_recording(), "valkey.dendro")
             .unwrap();
 
         for id in ["baseline", "redis", "valkey"] {
@@ -2185,18 +2227,18 @@ mod tests {
         // Each is its own capture, not one shadowing another.
         assert_eq!(
             reg.slot("redis").unwrap().reader.filename().as_deref(),
-            Some("redis.parquet")
+            Some("redis.dendro")
         );
         assert_eq!(
             reg.slot("valkey").unwrap().reader.filename().as_deref(),
-            Some("valkey.parquet")
+            Some("valkey.dendro")
         );
 
         // The two-armed experiment helper points at the FIRST non-anchor
         // capture — the classic A/B second arm the gated operations use.
         assert_eq!(
             reg.experiment().unwrap().reader.filename().as_deref(),
-            Some("redis.parquet"),
+            Some("redis.dendro"),
         );
 
         // Detaching one leaves the rest addressable and in order.
@@ -2205,7 +2247,7 @@ mod tests {
         assert!(reg.has("valkey"));
         assert_eq!(
             reg.experiment().unwrap().reader.filename().as_deref(),
-            Some("valkey.parquet"),
+            Some("valkey.dendro"),
             "the next non-anchor capture becomes the experiment",
         );
     }
@@ -2215,19 +2257,17 @@ mod tests {
     #[test]
     fn re_attaching_a_capture_by_id_replaces_in_place() {
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("baseline", &parquet_bytes(), "base.parquet")
+        reg.attach("baseline", &one_recording(), "base.dendro")
             .unwrap();
-        reg.attach("redis", &parquet_bytes(), "old.parquet")
+        reg.attach("redis", &one_recording(), "old.dendro").unwrap();
+        reg.attach("valkey", &one_recording(), "valkey.dendro")
             .unwrap();
-        reg.attach("valkey", &parquet_bytes(), "valkey.parquet")
-            .unwrap();
-        reg.attach("redis", &parquet_bytes(), "new.parquet")
-            .unwrap();
+        reg.attach("redis", &one_recording(), "new.dendro").unwrap();
 
         assert_eq!(reg.others.len(), 2, "no duplicate redis");
         assert_eq!(
             reg.slot("redis").unwrap().reader.filename().as_deref(),
-            Some("new.parquet")
+            Some("new.dendro")
         );
         // redis stays first (its original position), valkey second.
         assert_eq!(reg.others[0].0, "redis");
@@ -2237,7 +2277,7 @@ mod tests {
     /// A single-recording archive is one capture, and must not conjure an
     /// experiment slot out of nothing.
     #[test]
-    fn a_single_recording_rez_is_one_capture() {
+    fn a_single_recording_archive_is_one_capture() {
         let mut reg = WasmCaptureRegistry::new();
         reg.attach("baseline", &committed_rez_bytes("v3.rez"), "one.rez")
             .unwrap();
@@ -2245,44 +2285,35 @@ mod tests {
         assert!(!reg.has("experiment"));
     }
 
-    /// The `.rez` branch must not capture the parquet path: a parquet still
-    /// lands in the slot the caller asked for, and nothing else moves.
+    /// A one-recording archive lands in the slot the caller asked for, and
+    /// nothing else moves: the experiment of a two-file comparison.
     #[test]
-    fn a_parquet_still_attaches_to_the_slot_it_was_given() {
+    fn a_one_recording_archive_attaches_to_the_slot_it_was_given() {
         let mut reg = WasmCaptureRegistry::new();
-        reg.attach("experiment", &parquet_bytes(), "capture.parquet")
+        reg.attach("experiment", &one_recording(), "capture.dendro")
             .unwrap();
         assert!(reg.has("experiment"));
         assert!(!reg.has("baseline"));
     }
 
-    /// Save as Report re-encodes a projection of the capture's ORIGINAL
-    /// parquet. An archive is many tables rather than one file, so a capture
-    /// out of a `.rez` reports that it cannot be saved instead of handing back
-    /// an empty download.
+    /// A capture opened from its own one-recording archive keeps the
+    /// archive and can be saved alone; one recording of a combined archive
+    /// is saved through that archive instead.
     #[test]
-    fn a_capture_from_an_archive_reports_that_it_cannot_be_saved() {
-        let archive = Viewer::new(&archive_bytes(&[("redis", "web-01")]), "one.dendro").unwrap();
-        assert!(!archive.can_save());
-        let parquet = Viewer::new(&parquet_bytes(), "capture.parquet").unwrap();
-        assert!(parquet.can_save());
+    fn a_capture_of_its_own_archive_can_be_saved() {
+        let one = Viewer::new(&one_recording(), "one.dendro").unwrap();
+        assert!(one.can_save());
+        let combined = Viewer::new(
+            &archive_bytes(&[("redis", "web-01"), ("valkey", "web-01")]),
+            "fleet.dendro",
+        )
+        .unwrap();
+        assert!(!combined.can_save());
     }
 
-    /// One parquet table's bytes — a real parquet: the one sealed segment
-    /// of a dendro archive's only stream.
-    fn parquet_bytes() -> Vec<u8> {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("one.dendro");
-        rez::fixtures::multi_recording(&path, &[("redis", "web-01")]);
-        use metriken_storage::Catalog;
-        let catalog = metriken_storage::DendroCatalog::open(&path).unwrap();
-        let source = catalog.sources().unwrap().remove(0).id;
-        let stream = catalog.tables(source).unwrap().remove(0);
-        let metas = catalog.segment_meta(source, &stream).unwrap();
-        catalog
-            .segment_bytes(source, &stream, metas[0].0)
-            .unwrap()
-            .expect("the fixture seals one segment")
+    /// A one-recording dendro archive's bytes.
+    fn one_recording() -> Vec<u8> {
+        archive_bytes(&[("redis", "web-01")])
     }
 
     #[test]
@@ -2335,7 +2366,7 @@ mod tests {
             saved(&committed_rez_bytes("v3-multi.rez"), "multi.rez").len(),
             2
         );
-        assert_eq!(saved(&parquet_bytes(), "capture.parquet").len(), 1);
+        assert_eq!(saved(&one_recording(), "capture.dendro").len(), 1);
 
         // A v3 report holds every row the `.rez` reads: segments and WAL
         // rows (`v3-live.rez`), and WAL rows alone (`v3-wal-only.rez`).

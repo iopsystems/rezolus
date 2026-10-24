@@ -196,7 +196,7 @@ pub(crate) fn add_events_selected(
     // Resolved on the input first, so a selector that names nothing is
     // refused before anything is written.
     one_target(path, selector, program)?;
-    let edit = super::legacy::edit_target(path, output, output_advice)?;
+    let edit = super::legacy::edit_target(path, output, program)?;
     let target_path = edit.path().to_path_buf();
     let (target, total) = one_target(&target_path, selector, program)?;
     // The same append the writer applies, run here first so the counts
@@ -225,15 +225,6 @@ pub(crate) fn add_events_selected(
         total: preview.events.events.len(),
         report: joined(note, annotation.report.captured()),
     })
-}
-
-/// How to write an MCP edit of the legacy recording at `path`: name a new
-/// archive in the tool's `output` argument.
-fn output_advice(suggested: &Path) -> String {
-    format!(
-        "pass \"output\": {:?} (a new .dendro the edit is written to)",
-        suggested.display().to_string()
-    )
 }
 
 /// `first` and `second`, each on its own line, when there are any.
@@ -301,7 +292,7 @@ pub(crate) fn remove_events_selected(
             .into());
     }
     one_target(path, selector, program)?;
-    let edit = super::legacy::edit_target(path, output, output_advice)?;
+    let edit = super::legacy::edit_target(path, output, program)?;
     let target_path = edit.path().to_path_buf();
     let (target, total) = one_target(&target_path, selector, program)?;
     // The recording's events as a reader shows them: every source's, as one
@@ -349,7 +340,7 @@ fn one_target(
     selector: &crate::parquet_tools::select::RecordingSelector,
     program: &str,
 ) -> Result<(super::check::Target, usize), Box<dyn std::error::Error>> {
-    let (_format, mut targets, total) = super::check::open_targets(path, selector, program)?;
+    let (mut targets, total) = super::check::open_targets(path, selector, program)?;
     if targets.len() != 1 {
         let all: Vec<BTreeMap<String, String>> =
             targets.iter().filter_map(|t| t.labels.clone()).collect();
@@ -991,7 +982,7 @@ mod tests {
         };
         add_events_selected(&a, None, &any, vec![event("E1")], "rezolus").unwrap();
         let copy = dir.path().join("copy.dendro");
-        crate::parquet_tools::snapshot_rez(&a, &copy).unwrap();
+        crate::parquet_tools::snapshot_rez(&a, &copy, "rezolus").unwrap();
         add_events_selected(&copy, None, &any, vec![event("E2")], "rezolus").unwrap();
         let grp = dir.path().join("grp.dendro");
         crate::parquet_tools::combine::run_combine_for_test(&[a, copy], &grp).unwrap();

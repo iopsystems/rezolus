@@ -1,3 +1,4 @@
+pub(crate) mod ab_tarball;
 pub(crate) mod annotate;
 pub(crate) mod check;
 mod cli;
@@ -9,59 +10,47 @@ pub(crate) mod legacy;
 pub(crate) mod metadata;
 pub(crate) mod select;
 
-use arrow::datatypes::SchemaRef;
-use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
-use parquet::file::metadata::ParquetMetaData;
-use std::path::Path;
-use std::sync::Arc;
+// The Args structs are the tools' API for a host that builds its own clap
+// tree; this binary mounts `Host::command` and names none of them.
+#[allow(unused_imports)]
+pub use cli::{
+    AnnotateArgs, CheckArgs, CombineArgs, ConvertArgs, FilterArgs, Host, MetadataArgs, Recording,
+    SnapshotArgs, TableFlag, UpgradeArgs,
+};
 
-pub use cli::{Host, Recording, TableFlag};
-
-/// Copy an archive that may still be written into one complete standalone
-/// `.dendro` at `output`, which must end in `.dendro` and not exist.
+/// Copy a dendro archive that may still be written into one complete
+/// standalone `.dendro` at `output`, which must end in `.dendro` and not
+/// exist. Any other file is refused, one an earlier release wrote with the
+/// `upgrade` command spelled with `program`.
 ///
 /// **The point is SQLite's `-wal` sidecar.** An archive is a SQLite database
 /// in WAL mode: commits land in `<file>-wal` and are checkpointed into the
 /// archive in batches, so the archive on its own is a consistent view as of
 /// the last checkpoint and nothing newer. `cp` takes that older view, and it
-/// is not detectably wrong, it just ends early. A dendro archive is copied in
-/// one read snapshot (sidecar included, writer un-paused) with its live tail
-/// sealed; a `.rez` is converted, read through a normal connection, which
-/// reads the sidecar too.
+/// is not detectably wrong, it just ends early. The archive is copied in one
+/// read snapshot (sidecar included, writer un-paused) with its live tail
+/// sealed.
 pub(crate) fn snapshot_rez(
     path: &std::path::Path,
     output: &std::path::Path,
+    program: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use legacy::Container;
+    ::rez::container::require_dendro(path, program)?;
     legacy::check_new_dendro(output)?;
     // Staged beside the output so a failed copy leaves nothing there.
     let staging = legacy::staging_dir(output)?;
     let staged = staging.path().join("snapshot.dendro");
-    match Container::of(path) {
-        Container::Dendro => {
-            let src = dendro::archive::Archive::open(path)?;
-            crate::dendro_copy::copy(&src, &staged, &dendro::rewrite::CopySpec::everything())?;
-        }
-        Container::RezV3 | Container::RezTar => {
-            println!("{}", legacy::convert_for(path, &staged, output)?);
-        }
-        c => {
-            return Err(format!(
-                "{} is a {}, not an archive (.dendro or .rez)",
-                path.display(),
-                c.name()
-            )
-            .into())
-        }
-    }
+    let src = dendro::archive::Archive::open(path)?;
+    crate::dendro_copy::copy(&src, &staged, &dendro::rewrite::CopySpec::everything())?;
     legacy::publish(&staged, output)?;
     println!("Wrote {}", output.display());
     Ok(())
 }
 
-/// Convert the legacy recording at `path` (any `.rez`, or a parquet file)
-/// into a new dendro archive at `output`, or beside `path` with a `.dendro`
-/// extension. Never in place and never over an existing file.
+/// Convert the legacy recording at `path` (any `.rez`, a parquet file, or a
+/// `.parquet.ab.tar`) into a new dendro archive at `output`, or beside
+/// `path` with a `.dendro` extension. Never in place and never over an
+/// existing file.
 fn upgrade_to_dendro(
     path: &std::path::Path,
     output: Option<&std::path::Path>,
@@ -69,12 +58,11 @@ fn upgrade_to_dendro(
 ) -> Result<(), Box<dyn std::error::Error>> {
     if to != "dendro" {
         return Err(format!(
-            "--to {to}: 6.x writes .dendro only; `recording upgrade` converts to dendro \
-             (a v3 .rez is read as it is, so there is nothing to upgrade a tar to)"
+            "--to {to}: `recording upgrade` converts to dendro, the only format written"
         )
         .into());
     }
-    if legacy::Container::of(path) == legacy::Container::Dendro {
+    if legacy::Container::of_path(path) == legacy::Container::Dendro {
         return Err(format!(
             "{} is already a dendro archive; there is nothing to upgrade",
             path.display()
@@ -93,22 +81,10 @@ fn upgrade_to_dendro(
     println!(
         "converted {} ({}) to {}: {summary}",
         path.display(),
-        legacy::Container::of(path).name(),
+        legacy::Container::of_path(path).name(),
         output.display()
     );
     Ok(())
-}
-
-fn read_parquet_footer(
-    input: impl AsRef<Path>,
-) -> Result<(Arc<ParquetMetaData>, SchemaRef, ParquetRecordBatchReader), Box<dyn std::error::Error>>
-{
-    let file = std::fs::File::open(input)?;
-    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-    let metadata = builder.metadata().clone();
-    let schema = builder.schema().clone();
-    let reader = builder.build()?;
-    Ok((metadata, schema, reader))
 }
 
 /// A [`Host`] for this module's tests, spelled as rezolus's, and the parse
@@ -138,6 +114,17 @@ pub(crate) mod test_support {
             .view("rezolus view")
             .mcp("rezolus mcp")
             .buffer_path("/var/lib/rezolus/hindsight.dendro")
+    }
+
+    /// The committed parquet capture (`tests/fixtures/legacy`) upgraded to
+    /// `simple.dendro` in `dir`: five samples of a gauge `queue_depth`,
+    /// constant at 3, and a counter `http_requests_total`.
+    pub(crate) fn simple_dendro(dir: &Path) -> std::path::PathBuf {
+        let parquet = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/legacy/simple_capture.parquet");
+        let out = dir.join("simple.dendro");
+        super::legacy::convert(&parquet, &out).unwrap();
+        out
     }
 
     /// `args` (the program name first, then a subcommand) parsed as the CLI
@@ -311,7 +298,7 @@ mod upgrade_to_dendro_tests {
         let dir = tempfile::tempdir().unwrap();
         let src = tar_rez(dir.path());
         let err = upgrade_to_dendro(&src, None, "v3").unwrap_err().to_string();
-        assert!(err.contains(".dendro only"), "{err}");
+        assert!(err.contains("converts to dendro"), "{err}");
         upgrade_to_dendro(&src, None, "dendro").unwrap();
         assert!(dir.path().join("v2.dendro").exists());
     }
@@ -327,7 +314,7 @@ mod upgrade_to_dendro_tests {
             let src = ::rez::fixtures::committed_rez(name, dir.path());
             let dest = dir.path().join(format!("{name}.dendro"));
             upgrade_to_dendro(&src, Some(&dest), "dendro").unwrap();
-            let a = ::rez::reader::RezReader::open_recordings(&src, pool()).unwrap();
+            let a = metriken_storage::rez::open::open_recordings(&src, pool()).unwrap();
             let b = ::rez::reader::RezReader::open_recordings(&dest, pool()).unwrap();
             assert_eq!(a.len(), b.len(), "{name}");
             for ((la, ra), (lb, rb)) in a.iter().zip(&b) {
@@ -360,7 +347,7 @@ mod dendro_command_tests {
         let live = dir.path().join("live.dendro");
         fixtures::recorded(&live, 10, false);
         let out = dir.path().join("snap.dendro");
-        snapshot_rez(&live, &out).unwrap();
+        snapshot_rez(&live, &out, "rezolus").unwrap();
         for suffix in ["-wal", "-shm"] {
             assert!(!dir.path().join(format!("snap.dendro{suffix}")).exists());
         }
@@ -380,7 +367,7 @@ mod dendro_command_tests {
             assert_eq!(snap.live_wal_span(b, &stream).unwrap().rows, 0, "{stream}");
         }
         assert!(
-            snapshot_rez(&live, &out).is_err(),
+            snapshot_rez(&live, &out, "rezolus").is_err(),
             "never over an existing file"
         );
     }
@@ -397,33 +384,34 @@ mod dendro_command_tests {
         assert!(err.contains("already a dendro archive"), "{err}");
     }
 
-    /// `snapshot` of a `.rez` (one a 5.x recorder may still be writing)
-    /// writes a `.dendro` holding every row the `.rez` reads, its live tail
-    /// included; an output not ending in `.dendro`, or one that exists, is
-    /// refused.
+    /// `snapshot` of a `.rez` is refused, naming the upgrade, and writes
+    /// nothing.
     #[test]
-    fn a_rez_snapshot_is_a_dendro() {
-        use metriken_query::MetricsSource;
+    fn a_rez_snapshot_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let live = ::rez::fixtures::committed_rez("v3-live.rez", dir.path());
-        let err = snapshot_rez(&live, &dir.path().join("snap.rez"))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains(".dendro archives only"), "{err}");
         let out = dir.path().join("snap.dendro");
-        snapshot_rez(&live, &out).unwrap();
-        let pool = || metriken_storage::BufferPool::new(16 * 1024 * 1024);
-        let a = ::rez::reader::RezReader::open_recordings(&live, pool()).unwrap();
-        let b = ::rez::reader::RezReader::open_recordings(&out, pool()).unwrap();
-        assert_eq!(a[0].1.time_range_ns(), b[0].1.time_range_ns());
-        std::fs::write(dir.path().join("taken.dendro"), b"do not clobber me").unwrap();
-        let err = snapshot_rez(&live, &dir.path().join("taken.dendro"))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("already exists"), "{err}");
+        let err = snapshot_rez(&live, &out, "tool").unwrap_err().to_string();
+        assert!(err.contains("tool recording upgrade"), "{err}");
+        assert!(!out.exists());
+    }
+
+    /// `upgrade` converts a `.parquet.ab.tar` into a two-arm archive beside
+    /// it.
+    #[test]
+    fn upgrade_converts_an_ab_tarball() {
+        let dir = tempfile::tempdir().unwrap();
+        let tar = super::ab_tarball::tests::ab_tarball(dir.path());
+        upgrade_to_dendro(&tar, None, "dendro").unwrap();
+        let out = dir.path().join("combined.dendro");
+        let sources = Archive::open(&out).unwrap().read_sources().unwrap();
+        let arms: Vec<_> = sources
+            .iter()
+            .map(|s| s.meta.labels.get("arm").cloned())
+            .collect();
         assert_eq!(
-            std::fs::read(dir.path().join("taken.dendro")).unwrap(),
-            b"do not clobber me"
+            arms,
+            [Some("baseline".to_string()), Some("experiment".to_string())]
         );
     }
 }

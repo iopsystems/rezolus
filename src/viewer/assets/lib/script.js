@@ -195,7 +195,7 @@ const uploadParquet = async (file) => {
         }
         m.redraw();
     } catch (e) {
-        notify('error', `Failed to upload parquet: ${e?.message ?? e ?? 'unknown error'}`);
+        notify('error', `Failed to upload recording: ${e?.message ?? e ?? 'unknown error'}`);
     }
 };
 

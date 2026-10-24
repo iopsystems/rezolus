@@ -3,9 +3,8 @@
 //! A `--queries` file with a `unit_system` the viewer does not know is
 //! refused before any edit: asked for `--event` alongside it, annotate exits
 //! 1 and leaves the file byte for byte as it was, in each container. A
-//! legacy recording (`.rez`, `.parquet`) is never changed: without `-o` the
-//! edit is refused, naming the command to run; with `-o` it goes to a new
-//! `.dendro`.
+//! legacy recording (`.rez`, `.parquet`) is never opened: the edit is
+//! refused, naming the `upgrade` that converts it.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -22,7 +21,7 @@ fn stderr(out: &Output) -> String {
 }
 
 fn fixture() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("site/viewer/data/simple_capture.parquet")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/legacy/simple_capture.parquet")
 }
 
 /// A copy in `dir` of the committed `.rez` `name`.
@@ -115,11 +114,10 @@ fn dendro_refusal_writes_nothing() {
     assert_refused_untouched(dir.path(), &dendro, &[]);
 }
 
-/// A legacy recording without `-o` is refused, naming the command to run,
-/// and is not changed; with `-o` the event goes into a new `.dendro`, and
-/// the original is still not changed.
+/// A legacy recording is refused, with `-o` or without, naming the
+/// upgrade, and is not changed; nothing is written at the output.
 #[test]
-fn a_legacy_recording_is_annotated_into_a_new_dendro() {
+fn a_legacy_recording_is_refused_with_the_upgrade() {
     let dir = tempfile::tempdir().unwrap();
     for name in ["v3.rez", "v2.rez", "simple_capture.parquet"] {
         let input = if name.ends_with(".parquet") {
@@ -131,37 +129,30 @@ fn a_legacy_recording_is_annotated_into_a_new_dendro() {
         };
         let before = std::fs::read(&input).unwrap();
         let event = "time=2026-01-01T00:00:00Z,kind=deploy,description=x";
-        let out = rezolus(&[
-            "recording",
-            "annotate",
-            input.to_str().unwrap(),
-            "--event",
-            event,
-        ]);
-        assert_eq!(out.status.code(), Some(1), "{name}: {}", stderr(&out));
-        let advice = format!("-o {}", input.with_extension("dendro").display());
-        assert!(stderr(&out).contains(&advice), "{name}: {}", stderr(&out));
-
         let dendro = dir.path().join(format!("{name}.annotated.dendro"));
-        let out = rezolus(&[
-            "recording",
-            "annotate",
-            input.to_str().unwrap(),
-            "--event",
-            event,
-            "-o",
-            dendro.to_str().unwrap(),
-        ]);
-        assert!(out.status.success(), "{name}: {}", stderr(&out));
-        let describe = rezolus(&["recording", "metadata", "-i", dendro.to_str().unwrap()]);
-        assert!(describe.status.success(), "{name}: {}", stderr(&describe));
+        for output in [None, Some(dendro.to_str().unwrap())] {
+            let mut args = vec![
+                "recording",
+                "annotate",
+                input.to_str().unwrap(),
+                "--event",
+                event,
+            ];
+            args.extend(output.iter().flat_map(|o| ["-o", *o]));
+            let out = rezolus(&args);
+            assert_eq!(out.status.code(), Some(1), "{name}: {}", stderr(&out));
+            let advice = format!("rezolus recording upgrade {}", input.display());
+            assert!(stderr(&out).contains(&advice), "{name}: {}", stderr(&out));
+            assert!(!dendro.exists(), "{name}");
+        }
         assert_eq!(std::fs::read(&input).unwrap(), before, "{name} changed");
     }
 }
 
 /// An edit written to a new `.dendro` is staged beside it and moved into
-/// place only when it succeeds: a bad `--event`, found after the copy or
-/// conversion, leaves no output and no staging directory.
+/// place only when it succeeds: a bad `--event`, found after the copy,
+/// leaves no output and no staging directory; a legacy input is refused
+/// before anything is written.
 #[test]
 fn a_failed_edit_leaves_nothing_at_the_output() {
     let dir = tempfile::tempdir().unwrap();

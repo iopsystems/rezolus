@@ -1,12 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use ::dashboard::keys::{
-    KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE, NESTED_SERVICE_QUERIES,
-};
-use ::dashboard::{ServiceExtension, TemplateRegistry};
-
-use super::legacy::{self, Container};
+use super::legacy::Container;
 
 /// What a filter keeps. `samplers` and `tables` select tables (a table is
 /// kept when either names it); `metrics` selects columns within the kept
@@ -48,12 +43,8 @@ fn table_is_under(table: &str, name: &str) -> bool {
 }
 
 /// Returns the process exit status.
-pub(super) fn run(
-    host: &super::Host,
-    args: &super::cli::FilterArgs,
-    registry: &TemplateRegistry,
-) -> i32 {
-    match run_inner(host, args, registry) {
+pub(super) fn run(host: &super::Host, args: &super::cli::FilterArgs) -> i32 {
+    match run_inner(host, args) {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("error: {e}");
@@ -62,11 +53,7 @@ pub(super) fn run(
     }
 }
 
-fn run_inner(
-    host: &super::Host,
-    args: &super::cli::FilterArgs,
-    registry: &TemplateRegistry,
-) -> Result<(), String> {
+fn run_inner(host: &super::Host, args: &super::cli::FilterArgs) -> Result<(), String> {
     let path = &args.file;
     let output = args.output.as_deref();
     let csv = |list: &Option<String>| -> Option<BTreeSet<String>> {
@@ -79,29 +66,11 @@ fn run_inner(
     };
     let samplers = csv(&args.samplers);
     let tables = csv(&args.tables);
-    let mut metrics = csv(&args.metrics);
+    let metrics = csv(&args.metrics);
     let (flag, noun) = (host.table_flag.flag(), host.table_flag.noun());
-    let container = Container::of(path);
-    let selects_tables = samplers.is_some() || tables.is_some();
+    ::rez::container::require_dendro(path, host.program)?;
 
-    // A parquet file with neither flag keeps what its KPIs need, as the
-    // parquet filter did: the metrics its KPI queries name, and every metric
-    // of the agent's columns.
-    if container == Container::Parquet && !selects_tables && metrics.is_none() {
-        let custom = args.queries.as_deref();
-        metrics = Some(
-            resolve_service_extension(path, custom, registry)
-                .and_then(|ext| kpi_metrics(path, &ext, host.agent))
-                .map_err(|e| e.to_string())?,
-        );
-    } else if args.queries.is_some() {
-        eprintln!(
-            "warning: --queries picks a parquet file's KPI metrics when neither {flag} \
-             nor --metrics is given; it is ignored here"
-        );
-    }
-
-    if !selects_tables && metrics.is_none() {
+    if samplers.is_none() && tables.is_none() && metrics.is_none() {
         return Err(format!(
             "filtering an archive requires {flag} <a,b,...> ({noun} to keep) \
              and/or --metrics <a,b,...> (metric columns to keep)"
@@ -114,121 +83,32 @@ fn run_inner(
         metrics: metrics.as_ref(),
         flag,
     };
-    filter(path, &keep, output).map_err(|e| format!("failed to filter {}: {e}", path.display()))
+    filter(path, &keep, output, host.program)
+        .map_err(|e| format!("failed to filter {}: {e}", path.display()))
 }
 
-/// Filter the recording at `path` to what `keep` names: a dendro archive
-/// in place or into `output` (a `.dendro`), a legacy one into `output`,
-/// which it needs.
+/// Filter the dendro archive at `path` to what `keep` names, in place or
+/// into `output` (a new `.dendro`). Any other file is refused, one an
+/// earlier release wrote with the `upgrade` command spelled with `program`.
 fn filter(
     path: &Path,
     keep: &Keep<'_>,
     output: Option<&Path>,
+    program: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    match Container::of(path) {
+    match Container::of_path(path) {
         Container::Dendro => {
             if let Some(output) = output.filter(|o| o.extension().is_none_or(|e| e != "dendro")) {
                 return Err(format!(
-                    "{}: 6.x writes .dendro archives only; give an output ending in .dendro",
+                    "{}: the output is a .dendro archive; give a name ending in .dendro",
                     output.display()
                 )
                 .into());
             }
             filter_dendro(path, keep, output)
         }
-        c if c.is_legacy() => filter_legacy(path, c, keep, output),
-        _ => Err(format!(
-            "{} is not a recording (.dendro, .rez or .parquet)",
-            path.display()
-        )
-        .into()),
+        c => Err(::rez::container::not_dendro(&path.display().to_string(), c, program).into()),
     }
-}
-
-/// Filter a legacy recording into a new `.dendro` at `output`: converted
-/// beside it first, then filtered as a dendro archive. The input is not
-/// changed; without `output` the filter is refused, naming the command.
-fn filter_legacy(
-    path: &Path,
-    container: Container,
-    keep: &Keep<'_>,
-    output: Option<&Path>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(output) = output else {
-        return Err(format!(
-            "{} is a {}; 6.x writes .dendro only and does not change it. Write the \
-             filtered recording to a new archive instead:\n  {}",
-            path.display(),
-            container.name(),
-            legacy::command_with_output(&legacy::dendro_beside(path))
-        )
-        .into());
-    };
-    legacy::check_new_dendro(output)?;
-    let staging = super::legacy::staging_dir(output)?;
-    let converted = staging.path().join("converted.dendro");
-    println!("{}", legacy::convert_for(path, &converted, output)?);
-    filter_dendro(&converted, keep, Some(output))
-}
-
-/// The metrics a parquet file's KPI filter keeps: the base names of the
-/// metrics `ext`'s queries select, and the metric of every agent column (a
-/// column whose own `source`, else the file's, is `agent`, `Host::agent`).
-/// A column's metric is its `metric` metadata, else its name before `:`.
-fn kpi_metrics(
-    path: &Path,
-    ext: &ServiceExtension,
-    agent: &str,
-) -> Result<BTreeSet<String>, Box<dyn std::error::Error>> {
-    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-    let builder = ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(path)?)?;
-    let file_source: Option<String> = builder
-        .metadata()
-        .file_metadata()
-        .key_value_metadata()
-        .and_then(|kv| kv.iter().find(|kv| kv.key == KEY_SOURCE))
-        .and_then(|kv| kv.value.clone());
-    let mut keep = extract_column_names(ext);
-    for f in builder.schema().fields() {
-        let source = f
-            .metadata()
-            .get(KEY_SOURCE)
-            .map(String::as_str)
-            .or(file_source.as_deref());
-        if source == Some(agent) {
-            let metric = f
-                .metadata()
-                .get("metric")
-                .cloned()
-                .unwrap_or_else(|| f.name().split(':').next().unwrap_or(f.name()).to_string());
-            keep.insert(metric);
-        }
-    }
-    Ok(keep)
-}
-
-/// Extract metric selectors (name + optional labels) from a PromQL query.
-///
-/// Matches `metric_name` or `metric_name{labels...}`, skipping anything
-/// followed by `(` (i.e. function calls like `sum(`, `irate(`).
-fn extract_metric_selectors(query: &str) -> BTreeSet<String> {
-    use regex::Regex;
-    use std::sync::LazyLock;
-
-    static RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"[a-zA-Z_][a-zA-Z0-9_]*(\{[^}]*\})?").unwrap());
-
-    RE.find_iter(query)
-        .filter(|m| {
-            // Skip duration suffixes like 5s, 1m, 1h (preceded by a digit)
-            if m.start() > 0 && query.as_bytes()[m.start() - 1].is_ascii_digit() {
-                return false;
-            }
-            // Skip function calls: next non-whitespace char after match is '('
-            query[m.end()..].trim_start().as_bytes().first() != Some(&b'(')
-        })
-        .map(|m| m.as_str().to_string())
-        .collect()
 }
 
 /// Filter a dendro archive by sampler and/or by metric column, through
@@ -372,122 +252,6 @@ fn filter_dendro(
     Ok(())
 }
 
-/// Extract base metric column names from all KPI queries in a service extension.
-fn extract_column_names(ext: &ServiceExtension) -> BTreeSet<String> {
-    ext.kpis
-        .iter()
-        .flat_map(|kpi| extract_metric_selectors(&kpi.query))
-        .map(|selector| {
-            // Strip label selectors: "tokens{direction=\"output\"}" -> "tokens"
-            selector.split('{').next().unwrap_or(&selector).to_string()
-        })
-        .collect()
-}
-
-/// Resolve a ServiceExtension from the available sources.
-///
-/// Resolution order:
-/// 1. Custom file (if provided via `--file`)
-/// 2. Top-level `service_queries` key in parquet metadata
-/// 3. `per_source_metadata.<source>.<entry>.service_queries` (combined
-///    files; one template per source, from its first entry that has one, as
-///    the viewers read it in `dashboard::source_templates`)
-/// 4. Built-in template looked up by source name
-fn resolve_service_extension(
-    path: &Path,
-    custom_file: Option<&Path>,
-    registry: &TemplateRegistry,
-) -> Result<ServiceExtension, Box<dyn std::error::Error>> {
-    use parquet::file::reader::FileReader;
-    use parquet::file::serialized_reader::SerializedFileReader;
-
-    // 1. Custom file
-    if let Some(custom_path) = custom_file {
-        let content = std::fs::read_to_string(custom_path)?;
-        let ext: ServiceExtension = serde_json::from_str(&content)?;
-        return Ok(ext);
-    }
-
-    // Read parquet metadata
-    let file = std::fs::File::open(path)?;
-    let reader = SerializedFileReader::new(file)?;
-    let kv = reader
-        .metadata()
-        .file_metadata()
-        .key_value_metadata()
-        .cloned()
-        .unwrap_or_default();
-
-    // 2. Top-level service_queries
-    if let Some(sq) = kv
-        .iter()
-        .find(|kv| kv.key == KEY_SERVICE_QUERIES)
-        .and_then(|kv| kv.value.as_deref())
-    {
-        if let Ok(ext) = serde_json::from_str::<ServiceExtension>(sq) {
-            return Ok(ext);
-        }
-    }
-
-    // For combined files we must collect KPIs from ALL sources so the filter
-    // retains columns needed by every service, not just the first one found.
-    let mut all_kpis = Vec::new();
-    let mut first_ext: Option<ServiceExtension> = None;
-
-    // 3. per_source_metadata.<source>.service_queries — collect from all sources
-    let source = kv
-        .iter()
-        .find(|kv| kv.key == KEY_SOURCE)
-        .and_then(|kv| kv.value.as_deref());
-
-    if let Some(psm_str) = kv
-        .iter()
-        .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
-        .and_then(|kv| kv.value.as_deref())
-    {
-        if let Ok(psm) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
-        {
-            for source_group in psm.values() {
-                let Some(entries) = source_group.as_object() else {
-                    continue;
-                };
-                let ext = entries.values().find_map(|entry| {
-                    entry
-                        .get(NESTED_SERVICE_QUERIES)
-                        .and_then(|sq| serde_json::from_value::<ServiceExtension>(sq.clone()).ok())
-                });
-                if let Some(ext) = ext {
-                    all_kpis.extend(ext.kpis.clone());
-                    if first_ext.is_none() {
-                        first_ext = Some(ext);
-                    }
-                }
-            }
-        }
-    }
-
-    // 4. Template registry by source name — collect from all sources
-    if let Some(source_str) = source {
-        let sources: Vec<String> = serde_json::from_str::<Vec<String>>(source_str)
-            .unwrap_or_else(|_| vec![source_str.trim_matches('"').to_string()]);
-        for s in &sources {
-            if let Some(template) = registry.get(s) {
-                all_kpis.extend(template.kpis.clone());
-                if first_ext.is_none() {
-                    first_ext = Some(template.clone());
-                }
-            }
-        }
-    }
-
-    if let Some(mut ext) = first_ext {
-        ext.kpis = all_kpis;
-        return Ok(ext);
-    }
-
-    Err("no service extension found: use --queries to provide one".into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -542,254 +306,22 @@ mod tests {
             flag: "--samplers",
         }
     }
-    use std::collections::HashMap;
 
-    /// A one-row parquet with the given columns, each carrying the metadata
-    /// given, plus whatever file-level keys are asked for.
-    fn write_parquet(path: &Path, columns: &[(&str, &[(&str, &str)])], file_meta: &[(&str, &str)]) {
-        use arrow::array::{ArrayRef, UInt64Array};
-        use arrow::datatypes::{DataType, Field, Schema};
-        use arrow::record_batch::RecordBatch;
-        use parquet::arrow::ArrowWriter;
-        use parquet::file::properties::WriterProperties;
-        use std::sync::Arc;
-
-        let fields: Vec<Field> = columns
-            .iter()
-            .map(|(name, meta)| {
-                Field::new(*name, DataType::UInt64, false).with_metadata(
-                    meta.iter()
-                        .map(|(k, v)| (k.to_string(), v.to_string()))
-                        .collect::<HashMap<_, _>>(),
-                )
-            })
-            .collect();
-        let schema = Arc::new(Schema::new(fields));
-        let arrays: Vec<ArrayRef> = columns
-            .iter()
-            .map(|_| Arc::new(UInt64Array::from(vec![1u64])) as ArrayRef)
-            .collect();
-        let batch = RecordBatch::try_new(schema.clone(), arrays).unwrap();
-
-        let kv: Vec<parquet::file::metadata::KeyValue> = file_meta
-            .iter()
-            .map(|(k, v)| {
-                parquet::file::metadata::KeyValue::new(k.to_string(), Some(v.to_string()))
-            })
-            .collect();
-        let props = WriterProperties::builder()
-            .set_key_value_metadata(if kv.is_empty() { None } else { Some(kv) })
-            .build();
-        let file = std::fs::File::create(path).unwrap();
-        let mut writer = ArrowWriter::try_new(file, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-    }
-
-    /// A combined parquet's templates are read from each source's entries,
-    /// `per_source_metadata.<source>.<entry>.service_queries`, where
-    /// `recording combine` writes them, and every source's KPIs are kept.
+    /// A `.rez` is refused, naming the upgrade, and left as it was.
     #[test]
-    fn combined_templates_are_read_from_each_sources_entries() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("combined.parquet");
-        let kpi =
-            |q: &str| serde_json::json!({"role": "r", "title": q, "query": q, "type": "gauge"});
-        let psm = serde_json::json!({
-            "widgetd": {"0": {"service_queries": {"service_name": "widgetd", "kpis": [kpi("widgets")]}}},
-            "gadgetd": {"0": {"version": "1"}, "1": {"service_queries": {"service_name": "gadgetd", "kpis": [kpi("gadgets")]}}},
-        })
-        .to_string();
-        write_parquet(
-            &path,
-            &[("timestamp", &[])],
-            &[
-                ("source", r#"["gadgetd","widgetd"]"#),
-                ("per_source_metadata", psm.as_str()),
-            ],
-        );
-        let registry = ::dashboard::embedded_templates().unwrap();
-        let ext = resolve_service_extension(&path, None, &registry).unwrap();
-        let mut queries: Vec<&str> = ext.kpis.iter().map(|k| k.query.as_str()).collect();
-        queries.sort();
-        assert_eq!(queries, ["gadgets", "widgets"]);
-    }
-
-    /// The recorder no longer writes `source` into every column, so the rule
-    /// that keeps agent columns has to read the file's own `source` key.
-    ///
-    /// Without the fallback this drops every rezolus column from a
-    /// single-source recording — the columns an operator keeps a recording for.
-    #[test]
-    fn agent_columns_are_kept_from_the_files_source_when_a_column_has_none() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("agent.parquet");
-        write_parquet(
-            &path,
-            &[
-                ("timestamp", &[]),
-                ("cpu_usage", &[("metric", "cpu_usage")]),
-            ],
-            &[("source", "rezolus")],
-        );
-        // A KPI set that names neither column: only the rezolus rule can keep
-        // them.
-        let kept = kpi_metrics(&path, &make_test_ext(&["something_else"]), "rezolus").unwrap();
-        assert!(
-            kept.contains("cpu_usage"),
-            "an agent column must survive on the file's source alone, got {kept:?}"
-        );
-    }
-
-    /// And the rule still discriminates: a file from something else keeps only
-    /// what its KPIs name, end to end into the `.dendro` it is filtered to. A
-    /// fallback that kept everything would make the filter a no-op for service
-    /// recordings.
-    #[test]
-    fn a_non_agent_file_keeps_only_what_its_queries_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("svc.parquet");
-        let out = dir.path().join("slim.dendro");
-        write_parquet(
-            &path,
-            &[
-                ("timestamp", &[("metric_type", "timestamp")]),
-                (
-                    "wanted",
-                    &[("metric", "wanted"), ("metric_type", "counter")],
-                ),
-                (
-                    "unwanted",
-                    &[("metric", "unwanted"), ("metric_type", "counter")],
-                ),
-            ],
-            &[("source", "llm-perf")],
-        );
-        let kept = kpi_metrics(&path, &make_test_ext(&["wanted"]), "rezolus").unwrap();
-        assert_eq!(kept, set(&["wanted"]));
-        filter(&path, &keep(None, Some(&kept)), Some(&out)).unwrap();
-        let readers = ::rez::reader::RezReader::open_recordings(
-            &out,
-            metriken_storage::BufferPool::new(8 * 1024 * 1024),
-        )
-        .unwrap();
-        let names = readers[0].1.counter_names();
-        assert_eq!(names, ["wanted"], "{names:?}");
-    }
-
-    fn make_test_ext(queries: &[&str]) -> ServiceExtension {
-        ServiceExtension {
-            service_name: "test".to_string(),
-            aliases: Vec::new(),
-            service_metadata: Default::default(),
-            kpis: queries
-                .iter()
-                .map(|q| ::dashboard::Kpi {
-                    role: "test".to_string(),
-                    title: "test".to_string(),
-                    description: None,
-                    query: q.to_string(),
-                    metric_type: "gauge".to_string(),
-                    subtype: None,
-                    unit_system: None,
-                    percentiles: None,
-                    available: false,
-                    denominator: false,
-                    subgroup: None,
-                    subgroup_description: None,
-                    full_width: false,
-                    check: None,
-                })
-                .collect(),
-        }
-    }
-
-    #[test]
-    fn extract_column_names_basic() {
-        let ext = make_test_ext(&["requests_inflight", "ttft"]);
-        let names = extract_column_names(&ext);
-        assert!(names.contains("requests_inflight"));
-        assert!(names.contains("ttft"));
-        assert_eq!(names.len(), 2);
-    }
-
-    #[test]
-    fn extract_column_names_strips_labels() {
-        let ext = make_test_ext(&[r#"sum(irate(tokens{direction="output"}[5s]))"#]);
-        let names = extract_column_names(&ext);
-        assert!(names.contains("tokens"));
-        assert!(!names.iter().any(|n| n.contains('{')));
-    }
-
-    #[test]
-    fn extract_column_names_deduplicates() {
-        let ext = make_test_ext(&[
-            r#"sum(irate(requests{status="error"}[5s])) / sum(irate(requests{status="sent"}[5s]))"#,
-        ]);
-        let names = extract_column_names(&ext);
-        // "requests" appears twice in query but should be deduplicated
-        assert!(names.contains("requests"));
-        assert_eq!(names.len(), 1);
-    }
-
-    // ── legacy inputs ──────────────────────────────────────────────────
-
-    /// A `.rez` of either container is filtered into a new `.dendro` holding
-    /// the kept samplers with their rows, and is not changed itself.
-    #[test]
-    fn a_rez_is_filtered_into_a_new_dendro() {
+    fn a_legacy_recording_is_refused_with_the_upgrade() {
         let dir = tempfile::tempdir().unwrap();
         for name in ["v3.rez", "v2.rez"] {
             let path = ::rez::fixtures::committed_rez(name, dir.path());
             let before = std::fs::read(&path).unwrap();
             let out = dir.path().join(format!("{name}.dendro"));
-            filter(&path, &keep(Some(&set(&["a"])), None), Some(&out)).unwrap();
-            assert_eq!(dendro_streams(&out), ["a"], "{name}");
-            let db = dendro::archive::Archive::open(&out).unwrap();
-            let id = db.read_sources().unwrap()[0].id;
-            assert!(
-                db.total_rows(id, "a").unwrap() > 0,
-                "{name}: the rows came across"
-            );
+            let err = filter(&path, &keep(Some(&set(&["a"])), None), Some(&out), "tool")
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("tool recording upgrade"), "{name}: {err}");
+            assert!(!out.exists(), "{name}");
             assert_eq!(std::fs::read(&path).unwrap(), before, "{name} unchanged");
         }
-    }
-
-    /// `--metrics` on a `.rez` keeps the table holding the kept metric.
-    #[test]
-    fn a_rez_is_filtered_by_metric() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = ::rez::fixtures::committed_rez("v3.rez", dir.path());
-        let out = dir.path().join("slim.dendro");
-        filter(&path, &keep(None, Some(&set(&["mem_free"]))), Some(&out)).unwrap();
-        assert_eq!(dendro_streams(&out), ["b"]);
-    }
-
-    /// Without `-o` a legacy recording is refused, naming `-o` and the
-    /// `.dendro` to write; an output that is not a new `.dendro` is refused;
-    /// an unmatched sampler names the typo and writes nothing.
-    #[test]
-    fn a_legacy_filter_needs_a_new_dendro() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = ::rez::fixtures::committed_rez("v3.rez", dir.path());
-        let err = filter(&path, &keep(Some(&set(&["a"])), None), None)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("-o") && err.contains("v3.dendro"), "{err}");
-        let err = filter(
-            &path,
-            &keep(Some(&set(&["a"])), None),
-            Some(&dir.path().join("x.rez")),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains(".dendro archives only"), "{err}");
-        let out = dir.path().join("typo.dendro");
-        let err = filter(&path, &keep(Some(&set(&["cpu_usge"])), None), Some(&out))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("cpu_usge"), "{err}");
-        assert!(!out.exists());
     }
 
     fn dendro_streams(path: &Path) -> Vec<String> {

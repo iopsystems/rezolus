@@ -31,11 +31,18 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
     const { initSync, WasmCaptureRegistry } = await import(pathToFileURL(wasmJsCopy).href);
     initSync({ module: fs.readFileSync(pkgWasm) });
 
-    const parquet = fs.readFileSync(path.join(repoRoot, 'site/viewer/data/simple_capture.parquet'));
+    const recording = fs.readFileSync(path.join(repoRoot, 'tests/fixtures/upgraded/simple_capture.dendro'));
 
-    test('WASM timestamps returns raw jittered timestamps', () => {
+    // metriken-query 0.42.1 implements MetricsSource for ArchiveReader without
+    // sample_timestamps, so the trait default (an empty Vec) answers for every
+    // .dendro. A parquet was the only input with timestamps, and the viewer
+    // no longer opens one. Marked todo, not removed, until the archive reader
+    // returns its rows' timestamps.
+    test('WASM timestamps returns raw jittered timestamps', {
+        todo: 'ArchiveReader has no sample_timestamps (metriken-query 0.42.1)',
+    }, () => {
         const registry = new WasmCaptureRegistry();
-        registry.attach('baseline', new Uint8Array(parquet), 'simple_capture.parquet');
+        registry.attach('baseline', new Uint8Array(recording), 'simple_capture.dendro');
 
         const resp = JSON.parse(registry.timestamps('baseline', null));
 

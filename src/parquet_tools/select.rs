@@ -344,8 +344,8 @@ pub(crate) fn describe_candidates_at(
                  {IND}recording in this archive. To compare them, label them by position: \
                  `{program} recording\n\
                  {IND}combine FILE --ab baseline={p} experiment={q} -o ab.dendro`{others};\n\
-                 {IND}for a new capture, give each --endpoint its own source=NAME or \
-                 arm=NAME.\n",
+                 {IND}for a new capture, give each recording its own source or arm \
+                 label.\n",
                 positions[i]
             ));
             continue;
@@ -963,8 +963,8 @@ mod tests {
             "no selector can pick between identical label sets, so none should be offered: {out}"
         );
         assert!(
-            out.contains("source=NAME"),
-            "must give the fix for a new capture, echoing the recorder's own warning: {out}"
+            out.contains("its own source or arm label"),
+            "must give the fix for a new capture: {out}"
         );
         // The archive at hand can be compared without re-recording it:
         // `combine --ab` labels its recordings by position.

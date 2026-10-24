@@ -5,6 +5,7 @@
 #   1. builds + runs examples/gen_display_testdata to write a baseline and an
 #      experiment parquet (deterministic gauge spikes, bursty counter, latency
 #      histogram with tail spikes; the experiment carries a ~2x regression),
+#      and converts each to a .dendro with `rezolus recording upgrade`,
 #   2. starts the viewer in COMPARE mode (both captures loaded),
 #   3. runs tests/display_synthetic.test.mjs against the live API, asserting the
 #      decimation guarantees exactly (spike preservation, budget, window
@@ -32,9 +33,11 @@ cargo build -q -p rezolus
 
 echo "==> generating synthetic fixtures"
 ./target/debug/examples/gen_display_testdata "$BASE" "$EXP"
+./target/debug/rezolus recording upgrade "$BASE" >/dev/null
+./target/debug/rezolus recording upgrade "$EXP" >/dev/null
 
 echo "==> starting compare-mode viewer on 127.0.0.1:$PORT"
-./target/debug/rezolus view "$BASE" "$EXP" --listen "127.0.0.1:$PORT" >"$TMP/viewer.log" 2>&1 &
+./target/debug/rezolus view "${BASE%.parquet}.dendro" "${EXP%.parquet}.dendro" --listen "127.0.0.1:$PORT" >"$TMP/viewer.log" 2>&1 &
 VIEWER_PID=$!
 
 ready=""

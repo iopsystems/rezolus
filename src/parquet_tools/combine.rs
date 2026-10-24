@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use super::legacy::{self, Container};
+use super::legacy;
 
 /// How `--ab` assigns arms.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -371,6 +371,9 @@ pub(super) fn run(
         return Err("combine takes two or more inputs (or one archive with --ab)".into());
     }
     legacy::check_new_dendro(output)?;
+    for file in files {
+        ::rez::container::require_dendro(file, host.program)?;
+    }
     let plan = ab_plan(ab_raw, files, &host.positions_from())?;
     combine_dendro(&host.viewer_refuses(), files, output, &plan)
 }
@@ -378,8 +381,8 @@ pub(super) fn run(
 /// Assemble one dendro archive from `files`, a source per input recording,
 /// in one transaction: the output holds every input or does not exist.
 ///
-/// A `.rez` or parquet input is converted first into the staging directory,
-/// as `recording upgrade` converts it. Each input is then copied through
+/// Every input is a dendro archive (`run` refuses anything else). Each is
+/// copied through
 /// `copy_sources_into` in its own read snapshot, its live tail sealed
 /// (`crate::dendro_copy`), and each source keeps its uuid, so a source and a
 /// copy of it (the same uuid, e.g. a file and its snapshot) stay one
@@ -396,30 +399,7 @@ fn combine_dendro(
     // Beside the output, never in $TMPDIR: a link across filesystems fails.
     let staging = legacy::staging_dir(output)?;
 
-    let mut inputs: Vec<PathBuf> = Vec::with_capacity(files.len());
-    let mut converted = 0usize;
-    for (i, file) in files.iter().enumerate() {
-        match Container::of(file) {
-            Container::Dendro => inputs.push(file.clone()),
-            c if c.is_legacy() => {
-                let staged = staging.path().join(format!("converted-{i}.dendro"));
-                legacy::convert(file, &staged)?;
-                converted += 1;
-                inputs.push(staged);
-            }
-            c => {
-                return Err(format!(
-                    "{} is a {}, not a recording (.dendro, .rez or .parquet)",
-                    file.display(),
-                    c.name()
-                )
-                .into())
-            }
-        }
-    }
-    if converted > 0 {
-        say!("converted {converted} .rez or parquet input(s) to dendro for the assembly");
-    }
+    let inputs: Vec<PathBuf> = files.to_vec();
     check_ab_plan(plan, files, &inputs)?;
 
     let archives: Vec<Archive> = inputs
@@ -538,83 +518,6 @@ pub(crate) fn run_combine_for_test(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ::dashboard::keys::{KEY_SAMPLING_INTERVAL_MS, KEY_SOURCE};
-    use arrow::array::{Int64Array, UInt64Array};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use parquet::arrow::ArrowWriter;
-    use parquet::file::metadata::KeyValue;
-    use parquet::file::properties::WriterProperties;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use tempfile::NamedTempFile;
-
-    /// 1 second in nanoseconds — use as a multiplier so test timestamps
-    /// are at a realistic scale relative to the sampling interval.
-    const SEC: u64 = 1_000_000_000;
-
-    /// A parquet recording as a 5.x recorder wrote one: a timestamp column, a
-    /// duration column, and one gauge metric column.
-    fn make_test_file(
-        timestamps: &[u64],
-        metric_name: &str,
-        metric_values: &[Option<i64>],
-        source: &str,
-        sampling_interval_ms: &str,
-    ) -> (NamedTempFile, PathBuf) {
-        let ts_field =
-            Field::new("timestamp", DataType::UInt64, false).with_metadata(HashMap::from([
-                ("metric_type".to_string(), "timestamp".to_string()),
-                ("unit".to_string(), "nanoseconds".to_string()),
-            ]));
-        let dur_field =
-            Field::new("duration", DataType::UInt64, true).with_metadata(HashMap::from([
-                ("metric_type".to_string(), "duration".to_string()),
-                ("unit".to_string(), "nanoseconds".to_string()),
-            ]));
-        let metric_field = Field::new(metric_name, DataType::Int64, true).with_metadata(
-            HashMap::from([("metric_type".to_string(), "gauge".to_string())]),
-        );
-
-        let schema = Arc::new(Schema::new(vec![ts_field, dur_field, metric_field]));
-
-        let ts_array = UInt64Array::from(timestamps.to_vec());
-        let dur_array = UInt64Array::from(vec![None::<u64>; timestamps.len()]);
-        let metric_array = Int64Array::from(metric_values.to_vec());
-
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(ts_array),
-                Arc::new(dur_array),
-                Arc::new(metric_array),
-            ],
-        )
-        .unwrap();
-
-        let kv = vec![
-            KeyValue {
-                key: KEY_SOURCE.to_string(),
-                value: Some(source.to_string()),
-            },
-            KeyValue {
-                key: KEY_SAMPLING_INTERVAL_MS.to_string(),
-                value: Some(sampling_interval_ms.to_string()),
-            },
-        ];
-        let props = WriterProperties::builder()
-            .set_key_value_metadata(Some(kv))
-            .build();
-
-        let tmp = NamedTempFile::new().unwrap();
-        let path = tmp.path().to_path_buf();
-        let file = std::fs::File::create(&path).unwrap();
-        let mut writer = ArrowWriter::try_new(file, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        (tmp, path)
-    }
 
     /// Parse `args` as the CLI does and run the combine they name.
     fn combine_args(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -655,9 +558,18 @@ mod tests {
         combine_args(args)
     }
 
-    /// A one-recording `.rez` labelled `labels`.
+    /// A one-recording archive labelled `labels` at `path`: a `.rez`
+    /// built by the fixture writer, upgraded.
     fn agent_rez(path: &std::path::Path, labels: &[(&str, &str)]) {
-        rez::fixtures::rez_with_identity(path, labels, &[("source", "rezolus")]);
+        identity_rez(path, labels, &[("source", "rezolus")]);
+    }
+
+    /// `rez::fixtures::rez_with_identity` at `path`, upgraded.
+    fn identity_rez(path: &std::path::Path, labels: &[(&str, &str)], metadata: &[(&str, &str)]) {
+        let rez = path.with_extension("legacy.rez");
+        rez::fixtures::rez_with_identity(&rez, labels, metadata);
+        crate::parquet_tools::legacy::convert(&rez, path).unwrap();
+        std::fs::remove_file(rez).unwrap();
     }
 
     /// The labels of an archive's recordings, in catalog order.
@@ -719,36 +631,6 @@ mod tests {
         )
         .unwrap();
         assert!(crate::viewer::opens_combined(&readers, false));
-    }
-
-    /// Parquet inputs, one recording each, take their arms.
-    #[test]
-    fn combine_ab_stamps_parquet_inputs() {
-        let (_t1, p1) = make_test_file(
-            &[100 * SEC, 200 * SEC],
-            "m1",
-            &[Some(1), Some(2)],
-            "redis",
-            "1000",
-        );
-        let (_t2, p2) = make_test_file(
-            &[100 * SEC, 200 * SEC],
-            "m2",
-            &[Some(3), Some(4)],
-            "valkey",
-            "1000",
-        );
-        let dir = tempfile::tempdir().unwrap();
-        let out = dir.path().join("ab.dendro");
-        let base = format!("baseline={}", p2.display());
-        let exp = format!("experiment={}", p1.display());
-        run_combine_ab(&[p1, p2], &out, &[&base, &exp]).unwrap();
-        let arms: BTreeMap<String, String> = archive_labels(&out)
-            .into_iter()
-            .map(|l| (l["source"].clone(), l["arm"].clone()))
-            .collect();
-        assert_eq!(arms["redis"], "experiment");
-        assert_eq!(arms["valkey"], "baseline");
     }
 
     /// An input recording already carrying the arm it would be given keeps
@@ -828,12 +710,12 @@ mod tests {
     fn combine_ab_relabels_one_archive_by_position() {
         let dir = tempfile::tempdir().unwrap();
         let (a, b) = (dir.path().join("a.rez"), dir.path().join("b.rez"));
-        rez::fixtures::rez_with_identity(
+        identity_rez(
             &a,
             &[("source", "rezolus")],
             &[("source", "rezolus"), ("version", "first")],
         );
-        rez::fixtures::rez_with_identity(
+        identity_rez(
             &b,
             &[("source", "rezolus")],
             &[("source", "rezolus"), ("version", "second")],
@@ -946,9 +828,12 @@ mod tests {
         FAIL_STAMP.with(|f| f.set(false));
         assert!(err.unwrap_err().to_string().contains("injected"));
         assert!(!out.exists());
+        // The inputs, and the sidecars SQLite leaves beside an archive it
+        // read; no staging directory and no output.
         let leftovers: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
-            .map(|e| e.unwrap().file_name())
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| !n.ends_with("-wal") && !n.ends_with("-shm"))
             .collect();
         assert_eq!(leftovers.len(), 2, "{leftovers:?}");
         run_combine_ab(&[a, b], &out, &ab).unwrap();
@@ -1003,76 +888,24 @@ mod tests {
         }
     }
 
-    /// `.rez` inputs of both containers are converted on the way in, and
-    /// the assembled archive is readable, a recording per input, each
-    /// holding its tables' rows.
+    /// A `.rez` or parquet input is refused, naming the upgrade, and
+    /// nothing is written.
     #[test]
-    fn combine_converts_rez_inputs_into_one_readable_archive() {
+    fn combine_refuses_legacy_inputs() {
         let dir = tempfile::tempdir().unwrap();
         let v3 = rez::fixtures::committed_rez("v3.rez", dir.path());
-        let v2 = rez::fixtures::committed_rez("v2.rez", dir.path());
-        let out = dir.path().join("out.dendro");
-        run_combine(&[v3.clone(), v2.clone()], &out).unwrap();
-
-        let db = dendro::archive::Archive::open(&out).unwrap();
-        let sources = db.read_sources().unwrap();
-        assert_eq!(sources.len(), 2, "one source per input recording");
-        for s in &sources {
-            assert!(s.complete, "an assembled archive is finished");
-            let mut streams = db.all_streams(s.id).unwrap();
-            streams.sort();
-            assert_eq!(streams, ["a", "b"]);
-            for stream in &streams {
-                assert!(db.total_rows(s.id, stream).unwrap() > 0, "{stream}");
-            }
+        let ok = dir.path().join("ok.dendro");
+        crate::parquet_tools::legacy::convert(&v3, &ok).unwrap();
+        let parquet = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/legacy/simple_capture.parquet");
+        for legacy in [v3.clone(), parquet] {
+            let out = dir.path().join("out.dendro");
+            let err = run_combine(&[ok.clone(), legacy.clone()], &out)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("recording upgrade"), "{err}");
+            assert!(!out.exists());
         }
-        drop(db);
-        let readers = ::rez::reader::RezReader::open_recordings(
-            &out,
-            metriken_storage::BufferPool::new(64 * 1024 * 1024),
-        )
-        .unwrap();
-        assert_eq!(readers.len(), 2, "both recordings are readable");
-        let committed = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("crates/rez/tests/fixtures/rez/v3.rez");
-        assert_eq!(
-            std::fs::read(&v3).unwrap(),
-            std::fs::read(committed).unwrap(),
-            "the input is not changed"
-        );
-    }
-
-    /// Parquet inputs become a recording each, labelled with each file's
-    /// `source` as the viewer labels a parquet file.
-    #[test]
-    fn combine_parquet_inputs_into_a_multi_recording_archive() {
-        let (_t1, p1) = make_test_file(
-            &[100 * SEC, 200 * SEC],
-            "m1",
-            &[Some(1), Some(2)],
-            "redis",
-            "1000",
-        );
-        let (_t2, p2) = make_test_file(
-            &[100 * SEC, 200 * SEC],
-            "m2",
-            &[Some(3), Some(4)],
-            "valkey",
-            "1000",
-        );
-        let dir = tempfile::tempdir().unwrap();
-        let out = dir.path().join("ab.dendro");
-        run_combine(&[p1, p2], &out).unwrap();
-        let sources: std::collections::BTreeSet<String> = archive_labels(&out)
-            .into_iter()
-            .filter_map(|l| l.get("source").cloned())
-            .collect();
-        assert_eq!(
-            sources,
-            ["redis".to_string(), "valkey".to_string()]
-                .into_iter()
-                .collect()
-        );
     }
 
     /// 6.x writes `.dendro` only: a `.rez`, `.parquet` or `.parquet.ab.tar`
@@ -1210,7 +1043,7 @@ mod tests {
         let a = dir.path().join("a.dendro");
         crate::dendro_copy::fixtures::recorded(&a, 6, true);
         let copy = dir.path().join("copy.dendro");
-        crate::parquet_tools::snapshot_rez(&a, &copy).unwrap();
+        crate::parquet_tools::snapshot_rez(&a, &copy, "rezolus").unwrap();
         let out = dir.path().join("twice.dendro");
         run_combine(&[a.clone(), copy], &out).unwrap();
 
@@ -1290,7 +1123,7 @@ mod tests {
         assert_eq!(other.len(), 2, "different epochs: two recordings");
 
         let copy = dir.path().join("copy.dendro");
-        crate::parquet_tools::snapshot_rez(&one_path, &copy).unwrap();
+        crate::parquet_tools::snapshot_rez(&one_path, &copy, "rezolus").unwrap();
         let out = dir.path().join("with-copy.dendro");
         run_combine(&[one_path, copy], &out).unwrap();
         let both = ::rez::reader::RezReader::open_recordings(&out, pool()).unwrap();
@@ -1321,7 +1154,7 @@ mod tests {
         let a = dir.path().join("a.dendro");
         write_dendro(&a, &[source("E", 0..6)], None, Finish::Finalized);
         let copy = dir.path().join("a-copy.dendro");
-        crate::parquet_tools::snapshot_rez(&a, &copy).unwrap();
+        crate::parquet_tools::snapshot_rez(&a, &copy, "rezolus").unwrap();
         let later = dir.path().join("later.dendro");
         write_dendro(&later, &[source("F", 10..16)], None, Finish::Finalized);
         let three = dir.path().join("three.dendro");

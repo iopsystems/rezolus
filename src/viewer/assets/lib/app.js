@@ -49,7 +49,7 @@ let activeSectionRoute = null;
 const DEFAULT_DOCUMENT_TITLE = (typeof document !== 'undefined' && document.title) || 'Rezolus';
 
 // Update browser tab title to reflect the active section + loaded file
-// so pasted URLs (e.g. .../viewer/?demo=vllm.parquet#/gpu) preview
+// so pasted URLs (e.g. .../viewer/?demo=vllm.dendro#/gpu) preview
 // usefully in link-unfurling and tab strips.
 const updateDocumentTitle = (sectionKey) => {
     if (typeof document === 'undefined') return;
@@ -337,7 +337,7 @@ const detachExperiment = async () => {
     m.redraw();
 };
 
-// Replace the currently attached experiment with a new parquet. Unlike
+// Replace the currently attached experiment with a new recording. Unlike
 // detachExperiment + attachExperiment, this preserves compareMode across
 // the transition so the UI doesn't bounce back to single-capture mode.
 const loadExperiment = async (file) => {
@@ -1275,8 +1275,8 @@ const initDashboard = (config = {}) => {
     }
 
     // Restore step override from whichever store carries one. Report
-    // (loaded-from-parquet) wins when both exist so a shared annotated
-    // parquet shows the granularity its author intended.
+    // (loaded from the recording) wins when both exist so a shared annotated
+    // recording shows the granularity its author intended.
     const restoredStep =
         reportStore.stepOverride ?? notebookStore.stepOverride ?? null;
     if (restoredStep != null) {
@@ -1377,7 +1377,7 @@ const initDashboard = (config = {}) => {
             experimentAlias,
             captures: compareCaptures,
             // The WASM viewer has no onUploadParquet handler — that path
-            // is how the site viewer loads its initial parquet on its own.
+            // is how the site viewer loads its initial recording on its own.
             // Use its absence as the "WASM mode" signal and hide both
             // per-capture Load buttons there. Server viewer always has it.
             onLoadBaseline: onUploadParquet ? (file) => onUploadParquet(file) : null,

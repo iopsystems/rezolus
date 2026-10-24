@@ -4,7 +4,7 @@
 let registry = null;
 
 const ensureRegistry = () => {
-    if (!registry) throw new Error('No parquet file loaded');
+    if (!registry) throw new Error('No recording loaded');
 };
 
 const ensureAttached = (captureId) => {
@@ -61,15 +61,15 @@ const ViewerApi = {
     async attachExperiment(file) {
         ensureRegistry();
         const data = new Uint8Array(await file.arrayBuffer());
-        registry.attach('experiment', data, file.name || 'experiment.parquet');
+        registry.attach('experiment', data, file.name || 'experiment.dendro');
     },
 
     // Attach an experiment capture from raw bytes (no File wrapper). Used
-    // by the demo URL flow to feed pre-fetched parquet buffers into the
+    // by the demo URL flow to feed pre-fetched recording buffers into the
     // WASM registry.
     async attachExperimentBytes(bytes, filename) {
         ensureRegistry();
-        registry.attach('experiment', bytes, filename || 'experiment.parquet');
+        registry.attach('experiment', bytes, filename || 'experiment.dendro');
     },
 
     // Whether a capture slot currently holds anything. The registry fills
