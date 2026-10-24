@@ -24,13 +24,27 @@ mod snapshot;
 
 pub use snapshot::SnapshotBuilder;
 
-/// Exercise a sampler's real registered columns through the long stream builder.
+/// Serialize sampler metric mutations with snapshot and contract tests.
 #[cfg(test)]
-pub(crate) fn test_stream_groups() -> Vec<metriken_exposition::group_builder::StreamGroup> {
-    let _serialize = snapshot::BUILDER_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    acquisition_cache::V3Builder::new().build_stream(vec![])
+pub(crate) fn test_registry() -> TestRegistryGuard {
+    TestRegistryGuard {
+        _guard: snapshot::BUILDER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()),
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct TestRegistryGuard {
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl TestRegistryGuard {
+    /// Build registered sampler columns without reacquiring the registry lock.
+    pub(crate) fn stream_groups(&self) -> Vec<metriken_exposition::group_builder::StreamGroup> {
+        acquisition_cache::V3Builder::new().build_stream(vec![])
+    }
 }
 
 pub async fn serve(

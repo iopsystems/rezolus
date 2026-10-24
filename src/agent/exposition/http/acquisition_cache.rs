@@ -331,6 +331,7 @@ mod tests {
         let in_flight = SLOW_CACHE_GROUP.acquire_blocking();
         SLOW_CACHE_GAUGE.set(999, 20);
         assert!(finish(&pending, &mut cache.wide, &mut torn, |g| &g.name));
+        torn.retain(|g| g.name == NAME);
         assert_eq!(torn, vec![failed_group]);
         in_flight.finish();
         assert_eq!(extract(&take(&mut cache)).unwrap().gauges, vec![Some(20)]);

@@ -16,6 +16,7 @@ const ROOT: &str = "/sys/fs/cgroup";
 const DEFAULT_INTERVAL: Duration = Duration::from_secs(60);
 
 use crate::agent::*;
+use anyhow::Context;
 use metriken::GaugeGroup;
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -32,11 +33,12 @@ fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
     }
-    let controllers = std::fs::read_to_string(Path::new(ROOT).join("cgroup.controllers"))?;
-    anyhow::ensure!(
-        controllers.split_whitespace().any(|c| c == "memory"),
-        "cgroup v2 memory controller is unavailable at {ROOT}"
-    );
+    if !memory_enabled_for_children(Path::new(ROOT))? {
+        warn!(
+            "{NAME}: memory is not enabled in {ROOT}/cgroup.subtree_control; \
+             child cgroup memory metrics will be empty until it is enabled"
+        );
+    }
     let interval = config.sampler_interval(NAME).unwrap_or(DEFAULT_INTERVAL);
     anyhow::ensure!(
         !interval.is_zero(),
@@ -47,6 +49,22 @@ fn init(config: Arc<Config>) -> SamplerResult {
         interval,
         reading: Arc::new(AtomicBool::new(false)),
     })))
+}
+
+fn memory_enabled_for_children(root: &Path) -> anyhow::Result<bool> {
+    let has_memory = |file: &str| -> anyhow::Result<bool> {
+        let path = root.join(file);
+        let contents = std::fs::read_to_string(&path).with_context(|| {
+            format!("reading {} for cgroup v2 memory accounting", path.display())
+        })?;
+        Ok(contents.split_whitespace().any(|c| c == "memory"))
+    };
+    anyhow::ensure!(
+        has_memory("cgroup.controllers")?,
+        "cgroup v2 memory controller is unavailable at {}",
+        root.display()
+    );
+    has_memory("cgroup.subtree_control")
 }
 
 #[distributed_slice(SAMPLERS)]
@@ -125,7 +143,10 @@ impl CgroupMemory {
                     "{NAME}: {count} cgroups sampled in {} us",
                     start.elapsed().as_micros()
                 ),
-                Ok(Err(e)) => debug!("{NAME}: sweep failed: {e}"),
+                Ok(Err(e)) => warn!(
+                    "{NAME}: sweep failed: {e}; retaining the previous observation and \
+                     retrying after the configured interval"
+                ),
                 Err(_) => error!("{NAME}: sweep panicked; retrying after the configured interval"),
             }
             state.lock().unwrap_or_else(|e| e.into_inner()).last_read = Some(Instant::now());
@@ -145,7 +166,7 @@ impl State {
 
     fn sample(&mut self, root: &Path) -> std::io::Result<usize> {
         // Failure to access the mount must not stamp a successful acquisition.
-        std::fs::read_dir(root)?;
+        std::fs::read_dir(root).map_err(|e| path_error(root, e))?;
         let mut paths = HashSet::new();
         for entry in WalkDir::new(root).min_depth(1) {
             let entry = match entry {
@@ -159,8 +180,11 @@ impl State {
                 }
                 Err(e) => return Err(std::io::Error::other(e)),
             };
-            if entry.file_type().is_dir() && entry.path().join("memory.current").try_exists()? {
-                paths.insert(entry.into_path());
+            if entry.file_type().is_dir() {
+                let probe = entry.path().join("memory.current");
+                if probe.try_exists().map_err(|e| path_error(&probe, e))? {
+                    paths.insert(entry.into_path());
+                }
             }
         }
 
@@ -233,6 +257,10 @@ impl State {
         }
         Ok(count)
     }
+}
+
+fn path_error(path: &Path, error: std::io::Error) -> std::io::Error {
+    std::io::Error::new(error.kind(), format!("{}: {error}", path.display()))
 }
 
 fn read_bytes(path: &Path) -> Option<i64> {
@@ -309,17 +337,37 @@ fn clear_slot(slot: usize) {
 mod tests {
     use super::*;
 
-    // Both lifecycle and ignored capacity tests mutate the same metric statics.
-    static METRICS_LOCK: Mutex<()> = Mutex::new(());
-
     fn sample(state: &mut State, root: &Path) -> std::io::Result<usize> {
         state.sweep(root)
     }
 
     #[test]
+    fn controller_diagnostics_distinguish_availability_and_child_enablement() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let error = memory_enabled_for_children(root).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains(&root.join("cgroup.controllers").display().to_string()));
+        std::fs::write(root.join("cgroup.controllers"), "cpu io\n").unwrap();
+        assert!(memory_enabled_for_children(root)
+            .unwrap_err()
+            .to_string()
+            .contains("memory controller is unavailable"));
+        std::fs::write(root.join("cgroup.controllers"), "cpu memory io\n").unwrap();
+        let error = memory_enabled_for_children(root).unwrap_err();
+        assert!(error.to_string().contains("cgroup.subtree_control"));
+        std::fs::write(root.join("cgroup.subtree_control"), "cpu\n").unwrap();
+        assert!(!memory_enabled_for_children(root).unwrap());
+        // Enabling accounting later needs no change to controller availability.
+        std::fs::write(root.join("cgroup.subtree_control"), "cpu memory\n").unwrap();
+        assert!(memory_enabled_for_children(root).unwrap());
+    }
+
+    #[test]
     #[ignore = "creates 4097 cgroupfs fixtures to measure a capacity-sized sweep"]
     fn capacity_sweep_cost() {
-        let _serial = METRICS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _registry = crate::agent::exposition::http::test_registry();
         let root = tempfile::tempdir().unwrap();
         let stat = KINDS
             .iter()
@@ -384,7 +432,7 @@ mod tests {
 
     #[test]
     fn failed_sweep_preserves_values_membership_and_window_until_recovery() {
-        let _serial = METRICS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _registry = crate::agent::exposition::http::test_registry();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let existing = root.join("existing");
@@ -398,6 +446,22 @@ mod tests {
         let slots = state.slots.clone();
         let window = CGROUP_MEMORY_ACQ.window().unwrap();
         let metadata = CGROUP_MEMORY_USAGE.metadata_snapshot();
+        // A broken subtree must report its path and preserve every published
+        // group. A symlink loop injects a probe error even when tests run as root.
+        let broken = root.join("broken");
+        std::fs::create_dir(&broken).unwrap();
+        let probe = broken.join("memory.current");
+        std::os::unix::fs::symlink("memory.current", &probe).unwrap();
+        std::fs::write(existing.join("memory.current"), "8192").unwrap();
+        let error = state.sweep(root).unwrap_err();
+        assert!(error.to_string().contains(&probe.display().to_string()));
+        assert_eq!(state.slots, slots);
+        assert_eq!(CGROUP_MEMORY_ACQ.window(), Some(window));
+        assert_eq!(CGROUP_MEMORY_USAGE.metadata_snapshot(), metadata);
+        for slot in slots.values() {
+            assert_eq!(CGROUP_MEMORY_USAGE.value(*slot), Some(4096));
+        }
+        std::fs::remove_dir_all(&broken).unwrap();
         std::fs::remove_dir_all(&vanished).unwrap();
         std::fs::write(existing.join("memory.current"), "invalid").unwrap();
         let added = root.join("added");
@@ -468,10 +532,10 @@ mod tests {
             .is_some());
     }
 
-    // METRICS_LOCK serializes all tests that write the process-global groups.
+    // Hold the registry lock across both mutations and stream assertions.
     #[test]
     fn discovers_nested_cgroups_and_clears_missing_values_and_deleted_groups() {
-        let _serial = METRICS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let registry = crate::agent::exposition::http::test_registry();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let parent = root.join("outer.slice/user.slice/service.slice");
@@ -509,7 +573,7 @@ mod tests {
         // All thirty columns must join to the same two cgroup occupants in
         // the long stream. In particular, kinds belong to columns, not slots.
         use metriken_exposition::group_builder::StreamGroup;
-        let groups = crate::agent::exposition::http::test_stream_groups();
+        let groups = registry.stream_groups();
         let group = groups
             .into_iter()
             .find_map(|g| match g {

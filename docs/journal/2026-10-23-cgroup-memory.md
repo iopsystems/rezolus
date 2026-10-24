@@ -345,3 +345,37 @@ root suite passed all 1130 tests (12 ignored), and the dashboard suite passed
 249 (four ignored). The changed test total reflects upstream's recording-tool
 refactor. Cgroup JavaScript tests, formatting and PR-diff whitespace checks
 passed. Clippy completed with the same pre-existing warning in `src/mcp/link.rs`.
+
+## Second local review follow-up
+
+The cache lifecycle assertion now selects its own probe group before comparing
+the result. Other cached groups can legitimately be carried into that result.
+All memory sampler tests that mutate registered metrics now hold the snapshot
+tests' registry lock, including the ignored capacity test. The long-stream
+assertion builds through that lock's guard without reacquiring the mutex.
+This replaces the sampler-only lock, which did not isolate snapshot tests.
+
+Discovery errors still discard the whole acquisition and preserve its previous
+values, membership, and window (principle 18). They now warn with the failure
+path and retry policy. Skipping inaccessible subtrees would otherwise mistake
+their existing cgroups for deletions. A symlink-loop regression injects a probe
+failure independently of test-user permissions and verifies preservation.
+
+Initialization now distinguishes controller availability from enablement for
+children. It warns when `cgroup.subtree_control` lacks memory, while keeping the
+sampler available to collect after accounting is enabled. Errors reading either
+controller file include its full path and cgroup v2 context. Fixture coverage
+checks missing files, an unavailable controller, disabled child accounting,
+and subsequent enablement. This adds one startup read and no steady-state
+reads; the sampler's cadence and cache behavior are unchanged.
+
+The remaining review suggestions (capacity selection/reporting, dashboard
+discovery concurrency, metadata allocation, UTF-8 label handling shared with
+BPF, and a shared slow-worker helper) remain follow-up work.
+
+Validation: the previously failing mixed cgroup/cache run passed (21 tests,
+one ignored), and passed again with the capacity test included (22 tests) on
+four test threads. The full root suite passed 1131 tests (12 ignored), including
+the snapshot contract and localhost stream/recorder tests. Formatting and
+whitespace checks passed. Clippy completed with only the existing
+`manual_range_contains` warning in `src/mcp/link.rs`.
