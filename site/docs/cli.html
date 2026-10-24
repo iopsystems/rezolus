@@ -217,8 +217,8 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 </div>
 </div>
 <div class="mt-3 space-y-1 text-sm text-slate-500 font-mono">
-<div><span class="text-slate-400">INPUT</span>                          <span class="text-slate-600">First capture: parquet, .dendro or .rez archive, agent URL, or alias=parquet</span></div>
-<div><span class="text-slate-400">EXPERIMENT</span>                     <span class="text-slate-600">Optional second capture for A/B comparison</span></div>
+<div><span class="text-slate-400">INPUT</span>                          <span class="text-slate-600">First capture: a .dendro recording, an agent URL, or alias=path</span></div>
+<div><span class="text-slate-400">EXPERIMENT</span>                     <span class="text-slate-600">Optional second capture for A/B comparison (a one-recording .dendro)</span></div>
 <div><span class="text-slate-400">-l, --listen</span> &lt;ADDR&gt;           <span class="text-slate-600">Viewer listen address (e.g. 127.0.0.1:8080)</span></div>
 <div><span class="text-slate-400">    --templates</span> &lt;DIR&gt;         <span class="text-slate-600">Directory of service-extension template JSON</span></div>
 <div><span class="text-slate-400">    --category</span> &lt;NAME&gt;         <span class="text-slate-600">Activate category mode (e.g. inference-library)</span></div>
@@ -232,7 +232,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
 <div class="p-5 font-mono text-base">
 <div class="text-slate-600 text-sm mb-2"># View a recording</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view output.parquet</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view output.dendro</code></div>
 <div class="text-slate-600 text-sm mt-3 mb-2"># View an archive (a 2-recording archive renders as A/B)</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view out.dendro</code></div>
 <div class="text-slate-600 text-sm mt-3 mb-2"># View live agent</div>
@@ -260,7 +260,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div><span class="text-slate-400">extract-features</span> &lt;FILE&gt;</div>
 <div><span class="text-slate-400">install</span> [--scope user|project] [--dry-run] [--no-skill] [--allow-mutating] [--export-dir DIR] [--viewer-url URL]</div>
 </div>
-<p class="text-sm text-slate-400 mt-3">Every &lt;FILE&gt; may be a <code>.parquet</code>, a <code>.dendro</code> or a <code>.rez</code>; the format is detected by content. With no subcommand, <code>rezolus mcp</code> runs as a stdio MCP server for an LLM client; In Rezolus 6.0 and later, <code>--allow-mutating</code> enables the mutating tool (<code>remove_events</code>), <code>--export-dir DIR</code> gives <code>export_query</code> a directory to write into, and <code>--viewer-url URL</code> lets <code>viewer_link</code> return full URLs; <code>install</code> registers it with Claude Code. See <a class="text-blue-600 dark:text-blue-400" href="mcp.html">MCP Server</a>.</p>
+<p class="text-sm text-slate-400 mt-3">Every &lt;FILE&gt; is a <code>.dendro</code>; a <code>.rez</code> or <code>.parquet</code> from an earlier release is refused with <code>rezolus recording upgrade FILE</code>, which converts it. With no subcommand, <code>rezolus mcp</code> runs as a stdio MCP server for an LLM client; In Rezolus 6.0 and later, <code>--allow-mutating</code> enables the mutating tool (<code>remove_events</code>), <code>--export-dir DIR</code> gives <code>export_query</code> a directory to write into, and <code>--viewer-url URL</code> lets <code>viewer_link</code> return full URLs; <code>install</code> registers it with Claude Code. See <a class="text-blue-600 dark:text-blue-400" href="mcp.html">MCP Server</a>.</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
 <div class="p-5 font-mono text-base leading-8">
 <div class="text-slate-500 text-sm"># One-shot PromQL against a recording</div>
@@ -279,20 +279,16 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording &lt;SUBCOMMAND&gt; [OPTIONS]</code></div>
 </div>
 </div>
-<p class="text-sm text-slate-400 mt-2">Offline operations on recordings &mdash; <code>.dendro</code> and <code>.rez</code> archives and <code>.parquet</code> files. Inspect metadata, trim what you do not need, embed service KPI definitions, merge multi-source captures, or convert older formats. <code>rezolus parquet &hellip;</code> still works as an alias.</p>
+<p class="text-sm text-slate-400 mt-2">Offline operations on <code>.dendro</code> recordings: inspect, embed KPI definitions and events, evaluate checks, combine, shrink, and copy a live archive. <code>upgrade</code> converts the <code>.rez</code> archives, <code>.parquet</code> files and <code>.parquet.ab.tar</code> A/B tarballs earlier releases wrote; every other subcommand refuses them with that command. <code>rezolus parquet &hellip;</code> still works as an alias.</p>
 
 <div class="mt-6 space-y-6">
 
 <!-- metadata -->
 <div>
 <h4 class="text-sm font-bold mb-2"><code>metadata</code></h4>
-<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Show file-level + column metadata for a recording.</p>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Describe an archive: its recordings, their labels and metadata, and each table with its cadence.</p>
 <div class="space-y-1 text-sm text-slate-500 font-mono">
-<div><span class="text-slate-400">-i, --input</span> &lt;FILE&gt;          <span class="text-slate-600">Recording to inspect (.parquet, or a .dendro or .rez archive)</span></div>
-<div><span class="text-slate-400">    --schema</span>               <span class="text-slate-600">Show only column-level metadata</span></div>
-<div><span class="text-slate-400">    --file</span>                 <span class="text-slate-600">Show only file-level metadata</span></div>
-<div><span class="text-slate-400">    --geometry</span>             <span class="text-slate-600">Show only table shape + row group layout</span></div>
-<div><span class="text-slate-400">    --field</span> &lt;KEY&gt;          <span class="text-slate-600">Print one file-level metadata key</span></div>
+<div><span class="text-slate-400">-i, --input &lt;FILE&gt;</span>          <span class="text-slate-600">The recording (.dendro)</span></div>
 <div><span class="text-slate-400">    --json</span>                 <span class="text-slate-600">Emit JSON (for scripting)</span></div>
 </div>
 </div>
@@ -300,89 +296,100 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <!-- annotate -->
 <div>
 <h4 class="text-sm font-bold mb-2"><code>annotate</code></h4>
-<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Embed service-extension KPI queries (and related metadata) into a recording so the viewer can render them as charts.</p>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Embed service-extension KPI queries, events or a systeminfo JSON into each recording of an archive, in place or into a copy.</p>
 <div class="space-y-1 text-sm text-slate-500 font-mono">
-<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">Parquet to annotate (overwritten in place unless &dash;&dash;output)</span></div>
-<div><span class="text-slate-400">    --queries</span> &lt;JSON&gt;        <span class="text-slate-600">Custom service-extension JSON (overrides templates)</span></div>
-<div><span class="text-slate-400">    --templates</span> &lt;DIR&gt;       <span class="text-slate-600">Template directory to resolve KPIs from</span></div>
-<div><span class="text-slate-400">    --source</span> &lt;NAME&gt;         <span class="text-slate-600">Source tag to match against template <code>members</code></span></div>
-<div><span class="text-slate-400">    --node</span> &lt;NAME&gt;           <span class="text-slate-600">Node name, read by <code>combine</code> for multi-node merges</span></div>
-<div><span class="text-slate-400">    --filter</span>                <span class="text-slate-600">Trim columns to only those referenced by KPIs</span></div>
-<div><span class="text-slate-400">    --systeminfo</span> &lt;JSON&gt;     <span class="text-slate-600">Embed/override the recorded systeminfo</span></div>
-<div><span class="text-slate-400">    --add-events</span> &lt;JSON&gt;     <span class="text-slate-600">Append events to the file</span></div>
-<div><span class="text-slate-400">    --event</span> &lt;SPEC&gt;          <span class="text-slate-600">Single event spec (repeatable)</span></div>
-<div><span class="text-slate-400">    --clear-events</span>          <span class="text-slate-600">Drop all existing events</span></div>
-<div><span class="text-slate-400">    --overwrite</span>             <span class="text-slate-600">Allow overwriting existing annotations</span></div>
-<div><span class="text-slate-400">    --undo</span>                  <span class="text-slate-600">Remove previously-applied annotations</span></div>
+<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">The recording to annotate (.dendro)</span></div>
+<div><span class="text-slate-400">-o, --output &lt;PATH&gt;</span>         <span class="text-slate-600">Write the annotated copy here instead of in place</span></div>
+<div><span class="text-slate-400">    --queries &lt;JSON&gt;</span>        <span class="text-slate-600">Service-extension JSON to embed</span></div>
+<div><span class="text-slate-400">    --undo</span>                  <span class="text-slate-600">Remove the embedded KPIs</span></div>
+<div><span class="text-slate-400">    --systeminfo &lt;PATH&gt;</span>     <span class="text-slate-600">Store a systeminfo JSON</span></div>
+<div><span class="text-slate-400">    --event &lt;SPEC&gt;</span>          <span class="text-slate-600">Add one event (repeatable)</span></div>
+<div><span class="text-slate-400">    --add-events &lt;PATH&gt;</span>     <span class="text-slate-600">Add events from a JSON/JSONL file (repeatable)</span></div>
+<div><span class="text-slate-400">    --clear-events</span>          <span class="text-slate-600">Remove existing events first</span></div>
+</div>
+</div>
+
+<!-- check -->
+<div>
+<h4 class="text-sm font-bold mb-2"><code>check</code></h4>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Evaluate the checks a recording's KPIs carry and print a verdict per check; exits 0, 1 (a check failed) or 2 (a check could not be evaluated).</p>
+<div class="space-y-1 text-sm text-slate-500 font-mono">
+<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">The recording to check (.dendro)</span></div>
+<div><span class="text-slate-400">    --queries &lt;JSON&gt;</span>        <span class="text-slate-600">Run these checks instead of the embedded ones</span></div>
+<div><span class="text-slate-400">    --recording &lt;K=V&gt;</span>       <span class="text-slate-600">One recording of a multi-recording archive</span></div>
+<div><span class="text-slate-400">    --annotate</span>              <span class="text-slate-600">Write FAIL/WARN windows as kind=check events</span></div>
+<div><span class="text-slate-400">    --json</span>                  <span class="text-slate-600">Print the verdicts as JSON</span></div>
 </div>
 </div>
 
 <!-- combine -->
 <div>
 <h4 class="text-sm font-bold mb-2"><code>combine</code></h4>
-<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Merge multiple recordings into one &mdash; multi-node rezolus, multi-instance services, a multi-recording <code>.dendro</code> or <code>.rez</code>, or compare-mode A/B bundles.</p>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Assemble two or more archives into one, a recording per input recording, opened as one combined view or, with <code>--ab</code>, as an A/B comparison.</p>
 <div class="space-y-1 text-sm text-slate-500 font-mono">
-<div><span class="text-slate-400">FILES...</span>                      <span class="text-slate-600">Inputs to merge (parquet, single-recording .rez, or .dendro into a .dendro output)</span></div>
-<div><span class="text-slate-400">-o, --output</span> &lt;FILE&gt;         <span class="text-slate-600">Output path; the extension picks the result (.parquet, .rez, .dendro, .parquet.ab.tar)</span></div>
-<div><span class="text-slate-400">    --pinned</span> &lt;NAME&gt;         <span class="text-slate-600">Default rezolus node to display</span></div>
-<div><span class="text-slate-400">    --ab</span> &lt;B=SRC&gt; &lt;E=SRC&gt;   <span class="text-slate-600">Bundle as A/B compare tarball &mdash; one flag, both values: <code>--ab baseline=…&nbsp;experiment=…</code></span></div>
-<div><span class="text-slate-400">    --category</span> &lt;NAME&gt;       <span class="text-slate-600">Tag the bundle with a category template</span></div>
-<div><span class="text-slate-400">    --bypass-time-check</span>     <span class="text-slate-600">Skip timestamp alignment validation</span></div>
+<div><span class="text-slate-400">FILES...</span>                      <span class="text-slate-600">Input recordings (.dendro)</span></div>
+<div><span class="text-slate-400">-o, --output &lt;FILE&gt;</span>         <span class="text-slate-600">The .dendro to write; must not exist</span></div>
+<div><span class="text-slate-400">    --ab &lt;B=IN&gt; &lt;E=IN&gt;</span>     <span class="text-slate-600">Label the inputs arm=baseline / arm=experiment (one archive input: by position)</span></div>
 </div>
 </div>
 
 <!-- filter -->
 <div>
 <h4 class="text-sm font-bold mb-2"><code>filter</code></h4>
-<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Shrink a recording to what it needs &mdash; parquet columns referenced by its service-extension KPIs, or whole samplers of a <code>.dendro</code> or <code>.rez</code>. Useful before sharing a focused report.</p>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Shrink an archive to the samplers or metric columns named, in place or into a new <code>.dendro</code>.</p>
 <div class="space-y-1 text-sm text-slate-500 font-mono">
-<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">Recording to filter (.parquet, or .dendro or .rez with --samplers)</span></div>
-<div><span class="text-slate-400">    --samplers</span> &lt;A,B,...&gt;    <span class="text-slate-600">For .dendro and .rez: samplers to KEEP (required there, ignored for parquet)</span></div>
-<div><span class="text-slate-400">    --queries</span> &lt;JSON&gt;        <span class="text-slate-600">Custom KPI JSON (overrides embedded/template)</span></div>
-<div><span class="text-slate-400">    --templates</span> &lt;DIR&gt;       <span class="text-slate-600">Template directory to resolve KPIs from</span></div>
-<div><span class="text-slate-400">-o, --output</span> &lt;FILE&gt;         <span class="text-slate-600">Output path (defaults to in-place overwrite)</span></div>
+<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">Recording to filter (.dendro)</span></div>
+<div><span class="text-slate-400">    --samplers &lt;A,B,...&gt;</span>    <span class="text-slate-600">Samplers to keep</span></div>
+<div><span class="text-slate-400">    --metrics &lt;A,B,...&gt;</span>     <span class="text-slate-600">Metric columns to keep</span></div>
+<div><span class="text-slate-400">-o, --output &lt;FILE&gt;</span>         <span class="text-slate-600">Write here instead of in place</span></div>
 </div>
 </div>
 
 <!-- convert -->
 <div>
 <h4 class="text-sm font-bold mb-2"><code>convert</code></h4>
-<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Turn a raw msgpack recording (from a 5.x <code>record -o out.raw</code>) into parquet. Plain or zstd input, detected by content.</p>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Turn a raw msgpack recording (<code>record -o out.raw</code> in 5.x) into a <code>.dendro</code>. Plain or zstd input, detected by content.</p>
 <div class="space-y-1 text-sm text-slate-500 font-mono">
 <div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">Raw recording to convert</span></div>
-<div><span class="text-slate-400">-o, --output</span> &lt;PATH&gt;         <span class="text-slate-600">Output parquet path (default: input with .parquet)</span></div>
-<div><span class="text-slate-400">    --interval</span> &lt;DURATION&gt;   <span class="text-slate-600">Override the inferred sampling interval</span></div>
-<div><span class="text-slate-400">    --systeminfo</span> &lt;PATH&gt;     <span class="text-slate-600">Stamp in a systeminfo blob the raw stream never carried</span></div>
-<div><span class="text-slate-400">    --descriptions</span> &lt;PATH&gt;   <span class="text-slate-600">Stamp in metric help text (only settable here)</span></div>
-<div><span class="text-slate-400">-m, --metadata</span> &lt;KEY=VALUE&gt;  <span class="text-slate-600">Tag the output (repeatable)</span></div>
+<div><span class="text-slate-400">-o, --output &lt;PATH&gt;</span>         <span class="text-slate-600">Output .dendro path (default: input with .dendro)</span></div>
+<div><span class="text-slate-400">    --interval &lt;DURATION&gt;</span>   <span class="text-slate-600">Override the inferred sampling interval</span></div>
+<div><span class="text-slate-400">    --systeminfo &lt;PATH&gt;</span>     <span class="text-slate-600">Stamp in a systeminfo blob the raw stream never carried</span></div>
+<div><span class="text-slate-400">    --descriptions &lt;PATH&gt;</span>   <span class="text-slate-600">Stamp in metric help text (only settable here)</span></div>
+<div><span class="text-slate-400">-m, --metadata &lt;KEY=VALUE&gt;</span>  <span class="text-slate-600">Tag the output (repeatable)</span></div>
 <div><span class="text-slate-400">    --force</span>                 <span class="text-slate-600">Overwrite an existing output</span></div>
+</div>
+</div>
+
+<!-- snapshot -->
+<div>
+<h4 class="text-sm font-bold mb-2"><code>snapshot</code></h4>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Copy an archive that is still being written into a complete standalone <code>.dendro</code>, without pausing the writer.</p>
+<div class="space-y-1 text-sm text-slate-500 font-mono">
+<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">The archive to copy (.dendro)</span></div>
+<div><span class="text-slate-400">-o, --output &lt;DENDRO&gt;</span>       <span class="text-slate-600">The .dendro to write; must not exist</span></div>
 </div>
 </div>
 
 <!-- upgrade -->
 <div>
 <h4 class="text-sm font-bold mb-2"><code>upgrade</code></h4>
-<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Rewrite a v1/v2 (tar) <code>.rez</code> as the current v3 (SQLite) container. Segment data is carried across byte-for-byte. A v3 input is refused rather than copied.</p>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Convert a recording an earlier release wrote into a new <code>.dendro</code>: a v1, v2 or v3 <code>.rez</code>, a <code>.parquet</code> file, or a <code>.parquet.ab.tar</code> A/B tarball (two recordings, arm=baseline and arm=experiment). The input is never changed.</p>
 <div class="space-y-1 text-sm text-slate-500 font-mono">
-<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">The .rez archive to upgrade</span></div>
-<div><span class="text-slate-400">-o, --output</span> &lt;REZ&gt;          <span class="text-slate-600">Write here instead of replacing in place</span></div>
+<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">The recording to convert</span></div>
+<div><span class="text-slate-400">-o, --output &lt;DENDRO&gt;</span>       <span class="text-slate-600">The .dendro to write (default: the input with a .dendro extension)</span></div>
 </div>
 </div>
 
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
 <div class="p-5 font-mono text-base leading-8">
-<div class="text-slate-500 text-sm"># Inspect</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording metadata -i out.rez</code></div>
-<div class="text-slate-600 text-sm mt-3"># Annotate with KPIs from a template directory</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording annotate recording.parquet --templates ./templates</code></div>
-<div class="text-slate-600 text-sm mt-3"># Combine two captures as an A/B bundle</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording combine before.parquet after.parquet \</code></div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">&nbsp;</span><code class="text-green-400">    --ab baseline=before experiment=after \</code></div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">&nbsp;</span><code class="text-green-400">    -o compare.parquet.ab.tar</code></div>
-<div class="text-slate-600 text-sm mt-3"># Assemble two single-recording .rez into one A/B archive</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording combine baseline.rez experiment.rez -o ab.rez</code></div>
-</div>
-</div>
+<div class="text-slate-500 text-sm"># Convert a 5.x recording, then inspect it</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording upgrade out.rez</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording metadata -i out.dendro</code></div>
+<div class="text-slate-600 text-sm mt-3"># Embed KPIs</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording annotate run.dendro --queries kpis.json</code></div>
+<div class="text-slate-600 text-sm mt-3"># Combine two captures as an A/B comparison</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording combine before.dendro after.dendro \</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">&nbsp;</span><code class="text-green-400">    --ab baseline=before.dendro experiment=after.dendro -o ab.dendro</code></div>
 </div>
 </div>
 

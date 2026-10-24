@@ -178,6 +178,27 @@
 
 ### Removed
 
+- **Breaking: every command but `rezolus recording upgrade` opens `.dendro`
+  archives only.** A `.rez` archive (v1, v2 or v3), a standalone `.parquet`
+  file and a `.parquet.ab.tar` A/B tarball are refused by `view` (a file, a
+  browser upload, a URL load and an attached experiment), the static-site
+  viewer, `mcp` (CLI and stdio), Save as Report and every other `recording`
+  subcommand, with the command that converts the file:
+  `rezolus recording upgrade FILE`, which writes `FILE`'s name with a
+  `.dendro` extension. Nothing converts a recording when it is opened, in
+  memory or into a temporary file. `upgrade` now also converts a
+  `.parquet.ab.tar` into a two-recording `.dendro` labelled
+  `arm=baseline`/`arm=experiment`, which the viewer opens as the
+  comparison; the tarball's aliases and category are not carried over. The
+  edit commands' `-o` no longer converts a legacy input; it still writes
+  the edited copy of a `.dendro` elsewhere. `recording filter` loses
+  `--queries` and `--templates` (they chose a parquet file's KPI columns),
+  and `recording metadata` loses `--schema`, `--file`, `--geometry` and
+  `--field` (they described a parquet footer). A two-file comparison
+  (`rezolus view a.dendro b.dendro`, the browser's experiment upload, a
+  URL pair) takes a one-recording `.dendro` as each side; an archive of
+  several recordings is refused, naming `recording combine --ab`. The
+  static-site demo recordings are `.dendro` files.
 - **The viewer's Time selector (Aligned/Raw) is gone.** Every dashboard
   chart is on the step grid. Raw mode is a per-chart view: the expanded
   chart (the open-in-new-tab link) has SHOW SAMPLES, which reruns its query
