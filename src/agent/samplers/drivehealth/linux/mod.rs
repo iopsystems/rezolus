@@ -24,12 +24,11 @@ const NAME: &str = "drivehealth";
 /// command; 60s keeps the amortized cost negligible on large JBODs.
 const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(60);
 
+use crate::agent::samplers::blocking::{BlockingWorker, Cadence};
 use crate::agent::*;
 use metriken::CounterGroup;
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 mod ata;
 mod device;
@@ -161,12 +160,7 @@ struct DriveHealth {
     /// Drives found once at startup. `Arc` so a `spawn_blocking` read can borrow
     /// them without cloning the list each round.
     drives: Arc<Vec<Drive>>,
-    /// Minimum spacing between reads.
-    interval: Duration,
-    /// Timestamp of the last dispatched read; `None` until the first read.
-    last_read: Mutex<Option<Instant>>,
-    /// True while a read is in flight, so we never overlap reads.
-    reading: Arc<AtomicBool>,
+    worker: BlockingWorker,
 }
 
 impl DriveHealth {
@@ -237,9 +231,7 @@ impl DriveHealth {
 
         Self {
             drives: Arc::new(drives),
-            interval,
-            last_read: Mutex::new(None),
-            reading: Arc::new(AtomicBool::new(false)),
+            worker: BlockingWorker::new(NAME, interval, Cadence::FromDispatch),
         }
     }
 }
@@ -255,20 +247,9 @@ impl Sampler for DriveHealth {
             return;
         }
 
-        // Throttle: dispatch a read at most once per `interval`. Cheap time
-        // check on the scrape path.
-        {
-            let mut last = self.last_read.lock().unwrap();
-            match *last {
-                Some(t) if t.elapsed() < self.interval => return,
-                _ => *last = Some(Instant::now()),
-            }
-        }
-
-        // Never overlap reads.
-        if self.reading.swap(true, Ordering::AcqRel) {
+        let Some(permit) = self.worker.try_acquire() else {
             return;
-        }
+        };
 
         // Offload to the blocking pool and return immediately: each read is a
         // device command, so it must not run on the async worker. Drives are
@@ -277,7 +258,7 @@ impl Sampler for DriveHealth {
         // Acquisition-group bracket (principle 18): this `spawn_blocking`
         // task is `DRIVEHEALTH_SWEEP_ACQ`'s single writer — `refresh()`
         // itself never acquires/finishes the group, only dispatches this
-        // task (and the `reading` flag above already prevents two sweeps
+        // task (and the worker permit above already prevents two sweeps
         // from overlapping, so there is structurally never a second task
         // that could race this one for the group). `acquire()` brackets
         // `read_all` plus the per-drive `set()` loop that follows it;
@@ -296,8 +277,7 @@ impl Sampler for DriveHealth {
         // for the walk-union window behavior this bracket inherits from
         // every declared group.)
         let drives = self.drives.clone();
-        let reading = self.reading.clone();
-        tokio::task::spawn_blocking(move || {
+        permit.spawn(move || {
             let guard = DRIVEHEALTH_SWEEP_ACQ.acquire();
             // The EC2 page is read in the same sweep; its groups' single
             // writer is this task too.
@@ -388,7 +368,6 @@ impl Sampler for DriveHealth {
                  ebs={ebs_ok} instance_store={instance_store_ok}",
                 drives.len()
             );
-            reading.store(false, Ordering::Release);
         });
     }
 }

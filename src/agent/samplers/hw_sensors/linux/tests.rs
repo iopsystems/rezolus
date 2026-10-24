@@ -4,8 +4,6 @@ use crate::agent::samplers::Sampler;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
@@ -601,32 +599,16 @@ fn failed_and_removed_readings_clear_without_reusing_the_slot() {
 }
 
 #[test]
-fn read_and_rediscovery_throttles_are_independent_and_include_the_first_tick() {
+fn rediscovery_throttle_includes_the_first_tick() {
     let start = Instant::now();
-    let mut read = super::Throttle::new();
-    assert!(read.due(start, Duration::from_secs(5)));
-    assert!(!read.due(start + Duration::from_secs(4), Duration::from_secs(5)));
-    assert!(read.due(start + Duration::from_secs(5), Duration::from_secs(5)));
-
     let mut discovery = super::Throttle::new();
     assert!(discovery.due(start, Duration::from_secs(60)));
     assert!(!discovery.due(start + Duration::from_secs(59), Duration::from_secs(60)));
     assert!(discovery.due(start + Duration::from_secs(60), Duration::from_secs(60)));
 }
 
-#[test]
-fn a_panicking_worker_clears_the_in_flight_latch() {
-    let reading = Arc::new(AtomicBool::new(true));
-    let latch = reading.clone();
-    let _ = std::panic::catch_unwind(move || {
-        let _in_flight = super::InFlight(latch);
-        panic!("sensor sweep failed");
-    });
-    assert!(!reading.load(Ordering::Acquire));
-}
-
 #[tokio::test]
-async fn refresh_dispatches_one_background_sweep_and_respects_both_guards() {
+async fn refresh_dispatches_a_background_sweep_and_respects_cadence() {
     let _globals = SENSOR_GLOBALS.lock().await;
     let root = tempfile::tempdir().unwrap();
     let hwmon = make_hwmon(root.path(), "generic", &[("temp1_input", "42000")]);
@@ -635,20 +617,14 @@ async fn refresh_dispatches_one_background_sweep_and_respects_both_guards() {
     assert_eq!(super::stats::SENSOR_TEMPERATURE_ACQ.member_bound(), Some(0));
     assert_eq!(super::metric(Family::Temperature).value(0), None);
 
-    // The held latch returns before touching the cadence throttle.
-    sampler.reading.store(true, Ordering::Release);
-    sampler.refresh().await;
-    assert!(sampler.last_read.lock().unwrap().last.is_none());
-    sampler.reading.store(false, Ordering::Release);
-
     sampler.refresh().await;
     for _ in 0..100 {
-        if !sampler.reading.load(Ordering::Acquire) {
+        if !sampler.worker.is_running() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert!(!sampler.reading.load(Ordering::Acquire));
+    assert!(!sampler.worker.is_running());
     assert_eq!(super::metric(Family::Temperature).value(0), Some(42_000));
     assert_eq!(super::stats::SENSOR_TEMPERATURE_ACQ.member_bound(), Some(1));
 
