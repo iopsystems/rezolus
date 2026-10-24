@@ -33,6 +33,10 @@ test('seriesGapGeometry: native spacing keeps the interval and steps', () => {
     assert.deepEqual(seriesGapGeometry(grid(20, 1, 5), 1), { gapInterval: 1, step: 'start' });
 });
 
+test('seriesGapGeometry: exactly 1.5 times the interval counts as decimated', () => {
+    assert.deepEqual(seriesGapGeometry(grid(20, 15), 10), { gapInterval: 15, step: false });
+});
+
 test('seriesGapGeometry: decimated buckets are gapped at their spacing, unstepped', () => {
     const g = seriesGapGeometry(grid(20, 10), 1);
     assert.deepEqual(g, { gapInterval: 10, step: false });
@@ -63,7 +67,7 @@ test('compare: a decimated baseline and a native experiment both draw unbroken',
 test('multi: a decimated envelope breaks where its line does', () => {
     const t = grid(20, 5, 7); // one bucket missing
     const col = (v) => new Float64Array(t.map(() => v));
-    const box = (k) => ({ t, min: col(k), lo: col(k + 1), median: col(k + 2), hi: col(k + 3), max: col(k + 4), decimated: true });
+    const box = (k) => ({ t, min: col(k), lo: col(k + 1), median: col(k + 2), hi: col(k + 3), max: col(k + 4), uncLo: col(k + 1.5), uncHi: col(k + 2.5), unc: true, decimated: true });
     const chart = fakeChart({
         data: [t, t.map(() => 2), t.map(() => 12)],
         opts: {},
@@ -75,7 +79,8 @@ test('multi: a decimated envelope breaks where its line does', () => {
     const series = chart.captured.option.series;
     const lines = series.filter((s) => s.name && !s.stack);
     const bands = series.filter((s) => s.stack && String(s.stack).startsWith('mb'));
-    assert.ok(bands.length > 0, 'the envelope is drawn');
+    assert.ok(bands.some((b) => String(b.stack).endsWith('outer')), 'the envelope is drawn');
+    assert.ok(bands.some((b) => String(b.stack).endsWith('unc')), 'the uncertainty ribbon is drawn');
     for (const l of lines) assert.equal(nulls(l.data), 1, 'the line breaks once');
     for (const b of bands) assert.equal(nulls(b.data), 1, `band ${b.stack} breaks once`);
 });

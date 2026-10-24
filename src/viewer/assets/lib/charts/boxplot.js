@@ -141,9 +141,10 @@ export function buildBoxplotSeries(s, opts = {}) {
         // set, those points are cut out of the median line and redrawn as a
         // dashed overlay, exactly as the plain-line path does.
         interpolated = null,
-        // When set (seconds), the spread bands break wherever consecutive
-        // points are more than 1.5 times this apart, as a caller's own lines
-        // do (insertGapNulls). Unset, the bands span every gap.
+        // When set (seconds), the spread bands and the uncertainty ribbon
+        // break wherever consecutive points are more than 1.5 times this
+        // apart, as a caller's own lines do (insertGapNulls). Unset, they
+        // span every gap.
         gapInterval = null,
     } = opts;
     const gaps = (data) => (gapInterval > 0 ? insertGapNulls(data, gapInterval) : data);
@@ -214,12 +215,12 @@ export function buildBoxplotSeries(s, opts = {}) {
         };
         out.push(
             // baseline rides uncLo (thin visible lower border)
-            { ...uCommon, data: zipMs(s.t, s.uncLo), lineStyle: border },
+            { ...uCommon, data: gaps(zipMs(s.t, s.uncLo)), lineStyle: border },
             // (uncHi - uncLo) stacked on the baseline → top edge lands on uncHi;
             // its areaStyle fills the ribbon, its lineStyle draws the upper border.
             {
                 ...uCommon,
-                data: zipDiffMs(s.t, s.uncLo, s.uncHi),
+                data: gaps(zipDiffMs(s.t, s.uncLo, s.uncHi)),
                 lineStyle: border,
                 areaStyle: { color: lineColor, opacity: 0.22 },
             },

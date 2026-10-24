@@ -130,9 +130,10 @@ export function configureLineChart(chart) {
         // them means the only thing rendered across a hole is the dashed
         // segment, which is the point: the chart should not show an unobserved
         // stretch in the same ink as a measured one.
-        // Each series is gapped and stepped by its own spacing: a compare
-        // chart's baseline can arrive in decimated buckets while its
-        // experiment arrives at the recording's interval.
+        // Each series is gapped and stepped by its own spacing
+        // (seriesGapGeometry): a compare chart's baseline can arrive in
+        // decimated buckets while its experiment arrives at the recording's
+        // interval, and a slow sampler's series is sparser than the interval.
         const geometry = seriesGapGeometry(s.timeData, chart.interval);
         const interp = Array.isArray(s.interpolated)
             && s.interpolated.length === s.timeData.length
