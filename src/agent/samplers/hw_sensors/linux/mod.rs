@@ -435,7 +435,7 @@ impl Sampler for HwSensors {
         let sysfs = self.sysfs.clone();
         permit.spawn(move || {
             // Retain lifetime slot ownership if a previous sweep unwound.
-            sweep(&mut recover_lock(&state), &sysfs);
+            sweep(&mut recover_lock(NAME, &state), &sysfs);
         });
     }
 }

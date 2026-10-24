@@ -103,7 +103,7 @@ impl CgroupMemory {
         let state = self.state.clone();
         Some(permit.spawn(move || {
             let start = Instant::now();
-            match read(&mut recover_lock(&state)) {
+            match read(&mut recover_lock(NAME, &state)) {
                 Ok(count) => debug!(
                     "{NAME}: {count} cgroups sampled in {} us",
                     start.elapsed().as_micros()
