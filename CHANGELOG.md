@@ -11,6 +11,13 @@
 
 ### Fixed
 
+- **A compare chart's decimated baseline draws an unbroken line, and a
+  decimated envelope breaks at a missing bucket.** A compare chart's baseline
+  arrives in decimated buckets while its experiment arrives at the
+  recording's interval, and both were gapped against the interval, so the
+  baseline drew as dashes. Each series is now gapped and stepped by its own
+  spacing. A decimated per-entity chart's min/max envelope spanned a missing
+  bucket that its line broke at; it now breaks there too. (#1519)
 - **`task_cpu_usage` drops a series within one snapshot interval of its thread
   exiting, even when the exit event is lost.** A `task_exit` dropped because
   its ringbuf was full left the thread's labels exported at 0 until the pid

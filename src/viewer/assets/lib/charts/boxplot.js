@@ -1,4 +1,5 @@
 import { visibleLabels } from '../labels.js';
+import { insertGapNulls } from './util/utils.js';
 
 // Render a decoded display-mode boxplot series (see data.js
 // `decodeDisplayBinary`) as echarts series: a robust median line, plus two
@@ -140,7 +141,12 @@ export function buildBoxplotSeries(s, opts = {}) {
         // set, those points are cut out of the median line and redrawn as a
         // dashed overlay, exactly as the plain-line path does.
         interpolated = null,
+        // When set (seconds), the spread bands break wherever consecutive
+        // points are more than 1.5 times this apart, as a caller's own lines
+        // do (insertGapNulls). Unset, the bands span every gap.
+        gapInterval = null,
     } = opts;
+    const gaps = (data) => (gapInterval > 0 ? insertGapNulls(data, gapInterval) : data);
 
     const interp = Array.isArray(interpolated) && interpolated.length === s.t.length
         ? interpolated
@@ -174,14 +180,14 @@ export function buildBoxplotSeries(s, opts = {}) {
 
     const out = [
         // outer extremes band [min, max] — the spike envelope
-        base(zipMs(s.t, s.min), `${stackId} outer`),
-        fill(zipDiffMs(s.t, s.min, s.max), `${stackId} outer`, outerOpacity),
+        base(gaps(zipMs(s.t, s.min)), `${stackId} outer`),
+        fill(gaps(zipDiffMs(s.t, s.min, s.max)), `${stackId} outer`, outerOpacity),
     ];
     if (!outerOnly) {
         // inner typical-spread band [lo, hi]
         out.push(
-            base(zipMs(s.t, s.lo), `${stackId} inner`),
-            fill(zipDiffMs(s.t, s.lo, s.hi), `${stackId} inner`, innerOpacity),
+            base(gaps(zipMs(s.t, s.lo)), `${stackId} inner`),
+            fill(gaps(zipDiffMs(s.t, s.lo, s.hi)), `${stackId} inner`, innerOpacity),
         );
     }
     // Measurement-uncertainty ribbon [uncLo, uncHi] — the aggregated acquisition-

@@ -4,6 +4,7 @@ import {
 import {
     insertGapNulls,
     clampToRange,
+    seriesGapGeometry,
 } from './util/utils.js';
 import {
     getBaseOption,
@@ -129,6 +130,10 @@ export function configureLineChart(chart) {
         // them means the only thing rendered across a hole is the dashed
         // segment, which is the point: the chart should not show an unobserved
         // stretch in the same ink as a measured one.
+        // Each series is gapped and stepped by its own spacing: a compare
+        // chart's baseline can arrive in decimated buckets while its
+        // experiment arrives at the recording's interval.
+        const geometry = seriesGapGeometry(s.timeData, chart.interval);
         const interp = Array.isArray(s.interpolated)
             && s.interpolated.length === s.timeData.length
             ? s.interpolated
@@ -166,7 +171,7 @@ export function configureLineChart(chart) {
         // tooltip suppressed) so the eye follows the trend; hovering
         // triggers only the scatter series.
         if (s.scatter) {
-            const guideLine = insertGapNulls(zippedRaw, chart.interval);
+            const guideLine = insertGapNulls(zippedRaw, geometry.gapInterval);
             return [
                 {
                     name: s.name,
@@ -192,7 +197,7 @@ export function configureLineChart(chart) {
             ];
         }
 
-        const zipped = insertGapNulls(zippedRaw, chart.interval);
+        const zipped = insertGapNulls(zippedRaw, geometry.gapInterval);
         // `showSymbol: false` suppresses symbols for the WHOLE series, so a
         // per-item `symbol` on a stranded point is ignored under it. Switching
         // to `symbol: 'none'` keeps every ordinary point unmarked while letting
@@ -209,7 +214,7 @@ export function configureLineChart(chart) {
                 : { showSymbol: false }),
             sampling: 'lttb',
             emphasis: { focus: 'series' },
-            step: 'start',
+            step: geometry.step,
             lineStyle: { width: 1.5, color: s.color },
             itemStyle: { color: s.color },
             connectNulls: false,
@@ -235,7 +240,7 @@ export function configureLineChart(chart) {
         // The interpolated overlay goes on top (z:3) so a drained, dashed
         // segment reads over the solid nominal rather than under it.
         return [
-            ...buildBandSeries(s, idx, range, chart.interval),
+            ...buildBandSeries(s, idx, range, geometry.gapInterval),
             base,
             ...buildInterpolatedSeries(s, range),
         ];
