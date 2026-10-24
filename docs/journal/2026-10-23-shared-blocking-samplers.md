@@ -1,7 +1,7 @@
 # Shared blocking sampler admission
 
 This follows the worker-helper suggestion from the local review of PR #1537.
-It is stacked on `feat/cgroup-memory-accounting` at `615695c8`. The memory
+It is stacked on `feat/cgroup-memory-accounting` at `37f3e29e`. The memory
 feature and its other review follow-ups remain in the parent PR.
 
 ## Behavior
@@ -95,3 +95,8 @@ quota; that test passed when rerun with temporary files on the workspace disk.
 The checked-in benchmark and its Clippy check passed. Root Clippy across all
 targets again reported only the existing `manual_range_contains` warning.
 Formatting and diff whitespace checks passed.
+
+After PR #1543 merged as `d5337d18`, the parent integrated main and advanced
+to alpha.66. This stack now advances to `6.0.0-alpha.67`. Integrating the new
+parent changes CI workflows, documentation and the version only; sampler and
+test sources remain identical to reviewed commit `79f26788`.

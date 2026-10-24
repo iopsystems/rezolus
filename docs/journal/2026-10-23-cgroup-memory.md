@@ -379,3 +379,11 @@ four test threads. The full root suite passed 1131 tests (12 ignored), including
 the snapshot contract and localhost stream/recorder tests. Formatting and
 whitespace checks passed. Clippy completed with only the existing
 `manual_range_contains` warning in `src/mcp/link.rs`.
+
+## After the CI improvements merged
+
+Integrated main at `d5337d18` (PR #1543). Main now uses alpha.65, so this
+PR advances to `6.0.0-alpha.66`. The merge brings in the reviewed CI workflow
+changes; sampler, cache, dashboard and test sources are unchanged from
+`615695c8`. The shared-worker follow-up remains stacked in PR #1542 and must
+advance to alpha.67 on top of this revision.
