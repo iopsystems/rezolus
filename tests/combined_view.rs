@@ -418,16 +418,17 @@ fn an_agent_and_a_service_of_one_run_open_as_one_view() {
     }
 }
 
-/// A single-source parquet is a recording of one member: its series carry
-/// its `source`, and so do they in the `.dendro` it is annotated into, so a
-/// KPI template whose queries select `source=` (as an archive's do) renders,
-/// and `mcp query` with the matcher reads the series of either.
+/// A single-source parquet upgraded to a `.dendro` (the demo recording) is a
+/// recording of one member: its series carry its `source`, and so do they in
+/// the copy it is annotated into, so a KPI template whose queries select
+/// `source=` (as an archive's do) renders, and `mcp query` with the matcher
+/// reads the series of either.
 #[test]
-fn a_parquets_template_selecting_its_source_renders() {
+fn an_upgraded_parquets_template_selecting_its_source_renders() {
     let dir = tempfile::tempdir().unwrap();
-    let parquet = dir.path().join("run.parquet");
+    let parquet = dir.path().join("demo.dendro");
     std::fs::copy(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/site/viewer/data/demo.parquet"),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/site/viewer/data/demo.dendro"),
         &parquet,
     )
     .unwrap();

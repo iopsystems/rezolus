@@ -1,5 +1,5 @@
 // script.js — WASM viewer bootstrap stub.
-// Handles demo parquet loading, WASM init, and template loading.
+// Handles demo recording loading, WASM init, and template loading.
 // Delegates all UI/routing to app.js via initDashboard().
 
 import { ViewerApi } from './viewer_api.js';
@@ -19,23 +19,23 @@ const demoSections = [
     {
         label: 'Host (System) Metrics',
         demos: [
-            { label: 'Host-1', file: 'demo.parquet' },
+            { label: 'Host-1', file: 'demo.dendro' },
         ],
     },
     {
         label: 'Host and Client Metrics',
         demos: [
-            { label: 'Cache (Valkey)', file: 'cachecannon.parquet' },
-            { label: 'Inference (vLLM)', file: 'vllm.parquet' },
+            { label: 'Cache (Valkey)', file: 'cachecannon.dendro' },
+            { label: 'Inference (vLLM)', file: 'vllm.dendro' },
         ],
     },
     {
         label: 'A/B Testing',
         demos: [
-            { label: 'Cache (Default vs Pinned Interrupts)', files: ['AB_base.parquet', 'AB_base_pin.parquet'] },
+            { label: 'Cache (Default vs Pinned Interrupts)', files: ['AB_base.dendro', 'AB_base_pin.dendro'] },
             {
                 label: 'Inference (vLLM vs SGLang)',
-                files: ['vllm_gemma3.parquet', 'sglang_gemma3.parquet'],
+                files: ['vllm_gemma3.dendro', 'sglang_gemma3.dendro'],
                 legends: { baseline: 'vLLM', experiment: 'SGLang' },
                 category: 'inference-library',
             },
@@ -143,7 +143,7 @@ async function loadParquet(data, filename) {
     // outside the new file.
     clearMetadataCache();
     const state = await fetchInitialState();
-    // WASM's file_metadata_json only emits the parquet's embedded
+    // WASM's file_metadata_json only emits the recording's embedded
     // metadata; filename is a runtime TSDB field. Inject it so the
     // tab title and other UI hooks see it the same way the server
     // viewer does.
@@ -193,7 +193,7 @@ async function loadParquet(data, filename) {
 // with the new bytes — same lifecycle as `loadCapture`).
 async function loadFile(file) {
     if (!file) return;
-    const display = file.name || 'capture.parquet';
+    const display = file.name || 'capture.dendro';
     splashLabel = display;
     splashProgress = -1;
     landingError = null;
@@ -223,9 +223,9 @@ async function loadFile(file) {
     }
 }
 
-// ── Load demo parquet (with download progress) ──────────────────────
+// ── Load demo recording (with download progress) ──────────────────────
 
-// Fetch a parquet by URL or relative path. Relative paths resolve under
+// Fetch a recording by URL or relative path. Relative paths resolve under
 // `data/` (the static-site convention for bundled demos); anything
 // matching `^https?://` is fetched as-is. Returns the raw bytes as a
 // Uint8Array.
@@ -258,7 +258,7 @@ async function fetchParquetBytes(source, onProgress) {
     return new Uint8Array(await resp.arrayBuffer());
 }
 
-async function loadDemo(filename = 'demo.parquet') {
+async function loadDemo(filename = 'demo.dendro') {
     splashLabel = filename;
     splashProgress = -1;
     landingError = null;
@@ -350,7 +350,7 @@ async function loadCapture(source, alias = null) {
 
 // Bring up the compare dashboard from whatever is already in the registry.
 //
-// Both A/B entry points end here: two separately loaded parquets, and a
+// Both A/B entry points end here: two separately loaded recordings, and a
 // single multi-recording `.rez` that filled both slots by itself. Sharing
 // this is what keeps them the same dashboard — an archive rendered through a
 // second, nearly-identical setup would drift from the two-file path silently,
@@ -434,7 +434,7 @@ async function loadComparisonFromRegistry(filename) {
     }
 }
 
-// Load a pair of demo parquets as baseline + experiment and launch the
+// Load a pair of demo recordings as baseline + experiment and launch the
 // viewer in compare mode. Triggered by ?demoA=<file>&demoB=<file>.
 async function loadCompareDemo(fileA, fileB, legends = null, category = null) {
     splashLabel = `${fileA} vs ${fileB}`;
@@ -478,7 +478,7 @@ async function loadCompareDemo(fileA, fileB, legends = null, category = null) {
         // shape and scales naturally to N captures in the future. The
         // label is purely the legend used for display; template
         // selection and category membership are derived from each
-        // parquet's source metadata.
+        // recording's source metadata.
         const url = new URL(window.location);
         const encode = (file, label) => label ? `${label}=${file}` : file;
         url.searchParams.delete('demo');
@@ -530,7 +530,7 @@ const Root = {
             onLoadUrl: (raw) => {
                 // Comma separates A/B for compare mode. Each entry uses
                 // the same alias=URL grammar as the URL params, so a
-                // paste like `vllm=https://…/a.parquet, sglang=https://…/b.parquet`
+                // paste like `vllm=https://…/a.dendro, sglang=https://…/b.dendro`
                 // seeds legends and routes to compare mode automatically.
                 const entries = raw.split(',').map((s) => s.trim()).filter(Boolean);
                 if (entries.length >= 2) {
@@ -560,7 +560,7 @@ const Root = {
 // Canonical compare URL: `?capture=label=path&capture=label=path&category=name`
 // (each `label=` prefix optional, category optional). The label is
 // purely the legend used for display; template selection and category
-// membership come from each parquet's source metadata. Order encodes
+// membership come from each recording's source metadata. Order encodes
 // role: 1st = baseline, 2nd = experiment. Legacy: `?demoA=…&demoB=…`
 // is parsed as a fallback for one release; on first load we rewrite to
 // canonical shape.
@@ -598,9 +598,9 @@ if (_captureRaw.length >= 2) {
     m.mount(document.body, Root);
     loadCompareDemo(fileA, fileB, legends, _category);
 } else if (_demoParam !== null) {
-    splashLabel = _demoParam || 'demo.parquet';
+    splashLabel = _demoParam || 'demo.dendro';
     m.mount(document.body, Root);
-    loadDemo(_demoParam || 'demo.parquet');
+    loadDemo(_demoParam || 'demo.dendro');
 } else {
     // No capture in URL — drop a stale section hash (e.g. #/overview
     // left over from a previous session) so the landing-page URL bar
