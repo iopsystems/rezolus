@@ -11,6 +11,13 @@
 
 ### Fixed
 
+- **A cgroup whose name holds a backslash or a quote can be selected.** The
+  picker put selected names into the query unescaped, so systemd's `\x2d`
+  (an escaped `-`) was consumed by the PromQL string and the cgroup was
+  neither shown on the individual side nor removed from the aggregate. Names
+  are now quoted for the PromQL string. A name containing `|`, or one that
+  is not a valid regular expression, is shown disabled with the reason: the
+  query engine cannot match it. (#1523)
 - **`task_cpu_usage` drops a series within one snapshot interval of its thread
   exiting, even when the exit event is lost.** A `task_exit` dropped because
   its ringbuf was full left the thread's labels exported at 0 until the pid
