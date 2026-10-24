@@ -22,6 +22,7 @@ merged PRs, and project notes; each is grounded in real commits/PRs.
 
 | Date | Effort | Status |
 |------|--------|--------|
+| 2026-10-23 | [Shared blocking sampler admission](2026-10-23-shared-blocking-samplers.md) | PR #1542, stacked on #1537; shared cadence, cancellation and unwind handling for memory, sensors and drive health |
 | 2026-10-23 | [Per-cgroup memory accounting](2026-10-23-cgroup-memory.md) | Implemented locally; cgroup v2 totals, swap, type breakdown, individual dashboard plots; live-validated on 204 cgroups |
 | 2026-04-18 | [Viewer performance and JS restructure](2026-04-18-viewer-perf-restructure.md) | Shipped (merged) |
 | 2026-04-19 | [Viewer chart & heatmap UX](2026-04-19-viewer-chart-ux.md) | Shipped (merged) |

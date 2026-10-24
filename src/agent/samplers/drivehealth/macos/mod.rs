@@ -13,14 +13,13 @@ const NAME: &str = "drivehealth";
 
 const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(60);
 
+use crate::agent::samplers::blocking::{BlockingWorker, Cadence};
 use crate::agent::samplers::iokit::{CfString, NvmeSmart, Service};
 use crate::agent::*;
 use metriken::CounterGroup;
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 mod stats {
     include!("../linux/stats.rs");
@@ -79,9 +78,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     Ok(Some(Box::new(DriveHealth {
         drives: Arc::new(drives),
-        interval,
-        last_read: Mutex::new(None),
-        reading: Arc::new(AtomicBool::new(false)),
+        // Device commands need an idle interval even when a sweep overruns.
+        worker: BlockingWorker::new(NAME, interval, Cadence::FromCompletion),
     })))
 }
 
@@ -136,12 +134,7 @@ fn enumerate() -> Vec<Drive> {
 
 struct DriveHealth {
     drives: Arc<Vec<Drive>>,
-    interval: Duration,
-    /// When the last sweep was dispatched.
-    last_read: Mutex<Option<Instant>>,
-    /// Set while a sweep runs, so sweeps never overlap and each one is its
-    /// groups' only writer.
-    reading: Arc<AtomicBool>,
+    worker: BlockingWorker,
 }
 
 #[async_trait]
@@ -151,30 +144,13 @@ impl Sampler for DriveHealth {
     }
 
     async fn refresh(&self) {
-        {
-            let mut last = self.last_read.lock().unwrap_or_else(|e| e.into_inner());
-            if last.is_some_and(|t| t.elapsed() < self.interval) {
-                return;
-            }
-            *last = Some(Instant::now());
-        }
-        if self.reading.swap(true, Ordering::AcqRel) {
+        let Some(permit) = self.worker.try_acquire() else {
             return;
-        }
+        };
         // Each read is a device command, so the sweep runs on the blocking
         // pool and `refresh` returns without waiting for it, as on Linux.
         let drives = self.drives.clone();
-        let reading = self.reading.clone();
-        tokio::task::spawn_blocking(move || {
-            // Cleared on drop, so a panic in the sweep does not stop every
-            // later sweep.
-            struct Clear(Arc<AtomicBool>);
-            impl Drop for Clear {
-                fn drop(&mut self) {
-                    self.0.store(false, Ordering::Release);
-                }
-            }
-            let _clear = Clear(reading);
+        permit.spawn(move || {
             sweep(&drives);
         });
     }
