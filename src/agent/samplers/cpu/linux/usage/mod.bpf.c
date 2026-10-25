@@ -388,24 +388,34 @@ static __always_inline void start_process(struct task_struct* task) {
  * account_process - Add an accounted delta to the task's thread group, and
  * retry the group's metadata if it is owed
  *
- * Every delta credited to the per-CPU totals is added, including CPU an
- * exited instance uses in the rest of do_exit, so the per-process total
- * includes every thread of the group, exported or not, live or exited.
+ * Every delta credited to the per-CPU totals while the group is live is
+ * added, including CPU an exited thread uses in the rest of do_exit, so the
+ * per-process total includes every thread of the group, exported or not,
+ * live or exited. Nothing is added after the group's last exit, which zeroes
+ * the counter: a slot with no labels is then 0, which a V2 snapshot skips.
+ *
+ * `exiting`: the task is past its own sched_process_exit. It does not retry
+ * the send, so a thread in the rest of do_exit cannot mark the group's
+ * metadata sent after the group's last exit has marked it exited.
  */
-static __always_inline void account_process(struct task_struct* task, bool btf, u64 delta) {
+static __always_inline void account_process(struct task_struct* task, bool btf, u64 delta,
+                                            bool exiting) {
     u32 tgid = BTF_READ(btf, task, tgid);
     if (tgid == 0 || tgid >= MAX_PID)
         return;
 
     u32 slot = pid_slot(tgid);
-    array_add(&process_cpu_usage, slot, delta);
-
     u64* marker = bpf_map_lookup_elem(&process_start_times, &slot);
     if (!marker)
         return;
 
     u64 m = *marker;
-    if (!(m & METADATA_PENDING) || (m & INSTANCE_EXITED))
+    if (m == 0 || (m & INSTANCE_EXITED))
+        return;
+
+    array_add(&process_cpu_usage, slot, delta);
+
+    if (!(m & METADATA_PENDING) || exiting)
         return;
 
     struct task_struct* leader = BTF_READ(btf, task, group_leader);
@@ -643,7 +653,7 @@ static __always_inline int handle_cpuacct_account_field(struct task_struct* task
     }
 
     if (task_attribution && delta_total > 0)
-        account_process(task, btf, delta_total);
+        account_process(task, btf, delta_total, seen == EXITED_INSTANCE);
 
     if (!cgroup_attribution)
         return 0;
@@ -795,7 +805,8 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
     // after the fold nor sends a task_info stamped after the task_exit.
     retire_task(task, btf, pid, slot, dead_tgid);
 
-    // The group's last exit: its process instance has ended. Userspace's
+    // The group's last exit: its process instance has ended. The counter is
+    // zeroed after the marker, as retire_task zeroes a task's. Userspace's
     // sweep releases its labels; a new group with this tgid starts again.
     if (task_attribution && dead_tgid != 0 && dead_tgid < MAX_PID) {
         u32 process_slot = pid_slot(dead_tgid);
@@ -803,6 +814,8 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
         if (process_marker && *process_marker) {
             u64 ended = (*process_marker & ~METADATA_PENDING) | INSTANCE_EXITED;
             bpf_map_update_elem(&process_start_times, &process_slot, &ended, BPF_ANY);
+            u64 zero = 0;
+            bpf_map_update_elem(&process_cpu_usage, &process_slot, &zero, BPF_ANY);
         }
     }
 
@@ -940,7 +953,7 @@ static __always_inline int account__task_rename(u64* ctx, bool btf) {
 
     // The group leader's name is the process's: relabel the process too.
     // Exec renames the exec'ing thread after de_thread has made it the
-    // leader, so a process is relabelled with the program it ran.
+    // leader, so a process is relabelled with the program it executes.
     if (BTF_READ(btf, task, tgid) == pid)
         rename_process(task, btf, pid, comm, ts);
 

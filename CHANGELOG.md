@@ -1101,9 +1101,9 @@
   their own, so a process's total no longer depends on how many threads it
   created. Its series ends within one snapshot interval of the process's
   last thread exiting. It adds 64 MiB of kernel memory to
-  `task_attribution` (two per-pid arrays), a metadata event per new process
-  and per leader rename, and a counter add and a marker read per accounting
-  event. (#1490)
+  `task_attribution` (two per-pid arrays) and a 256 KiB ring, a metadata
+  event per new process and per leader rename, and a marker read and a
+  counter add per accounting event. (#1490)
 
 - **`drive_temperature_sensor`: NVMe Temperature Sensors 1 to 8.**
   `drivehealth` decodes them from the SMART/Health log it already reads

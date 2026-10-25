@@ -25,13 +25,15 @@ pub struct Sampler {
     #[serde(default)]
     cgroup_attribution: Option<bool>,
     /// Whether a sampler that keeps per-task accounting also exports it as
-    /// per-task series (`cpu_usage`'s `task_cpu_usage`). Off by default: the
-    /// accounting stays (host and cgroup totals are computed from it), and
-    /// what is dropped is the export — a task-metadata event per new task
-    /// and per rename, the `task_rename` program, the walk of the per-pid
-    /// map's populated slots each time a snapshot is served, and one series
-    /// per thread plus one per rename in every recording. `None` means the
-    /// default.
+    /// per-task series (`cpu_usage`'s `task_cpu_usage`, and the per-process
+    /// totals `process_cpu_usage`). Off by default: the accounting stays
+    /// (host and cgroup totals are computed from it), and what is dropped is
+    /// the export — a task-metadata event per new task and per rename, a
+    /// process-metadata event per new process and per leader rename, the
+    /// `task_rename` program, the two per-process arrays (64 MiB), the walks
+    /// of the per-pid maps' populated slots each time a snapshot is served,
+    /// and one series per thread plus one per rename and one per process in
+    /// every recording. `None` means the default.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     task_attribution: Option<bool>,

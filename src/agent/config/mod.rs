@@ -328,9 +328,11 @@ impl Config {
 
     /// Whether `name` exports its per-task accounting as per-task series
     /// (per-sampler override, falling back to the `defaults` section, then
-    /// off). Consumed by `cpu_usage`: with it off, `task_cpu_usage` is absent
-    /// and the task-metadata and task-exit events are not sent, while the
-    /// per-task accounting the host and cgroup totals rely on still runs.
+    /// off). Consumed by `cpu_usage`: with it off, `task_cpu_usage` and
+    /// `process_cpu_usage` are absent, the task-metadata, task-exit and
+    /// process-metadata events are not sent, and the per-process maps are not
+    /// created, while the per-task accounting the host and cgroup totals
+    /// rely on still runs.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn task_attribution(&self, name: &str) -> bool {
         self.samplers

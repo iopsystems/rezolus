@@ -69,11 +69,20 @@ static PROCESS_IDENTITY: metriken::group::SlotIdentity =
 
 static PROCESS_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[PROCESS_METRICS];
 
-/// The start time of the thread group each labelled process slot's labels
-/// describe. Process slots have no exit event: [`sweep_process_slots`]
-/// releases a slot once its `process_start_times` marker no longer holds
-/// that group live.
-static PROCESS_ASSIGNED: std::sync::Mutex<std::collections::BTreeMap<usize, u64>> =
+/// What each labelled process slot's labels came from: the newest `ts` of the
+/// `process_info` events applied to it, and the start time and tgid of the
+/// thread group they describe. Process slots have no exit event:
+/// [`sweep_process_slots`] releases a slot once its `process_start_times`
+/// marker no longer holds that group live, or the group has had its last
+/// exit. Locked before [`DEAD_GROUPS`] wherever both are held.
+#[derive(Clone, Copy)]
+struct ProcessAssigned {
+    ts: u64,
+    start_time: u64,
+    tgid: u32,
+}
+
+static PROCESS_ASSIGNED: std::sync::Mutex<std::collections::BTreeMap<usize, ProcessAssigned>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
 
 fn handle_cgroup_info(data: &[u8]) -> i32 {
@@ -110,7 +119,7 @@ static ASSIGNED_AT: std::sync::Mutex<std::collections::BTreeMap<usize, Assigned>
 /// Each entry is applied by two sweeps, because a `task_info` sent before
 /// the group's last exit can be drained one drain after it: one drain reads
 /// the `task_info` ring before the `task_exit` ring. Locked after
-/// [`ASSIGNED_AT`] wherever both are held.
+/// [`ASSIGNED_AT`] or [`PROCESS_ASSIGNED`] wherever both are held.
 static DEAD_GROUPS: std::sync::Mutex<std::collections::BTreeMap<u32, (u64, bool)>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
 
@@ -160,22 +169,32 @@ fn sweep_task_slots(markers: &[std::sync::atomic::AtomicU64]) {
 /// Release every labelled process slot whose thread group the BPF side no
 /// longer holds live: its `process_start_times` marker shows that group
 /// exited (its last thread has entered do_exit), another group, or none.
-/// Runs after every drain.
+/// Release too every slot whose tgid is in [`DEAD_GROUPS`] from an exit
+/// newer than its labels. The marker writes are not atomic: a leader rename
+/// whose send finds the ringbuf full, racing the group's last exit, can
+/// leave the marker pending after the exit marked it exited. Runs after
+/// every drain, before [`sweep_task_slots`] ages `DEAD_GROUPS`, so each
+/// entry is applied here by two sweeps as well.
 ///
 /// A `process_info` is submitted only after its group's marker is written
 /// (pending first; see start_process in mod.bpf.c), so a drained
 /// `process_info` never meets an older marker.
 fn sweep_process_slots(markers: &[std::sync::atomic::AtomicU64]) {
     let mut assigned = PROCESS_ASSIGNED.lock().unwrap_or_else(|e| e.into_inner());
-    assigned.retain(|&slot, &mut start_time| {
+    let dead_groups = DEAD_GROUPS.lock().unwrap_or_else(|e| e.into_inner());
+    assigned.retain(|&slot, at| {
         let marker = markers
             .get(slot)
             .map_or(0, |m| m.load(std::sync::atomic::Ordering::Relaxed));
-        let live = marker & INSTANCE_EXITED == 0 && marker & !METADATA_PENDING == start_time;
-        if !live {
+        let live = marker & INSTANCE_EXITED == 0 && marker & !METADATA_PENDING == at.start_time;
+        let group_gone = dead_groups
+            .get(&at.tgid)
+            .is_some_and(|&(ts, _)| ts >= at.ts);
+        if !live || group_gone {
             PROCESS_IDENTITY.release(slot);
+            return false;
         }
-        live
+        true
     });
 }
 
@@ -235,7 +254,14 @@ fn handle_process_info(data: &[u8]) -> i32 {
         let slot = pid_slot(info.tgid as usize);
         let mut assigned = PROCESS_ASSIGNED.lock().unwrap_or_else(|e| e.into_inner());
         PROCESS_IDENTITY.assign(slot, info_labels(&info));
-        assigned.insert(slot, info.start_time);
+        assigned.insert(
+            slot,
+            ProcessAssigned {
+                ts: info.ts,
+                start_time: info.start_time,
+                tgid: info.tgid,
+            },
+        );
     }
 
     0
@@ -460,10 +486,12 @@ fn init(config: Arc<Config>) -> SamplerResult {
             .sparse_packed_counters("task_cpu_usage", &TASK_CPU_USAGE, &TASK_USAGE_ACQ)
             .ringbuf_handler("task_info", handle_task_info)
             .ringbuf_handler("task_exit", handle_task_exit)
-            .map_sweep("task_start_times", sweep_task_slots)
             .sparse_packed_counters("process_cpu_usage", &PROCESS_CPU_USAGE, &PROCESS_USAGE_ACQ)
             .ringbuf_handler("process_info", handle_process_info)
-            .map_sweep("process_start_times", sweep_process_slots);
+            // Before the task sweep, which ages DEAD_GROUPS; see
+            // sweep_process_slots.
+            .map_sweep("process_start_times", sweep_process_slots)
+            .map_sweep("task_start_times", sweep_task_slots);
     }
 
     let bpf = builder.build()?;
@@ -581,12 +609,15 @@ mod tests {
     /// `tgid`, `comm` and `cgroup`, and no `pid`. A leader rename relabels
     /// it. The sweep keeps the labels while the marker holds that group live,
     /// pending or not, and releases them once the marker shows the group
-    /// exited, another group, or none.
+    /// exited, another group, or none, or once the group has had a last exit
+    /// newer than the labels.
     #[test]
     fn the_process_sweep_releases_labels_whose_group_is_gone() {
         use std::sync::atomic::{AtomicU64, Ordering};
 
-        // The only test that labels process slots or sweeps them.
+        // The only test that labels process slots or sweeps them. It records
+        // a dead group, which the task sweeps age.
+        let _sweeps = SWEEPS.lock().unwrap_or_else(|e| e.into_inner());
         let tgid = 3201;
         let slot = pid_slot(tgid as usize);
         let start = 9_000;
@@ -619,6 +650,23 @@ mod tests {
         }
 
         markers[slot].store(start | INSTANCE_EXITED, Ordering::Relaxed);
+        sweep_process_slots(&markers);
+        assert!(labels().is_none());
+
+        // A marker left pending after the group's last exit: the exit's
+        // dead_tgid releases labels older than it and keeps newer ones (a
+        // new group with the same tgid).
+        markers[slot].store(start | METADATA_PENDING, Ordering::Relaxed);
+        handle_process_info(&task_info_in(tgid, tgid, "postgres", 10, start));
+        handle_task_exit(&task_exit_of(tgid, tgid, 11));
+        sweep_process_slots(&markers);
+        assert!(labels().is_none());
+
+        markers[slot].store(start + 1, Ordering::Relaxed);
+        handle_process_info(&task_info_in(tgid, tgid, "postgres", 12, start + 1));
+        sweep_process_slots(&markers);
+        assert!(labels().is_some());
+        markers[slot].store(0, Ordering::Relaxed);
         sweep_process_slots(&markers);
         assert!(labels().is_none());
     }
