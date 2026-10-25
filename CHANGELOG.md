@@ -17,6 +17,16 @@
   at the cursor, and the plot now starts where a single-series chart's does.
   Clicking a legend entry hid that series; per-entity charts lose that. The
   compare-mode overlay keeps its two-entry legend. (#1517)
+- **A compare chart's decimated baseline draws an unbroken line, and a
+  decimated envelope breaks at a missing bucket.** A compare chart's baseline
+  arrives in decimated buckets while its experiment arrives at the
+  recording's interval, and both were gapped against the interval, so the
+  baseline drew as dashes. Each series is now gapped and stepped by its own
+  spacing: one spaced at least 1.5 times the interval draws unstepped, which
+  also turns a slow sampler's series on a line chart (for example 5 s sensor
+  readings in a 1 s recording) from isolated points into a line. A decimated
+  per-entity chart's min/max envelope and uncertainty ribbon spanned a
+  missing bucket that its line broke at; they now break there too. (#1519)
 - **`task_cpu_usage` drops a series within one snapshot interval of its thread
   exiting, even when the exit event is lost.** A `task_exit` dropped because
   its ringbuf was full left the thread's labels exported at 0 until the pid

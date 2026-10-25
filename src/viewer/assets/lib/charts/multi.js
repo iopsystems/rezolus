@@ -213,6 +213,7 @@ export function configureMultiSeriesChart(chart) {
                     lineColor: cgroupColors[k],
                     outerOnly: true,
                     noMedian: true,
+                    gapInterval: geometry.gapInterval,
                 },
             );
             for (const bs of band) bs.z = 0;
