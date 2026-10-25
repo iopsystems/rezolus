@@ -11,6 +11,12 @@
 
 ### Fixed
 
+- **A per-entity line chart has no legend.** A chart with one line per
+  sensor, mount or cgroup drew a legend that wrapped to as many rows as it
+  had series, over the plot and the time axis. The tooltip names every series
+  at the cursor, and the plot now starts where a single-series chart's does.
+  Clicking a legend entry hid that series; per-entity charts lose that. The
+  compare-mode overlay keeps its two-entry legend. (#1517)
 - **`task_cpu_usage` drops a series within one snapshot interval of its thread
   exiting, even when the exit event is lost.** A `task_exit` dropped because
   its ringbuf was full left the thread's labels exported at 0 until the pid

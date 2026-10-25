@@ -168,7 +168,7 @@ export function getTooltipFormatter(valueFormatter, pinnedSet, chart, style) {
 
 // Plot-area top offset (pixels from the top of the Chart component
 // div to the top of the echarts grid). Chart modules that add a
-// legend above the plot (multi, scatter, line-overlay, heatmap,
+// legend above the plot (scatter, line-overlay, heatmap,
 // histogram_heatmap) push the grid down by this amount.
 //
 // Keep in sync with the .compare-slot-label / .compare-split-label
