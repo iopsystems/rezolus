@@ -10,6 +10,7 @@
 //! * `cpu_usage`
 //! * `cgroup_cpu_usage`
 //! * `task_cpu_usage` — only with `task_attribution = true` (off by default)
+//! * `process_cpu_usage` — only with `task_attribution = true`
 //! * `softirq`
 //! * `softirq_time`
 //!
@@ -58,6 +59,22 @@ static TASK_IDENTITY: metriken::group::SlotIdentity =
     metriken::group::SlotIdentity::grouped(TASK_IDENTITY_GROUPS);
 
 static TASK_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[TASK_METRICS];
+
+static PROCESS_METRICS: &[&dyn metriken::group::SlotMetadata] = &[&PROCESS_CPU_USAGE];
+
+/// The only way this sampler writes what a process slot (`pid_slot(tgid)`)
+/// means.
+static PROCESS_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(PROCESS_IDENTITY_GROUPS);
+
+static PROCESS_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[PROCESS_METRICS];
+
+/// The start time of the thread group each labelled process slot's labels
+/// describe. Process slots have no exit event: [`sweep_process_slots`]
+/// releases a slot once its `process_start_times` marker no longer holds
+/// that group live.
+static PROCESS_ASSIGNED: std::sync::Mutex<std::collections::BTreeMap<usize, u64>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
 
 fn handle_cgroup_info(data: &[u8]) -> i32 {
     process_cgroup_info::<bpf::types::cgroup_info>(data, &CGROUP_IDENTITY)
@@ -140,6 +157,90 @@ fn sweep_task_slots(markers: &[std::sync::atomic::AtomicU64]) {
     dead_groups.retain(|_, (_, applied)| !std::mem::replace(applied, true));
 }
 
+/// Release every labelled process slot whose thread group the BPF side no
+/// longer holds live: its `process_start_times` marker shows that group
+/// exited (its last thread has entered do_exit), another group, or none.
+/// Runs after every drain.
+///
+/// A `process_info` is submitted only after its group's marker is written
+/// (pending first; see start_process in mod.bpf.c), so a drained
+/// `process_info` never meets an older marker.
+fn sweep_process_slots(markers: &[std::sync::atomic::AtomicU64]) {
+    let mut assigned = PROCESS_ASSIGNED.lock().unwrap_or_else(|e| e.into_inner());
+    assigned.retain(|&slot, &mut start_time| {
+        let marker = markers
+            .get(slot)
+            .map_or(0, |m| m.load(std::sync::atomic::Ordering::Relaxed));
+        let live = marker & INSTANCE_EXITED == 0 && marker & !METADATA_PENDING == start_time;
+        if !live {
+            PROCESS_IDENTITY.release(slot);
+        }
+        live
+    });
+}
+
+/// The labels a `task_info` record carries: `tgid`, `comm` (when not empty)
+/// and `cgroup`. A task's series adds `pid`.
+fn info_labels(info: &bpf::types::task_info) -> std::collections::BTreeMap<String, String> {
+    let comm = std::str::from_utf8(&info.comm)
+        .unwrap_or("")
+        .trim_end_matches(char::from(0))
+        .to_string();
+
+    let cgroup_name = std::str::from_utf8(&info.cgroup_name)
+        .unwrap_or("")
+        .trim_end_matches(char::from(0))
+        .replace("\\x2d", "-");
+
+    let cgroup_pname = std::str::from_utf8(&info.cgroup_pname)
+        .unwrap_or("")
+        .trim_end_matches(char::from(0))
+        .replace("\\x2d", "-");
+
+    let cgroup_gpname = std::str::from_utf8(&info.cgroup_gpname)
+        .unwrap_or("")
+        .trim_end_matches(char::from(0))
+        .replace("\\x2d", "-");
+
+    let cgroup = if !cgroup_gpname.is_empty() {
+        if info.cgroup_level > 3 {
+            format!(".../{cgroup_gpname}/{cgroup_pname}/{cgroup_name}")
+        } else {
+            format!("/{cgroup_gpname}/{cgroup_pname}/{cgroup_name}")
+        }
+    } else if !cgroup_pname.is_empty() {
+        format!("/{cgroup_pname}/{cgroup_name}")
+    } else if !cgroup_name.is_empty() {
+        format!("/{cgroup_name}")
+    } else {
+        "/".to_string()
+    };
+
+    let mut labels = std::collections::BTreeMap::new();
+    labels.insert("tgid".to_string(), info.tgid.to_string());
+    if !comm.is_empty() {
+        labels.insert("comm".to_string(), comm);
+    }
+    labels.insert("cgroup".to_string(), cgroup);
+    labels
+}
+
+/// A thread group's metadata, sent when the group is first seen and when
+/// its leader is renamed. The record describes the group leader; its
+/// `start_time` is the group's.
+fn handle_process_info(data: &[u8]) -> i32 {
+    let mut info = bpf::types::task_info::default();
+
+    if plain::copy_from_bytes(&mut info, data).is_ok() {
+        let slot = pid_slot(info.tgid as usize);
+        let mut assigned = PROCESS_ASSIGNED.lock().unwrap_or_else(|e| e.into_inner());
+        PROCESS_IDENTITY.assign(slot, info_labels(&info));
+        assigned.insert(slot, info.start_time);
+    }
+
+    0
+}
+
 fn handle_task_info(data: &[u8]) -> i32 {
     let mut info = bpf::types::task_info::default();
 
@@ -148,52 +249,12 @@ fn handle_task_info(data: &[u8]) -> i32 {
         let slot = pid_slot(pid);
         let tgid = info.tgid;
 
-        // Extract comm (task name)
-        let comm = std::str::from_utf8(&info.comm)
-            .unwrap_or("")
-            .trim_end_matches(char::from(0))
-            .to_string();
-
-        let cgroup_name = std::str::from_utf8(&info.cgroup_name)
-            .unwrap_or("")
-            .trim_end_matches(char::from(0))
-            .replace("\\x2d", "-");
-
-        let cgroup_pname = std::str::from_utf8(&info.cgroup_pname)
-            .unwrap_or("")
-            .trim_end_matches(char::from(0))
-            .replace("\\x2d", "-");
-
-        let cgroup_gpname = std::str::from_utf8(&info.cgroup_gpname)
-            .unwrap_or("")
-            .trim_end_matches(char::from(0))
-            .replace("\\x2d", "-");
-
-        let cgroup = if !cgroup_gpname.is_empty() {
-            if info.cgroup_level > 3 {
-                format!(".../{cgroup_gpname}/{cgroup_pname}/{cgroup_name}")
-            } else {
-                format!("/{cgroup_gpname}/{cgroup_pname}/{cgroup_name}")
-            }
-        } else if !cgroup_pname.is_empty() {
-            format!("/{cgroup_pname}/{cgroup_name}")
-        } else if !cgroup_name.is_empty() {
-            format!("/{cgroup_name}")
-        } else {
-            "/".to_string()
-        };
-
         // Built once and set once. Setting the four labels separately left a
         // window where a reader could see a slot half-way through changing
         // hands — the new task's pid beside the old task's comm. See
         // `agent::identity`.
-        let mut labels = std::collections::BTreeMap::new();
+        let mut labels = info_labels(&info);
         labels.insert("pid".to_string(), pid.to_string());
-        labels.insert("tgid".to_string(), tgid.to_string());
-        if !comm.is_empty() {
-            labels.insert("comm".to_string(), comm);
-        }
-        labels.insert("cgroup".to_string(), cgroup);
 
         let mut assigned = ASSIGNED_AT.lock().unwrap_or_else(|e| e.into_inner());
         TASK_IDENTITY.assign(slot, labels);
@@ -356,6 +417,19 @@ fn init(config: Arc<Config>) -> SamplerResult {
                 }
             }
         }
+        // 64 MiB of per-pid arrays only the per-process series use.
+        if !task_attribution {
+            let maps = &mut open.maps;
+            for map in [
+                &mut maps.process_cpu_usage,
+                &mut maps.process_start_times,
+                &mut maps.process_info,
+            ] {
+                if let Err(e) = map.set_autocreate(false) {
+                    debug!("{NAME}: could not leave a map out of the object: {e}");
+                }
+            }
+        }
     });
 
     if cgroup_attribution {
@@ -386,7 +460,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
             .sparse_packed_counters("task_cpu_usage", &TASK_CPU_USAGE, &TASK_USAGE_ACQ)
             .ringbuf_handler("task_info", handle_task_info)
             .ringbuf_handler("task_exit", handle_task_exit)
-            .map_sweep("task_start_times", sweep_task_slots);
+            .map_sweep("task_start_times", sweep_task_slots)
+            .sparse_packed_counters("process_cpu_usage", &PROCESS_CPU_USAGE, &PROCESS_USAGE_ACQ)
+            .ringbuf_handler("process_info", handle_process_info)
+            .map_sweep("process_start_times", sweep_process_slots);
     }
 
     let bpf = builder.build()?;
@@ -415,6 +492,9 @@ impl SkelExt for ModSkel<'_> {
             "task_exit" => &self.maps.task_exit,
             "task_cpu_usage" => &self.maps.task_cpu_usage,
             "task_start_times" => &self.maps.task_start_times,
+            "process_cpu_usage" => &self.maps.process_cpu_usage,
+            "process_start_times" => &self.maps.process_start_times,
+            "process_info" => &self.maps.process_info,
             _ => unimplemented!(),
         }
     }
@@ -495,6 +575,52 @@ mod tests {
     fn task_exit_of(pid: u32, dead_tgid: u32, ts: u64) -> Vec<u8> {
         let exit = bpf::types::task_exit { pid, dead_tgid, ts };
         unsafe { plain::as_bytes(&exit) }.to_vec()
+    }
+
+    /// A process slot is labelled by its group's `process_info` with
+    /// `tgid`, `comm` and `cgroup`, and no `pid`. A leader rename relabels
+    /// it. The sweep keeps the labels while the marker holds that group live,
+    /// pending or not, and releases them once the marker shows the group
+    /// exited, another group, or none.
+    #[test]
+    fn the_process_sweep_releases_labels_whose_group_is_gone() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        // The only test that labels process slots or sweeps them.
+        let tgid = 3201;
+        let slot = pid_slot(tgid as usize);
+        let start = 9_000;
+        let markers: Vec<AtomicU64> = (0..4096).map(|_| AtomicU64::new(0)).collect();
+        let labels = || PROCESS_CPU_USAGE.load_metadata(slot);
+
+        handle_process_info(&task_info_in(tgid, tgid, "bash", 1, start));
+        let first = labels().unwrap();
+        assert_eq!(first["tgid"], tgid.to_string());
+        assert_eq!(first["comm"], "bash");
+        assert_eq!(first["cgroup"], "/");
+        assert!(!first.contains_key("pid"));
+
+        handle_process_info(&task_info_in(tgid, tgid, "postgres", 2, start));
+        let renamed = labels().unwrap();
+        assert_eq!(renamed["comm"], "postgres");
+        assert_ne!(renamed[UID_LABEL], first[UID_LABEL]);
+
+        for (marker, kept) in [
+            (start, true),
+            (start | METADATA_PENDING, true),
+            (start | INSTANCE_EXITED, false),
+            (start + 1, false),
+            (0, false),
+        ] {
+            handle_process_info(&task_info_in(tgid, tgid, "postgres", 3, start));
+            markers[slot].store(marker, Ordering::Relaxed);
+            sweep_process_slots(&markers);
+            assert_eq!(labels().is_some(), kept, "marker {marker:#x}");
+        }
+
+        markers[slot].store(start | INSTANCE_EXITED, Ordering::Relaxed);
+        sweep_process_slots(&markers);
+        assert!(labels().is_none());
     }
 
     /// The BPF side sends task_info again when a thread is renamed. This is

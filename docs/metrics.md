@@ -364,6 +364,7 @@ optimizing workloads.
 | `cpu_usage_exited_tasks` | CPU time of tasks that have exited, per CPU the exit ran on; includes the CPU a thread used under its own thread id before it exec'd from outside the group leader | `id` |
 | `cgroup_cpu_usage_exited_tasks` | CPU time of a cgroup's tasks that have exited | `name` |
 | `task_cpu_usage` | CPU time (user and system) per thread; only with `task_attribution = true` | `pid`, `tgid`, `comm`, `cgroup` |
+| `process_cpu_usage` | CPU time (user and system) per process, by every thread of the process including exited ones; only with `task_attribution = true` | `tgid`, `comm`, `cgroup` |
 
 The sampler accounts CPU per task in every configuration: the per-CPU and
 per-cgroup deltas are computed from each thread's `utime`/`stime` whether
@@ -376,6 +377,20 @@ populated slots each time a snapshot is served, and one series per thread
 plus one per rename in every recording, which on a host with thread churn
 or frequent renames is most of the recording. Set `task_attribution = true`
 in `[samplers.cpu_usage]` (or `[defaults]`) to get it.
+
+`process_cpu_usage` comes with `task_attribution`: one series per process
+(thread group), keyed by `tgid`. Every CPU delta credited to `cpu_usage` for
+a thread of the process is added to it, including the CPU of threads that
+have exited, so `rate(process_cpu_usage)` is the process's CPU however many
+threads it created and however many of them have their own series. Like
+`task_cpu_usage`, it counts from when the process started, or from when the
+agent first saw it for a process that predates the agent. Its `comm` and
+`cgroup` are the group leader's. The leader's renames relabel it, and so
+does exec, so a forked child is relabelled with the program it runs. The
+series ends within one snapshot interval of the process's last thread
+exiting. It costs two more per-pid arrays (64 MiB of kernel memory), a
+metadata event per new process and per leader rename, and a counter add and
+a marker read per accounting event.
 
 `comm` follows renames. A thread whose name changes (`pthread_setname_np`,
 `prctl(PR_SET_NAME)`, a write to `/proc/<pid>/task/<tid>/comm`, or exec) is

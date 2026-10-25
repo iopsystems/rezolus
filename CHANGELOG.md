@@ -1093,6 +1093,18 @@
 
 ### Added
 
+- **`process_cpu_usage`: CPU time per process.** With
+  `task_attribution = true`, `cpu_usage` also exports one series per thread
+  group, labelled `tgid`, `comm` (the group leader's, relabelled on exec and
+  on the leader's renames) and `cgroup`. It counts every thread of the
+  process, including threads that have exited and threads with no series of
+  their own, so a process's total no longer depends on how many threads it
+  created. Its series ends within one snapshot interval of the process's
+  last thread exiting. It adds 64 MiB of kernel memory to
+  `task_attribution` (two per-pid arrays), a metadata event per new process
+  and per leader rename, and a counter add and a marker read per accounting
+  event. (#1490)
+
 - **`drive_temperature_sensor`: NVMe Temperature Sensors 1 to 8.**
   `drivehealth` decodes them from the SMART/Health log it already reads
   (bytes 200 to 215), labelled `sensor={1..8}` and with the drive's labels,
