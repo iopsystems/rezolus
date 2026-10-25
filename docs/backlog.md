@@ -741,7 +741,7 @@ Source: [Rezolus 6.0.0: release readiness](journal/2026-10-08-6-0-release-readin
   next pin; 5.27.0 the latest 5.x). (The v5.22.1 reader on a 6.0 `.rez` was
   dropped 2026-10-12: 6.0 writes no `.rez`.)
 - **Smaller test gaps** — Open. V3 raw `recording convert`; a WASM `.dendro`
-  test; `tests/viewer_smoke.sh` in CI; read `site/viewer/data/mr2-report.parquet`
+  test; `tests/viewer_smoke.sh` in CI; read `site/viewer/data/mr2-report.dendro`
   in a test; upgrade a v1 tar archive.
 - **Refuse an agent older than 5.21.0** — Open. At startup (exit 1, nothing
   written) and mid-run (that endpoint refused, the rest recorded), with a

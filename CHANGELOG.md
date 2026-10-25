@@ -197,8 +197,10 @@
   `--field` (they described a parquet footer). A two-file comparison
   (`rezolus view a.dendro b.dendro`, the browser's experiment upload, a
   URL pair) takes a one-recording `.dendro` as each side; an archive of
-  several recordings is refused, naming `recording combine --ab`. The
-  static-site demo recordings are `.dendro` files.
+  several recordings is refused, naming the `recording combine` and `view
+  --baseline/--experiment` commands that compare two of its recordings. The
+  static-site demo recordings are `.dendro` files; a link that names a
+  demo's old `.parquet` file loads its `.dendro`.
 - **The viewer's Time selector (Aligned/Raw) is gone.** Every dashboard
   chart is on the step grid. Raw mode is a per-chart view: the expanded
   chart (the open-in-new-tab link) has SHOW SAMPLES, which reruns its query
@@ -216,38 +218,30 @@
   The refusal quotes the path as it was given (`-o`, the positional OUTPUT,
   or the config file's `output`) and names a 5.x recorder (5.27.0 or later),
   which still writes those formats; `rezolus recording upgrade` converts a
-  `.rez` or a parquet file. Reading `.rez` and parquet is unchanged.
-- **The `recording` tools write `.dendro` only, and never change a `.rez` or
-  a parquet file.** metriken-storage 0.5 has no `.rez` writer; legacy
-  recordings are converted with its converters (0.5.1).
-  - `combine` writes one `.dendro` from any mix of `.dendro`, `.rez` and
-    `.parquet` inputs, a recording per input recording; `--ab` is kept and
-    labels each input's recordings `arm=baseline`/`arm=experiment`. An
-    output ending in `.parquet` (the row-merge), `.parquet.ab.tar` or `.rez`
-    is refused, naming `-o <name>.dendro`, and so are `--pinned`,
-    `--category` and `--bypass-time-check`, which applied to those outputs.
+  `.rez` or a parquet file.
+- **The `recording` tools write `.dendro` only.** metriken-storage 0.5 has
+  no `.rez` writer.
+  - `combine` writes one `.dendro` from `.dendro` inputs, a recording per
+    input recording; `--ab` is kept and labels each input's recordings
+    `arm=baseline`/`arm=experiment`. An output ending in `.parquet` (the
+    row-merge), `.parquet.ab.tar` or `.rez` is refused, naming `-o
+    <name>.dendro`, and so are `--pinned`, `--category` and
+    `--bypass-time-check`, which applied to those outputs.
   - `filter`, `annotate` and `check --annotate` edit a `.dendro` in place,
-    or a copy given `-o`. A `.rez` or `.parquet` input needs `-o
-    <new>.dendro`; without it the command is refused (exit 1; `check`, exit
-    2) and the error prints the command line with `-o` added. A parquet
-    `filter` with neither `--samplers` nor `--metrics` keeps the metrics its
-    KPIs name, as before. `annotate`'s `--undo`, `--node`, `--source`,
-    `--systeminfo` and `--filter` edited a parquet footer; they are ignored
-    with a warning.
-  - `snapshot` of a `.rez` writes a `.dendro`.
-  - `upgrade` converts any `.rez` (v1, v2, v3) or `.parquet` into a
-    `.dendro` (the input's name with `.dendro` for its extension, without
-    `-o`; `upgrade x.dendro` says it is already one); `--to v3` is refused.
+    or a copy given `-o`. `annotate`'s `--node`, `--source` and `--filter`
+    set a parquet footer key or dropped parquet columns; they are refused
+    (exit 1), naming what to use instead.
+  - `upgrade` converts any `.rez` (v1, v2, v3), `.parquet` or
+    `.parquet.ab.tar` into a `.dendro` (without `-o`, the input's name with
+    `.dendro` for its extension, a `.parquet.ab.tar` losing both; `upgrade
+    x.dendro` says it is already one); `--to v3` is refused.
   - `convert` turns a raw msgpack recording into a `.dendro`.
   - The MCP server's `add_event`, `remove_events` and `run_checks`
-    (`annotate=true`) take an `output` path, required for a `.rez` or
-    parquet recording, as `-o` is. `export_query` is unchanged.
+    (`annotate=true`) take an `output` path, to write the edited copy there
+    as `-o` does. `export_query` is unchanged.
 - **Save as Report writes a `.dendro`**, in the server viewer and the static
-  site, from a `.dendro`, a `.rez` or one or two parquet files. A two-file
-  parquet compare is saved with `arm=baseline`/`arm=experiment`, so it
-  reopens as the comparison. The static site converts a `.rez` in memory; an
-  uploaded v3 `.rez` has no SQLite `-wal` sidecar, so a copy taken from under
-  a running recorder can be shorter than `rezolus view` reads from the file.
+  site. A two-file comparison is saved with `arm=baseline`/`arm=experiment`,
+  so it reopens as the comparison.
 - **`record` refuses every Rezolus agent that cannot stream.** An agent older
   than 5.21.0, a v2 agent, or a stream route that answers 404, 409 or a
   foreign content type is refused at startup (exit 1, nothing written) or,
@@ -306,7 +300,7 @@
   empty header, is skipped. `[samplers.hw_sensors] enabled = false` turns it off, and an
   existing config that sets it keeps the sampler off.
 - **metriken 0.11.4, metriken-exposition 0.25, metriken-model 0.2,
-  metriken-storage 0.5.2, metriken-query 0.42.1, metriken-recorder 0.5.1.** The
+  metriken-storage 0.5.4, metriken-query 0.42.2, metriken-recorder 0.5.1.** The
   counting histogram types are named for their kind (`AtomicCounterHistogram`,
   `RwLockCounterHistogram`, `CounterHistogramGroup`).
 - **The sample-timestamp (jitter) plot works for a `.dendro` recording**
@@ -412,19 +406,12 @@
   the throughput of a service recorded on that host (none for a host with
   no service), and System Info lists each recording's hardware under its
   host.
-- **A single-source parquet's `source` is a series label.** Its series
-  carry the file's `source`, as an archive recording's series carry its
-  recording's labels, so a KPI template carried in the parquet (llm-perf's)
-  whose queries select `{source="llm-perf"}` matches them: `rezolus view
-  run.parquet` draws those KPIs where it listed them all as unavailable, and
-  `rezolus mcp query`, `recording check` and the static viewer read the same
-  series. The `.dendro` a parquet file is converted to (`recording annotate
-  run.parquet --queries kpis.json -o run.dendro`, `recording upgrade`) labels
-  its recording with the same `source`, so the template matches there too. A combined
+- **A single-source parquet's `source` labels its upgraded recording.**
+  `rezolus recording upgrade run.parquet` labels the recording with the
+  file's `source`, so a KPI template carried in the parquet (llm-perf's)
+  whose queries select `{source="llm-perf"}` matches its series. A combined
   parquet, whose columns carry their own `source`, and a parquet any of
-  whose series already carry a `source` label are read as before. A series
-  that had no visible label now has `source`, so a chart of one such series
-  can be named by it (a lone series named "rezolus" where it was unnamed).
+  whose series already carry a `source` label are converted unlabelled.
 - **`rezolus mcp` reads an archive of one run combined.** Without
   `--recording` (or the stdio server's `recording` object), `query`,
   `describe-metrics`, `detect-anomalies` and `analyze-correlation` read every
@@ -1454,9 +1441,7 @@
   recordings, the archives were 3.3–8.8 times smaller, with the same answers
   to 213 of 213 queries on each and a tick p99 of 16–38 ms against
   375–407 ms. Segments are zstd-3 (55–57% smaller than lz4 for about 4% more
-  encode time). `-o out.rez`, `--format rez` or a hindsight `output` ending
-  in `.rez` still writes a `.rez`, and every tool still reads one. Built in
-  stages: `record` (#1326), hindsight, whose snapshots are fully sealed
+  encode time). Built in stages: `record` (#1326), hindsight, whose snapshots are fully sealed
   copies (#1329), `record --stream` (#1336), and `recording` metadata,
   annotate, check, snapshot, filter and combine (#1339, #1340, #1342) and
   Save-as-Report in both viewers (#1345) on dendro archives. Design and

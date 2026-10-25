@@ -448,8 +448,14 @@ fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
             .into_response();
     }
 
+    let baseline = state
+        .parquet_path
+        .read()
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "BASELINE.dendro".to_string());
     let (exp_reader, sysinfo, file_meta) =
-        match super::open_experiment(&temp_path, Arc::clone(&state.pool)) {
+        match super::open_experiment(&temp_path, &filename, &baseline, Arc::clone(&state.pool)) {
             Ok(opened) => opened,
             Err(e) => {
                 let _ = std::fs::remove_file(&temp_path);

@@ -97,7 +97,7 @@ Error: simple.dendro is already a dendro archive; there is nothing to upgrade
 --- exit 1
 --- stdout
 --- stderr
-Error: missing.rez is not a recording (a .dendro archive, or a .rez, .parquet or .parquet.ab.tar to upgrade)
+Error: missing.rez: no such file
 
 === rezolus recording metadata -i v3.rez
 --- exit 1

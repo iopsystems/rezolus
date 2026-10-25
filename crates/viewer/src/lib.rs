@@ -972,19 +972,24 @@ impl WasmCaptureRegistry {
     /// id/alias scheme) and the requested slot id is ignored. That is the same
     /// mapping `rezolus view` makes for the same file. Attached as the
     /// experiment of a two-file comparison, an archive must be one recording;
-    /// several are refused, naming `recording combine --ab`.
+    /// several are refused with the commands that compare two of them.
     pub fn attach(&mut self, capture: &str, data: &[u8], filename: &str) -> Result<(), JsValue> {
         self.notices.clear();
         let pool = BufferPool::new(WASM_CACHE_SIZE_BYTES);
         let recordings = open_rez(data, filename, Arc::clone(&pool))?;
         if capture != "baseline" && recordings.len() > 1 {
-            return Err(JsValue::from_str(&format!(
-                "{filename} holds {} recordings; the experiment of a two-file comparison is \
-                 one recording. Label the recordings to compare in one archive instead:\n  \
-                 rezolus recording combine BASELINE.dendro {file} --ab \
-                 baseline=BASELINE.dendro experiment={file} -o ab.dendro",
+            let baseline = self
+                .baseline
+                .as_ref()
+                .map(|b| b.reader.filename_or_default())
+                .unwrap_or_else(|| "BASELINE.dendro".to_string());
+            return Err(JsValue::from_str(&rez::container::one_recording_hint(
+                "rezolus",
+                filename,
+                "the experiment",
                 recordings.len(),
-                file = rez::container::shell_word(filename)
+                &baseline,
+                filename,
             )));
         }
         self.notices

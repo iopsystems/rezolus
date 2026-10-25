@@ -62,6 +62,9 @@ fn upgrade_to_dendro(
         )
         .into());
     }
+    if !path.exists() {
+        return Err(format!("{}: no such file", path.display()).into());
+    }
     if legacy::Container::of_path(path) == legacy::Container::Dendro {
         return Err(format!(
             "{} is already a dendro archive; there is nothing to upgrade",

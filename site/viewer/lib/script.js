@@ -7,6 +7,7 @@ import { FileUpload, splitAlias } from './ui/landing.js';
 import { setStorageScope, seedEventsFromMetadata } from './selection/selection.js';
 import { initDashboard, bootstrapSharedSections, sectionResponseCache, loadSection } from './app.js';
 import { clearMetadataCache } from './data.js';
+import { dendroDemoName } from './legacy_demo.js';
 import { resetLinkedViewState } from './app.js';
 
 // ── UI state ────────────────────────────────────────────────────────
@@ -572,8 +573,10 @@ const _demoParam = _params.get('demo');
 const _category = _params.get('category');
 
 const parsePair = (rawA, rawB) => {
-    const [labelA, fileA] = splitAlias(rawA);
-    const [labelB, fileB] = splitAlias(rawB);
+    const [labelA, rawFileA] = splitAlias(rawA);
+    const [labelB, rawFileB] = splitAlias(rawB);
+    const fileA = dendroDemoName(rawFileA);
+    const fileB = dendroDemoName(rawFileB);
     const legends = (labelA || labelB)
         ? { baseline: labelA, experiment: labelB }
         : null;
@@ -586,7 +589,8 @@ if (_captureRaw.length >= 2) {
     m.mount(document.body, Root);
     loadCompareDemo(fileA, fileB, legends, _category);
 } else if (_captureRaw.length === 1) {
-    const [alias, source] = splitAlias(_captureRaw[0]);
+    const [alias, rawSource] = splitAlias(_captureRaw[0]);
+    const source = dendroDemoName(rawSource);
     splashLabel = alias || source;
     m.mount(document.body, Root);
     loadCapture(source, alias);
@@ -598,9 +602,9 @@ if (_captureRaw.length >= 2) {
     m.mount(document.body, Root);
     loadCompareDemo(fileA, fileB, legends, _category);
 } else if (_demoParam !== null) {
-    splashLabel = _demoParam || 'demo.dendro';
+    splashLabel = dendroDemoName(_demoParam) || 'demo.dendro';
     m.mount(document.body, Root);
-    loadDemo(_demoParam || 'demo.dendro');
+    loadDemo(dendroDemoName(_demoParam) || 'demo.dendro');
 } else {
     // No capture in URL — drop a stale section hash (e.g. #/overview
     // left over from a previous session) so the landing-page URL bar

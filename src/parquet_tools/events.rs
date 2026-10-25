@@ -331,8 +331,7 @@ pub(crate) fn remove_events_selected(
 }
 
 /// The one recording a selector names, through the check runner's open
-/// (`RezReader::open_recordings`, or a parquet file's one recording, refusing
-/// a selector on it). Unlike `check`, an empty selector over a
+/// (`RezReader::open_recordings`). Unlike `check`, an empty selector over a
 /// multi-recording archive is an error here, with the same listing the read
 /// tools give. Returns the recording and how many the archive holds.
 fn one_target(

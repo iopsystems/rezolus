@@ -112,9 +112,9 @@ refusal tests: every command but `upgrade` must refuse it and print
 
 `rezolus recording upgrade` of `legacy/simple_capture.parquet` and of the
 `.rez` archives in `crates/rez/tests/fixtures/rez/` (`v2`, `v3`, `v3-multi`,
-`v3-live`, `v3-wal-only`), for the tests of every reader that opens `.dendro`
-only (the WASM viewer's node tests, `viewer_smoke.sh`, the viewer's and
-report-save's unit tests). Regenerate one, only when the converter changes, with
+`v3-live`, `v3-wal-only`), for the WASM viewer's node tests and
+`viewer_smoke.sh`, which open `.dendro` only. The Rust tests convert their
+fixtures when they run. Regenerate one, only when the converter changes, with
 
     rezolus recording upgrade crates/rez/tests/fixtures/rez/v3.rez -o tests/fixtures/upgraded/v3.dendro
 

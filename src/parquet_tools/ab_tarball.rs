@@ -113,7 +113,8 @@ fn unpack(path: &Path, dir: &Path) -> Result<AbContainers, Box<dyn std::error::E
     }
     let manifest =
         manifest.ok_or_else(|| format!("{}: the tarball holds no ab.json", path.display()))?;
-    let manifest: AbContainers = serde_json::from_slice(&manifest)?;
+    let manifest: AbContainers = serde_json::from_slice(&manifest)
+        .map_err(|e| format!("{}: ab.json is not valid: {e}", path.display()))?;
     if manifest.version != AbContainers::SCHEMA_VERSION {
         return Err(format!(
             "{}: ab.json is schema version {} (this release reads {})",

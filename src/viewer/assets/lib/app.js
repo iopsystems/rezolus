@@ -98,7 +98,6 @@ const withCachedSections = (data) => withSharedSections(sectionCacheState, data)
 const getCachedSections = () => getSections(sectionCacheState);
 
 let compareMode = false;
-let combinedAB = false;
 let reportMode = false;
 let experimentAttached = false;
 let experimentSystemInfo = null;
@@ -1057,7 +1056,6 @@ const SectionContent = {
                 baselineAlias,
                 experimentAlias,
                 experimentFilename,
-                combinedAB,
             });
         }
 
@@ -1257,7 +1255,6 @@ const initDashboard = (config = {}) => {
     compareMode = config.compareMode === true;
     experimentAttached = compareMode;
     refreshCompareCaptures();
-    combinedAB = config.combinedAB === true;
     reportMode = config.reportMode === true;
     experimentSystemInfo = config.experimentSystemInfo || null;
     experimentDurationMs = durationFromFileMetadata(config.experimentFileMetadata);

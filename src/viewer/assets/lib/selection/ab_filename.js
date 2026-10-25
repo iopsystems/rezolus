@@ -1,10 +1,12 @@
 // Compose the default download filename prefix for an A/B Report save.
-// Caller appends the `.parquet.ab.tar` extension via the save modal.
+// Caller appends the `.dendro` extension via the save modal.
 
-const PARQUET_SUFFIXES = ['.dendro', '.parquet.ab.tar', '.parquet', '.ab.tar', '.tar'];
+// `.dendro`, and the extensions recordings had in earlier releases, whose
+// file names an alias can still carry.
+const RECORDING_SUFFIXES = ['.dendro', '.parquet.ab.tar', '.parquet', '.ab.tar', '.tar'];
 
 const stripKnownSuffix = (label) => {
-    for (const suffix of PARQUET_SUFFIXES) {
+    for (const suffix of RECORDING_SUFFIXES) {
         if (label.endsWith(suffix)) {
             return label.slice(0, -suffix.length);
         }

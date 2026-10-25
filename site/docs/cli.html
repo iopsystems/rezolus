@@ -301,6 +301,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">The recording to annotate (.dendro)</span></div>
 <div><span class="text-slate-400">-o, --output &lt;PATH&gt;</span>         <span class="text-slate-600">Write the annotated copy here instead of in place</span></div>
 <div><span class="text-slate-400">    --queries &lt;JSON&gt;</span>        <span class="text-slate-600">Service-extension JSON to embed</span></div>
+<div><span class="text-slate-400">    --templates &lt;DIR&gt;</span>       <span class="text-slate-600">Directory of service-extension template JSON</span></div>
 <div><span class="text-slate-400">    --undo</span>                  <span class="text-slate-600">Remove the embedded KPIs</span></div>
 <div><span class="text-slate-400">    --systeminfo &lt;PATH&gt;</span>     <span class="text-slate-600">Store a systeminfo JSON</span></div>
 <div><span class="text-slate-400">    --event &lt;SPEC&gt;</span>          <span class="text-slate-600">Add one event (repeatable)</span></div>
@@ -318,7 +319,9 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div><span class="text-slate-400">    --queries &lt;JSON&gt;</span>        <span class="text-slate-600">Run these checks instead of the embedded ones</span></div>
 <div><span class="text-slate-400">    --recording &lt;K=V&gt;</span>       <span class="text-slate-600">One recording of a multi-recording archive</span></div>
 <div><span class="text-slate-400">    --annotate</span>              <span class="text-slate-600">Write FAIL/WARN windows as kind=check events</span></div>
+<div><span class="text-slate-400">-o, --output &lt;PATH&gt;</span>         <span class="text-slate-600">With --annotate, write the events into this new .dendro</span></div>
 <div><span class="text-slate-400">    --json</span>                  <span class="text-slate-600">Print the verdicts as JSON</span></div>
+<div><span class="text-slate-400">    --templates &lt;DIR&gt;</span>       <span class="text-slate-600">Templates for a recording with no embedded KPIs</span></div>
 </div>
 </div>
 
@@ -376,7 +379,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Convert a recording an earlier release wrote into a new <code>.dendro</code>: a v1, v2 or v3 <code>.rez</code>, a <code>.parquet</code> file, or a <code>.parquet.ab.tar</code> A/B tarball (two recordings, arm=baseline and arm=experiment). The input is never changed.</p>
 <div class="space-y-1 text-sm text-slate-500 font-mono">
 <div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">The recording to convert</span></div>
-<div><span class="text-slate-400">-o, --output &lt;DENDRO&gt;</span>       <span class="text-slate-600">The .dendro to write (default: the input with a .dendro extension)</span></div>
+<div><span class="text-slate-400">-o, --output &lt;DENDRO&gt;</span>       <span class="text-slate-600">The .dendro to write (default: the input's name with .dendro for its extension; x.parquet.ab.tar becomes x.dendro)</span></div>
 </div>
 </div>
 

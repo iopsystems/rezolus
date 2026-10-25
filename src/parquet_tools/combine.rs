@@ -222,28 +222,23 @@ fn stamped_labels(
 }
 
 /// Refuse a plan an input's recordings already contradict, before anything
-/// is copied: each input's source labels, read from the dendro archive it is
-/// copied from (`inputs`, the converted ones for a legacy input), named by
-/// the input as given (`files`). Whether the arms fill a comparison is
+/// is copied: each input's source labels, read from the dendro archive
+/// (`files`, as given). Whether the arms fill a comparison is
 /// checked after the copy (`check_slots`), when the output's recordings are
 /// known: a source and its copy in two inputs are one recording.
-fn check_ab_plan(
-    plan: &AbPlan,
-    files: &[PathBuf],
-    inputs: &[PathBuf],
-) -> Result<(), Box<dyn std::error::Error>> {
+fn check_ab_plan(plan: &AbPlan, files: &[PathBuf]) -> Result<(), Box<dyn std::error::Error>> {
     if *plan == AbPlan::Nothing {
         return Ok(());
     }
     let mut labels = Vec::new();
     let mut counts = Vec::new();
-    for input in inputs {
+    for input in files {
         let sources = dendro::archive::Archive::open(input)?.read_sources()?;
         counts.push(sources.len());
         labels.extend(sources.into_iter().map(|s| s.meta.labels));
     }
     let groups = match plan {
-        AbPlan::Positions(_) => read_groups_of(&inputs[0])?,
+        AbPlan::Positions(_) => read_groups_of(&files[0])?,
         _ => Vec::new(),
     };
     stamped_labels(&labels, &plan.per_recording(&counts, files, &groups)?)?;
@@ -399,10 +394,9 @@ fn combine_dendro(
     // Beside the output, never in $TMPDIR: a link across filesystems fails.
     let staging = legacy::staging_dir(output)?;
 
-    let inputs: Vec<PathBuf> = files.to_vec();
-    check_ab_plan(plan, files, &inputs)?;
+    check_ab_plan(plan, files)?;
 
-    let archives: Vec<Archive> = inputs
+    let archives: Vec<Archive> = files
         .iter()
         .map(|p| Archive::open(p))
         .collect::<Result<_, _>>()?;
@@ -584,13 +578,12 @@ mod tests {
         .collect()
     }
 
-    /// `--ab` stamps `arm` on each input's recordings, from `.rez` and
-    /// parquet inputs, and the archive opens as a comparison; without it
-    /// nothing is stamped and it opens combined.
+    /// `--ab` stamps `arm` on each input's recordings, and the archive opens
+    /// as a comparison; without it nothing is stamped and it opens combined.
     #[test]
     fn combine_ab_stamps_each_inputs_arm() {
         let dir = tempfile::tempdir().unwrap();
-        let (a, b) = (dir.path().join("a.rez"), dir.path().join("b.rez"));
+        let (a, b) = (dir.path().join("a.dendro"), dir.path().join("b.dendro"));
         agent_rez(&a, &[("source", "rezolus"), ("host", "a")]);
         agent_rez(&b, &[("source", "rezolus"), ("host", "b")]);
         let arms = |path: &std::path::Path| -> Vec<(String, Option<String>)> {
@@ -607,7 +600,7 @@ mod tests {
         let ab = dir.path().join("ab.dendro");
         // One input named by its file name, the other by the path as typed.
         let exp = format!("experiment={}", b.display());
-        run_combine_ab(&[a.clone(), b.clone()], &ab, &["baseline=a.rez", &exp]).unwrap();
+        run_combine_ab(&[a.clone(), b.clone()], &ab, &["baseline=a.dendro", &exp]).unwrap();
         assert_eq!(arms(&ab), want);
         let readers = ::rez::reader::RezReader::open_recordings(
             &ab,
@@ -638,7 +631,7 @@ mod tests {
     #[test]
     fn combine_ab_refuses_a_conflicting_arm() {
         let dir = tempfile::tempdir().unwrap();
-        let (a, b) = (dir.path().join("a.rez"), dir.path().join("b.rez"));
+        let (a, b) = (dir.path().join("a.dendro"), dir.path().join("b.dendro"));
         agent_rez(
             &a,
             &[("source", "rezolus"), ("host", "a"), ("arm", "baseline")],
@@ -651,7 +644,7 @@ mod tests {
         run_combine_ab(
             &[a.clone(), b.clone()],
             &kept,
-            &["baseline=a.rez", "experiment=c.rez"],
+            &["baseline=a.dendro", "experiment=c.dendro"],
         )
         .unwrap_err();
         assert!(!kept.exists());
@@ -659,12 +652,12 @@ mod tests {
         let err = run_combine_ab(
             &[a.clone(), b.clone()],
             &out,
-            &["baseline=a.rez", "experiment=b.rez"],
+            &["baseline=a.dendro", "experiment=b.dendro"],
         )
         .unwrap_err()
         .to_string();
         assert!(
-            err.contains("b.rez") && err.contains("already arm baseline"),
+            err.contains("b.dendro") && err.contains("already arm baseline"),
             "{err}"
         );
         // Refused before the copy: the relabel after it is never reached.
@@ -672,7 +665,7 @@ mod tests {
         let early = run_combine_ab(
             &[a.clone(), b.clone()],
             &dir.path().join("early.dendro"),
-            &["baseline=a.rez", "experiment=b.rez"],
+            &["baseline=a.dendro", "experiment=b.dendro"],
         );
         FAIL_STAMP.with(|f| f.set(false));
         let early = early.unwrap_err().to_string();
@@ -682,17 +675,17 @@ mod tests {
         run_combine_ab(
             &[b.clone(), a.clone()],
             &swapped,
-            &["baseline=a.rez", "experiment=b.rez"],
+            &["baseline=a.dendro", "experiment=b.dendro"],
         )
         .unwrap_err();
         // The matching arm is kept.
-        let c = dir.path().join("c.rez");
+        let c = dir.path().join("c.dendro");
         agent_rez(&c, &[("source", "rezolus"), ("host", "c")]);
         let ok = dir.path().join("ok.dendro");
         run_combine_ab(
             &[a.clone(), c.clone()],
             &ok,
-            &["baseline=a.rez", "experiment=c.rez"],
+            &["baseline=a.dendro", "experiment=c.dendro"],
         )
         .unwrap();
         let arms: Vec<_> = archive_labels(&ok)
@@ -709,7 +702,7 @@ mod tests {
     #[test]
     fn combine_ab_relabels_one_archive_by_position() {
         let dir = tempfile::tempdir().unwrap();
-        let (a, b) = (dir.path().join("a.rez"), dir.path().join("b.rez"));
+        let (a, b) = (dir.path().join("a.dendro"), dir.path().join("b.dendro"));
         identity_rez(
             &a,
             &[("source", "rezolus")],
@@ -770,7 +763,7 @@ mod tests {
     #[test]
     fn combine_ab_keeps_a_case_variant_and_refuses_three_arms() {
         let dir = tempfile::tempdir().unwrap();
-        let (a, b) = (dir.path().join("a.rez"), dir.path().join("b.rez"));
+        let (a, b) = (dir.path().join("a.dendro"), dir.path().join("b.dendro"));
         agent_rez(
             &a,
             &[("source", "rezolus"), ("host", "a"), ("arm", "Baseline")],
@@ -780,7 +773,7 @@ mod tests {
         run_combine_ab(
             &[a.clone(), b.clone()],
             &out,
-            &["baseline=a.rez", "experiment=b.rez"],
+            &["baseline=a.dendro", "experiment=b.dendro"],
         )
         .unwrap();
         let arms: Vec<_> = archive_labels(&out)
@@ -790,12 +783,12 @@ mod tests {
         assert_eq!(arms, ["Baseline", "experiment"]);
 
         let three = dir.path().join("three.dendro");
-        let c = dir.path().join("c.rez");
+        let c = dir.path().join("c.dendro");
         agent_rez(
             &c,
             &[("source", "rezolus"), ("host", "c"), ("arm", "control")],
         );
-        let (d, e) = (dir.path().join("d.rez"), dir.path().join("e.rez"));
+        let (d, e) = (dir.path().join("d.dendro"), dir.path().join("e.dendro"));
         agent_rez(&d, &[("source", "rezolus"), ("host", "d")]);
         agent_rez(&e, &[("source", "rezolus"), ("host", "e")]);
         run_combine_ab(&[d, e, c.clone()], &three, &[]).unwrap();
@@ -818,11 +811,11 @@ mod tests {
     #[test]
     fn a_failed_relabel_leaves_no_output() {
         let dir = tempfile::tempdir().unwrap();
-        let (a, b) = (dir.path().join("a.rez"), dir.path().join("b.rez"));
+        let (a, b) = (dir.path().join("a.dendro"), dir.path().join("b.dendro"));
         agent_rez(&a, &[("source", "rezolus"), ("host", "a")]);
         agent_rez(&b, &[("source", "rezolus"), ("host", "b")]);
         let out = dir.path().join("ab.dendro");
-        let ab = ["baseline=a.rez", "experiment=b.rez"];
+        let ab = ["baseline=a.dendro", "experiment=b.dendro"];
         FAIL_STAMP.with(|f| f.set(true));
         let err = run_combine_ab(&[a.clone(), b.clone()], &out, &ab);
         FAIL_STAMP.with(|f| f.set(false));
@@ -851,8 +844,8 @@ mod tests {
         };
         assert_eq!(
             plan(
-                &["experiment=x/a.rez", "baseline=b.rez"],
-                &["x/a.rez", "y/b.rez"]
+                &["experiment=x/a.dendro", "baseline=b.dendro"],
+                &["x/a.dendro", "y/b.dendro"]
             )
             .unwrap(),
             AbPlan::Inputs(["experiment", "baseline"])
@@ -867,7 +860,7 @@ mod tests {
             AbPlan::Inputs(["experiment", "baseline"])
         );
         assert_eq!(
-            plan(&["baseline=1", "experiment=0"], &["old.rez"]).unwrap(),
+            plan(&["baseline=1", "experiment=0"], &["old.dendro"]).unwrap(),
             AbPlan::Positions([(1, "baseline"), (0, "experiment")])
         );
         assert_eq!(plan(&[], &["a", "b", "c"]).unwrap(), AbPlan::Nothing);
@@ -878,11 +871,11 @@ mod tests {
             (&["baseline=a", "experiment=z"][..], &["a", "b"][..]),
             (&["control=a", "experiment=b"][..], &["a", "b"][..]),
             (
-                &["baseline=a.rez", "experiment=b"][..],
-                &["x/a.rez", "y/a.rez"][..],
+                &["baseline=a.dendro", "experiment=b"][..],
+                &["x/a.dendro", "y/a.dendro"][..],
             ),
-            (&["baseline=0", "experiment=0"][..], &["old.rez"][..]),
-            (&["baseline=first", "experiment=1"][..], &["old.rez"][..]),
+            (&["baseline=0", "experiment=0"][..], &["old.dendro"][..]),
+            (&["baseline=first", "experiment=1"][..], &["old.dendro"][..]),
         ] {
             assert!(plan(raw, files).is_err(), "{raw:?} {files:?}");
         }

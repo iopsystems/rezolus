@@ -160,6 +160,34 @@ pub fn require_dendro(path: &Path, program: &str) -> Result<(), String> {
     }
 }
 
+/// The refusal of a file holding `n` recordings as one side (`side`, "the
+/// baseline" or "the experiment") of a two-file comparison, where each file
+/// is one recording. It names the commands that compare two of them: put
+/// both files' recordings in one archive, list them, and choose the two.
+pub fn one_recording_hint(
+    program: &str,
+    file: &str,
+    side: &str,
+    n: usize,
+    baseline: &str,
+    experiment: &str,
+) -> String {
+    if n == 0 {
+        return format!("{file} holds no recordings");
+    }
+    format!(
+        "{file} holds {n} recordings; {side} of a two-file comparison is one recording. \
+         Put the recordings in one archive and choose the two to compare:\n  \
+         {program} recording combine {} {} -o both.dendro\n  \
+         {program} mcp describe-recording both.dendro\n  \
+         {program} view both.dendro --baseline KEY=VALUE --experiment KEY=VALUE\n\
+         describe-recording lists each recording's labels, and how to label \
+         recordings that no labels tell apart.",
+        shell_word(baseline),
+        shell_word(experiment),
+    )
+}
+
 /// `word` quoted for a POSIX shell when it needs it: one that is safe bare
 /// (letters, digits and `_-.,:/=@%+`) is returned as it is, anything else
 /// single-quoted.

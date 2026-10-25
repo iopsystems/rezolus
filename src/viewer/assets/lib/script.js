@@ -422,7 +422,6 @@ const showCompareLanding = () => {
 
 const bootstrap = async () => {
     let compareMode = false;
-    let combinedAB = false;
     let reportMode = false;
     let categoryName = null;
     setSplashLabel('Connecting to viewer');
@@ -436,7 +435,6 @@ const bootstrap = async () => {
         followMode = response.following === true;
         compareMode = response.compare_mode === true;
         categoryName = response.category || null;
-        combinedAB = response.combined_ab === true;
         reportMode = response.report === true;
     } catch (_) { /* assume loaded file mode */ }
 
@@ -497,7 +495,6 @@ const bootstrap = async () => {
         liveMode,
         following: followMode,
         compareMode,
-        combinedAB,
         reportMode,
         categoryName,
         baselineAlias,

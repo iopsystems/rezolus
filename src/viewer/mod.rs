@@ -53,7 +53,7 @@ use capture_registry::CaptureId;
 use state::AppState;
 
 /// Shared entry point for loading the template registry. Both the
-/// viewer (`rezolus view`) and `rezolus parquet annotate/filter` call
+/// viewer (`rezolus view`) and `rezolus recording annotate/check` call
 /// this. Precedence: explicit `--templates <path>` > env var /
 /// `crates/dashboard/templates/` default (developer-mode or explicit path only).
 /// Release builds fall back to the templates baked into the `dashboard`
@@ -128,9 +128,9 @@ pub fn command() -> Command {
              Either positional may be given as alias=path (e.g. redis=./a.dendro) to set the\n\
              display label; the internal slots stay baseline/experiment. The second positional\n\
              is the experiment of a two-file comparison: each file is then one recording (an\n\
-             archive of several is refused, naming `recording combine --ab`, which labels\n\
-             them for a comparison in one archive). Live and upload-only modes attach a\n\
-             second capture from the browser instead.\n\n\
+             archive of several is refused, naming the `recording combine` and\n\
+             --baseline/--experiment commands that compare two of its recordings). Live and\n\
+             upload-only modes attach a second capture from the browser instead.\n\n\
              By default the viewer binds 127.0.0.1 on a random free port; pass --listen to fix\n\
              the address (e.g. to reach it from another host).\n\n\
              The --templates/--category flags (service-extension dashboards) and the --proxy-*\n\
@@ -366,7 +366,7 @@ pub struct Config {
     query_concurrency: usize,
     /// Render a terminal UI instead of the web dashboard.
     tui: bool,
-    /// Label selectors naming which recordings of a multi-recording `.rez`
+    /// Label selectors naming which recordings of a multi-recording archive
     /// fill the A/B slots. An empty selector means the flag was not given.
     baseline_recording: crate::mcp::RecordingSelector,
     experiment_recording: crate::mcp::RecordingSelector,
@@ -383,10 +383,10 @@ impl Config {
 /// path-or-url. The alias prefix must look "identifier-like" — no path
 /// separators, no colon (would collide with URL schemes), no whitespace.
 ///
-/// `redis=./a.parquet`         → (Some("redis"), "./a.parquet")
-/// `./a.parquet`               → (None,          "./a.parquet")
+/// `redis=./a.dendro`          → (Some("redis"), "./a.dendro")
+/// `./a.dendro`                → (None,          "./a.dendro")
 /// `http://localhost:4241`     → (None,          "http://localhost:4241")
-/// `/abs/path=weird.parquet`   → (None,          "/abs/path=weird.parquet")
+/// `/abs/path=weird.dendro`    → (None,          "/abs/path=weird.dendro")
 fn split_alias(raw: &str) -> (Option<String>, &str) {
     if let Some(eq) = raw.find('=') {
         let (lhs, rest) = raw.split_at(eq);
@@ -540,7 +540,7 @@ pub fn run(config: Config) {
             if config.selects_a_recording() {
                 eprintln!(
                     "{}",
-                    selectors_need_a_rez(&format!("the live agent at {url}"))
+                    selectors_need_an_archive(&format!("the live agent at {url}"))
                 );
                 std::process::exit(1);
             }
@@ -556,7 +556,7 @@ pub fn run(config: Config) {
             if config.selects_a_recording() {
                 eprintln!(
                     "{}",
-                    selectors_need_a_rez("upload-only mode (no input file)")
+                    selectors_need_an_archive("upload-only mode (no input file)")
                 );
                 std::process::exit(1);
             }
@@ -659,27 +659,17 @@ fn init_file_mode(
     init_file_mode_rez(config, path, registry, pool)
 }
 
-/// The refusal of a second file that is not one recording: a comparison
-/// of two files is one recording each, and several recordings compare
-/// inside one archive, labelled by `recording combine --ab`.
-pub(super) fn one_recording_hint(path: &Path, what: &str, n: usize) -> String {
-    let file = ::rez::container::shell_word(&path.display().to_string());
-    format!(
-        "{} holds {n} recordings; {what} of a two-file comparison is one recording. \
-         Label the recordings to compare in one archive instead:\n  \
-         {} recording combine BASELINE.dendro {file} --ab baseline=BASELINE.dendro \
-         experiment={file} -o ab.dendro",
-        path.display(),
-        env!("CARGO_BIN_NAME")
-    )
-}
-
-/// Open the dendro archive at `path` as the experiment of a two-file
-/// comparison: its one recording, with the systeminfo and metadata the
-/// captures registry keeps. A legacy file is refused with the upgrade
-/// command, an archive of several recordings with the `combine --ab` one.
+/// Open the dendro archive at `path`, known to the user as `name`, as the
+/// experiment of a two-file comparison against `baseline` (both names for
+/// the refusal): its one
+/// recording, with the systeminfo and metadata the captures registry keeps.
+/// A legacy file is refused with the upgrade command, an archive of several
+/// recordings with the commands that compare two of them
+/// ([`::rez::container::one_recording_hint`]).
 pub(super) fn open_experiment(
     path: &Path,
+    name: &str,
+    baseline: &str,
     pool: Arc<metriken_storage::BufferPool>,
 ) -> Result<(crate::rez_reader::RezReader, Option<String>, Option<String>), String> {
     use metriken_query::MetricsSource;
@@ -687,7 +677,14 @@ pub(super) fn open_experiment(
     let mut readers = crate::rez_reader::RezReader::open_recordings(path, pool)
         .map_err(|e| format!("failed to load {}: {e}", path.display()))?;
     if readers.len() != 1 {
-        return Err(one_recording_hint(path, "the experiment", readers.len()));
+        return Err(::rez::container::one_recording_hint(
+            env!("CARGO_BIN_NAME"),
+            name,
+            "the experiment",
+            readers.len(),
+            baseline,
+            name,
+        ));
     }
     let (_, reader) = readers.pop().expect("one recording");
     let systeminfo = reader.metadata_get("systeminfo");
@@ -732,16 +729,11 @@ fn resolve_slot(
     })
 }
 
-/// Which recordings of a multi-recording `.rez` fill the baseline and
+/// Which recordings of a multi-recording archive fill the baseline and
 /// experiment slots.
 ///
-/// With neither selector this is the historical behavior — recordings 0 and 1,
-/// in manifest order — kept deliberately: a `.rez` written by `record
-/// --endpoint a --endpoint b` is already in the order the user typed, so the
-/// default is not arbitrary for the shape that produces most of these
-/// archives. The selectors exist for the shape where it IS arbitrary: three or
-/// more recordings, where "the first two" is whichever two the recorder
-/// happened to open first.
+/// With neither selector the recordings' `arm` labels decide
+/// (`dashboard::combined::arm_slots`); with `--baseline` the selectors do.
 ///
 /// A selector that matches nothing, or several, is refused rather than
 /// narrowed to a first match — the same call made for the MCP `--recording`
@@ -809,11 +801,12 @@ fn resolve_ab_slots(
 
 /// The message for a recording selector passed where there is no archive to
 /// select inside of. `what` names the input as the user gave it.
-fn selectors_need_a_rez(what: &str) -> String {
+fn selectors_need_an_archive(what: &str) -> String {
     format!(
-        "{BASELINE_FLAG}/{EXPERIMENT_FLAG} name recordings inside a multi-recording .rez \
+        "{BASELINE_FLAG}/{EXPERIMENT_FLAG} name recordings inside a multi-recording .dendro \
          archive, but {what} is not one.\nTo compare two separate files, pass them as \
-         positionals: rezolus view baseline.parquet experiment.parquet"
+         positionals: {} view baseline.dendro experiment.dendro",
+        env!("CARGO_BIN_NAME")
     )
 }
 
@@ -937,9 +930,8 @@ fn init_file_mode_combined(
     let selection = ::dashboard::combined::marker(&markers, crate::parquet_metadata::KEY_SELECTION);
     let report_marker =
         ::dashboard::combined::marker(&markers, crate::parquet_metadata::KEY_REPORT);
-    // A dendro archive is a SQLite file and can grow in place.
-    let growable = true;
-    let following = growable && !combined.reader.complete();
+    // An archive not finalized when opened is followed: it can grow in place.
+    let following = !combined.reader.complete();
     let mut live = None;
     let (source, catalog): (
         Arc<dyn metriken_query::MetricsSource>,
@@ -998,12 +990,9 @@ fn init_file_mode_combined(
     state
 }
 
-/// `.rez` archive file mode: load the per-sampler tables as one `RezReader`
-/// (a `MetricsSource`) and build the baseline dashboard from it. The manifest's
-/// recording metadata stands in for the parquet footer (systeminfo, file
-/// metadata). Service extensions and source classification degrade gracefully —
-/// a `.rez` has no parquet footer, so those path-based reads simply yield
-/// nothing, which is correct for a plain agent recording.
+/// Archive file mode: open each recording of the dendro archive at `path` as
+/// a `RezReader` (a `MetricsSource`) and build the dashboards from them,
+/// with each recording's metadata for its systeminfo and file metadata.
 fn init_file_mode_rez(
     config: &Config,
     path: &Path,
@@ -1014,8 +1003,7 @@ fn init_file_mode_rez(
     use std::collections::BTreeMap;
     info!("Loading data from {}...", path.display());
 
-    // One reader per recording (labels preserved). Manifest recording
-    // metadata stands in for the parquet footer.
+    // One reader per recording (labels preserved).
     let readers = crate::rez_reader::RezReader::open_recordings(path, Arc::clone(&pool))
         .unwrap_or_else(|e| {
             eprintln!("failed to load {}: {e}", path.display());
@@ -1028,12 +1016,22 @@ fn init_file_mode_rez(
 
     // A second file is the experiment of a two-file comparison: each file
     // is one recording.
-    if config.experiment_path.is_some() && readers.len() != 1 {
-        eprintln!(
-            "{}",
-            one_recording_hint(path, "the baseline", readers.len())
-        );
-        std::process::exit(1);
+    if let Some(experiment) = &config.experiment_path {
+        if readers.len() != 1 {
+            let file = path.display().to_string();
+            eprintln!(
+                "{}",
+                ::rez::container::one_recording_hint(
+                    env!("CARGO_BIN_NAME"),
+                    &file,
+                    "the baseline",
+                    readers.len(),
+                    &file,
+                    &experiment.display().to_string(),
+                )
+            );
+            std::process::exit(1);
+        }
     }
 
     // An archive of one run opens as one combined view; a comparison only
@@ -1093,15 +1091,10 @@ fn init_file_mode_rez(
     // buffer, a `record` in progress, or a file whose writer is gone) is
     // followed: each recording shown is read through a `LiveReader` that a
     // `follow::Follow` thread reopens until the follow ends (see follow.rs).
-    // Only the SQLite containers (dendro and `.rez` v3) can grow in place; a
-    // tar `.rez` is written whole.
-    // A dendro archive is a SQLite file and can grow in place.
-    let growable = true;
-    let mut following = growable
-        && order
-            .iter()
-            .chain(&beside_idx)
-            .any(|&i| !readers[i].1.complete());
+    let mut following = order
+        .iter()
+        .chain(&beside_idx)
+        .any(|&i| !readers[i].1.complete());
     // A reopen finds each recording by its label set, so a shown recording
     // whose label set another recording shares cannot be found again.
     if following {
@@ -1214,9 +1207,8 @@ fn init_file_mode_rez(
     *state.anchor_labels.write() = Some(b_labels.clone());
     *state.parquet_path.write() = Some(path.to_path_buf());
     *state.selection.write() = b_selection;
-    // A `.rez` report stamps `KEY_REPORT=trimmed` on its anchor recording, the
-    // manifest analogue of the parquet footer marker read on the parquet path.
-    // Without this a reloaded `.rez` report would render its (mostly trimmed)
+    // A saved report stamps `KEY_REPORT=trimmed` on its anchor recording.
+    // Without this a reloaded report would render its (mostly trimmed)
     // sections instead of going straight to the saved Report view.
     *state.trimmed_report_marker.write() = b_report_marker;
     state.captures.set_baseline_systeminfo(b_systeminfo);
@@ -1255,8 +1247,10 @@ fn init_file_mode_rez(
     }
 
     if let Some(exp_path) = &config.experiment_path {
-        let (reader, systeminfo, file_meta) = open_experiment(exp_path, Arc::clone(&pool))
-            .unwrap_or_else(|e| {
+        let baseline = path.display().to_string();
+        let name = exp_path.display().to_string();
+        let (reader, systeminfo, file_meta) =
+            open_experiment(exp_path, &name, &baseline, Arc::clone(&pool)).unwrap_or_else(|e| {
                 eprintln!("{e}");
                 std::process::exit(1);
             });
@@ -1402,15 +1396,7 @@ mod tests {
     use ::dashboard::dashboard::DashboardContext;
     use ::dashboard::Section;
 
-    /// `init_file_mode` must dispatch a v3 (SQLite) `.rez` to
-    /// `init_file_mode_rez`, not the plain-parquet `ParquetReader` path.
-    /// Mutation check: reverting the `detect_rez_format` check in
-    /// `init_file_mode` to `is_rez_path` makes this fail — a v3 file then
-    /// falls through to `ParquetReader::open_with_pool`, which errors on the
-    /// SQLite header and (in real `init_file_mode`, unlike most of this
-    /// crate's error paths) calls `std::process::exit(1)` rather than
-    /// returning an `Err`, so under the mutation this test process aborts
-    /// instead of failing an assertion.
+    /// `init_file_mode` opens a v3 `.rez` upgraded to `.dendro`.
     #[test]
     fn init_file_mode_reads_an_upgraded_rez() {
         let dir = tempfile::tempdir().unwrap();
@@ -1439,7 +1425,7 @@ mod tests {
 
     /// Two one-recording archives open as a two-file comparison, the
     /// second in the experiment slot; an experiment of several recordings is
-    /// refused naming `combine --ab`, and a legacy one naming the upgrade.
+    /// refused naming `recording combine`, and a legacy one naming the upgrade.
     #[test]
     fn a_second_file_is_a_one_recording_experiment() {
         let dir = tempfile::tempdir().unwrap();
@@ -1472,22 +1458,28 @@ mod tests {
         let pool = || metriken_storage::BufferPool::new(8 * 1024 * 1024);
         let two = dir.path().join("two.dendro");
         ::rez::fixtures::multi_recording(&two, &[("redis", "web-01"), ("valkey", "web-02")]);
-        let err = super::open_experiment(&two, pool()).err().unwrap();
+        let err = super::open_experiment(&two, &two.display().to_string(), "one.dendro", pool())
+            .err()
+            .unwrap();
+        let combine = format!(
+            "recording combine one.dendro {} -o both.dendro",
+            two.display()
+        );
         assert!(
-            err.contains("holds 2 recordings") && err.contains("--ab"),
+            err.contains("holds 2 recordings") && err.contains(&combine),
             "{err}"
         );
         let legacy = ::rez::fixtures::committed_rez("v3.rez", dir.path());
-        let err = super::open_experiment(&legacy, pool()).err().unwrap();
+        let err = super::open_experiment(&legacy, "v3.rez", "one.dendro", pool())
+            .err()
+            .unwrap();
         assert!(err.contains("rezolus recording upgrade"), "{err}");
     }
 
-    /// Selection and events embedded in a `.rez` recording's manifest are
-    /// surfaced by `init_file_mode_rez` exactly as the parquet footer path
-    /// surfaces them: selection into `state.selection`, events inside the
-    /// baseline's `file_metadata` (where the frontend's `seedEventsFromMetadata`
-    /// finds them). Before this workstream, `init_file_mode_rez` never set
-    /// `state.selection` for a `.rez`.
+    /// Selection and events in a recording's metadata are surfaced by
+    /// `init_file_mode_rez`: selection into `state.selection`, events inside
+    /// the baseline's `file_metadata` (where the frontend's
+    /// `seedEventsFromMetadata` finds them).
     #[test]
     fn init_file_mode_rez_surfaces_manifest_selection_and_events() {
         let dir = tempfile::tempdir().unwrap();
@@ -1533,7 +1525,7 @@ mod tests {
         );
 
         // The report marker on the anchor makes the archive load as a report —
-        // the round trip a `.rez` Save-as-Report depends on.
+        // the round trip Save-as-Report depends on.
         assert!(
             state.is_trimmed_report(),
             "KEY_REPORT on the anchor manifest must set the trimmed-report marker"
@@ -1709,8 +1701,8 @@ mod tests {
 
     /// An archive's simple capture (a source with no template and no
     /// Rezolus metrics) is classified from its recording's metadata, so its
-    /// section is named by its `source`, as the same capture's parquet and the
-    /// WASM viewer name it, rather than by the archive's filename.
+    /// section is named by its `source`, as the WASM viewer names it, rather
+    /// than by the archive's filename.
     #[test]
     fn an_archive_simple_capture_is_named_by_its_source() {
         let dir = tempfile::tempdir().unwrap();
@@ -1729,8 +1721,7 @@ mod tests {
     }
 
     /// Each recording of a two-recording archive renders the template its own
-    /// metadata carries: the experiment's is read from its recording, not
-    /// from a parquet path the archive does not have.
+    /// metadata carries: the experiment's is read from its recording.
     #[test]
     fn each_recording_of_an_archive_renders_its_own_template() {
         let dir = tempfile::tempdir().unwrap();
@@ -1985,17 +1976,17 @@ mod tests {
         }
     }
 
-    /// The flags are only meaningful inside a `.rez` manifest; anywhere else
-    /// they must be refused rather than ignored, since ignoring one loads a
-    /// file the caller narrowed and shows it as the narrowed view.
+    /// The flags are only meaningful inside an archive; anywhere else they
+    /// must be refused rather than ignored, since ignoring one loads a file
+    /// the caller narrowed and shows it as the narrowed view.
     #[test]
-    fn selectors_outside_a_rez_are_refused_by_name() {
-        let msg = super::selectors_need_a_rez("out.parquet");
+    fn selectors_outside_an_archive_are_refused_by_name() {
+        let msg = super::selectors_need_an_archive("upload-only mode");
         assert!(
             msg.contains("--baseline") && msg.contains("--experiment"),
             "{msg}"
         );
-        assert!(msg.contains("out.parquet"), "{msg}");
+        assert!(msg.contains("upload-only mode"), "{msg}");
     }
 
     /// Selecting recordings must actually put THOSE recordings in the slots,

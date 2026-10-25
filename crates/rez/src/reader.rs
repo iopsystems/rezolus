@@ -1,6 +1,6 @@
-//! `RezReader`: an archive opened by `metriken_storage::rez::open` (a
-//! `.rez` or dendro archive, recognized by content), read as one
-//! `metriken_query::MetricsSource` per recording.
+//! `RezReader`: a dendro archive read as one
+//! `metriken_query::MetricsSource` per recording. Any other file is refused
+//! with the command that converts it.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -12,8 +12,8 @@ use metriken_query::{
 pub use metriken_storage::ArchiveReader;
 use metriken_storage::BufferPool;
 
-/// A `.rez` or dendro archive read as a `MetricsSource`: metriken-storage's
-/// [`ArchiveReader`], opened from a path or bytes by content. Derefs to it,
+/// A dendro archive read as a `MetricsSource`: metriken-storage's
+/// [`ArchiveReader`], opened from a path or bytes. Derefs to it,
 /// so its methods (`composition_sources`, `metric_metadata`, `complete`, ...)
 /// are this type's.
 pub struct RezReader(pub ArchiveReader);
@@ -28,9 +28,6 @@ impl std::ops::Deref for RezReader {
 /// One `RezReader` per recording, paired with that recording's label set.
 pub type LabeledRecordings = Vec<(BTreeMap<String, String>, RezReader)>;
 
-/// The refusal of a file that is not a dendro archive, for a caller that has
-/// not checked first ([`crate::container::require_dendro`] spells the
-/// command with the program's name).
 /// Wrap each reader of a read-group listing as a `RezReader`.
 fn labeled(recordings: metriken_storage::LabeledRecordings) -> LabeledRecordings {
     recordings
@@ -39,6 +36,9 @@ fn labeled(recordings: metriken_storage::LabeledRecordings) -> LabeledRecordings
         .collect()
 }
 
+/// The refusal of a file that is not a dendro archive, for a caller that has
+/// not checked first ([`crate::container::require_dendro`] spells the
+/// command with the program's name).
 fn refusal(what: &str, container: crate::container::Container) -> String {
     if container.is_legacy() {
         format!(
