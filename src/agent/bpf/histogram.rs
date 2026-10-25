@@ -5,7 +5,7 @@ use metriken::RwLockCounterHistogram;
 
 use crate::agent::timing::AcquisitionGroup;
 
-use std::os::fd::{AsFd, AsRawFd, FromRawFd};
+use std::os::fd::AsFd;
 
 /// Represents a histogram in a BPF map. The distribution must be created
 /// with:
@@ -60,12 +60,11 @@ impl<'a> Histogram<'a> {
 
         let mmap_len = whole_pages::<u64>(buckets * slices) * PAGE_SIZE;
 
-        let fd = map.as_fd().as_raw_fd();
-        let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
+        let fd = map.as_fd();
         let mmap = unsafe {
             memmap2::MmapOptions::new()
                 .len(mmap_len)
-                .map_mut(&file)
+                .map_mut(&fd)
                 .expect("failed to mmap() bpf distribution")
         };
 
