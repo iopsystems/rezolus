@@ -14,7 +14,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
         temperatures.plot_promql_full(
             PlotOpts::gauge("Temperature", "sensor-temperature", Unit::Count).with_axis_label("°C"),
-            "sum by (sensor) (sensor_temperature) / 1000".to_string(),
+            "sum by (name) (sensor_temperature) / 1000".to_string(),
         );
     }
 
@@ -27,7 +27,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
         power.plot_promql_full(
             PlotOpts::gauge("Power", "sensor-power", Unit::Power).with_axis_label("Watts"),
-            "sum by (sensor) (sensor_power) / 1000000".to_string(),
+            "sum by (name) (sensor_power) / 1000000".to_string(),
         );
     }
 
@@ -36,7 +36,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         voltage.describe("Bus voltage per native sensor identity.");
         voltage.plot_promql_full(
             PlotOpts::gauge("Voltage", "sensor-voltage", Unit::Count).with_axis_label("Volts"),
-            "sum by (sensor) (sensor_voltage) / 1000".to_string(),
+            "sum by (name) (sensor_voltage) / 1000".to_string(),
         );
     }
 
@@ -45,7 +45,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         current.describe("Current per native sensor identity.");
         current.plot_promql_full(
             PlotOpts::gauge("Current", "sensor-current", Unit::Count).with_axis_label("Amps"),
-            "sum by (sensor) (sensor_current) / 1000".to_string(),
+            "sum by (name) (sensor_current) / 1000".to_string(),
         );
     }
 
@@ -54,7 +54,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         speed.describe("Measured fan speed in revolutions per minute, separate from PWM demand.");
         speed.plot_promql_full(
             PlotOpts::gauge("Fan Speed", "sensor-fan-speed", Unit::Count).with_axis_label("RPM"),
-            "sum by (sensor) (sensor_fan_speed)".to_string(),
+            "sum by (name) (sensor_fan_speed)".to_string(),
         );
     }
 
@@ -67,7 +67,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             PlotOpts::gauge("Fan PWM", "sensor-fan-pwm", Unit::Percentage)
                 .with_axis_label("Percent")
                 .percentage_range(),
-            "sum by (sensor) (sensor_fan_pwm) / 255".to_string(),
+            "sum by (name) (sensor_fan_pwm) / 255".to_string(),
         );
     }
 
@@ -79,7 +79,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         state.plot_promql_full(
             PlotOpts::gauge("Cooling State", "sensor-cooling-state", Unit::Count)
                 .with_axis_label("State"),
-            "sum by (sensor) (sensor_cooling_state)".to_string(),
+            "sum by (name) (sensor_cooling_state)".to_string(),
         );
     }
 
@@ -138,7 +138,10 @@ mod tests {
             .iter()
             .map(|(sensor, value)| {
                 let mut metadata = HashMap::new();
-                metadata.insert("sensor".to_string(), (*sensor).to_string());
+                // The agent's identity and its readable name; the dashboard
+                // groups by the name.
+                metadata.insert("sensor".to_string(), format!("hwmon:{sensor}"));
+                metadata.insert("name".to_string(), (*sensor).to_string());
                 metriken_exposition::Gauge::new(metric.to_string(), *value, metadata)
             })
             .collect();
@@ -180,13 +183,13 @@ mod tests {
         assert_eq!(
             actual,
             [
-                "sum by (sensor) (sensor_temperature) / 1000",
-                "sum by (sensor) (sensor_power) / 1000000",
-                "sum by (sensor) (sensor_voltage) / 1000",
-                "sum by (sensor) (sensor_current) / 1000",
-                "sum by (sensor) (sensor_fan_speed)",
-                "sum by (sensor) (sensor_fan_pwm) / 255",
-                "sum by (sensor) (sensor_cooling_state)",
+                "sum by (name) (sensor_temperature) / 1000",
+                "sum by (name) (sensor_power) / 1000000",
+                "sum by (name) (sensor_voltage) / 1000",
+                "sum by (name) (sensor_current) / 1000",
+                "sum by (name) (sensor_fan_speed)",
+                "sum by (name) (sensor_fan_pwm) / 255",
+                "sum by (name) (sensor_cooling_state)",
             ]
         );
     }
@@ -196,9 +199,9 @@ mod tests {
         let store = store_with_sensor_values(
             "sensor_temperature",
             &[
-                ("ambient:below-freezing", -5_000),
-                ("thermal_zone:CPU", 42_500),
-                ("hwmon:GPU", 55_250),
+                ("board ambient i2c-1", -5_000),
+                ("thermal CPU thermal_zone0", 42_500),
+                ("amdgpu edge 0000:0e:00.0", 55_250),
             ],
         );
         let view = generate(&store, vec![]);
@@ -210,7 +213,7 @@ mod tests {
         let mut series: Vec<(String, f64)> = match result {
             metriken_query::QueryResult::Vector { result } => result
                 .into_iter()
-                .map(|sample| (sample.metric["sensor"].clone(), sample.value.1))
+                .map(|sample| (sample.metric["name"].clone(), sample.value.1))
                 .collect(),
             other => panic!("expected vector, got {other:?}"),
         };
@@ -218,9 +221,9 @@ mod tests {
         assert_eq!(
             series,
             [
-                ("ambient:below-freezing".to_string(), -5.0),
-                ("hwmon:GPU".to_string(), 55.25),
-                ("thermal_zone:CPU".to_string(), 42.5),
+                ("amdgpu edge 0000:0e:00.0".to_string(), 55.25),
+                ("board ambient i2c-1".to_string(), -5.0),
+                ("thermal CPU thermal_zone0".to_string(), 42.5),
             ]
         );
     }

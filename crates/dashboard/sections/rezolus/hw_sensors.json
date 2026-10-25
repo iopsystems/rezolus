@@ -21,7 +21,7 @@
                   "id": "sensor-temperature",
                   "unit": "count",
                   "axis_label": "°C",
-                  "query": "sum by (sensor) (sensor_temperature) / 1000",
+                  "query": "sum by (name) (sensor_temperature) / 1000",
                   "width": "full"
                 }
               ]
@@ -43,7 +43,7 @@
                   "id": "sensor-power",
                   "unit": "power",
                   "axis_label": "Watts",
-                  "query": "sum by (sensor) (sensor_power) / 1000000",
+                  "query": "sum by (name) (sensor_power) / 1000000",
                   "width": "full"
                 }
               ]
@@ -65,7 +65,7 @@
                   "id": "sensor-voltage",
                   "unit": "count",
                   "axis_label": "Volts",
-                  "query": "sum by (sensor) (sensor_voltage) / 1000",
+                  "query": "sum by (name) (sensor_voltage) / 1000",
                   "width": "full"
                 }
               ]
@@ -87,7 +87,7 @@
                   "id": "sensor-current",
                   "unit": "count",
                   "axis_label": "Amps",
-                  "query": "sum by (sensor) (sensor_current) / 1000",
+                  "query": "sum by (name) (sensor_current) / 1000",
                   "width": "full"
                 }
               ]
@@ -109,7 +109,7 @@
                   "id": "sensor-fan-speed",
                   "unit": "count",
                   "axis_label": "RPM",
-                  "query": "sum by (sensor) (sensor_fan_speed)",
+                  "query": "sum by (name) (sensor_fan_speed)",
                   "width": "full"
                 }
               ]
@@ -131,7 +131,7 @@
                   "id": "sensor-fan-pwm",
                   "unit": "percentage",
                   "axis_label": "Percent",
-                  "query": "sum by (sensor) (sensor_fan_pwm) / 255",
+                  "query": "sum by (name) (sensor_fan_pwm) / 255",
                   "width": "full",
                   "percentage_range": true
                 }
@@ -154,7 +154,7 @@
                   "id": "sensor-cooling-state",
                   "unit": "count",
                   "axis_label": "State",
-                  "query": "sum by (sensor) (sensor_cooling_state)",
+                  "query": "sum by (name) (sensor_cooling_state)",
                   "width": "full"
                 }
               ]
