@@ -163,7 +163,8 @@ pub fn require_dendro(path: &Path, program: &str) -> Result<(), String> {
 /// The refusal of a file holding `n` recordings as one side (`side`, "the
 /// baseline" or "the experiment") of a two-file comparison, where each file
 /// is one recording. It names the commands that compare two of them: put
-/// both files' recordings in one archive, list them, and choose the two.
+/// both files' recordings in one archive, list them, and choose the two by
+/// labels or, where labels cannot tell them apart, by position.
 pub fn one_recording_hint(
     program: &str,
     file: &str,
@@ -181,8 +182,10 @@ pub fn one_recording_hint(
          {program} recording combine {} {} -o both.dendro\n  \
          {program} mcp describe-recording both.dendro\n  \
          {program} view both.dendro --baseline KEY=VALUE --experiment KEY=VALUE\n\
-         describe-recording lists each recording's labels, and how to label \
-         recordings that no labels tell apart.",
+         If describe-recording says a recording cannot be selected by labels, label \
+         the two by the positions it lists and view that archive:\n  \
+         {program} recording combine both.dendro --ab baseline=N experiment=M -o ab.dendro\n  \
+         {program} view ab.dendro",
         shell_word(baseline),
         shell_word(experiment),
     )

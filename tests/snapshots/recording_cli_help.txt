@@ -159,7 +159,7 @@ Options:
       --queries <PATH>     Custom service extension JSON file (overrides built-in template)
       --undo               Remove the KPIs (service extension) from each recording
       --filter             Refused: filtered a parquet file's columns; use `rezolus recording filter`
-      --templates <DIR>    Directory containing service extension template JSON files
+      --templates <DIR>    Accepted and unused: annotate reads no template (a DIR that does not load is warned about)
       --node <NAME>        Refused: set a parquet footer key; a recording's labels are set when it is recorded
       --source <NAME>      Refused: set a parquet footer key; a recording's labels are set when it is recorded
       --overwrite          Applied to --source, which is refused
@@ -214,7 +214,7 @@ Options:
           Refused: filtered a parquet file's columns; use `rezolus recording filter`
 
       --templates <DIR>
-          Directory containing service extension template JSON files
+          Accepted and unused: annotate reads no template (a DIR that does not load is warned about)
 
       --node <NAME>
           Refused: set a parquet footer key; a recording's labels are set when it is recorded
@@ -707,7 +707,7 @@ Arguments:
   <FILE>  The recording to convert: a .rez archive, a .parquet file or a .parquet.ab.tar
 
 Options:
-  -o, --output <DENDRO>  The .dendro to write (default: the input with a .dendro extension); must not exist
+  -o, --output <DENDRO>  The .dendro to write (default: the input's name with .dendro for its extension; x.parquet.ab.tar becomes x.dendro); must not exist
       --to <FORMAT>      Target container: `dendro`, the only one written (accepted for scripts that pass it) [default: dendro]
   -h, --help             Print help (see more with '--help')
 --- stderr
@@ -724,12 +724,13 @@ A v3 `.rez`'s recordings become sources and its tables streams; segment,
 WAL and caller-row bytes are copied unchanged. A tar `.rez`'s recordings
 become sources with their labels, metadata, clock anchor and `complete`
 flag. A parquet file becomes one source, labelled with the file's
-`source` as the viewer labels it. An A/B tarball becomes two sources, its
+one `source` when no series carries its own. An A/B tarball becomes two sources, its
 baseline labelled arm=baseline and its experiment arm=experiment, which
 the viewer opens as a comparison. Tar and parquet tables are re-encoded.
 
-The input is never changed. -o defaults to the input with its extension
-replaced by .dendro, and an existing output is refused.
+The input is never changed. -o defaults to the input's name with .dendro
+for its extension (x.parquet.ab.tar becomes x.dendro), and an existing
+output is refused.
 
 EXAMPLES:
     # Writes old.dendro beside old.rez
@@ -749,7 +750,7 @@ Arguments:
 
 Options:
   -o, --output <DENDRO>
-          The .dendro to write (default: the input with a .dendro extension); must not exist
+          The .dendro to write (default: the input's name with .dendro for its extension; x.parquet.ab.tar becomes x.dendro); must not exist
 
       --to <FORMAT>
           Target container: `dendro`, the only one written (accepted for scripts that pass it)

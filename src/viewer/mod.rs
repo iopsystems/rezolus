@@ -659,13 +659,12 @@ fn init_file_mode(
     init_file_mode_rez(config, path, registry, pool)
 }
 
-/// Open the dendro archive at `path`, known to the user as `name`, as the
-/// experiment of a two-file comparison against `baseline` (both names for
-/// the refusal): its one
-/// recording, with the systeminfo and metadata the captures registry keeps.
-/// A legacy file is refused with the upgrade command, an archive of several
-/// recordings with the commands that compare two of them
-/// ([`::rez::container::one_recording_hint`]).
+/// Open the dendro archive at `path` as the experiment of a two-file
+/// comparison: its one recording, with the systeminfo and metadata the
+/// captures registry keeps. A legacy file is refused with the upgrade
+/// command, an archive of several recordings with the commands that compare
+/// two of them ([`::rez::container::one_recording_hint`]), which name the
+/// experiment as `name` and the baseline as `baseline`.
 pub(super) fn open_experiment(
     path: &Path,
     name: &str,
@@ -959,6 +958,7 @@ fn init_file_mode_combined(
         Arc::clone(&pool),
     );
     *state.parquet_path.write() = Some(path.to_path_buf());
+    *state.baseline_name.write() = Some(path.display().to_string());
     *state.selection.write() = selection;
     *state.trimmed_report_marker.write() = report_marker;
     state.captures.set_baseline_systeminfo(combined.systeminfo);
@@ -1206,6 +1206,7 @@ fn init_file_mode_rez(
     *state.beside.write() = beside;
     *state.anchor_labels.write() = Some(b_labels.clone());
     *state.parquet_path.write() = Some(path.to_path_buf());
+    *state.baseline_name.write() = Some(path.display().to_string());
     *state.selection.write() = b_selection;
     // A saved report stamps `KEY_REPORT=trimmed` on its anchor recording.
     // Without this a reloaded report would render its (mostly trimmed)

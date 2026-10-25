@@ -7,8 +7,8 @@ mod endpoint;
 /// The replication stream, read through `metriken-recorder`, and the wire
 /// names older agents serve it under.
 pub(crate) mod stream;
-// The `.rez` format lives in its own crate so the WASM viewer can read it
-// (`rezolus` is binary-only, so nothing could depend on it). Re-exported under
+// The `.rez` format lives in its own crate (`rezolus` is binary-only, so
+// nothing could depend on it). Re-exported under
 // the paths call sites already use. 6.x converts a `.rez` with `recording
 // upgrade` and writes none.
 pub(crate) use ::rez::{rez, wire};

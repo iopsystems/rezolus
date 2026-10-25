@@ -230,6 +230,7 @@ fn ingest_rez_from_path(
         *state.combined_catalog.write() =
             Some(Arc::new(::dashboard::combined::FixedCatalog(reader)));
         *state.parquet_path.write() = Some(rez_path.clone());
+        *state.baseline_name.write() = Some(display_filename.clone());
         *state.experiment_parquet_path.write() = None;
         *state.cli_experiment_path.write() = None;
         *state.selection.write() = selection;
@@ -350,6 +351,7 @@ fn ingest_rez_from_path(
     *state.beside.write() = beside;
     *state.anchor_labels.write() = Some(b_labels.clone());
     *state.parquet_path.write() = Some(rez_path.clone());
+    *state.baseline_name.write() = Some(display_filename.clone());
     *state.experiment_parquet_path.write() = None;
     *state.cli_experiment_path.write() = None;
     state.captures.set_baseline_systeminfo(b_systeminfo);
@@ -449,10 +451,9 @@ fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
     }
 
     let baseline = state
-        .parquet_path
+        .baseline_name
         .read()
-        .as_ref()
-        .map(|p| p.display().to_string())
+        .clone()
         .unwrap_or_else(|| "BASELINE.dendro".to_string());
     let (exp_reader, sysinfo, file_meta) =
         match super::open_experiment(&temp_path, &filename, &baseline, Arc::clone(&state.pool)) {
@@ -694,11 +695,10 @@ pub async fn save_capture(State(state): State<Arc<AppState>>) -> Response {
     finalize_attachment(result, "rezolus-capture.dendro", parquet_attachment)
 }
 
-/// File mode: column-trim the loaded parquet (or build a 2-recording `.rez`
-/// from a parquet compare) using the saved selection, embed the
-/// selection JSON in the output footer, and stream it back. Live mode takes
-/// the archive branch: `parquet_path` is the live archive, and the report is
-/// a trimmed `.dendro`.
+/// Save as Report: a trimmed `.dendro` of the loaded archive (of both
+/// archives, arm-labelled, for a two-file comparison) carrying the saved
+/// selection, streamed back. In live mode `parquet_path` is the live
+/// archive.
 ///
 /// The report is built in a query slot: resolving the kept columns builds a
 /// reader for each table a saved query touches, and the build reads the
@@ -894,6 +894,33 @@ mod tests {
         let meta = |id: &str| state.captures.file_metadata_by_id(id).unwrap();
         assert!(meta("baseline").contains("s1"), "{}", meta("baseline"));
         assert!(meta("experiment").contains("s0"), "{}", meta("experiment"));
+    }
+
+    /// An uploaded experiment of several recordings is refused naming the
+    /// uploaded baseline by the name it was uploaded as, quoted for a shell,
+    /// not by its staged copy.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_multi_recording_experiment_upload_names_the_uploaded_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("staged-copy");
+        ::rez::fixtures::multi_recording(&base, &[("redis", "web-01")]);
+        let two = dir.path().join("two.dendro");
+        ::rez::fixtures::multi_recording(&two, &[("redis", "web-02"), ("valkey", "web-03")]);
+        let state = upload_only_state();
+        let _ = ingest_rez_from_path(&state, base, "my base.dendro".to_string());
+
+        let body = std::fs::read(&two).unwrap();
+        let response = attach_upload(&state, &body, "exp.dendro".to_string());
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let text = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&text);
+        assert!(
+            text.contains("recording combine 'my base.dendro' exp.dendro -o both.dendro"),
+            "{text}"
+        );
+        assert!(!text.contains("staged-copy"), "{text}");
     }
 
     /// An upload with one armed recording among unarmed ones is refused, and

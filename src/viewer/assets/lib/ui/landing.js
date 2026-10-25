@@ -2,9 +2,9 @@
 // Used by both the binary viewer (src/viewer) and the static site (site/viewer).
 //
 // Props:
-//   onFile(file: File)        — called when user selects or drops a .parquet file
+//   onFile(file: File)        — called when user selects or drops a recording (.dendro)
 //   onConnect(url: str)       — called when user enters a live agent URL (optional; hidden if absent)
-//   onLoadUrl(raw: str)       — called with `[alias=]url` to load a parquet from a URL (optional; hidden if absent)
+//   onLoadUrl(raw: str)       — called with `[alias=]url` to load a recording from a URL (optional; hidden if absent)
 //   urlLoading                — 'direct' | 'proxy' | 'disabled'. Drives the URL input's enabled state and hint text:
 //                               'direct'   — browser fetches directly; CORS on the source matters (static-site default).
 //                               'proxy'    — server fetches via --proxy-allow; CORS irrelevant (binary viewer with allowlist).

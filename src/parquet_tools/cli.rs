@@ -363,7 +363,7 @@ pub struct AnnotateArgs {
     #[arg(
         long = "templates",
         value_name = "DIR",
-        help = "Directory containing service extension template JSON files"
+        help = "Accepted and unused: annotate reads no template (a DIR that does not load is warned about)"
     )]
     pub templates: Option<PathBuf>,
     #[arg(
@@ -610,7 +610,7 @@ pub struct UpgradeArgs {
         short = 'o',
         long = "output",
         value_name = "DENDRO",
-        help = "The .dendro to write (default: the input with a .dendro extension); must not exist"
+        help = "The .dendro to write (default: the input's name with .dendro for its extension; x.parquet.ab.tar becomes x.dendro); must not exist"
     )]
     pub output: Option<PathBuf>,
     #[arg(
@@ -961,11 +961,12 @@ mod help {
                          WAL and caller-row bytes are copied unchanged. A tar `.rez`'s recordings\n\
                          become sources with their labels, metadata, clock anchor and `complete`\n\
                          flag. A parquet file becomes one source, labelled with the file's\n\
-                         `source` as the viewer labels it. An A/B tarball becomes two sources, its\n\
+                         one `source` when no series carries its own. An A/B tarball becomes two sources, its\n\
                          baseline labelled arm=baseline and its experiment arm=experiment, which\n\
                          the viewer opens as a comparison. Tar and parquet tables are re-encoded.\n\n\
-                         The input is never changed. -o defaults to the input with its extension\n\
-                         replaced by .dendro, and an existing output is refused.\n\n\
+                         The input is never changed. -o defaults to the input's name with .dendro\n\
+                         for its extension (x.parquet.ab.tar becomes x.dendro), and an existing\n\
+                         output is refused.\n\n\
                          EXAMPLES:\n    \
                          # Writes old.dendro beside old.rez\n    \
                          {program} recording upgrade old.rez\n\n    \

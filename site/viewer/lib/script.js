@@ -535,15 +535,11 @@ const Root = {
                 // seeds legends and routes to compare mode automatically.
                 const entries = raw.split(',').map((s) => s.trim()).filter(Boolean);
                 if (entries.length >= 2) {
-                    const [labelA, fileA] = splitAlias(entries[0]);
-                    const [labelB, fileB] = splitAlias(entries[1]);
-                    const legends = (labelA || labelB)
-                        ? { baseline: labelA, experiment: labelB }
-                        : null;
+                    const { fileA, fileB, legends } = parsePair(entries[0], entries[1]);
                     loadCompareDemo(fileA, fileB, legends, null);
                 } else if (entries.length === 1) {
                     const [alias, source] = splitAlias(entries[0]);
-                    loadCapture(source, alias);
+                    loadCapture(dendroDemoName(source), alias);
                 }
             },
             // Static-site bundle has no local proxy; URL loading goes

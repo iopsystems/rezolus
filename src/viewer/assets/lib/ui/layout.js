@@ -162,7 +162,7 @@ const TopNav = {
                     title: `Also shown, each in its own sections: ${also.join(', ')}`,
                 }, `also: ${also.join(', ')}`);
 
-                // N-way (> 2 captures, from a multi-recording `.rez`): a static
+                // N-way (> 2 captures, from a multi-recording archive): a static
                 // strip listing every capture, each dot colored to match its
                 // overlay line. No dropdown — the arms are recordings INSIDE the
                 // archive, so there is no per-capture file to show or Load

@@ -103,7 +103,7 @@ export const captureColors = (captures) => {
  * list from `getCaptures()`; colours come from `captureColors` — the same map
  * the overlay draws with, not a second walk of the palette — so a capture's dot
  * in the badge matches its line on the chart. Filenames are only known for the
- * two A/B slots (they come from the attach flow); extra arms of a `.rez` show
+ * two A/B slots (they come from the attach flow); extra arms of an archive show
  * their alias alone.
  */
 export const compareBadgeRows = (captures, opts = {}) => {
@@ -135,7 +135,7 @@ export const compareBadgeRows = (captures, opts = {}) => {
 /**
  * How many capture chips the badge draws before folding the rest into `+N`.
  *
- * A fleet `.rez` can hold a recording per host, and the badge lives in the
+ * A fleet archive can hold a recording per host, and the badge lives in the
  * navbar: unbounded chips wrap into several rows and shove the rest of the bar
  * around. The A/B badge bounded this at two and put the detail behind a
  * dropdown for the same reason.

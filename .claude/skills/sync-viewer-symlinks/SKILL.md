@@ -19,12 +19,14 @@ and fixes any missing symlinks.
 
 ## Standalone files (never symlinked)
 
-Only these two top-level files in `site/viewer/lib/` are site-specific real
+Only these three top-level files in `site/viewer/lib/` are site-specific real
 files (site keeps its own copy):
 
 - `script.js` — site-specific entry point
 - `viewer_api.js` — site-specific API transport layer (calls the in-browser
   WASM registry instead of the HTTP backend)
+- `legacy_demo.js` — maps a demo link's pre-6.0 `.parquet` name to its
+  `.dendro` file
 
 Everything else — **including `data.js`** — is a same-name symlink into
 `src/viewer/assets/lib/`. (There is no `data_base.js`; that was an older

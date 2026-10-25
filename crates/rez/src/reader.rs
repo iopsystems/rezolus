@@ -1,6 +1,6 @@
 //! `RezReader`: a dendro archive read as one
-//! `metriken_query::MetricsSource` per recording. Any other file is refused
-//! with the command that converts it.
+//! `metriken_query::MetricsSource` per recording. A file an earlier release
+//! wrote is refused with the command that converts it.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;

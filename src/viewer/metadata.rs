@@ -289,10 +289,9 @@ pub fn regenerate_dashboards(state: &AppState) {
         return;
     }
 
-    // Each capture's templates come from its own metadata (a parquet footer,
-    // a `.rez` recording's manifest, a dendro source), and each is validated
-    // against its own data so a KPI present only in one recording isn't
-    // wrongly marked unavailable.
+    // Each capture's templates come from its own recording's metadata, and
+    // each is validated against its own data so a KPI present only in one
+    // recording isn't wrongly marked unavailable.
     let baseline_exts: Vec<(String, ServiceExtension)> = {
         let baseline_data = state.baseline_data();
         let mut exts = capture_service_extensions(baseline_data.as_ref(), registry, preference);
@@ -368,9 +367,9 @@ pub(super) fn classify_sources(
         None => return vec![],
     };
 
-    // The capture's metadata as a JSON object for the shared classifier: a
-    // parquet's footer, or a `.rez`/dendro recording's own metadata. The WASM
-    // viewer builds the same object from the same map.
+    // The capture's metadata as a JSON object for the shared classifier: the
+    // recording's own metadata. The WASM viewer builds the same object from
+    // the same map.
     let mut kv_map = serde_json::Map::new();
     for (key, val) in baseline_data.file_metadata() {
         let json_val =
