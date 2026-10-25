@@ -51,6 +51,14 @@ pub struct Descriptor {
     pub family: Family,
     /// Stable, family-local identity. It contains no discovery-root prefix.
     pub sensor: String,
+    /// A readable name, unique within the family: the chip, the label (or the
+    /// channel when there is none), and the short device. `disambiguate_names`
+    /// adds the channel when another descriptor of the family has the same
+    /// name in that discovery pass. A slot keeps the name it was given first.
+    pub name: String,
+    /// The last component of the device path: a PCI address such as
+    /// `0000:0b:00.1`, a platform or I2C device name, or `thermal_zoneN`.
+    pub device: String,
     pub source: String,
     pub chip: String,
     pub channel: String,
@@ -147,10 +155,32 @@ pub fn discover(sysfs: &Path) -> Discovery {
         descriptor.board_model.clone_from(&board.model);
         descriptor.soc_compatible.clone_from(&board.compatible);
     }
+    disambiguate_names(&mut found.descriptors);
     found
         .descriptors
         .sort_by(|a, b| (a.family, a.sensor.as_str()).cmp(&(b.family, b.sensor.as_str())));
     found
+}
+
+/// A name shared by two descriptors of one family in one discovery pass (a
+/// driver that repeats a label across channels) gets the channel added, so a
+/// dashboard grouping by name cannot sum two channels together. A channel
+/// that appears in a later pass (an `asusec` header connected while running)
+/// can repeat a label the earlier one kept undisambiguated; both names stay
+/// unique, but the first can change after a restart.
+fn disambiguate_names(descriptors: &mut [Descriptor]) {
+    let mut counts = std::collections::HashMap::new();
+    for d in descriptors.iter() {
+        *counts.entry((d.family, d.name.clone())).or_insert(0usize) += 1;
+    }
+    for d in descriptors.iter_mut() {
+        if counts[&(d.family, d.name.clone())] > 1 {
+            d.name = format!("{} {} {}", d.chip, d.channel, d.device);
+            if let Some(label) = &d.label {
+                d.name = format!("{} {label} ({}) {}", d.chip, d.channel, d.device);
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -606,9 +636,17 @@ fn add_with_device(
     if derived {
         sensor.push_str(":derived=voltage_x_current");
     }
+    let short = device
+        .rsplit('/')
+        .find(|c| !c.is_empty())
+        .unwrap_or(device)
+        .to_string();
+    let name = format!("{chip} {} {short}", label.as_deref().unwrap_or(channel));
     found.descriptors.push(Descriptor {
         family,
         sensor,
+        name,
+        device: short,
         source: source.to_string(),
         chip: chip.to_string(),
         channel: channel.to_string(),

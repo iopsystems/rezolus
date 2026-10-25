@@ -282,6 +282,78 @@ fn asusec_empty_temperature_headers_are_not_read() {
 }
 
 #[test]
+fn names_are_chip_label_or_channel_and_short_device() {
+    let root = tempfile::tempdir().unwrap();
+    make_hwmon(
+        root.path(),
+        "generic",
+        &[
+            ("temp1_input", "40000"),
+            ("temp1_label", "board"),
+            ("temp2_input", "41000"),
+            ("temp2_label", "board"),
+            ("temp3_input", "42000"),
+            ("fan1_input", "900"),
+            ("fan1_label", "board"),
+        ],
+    );
+    let cooling = root.path().join("class/thermal/cooling_device0");
+    write(cooling.join("type"), "pwm-fan");
+    write(cooling.join("cur_state"), "1");
+    let found = discover(root.path());
+    let names: Vec<_> = found
+        .descriptors
+        .iter()
+        .map(|d| (d.family, d.name.as_str(), d.device.as_str()))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            // A label two channels share gets the channel added.
+            (
+                Family::Temperature,
+                "generic board (temp1) hwmon0",
+                "hwmon0"
+            ),
+            (
+                Family::Temperature,
+                "generic board (temp2) hwmon0",
+                "hwmon0"
+            ),
+            (Family::Temperature, "generic temp3 hwmon0", "hwmon0"),
+            // The same label in another family is not a repeat.
+            (Family::FanSpeed, "generic board hwmon0", "hwmon0"),
+            (
+                Family::CoolingState,
+                "pwm-fan cur_state cooling_device0",
+                "cooling_device0"
+            ),
+        ]
+    );
+}
+
+#[test]
+fn thor_fixture_names_are_unique_within_each_family() {
+    let root = materialize_inventory();
+    let found = discover(root.path());
+    let mut seen = std::collections::HashSet::new();
+    for d in &found.descriptors {
+        assert!(
+            seen.insert((d.family, d.name.clone())),
+            "repeated name {:?} {}",
+            d.family,
+            d.name
+        );
+        assert!(
+            !d.device.is_empty() && !d.device.contains('/'),
+            "device {}",
+            d.device
+        );
+    }
+    assert!(found.descriptors.len() > 10);
+}
+
+#[test]
 fn disabled_faulted_missing_and_malformed_inputs_are_absent_not_zero() {
     let root = tempfile::tempdir().unwrap();
     let hwmon = make_hwmon(

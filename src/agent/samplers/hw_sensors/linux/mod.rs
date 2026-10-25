@@ -186,6 +186,8 @@ fn publish_family(family: Family, slots: &mut Slots) -> Publish {
 
 fn apply_metadata(metric: &GaugeGroup, slot: usize, descriptor: &Descriptor) {
     metric.insert_metadata(slot, "sensor".to_string(), descriptor.sensor.clone());
+    metric.insert_metadata(slot, "name".to_string(), descriptor.name.clone());
+    metric.insert_metadata(slot, "device".to_string(), descriptor.device.clone());
     metric.insert_metadata(slot, "source".to_string(), descriptor.source.clone());
     metric.insert_metadata(slot, "chip".to_string(), descriptor.chip.clone());
     metric.insert_metadata(slot, "channel".to_string(), descriptor.channel.clone());

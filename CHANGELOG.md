@@ -11,6 +11,15 @@
 
 ### Fixed
 
+- **Hardware Sensors series have short names.** Each chart was grouped by
+  `sensor`, the full sysfs identity (for example
+  `hwmon:/devices/pci0000:00/0000:00:02.1/0000:02:00.0/0000:03:08.0/0000:0b:00.1:bnxt_en:temp1`).
+  `hw_sensors` now also labels each channel with `device`, the last component
+  of the device path, and `name`, `<chip> <label or channel> <device>`
+  (for example `bnxt_en temp1 0000:0b:00.1`), and the charts group by
+  `name`. A recording without `name` (from an older agent) is still grouped
+  by `sensor`; one that mixes both sums its series without `name` into one
+  line. (#1518)
 - **NVMe health metrics carry an acquisition window on Linux.** The Linux
   `drivehealth` sweep never acquired its NVMe acquisition group, so the
   temperature-time and thermal-management counters and the
@@ -34,6 +43,15 @@
   readings in a 1 s recording) from isolated points into a line. A decimated
   per-entity chart's min/max envelope and uncertainty ribbon spanned a
   missing bucket that its line broke at; they now break there too. (#1519)
+- **A cgroup whose name holds a backslash or a quote can be selected.** The
+  picker put selected names into the query unescaped, so systemd's `\x2d`
+  (an escaped `-`) was consumed by the PromQL string and the cgroup was
+  neither shown on the individual side nor removed from the aggregate. Names
+  are now quoted for the PromQL string. A cgroup is offered for selection
+  when its name is letters, digits, `/ _ . : @ - = , ~ %` and `\xHH`
+  escapes, which cover systemd units, container ids and pod names; any other
+  name is shown disabled with the reason, and a link that selects one drops
+  it with a console warning. (#1523)
 - **`task_cpu_usage` drops a series within one snapshot interval of its thread
   exiting, even when the exit event is lost.** A `task_exit` dropped because
   its ringbuf was full left the thread's labels exported at 0 until the pid
