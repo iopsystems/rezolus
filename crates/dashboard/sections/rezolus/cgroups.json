@@ -201,6 +201,7 @@
               "kind": "counter",
               "title": "Total CPU Cores",
               "id": "individual-total-cores",
+              "style": "multi",
               "unit": "count",
               "query": "sum by (name) (irate(cgroup_cpu_usage{name=~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
             },
@@ -208,6 +209,7 @@
               "kind": "counter",
               "title": "User CPU Cores",
               "id": "individual-user-cores",
+              "style": "multi",
               "unit": "count",
               "query": "sum by (name) (irate(cgroup_cpu_usage{state=\"user\",name=~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
             },
@@ -215,6 +217,7 @@
               "kind": "counter",
               "title": "System CPU Cores",
               "id": "individual-system-cores",
+              "style": "multi",
               "unit": "count",
               "query": "sum by (name) (irate(cgroup_cpu_usage{state=\"system\",name=~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
             },
@@ -222,6 +225,7 @@
               "kind": "counter",
               "title": "CPU Migrations",
               "id": "individual-cpu-migrations",
+              "style": "multi",
               "unit": "rate",
               "query": "sum by (name) (irate(cgroup_cpu_migrations{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -229,6 +233,7 @@
               "kind": "counter",
               "title": "CPU Throttled Time",
               "id": "individual-cpu-throttled-time",
+              "style": "multi",
               "unit": "time",
               "query": "sum by (name) (irate(cgroup_cpu_throttled_time{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -236,6 +241,7 @@
               "kind": "counter",
               "title": "ext4 Blocked Time",
               "id": "individual-ext4-blocked-time",
+              "style": "multi",
               "unit": "time",
               "query": "sum by (name) (irate(cgroup_ext4_op_time{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -243,6 +249,7 @@
               "kind": "counter",
               "title": "XFS Log Blocked Time",
               "id": "individual-xfs-log-blocked-time",
+              "style": "multi",
               "unit": "time",
               "query": "sum by (name) (irate(cgroup_xfs_log_wait_time{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -250,6 +257,7 @@
               "kind": "counter",
               "title": "IPC",
               "id": "individual-ipc",
+              "style": "multi",
               "unit": "count",
               "query": "sum by (name) (irate(cgroup_cpu_instructions{name=~\"__SELECTED_CGROUPS__\"}[5m])) / sum by (name) (irate(cgroup_cpu_cycles{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -257,6 +265,7 @@
               "kind": "counter",
               "title": "TLB Flushes",
               "id": "individual-tlb-flush",
+              "style": "multi",
               "unit": "rate",
               "query": "sum by (name) (irate(cgroup_cpu_tlb_flush{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -264,6 +273,7 @@
               "kind": "counter",
               "title": "Syscalls",
               "id": "individual-syscall",
+              "style": "multi",
               "unit": "rate",
               "query": "sum by (name) (irate(cgroup_syscall{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -348,6 +358,7 @@
                   "kind": "counter",
                   "title": "Syscall ${op.title}",
                   "id": "individual-syscall-${op.lower}",
+                  "style": "multi",
                   "unit": "rate",
                   "query": "sum by (name) (irate(cgroup_syscall{op=\"${op.lower}\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
                 }

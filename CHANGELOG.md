@@ -11,6 +11,13 @@
 
 ### Fixed
 
+- **A single selected cgroup keeps its colour after a zoom or refresh.** With
+  one cgroup selected, a zoom drew its individual charts as "Series 1" in a
+  colour other than the picker's swatch, and a live refresh drew them as a
+  plain line in the accent colour. The display path now names a lone series
+  on a `multi` chart, as the JSON path does, and the individual cgroup charts
+  are `multi` in the dashboard definition rather than only on the plots
+  present when the selector mounted. (#1289)
 - **Hardware Sensors series have short names.** Each chart was grouped by
   `sensor`, the full sysfs identity (for example
   `hwmon:/devices/pci0000:00/0000:00:02.1/0000:02:00.0/0000:03:08.0/0000:0b:00.1:bnxt_en:temp1`).
