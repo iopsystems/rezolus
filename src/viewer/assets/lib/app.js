@@ -3,7 +3,7 @@
 
 import { ChartsState, Chart } from './charts/chart.js';
 import { QueryExplorer, SingleChartView } from './features/explorers.js';
-import { CgroupSelector, seedSelectedCgroups, selectedCgroupPattern } from './features/cgroup_selector.js';
+import { CgroupSelector, seedSelectedCgroups, selectedCgroupSelection, loadCgroupGroups, clearCgroupGroups } from './features/cgroup_selector.js';
 import { GpuSelector } from './features/gpu_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
@@ -77,6 +77,8 @@ let selectedGpus = [];     // selected {vendor, id} GPUs filtering the GPU secti
 let gpuEntries = [];       // available {vendor, id} GPUs, from the section metadata
 let serviceInstances = {};
 let selectedInstances = {};
+// The cgroup selection the section's queries take (cgroup_selection.js's
+// resolveCgroupSelection), or null.
 let activeCgroupPattern = null;
 let heatmapEnabled = false;
 let heatmapLoading = false;
@@ -360,6 +362,7 @@ const clearViewerCaches = () => {
     heatmapDataCache.clear();
     chartsState.clear();
     clearCaptureMemo();
+    clearCgroupGroups();
 };
 
 const applyMultiNodeInfo = (experimentFileMetadata = null) => {
@@ -411,8 +414,10 @@ const applyMultiNodeInfo = (experimentFileMetadata = null) => {
     }
 };
 
-// `cgroupPattern` replaces the selector's pattern for this load: an expanded
-// chart passes the link's selection, since it mounts no selector.
+// `cgroupPattern` replaces the selector's selection for this load: an
+// expanded chart passes the link's selection, since it mounts no selector.
+// It may be a function of the section's data that resolves to the selection,
+// for a selection that needs the section's scope to resolve.
 // Section loads in flight, by section. A section loaded with `early` is
 // cached, and drawn, before its histogram queries land. A load caches
 // only while its generation is current: clearing the section cache, or
@@ -522,7 +527,8 @@ const fetchSection = async (section, { cgroupPattern = activeCgroupPattern, earl
     // Show the section once its counter and gauge charts have data; the
     // histogram charts show as loading until theirs land. Compare mode
     // waits for every chart: each fetches its experiment when it mounts.
-    const processedData = await processDashboardData(data, cgroupPattern, `/${section}`, {
+    const selection = typeof cgroupPattern === 'function' ? await cgroupPattern(data) : cgroupPattern;
+    const processedData = await processDashboardData(data, selection, `/${section}`, {
         onPrimary: (!early || compareMode) ? null : (partial) => {
             if (!current()) return;
             cacheSectionResponse(section, partial);
@@ -1494,7 +1500,7 @@ const initDashboard = (config = {}) => {
                                     chartId: decodeURIComponent(params.chartId),
                                     applyResultToPlot,
                                     sectionRoute: `/${sectionKey}`,
-                                    activeCgroupPattern: activeCgroupPattern ?? selectedCgroupPattern(),
+                                    activeCgroupPattern: activeCgroupPattern ?? selectedCgroupSelection(`/${sectionKey}`),
                                 }),
                             ]),
                         ]);
@@ -1504,8 +1510,23 @@ const initDashboard = (config = {}) => {
                 // Resolve synchronously regardless of cache state — see
                 // the matching comment in '/:section' below for rationale.
                 if (!sectionResponseCache[sectionKey]) {
+                    // A group in the link's selection resolves to its members
+                    // only once the section's cgroups are discovered, through
+                    // the queries the section's selector would run.
+                    const route = `/${sectionKey}`;
                     loadSection(sectionKey, {
-                        cgroupPattern: activeCgroupPattern ?? selectedCgroupPattern(),
+                        cgroupPattern: activeCgroupPattern ?? (async (section) => {
+                            try {
+                                await loadCgroupGroups(route, (q) => {
+                                    const node = getSelectedNode();
+                                    if (node) q = injectLabel(q, 'node', node);
+                                    return executePromQLRangeQuery(applyScope(q, section.metadata?.scope));
+                                });
+                            } catch (e) {
+                                console.warn('[cgroups] group discovery failed:', e);
+                            }
+                            return selectedCgroupSelection(route);
+                        }),
                     })
                         .then(() => m.redraw())
                         .catch(() => {});
