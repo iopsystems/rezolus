@@ -13,9 +13,11 @@
 
 - **NVMe health metrics carry an acquisition window on Linux.** The Linux
   `drivehealth` sweep never acquired its NVMe acquisition group, so the
-  temperature-time and thermal-management counters published with no window.
-  The sweep now stamps it when any drive's health log read, as the macOS
-  sampler does. (#1548)
+  temperature-time and thermal-management counters and the
+  `drive_temperature_sensor` gauges published with no window. The sweep now
+  stamps it when any drive's health log read, as the macOS sampler does. A
+  recording now holds one NVMe row per sweep instead of one per tick, and
+  `rate()` on these counters gets an uncertainty band. (#1548)
 - **A per-entity line chart has no legend.** A chart with one line per
   sensor, mount or cgroup drew a legend that wrapped to as many rows as it
   had series, over the plot and the time axis. The tooltip names every series
