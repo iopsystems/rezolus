@@ -443,7 +443,7 @@ counters are always maintained by the controller.
 | `drive_temperature_critical_time` | Cumulative seconds at/above the NVMe critical temperature threshold (CCTEMP) | `device`, `type=nvme`, `model`, `serial` |
 | `drive_thermal_throttle_time` | Cumulative seconds in NVMe host thermal-management state | `level={1,2}`, `device`, `type=nvme`, … |
 | `drive_thermal_throttle_transitions` | Count of transitions into NVMe host thermal-management state | `level={1,2}`, `device`, `type=nvme`, … |
-| `drive_temperature_sensor` | An NVMe Temperature Sensor (1 to 8) in degrees Celsius; absent for a sensor the controller does not implement | `sensor={1..8}`, `device`, `type=nvme`, … |
+| `drive_temperature_sensor` | An NVMe Temperature Sensor (1 to 8) in degrees Celsius; no value for a sensor the controller does not implement | `sensor={1..8}`, `device`, `type=nvme`, … |
 
 On Linux on Amazon EC2 Nitro instances, the same read of an EBS volume's or NVMe
 instance store volume's controller also fetches the device's detailed

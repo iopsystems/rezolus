@@ -194,6 +194,7 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("drive_queue_length", "drivehealth"),
     ("drive_temperature", "drivehealth"),
     ("drive_temperature_critical_time", "drivehealth"),
+    ("drive_temperature_sensor", "drivehealth"),
     ("drive_temperature_warning_time", "drivehealth"),
     ("drive_thermal_throttle_time", "drivehealth"),
     ("drive_thermal_throttle_transitions", "drivehealth"),

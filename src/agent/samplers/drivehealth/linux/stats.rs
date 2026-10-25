@@ -110,60 +110,62 @@ pub static DRIVE_THERMAL_THROTTLE_TRANSITIONS_1: CounterGroup = CounterGroup::ne
 pub static DRIVE_THERMAL_THROTTLE_TRANSITIONS_2: CounterGroup = CounterGroup::new(MAX_DRIVES);
 
 // NVMe Temperature Sensors 1-8 from the same SMART/Health log page. A sensor
-// the controller does not implement has no series. NVMe-only.
+// the controller does not implement keeps the drive's labels and has no value.
+// A sensor that stops reporting keeps its last value, as drive_temperature
+// does. NVMe-only.
 
 #[metric(
     name = "drive_temperature_sensor",
-    description = "An NVMe drive's Temperature Sensor 1 from the SMART/Health log, in degrees Celsius (C). Absent when the controller does not implement it.",
+    description = "An NVMe drive's Temperature Sensor 1 from the SMART/Health log, in degrees Celsius (C). No value when the controller does not implement it.",
     metadata = { sensor = "1", unit = "Celsius", acq_group = "drivehealth_nvme" }
 )]
 pub static DRIVE_TEMPERATURE_SENSOR_1: GaugeGroup = GaugeGroup::new(MAX_DRIVES);
 
 #[metric(
     name = "drive_temperature_sensor",
-    description = "An NVMe drive's Temperature Sensor 2 from the SMART/Health log, in degrees Celsius (C). Absent when the controller does not implement it.",
+    description = "An NVMe drive's Temperature Sensor 2 from the SMART/Health log, in degrees Celsius (C). No value when the controller does not implement it.",
     metadata = { sensor = "2", unit = "Celsius", acq_group = "drivehealth_nvme" }
 )]
 pub static DRIVE_TEMPERATURE_SENSOR_2: GaugeGroup = GaugeGroup::new(MAX_DRIVES);
 
 #[metric(
     name = "drive_temperature_sensor",
-    description = "An NVMe drive's Temperature Sensor 3 from the SMART/Health log, in degrees Celsius (C). Absent when the controller does not implement it.",
+    description = "An NVMe drive's Temperature Sensor 3 from the SMART/Health log, in degrees Celsius (C). No value when the controller does not implement it.",
     metadata = { sensor = "3", unit = "Celsius", acq_group = "drivehealth_nvme" }
 )]
 pub static DRIVE_TEMPERATURE_SENSOR_3: GaugeGroup = GaugeGroup::new(MAX_DRIVES);
 
 #[metric(
     name = "drive_temperature_sensor",
-    description = "An NVMe drive's Temperature Sensor 4 from the SMART/Health log, in degrees Celsius (C). Absent when the controller does not implement it.",
+    description = "An NVMe drive's Temperature Sensor 4 from the SMART/Health log, in degrees Celsius (C). No value when the controller does not implement it.",
     metadata = { sensor = "4", unit = "Celsius", acq_group = "drivehealth_nvme" }
 )]
 pub static DRIVE_TEMPERATURE_SENSOR_4: GaugeGroup = GaugeGroup::new(MAX_DRIVES);
 
 #[metric(
     name = "drive_temperature_sensor",
-    description = "An NVMe drive's Temperature Sensor 5 from the SMART/Health log, in degrees Celsius (C). Absent when the controller does not implement it.",
+    description = "An NVMe drive's Temperature Sensor 5 from the SMART/Health log, in degrees Celsius (C). No value when the controller does not implement it.",
     metadata = { sensor = "5", unit = "Celsius", acq_group = "drivehealth_nvme" }
 )]
 pub static DRIVE_TEMPERATURE_SENSOR_5: GaugeGroup = GaugeGroup::new(MAX_DRIVES);
 
 #[metric(
     name = "drive_temperature_sensor",
-    description = "An NVMe drive's Temperature Sensor 6 from the SMART/Health log, in degrees Celsius (C). Absent when the controller does not implement it.",
+    description = "An NVMe drive's Temperature Sensor 6 from the SMART/Health log, in degrees Celsius (C). No value when the controller does not implement it.",
     metadata = { sensor = "6", unit = "Celsius", acq_group = "drivehealth_nvme" }
 )]
 pub static DRIVE_TEMPERATURE_SENSOR_6: GaugeGroup = GaugeGroup::new(MAX_DRIVES);
 
 #[metric(
     name = "drive_temperature_sensor",
-    description = "An NVMe drive's Temperature Sensor 7 from the SMART/Health log, in degrees Celsius (C). Absent when the controller does not implement it.",
+    description = "An NVMe drive's Temperature Sensor 7 from the SMART/Health log, in degrees Celsius (C). No value when the controller does not implement it.",
     metadata = { sensor = "7", unit = "Celsius", acq_group = "drivehealth_nvme" }
 )]
 pub static DRIVE_TEMPERATURE_SENSOR_7: GaugeGroup = GaugeGroup::new(MAX_DRIVES);
 
 #[metric(
     name = "drive_temperature_sensor",
-    description = "An NVMe drive's Temperature Sensor 8 from the SMART/Health log, in degrees Celsius (C). Absent when the controller does not implement it.",
+    description = "An NVMe drive's Temperature Sensor 8 from the SMART/Health log, in degrees Celsius (C). No value when the controller does not implement it.",
     metadata = { sensor = "8", unit = "Celsius", acq_group = "drivehealth_nvme" }
 )]
 pub static DRIVE_TEMPERATURE_SENSOR_8: GaugeGroup = GaugeGroup::new(MAX_DRIVES);
