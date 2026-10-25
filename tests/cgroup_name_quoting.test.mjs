@@ -36,10 +36,11 @@ test('every allowed character, and a mix of real names, is selectable', () => {
 });
 
 test('names the engine cannot match are left out and say why', () => {
-    // Each of these either splits on "|", fails to compile as a regex in the
-    // engine (lookarounds, \\0, \\c, unbalanced brackets), has a quote, or
-    // contains the "\\." that match_pattern rewrites.
-    for (const name of ['/a|b', '/a[b', '/a(b', '*x', '/a"b', '/a(?=x)', '/a\\0', '/a\\cJ', '/a\\.b', '/a{b']) {
+    // Each of these is outside the allow-list. The engine cannot match most
+    // ("|", lookarounds, \\0, \\c, unbalanced brackets, the "\\." that
+    // match_pattern rewrites); /a{b and /a"b it could, and are excluded on
+    // purpose.
+    for (const name of ['/a|b', '/a[b', '/a(b', '*x', '/a"b', '/a(?=x)', '/a\\0', '/a\\cJ', '/a\\.b', '/a{b', '']) {
         assert.match(cgroupUnselectableReason(name), /^Cannot be selected/, name);
     }
     assert.equal(cgroupPattern(['/ok', '/a|b', '/a[b']), '/ok');

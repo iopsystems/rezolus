@@ -17,11 +17,12 @@ import { discoverCgroups } from './cgroup_discovery.js';
 // literally, after turning `\.` into `.`. A name made of letters, digits,
 // `/ _ . : @ - = , ~ %` and `\xHH` escapes (systemd's escaped characters)
 // compiles and compares equal to itself; those characters cover systemd
-// units, container ids and pod names. Any other name is not offered.
-const SELECTABLE = /^(?:[A-Za-z0-9/_.:@=,~%-]|\\x[0-9A-Fa-f]{2})*$/;
+// units, container ids and pod names. Any other name, and the empty name, is
+// not offered, including a few the engine could match (`{`, `"`).
+const SELECTABLE = /^(?:[A-Za-z0-9/_.:@=,~%-]|\\x[0-9A-Fa-f]{2})+$/;
 export const cgroupUnselectableReason = (name) => (SELECTABLE.test(name)
     ? null
-    : 'Cannot be selected: the name has characters the query engine\'s matcher cannot express');
+    : 'Cannot be selected: the name has characters outside those the selector can quote safely');
 
 // A name inside a PromQL double-quoted string: backslashes and quotes escaped,
 // so the string unquotes to the name itself (a systemd `\x2d` stays `\x2d`).
@@ -103,9 +104,10 @@ export const seedSelectedCgroups = (names) => {
     const seeded = (Array.isArray(names) ? names : []).filter((n) => typeof n === 'string' && n !== '');
     const unusable = seeded.filter((n) => cgroupUnselectableReason(n));
     if (unusable.length > 0) {
-        console.warn(`[cgroups] dropping selection the query engine cannot match: ${unusable.join(', ')}`);
+        console.warn(`[cgroups] dropping selection the selector cannot quote: ${unusable.join(', ')}`);
     }
     persistedSelectedCgroups = new Set(seeded.filter((n) => !cgroupUnselectableReason(n)));
+    if (unusable.length > 0) writeViewState({ cgroup: [...persistedSelectedCgroups] });
 };
 
 // The selection as the pattern the selector substitutes for
