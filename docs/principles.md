@@ -248,15 +248,19 @@ host. A sampler with a `cgroup_attribution` switch does not create its
 cgroup maps when the switch is off.
 
 `cpu_usage`'s `process_cpu_usage` is one `PackedCounters` copy whose slot
-every CPU running one of the process's threads writes. Its writer,
-`cpuacct_account_field`, runs about once per scheduler tick per busy CPU,
-so the contention is bounded by the tick rate. In the same 56-vCPU guest
+every CPU running one of the process's threads writes. The program on
+`cpuacct_account_field` adds to it only when the task's utime or stime
+advanced, which the kernel does about once per scheduler tick per busy
+CPU, so a process's slot takes at most about one write per CPU per tick.
+Ticks fire at the same time on every CPU unless the kernel is booted with
+`skew_tick=1`, so those writes arrive together. In the same 56-vCPU guest
 (HZ=250, 15.3k runs per second) with 48 spinning threads, the `cpu_usage`
 programs took 306-314 ns per run with the threads in one process and
 195-203 ns with 48 one-thread processes, against 162-177 ns without the
-process counter: about 2 ms of CPU per second across the host in the
-worst case. Sharding it as `CgroupCounters` are sharded would cost 16
-copies of a 32 MiB array, so it keeps one copy.
+process counter: about 2 ms of CPU per second across the host. The cost
+grows with the number of CPUs running the process and with HZ; it has
+not been measured on a larger host. Sharding it as `CgroupCounters` are
+sharded would cost 16 copies of a 32 MiB array, so it keeps one copy.
 
 **How to apply.**
 - New samplers prefer `CpuCounters` over `Counters` (see also principle 9).

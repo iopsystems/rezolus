@@ -1103,7 +1103,10 @@
   last thread exiting. It adds 64 MiB of kernel memory to
   `task_attribution` (two per-pid arrays) and a 256 KiB ring, a metadata
   event per new process and per leader rename, and two marker reads and a
-  counter add per accounting event that adds CPU. (#1490)
+  counter add per accounting event that adds CPU. A process whose threads
+  run on many CPUs contends on its counter: with 48 threads of one process
+  on a 56-vCPU host, each accounting run took about 310 ns, against about
+  200 ns with 48 one-thread processes and 170 ns without the counter. (#1490)
 
 - **`drive_temperature_sensor`: NVMe Temperature Sensors 1 to 8.**
   `drivehealth` decodes them from the SMART/Health log it already reads

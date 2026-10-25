@@ -170,9 +170,10 @@ fn sweep_task_slots(markers: &[std::sync::atomic::AtomicU64]) {
 /// longer holds live: its `process_start_times` marker shows that group
 /// exited (its last thread has entered do_exit), another group, or none.
 /// Release too every slot whose tgid is in [`DEAD_GROUPS`] from an exit
-/// newer than its labels. The marker writes are not atomic: a rename of a
-/// kernel thread by another kernel thread (`set_task_comm`; a userspace
-/// rename is refused outside the thread group) whose send finds the
+/// newer than its labels. The marker writes are not atomic: a
+/// `set_task_comm` on a kernel thread by another task (5.10's
+/// `kthread_create` renames the new thread from its creator's context; a
+/// userspace rename is refused outside the thread group) whose send finds the
 /// ringbuf full, racing that thread's exit, can leave the marker pending
 /// after the exit marked it exited. Runs after every drain, before
 /// [`sweep_task_slots`] ages `DEAD_GROUPS`, so each entry is applied here by
