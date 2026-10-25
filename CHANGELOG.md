@@ -1058,6 +1058,12 @@
 
 ### Added
 
+- **`drive_temperature_sensor`: NVMe Temperature Sensors 1 to 8.**
+  `drivehealth` decodes them from the SMART/Health log it already reads
+  (bytes 200 to 215), labelled `sensor={1..8}` and with the drive's labels,
+  on Linux and macOS. A sensor the controller does not implement has no
+  value. These are the per-sensor readings `hw_sensors` stopped collecting
+  when it left `nvme` hwmon chips to `drivehealth`. (#1526)
 - **`record --endpoint url,host=NAME` sets the recording's `host` label.**
   `record` names labels that a Rezolus agent's metadata brought too late to
   put on the recording (metriken-recorder's `LabelsNotApplied`), with the

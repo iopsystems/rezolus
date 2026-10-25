@@ -29,13 +29,21 @@ mod stats {
 use super::nvme_log::parse_health;
 use stats::*;
 
-static NVME_COUNTER_GROUPS: &[&dyn metriken::group::SlotMetadata] = &[
+static NVME_GROUPS: &[&dyn metriken::group::SlotMetadata] = &[
     &DRIVE_TEMPERATURE_WARNING_TIME,
     &DRIVE_TEMPERATURE_CRITICAL_TIME,
     &DRIVE_THERMAL_THROTTLE_TIME_1,
     &DRIVE_THERMAL_THROTTLE_TIME_2,
     &DRIVE_THERMAL_THROTTLE_TRANSITIONS_1,
     &DRIVE_THERMAL_THROTTLE_TRANSITIONS_2,
+    &DRIVE_TEMPERATURE_SENSOR_1,
+    &DRIVE_TEMPERATURE_SENSOR_2,
+    &DRIVE_TEMPERATURE_SENSOR_3,
+    &DRIVE_TEMPERATURE_SENSOR_4,
+    &DRIVE_TEMPERATURE_SENSOR_5,
+    &DRIVE_TEMPERATURE_SENSOR_6,
+    &DRIVE_TEMPERATURE_SENSOR_7,
+    &DRIVE_TEMPERATURE_SENSOR_8,
 ];
 
 static SWEEP_IDENTITY: metriken::group::SlotIdentity =
@@ -46,7 +54,7 @@ static SWEEP_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[&[&DR
 static NVME_IDENTITY: metriken::group::SlotIdentity =
     metriken::group::SlotIdentity::grouped(NVME_IDENTITY_GROUPS);
 
-static NVME_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[NVME_COUNTER_GROUPS];
+static NVME_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[NVME_GROUPS];
 
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
@@ -215,6 +223,11 @@ fn sweep(drives: &[Drive]) -> usize {
         ];
         for (group, value) in counters {
             let _ = group.set(idx, value);
+        }
+        for (group, celsius) in DRIVE_TEMPERATURE_SENSORS.iter().zip(h.sensor_temperature_c) {
+            if let Some(celsius) = celsius {
+                let _ = group.set(idx, celsius);
+            }
         }
     }
     if ok > 0 {
