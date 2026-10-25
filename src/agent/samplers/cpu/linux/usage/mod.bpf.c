@@ -282,12 +282,14 @@ u64 attach_ns = 0;
  * The accounting below runs either way -- the per-CPU and per-cgroup deltas
  * are computed from each task's utime/stime baseline, and exited tasks' CPU
  * is folded from task_cpu_usage into the exited counters -- so what the
- * switch removes is only what exists for the per-task series: the task_info
- * event (a ringbuf reserve and four string reads per new task), the
- * task_exit event, and the task_rename program, which is not loaded.
- * Userspace does not read task_cpu_usage or drain either ringbuf when it is
- * off. Written into read-only data before load, so the verifier removes the
- * sends rather than testing a flag per event.
+ * switch removes is only what exists for the per-task and per-process
+ * series: the task_info event (a ringbuf reserve and four string reads per
+ * new task), the task_exit event, the process_info event, start_process and
+ * account_process, the per-process maps (left out of the object), and the
+ * task_rename program, which is not loaded. Userspace does not read
+ * task_cpu_usage or process_cpu_usage or drain those three ringbufs when it
+ * is off. Written into read-only data before load, so the verifier removes
+ * the sends rather than testing a flag per event.
  */
 const volatile __u8 task_attribution = 0;
 
@@ -341,7 +343,8 @@ static __always_inline int send_process_info(struct task_struct* leader, const c
 /*
  * start_process - Start a thread group's per-process counter, once
  *
- * Called for each new task instance. The group's first one zeroes the
+ * Called for each new task instance and at an exec from outside the group
+ * leader. The group's first one zeroes the
  * counter at pid_slot(tgid), commits the group's start time as the marker,
  * pending, and sends the group's metadata; the others find the marker in
  * place. A full ringbuf leaves METADATA_PENDING set, and the group's next
@@ -388,11 +391,18 @@ static __always_inline void start_process(struct task_struct* task) {
  * account_process - Add an accounted delta to the task's thread group, and
  * retry the group's metadata if it is owed
  *
- * Every delta credited to the per-CPU totals while the group is live is
- * added, including CPU an exited thread uses in the rest of do_exit, so the
+ * Every delta credited to the per-CPU totals while the group is tracked
+ * (from its start_process until its last exit) is added, including CPU an
+ * exited thread uses in the rest of do_exit before that last exit, so the
  * per-process total includes every thread of the group, exported or not,
- * live or exited. Nothing is added after the group's last exit, which zeroes
- * the counter: a slot with no labels is then 0, which a V2 snapshot skips.
+ * live or exited.
+ *
+ * The group's last exit zeroes the counter, so a dead group's slot is 0,
+ * which a V2 snapshot skips. An add that read the marker before that exit
+ * can land after the zero; the marker is read again after the add, and the
+ * slot zeroed again if it shows the group exited. A marker left pending by a
+ * leader rename racing the last exit (see sweep_process_slots in mod.rs)
+ * lets later adds through, and leaves a non-zero slot with no labels.
  *
  * `exiting`: the task is past its own sched_process_exit. It does not retry
  * the send, so a thread in the rest of do_exit cannot mark the group's
@@ -414,6 +424,12 @@ static __always_inline void account_process(struct task_struct* task, bool btf, 
         return;
 
     array_add(&process_cpu_usage, slot, delta);
+
+    if (*marker & INSTANCE_EXITED) {
+        u64 zero = 0;
+        bpf_map_update_elem(&process_cpu_usage, &slot, &zero, BPF_ANY);
+        return;
+    }
 
     if (!(m & METADATA_PENDING) || exiting)
         return;
@@ -546,9 +562,9 @@ static __noinline int handle_new_task(struct task_struct* task, u32 pid, u64 sta
     }
     bpf_map_update_elem(&task_cpu_usage, &slot, &zero, BPF_ANY);
 
-    // A thread that exec'd from outside the leader stays in its group.
-    if (!exec_takeover)
-        start_process(task);
+    // A thread that exec'd from outside the leader stays in its group; the
+    // group is started here too when this is its first thread seen.
+    start_process(task);
 
     // The marker is committed, pending, before the send: userspace's sweep
     // releases labels whose instance the marker does not hold, so a
@@ -883,6 +899,9 @@ static __always_inline int account__sched_process_exec(u64* ctx, bool btf) {
         if (send_task_info(task))
             bpf_map_update_elem(&task_start_times, &new_slot, &start_time, BPF_ANY);
     }
+
+    // The group may not have been seen before its exec.
+    start_process(task);
 
     retire_task(task, btf, old_pid, slot, 0);
 

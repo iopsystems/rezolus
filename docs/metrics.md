@@ -79,8 +79,8 @@ A task is attributed to its CPU controller's task group. A service whose
 cgroup has no CPU controller of its own is counted under the nearest
 ancestor that has one, usually its slice.
 
-`task_attribution` is the per-task counterpart, for `cpu_usage` only, off by
-default: see [cpu_usage](#cpu_usage).
+`task_attribution` is the per-task and per-process counterpart, for
+`cpu_usage` only, off by default: see [cpu_usage](#cpu_usage).
 
 ## Table of Contents
 
@@ -380,17 +380,20 @@ in `[samplers.cpu_usage]` (or `[defaults]`) to get it.
 
 `process_cpu_usage` comes with `task_attribution`: one series per process
 (thread group), keyed by `tgid`. Every CPU delta credited to `cpu_usage` for
-a thread of the process is added to it, including the CPU of threads that
-have exited, so `rate(process_cpu_usage)` is the process's CPU however many
-threads it created and however many of them have their own series. Like
-`task_cpu_usage`, it counts from when the process started, or from when the
-agent first saw it for a process that predates the agent. Its `comm` and
-`cgroup` are the group leader's. The leader's renames relabel it, and so
-does exec, so a forked child is relabelled with the program it runs. The
-series ends within one snapshot interval of the process's last thread
-exiting. It costs two more per-pid arrays (64 MiB of kernel memory), a
-metadata event per new process and per leader rename, and a counter add and
-a marker read per accounting event.
+a thread of the process is added to it, from the first accounting event of
+any of its threads until its last thread enters do_exit, including the CPU
+of threads that have exited. So `rate(process_cpu_usage)` is the process's
+CPU however many threads it created and however many of them have their own
+series. Like `task_cpu_usage`, it counts from when the process started, or
+from when the agent first saw it for a process that predates the agent. Its
+`comm` and `cgroup` are the group leader's. The leader's renames relabel
+it, and so does exec, so a forked child is relabelled with the program it
+runs. The series ends within one snapshot interval of the process's last
+thread exiting. As with `task_cpu_usage`, a process that exits between a
+drain and the snapshot that follows it has a last sample of 0, so read it
+with `rate()` or `increase()`. It costs two more per-pid arrays (64 MiB of
+kernel memory), a 256 KiB ring, a metadata event per new process and per
+leader rename, and a marker read and a counter add per accounting event.
 
 `comm` follows renames. A thread whose name changes (`pthread_setname_np`,
 `prctl(PR_SET_NAME)`, a write to `/proc/<pid>/task/<tid>/comm`, or exec) is
