@@ -495,19 +495,19 @@ error: annotating needs --queries <service-extension.json>, --undo, --systeminfo
 --- exit 1
 --- stdout
 --- stderr
-error: --source set a key in a parquet file's footer. A .dendro recording's source is a label, set when it is recorded (`rezolus record --endpoint URL,source=NAME` or `--label k=v`), and 6.x does not relabel a recording; to tell recordings apart in a comparison, use `rezolus recording combine --ab`
+error: --source set a key in a parquet file's footer. A .dendro recording's source is a label, set when it is recorded (`rezolus record --endpoint URL,source=NAME` or `--label k=v`); 6.x does not change a recording's labels afterwards. `rezolus recording combine --ab` adds an `arm` label that tells two recordings apart in a comparison
 
 === rezolus recording annotate simple.dendro --node x
 --- exit 1
 --- stdout
 --- stderr
-error: --node set a key in a parquet file's footer. A .dendro recording's node is a label, set when it is recorded (`rezolus record --endpoint URL,source=NAME` or `--label k=v`), and 6.x does not relabel a recording; to tell recordings apart in a comparison, use `rezolus recording combine --ab`
+error: --node set a key in a parquet file's footer. A .dendro recording's node is a label, set when it is recorded (`rezolus record --endpoint URL,source=NAME` or `--label k=v`); 6.x does not change a recording's labels afterwards. `rezolus recording combine --ab` adds an `arm` label that tells two recordings apart in a comparison
 
 === rezolus recording annotate simple.dendro --filter
 --- exit 1
 --- stdout
 --- stderr
-error: --filter dropped a parquet file's columns its KPIs do not need; run `rezolus recording filter simple.dendro -o slim.dendro` instead (a parquet file with neither --samplers nor --metrics keeps what its KPIs need)
+error: --filter dropped a parquet file's columns its KPIs do not need; run `rezolus recording filter simple.dendro --samplers A,B -o slim.dendro` or `... --metrics A,B` instead, naming what to keep
 
 === rezolus recording annotate simple.dendro --queries bad-unit.json
 --- exit 1
