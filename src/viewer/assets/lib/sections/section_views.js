@@ -360,6 +360,7 @@ const renderCgroupSection = ({
             applyResultToPlot: applyResultToPlot,
             substitutePattern: substituteCgroupPattern,
             setActiveCgroupPattern: (p) => { setActiveCgroupPattern(p); },
+            sectionRoute,
         }),
         m('div.cgroup-pairs',
             pairs.map((pair) => {

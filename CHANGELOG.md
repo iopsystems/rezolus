@@ -1093,6 +1093,28 @@
 
 ### Added
 
+- **A systemd unit's cgroups can be selected as one entry.** The cgroup
+  selector lists each `*.scope` or `*.service` unit with two or more recorded
+  cgroups that name it (a libvirt guest's `vcpuN` and `emulator` threads, a
+  service's child cgroups) as a group above its members. The agent records a
+  cgroup more than three levels deep by its last three path components
+  (`.../machine-qemu-2-vm1.scope/libvirt/vcpu0`), so a group holds the unit's
+  own cgroup and those up to two levels below it; a cgroup further down is not
+  in it. A selected group plots one line per individual chart, from its own
+  query over the members, so a group's IPC is its summed instructions over its
+  summed cycles; the aggregate charts exclude its members. While a group is
+  selected, an entry that shares a cgroup with it cannot be selected, and
+  selecting a group replaces the selected entries it holds. The link carries a
+  group as its unit path with a trailing slash
+  (`cgroup=.../machine-qemu-2-vm1.scope/`), and the members are found again in
+  whichever recording opens it. A key that carries more or less of the unit's
+  path than that recording's key for it (`/machine.slice/...` against `.../`)
+  resolves to it when exactly one group matches, and a link that holds a group
+  and one of its members is rewritten to the group. A group with a member the
+  selector cannot quote is not selectable. A group's members are found when
+  the section opens, so in a live view a cgroup created under the unit after
+  that is counted in the aggregate until the section is opened again. A pinned
+  chart that draws a group is not compared in A/B mode. (#1544)
 - **`process_cpu_usage`: CPU time per process.** With
   `process_attribution = true` (off by default, independent of
   `task_attribution`), `cpu_usage` exports one series per thread

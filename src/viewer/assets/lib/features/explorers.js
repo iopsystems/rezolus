@@ -1,5 +1,6 @@
 import { ChartsState, Chart } from '../charts/chart.js';
-import { executePromQLRangeQuery, fetchHeatmapForPlot, getSelectedNode, injectLabel, buildEffectiveQuery } from '../data.js';
+import { executePromQLRangeQuery, fetchHeatmapForPlot, getSelectedNode, injectLabel, buildEffectiveQueries } from '../data.js';
+import { runCgroupVariants } from './cgroup_selection.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec } from '../charts/metric_types.js';
 import { collectGroupPlots } from './group_utils.js';
 import { readViewState, writeViewState } from '../ui/url_state.js';
@@ -371,19 +372,22 @@ export const SingleChartView = {
             opts: { ...plot.opts, title: st.title, description: st.description, format: formatOverride || plot.opts.format },
         };
 
-        // The query runs with the section's cgroup, node, GPU and instance
-        // selections applied, as the section's charts do. A histogram chart's
-        // query runs as typed, with the node selection.
-        const effectiveQuery = () => {
-            if (!isHistogramPlot(plot)) {
-                return buildEffectiveQuery({ ...plot, promql_query: st.query }, {
-                    sectionRoute: vnode.attrs.sectionRoute || null,
-                    activeCgroupPattern: vnode.attrs.activeCgroupPattern || null,
-                    serviceName: data.metadata?.service_name || null,
-                });
+        // The queries run with the section's cgroup, node, GPU and instance
+        // selections applied, as the section's charts do: one per selected
+        // cgroup group as well, until the query is edited. A histogram chart's
+        // query runs as typed, with the node selection. `{ query, label }`
+        // each, or null when the chart needs a cgroup selection.
+        const effectiveQueries = () => {
+            if (isHistogramPlot(plot)) {
+                const node = getSelectedNode();
+                return [{ query: node ? injectLabel(st.query, 'node', node) : st.query, label: null }];
             }
-            const node = getSelectedNode();
-            return node ? injectLabel(st.query, 'node', node) : st.query;
+            const opts = {
+                sectionRoute: vnode.attrs.sectionRoute || null,
+                activeCgroupPattern: vnode.attrs.activeCgroupPattern || null,
+                serviceName: data.metadata?.service_name || null,
+            };
+            return buildEffectiveQueries({ ...plot, promql_query: st.query }, opts);
         };
 
         // Resolves to whether the query ran and its result was drawn.
@@ -394,12 +398,12 @@ export const SingleChartView = {
             let ok = false;
 
             try {
-                const q = effectiveQuery();
-                if (q == null) {
+                const queries = effectiveQueries();
+                if (queries == null) {
                     st.error = 'This chart needs a cgroup selection';
                 } else {
-                    const response = await executePromQLRangeQuery(
-                        q, undefined, undefined, st.samples ? 'raw' : 'grid');
+                    const response = await runCgroupVariants(queries, (q) => executePromQLRangeQuery(
+                        q, undefined, undefined, st.samples ? 'raw' : 'grid'));
                     if (st.removed) return false;
                     if (response.status === 'success' && response.data && response.data.result) {
                         applyResultToPlot(plot, response);
