@@ -170,13 +170,15 @@ fn sweep_task_slots(markers: &[std::sync::atomic::AtomicU64]) {
 /// longer holds live: its `process_start_times` marker shows that group
 /// exited (its last thread has entered do_exit), another group, or none.
 /// Release too every slot whose tgid is in [`DEAD_GROUPS`] from an exit
-/// newer than its labels. The marker writes are not atomic: a leader rename
-/// whose send finds the ringbuf full, racing the group's last exit, can
-/// leave the marker pending after the exit marked it exited. Runs after
-/// every drain, before [`sweep_task_slots`] ages `DEAD_GROUPS`, so each
-/// entry is applied here by two sweeps as well. That needs one of the
-/// group's last `task_exit` events delivered: with all of them dropped,
-/// labels that race leaves stay until a new group takes the tgid's slot.
+/// newer than its labels. The marker writes are not atomic: a rename of a
+/// kernel thread by another kernel thread (`set_task_comm`; a userspace
+/// rename is refused outside the thread group) whose send finds the
+/// ringbuf full, racing that thread's exit, can leave the marker pending
+/// after the exit marked it exited. Runs after every drain, before
+/// [`sweep_task_slots`] ages `DEAD_GROUPS`, so each entry is applied here by
+/// two sweeps as well. That needs one of the group's last `task_exit` events
+/// delivered: with all of them dropped, labels that race leaves stay until a
+/// new group takes the tgid's slot.
 ///
 /// A `process_info` is submitted only after its group's marker is written
 /// (pending first; see start_process in mod.bpf.c), so a drained
@@ -370,8 +372,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     // raw_tp twin. cpuacct_account_field: the fentry twin (cheaper dispatch)
     // where fentry can attach to it (`kernel_can_fentry`), else the kprobe.
     // task_rename relabels per-task and per-process series, so neither twin
-    // loads without
-    // task_attribution.
+    // loads without task_attribution.
     let mut disabled = vec![
         if btf {
             "handle__sched_process_exit_raw"

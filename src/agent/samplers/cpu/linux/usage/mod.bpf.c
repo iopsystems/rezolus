@@ -285,7 +285,7 @@ u64 attach_ns = 0;
  * switch removes is only what exists for the per-task and per-process
  * series: the task_info event (a ringbuf reserve and four string reads per
  * new task), the task_exit event, the process_info event, start_process and
- * account_process, the per-process maps (left out of the object), and the
+ * account_process, the per-process maps (not created), and the
  * task_rename program, which is not loaded. Userspace does not read
  * task_cpu_usage or process_cpu_usage or drain those three ringbufs when it
  * is off. Written into read-only data before load, so the verifier removes
@@ -400,9 +400,11 @@ static __always_inline void start_process(struct task_struct* task) {
  * The group's last exit zeroes the counter, so a dead group's slot is 0,
  * which a V2 snapshot skips. An add that read the marker before that exit
  * can land after the zero; the marker is read again after the add, and the
- * slot zeroed again if it shows the group exited. A marker left pending by a
- * leader rename racing the last exit (see sweep_process_slots in mod.rs)
- * lets later adds through, and leaves a non-zero slot with no labels.
+ * slot zeroed again if it shows the group exited. That closes the race
+ * where the atomic add is a full barrier (x86). On arm64 the add and the
+ * exit's two stores are not ordered, so a late add can still leave a
+ * non-zero slot with no labels, which a V2 snapshot exports. So can a marker
+ * left pending after the exit (see sweep_process_slots in mod.rs).
  *
  * `exiting`: the task is past its own sched_process_exit. It does not retry
  * the send, so a thread in the rest of do_exit cannot mark the group's
