@@ -188,6 +188,9 @@ struct {
 // per-process cpu usage in nanoseconds (user + system of every thread of the
 // group, exported), at pid_slot(tgid); userspace assigns each process's
 // series to that index. Only with task_attribution; see process_start_times.
+// Every CPU running one of the process's threads writes its slot; one copy is
+// kept because the writer runs about once per tick per CPU (docs/principles.md,
+// principle 7, has the measured cost).
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(map_flags, BPF_F_MMAPABLE);
