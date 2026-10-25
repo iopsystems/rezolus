@@ -139,10 +139,10 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         assert.equal(registry.has('experiment'), false);
     });
 
-    // Each file of a two-file comparison is one recording: an experiment of
-    // several is refused, and so is any experiment beside a baseline of
-    // several, which keeps what it shows.
-    test('a two-file comparison takes one recording from each file', () => {
+    // An experiment is one recording. Beside a one-recording baseline or a
+    // comparison it fills the experiment slot; beside a combined view of
+    // several recordings it is refused and the view is unchanged.
+    test('an experiment is one recording, refused beside a combined view', () => {
         const one = fixture('exp-one.dendro', 1);
         const two = fixture('exp-two.dendro', 2);
 
@@ -156,21 +156,27 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
                 && String(e).includes('rezolus recording combine base.dendro exp2.dendro -o both.dendro'),
         );
 
-        for (const compare of [false, true]) {
-            const multi = new WasmCaptureRegistry();
-            multi.set_compare_requested(compare);
-            multi.attach('baseline', two, 'fleet.dendro');
-            const before = multi.has('experiment')
-                ? multi.file_metadata_json('experiment') : null;
-            assert.throws(
-                () => multi.attach('experiment', one, 'exp.dendro'),
-                (e) => String(e).startsWith('fleet.dendro holds 2 recordings; the baseline')
-                    && String(e).includes('rezolus recording combine fleet.dendro exp.dendro -o both.dendro'),
-                `compare=${compare}`,
-            );
-            assert.equal(multi.has('experiment') ? multi.file_metadata_json('experiment') : null,
-                before, `compare=${compare}`);
-        }
+        const combined = new WasmCaptureRegistry();
+        combined.attach('baseline', two, 'fleet.dendro');
+        assert.throws(
+            () => combined.attach('experiment', one, 'exp.dendro'),
+            (e) => String(e).startsWith('fleet.dendro holds 2 recordings; the baseline')
+                && String(e).includes('rezolus recording combine fleet.dendro exp.dendro -o both.dendro'),
+        );
+        assert.equal(combined.has('experiment'), false);
+        // A one-recording baseline replacing it takes an experiment again.
+        combined.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
+        combined.attach('experiment', one, 'exp.dendro');
+        assert.equal(combined.has('experiment'), true);
+
+        // The file replaces a comparison's experiment arm (valkey).
+        const ab = new WasmCaptureRegistry();
+        ab.set_compare_requested(true);
+        ab.attach('baseline', two, 'ab.dendro');
+        assert.match(ab.file_metadata_json('experiment'), /valkey/);
+        ab.attach('experiment', one, 'exp.dendro');
+        assert.doesNotMatch(ab.file_metadata_json('experiment'), /valkey/);
+        assert.match(ab.file_metadata_json('baseline'), /redis/);
     });
 
     // The committed v3 `.rez`, upgraded: two recordings, host=web-01 and

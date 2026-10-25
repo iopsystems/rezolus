@@ -307,36 +307,133 @@ fn positions_count_a_recording_with_no_rows() {
     assert!(line.contains("host=web-02"), "{line}");
 }
 
-/// An uploaded experiment is one recording beside a one-recording baseline:
-/// beside a baseline of several it is refused, and the baseline's slots
-/// are unchanged.
+/// `method` on `path` with an empty body: the status line.
+fn request(viewer: &Viewer, method: &str, path: &str) -> String {
+    let mut stream = TcpStream::connect(&viewer.addr).unwrap();
+    write!(
+        stream,
+        "{method} {path} HTTP/1.0\r\nHost: {}\r\nContent-Length: 0\r\n\r\n",
+        viewer.addr
+    )
+    .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    response.lines().next().unwrap_or_default().to_string()
+}
+
+/// An uploaded experiment is one recording. Beside a one-recording baseline
+/// or a comparison it fills the experiment slot; beside a combined view of
+/// several recordings it is refused and the view is unchanged, whether the
+/// baseline came from the command line or an upload.
 #[test]
-fn an_uploaded_experiment_needs_a_one_recording_baseline() {
+fn an_uploaded_experiment_is_refused_beside_a_combined_view() {
     let dir = tempfile::tempdir().unwrap();
     rez::fixtures::multi_recording(&dir.path().join("one.dendro"), &[("redis", "web-01")]);
     rez::fixtures::multi_recording(&dir.path().join("exp.dendro"), &[("redis", "web-09")]);
+    rez::fixtures::multi_recording(&dir.path().join("b.dendro"), &[("valkey", "web-02")]);
     rez::fixtures::multi_recording(
         &dir.path().join("fleet.dendro"),
         &[("redis", "web-01"), ("valkey", "web-01")],
     );
-    let exp = std::fs::read(dir.path().join("exp.dendro")).unwrap();
+    run(
+        dir.path(),
+        "rezolus recording combine one.dendro b.dendro \
+         --ab baseline=one.dendro experiment=b.dendro -o ab.dendro",
+    );
+    let read = |name: &str| std::fs::read(dir.path().join(name)).unwrap();
+    let exp = read("exp.dendro");
+    let refused = |viewer: &Viewer| {
+        let before = slots(viewer);
+        let (status, body) = upload(viewer, "/api/v1/captures/experiment", "exp.dendro", &exp);
+        assert!(status.contains(" 400 "), "{status}: {body}");
+        assert!(
+            body.starts_with("fleet.dendro holds 2 recordings; the baseline"),
+            "{body}"
+        );
+        assert!(
+            body.contains("rezolus recording combine fleet.dendro exp.dendro -o both.dendro"),
+            "{body}"
+        );
+        assert_eq!(slots(viewer), before);
+    };
+    let attached = |viewer: &Viewer| {
+        let (status, body) = upload(viewer, "/api/v1/captures/experiment", "exp.dendro", &exp);
+        assert!(status.contains(" 200 "), "{status}: {body}");
+        assert_eq!(slots(viewer).len(), 2, "{:?}", slots(viewer));
+    };
 
-    let viewer = serve(dir.path(), "rezolus view one.dendro");
-    let (status, body) = upload(&viewer, "/api/v1/captures/experiment", "exp.dendro", &exp);
+    attached(&serve(dir.path(), "rezolus view one.dendro"));
+    refused(&serve(dir.path(), "rezolus view fleet.dendro"));
+
+    // Uploaded baselines: combined, then one recording in its place.
+    let viewer = serve(dir.path(), "rezolus view");
+    let (status, body) = upload(
+        &viewer,
+        "/api/v1/upload",
+        "fleet.dendro",
+        &read("fleet.dendro"),
+    );
     assert!(status.contains(" 200 "), "{status}: {body}");
-    assert_eq!(slots(&viewer).len(), 2);
+    refused(&viewer);
+    let (status, body) = upload(&viewer, "/api/v1/upload", "one.dendro", &read("one.dendro"));
+    assert!(status.contains(" 200 "), "{status}: {body}");
+    attached(&viewer);
 
-    let viewer = serve(dir.path(), "rezolus view fleet.dendro");
-    let before = slots(&viewer);
-    let (status, body) = upload(&viewer, "/api/v1/captures/experiment", "exp.dendro", &exp);
-    assert!(status.contains(" 400 "), "{status}: {body}");
-    assert!(
-        body.starts_with("fleet.dendro holds 2 recordings; the baseline"),
-        "{body}"
+    // A comparison's experiment arm is replaced, as the page's Load button
+    // does it: DELETE, then POST.
+    let viewer = serve(dir.path(), "rezolus view ab.dendro");
+    assert_eq!(slots(&viewer).len(), 2);
+    let filename = |capture: &str| {
+        let mut stream = TcpStream::connect(&viewer.addr).unwrap();
+        write!(
+            stream,
+            "GET /api/v1/metadata?capture={capture} HTTP/1.0\r\nHost: {}\r\n\r\n",
+            viewer.addr
+        )
+        .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        let body = response.split_once("\r\n\r\n").unwrap().1;
+        let json: serde_json::Value = serde_json::from_str(body).unwrap();
+        json["data"]["filename"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    };
+    let baseline = filename("baseline");
+    assert_ne!(filename("experiment"), "exp.dendro");
+    let status = request(&viewer, "DELETE", "/api/v1/captures/experiment");
+    assert!(status.contains(" 200 "), "{status}");
+    attached(&viewer);
+    assert_eq!(filename("experiment"), "exp.dendro");
+    assert_eq!(filename("baseline"), baseline);
+}
+
+/// The baseline is an A/B archive named `ab.dendro`, as the position path
+/// writes one: the refusal leaves out the `--ab` step, which cannot relabel
+/// an arm, and the label path it prints works.
+#[test]
+fn an_ab_archive_baseline_is_refused_with_commands_that_work() {
+    let dir = tempfile::tempdir().unwrap();
+    rez::fixtures::multi_recording(&dir.path().join("a.dendro"), &[("redis", "web-01")]);
+    rez::fixtures::multi_recording(&dir.path().join("b.dendro"), &[("valkey", "web-02")]);
+    rez::fixtures::multi_recording(&dir.path().join("exp.dendro"), &[("redis", "web-09")]);
+    run(
+        dir.path(),
+        "rezolus recording combine a.dendro b.dendro \
+         --ab baseline=a.dendro experiment=b.dendro -o ab.dendro",
     );
-    assert!(
-        body.contains("rezolus recording combine fleet.dendro exp.dendro -o both.dendro"),
-        "{body}"
-    );
-    assert_eq!(slots(&viewer), before);
+    let (stderr, commands) = refusal(dir.path(), "ab.dendro", "exp.dendro");
+    assert_eq!(commands.len(), 3, "{stderr}");
+    assert!(stderr.contains("ab.dendro is an A/B archive"), "{stderr}");
+    run(dir.path(), &commands[0]);
+    let listing = String::from_utf8_lossy(&run(dir.path(), &commands[1]).stdout).to_string();
+    assert!(listing.contains("--recording host=web-09"), "{listing}");
+    let view = commands[2]
+        .replacen("--baseline KEY=VALUE", "--baseline arm=baseline", 1)
+        .replacen("--experiment KEY=VALUE", "--experiment host=web-09", 1);
+    let viewer = serve(dir.path(), &view);
+    let slots = slots(&viewer);
+    assert_eq!(slots.len(), 2, "{slots:?}");
+    assert_eq!(slot(&slots, "experiment"), "web-09", "{slots:?}");
 }

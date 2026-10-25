@@ -184,11 +184,15 @@
   and `recording metadata` loses `--schema`, `--file`, `--geometry` and
   `--field` (they described a parquet footer). A two-file comparison
   (`rezolus view a.dendro b.dendro`, the browser's experiment upload, a
-  URL pair) takes a one-recording `.dendro` as each side; an archive of
-  several recordings is refused, naming the `recording combine` and `view
-  --baseline/--experiment` commands that compare two of its recordings. The
-  static-site demo recordings are `.dendro` files; a link that names a
-  demo's old `.parquet` file loads its `.dendro`.
+  URL pair) takes a one-recording `.dendro` as the experiment. On the
+  command line the baseline is one recording too. In the browser and
+  through the upload API the baseline may also be an archive that opens
+  as a comparison, whose experiment the second file replaces; beside an
+  archive that opens as one combined view, an experiment is refused. Each
+  refusal names the `recording combine` and `view --baseline/--experiment`
+  commands that compare two recordings. The static-site demo recordings
+  are `.dendro` files; a link that names a demo's old `.parquet` file
+  loads its `.dendro`.
 - **The viewer's Time selector (Aligned/Raw) is gone.** Every dashboard
   chart is on the step grid. Raw mode is a per-chart view: the expanded
   chart (the open-in-new-tab link) has SHOW SAMPLES, which reruns its query
@@ -297,10 +301,10 @@
   with rows was read, in any sampler; a second recorder of the same agent
   is not merged in. The first request after the viewer opens or refreshes
   a recording reads every table's timestamps (the read took 6.6 s on a
-  9.6 h, 49-table recording); later requests reuse them. Reading
-  timestamps no longer leaves the tables read in the segment cache
-  (metriken-storage 0.5.4), so a query that reads a table's timestamps
-  to align samplers is followed by a fetch of that table's segments.
+  9.6 h, 49-table recording); later requests reuse them. The
+  timestamp read does not add the segments it opens to the segment cache
+  (metriken-storage 0.5.4), so it does not evict segments that chart
+  queries cached.
 - **A recording and its copies are read once.** metriken-query 0.42 forms
   process groups: sources that share a uuid (a source and its snapshot or
   hindsight dump), or share a `producer_epoch` and overlap in time (one agent

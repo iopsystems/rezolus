@@ -683,6 +683,9 @@ pub(super) fn open_experiment(
             readers.len(),
             baseline,
             name,
+            readers
+                .iter()
+                .any(|(l, _)| l.contains_key(::dashboard::combined::ARM_LABEL)),
         ));
     }
     let (_, reader) = readers.pop().expect("one recording");
@@ -959,7 +962,7 @@ fn init_file_mode_combined(
     );
     *state.parquet_path.write() = Some(path.to_path_buf());
     *state.baseline_name.write() = Some(path.display().to_string());
-    *state.baseline_recordings.write() = combined.labels.len();
+    *state.baseline_combined.write() = combined.labels.len();
     *state.selection.write() = selection;
     *state.trimmed_report_marker.write() = report_marker;
     state.captures.set_baseline_systeminfo(combined.systeminfo);
@@ -1029,6 +1032,9 @@ fn init_file_mode_rez(
                     readers.len(),
                     &file,
                     &experiment.display().to_string(),
+                    readers
+                        .iter()
+                        .any(|(l, _)| l.contains_key(::dashboard::combined::ARM_LABEL)),
                 )
             );
             std::process::exit(1);
@@ -1208,7 +1214,7 @@ fn init_file_mode_rez(
     *state.anchor_labels.write() = Some(b_labels.clone());
     *state.parquet_path.write() = Some(path.to_path_buf());
     *state.baseline_name.write() = Some(path.display().to_string());
-    *state.baseline_recordings.write() = n;
+    *state.baseline_combined.write() = 1;
     *state.selection.write() = b_selection;
     // A saved report stamps `KEY_REPORT=trimmed` on its anchor recording.
     // Without this a reloaded report would render its (mostly trimmed)

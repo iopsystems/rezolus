@@ -134,9 +134,10 @@ target/release/rezolus view a.dendro b.dendro                       # two-file A
 target/release/rezolus view fleet.dendro --baseline host=web-01 --experiment host=web-02  # pick two arms
 #   Every input (file, upload, URL load, attached experiment, the WASM viewer) is .dendro only: a .rez,
 #   .parquet or .parquet.ab.tar is refused with `<program> recording upgrade FILE` (rez::container::not_dendro);
-#   nothing converts on load. A two-file comparison is one recording per file: a file of several, on either
-#   side, is refused with the combine / describe-recording / view --baseline --experiment commands
-#   (rez::container::one_recording_hint).
+#   nothing converts on load. The experiment of a two-file comparison is one recording; the baseline is one
+#   recording on the command line, and in an upload or the WASM viewer may also be an archive shown as a
+#   comparison (the experiment replaces its arm). Anything else is refused with the combine /
+#   describe-recording / view --baseline --experiment commands (rez::container::one_recording_hint).
 target/release/rezolus view http://localhost:4241 [--listen ADDR]   # live agent connection
 target/release/rezolus view [--listen ADDR]                         # upload-only mode (no file)
 target/release/rezolus view --tui out.dendro                        # terminal UI (recording or live agent; not upload-only)

@@ -231,7 +231,7 @@ fn ingest_rez_from_path(
             Some(Arc::new(::dashboard::combined::FixedCatalog(reader)));
         *state.parquet_path.write() = Some(rez_path.clone());
         *state.baseline_name.write() = Some(display_filename.clone());
-        *state.baseline_recordings.write() = combined.labels.len();
+        *state.baseline_combined.write() = combined.labels.len();
         *state.experiment_parquet_path.write() = None;
         *state.cli_experiment_path.write() = None;
         *state.selection.write() = selection;
@@ -353,7 +353,7 @@ fn ingest_rez_from_path(
     *state.anchor_labels.write() = Some(b_labels.clone());
     *state.parquet_path.write() = Some(rez_path.clone());
     *state.baseline_name.write() = Some(display_filename.clone());
-    *state.baseline_recordings.write() = labels.len();
+    *state.baseline_combined.write() = 1;
     *state.experiment_parquet_path.write() = None;
     *state.cli_experiment_path.write() = None;
     state.captures.set_baseline_systeminfo(b_systeminfo);
@@ -398,9 +398,10 @@ fn filename_header(headers: &HeaderMap) -> Option<String> {
 // ── Experiment attach / detach ────────────────────────────────────────
 
 /// Attach a one-recording dendro archive as the experiment of an A/B
-/// comparison, beside a one-recording baseline. Body is the archive's bytes.
-/// Returns 409 if an experiment is already attached, and 400 with the
-/// commands that compare two recordings when either file holds several.
+/// comparison. Body is the archive's bytes. Returns 409 if an experiment is
+/// already attached (an archive's own experiment arm included), and 400 with
+/// the commands that compare two recordings when the upload holds several or
+/// the baseline is a combined view of several.
 pub async fn attach_experiment(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -448,18 +449,22 @@ fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
         .read()
         .clone()
         .unwrap_or_else(|| "BASELINE.dendro".to_string());
-    // The baseline of a two-file comparison is one recording too.
-    let baseline_recordings = *state.baseline_recordings.read();
-    if baseline_recordings != 1 {
+    // An experiment is compared with one baseline recording; a combined
+    // view of several has none to compare it with.
+    let combined = *state.baseline_combined.read();
+    if combined != 1 {
         return (
             StatusCode::BAD_REQUEST,
             ::rez::container::one_recording_hint(
                 env!("CARGO_BIN_NAME"),
                 &baseline,
                 "the baseline",
-                baseline_recordings,
+                combined,
                 &baseline,
                 &filename,
+                // A combined view's recordings carry no arm
+                // (`dashboard::combined::layout`).
+                false,
             ),
         )
             .into_response();

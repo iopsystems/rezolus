@@ -937,9 +937,10 @@ pub struct WasmCaptureRegistry {
     /// combine it with another file: the name it was attached under, or
     /// the one [`WasmCaptureRegistry::set_baseline_name`] gave.
     baseline_name: Option<String>,
-    /// How many recordings the baseline's file holds. An experiment is
-    /// attached beside it only when this is 1.
-    baseline_recordings: usize,
+    /// How many recordings the baseline's combined view joins; 1 when the
+    /// baseline shows one recording (a one-recording file or the baseline
+    /// slot of a comparison). An experiment is refused unless this is 1.
+    baseline_combined: usize,
     /// Applied to every capture's template lookup; see
     /// [`WasmCaptureRegistry::set_prefer_registry_templates`].
     template_preference: TemplatePreference,
@@ -966,8 +967,9 @@ fn file_name_of(name: &str) -> String {
 
 impl WasmCaptureRegistry {
     /// [`WasmCaptureRegistry::attach`]'s work, without recording the
-    /// baseline's name and recording count: those are kept only once the
-    /// attach has succeeded. Returns the file's recording count.
+    /// baseline's name and how many recordings it joins: those are kept
+    /// only once the attach has succeeded. Returns how many recordings the
+    /// attached view joins: the file's count for a combined view, else 1.
     fn attach_recordings(
         &mut self,
         capture: &str,
@@ -978,7 +980,14 @@ impl WasmCaptureRegistry {
         let pool = BufferPool::new(WASM_CACHE_SIZE_BYTES);
         let recordings = open_rez(data, filename, Arc::clone(&pool))?;
         let n = recordings.len();
-        if let Some(refusal) = self.one_recording_refusal(capture, filename, recordings.len()) {
+        if let Some(refusal) = self.one_recording_refusal(
+            capture,
+            filename,
+            recordings.len(),
+            recordings
+                .iter()
+                .any(|(l, _)| l.contains_key(dashboard::combined::ARM_LABEL)),
+        ) {
             return Err(JsValue::from_str(&refusal));
         }
         self.notices
@@ -994,7 +1003,7 @@ impl WasmCaptureRegistry {
             }
             return self
                 .attach_rez_comparison(recordings, pool, filename)
-                .map(|()| n);
+                .map(|()| 1);
         }
         // One recording, a capture of its own: a report is built from its
         // archive, or from both captures' archives in a two-file comparison.
@@ -1012,14 +1021,21 @@ impl WasmCaptureRegistry {
             filename,
         );
         self.set_capture(capture, viewer);
-        Ok(n)
+        Ok(1)
     }
 
-    /// The refusal of `n` recordings attached as `capture` when that is not
-    /// the baseline: each file of a two-file comparison is one recording
-    /// ([`rez::container::one_recording_hint`]), the experiment and the
-    /// baseline already attached.
-    fn one_recording_refusal(&self, capture: &str, filename: &str, n: usize) -> Option<String> {
+    /// The refusal of a file of `n` recordings attached as `capture` when
+    /// that is not the baseline: refused when the file holds several, or
+    /// when the baseline already attached is a combined view of several
+    /// ([`rez::container::one_recording_hint`]). Beside a comparison the
+    /// file replaces its experiment.
+    fn one_recording_refusal(
+        &self,
+        capture: &str,
+        filename: &str,
+        n: usize,
+        arms: bool,
+    ) -> Option<String> {
         if capture == "baseline" {
             return None;
         }
@@ -1029,10 +1045,12 @@ impl WasmCaptureRegistry {
             .map(file_name_of)
             .unwrap_or_else(|| "BASELINE.dendro".to_string());
         let experiment = file_name_of(filename);
-        let (file, side, count) = if n > 1 {
-            (&experiment, "the experiment", n)
-        } else if self.baseline_recordings > 1 {
-            (&baseline, "the baseline", self.baseline_recordings)
+        // A combined view's recordings carry no arm
+        // (`dashboard::combined::layout`).
+        let (file, side, count, arms) = if n > 1 {
+            (&experiment, "the experiment", n, arms)
+        } else if self.baseline_combined > 1 {
+            (&baseline, "the baseline", self.baseline_combined, false)
         } else {
             return None;
         };
@@ -1043,6 +1061,7 @@ impl WasmCaptureRegistry {
             count,
             &baseline,
             &experiment,
+            arms,
         ))
     }
 }
@@ -1057,7 +1076,7 @@ impl WasmCaptureRegistry {
             notices: Vec::new(),
             rez_source: None,
             baseline_name: None,
-            baseline_recordings: 1,
+            baseline_combined: 1,
             template_preference: TemplatePreference::Archive,
             compare_requested: false,
         }
@@ -1078,13 +1097,14 @@ impl WasmCaptureRegistry {
     /// comparison itself, so it attaches EVERY recording (under the shared
     /// id/alias scheme) and the requested slot id is ignored. That is the same
     /// mapping `rezolus view` makes for the same file. An experiment is one
-    /// recording attached beside a one-recording baseline; otherwise it is
-    /// refused with the commands that compare two recordings.
+    /// recording; it replaces the experiment slot beside a one-recording
+    /// baseline or a comparison, and is refused beside a combined view of
+    /// several recordings, with the commands that compare two recordings.
     pub fn attach(&mut self, capture: &str, data: &[u8], filename: &str) -> Result<(), JsValue> {
-        let n = self.attach_recordings(capture, data, filename)?;
+        let combined = self.attach_recordings(capture, data, filename)?;
         if capture == "baseline" {
             self.baseline_name = Some(filename.to_string());
-            self.baseline_recordings = n;
+            self.baseline_combined = combined;
         }
         Ok(())
     }
@@ -1824,16 +1844,16 @@ mod tests {
         let base = archive_bytes(&[("rezolus", "web-01"), ("rezolus", "web-02")]);
         reg.attach("baseline", &base, "my base.dendro").unwrap();
         let refusal = reg
-            .one_recording_refusal("experiment", "exp.dendro", 2)
+            .one_recording_refusal("experiment", "exp.dendro", 2, false)
             .unwrap();
         assert!(
             refusal.contains("recording combine 'my base.dendro' exp.dendro -o both.dendro"),
             "{refusal}"
         );
-        // The baseline holds two recordings, so a one-recording experiment
-        // is refused too, naming the baseline as the file to fix.
+        // The baseline is a combined view of two recordings, so a
+        // one-recording experiment is refused too, naming the baseline.
         let refusal = reg
-            .one_recording_refusal("experiment", "exp.dendro", 1)
+            .one_recording_refusal("experiment", "exp.dendro", 1, false)
             .unwrap();
         assert!(
             refusal.starts_with("my base.dendro holds 2 recordings; the baseline"),
@@ -1841,7 +1861,7 @@ mod tests {
         );
         // A URL stands for its file; a name set by the page replaces a label.
         let refusal = reg
-            .one_recording_refusal("experiment", "https://h/runs/exp.dendro?x=1", 2)
+            .one_recording_refusal("experiment", "https://h/runs/exp.dendro?x=1", 2, false)
             .unwrap();
         assert!(
             refusal.contains("'my base.dendro' exp.dendro -o"),
@@ -1849,14 +1869,14 @@ mod tests {
         );
         reg.set_baseline_name("https://h/fleet.dendro");
         let refusal = reg
-            .one_recording_refusal("experiment", "exp.dendro", 2)
+            .one_recording_refusal("experiment", "exp.dendro", 2, false)
             .unwrap();
         assert!(
             refusal.contains("combine fleet.dendro exp.dendro"),
             "{refusal}"
         );
         assert!(
-            reg.one_recording_refusal("baseline", "b.dendro", 2)
+            reg.one_recording_refusal("baseline", "b.dendro", 2, false)
                 .is_none()
         );
     }
@@ -1874,7 +1894,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            reg.one_recording_refusal("experiment", "one.dendro", 1)
+            reg.one_recording_refusal("experiment", "one.dendro", 1, false)
                 .is_none()
         );
         reg.attach(
