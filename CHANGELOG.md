@@ -124,9 +124,9 @@
   attaches to the `task:task_rename` tracepoint when `task_attribution` is
   on and relabels the thread's series; a rename starts a new series. (#1489)
 - **The viewer's Metadata section reads a combined recording's templates
-  where combine wrote them**, `per_source_metadata.<source>.<entry>.service_queries`
-  (a 5.x combined parquet, upgraded). It looked one level up and listed no
-  templates.
+  where 5.x `recording combine` wrote them**,
+  `per_source_metadata.<source>.<entry>.service_queries` (a 5.x combined
+  parquet, upgraded). It looked one level up and listed no templates.
 - **The viewer escapes recording text it puts into chart HTML.** Chart
   tooltips, the heatmap tooltips and the embed demo's status line inserted
   strings from the recording as markup: plot titles from section templates
@@ -439,8 +439,9 @@
 
 - **Both viewers take a source's KPI template from the recording, ahead of
   the built-in one.** The `service_queries` key of a dendro source's
-  metadata (what `rezolus recording annotate` writes) renders by default; the built-in registry is
-  consulted for a source only when its metadata has none. `rezolus view
+  metadata (what `rezolus recording annotate` writes) renders by default;
+  the built-in registry is consulted for a source only when its metadata
+  has none. `rezolus view
   --registry-templates` renders the built-in template instead for sources
   the registry knows. The WASM viewer exposes the same switch as
   `WasmCaptureRegistry::set_prefer_registry_templates`, which the static
@@ -456,9 +457,9 @@
   log, the browser console), not a failed load. In a comparison, a notice
   describes that recording's own lookup; the baseline's template renders for
   a source name both recordings share. A top-level template on a file whose
-  `source` names several sources (an upgraded combined parquet's JSON array) is keyed
-  by the template's own `service_name`; one that does not parse there is
-  ignored. A live agent's handshake metadata is read only by the terminal UI
+  `source` names several sources (an upgraded combined parquet's JSON
+  array) is keyed by the template's own `service_name`; one that does not
+  parse there is ignored. A live agent's handshake metadata is read only by the terminal UI
   (`--tui`), which rebuilds its sections each tick; the browser dashboard of
   a live agent builds its sections once, with no KPI sections. The server
   viewer now also classifies a dendro source from its metadata, so a simple
@@ -755,8 +756,8 @@
 - **The `.rez` format and the archive reader and writer are
   `metriken-storage`'s** (0.2.0, feature `rez`), and queries over an archive
   are `metriken-query` 0.36.0's. metriken-archive and metriken-segment are no
-  longer dependencies; msgpack-to-parquet conversion (`recording convert`,
-  the recorder's parquet output) is metriken-storage's `convert`.
+  longer dependencies; raw msgpack conversion (`recording convert`) is
+  metriken-storage's `convert`.
   `crates/rez` keeps `RezReader` and `LiveReader` and re-exports the rest at
   its old paths.
 - **An agent restart is written into the recording's metadata.** When the
@@ -1043,8 +1044,11 @@
   names dendro's `NO_INDEX_STATE`), no longer keeps the slot-change broadcast
   or index history, and `/status` drops `index_resyncs`. Slot identity
   reaches a `.dendro` through each group's schema, `__uid__` included.
-  `recording upgrade` does not carry that index into the `.dendro` of a
-  `.rez` a 5.x `record --stream` wrote. 5.x keeps `.rez --stream` on
+  `recording upgrade` copies that index from a `.rez` a 5.x `record
+  --stream` wrote into the `.dendro` as caller rows, and it is not read:
+  each slot column keeps the labels its segment was built with, which
+  splits reused slots where a member carries its labels, and each indexed
+  table logs a warning. 5.x keeps `.rez --stream` on
   `release/5.x`; a 5.x `record --stream -o out.rez` against a 6.0 agent
   receives no index frames, so it no longer records an identity index. A 6.0
   recorder ignores a 5.x agent's index frames.
@@ -1410,8 +1414,7 @@
 - **`record` and `hindsight` write dendro archives by default** (`.dendro`),
   through metriken-archive's `ArchiveWriter`. A bare `rezolus record` writes
   `rezolus.dendro`; hindsight's default output is
-  `/var/lib/rezolus/rezolus.dendro`, and any hindsight `output` not ending in
-  `.rez` gets a dendro buffer. Groups with slots (threads, cgroups, CPUs) are
+  `/var/lib/rezolus/rezolus.dendro`. Groups with slots (threads, cgroups, CPUs) are
   stored one row per occupant, with the occupants' labels in a
   `<table>/occupants` stream. Replayed against the `.rez` writer on four
   recordings, the archives were 3.3–8.8 times smaller, with the same answers

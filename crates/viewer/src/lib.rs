@@ -933,8 +933,9 @@ pub struct WasmCaptureRegistry {
     /// archive. `None` when each capture is one recording and carries its
     /// own bytes.
     rez_source: Option<Bytes>,
-    /// The name the baseline was attached under (a file name or URL), for a
-    /// refusal that tells the user to combine it with another file.
+    /// The baseline's file name, for a refusal that tells the user to
+    /// combine it with another file: the name it was attached under, or
+    /// the one [`WasmCaptureRegistry::set_baseline_name`] gave.
     baseline_name: Option<String>,
     /// Applied to every capture's template lookup; see
     /// [`WasmCaptureRegistry::set_prefer_registry_templates`].
@@ -944,7 +945,69 @@ pub struct WasmCaptureRegistry {
     compare_requested: bool,
 }
 
+/// The file name a capture name stands for in a command line: a URL's last
+/// path segment (the file a user would download), anything else as it is.
+fn file_name_of(name: &str) -> String {
+    match name.split_once("://") {
+        Some((_, rest)) => rest
+            .split(['?', '#'])
+            .next()
+            .unwrap_or_default()
+            .rsplit('/')
+            .find(|s| !s.is_empty())
+            .unwrap_or(name)
+            .to_string(),
+        None => name.to_string(),
+    }
+}
+
 impl WasmCaptureRegistry {
+    /// [`WasmCaptureRegistry::attach`]'s work, without recording the
+    /// baseline's name: that is kept only once the attach has succeeded.
+    fn attach_recordings(
+        &mut self,
+        capture: &str,
+        data: &[u8],
+        filename: &str,
+    ) -> Result<(), JsValue> {
+        self.notices.clear();
+        let pool = BufferPool::new(WASM_CACHE_SIZE_BYTES);
+        let recordings = open_rez(data, filename, Arc::clone(&pool))?;
+        if let Some(refusal) = self.one_recording_refusal(capture, filename, recordings.len()) {
+            return Err(JsValue::from_str(&refusal));
+        }
+        self.notices
+            .extend(incomplete_notice(&recordings, filename));
+        if recordings.len() >= 2 {
+            // A report of this capture is a report of THIS archive.
+            self.rez_source = Some(Bytes::copy_from_slice(data));
+            if opens_combined(&recordings, self.compare_requested) {
+                let viewer = Viewer::combined(recordings, pool);
+                self.others.clear();
+                self.set_capture(capture, viewer);
+                return Ok(());
+            }
+            return self.attach_rez_comparison(recordings, pool, filename);
+        }
+        // One recording, a capture of its own: a report is built from its
+        // archive, or from both captures' archives in a two-file comparison.
+        if capture == "baseline" {
+            self.rez_source = None;
+        }
+        let (_, reader) = recordings
+            .into_iter()
+            .next()
+            .expect("open_rez rejects an empty archive");
+        let viewer = Viewer::from_source(
+            Arc::new(reader.with_filename(filename.to_string())),
+            pool,
+            Bytes::copy_from_slice(data),
+            filename,
+        );
+        self.set_capture(capture, viewer);
+        Ok(())
+    }
+
     /// The refusal of `n` recordings attached as `capture` when that is not
     /// the baseline: the experiment of a two-file comparison is one
     /// recording ([`rez::container::one_recording_hint`]).
@@ -954,15 +1017,17 @@ impl WasmCaptureRegistry {
         }
         let baseline = self
             .baseline_name
-            .clone()
+            .as_deref()
+            .map(file_name_of)
             .unwrap_or_else(|| "BASELINE.dendro".to_string());
+        let experiment = file_name_of(filename);
         Some(rez::container::one_recording_hint(
             "rezolus",
-            filename,
+            &experiment,
             "the experiment",
             n,
             &baseline,
-            filename,
+            &experiment,
         ))
     }
 }
@@ -1000,45 +1065,18 @@ impl WasmCaptureRegistry {
     /// experiment of a two-file comparison, an archive must be one recording;
     /// several are refused with the commands that compare two of them.
     pub fn attach(&mut self, capture: &str, data: &[u8], filename: &str) -> Result<(), JsValue> {
-        self.notices.clear();
-        let pool = BufferPool::new(WASM_CACHE_SIZE_BYTES);
-        let recordings = open_rez(data, filename, Arc::clone(&pool))?;
-        if let Some(refusal) = self.one_recording_refusal(capture, filename, recordings.len()) {
-            return Err(JsValue::from_str(&refusal));
-        }
-        self.notices
-            .extend(incomplete_notice(&recordings, filename));
+        self.attach_recordings(capture, data, filename)?;
         if capture == "baseline" {
             self.baseline_name = Some(filename.to_string());
         }
-        if recordings.len() >= 2 {
-            // A report of this capture is a report of THIS archive.
-            self.rez_source = Some(Bytes::copy_from_slice(data));
-            if opens_combined(&recordings, self.compare_requested) {
-                let viewer = Viewer::combined(recordings, pool);
-                self.others.clear();
-                self.set_capture(capture, viewer);
-                return Ok(());
-            }
-            return self.attach_rez_comparison(recordings, pool, filename);
-        }
-        // One recording, a capture of its own: a report is built from its
-        // archive, or from both captures' archives in a two-file comparison.
-        if capture == "baseline" {
-            self.rez_source = None;
-        }
-        let (_, reader) = recordings
-            .into_iter()
-            .next()
-            .expect("open_rez rejects an empty archive");
-        let viewer = Viewer::from_source(
-            Arc::new(reader.with_filename(filename.to_string())),
-            pool,
-            Bytes::copy_from_slice(data),
-            filename,
-        );
-        self.set_capture(capture, viewer);
         Ok(())
+    }
+
+    /// The baseline's file name for the refusal of a multi-recording
+    /// experiment, when the name it was attached under is not one: a label
+    /// the page shows, or a URL (pass its last path segment).
+    pub fn set_baseline_name(&mut self, name: &str) {
+        self.baseline_name = Some(name.to_string());
     }
 
     /// Load a multi-recording `.rez` into the two A/B slots.
@@ -1758,8 +1796,6 @@ mod tests {
         assert_eq!(value["groups"], serde_json::json!([]));
     }
 
-    /// Build a multi-recording dendro archive and hand back its bytes, the
-    /// way a browser receives one: a blob, with no file behind it.
     /// An experiment of several recordings is refused naming the baseline
     /// by the name it was attached under, quoted for a shell.
     #[test]
@@ -1780,12 +1816,30 @@ mod tests {
             reg.one_recording_refusal("experiment", "exp.dendro", 1)
                 .is_none()
         );
+        // A URL stands for its file; a name set by the page replaces a label.
+        let refusal = reg
+            .one_recording_refusal("experiment", "https://h/runs/exp.dendro?x=1", 2)
+            .unwrap();
+        assert!(
+            refusal.contains("'my base.dendro' exp.dendro -o"),
+            "{refusal}"
+        );
+        reg.set_baseline_name("https://h/fleet.dendro");
+        let refusal = reg
+            .one_recording_refusal("experiment", "exp.dendro", 2)
+            .unwrap();
+        assert!(
+            refusal.contains("combine fleet.dendro exp.dendro"),
+            "{refusal}"
+        );
         assert!(
             reg.one_recording_refusal("baseline", "b.dendro", 2)
                 .is_none()
         );
     }
 
+    /// Build a multi-recording dendro archive and hand back its bytes, the
+    /// way a browser receives one: a blob, with no file behind it.
     fn archive_bytes(recordings: &[(&str, &str)]) -> Vec<u8> {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("fleet.dendro");

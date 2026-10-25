@@ -8,9 +8,9 @@ mod endpoint;
 /// names older agents serve it under.
 pub(crate) mod stream;
 // The `.rez` format lives in its own crate (`rezolus` is binary-only, so
-// nothing could depend on it). Re-exported under
-// the paths call sites already use. 6.x converts a `.rez` with `recording
-// upgrade` and writes none.
+// nothing could depend on it), re-exported under the paths call sites
+// already use. 6.x converts a `.rez` with `recording upgrade` and writes
+// none.
 pub(crate) use ::rez::{rez, wire};
 #[cfg(test)]
 pub(crate) use ::rez::{schema, wal};

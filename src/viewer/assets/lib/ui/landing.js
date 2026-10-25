@@ -31,7 +31,7 @@ export const splitAlias = (raw) => {
     return [lhs, rhs];
 };
 
-// Small reusable dropzone for a single parquet slot. Used by the
+// Small reusable dropzone for a single recording slot. Used by the
 // compare-mode dual landing and available for other single-slot callers.
 // Props: { label, disabled, onDrop(file), onChoose(file) }
 const Dropzone = {

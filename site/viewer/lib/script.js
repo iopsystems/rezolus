@@ -74,7 +74,7 @@ const loadTemplates = async () => {
     }
 };
 
-const initWasmViewer = async (data, filename) => {
+const initWasmViewer = async (data, filename, fileName = filename) => {
     const wasmModule = await import('../pkg/wasm_viewer.js');
     await wasmModule.default();
     if (!ViewerApi.registry()) {
@@ -87,7 +87,7 @@ const initWasmViewer = async (data, filename) => {
     ViewerApi.registry().set_compare_requested(
         new URLSearchParams(window.location.search).get('compare') === '1',
     );
-    await ViewerApi.attachBaseline(data, filename);
+    await ViewerApi.attachBaseline(data, filename, fileName);
     await loadTemplates();
 
     const info = await ViewerApi.getInfo('baseline');
@@ -130,9 +130,9 @@ const fetchInitialState = async () => {
 
 // ── Common loader ───────────────────────────────────────────────────
 
-async function loadParquet(data, filename) {
-    await initWasmViewer(data, filename);
-    // A multi-recording `.rez` carries both sides of a comparison in one
+async function loadParquet(data, filename, fileName = filename) {
+    await initWasmViewer(data, filename, fileName);
+    // A multi-recording archive carries both sides of a comparison in one
     // file, so attaching it filled the experiment slot too (the WASM
     // registry decides this — it is the same mapping `rezolus view` makes).
     // Hand off to the compare path rather than rendering half the archive.
@@ -325,7 +325,7 @@ async function loadCapture(source, alias = null) {
         splashProgress = -1;
         m.redraw();
 
-        await loadParquet(data, display);
+        await loadParquet(data, display, captureLabel(null, source));
 
         // Canonicalize address bar to ?capture=[alias=]source so the
         // URL is shareable and bookmarkable.
@@ -352,7 +352,7 @@ async function loadCapture(source, alias = null) {
 // Bring up the compare dashboard from whatever is already in the registry.
 //
 // Both A/B entry points end here: two separately loaded recordings, and a
-// single multi-recording `.rez` that filled both slots by itself. Sharing
+// single multi-recording archive that filled both slots by itself. Sharing
 // this is what keeps them the same dashboard — an archive rendered through a
 // second, nearly-identical setup would drift from the two-file path silently,
 // since nothing compares the two.
@@ -394,7 +394,7 @@ async function initCompareDashboard({ experimentFallbackName, legends = null, ca
     }
     const reportMode = base.fileMetadata?.report === 'trimmed'
         || experimentFileMetadata?.report === 'trimmed';
-    // A `.rez` names its own arms — the registry set each slot's alias from
+    // An archive names its own arms — the registry set each slot's alias from
     // the label that tells the recordings apart, the same rule `rezolus view`
     // uses. An explicit legend (the demo URLs' `label=file` form) still wins.
     const baseMeta = await ViewerApi.getMetadata('baseline').catch(() => null);
@@ -417,7 +417,7 @@ async function initCompareDashboard({ experimentFallbackName, legends = null, ca
 }
 
 // Bring up a comparison whose two arms are already attached — the
-// multi-recording `.rez` path, where one uploaded file filled both slots.
+// multi-recording archive path, where one uploaded file filled both slots.
 async function loadComparisonFromRegistry(filename) {
     clearMetadataCache();
     await initCompareDashboard({ experimentFallbackName: filename });

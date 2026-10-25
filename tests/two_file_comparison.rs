@@ -230,6 +230,8 @@ fn recordings_labels_cannot_tell_apart_compare_by_position() {
     }
     let viewer = serve(dir.path(), &commands[4]);
     let slots = slots(&viewer);
-    slot(&slots, "baseline");
-    slot(&slots, "experiment");
+    // The aliases are the arm values; describe-recording above tied each arm
+    // to its host.
+    assert_eq!(slot(&slots, "baseline"), "baseline", "{slots:?}");
+    assert_eq!(slot(&slots, "experiment"), "experiment", "{slots:?}");
 }

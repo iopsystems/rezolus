@@ -53,9 +53,12 @@ const ViewerApi = {
         return registry;
     },
 
-    async attachBaseline(data, filename) {
+    // `fileName` is the baseline's file name when `filename` is a label
+    // the page shows instead (an alias).
+    async attachBaseline(data, filename, fileName = filename) {
         ensureRegistry();
         registry.attach('baseline', data, filename);
+        registry.set_baseline_name(fileName);
     },
 
     async attachExperiment(file) {

@@ -724,9 +724,10 @@ A v3 `.rez`'s recordings become sources and its tables streams; segment,
 WAL and caller-row bytes are copied unchanged. A tar `.rez`'s recordings
 become sources with their labels, metadata, clock anchor and `complete`
 flag. A parquet file becomes one source, labelled with the file's
-one `source` when no series carries its own. An A/B tarball becomes two sources, its
-baseline labelled arm=baseline and its experiment arm=experiment, which
-the viewer opens as a comparison. Tar and parquet tables are re-encoded.
+`source` when that names one source and no series carries its own.
+An A/B tarball becomes two sources, its baseline labelled arm=baseline
+and its experiment arm=experiment, which the viewer opens as a
+comparison. Tar and parquet tables are re-encoded.
 
 The input is never changed. -o defaults to the input's name with .dendro
 for its extension (x.parquet.ab.tar becomes x.dendro), and an existing

@@ -953,7 +953,8 @@ mod help {
                          # Keep only specific metric columns, in place\n    \
                          {program} recording filter capture.dendro --metrics cpu_usage,cpu_frequency";
 
-    pub(super) const UPGRADE_LONG: &str = "Write a new .dendro archive holding a recording an earlier release wrote:\n\
+    pub(super) const UPGRADE_LONG: &str =
+        "Write a new .dendro archive holding a recording an earlier release wrote:\n\
                          a v1, v2 or v3 `.rez`, a standalone `.parquet`, or a `.parquet.ab.tar`\n\
                          A/B tarball. Every other command opens .dendro archives only and refuses\n\
                          these with this command.\n\n\
@@ -961,9 +962,10 @@ mod help {
                          WAL and caller-row bytes are copied unchanged. A tar `.rez`'s recordings\n\
                          become sources with their labels, metadata, clock anchor and `complete`\n\
                          flag. A parquet file becomes one source, labelled with the file's\n\
-                         one `source` when no series carries its own. An A/B tarball becomes two sources, its\n\
-                         baseline labelled arm=baseline and its experiment arm=experiment, which\n\
-                         the viewer opens as a comparison. Tar and parquet tables are re-encoded.\n\n\
+                         `source` when that names one source and no series carries its own.\n\
+                         An A/B tarball becomes two sources, its baseline labelled arm=baseline\n\
+                         and its experiment arm=experiment, which the viewer opens as a\n\
+                         comparison. Tar and parquet tables are re-encoded.\n\n\
                          The input is never changed. -o defaults to the input's name with .dendro\n\
                          for its extension (x.parquet.ab.tar becomes x.dendro), and an existing\n\
                          output is refused.\n\n\

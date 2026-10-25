@@ -376,7 +376,7 @@ back onto the read path.
 
 ### Service Extensions
 
-Service-level KPI dashboards are defined in `src/viewer/service_extension.rs` (`ServiceExtension`/`Kpi` structs). They allow the viewer to generate custom dashboard sections from PromQL queries embedded in parquet metadata. The `parquet annotate` command validates and embeds these. Templates live in `src/parquet_tools/templates/`.
+Service-level KPI dashboards are defined in `crates/dashboard/src/service_extension.rs` (`ServiceExtension`/`Kpi` structs). They allow the viewer to generate custom dashboard sections from PromQL queries embedded in a recording's metadata. The `recording annotate` command validates and embeds these. Templates live in `crates/dashboard/templates/`.
 
 ### Built-in sections and section templates
 
