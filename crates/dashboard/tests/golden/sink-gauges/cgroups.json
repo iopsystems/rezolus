@@ -497,7 +497,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_cpu_usage{name=~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
             },
@@ -514,7 +515,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_cpu_usage{state=\"user\",name=~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
             },
@@ -531,7 +533,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_cpu_usage{state=\"system\",name=~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
             },
@@ -548,7 +551,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_cpu_migrations{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -565,7 +569,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_cpu_throttled_time{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -582,7 +587,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_ext4_op_time{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -599,7 +605,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_xfs_log_wait_time{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -616,7 +623,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_cpu_instructions{name=~\"__SELECTED_CGROUPS__\"}[5m])) / sum by (name) (irate(cgroup_cpu_cycles{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -633,7 +641,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_cpu_tlb_flush{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -650,7 +659,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_syscall{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -667,7 +677,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"read\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -684,7 +695,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"write\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -701,7 +713,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"poll\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -718,7 +731,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"socket\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -735,7 +749,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"lock\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -752,7 +767,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"time\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -769,7 +785,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"sleep\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -786,7 +803,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"yield\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -803,7 +821,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"filesystem\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -820,7 +839,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"sync\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -837,7 +857,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"memory\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -854,7 +875,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"process\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -871,7 +893,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"query\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -888,7 +911,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"ipc\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -905,7 +929,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"timer\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -922,7 +947,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"event\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             },
@@ -939,7 +965,8 @@
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
-                }
+                },
+                "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_syscall{op=\"other\",name=~\"__SELECTED_CGROUPS__\"}[5m]))"
             }

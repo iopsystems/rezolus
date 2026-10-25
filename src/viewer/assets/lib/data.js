@@ -603,7 +603,11 @@ const applyDisplayToPlot = (plot, decoded) => {
     plot.boxplotDecimated = series.some((s) => s.decimated);
     plot.series_metrics = series.map((s) => s.metric || {});
     const nameOf = seriesNamer(series.map((s) => s.metric || {}));
-    plot.series_names = series.length > 1
+    // A `multi` chart is drawn by multi.js even with one series, as on the
+    // JSON path (applyResultToPlot). multi.js colours a line by its name, so
+    // an unnamed one would be "Series 1" in another colour (#1289).
+    const asMulti = series.length > 1 || plot.opts?.style === 'multi';
+    plot.series_names = asMulti
         ? series.map((s, i) => nameOf(s.metric || {}) ?? `Series ${i + 1}`)
         : [];
     // Measurement-uncertainty bands from the aggregated uncLo/uncHi columns —
@@ -611,7 +615,7 @@ const applyDisplayToPlot = (plot, decoded) => {
     // (exact per-sample interval at native resolution). Mirror applyResultToPlot's
     // single vs multi split so line.js reads `intervals` and multi/scatter read
     // `series_intervals`, clearing the other to avoid a stale band ghosting.
-    if (series.length > 1) {
+    if (asMulti) {
         plot.series_intervals = series.map(displayIntervals);
         plot.intervals = null;
     } else {
@@ -622,7 +626,7 @@ const applyDisplayToPlot = (plot, decoded) => {
     // same as `intervals` above: line.js reads `plot.interpolated`, and multi
     // and scatter have no overlay to draw. Cleared in the multi case so a
     // previous single-series render cannot leave a stale flag behind.
-    plot.interpolated = series.length > 1 ? null : displayInterpolated(series[0]);
+    plot.interpolated = asMulti ? null : displayInterpolated(series[0]);
     // Resolve the render style the same way the JSON path does: percentile
     // histograms → scatter, single line-ish → line, multi line-ish → multi.
     plot._resolvedStyle = plot.opts?.style
@@ -1735,6 +1739,7 @@ export {
     buildEffectiveQuery,
     buildEffectiveQueries,
     plotUsesDisplay,
+    applyDisplayToPlot,
     // LOD tile cache internals (exported for tests)
     clipDecoded,
     tileLookup,
