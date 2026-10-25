@@ -394,9 +394,10 @@ with `rate()` or `increase()`. It costs two more per-pid arrays (64 MiB of
 kernel memory), a 256 KiB ring, a metadata event per new process and per
 leader rename, and two marker reads and a counter add per accounting event
 that adds CPU. A process's counter is written by every CPU running one of
-its threads: with 48 threads of one process spinning on a 56-vCPU host,
-each accounting run took about 310 ns, against about 200 ns with 48
-one-thread processes and 170 ns without `process_cpu_usage`.
+its threads: with 48 threads of one process spinning on a 56-vCPU host
+at HZ=250, each run of the `cpu_usage` BPF programs took about 310 ns,
+against about 200 ns with 48 one-thread processes and 170 ns without
+`process_cpu_usage`.
 
 `comm` follows renames. A thread whose name changes (`pthread_setname_np`,
 `prctl(PR_SET_NAME)`, a write to `/proc/<pid>/task/<tid>/comm`, or exec) is

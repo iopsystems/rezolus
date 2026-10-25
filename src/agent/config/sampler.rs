@@ -31,12 +31,11 @@ pub struct Sampler {
     /// the export — a task-metadata event per new task and per rename, a
     /// process-metadata event per new process and per leader rename, the
     /// `task_rename` program, the two per-process arrays (64 MiB), the walk
-    /// of each per-pid map each time a snapshot is served (its populated
-    /// slots for V3, every slot for V2), contention on a process's counter
+    /// of each per-pid map each time a snapshot is served (the slots with
+    /// metadata for V3, every slot for V2), contention on a process's counter
     /// when its threads run on many CPUs (principle 7 in
-    /// `docs/principles.md`),
-    /// and one series per thread plus one per rename and one per process in
-    /// every recording. `None` means the default.
+    /// `docs/principles.md`), and one series per thread plus one per rename
+    /// and one per process in every recording. `None` means the default.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     task_attribution: Option<bool>,

@@ -252,8 +252,9 @@ every CPU running one of the process's threads writes. The program on
 `cpuacct_account_field` adds to it only when the task's utime or stime
 advanced, which the kernel does about once per scheduler tick per busy
 CPU, so a process's slot takes at most about one write per CPU per tick.
-Ticks fire at the same time on every CPU unless the kernel is booted with
-`skew_tick=1`, so those writes arrive together. In the same 56-vCPU guest
+With tick-based accounting, ticks fire at the same time on every CPU
+unless the kernel is booted with `skew_tick=1`, so those writes arrive
+together. In the same 56-vCPU guest
 (HZ=250, 15.3k runs per second) with 48 spinning threads, the `cpu_usage`
 programs took 306-314 ns per run with the threads in one process and
 195-203 ns with 48 one-thread processes, against 162-177 ns without the
