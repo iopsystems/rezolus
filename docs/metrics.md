@@ -79,8 +79,9 @@ A task is attributed to its CPU controller's task group. A service whose
 cgroup has no CPU controller of its own is counted under the nearest
 ancestor that has one, usually its slice.
 
-`task_attribution` is the per-task counterpart, for `cpu_usage` only, off by
-default: see [cpu_usage](#cpu_usage).
+`task_attribution` and `process_attribution` are the per-task and
+per-process counterparts, for `cpu_usage` only, off by default: see
+[cpu_usage](#cpu_usage).
 
 ## Table of Contents
 
@@ -364,6 +365,7 @@ optimizing workloads.
 | `cpu_usage_exited_tasks` | CPU time of tasks that have exited, per CPU the exit ran on; includes the CPU a thread used under its own thread id before it exec'd from outside the group leader | `id` |
 | `cgroup_cpu_usage_exited_tasks` | CPU time of a cgroup's tasks that have exited | `name` |
 | `task_cpu_usage` | CPU time (user and system) per thread; only with `task_attribution = true` | `pid`, `tgid`, `comm`, `cgroup` |
+| `process_cpu_usage` | CPU time (user and system) per process, by every thread of the process including exited ones; only with `process_attribution = true` | `tgid`, `comm`, `cgroup` |
 
 The sampler accounts CPU per task in every configuration: the per-CPU and
 per-cgroup deltas are computed from each thread's `utime`/`stime` whether
@@ -376,6 +378,29 @@ populated slots each time a snapshot is served, and one series per thread
 plus one per rename in every recording, which on a host with thread churn
 or frequent renames is most of the recording. Set `task_attribution = true`
 in `[samplers.cpu_usage]` (or `[defaults]`) to get it.
+
+`process_cpu_usage` is the option `process_attribution`, off by default
+and independent of `task_attribution`: one series per process (thread
+group), keyed by `tgid`. Every CPU delta credited to `cpu_usage` for
+a thread of the process is added to it, until the exit of its last thread,
+including the CPU of threads that have exited. So `rate(process_cpu_usage)` is the process's
+CPU however many threads it created and however many of them have their own
+series. Like `task_cpu_usage`, it counts from when the process started, or
+from when the agent first saw it for a process that predates the agent. Its
+`comm` and `cgroup` are the group leader's. The leader's renames relabel
+it, and so does exec, so a forked child is relabelled with the program it
+runs. The series ends within one snapshot interval of the process's last
+thread exiting. As with `task_cpu_usage`, a process that exits between a
+drain and the snapshot that follows it has a last sample of 0, so read it
+with `rate()` or `increase()`. It costs two per-pid arrays (64 MiB of
+kernel memory), a 256 KiB ring, a metadata event per new process and per
+leader rename, an exit event per process when `task_attribution` is off,
+the `task_rename` program (one run per thread rename), and two marker
+reads and a counter add per accounting event that adds CPU. A process's counter is written by every CPU running one of
+its threads: with 48 threads of one process spinning on a 56-vCPU host
+at HZ=250, each run of the `cpu_usage` BPF programs took about 310 ns,
+against about 200 ns with 48 one-thread processes and 170 ns without
+`process_cpu_usage`.
 
 `comm` follows renames. A thread whose name changes (`pthread_setname_np`,
 `prctl(PR_SET_NAME)`, a write to `/proc/<pid>/task/<tid>/comm`, or exec) is

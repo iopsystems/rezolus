@@ -247,6 +247,22 @@ CPU for the 47 maps (282 MiB at 192 CPUs); 16 copies cost 23.5 MiB on any
 host. A sampler with a `cgroup_attribution` switch does not create its
 cgroup maps when the switch is off.
 
+`cpu_usage`'s `process_cpu_usage` is one `PackedCounters` copy whose slot
+every CPU running one of the process's threads writes. The program on
+`cpuacct_account_field` adds to it only when the task's utime or stime
+advanced, which the kernel does about once per scheduler tick per busy
+CPU, so a process's slot takes at most about one write per CPU per tick.
+With tick-based accounting, ticks fire at the same time on every CPU
+unless the kernel is booted with `skew_tick=1`, so those writes arrive
+together. In the same 56-vCPU guest
+(HZ=250, 15.3k runs per second) with 48 spinning threads, the `cpu_usage`
+programs took 306-314 ns per run with the threads in one process and
+195-203 ns with 48 one-thread processes, against 162-177 ns without the
+process counter: about 2 ms of CPU per second across the host. The cost
+grows with the number of CPUs running the process and with HZ; it has
+not been measured on a larger host. Sharding it as `CgroupCounters` are
+sharded would cost 16 copies of a 32 MiB array, so it keeps one copy.
+
 **How to apply.**
 - New samplers prefer `CpuCounters` over `Counters` (see also principle 9).
 - Choose `PackedCounters` for per-task keyed counters and
@@ -654,10 +670,10 @@ enforces, and that reviewers must protect:
   deliberate upper bound (marking the end immediately after that group's
   member reads, not at eventual publish, keeps the width to the group's
   own read span rather than whole-walk time). One exception on magnitude:
-  V2's `task_cpu_usage` span includes its full capacity walk — kept
-  deliberately for ringbuf-loss robustness (see the comment at the V2
-  reader-stamped arm in `snapshot.rs`) — so that one metric's V2 windows
-  are millisecond-scale.
+  V2's `task_cpu_usage` and `process_cpu_usage` spans include their full
+  capacity walks — kept deliberately for ringbuf-loss robustness (see the
+  comment at the V2 reader-stamped arm in `snapshot.rs`) — so those two
+  metrics' V2 windows are millisecond-scale.
 
 **What we refuse.**
 - Per-entry window stamping in new or migrated samplers.

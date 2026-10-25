@@ -225,11 +225,12 @@ enabled = true
 # cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
 
 # Instruments CPU usage by state with BPF on linux. On macos
-# host_processor_info() is used. Per-thread series (task_cpu_usage) are off by
-# default; the per-task accounting behind the host and cgroup totals runs
-# either way. See docs/metrics.md#cpu_usage.
+# host_processor_info() is used. Per-thread (task_cpu_usage) and per-process
+# (process_cpu_usage) series are off by default; the per-task accounting behind
+# the host and cgroup totals runs either way. See docs/metrics.md#cpu_usage.
 [samplers.cpu_usage]
-# task_attribution = true   # export task_cpu_usage, one series per thread plus one per rename
+# task_attribution = true      # export task_cpu_usage, one series per thread plus one per rename
+# process_attribution = true   # export process_cpu_usage, one series per process
 # cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
 
 # Reports per-drive temperature for NVMe and SATA drives via read-only

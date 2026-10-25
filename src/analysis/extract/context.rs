@@ -341,6 +341,7 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("package_c7_residency", "cpu_power"),
     ("package_c8_residency", "cpu_power"),
     ("package_c9_residency", "cpu_power"),
+    ("process_cpu_usage", "cpu_usage"),
     ("rezolus_blockio_operations", "rezolus_rusage"),
     ("rezolus_context_switch", "rezolus_rusage"),
     ("rezolus_cpu_usage", "rezolus_rusage"),
