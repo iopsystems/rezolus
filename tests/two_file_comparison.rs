@@ -126,6 +126,25 @@ fn slots(viewer: &Viewer) -> Vec<(String, String)> {
         .collect()
 }
 
+/// POST `body` to `path` as an upload named `name`: the status line and
+/// the response body.
+fn upload(viewer: &Viewer, path: &str, name: &str, body: &[u8]) -> (String, String) {
+    let mut stream = TcpStream::connect(&viewer.addr).unwrap();
+    write!(
+        stream,
+        "POST {path} HTTP/1.0\r\nHost: {}\r\nx-rezolus-filename: {name}\r\n\
+         Content-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
+        viewer.addr,
+        body.len()
+    )
+    .unwrap();
+    stream.write_all(body).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let (head, body) = response.split_once("\r\n\r\n").unwrap();
+    (head.lines().next().unwrap().to_string(), body.to_string())
+}
+
 fn slot<'a>(slots: &'a [(String, String)], id: &str) -> &'a str {
     &slots
         .iter()
@@ -286,4 +305,38 @@ fn positions_count_a_recording_with_no_rows() {
         .find(|l| l.contains("arm=experiment"))
         .unwrap_or_else(|| panic!("arm=experiment in:\n{described}"));
     assert!(line.contains("host=web-02"), "{line}");
+}
+
+/// An uploaded experiment is one recording beside a one-recording baseline:
+/// beside a baseline of several it is refused, and the baseline's slots
+/// are unchanged.
+#[test]
+fn an_uploaded_experiment_needs_a_one_recording_baseline() {
+    let dir = tempfile::tempdir().unwrap();
+    rez::fixtures::multi_recording(&dir.path().join("one.dendro"), &[("redis", "web-01")]);
+    rez::fixtures::multi_recording(&dir.path().join("exp.dendro"), &[("redis", "web-09")]);
+    rez::fixtures::multi_recording(
+        &dir.path().join("fleet.dendro"),
+        &[("redis", "web-01"), ("valkey", "web-01")],
+    );
+    let exp = std::fs::read(dir.path().join("exp.dendro")).unwrap();
+
+    let viewer = serve(dir.path(), "rezolus view one.dendro");
+    let (status, body) = upload(&viewer, "/api/v1/captures/experiment", "exp.dendro", &exp);
+    assert!(status.contains(" 200 "), "{status}: {body}");
+    assert_eq!(slots(&viewer).len(), 2);
+
+    let viewer = serve(dir.path(), "rezolus view fleet.dendro");
+    let before = slots(&viewer);
+    let (status, body) = upload(&viewer, "/api/v1/captures/experiment", "exp.dendro", &exp);
+    assert!(status.contains(" 400 "), "{status}: {body}");
+    assert!(
+        body.starts_with("fleet.dendro holds 2 recordings; the baseline"),
+        "{body}"
+    );
+    assert!(
+        body.contains("rezolus recording combine fleet.dendro exp.dendro -o both.dendro"),
+        "{body}"
+    );
+    assert_eq!(slots(&viewer), before);
 }

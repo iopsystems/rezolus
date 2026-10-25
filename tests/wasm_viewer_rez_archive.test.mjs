@@ -139,6 +139,40 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         assert.equal(registry.has('experiment'), false);
     });
 
+    // Each file of a two-file comparison is one recording: an experiment of
+    // several is refused, and so is any experiment beside a baseline of
+    // several, which keeps what it shows.
+    test('a two-file comparison takes one recording from each file', () => {
+        const one = fixture('exp-one.dendro', 1);
+        const two = fixture('exp-two.dendro', 2);
+
+        const single = new WasmCaptureRegistry();
+        single.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
+        single.attach('experiment', one, 'exp.dendro');
+        assert.equal(single.has('experiment'), true);
+        assert.throws(
+            () => single.attach('experiment', two, 'exp2.dendro'),
+            (e) => String(e).startsWith('exp2.dendro holds 2 recordings; the experiment')
+                && String(e).includes('rezolus recording combine base.dendro exp2.dendro -o both.dendro'),
+        );
+
+        for (const compare of [false, true]) {
+            const multi = new WasmCaptureRegistry();
+            multi.set_compare_requested(compare);
+            multi.attach('baseline', two, 'fleet.dendro');
+            const before = multi.has('experiment')
+                ? multi.file_metadata_json('experiment') : null;
+            assert.throws(
+                () => multi.attach('experiment', one, 'exp.dendro'),
+                (e) => String(e).startsWith('fleet.dendro holds 2 recordings; the baseline')
+                    && String(e).includes('rezolus recording combine fleet.dendro exp.dendro -o both.dendro'),
+                `compare=${compare}`,
+            );
+            assert.equal(multi.has('experiment') ? multi.file_metadata_json('experiment') : null,
+                before, `compare=${compare}`);
+        }
+    });
+
     // The committed v3 `.rez`, upgraded: two recordings, host=web-01 and
     // host=web-02, three ticks of the gauge mem_free each, (i + 1) * 1000 + t.
     test('an upgraded two-recording .rez of one run is one combined capture', () => {

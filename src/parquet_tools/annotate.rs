@@ -36,8 +36,9 @@ fn run_inner(host: &super::Host, args: &super::cli::AnnotateArgs) -> Result<(), 
     let relabel = |flag: &str| {
         format!(
             "{flag} set a key in a parquet file's footer. A .dendro recording's {} is a \
-             label, set when it is recorded{how}, and 6.x does not relabel a recording; to \
-             tell recordings apart in a comparison, use `{program} recording combine --ab`",
+             label, set when it is recorded{how}; 6.x does not change a recording's labels \
+             afterwards. `{program} recording combine --ab` adds an `arm` label that tells \
+             two recordings apart in a comparison",
             flag.trim_start_matches("--")
         )
     };
@@ -49,9 +50,9 @@ fn run_inner(host: &super::Host, args: &super::cli::AnnotateArgs) -> Result<(), 
             args.filter,
             format!(
                 "--filter dropped a parquet file's columns its KPIs do not need; run \
-                 `{program} recording filter {} -o slim.dendro` instead (a parquet file \
-                 with neither {table_flag} nor --metrics keeps what its KPIs need)",
-                super::select::shell_word(&path.display().to_string())
+                 `{program} recording filter {} {table_flag} A,B -o slim.dendro` or \
+                 `... --metrics A,B` instead, naming what to keep",
+                ::rez::container::shell_word(&path.display().to_string())
             ),
         ),
     ] {

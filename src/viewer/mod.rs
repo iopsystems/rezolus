@@ -959,6 +959,7 @@ fn init_file_mode_combined(
     );
     *state.parquet_path.write() = Some(path.to_path_buf());
     *state.baseline_name.write() = Some(path.display().to_string());
+    *state.baseline_recordings.write() = combined.labels.len();
     *state.selection.write() = selection;
     *state.trimmed_report_marker.write() = report_marker;
     state.captures.set_baseline_systeminfo(combined.systeminfo);
@@ -1207,6 +1208,7 @@ fn init_file_mode_rez(
     *state.anchor_labels.write() = Some(b_labels.clone());
     *state.parquet_path.write() = Some(path.to_path_buf());
     *state.baseline_name.write() = Some(path.display().to_string());
+    *state.baseline_recordings.write() = n;
     *state.selection.write() = b_selection;
     // A saved report stamps `KEY_REPORT=trimmed` on its anchor recording.
     // Without this a reloaded report would render its (mostly trimmed)

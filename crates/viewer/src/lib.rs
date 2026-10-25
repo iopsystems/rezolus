@@ -937,6 +937,9 @@ pub struct WasmCaptureRegistry {
     /// combine it with another file: the name it was attached under, or
     /// the one [`WasmCaptureRegistry::set_baseline_name`] gave.
     baseline_name: Option<String>,
+    /// How many recordings the baseline's file holds. An experiment is
+    /// attached beside it only when this is 1.
+    baseline_recordings: usize,
     /// Applied to every capture's template lookup; see
     /// [`WasmCaptureRegistry::set_prefer_registry_templates`].
     template_preference: TemplatePreference,
@@ -963,16 +966,18 @@ fn file_name_of(name: &str) -> String {
 
 impl WasmCaptureRegistry {
     /// [`WasmCaptureRegistry::attach`]'s work, without recording the
-    /// baseline's name: that is kept only once the attach has succeeded.
+    /// baseline's name and recording count: those are kept only once the
+    /// attach has succeeded. Returns the file's recording count.
     fn attach_recordings(
         &mut self,
         capture: &str,
         data: &[u8],
         filename: &str,
-    ) -> Result<(), JsValue> {
+    ) -> Result<usize, JsValue> {
         self.notices.clear();
         let pool = BufferPool::new(WASM_CACHE_SIZE_BYTES);
         let recordings = open_rez(data, filename, Arc::clone(&pool))?;
+        let n = recordings.len();
         if let Some(refusal) = self.one_recording_refusal(capture, filename, recordings.len()) {
             return Err(JsValue::from_str(&refusal));
         }
@@ -985,9 +990,11 @@ impl WasmCaptureRegistry {
                 let viewer = Viewer::combined(recordings, pool);
                 self.others.clear();
                 self.set_capture(capture, viewer);
-                return Ok(());
+                return Ok(n);
             }
-            return self.attach_rez_comparison(recordings, pool, filename);
+            return self
+                .attach_rez_comparison(recordings, pool, filename)
+                .map(|()| n);
         }
         // One recording, a capture of its own: a report is built from its
         // archive, or from both captures' archives in a two-file comparison.
@@ -1005,14 +1012,15 @@ impl WasmCaptureRegistry {
             filename,
         );
         self.set_capture(capture, viewer);
-        Ok(())
+        Ok(n)
     }
 
     /// The refusal of `n` recordings attached as `capture` when that is not
-    /// the baseline: the experiment of a two-file comparison is one
-    /// recording ([`rez::container::one_recording_hint`]).
+    /// the baseline: each file of a two-file comparison is one recording
+    /// ([`rez::container::one_recording_hint`]), the experiment and the
+    /// baseline already attached.
     fn one_recording_refusal(&self, capture: &str, filename: &str, n: usize) -> Option<String> {
-        if capture == "baseline" || n <= 1 {
+        if capture == "baseline" {
             return None;
         }
         let baseline = self
@@ -1021,11 +1029,18 @@ impl WasmCaptureRegistry {
             .map(file_name_of)
             .unwrap_or_else(|| "BASELINE.dendro".to_string());
         let experiment = file_name_of(filename);
+        let (file, side, count) = if n > 1 {
+            (&experiment, "the experiment", n)
+        } else if self.baseline_recordings > 1 {
+            (&baseline, "the baseline", self.baseline_recordings)
+        } else {
+            return None;
+        };
         Some(rez::container::one_recording_hint(
             "rezolus",
-            &experiment,
-            "the experiment",
-            n,
+            file,
+            side,
+            count,
             &baseline,
             &experiment,
         ))
@@ -1042,6 +1057,7 @@ impl WasmCaptureRegistry {
             notices: Vec::new(),
             rez_source: None,
             baseline_name: None,
+            baseline_recordings: 1,
             template_preference: TemplatePreference::Archive,
             compare_requested: false,
         }
@@ -1061,13 +1077,14 @@ impl WasmCaptureRegistry {
     /// A multi-recording archive attached as the baseline carries a whole
     /// comparison itself, so it attaches EVERY recording (under the shared
     /// id/alias scheme) and the requested slot id is ignored. That is the same
-    /// mapping `rezolus view` makes for the same file. Attached as the
-    /// experiment of a two-file comparison, an archive must be one recording;
-    /// several are refused with the commands that compare two of them.
+    /// mapping `rezolus view` makes for the same file. An experiment is one
+    /// recording attached beside a one-recording baseline; otherwise it is
+    /// refused with the commands that compare two recordings.
     pub fn attach(&mut self, capture: &str, data: &[u8], filename: &str) -> Result<(), JsValue> {
-        self.attach_recordings(capture, data, filename)?;
+        let n = self.attach_recordings(capture, data, filename)?;
         if capture == "baseline" {
             self.baseline_name = Some(filename.to_string());
+            self.baseline_recordings = n;
         }
         Ok(())
     }
@@ -1813,9 +1830,14 @@ mod tests {
             refusal.contains("recording combine 'my base.dendro' exp.dendro -o both.dendro"),
             "{refusal}"
         );
+        // The baseline holds two recordings, so a one-recording experiment
+        // is refused too, naming the baseline as the file to fix.
+        let refusal = reg
+            .one_recording_refusal("experiment", "exp.dendro", 1)
+            .unwrap();
         assert!(
-            reg.one_recording_refusal("experiment", "exp.dendro", 1)
-                .is_none()
+            refusal.starts_with("my base.dendro holds 2 recordings; the baseline"),
+            "{refusal}"
         );
         // A URL stands for its file; a name set by the page replaces a label.
         let refusal = reg
@@ -1837,6 +1859,31 @@ mod tests {
             reg.one_recording_refusal("baseline", "b.dendro", 2)
                 .is_none()
         );
+    }
+
+    /// A one-recording experiment attaches beside a one-recording baseline.
+    /// The refusal beside a multi-recording baseline is tested above and,
+    /// through `attach`, in `tests/wasm_viewer_rez_archive.test.mjs`.
+    #[test]
+    fn an_experiment_attaches_beside_a_one_recording_baseline() {
+        let mut reg = WasmCaptureRegistry::new();
+        reg.attach(
+            "baseline",
+            &archive_bytes(&[("rezolus", "web-01")]),
+            "a.dendro",
+        )
+        .unwrap();
+        assert!(
+            reg.one_recording_refusal("experiment", "one.dendro", 1)
+                .is_none()
+        );
+        reg.attach(
+            "experiment",
+            &archive_bytes(&[("rezolus", "web-09")]),
+            "one.dendro",
+        )
+        .unwrap();
+        assert!(reg.has("experiment"));
     }
 
     /// Build a multi-recording dendro archive and hand back its bytes, the

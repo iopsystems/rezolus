@@ -231,6 +231,7 @@ fn ingest_rez_from_path(
             Some(Arc::new(::dashboard::combined::FixedCatalog(reader)));
         *state.parquet_path.write() = Some(rez_path.clone());
         *state.baseline_name.write() = Some(display_filename.clone());
+        *state.baseline_recordings.write() = combined.labels.len();
         *state.experiment_parquet_path.write() = None;
         *state.cli_experiment_path.write() = None;
         *state.selection.write() = selection;
@@ -352,6 +353,7 @@ fn ingest_rez_from_path(
     *state.anchor_labels.write() = Some(b_labels.clone());
     *state.parquet_path.write() = Some(rez_path.clone());
     *state.baseline_name.write() = Some(display_filename.clone());
+    *state.baseline_recordings.write() = labels.len();
     *state.experiment_parquet_path.write() = None;
     *state.cli_experiment_path.write() = None;
     state.captures.set_baseline_systeminfo(b_systeminfo);
@@ -396,8 +398,9 @@ fn filename_header(headers: &HeaderMap) -> Option<String> {
 // ── Experiment attach / detach ────────────────────────────────────────
 
 /// Attach a one-recording dendro archive as the experiment of an A/B
-/// comparison. Body is the archive's bytes. Returns 409 if an experiment is
-/// already attached.
+/// comparison, beside a one-recording baseline. Body is the archive's bytes.
+/// Returns 409 if an experiment is already attached, and 400 with the
+/// commands that compare two recordings when either file holds several.
 pub async fn attach_experiment(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -440,6 +443,27 @@ fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
         )
             .into_response();
     }
+    let baseline = state
+        .baseline_name
+        .read()
+        .clone()
+        .unwrap_or_else(|| "BASELINE.dendro".to_string());
+    // The baseline of a two-file comparison is one recording too.
+    let baseline_recordings = *state.baseline_recordings.read();
+    if baseline_recordings != 1 {
+        return (
+            StatusCode::BAD_REQUEST,
+            ::rez::container::one_recording_hint(
+                env!("CARGO_BIN_NAME"),
+                &baseline,
+                "the baseline",
+                baseline_recordings,
+                &baseline,
+                &filename,
+            ),
+        )
+            .into_response();
+    }
     let temp_path =
         std::env::temp_dir().join(format!("rezolus-experiment-{}.dendro", std::process::id()));
     if let Err(e) = std::fs::write(&temp_path, body) {
@@ -450,11 +474,6 @@ fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
             .into_response();
     }
 
-    let baseline = state
-        .baseline_name
-        .read()
-        .clone()
-        .unwrap_or_else(|| "BASELINE.dendro".to_string());
     let (exp_reader, sysinfo, file_meta) =
         match super::open_experiment(&temp_path, &filename, &baseline, Arc::clone(&state.pool)) {
             Ok(opened) => opened,

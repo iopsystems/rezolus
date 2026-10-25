@@ -191,15 +191,21 @@ pub fn one_recording_hint(
     )
 }
 
-/// `word` quoted for a POSIX shell when it needs it: one that is safe bare
-/// (letters, digits and `_-.,:/=@%+`) is returned as it is, anything else
-/// single-quoted.
-pub fn shell_word(word: &str) -> String {
+/// `path` as a command-line argument for a POSIX shell: single-quoted
+/// unless every character is safe bare (letters, digits and `_-.,:/=@%+`),
+/// and prefixed with `./` when it starts with `-`, so it is not read as an
+/// option.
+pub fn shell_word(path: &str) -> String {
+    let path = if path.starts_with('-') {
+        format!("./{path}")
+    } else {
+        path.to_string()
+    };
     let safe = |c: char| c.is_ascii_alphanumeric() || "_-.,:/=@%+".contains(c);
-    if !word.is_empty() && word.chars().all(safe) {
-        return word.to_string();
+    if !path.is_empty() && path.chars().all(safe) {
+        return path;
     }
-    format!("'{}'", word.replace('\'', "'\\''"))
+    format!("'{}'", path.replace('\'', "'\\''"))
 }
 
 #[cfg(test)]
@@ -244,5 +250,7 @@ mod tests {
         assert_eq!(shell_word("run.rez"), "run.rez");
         assert_eq!(shell_word("my run.rez"), "'my run.rez'");
         assert_eq!(shell_word("it's.rez"), "'it'\\''s.rez'");
+        assert_eq!(shell_word("-multi.dendro"), "./-multi.dendro");
+        assert_eq!(shell_word("-a b.dendro"), "'./-a b.dendro'");
     }
 }
