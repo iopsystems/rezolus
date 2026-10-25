@@ -422,9 +422,8 @@ fn an_uploaded_experiment_is_refused_beside_a_combined_view() {
         "{status}: {body}"
     );
 
-    // A two-recording experiment beside the A/B archive: the combined
-    // archive would carry the baseline's arms, so the `--ab` step is left
-    // out.
+    // A two-recording experiment beside the A/B archive is refused with the
+    // commands, and the note that `--ab` keeps an arm a recording carries.
     rez::fixtures::multi_recording(
         &dir.path().join("exp2.dendro"),
         &[("redis", "web-01"), ("rezolus", "web-09")],
@@ -439,8 +438,8 @@ fn an_uploaded_experiment_is_refused_beside_a_combined_view() {
     );
     assert!(status.contains(" 400 "), "{status}: {body}");
     assert!(body.starts_with("exp2.dendro holds 2 recordings"), "{body}");
-    assert!(body.contains("carry `arm` labels"), "{body}");
-    assert!(!body.contains("--ab baseline="), "{body}");
+    assert!(body.contains("--ab baseline=N experiment=M"), "{body}");
+    assert!(body.contains("keeps an `arm` label"), "{body}");
 
     // With no experiment attached, the archive saves again.
     let (status, body) = upload(
@@ -450,41 +449,6 @@ fn an_uploaded_experiment_is_refused_beside_a_combined_view() {
         br#"{"entries":[]}"#,
     );
     assert!(body.starts_with("SQLite format 3"), "{status}: {body:.200}");
-}
-
-/// The baseline slot holds a recording without an arm, chosen by
-/// `--baseline`, beside recordings that carry arms: an experiment of several
-/// recordings is refused without the `--ab` step all the same.
-#[test]
-fn arms_anywhere_in_the_baseline_file_leave_out_the_ab_step() {
-    let dir = tempfile::tempdir().unwrap();
-    rez::fixtures::multi_recording(
-        &dir.path().join("three.dendro"),
-        &[
-            ("redis", "web-01"),
-            ("valkey", "web-02"),
-            ("envoy", "web-03"),
-        ],
-    );
-    rez::fixtures::multi_recording(
-        &dir.path().join("exp2.dendro"),
-        &[("redis", "web-01"), ("rezolus", "web-09")],
-    );
-    run(
-        dir.path(),
-        "rezolus recording combine three.dendro --ab baseline=0 experiment=1 -o big.dendro",
-    );
-    let viewer = serve(
-        dir.path(),
-        "rezolus view big.dendro --baseline source=envoy --experiment source=redis",
-    );
-    let status = request(&viewer, "DELETE", "/api/v1/captures/experiment");
-    assert!(status.contains(" 200 "), "{status}");
-    let exp2 = std::fs::read(dir.path().join("exp2.dendro")).unwrap();
-    let (status, body) = upload(&viewer, "/api/v1/captures/experiment", "exp2.dendro", &exp2);
-    assert!(status.contains(" 400 "), "{status}: {body}");
-    assert!(body.contains("carry `arm` labels"), "{body}");
-    assert!(!body.contains("--ab baseline="), "{body}");
 }
 
 /// Before any replacement, a comparison archive saves a report.
@@ -514,31 +478,9 @@ fn a_comparison_archive_saves_a_report() {
     );
 }
 
-/// An A/B archive given as the experiment is refused without the `--ab`
-/// step, which cannot relabel its arms.
-#[test]
-fn an_ab_archive_experiment_is_refused_without_the_ab_step() {
-    let dir = tempfile::tempdir().unwrap();
-    rez::fixtures::multi_recording(&dir.path().join("a.dendro"), &[("redis", "web-01")]);
-    rez::fixtures::multi_recording(&dir.path().join("b.dendro"), &[("valkey", "web-02")]);
-    rez::fixtures::multi_recording(&dir.path().join("one.dendro"), &[("redis", "web-09")]);
-    run(
-        dir.path(),
-        "rezolus recording combine a.dendro b.dendro \
-         --ab baseline=a.dendro experiment=b.dendro -o ab.dendro",
-    );
-    let (stderr, commands) = refusal(dir.path(), "one.dendro", "ab.dendro");
-    assert_eq!(commands.len(), 3, "{stderr}");
-    assert!(
-        stderr.contains("ab.dendro holds 2 recordings; the experiment"),
-        "{stderr}"
-    );
-    assert!(stderr.contains("carry `arm` labels"), "{stderr}");
-}
-
 /// The baseline is an A/B archive named `ab.dendro`, as the position path
-/// writes one: the refusal leaves out the `--ab` step, which cannot relabel
-/// an arm, and the label path it prints works.
+/// writes one: the refusal's output names avoid it, it notes that `--ab`
+/// keeps an arm, and the label path it prints works.
 #[test]
 fn an_ab_archive_baseline_is_refused_with_commands_that_work() {
     let dir = tempfile::tempdir().unwrap();
@@ -551,11 +493,9 @@ fn an_ab_archive_baseline_is_refused_with_commands_that_work() {
          --ab baseline=a.dendro experiment=b.dendro -o ab.dendro",
     );
     let (stderr, commands) = refusal(dir.path(), "ab.dendro", "exp.dendro");
-    assert_eq!(commands.len(), 3, "{stderr}");
-    assert!(
-        stderr.contains("Recordings in both.dendro carry `arm` labels"),
-        "{stderr}"
-    );
+    assert_eq!(commands.len(), 5, "{stderr}");
+    assert!(commands[3].ends_with("-o ab-2.dendro"), "{stderr}");
+    assert!(stderr.contains("keeps an `arm` label"), "{stderr}");
     run(dir.path(), &commands[0]);
     let listing = String::from_utf8_lossy(&run(dir.path(), &commands[1]).stdout).to_string();
     assert!(listing.contains("--recording host=web-09"), "{listing}");
@@ -566,4 +506,44 @@ fn an_ab_archive_baseline_is_refused_with_commands_that_work() {
     let slots = slots(&viewer);
     assert_eq!(slots.len(), 2, "{slots:?}");
     assert_eq!(slot(&slots, "experiment"), "web-09", "{slots:?}");
+}
+
+/// The baseline's one recording carries `arm=baseline` and the experiment's
+/// two recordings cannot be told apart by labels: the printed position step
+/// labels the arms, and the archive it writes opens as the comparison.
+#[test]
+fn the_position_step_works_beside_an_arm_label() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut armed = rez::fixtures::multi_recording_sources(&[("redis", "web-01")]);
+    armed[0]
+        .labels
+        .insert("arm".to_string(), "baseline".to_string());
+    rez::fixtures::write_dendro(
+        &dir.path().join("armed.dendro"),
+        &armed,
+        None,
+        rez::fixtures::Finish::Finalized,
+    );
+    rez::fixtures::multi_recording(
+        &dir.path().join("dup.dendro"),
+        &[("rezolus", "web-02"), ("rezolus", "web-02")],
+    );
+    let (stderr, commands) = refusal(dir.path(), "armed.dendro", "dup.dendro");
+    assert_eq!(commands.len(), 5, "{stderr}");
+    run(dir.path(), &commands[0]);
+    let listing = String::from_utf8_lossy(&run(dir.path(), &commands[1]).stdout).to_string();
+    assert!(
+        listing.contains("cannot be selected by labels"),
+        "{listing}"
+    );
+    run(
+        dir.path(),
+        &commands[3]
+            .replacen("baseline=N", "baseline=0", 1)
+            .replacen("experiment=M", "experiment=1", 1),
+    );
+    let viewer = serve(dir.path(), &commands[4]);
+    let slots = slots(&viewer);
+    assert_eq!(slot(&slots, "baseline"), "baseline", "{slots:?}");
+    assert_eq!(slot(&slots, "experiment"), "experiment", "{slots:?}");
 }

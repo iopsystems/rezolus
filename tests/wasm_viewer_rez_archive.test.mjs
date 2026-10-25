@@ -197,9 +197,8 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
     };
 
     // Beside an A/B archive an experiment replaces its arm, after which no
-    // report is saved (a report copies whole files); the refusals of
-    // several recordings leave out the `--ab` step, which cannot relabel an
-    // arm.
+    // report is saved (a report copies whole files); a refusal of several
+    // recordings prints the `--ab` step and notes that it keeps an arm.
     test('an experiment beside an A/B archive, and A/B archives refused', () => {
         const ab = abArchive();
         const one = fixture('exp-one.dendro', 1);
@@ -211,8 +210,8 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         assert.throws(
             () => registry.attach('experiment', fixture('exp-two.dendro', 2), 'exp2.dendro'),
             (e) => String(e).startsWith('exp2.dendro holds 2 recordings; the experiment')
-                && String(e).includes('carry `arm` labels')
-                && !String(e).includes('--ab baseline='),
+                && String(e).includes('--ab baseline=N experiment=M')
+                && String(e).includes('keeps an `arm` label'),
         );
         registry.attach('experiment', one, 'exp.dendro');
         assert.throws(
@@ -233,7 +232,7 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         assert.throws(
             () => single.attach('experiment', ab, 'ab.dendro'),
             (e) => String(e).startsWith('ab.dendro holds 2 recordings; the experiment')
-                && String(e).includes('carry `arm` labels'),
+                && String(e).includes('-o ab-2.dendro'),
         );
     });
 

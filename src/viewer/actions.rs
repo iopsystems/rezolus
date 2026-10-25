@@ -355,7 +355,7 @@ fn ingest_rez_from_path(
     *state.anchor_labels.write() = Some(b_labels.clone());
     *state.parquet_path.write() = Some(rez_path.clone());
     *state.baseline_name.write() = Some(display_filename.clone());
-    *state.baseline_file.write() = super::state::BaselineFile::compared(&labels);
+    *state.baseline_file.write() = super::state::BaselineFile::compared(labels.len());
     *state.experiment_parquet_path.write() = None;
     *state.cli_experiment_path.write() = None;
     state.captures.set_baseline_systeminfo(b_systeminfo);
@@ -466,9 +466,6 @@ fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
                 combined,
                 &baseline,
                 &filename,
-                // A combined view's recordings carry no arm
-                // (`dashboard::combined::layout`).
-                false,
             ),
         )
             .into_response();
@@ -483,22 +480,17 @@ fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
             .into_response();
     }
 
-    let (exp_reader, sysinfo, file_meta) = match super::open_experiment(
-        &temp_path,
-        &filename,
-        &baseline,
-        state.baseline_file.read().arms(),
-        Arc::clone(&state.pool),
-    ) {
-        Ok(opened) => opened,
-        Err(e) => {
-            let _ = std::fs::remove_file(&temp_path);
-            // The hint names the staged file; the caller knows it by the
-            // name it uploaded.
-            let e = e.replace(&temp_path.display().to_string(), &filename);
-            return (StatusCode::BAD_REQUEST, e).into_response();
-        }
-    };
+    let (exp_reader, sysinfo, file_meta) =
+        match super::open_experiment(&temp_path, &filename, &baseline, Arc::clone(&state.pool)) {
+            Ok(opened) => opened,
+            Err(e) => {
+                let _ = std::fs::remove_file(&temp_path);
+                // The hint names the staged file; the caller knows it by the
+                // name it uploaded.
+                let e = e.replace(&temp_path.display().to_string(), &filename);
+                return (StatusCode::BAD_REQUEST, e).into_response();
+            }
+        };
     let exp_reader = exp_reader.with_filename(filename);
 
     // HTTP-attached experiments don't carry an alias today; the
@@ -817,9 +809,9 @@ impl ReportSources {
         }
     }
 
-    /// Why no report can be saved: an uploaded experiment replaced the
-    /// experiment of an archive shown as a comparison. A report copies whole
-    /// archives, so it would hold the archive's own experiment as well.
+    /// Why no report can be saved: an uploaded experiment is attached beside
+    /// an archive shown as a comparison. A report copies whole archives, so
+    /// it would hold every recording of the archive beside the upload.
     fn refusal(&self, baseline: &str) -> Option<String> {
         match (self.baseline_file, &self.experiment) {
             (

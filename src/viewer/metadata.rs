@@ -232,13 +232,11 @@ pub fn refresh_combined_members(state: &AppState) {
     state.captures.set_baseline_systeminfo(combined.systeminfo);
     if let Some(slot) = state.combined_live.lock().as_mut() {
         slot.1 = changes;
-        // Only while this archive is still the baseline: an upload may have
-        // replaced it during the reread.
-        if Arc::ptr_eq(&slot.0, &live) {
-            *state.baseline_file.write() = super::state::BaselineFile::Combined {
-                recordings: combined.labels.len(),
-            };
-        }
+        // `replace_baseline` empties `combined_live` under this lock, so the
+        // slot is still set only while this archive is the baseline.
+        *state.baseline_file.write() = super::state::BaselineFile::Combined {
+            recordings: combined.labels.len(),
+        };
     }
     regenerate_dashboards(state);
 }

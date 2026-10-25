@@ -164,10 +164,9 @@ pub fn require_dendro(path: &Path, program: &str) -> Result<(), String> {
 /// baseline" or "the experiment") of a two-file comparison, where each file
 /// is one recording. It names the commands that compare two of them: put
 /// both files' recordings in one archive, list them, and choose the two by
-/// labels or, where labels cannot tell them apart, by position. When either
-/// file's recordings carry `arm` labels (`arms`), the position step is
-/// replaced by a note that it is not available: `combine --ab` keeps an
-/// arm a recording already carries. Output names differ from both inputs'.
+/// labels or, where labels cannot tell them apart, by position, noting that
+/// `combine --ab` keeps an `arm` a recording already carries. Output names
+/// differ from both inputs'.
 pub fn one_recording_hint(
     program: &str,
     file: &str,
@@ -175,34 +174,26 @@ pub fn one_recording_hint(
     n: usize,
     baseline: &str,
     experiment: &str,
-    arms: bool,
 ) -> String {
     if n == 0 {
         return format!("{file} holds no recordings");
     }
     let both = unused_name("both", &[baseline, experiment]);
-    let combine = format!(
+    let ab = unused_name("ab", &[baseline, experiment, &both]);
+    format!(
         "{file} holds {n} recordings; {side} of a two-file comparison is one recording. \
          Put the recordings in one archive and choose the two to compare:\n  \
          {program} recording combine {} {} -o {both}\n  \
          {program} mcp describe-recording {both}\n  \
-         {program} view {both} --baseline KEY=VALUE --experiment KEY=VALUE\n",
-        shell_word(baseline),
-        shell_word(experiment),
-    );
-    if arms {
-        return format!(
-            "{combine}Recordings in {both} carry `arm` labels, which `recording combine \
-             --ab` does not replace. If describe-recording says a recording cannot be \
-             selected by labels, no command compares it with another file's recording"
-        );
-    }
-    let ab = unused_name("ab", &[baseline, experiment, &both]);
-    format!(
-        "{combine}If describe-recording says a recording cannot be selected by labels, label \
+         {program} view {both} --baseline KEY=VALUE --experiment KEY=VALUE\n\
+         If describe-recording says a recording cannot be selected by labels, label \
          the two by the positions describe-recording prints and view that archive:\n  \
          {program} recording combine {both} --ab baseline=N experiment=M -o {ab}\n  \
-         {program} view {ab}"
+         {program} view {ab}\n\
+         `recording combine --ab` keeps an `arm` label a recording already carries \
+         and refuses to give it the other one.",
+        shell_word(baseline),
+        shell_word(experiment),
     )
 }
 
@@ -290,7 +281,6 @@ mod tests {
             2,
             "runs/ab.dendro",
             "both.dendro",
-            false,
         );
         assert!(
             hint.contains("combine runs/ab.dendro both.dendro -o both-2.dendro"),
@@ -308,17 +298,16 @@ mod tests {
             2,
             "ab.dendro",
             "x.dendro",
-            true,
         );
         assert!(
             hint.contains("combine ab.dendro x.dendro -o both.dendro"),
             "{hint}"
         );
-        assert!(!hint.contains("--ab baseline="), "{hint}");
         assert!(
-            hint.contains("Recordings in both.dendro carry `arm` labels"),
+            hint.contains("combine both.dendro --ab baseline=N experiment=M -o ab-2.dendro"),
             "{hint}"
         );
+        assert!(hint.contains("keeps an `arm` label"), "{hint}");
         let hint = one_recording_hint(
             "rezolus",
             "x.dendro",
@@ -326,7 +315,6 @@ mod tests {
             2,
             "Both.dendro",
             "x.dendro",
-            false,
         );
         assert!(hint.contains("-o both-2.dendro"), "{hint}");
     }
