@@ -139,8 +139,10 @@ fn upload(viewer: &Viewer, path: &str, name: &str, body: &[u8]) -> (String, Stri
     )
     .unwrap();
     stream.write_all(body).unwrap();
-    let mut response = String::new();
-    stream.read_to_string(&mut response).unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).unwrap();
+    // A report download is binary; only its status line is read.
+    let response = String::from_utf8_lossy(&response);
     let (head, body) = response.split_once("\r\n\r\n").unwrap();
     (head.lines().next().unwrap().to_string(), body.to_string())
 }
@@ -407,6 +409,87 @@ fn an_uploaded_experiment_is_refused_beside_a_combined_view() {
     attached(&viewer);
     assert_eq!(filename("experiment"), "exp.dendro");
     assert_eq!(filename("baseline"), baseline);
+
+    // A report copies whole files, so after the replacement none is saved.
+    let (status, body) = upload(
+        &viewer,
+        "/api/v1/save_with_selection",
+        "selection.json",
+        br#"{"entries":[]}"#,
+    );
+    assert!(
+        body.contains("Save as Report cannot save this comparison: ab.dendro holds 2 recordings"),
+        "{status}: {body}"
+    );
+
+    // A two-recording experiment beside the A/B archive: the combined
+    // archive would carry the baseline's arms, so the `--ab` step is left
+    // out.
+    rez::fixtures::multi_recording(
+        &dir.path().join("exp2.dendro"),
+        &[("redis", "web-01"), ("rezolus", "web-09")],
+    );
+    let status = request(&viewer, "DELETE", "/api/v1/captures/experiment");
+    assert!(status.contains(" 200 "), "{status}");
+    let (status, body) = upload(
+        &viewer,
+        "/api/v1/captures/experiment",
+        "exp2.dendro",
+        &read("exp2.dendro"),
+    );
+    assert!(status.contains(" 400 "), "{status}: {body}");
+    assert!(body.starts_with("exp2.dendro holds 2 recordings"), "{body}");
+    assert!(body.contains("carry `arm` labels"), "{body}");
+    assert!(!body.contains("--ab baseline="), "{body}");
+}
+
+/// Before any replacement, a comparison archive saves a report.
+#[test]
+fn a_comparison_archive_saves_a_report() {
+    let dir = tempfile::tempdir().unwrap();
+    rez::fixtures::multi_recording(&dir.path().join("a.dendro"), &[("redis", "web-01")]);
+    rez::fixtures::multi_recording(&dir.path().join("b.dendro"), &[("valkey", "web-02")]);
+    run(
+        dir.path(),
+        "rezolus recording combine a.dendro b.dendro \
+         --ab baseline=a.dendro experiment=b.dendro -o ab.dendro",
+    );
+    let viewer = serve(dir.path(), "rezolus view ab.dendro");
+    let (status, body) = upload(
+        &viewer,
+        "/api/v1/save_with_selection",
+        "selection.json",
+        br#"{"entries":[]}"#,
+    );
+    assert!(status.contains(" 200 "), "{status}");
+    // A dendro archive is an SQLite database.
+    assert!(
+        body.starts_with("SQLite format 3"),
+        "{}",
+        &body[..body.len().min(200)]
+    );
+}
+
+/// An A/B archive given as the experiment is refused without the `--ab`
+/// step, which cannot relabel its arms.
+#[test]
+fn an_ab_archive_experiment_is_refused_without_the_ab_step() {
+    let dir = tempfile::tempdir().unwrap();
+    rez::fixtures::multi_recording(&dir.path().join("a.dendro"), &[("redis", "web-01")]);
+    rez::fixtures::multi_recording(&dir.path().join("b.dendro"), &[("valkey", "web-02")]);
+    rez::fixtures::multi_recording(&dir.path().join("one.dendro"), &[("redis", "web-09")]);
+    run(
+        dir.path(),
+        "rezolus recording combine a.dendro b.dendro \
+         --ab baseline=a.dendro experiment=b.dendro -o ab.dendro",
+    );
+    let (stderr, commands) = refusal(dir.path(), "one.dendro", "ab.dendro");
+    assert_eq!(commands.len(), 3, "{stderr}");
+    assert!(
+        stderr.contains("ab.dendro holds 2 recordings; the experiment"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("carry `arm` labels"), "{stderr}");
 }
 
 /// The baseline is an A/B archive named `ab.dendro`, as the position path
@@ -425,7 +508,10 @@ fn an_ab_archive_baseline_is_refused_with_commands_that_work() {
     );
     let (stderr, commands) = refusal(dir.path(), "ab.dendro", "exp.dendro");
     assert_eq!(commands.len(), 3, "{stderr}");
-    assert!(stderr.contains("ab.dendro is an A/B archive"), "{stderr}");
+    assert!(
+        stderr.contains("Recordings in both.dendro carry `arm` labels"),
+        "{stderr}"
+    );
     run(dir.path(), &commands[0]);
     let listing = String::from_utf8_lossy(&run(dir.path(), &commands[1]).stdout).to_string();
     assert!(listing.contains("--recording host=web-09"), "{listing}");

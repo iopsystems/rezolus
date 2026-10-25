@@ -941,6 +941,12 @@ pub struct WasmCaptureRegistry {
     /// baseline shows one recording (a one-recording file or the baseline
     /// slot of a comparison). An experiment is refused unless this is 1.
     baseline_combined: usize,
+    /// Whether the baseline file's recordings carry `arm` labels, which
+    /// `recording combine --ab` does not replace.
+    baseline_arms: bool,
+    /// The file that replaced the experiment of a baseline archive shown as
+    /// a comparison. A report copies whole archives, so none is saved then.
+    replaced_experiment: Option<String>,
     /// Applied to every capture's template lookup; see
     /// [`WasmCaptureRegistry::set_prefer_registry_templates`].
     template_preference: TemplatePreference,
@@ -966,28 +972,25 @@ fn file_name_of(name: &str) -> String {
 }
 
 impl WasmCaptureRegistry {
-    /// [`WasmCaptureRegistry::attach`]'s work, without recording the
-    /// baseline's name and how many recordings it joins: those are kept
-    /// only once the attach has succeeded. Returns how many recordings the
-    /// attached view joins: the file's count for a combined view, else 1.
+    /// [`WasmCaptureRegistry::attach`]'s work, without recording what it
+    /// keeps about the baseline: that is kept only once the attach has
+    /// succeeded. Returns how many recordings the attached view joins (the
+    /// file's count for a combined view, else 1) and whether the file's
+    /// recordings carry `arm` labels.
     fn attach_recordings(
         &mut self,
         capture: &str,
         data: &[u8],
         filename: &str,
-    ) -> Result<usize, JsValue> {
+    ) -> Result<(usize, bool), JsValue> {
         self.notices.clear();
         let pool = BufferPool::new(WASM_CACHE_SIZE_BYTES);
         let recordings = open_rez(data, filename, Arc::clone(&pool))?;
         let n = recordings.len();
-        if let Some(refusal) = self.one_recording_refusal(
-            capture,
-            filename,
-            recordings.len(),
-            recordings
-                .iter()
-                .any(|(l, _)| l.contains_key(dashboard::combined::ARM_LABEL)),
-        ) {
+        let arms = recordings
+            .iter()
+            .any(|(l, _)| l.contains_key(dashboard::combined::ARM_LABEL));
+        if let Some(refusal) = self.one_recording_refusal(capture, filename, n, arms) {
             return Err(JsValue::from_str(&refusal));
         }
         self.notices
@@ -999,11 +1002,11 @@ impl WasmCaptureRegistry {
                 let viewer = Viewer::combined(recordings, pool);
                 self.others.clear();
                 self.set_capture(capture, viewer);
-                return Ok(n);
+                return Ok((n, arms));
             }
             return self
                 .attach_rez_comparison(recordings, pool, filename)
-                .map(|()| 1);
+                .map(|()| (1, arms));
         }
         // One recording, a capture of its own: a report is built from its
         // archive, or from both captures' archives in a two-file comparison.
@@ -1021,7 +1024,7 @@ impl WasmCaptureRegistry {
             filename,
         );
         self.set_capture(capture, viewer);
-        Ok(1)
+        Ok((1, arms))
     }
 
     /// The refusal of a file of `n` recordings attached as `capture` when
@@ -1048,7 +1051,7 @@ impl WasmCaptureRegistry {
         // A combined view's recordings carry no arm
         // (`dashboard::combined::layout`).
         let (file, side, count, arms) = if n > 1 {
-            (&experiment, "the experiment", n, arms)
+            (&experiment, "the experiment", n, arms || self.baseline_arms)
         } else if self.baseline_combined > 1 {
             (&baseline, "the baseline", self.baseline_combined, false)
         } else {
@@ -1077,6 +1080,8 @@ impl WasmCaptureRegistry {
             rez_source: None,
             baseline_name: None,
             baseline_combined: 1,
+            baseline_arms: false,
+            replaced_experiment: None,
             template_preference: TemplatePreference::Archive,
             compare_requested: false,
         }
@@ -1101,10 +1106,15 @@ impl WasmCaptureRegistry {
     /// baseline or a comparison, and is refused beside a combined view of
     /// several recordings, with the commands that compare two recordings.
     pub fn attach(&mut self, capture: &str, data: &[u8], filename: &str) -> Result<(), JsValue> {
-        let combined = self.attach_recordings(capture, data, filename)?;
+        let archive_before = self.rez_source.is_some();
+        let (combined, arms) = self.attach_recordings(capture, data, filename)?;
         if capture == "baseline" {
             self.baseline_name = Some(filename.to_string());
             self.baseline_combined = combined;
+            self.baseline_arms = arms;
+            self.replaced_experiment = None;
+        } else if archive_before {
+            self.replaced_experiment = Some(file_name_of(filename));
         }
         Ok(())
     }
@@ -1532,6 +1542,18 @@ impl WasmCaptureRegistry {
             .baseline
             .as_ref()
             .ok_or_else(|| JsValue::from_str("no baseline capture attached"))?;
+        if let Some(experiment) = &self.replaced_experiment {
+            let name = self
+                .baseline_name
+                .as_deref()
+                .map(file_name_of)
+                .unwrap_or_default();
+            return Err(JsValue::from_str(&format!(
+                "Save as Report cannot save this comparison: {name} holds several \
+                 recordings, and a report copies whole files, so it would hold {name}'s \
+                 own experiment beside {experiment}. Open {name} alone to save a report of it"
+            )));
+        }
 
         let events_json = if payload.events.is_empty() {
             None

@@ -179,6 +179,60 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         assert.match(ab.file_metadata_json('baseline'), /redis/);
     });
 
+    // An A/B archive (`recording combine --ab`) of two one-recording files.
+    const abArchive = () => {
+        const a = path.join(tmpDir, 'arm-a.dendro');
+        const b = path.join(tmpDir, 'arm-b.dendro');
+        const out = path.join(tmpDir, 'arms.dendro');
+        fs.writeFileSync(a, fixture('arm-a.dendro', 1));
+        fs.writeFileSync(b, fixture('arm-b.dendro', 1));
+        fs.rmSync(out, { force: true });
+        execFileSync(
+            'cargo',
+            ['run', '-q', '--bin', 'rezolus', '--', 'recording', 'combine', a, b,
+             '--ab', `baseline=${a}`, `experiment=${b}`, '-o', out],
+            { cwd: repoRoot, stdio: ['ignore', 'ignore', 'inherit'] },
+        );
+        return new Uint8Array(fs.readFileSync(out));
+    };
+
+    // Beside an A/B archive an experiment replaces its arm, after which no
+    // report is saved (a report copies whole files); the refusals of
+    // several recordings leave out the `--ab` step, which cannot relabel an
+    // arm.
+    test('an experiment beside an A/B archive, and A/B archives refused', () => {
+        const ab = abArchive();
+        const one = fixture('exp-one.dendro', 1);
+
+        const registry = new WasmCaptureRegistry();
+        registry.attach('baseline', ab, 'ab.dendro');
+        assert.equal(registry.has('experiment'), true);
+        assert.ok(registry.save_with_selection('{"entries":[]}').length > 0);
+        assert.throws(
+            () => registry.attach('experiment', fixture('exp-two.dendro', 2), 'exp2.dendro'),
+            (e) => String(e).startsWith('exp2.dendro holds 2 recordings; the experiment')
+                && String(e).includes('carry `arm` labels')
+                && !String(e).includes('--ab baseline='),
+        );
+        registry.attach('experiment', one, 'exp.dendro');
+        assert.throws(
+            () => registry.save_with_selection('{"entries":[]}'),
+            (e) => String(e).includes(
+                'Save as Report cannot save this comparison: ab.dendro holds several recordings'),
+        );
+        // A new baseline clears it.
+        registry.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
+        assert.ok(registry.save_with_selection('{"entries":[]}').length > 0);
+
+        const single = new WasmCaptureRegistry();
+        single.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
+        assert.throws(
+            () => single.attach('experiment', ab, 'ab.dendro'),
+            (e) => String(e).startsWith('ab.dendro holds 2 recordings; the experiment')
+                && String(e).includes('carry `arm` labels'),
+        );
+    });
+
     // The committed v3 `.rez`, upgraded: two recordings, host=web-01 and
     // host=web-02, three ticks of the gauge mem_free each, (i + 1) * 1000 + t.
     test('an upgraded two-recording .rez of one run is one combined capture', () => {

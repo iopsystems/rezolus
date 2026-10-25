@@ -164,7 +164,7 @@ pub fn require_dendro(path: &Path, program: &str) -> Result<(), String> {
 /// baseline" or "the experiment") of a two-file comparison, where each file
 /// is one recording. It names the commands that compare two of them: put
 /// both files' recordings in one archive, list them, and choose the two by
-/// labels or, where labels cannot tell them apart, by position. When the
+/// labels or, where labels cannot tell them apart, by position. When either
 /// file's recordings carry `arm` labels (`arms`), the position step is
 /// replaced by a note that it is not available: `combine --ab` keeps an
 /// arm a recording already carries. Output names differ from both inputs'.
@@ -192,10 +192,9 @@ pub fn one_recording_hint(
     );
     if arms {
         return format!(
-            "{combine}{file} is an A/B archive: its recordings carry `arm` labels, which \
-             `recording combine --ab` does not replace. If describe-recording says a \
-             recording cannot be selected by labels, no command compares it with another \
-             file's recording"
+            "{combine}Recordings in {both} carry `arm` labels, which `recording combine \
+             --ab` does not replace. If describe-recording says a recording cannot be \
+             selected by labels, no command compares it with another file's recording"
         );
     }
     let ab = unused_name("ab", &[baseline, experiment, &both]);
@@ -208,13 +207,14 @@ pub fn one_recording_hint(
 }
 
 /// `{stem}.dendro`, or `{stem}-2.dendro`, `{stem}-3.dendro`, ... : the first
-/// whose file name is not the file name of any path in `taken`.
+/// whose file name differs, ignoring ASCII case, from the file name of every
+/// path in `taken`.
 fn unused_name(stem: &str, taken: &[&str]) -> String {
     let file_name = |p: &str| p.rsplit(['/', '\\']).next().unwrap_or(p).to_string();
     let taken: Vec<String> = taken.iter().map(|p| file_name(p)).collect();
     std::iter::once(format!("{stem}.dendro"))
         .chain((2..).map(|i| format!("{stem}-{i}.dendro")))
-        .find(|name| !taken.contains(name))
+        .find(|name| !taken.iter().any(|t| t.eq_ignore_ascii_case(name)))
         .expect("an unbounded sequence")
 }
 
@@ -278,6 +278,7 @@ mod tests {
         assert_eq!(shell_word("my run.rez"), "'my run.rez'");
         assert_eq!(shell_word("it's.rez"), "'it'\\''s.rez'");
         assert_eq!(shell_word("-multi.dendro"), "./-multi.dendro");
+        assert_eq!(shell_word("-a b.dendro"), "'./-a b.dendro'");
     }
 
     #[test]
@@ -314,7 +315,19 @@ mod tests {
             "{hint}"
         );
         assert!(!hint.contains("--ab baseline="), "{hint}");
-        assert!(hint.contains("is an A/B archive"), "{hint}");
-        assert_eq!(shell_word("-a b.dendro"), "'./-a b.dendro'");
+        assert!(
+            hint.contains("Recordings in both.dendro carry `arm` labels"),
+            "{hint}"
+        );
+        let hint = one_recording_hint(
+            "rezolus",
+            "x.dendro",
+            "the baseline",
+            2,
+            "Both.dendro",
+            "x.dendro",
+            false,
+        );
+        assert!(hint.contains("-o both-2.dendro"), "{hint}");
     }
 }

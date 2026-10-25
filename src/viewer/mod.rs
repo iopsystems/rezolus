@@ -659,16 +659,28 @@ fn init_file_mode(
     init_file_mode_rez(config, path, registry, pool)
 }
 
+/// Whether the baseline's recording carries an `arm` label: then the
+/// baseline file's recordings cannot be relabelled by `combine --ab`.
+pub(super) fn baseline_has_arms(state: &AppState) -> bool {
+    state
+        .anchor_labels
+        .read()
+        .as_ref()
+        .is_some_and(|l| l.contains_key(::dashboard::combined::ARM_LABEL))
+}
+
 /// Open the dendro archive at `path` as the experiment of a two-file
 /// comparison: its one recording, with the systeminfo and metadata the
 /// captures registry keeps. A legacy file is refused with the upgrade
 /// command, an archive of several recordings with the commands that compare
 /// two of them ([`::rez::container::one_recording_hint`]), which name the
-/// experiment as `name` and the baseline as `baseline`.
+/// experiment as `name` and the baseline as `baseline`; `baseline_arms` is
+/// whether the baseline's recordings carry `arm` labels.
 pub(super) fn open_experiment(
     path: &Path,
     name: &str,
     baseline: &str,
+    baseline_arms: bool,
     pool: Arc<metriken_storage::BufferPool>,
 ) -> Result<(crate::rez_reader::RezReader, Option<String>, Option<String>), String> {
     use metriken_query::MetricsSource;
@@ -685,7 +697,8 @@ pub(super) fn open_experiment(
             name,
             readers
                 .iter()
-                .any(|(l, _)| l.contains_key(::dashboard::combined::ARM_LABEL)),
+                .any(|(l, _)| l.contains_key(::dashboard::combined::ARM_LABEL))
+                || baseline_arms,
         ));
     }
     let (_, reader) = readers.pop().expect("one recording");
@@ -962,7 +975,7 @@ fn init_file_mode_combined(
     );
     *state.parquet_path.write() = Some(path.to_path_buf());
     *state.baseline_name.write() = Some(path.display().to_string());
-    *state.baseline_combined.write() = combined.labels.len();
+    *state.baseline_file.write() = state::BaselineFile::Combined(combined.labels.len());
     *state.selection.write() = selection;
     *state.trimmed_report_marker.write() = report_marker;
     state.captures.set_baseline_systeminfo(combined.systeminfo);
@@ -1214,7 +1227,10 @@ fn init_file_mode_rez(
     *state.anchor_labels.write() = Some(b_labels.clone());
     *state.parquet_path.write() = Some(path.to_path_buf());
     *state.baseline_name.write() = Some(path.display().to_string());
-    *state.baseline_combined.write() = 1;
+    *state.baseline_file.write() = match n {
+        1 => state::BaselineFile::One,
+        n => state::BaselineFile::Comparison(n),
+    };
     *state.selection.write() = b_selection;
     // A saved report stamps `KEY_REPORT=trimmed` on its anchor recording.
     // Without this a reloaded report would render its (mostly trimmed)
@@ -1258,11 +1274,17 @@ fn init_file_mode_rez(
     if let Some(exp_path) = &config.experiment_path {
         let baseline = path.display().to_string();
         let name = exp_path.display().to_string();
-        let (reader, systeminfo, file_meta) =
-            open_experiment(exp_path, &name, &baseline, Arc::clone(&pool)).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
+        let (reader, systeminfo, file_meta) = open_experiment(
+            exp_path,
+            &name,
+            &baseline,
+            baseline_has_arms(&state),
+            Arc::clone(&pool),
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        });
         state.captures.attach_experiment(
             Arc::new(reader) as Arc<dyn metriken_query::MetricsSource>,
             systeminfo,
@@ -1467,9 +1489,15 @@ mod tests {
         let pool = || metriken_storage::BufferPool::new(8 * 1024 * 1024);
         let two = dir.path().join("two.dendro");
         ::rez::fixtures::multi_recording(&two, &[("redis", "web-01"), ("valkey", "web-02")]);
-        let err = super::open_experiment(&two, &two.display().to_string(), "one.dendro", pool())
-            .err()
-            .unwrap();
+        let err = super::open_experiment(
+            &two,
+            &two.display().to_string(),
+            "one.dendro",
+            false,
+            pool(),
+        )
+        .err()
+        .unwrap();
         let combine = format!(
             "recording combine one.dendro {} -o both.dendro",
             two.display()
@@ -1479,7 +1507,7 @@ mod tests {
             "{err}"
         );
         let legacy = ::rez::fixtures::committed_rez("v3.rez", dir.path());
-        let err = super::open_experiment(&legacy, "v3.rez", "one.dendro", pool())
+        let err = super::open_experiment(&legacy, "v3.rez", "one.dendro", false, pool())
             .err()
             .unwrap();
         assert!(err.contains("rezolus recording upgrade"), "{err}");

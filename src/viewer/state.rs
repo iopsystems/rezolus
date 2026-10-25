@@ -258,6 +258,17 @@ impl ProxyState {
     }
 }
 
+/// How the baseline's file is shown (`dashboard::combined::layout`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BaselineFile {
+    /// One recording, a live session, or no file yet.
+    One,
+    /// An archive of this many recordings, shown as a comparison.
+    Comparison(usize),
+    /// An archive of this many recordings, shown as one combined view.
+    Combined(usize),
+}
+
 pub struct AppState {
     pub sections: RwLock<LazySectionStore>,
     /// Per-capture data store + metadata. Single-capture callers always target
@@ -282,12 +293,10 @@ pub struct AppState {
     /// command line, an upload's file name); `None` in live mode, which has
     /// no file of the user's to name.
     pub baseline_name: RwLock<Option<String>>,
-    /// How many recordings the baseline's combined view joins
-    /// (`dashboard::combined::layout`); 1 when the baseline shows one
-    /// recording: a one-recording file, the baseline slot of a comparison,
-    /// a live session, or no file yet. An uploaded experiment is refused
-    /// unless this is 1.
-    pub baseline_combined: RwLock<usize>,
+    /// How the baseline file is shown. An uploaded experiment is refused
+    /// beside a combined view, and a report is not saved after one replaced
+    /// a comparison's experiment.
+    pub baseline_file: RwLock<BaselineFile>,
     /// The staged copy of the HTTP-attached experiment archive.
     pub experiment_parquet_path: RwLock<Option<PathBuf>>,
     /// The experiment archive path given on the command line.
@@ -371,7 +380,7 @@ impl AppState {
             follow: Mutex::new(None),
             parquet_path: RwLock::new(None),
             baseline_name: RwLock::new(None),
-            baseline_combined: RwLock::new(1),
+            baseline_file: RwLock::new(BaselineFile::One),
             experiment_parquet_path: RwLock::new(None),
             cli_experiment_path: RwLock::new(None),
             category_name: RwLock::new(None),
@@ -429,7 +438,7 @@ impl AppState {
         self.replace_baseline(session.reader());
         *self.parquet_path.write() = Some(session.path().to_path_buf());
         *self.baseline_name.write() = None;
-        *self.baseline_combined.write() = 1;
+        *self.baseline_file.write() = BaselineFile::One;
         *slot = Some(session);
     }
 

@@ -185,12 +185,15 @@
   `--field` (they described a parquet footer). A two-file comparison
   (`rezolus view a.dendro b.dendro`, the browser's experiment upload, a
   URL pair) takes a one-recording `.dendro` as the experiment. On the
-  command line the baseline is one recording too. In the browser and
-  through the upload API the baseline may also be an archive that opens
-  as a comparison, whose experiment the second file replaces; beside an
-  archive that opens as one combined view, an experiment is refused. Each
-  refusal names the `recording combine` and `view --baseline/--experiment`
-  commands that compare two recordings. The static-site demo recordings
+  command line the baseline is one recording too: `rezolus view a b` with
+  an archive of several recordings as `a` exits with an error (a second
+  file beside a `.rez` or `.dendro` used to be ignored with a warning). In the browser and through the upload API the
+  baseline may also be an archive that opens as a comparison, whose
+  experiment the second file replaces; Save as Report is then refused,
+  since a report copies whole files and would hold the archive's own
+  experiment too. Beside an archive that opens as one combined view, an
+  experiment is refused. Each refusal names the `recording combine` and
+  `view --baseline/--experiment` commands that compare two recordings. The static-site demo recordings
   are `.dendro` files; a link that names a demo's old `.parquet` file
   loads its `.dendro`.
 - **The viewer's Time selector (Aligned/Raw) is gone.** Every dashboard

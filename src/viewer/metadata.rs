@@ -217,6 +217,7 @@ pub fn refresh_combined_members(state: &AppState) {
     };
     let before = state.members.read().len();
     let combined = super::combine_recordings(readers);
+    *state.baseline_file.write() = super::state::BaselineFile::Combined(combined.labels.len());
     warn!(
         "{} now holds {} recordings (was {before}): {}; its sections were rebuilt, reload \
          the page to see them",

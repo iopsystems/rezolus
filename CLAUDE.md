@@ -136,7 +136,7 @@ target/release/rezolus view fleet.dendro --baseline host=web-01 --experiment hos
 #   .parquet or .parquet.ab.tar is refused with `<program> recording upgrade FILE` (rez::container::not_dendro);
 #   nothing converts on load. The experiment of a two-file comparison is one recording; the baseline is one
 #   recording on the command line, and in an upload or the WASM viewer may also be an archive shown as a
-#   comparison (the experiment replaces its arm). Anything else is refused with the combine /
+#   comparison (the experiment replaces its arm; Save as Report is then refused). Anything else is refused with the combine /
 #   describe-recording / view --baseline --experiment commands (rez::container::one_recording_hint).
 target/release/rezolus view http://localhost:4241 [--listen ADDR]   # live agent connection
 target/release/rezolus view [--listen ADDR]                         # upload-only mode (no file)
