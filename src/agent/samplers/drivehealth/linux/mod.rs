@@ -311,6 +311,9 @@ impl Sampler for DriveHealth {
             // writer is this task too.
             let ebs_guard = DRIVEHEALTH_EBS_ACQ.acquire();
             let instance_store_guard = DRIVEHEALTH_INSTANCE_STORE_ACQ.acquire();
+            // The NVMe health counters and sensor temperatures come from the
+            // same log-page read.
+            let nvme_guard = DRIVEHEALTH_NVME_ACQ.acquire();
 
             let readings = read_all(&drives);
             let mut ebs_ok = 0;
@@ -319,6 +322,7 @@ impl Sampler for DriveHealth {
                 .iter()
                 .filter(|r| r.temperature_c.is_some() || r.nvme.is_some())
                 .count();
+            let nvme_ok = readings.iter().filter(|r| r.nvme.is_some()).count();
             for (idx, r) in readings.into_iter().enumerate() {
                 if let Some(celsius) = r.temperature_c {
                     let _ = DRIVE_TEMPERATURE.set(idx, celsius);
@@ -388,6 +392,7 @@ impl Sampler for DriveHealth {
             // read, and a drive whose read failed keeps its previous values
             // under the new window.
             for (guard, ok) in [
+                (nvme_guard, nvme_ok),
                 (ebs_guard, ebs_ok),
                 (instance_store_guard, instance_store_ok),
             ] {
