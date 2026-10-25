@@ -12,7 +12,7 @@
       "subgroups": [
         {
           "name": "Temperature",
-          "description": "Temperatures from each native sensor identity. Missing or unreadable sensors are absent.",
+          "description": "Temperatures, one series per channel. Missing or unreadable sensors are absent.",
           "plots": [
             {
               "data": [],
@@ -29,7 +29,7 @@
                   "value_label": null
                 }
               },
-              "promql_query": "sum by (sensor) (sensor_temperature) / 1000",
+              "promql_query": "sum by (name) (sensor_temperature) / 1000",
               "width": "full"
             }
           ]
@@ -53,14 +53,14 @@
                   "value_label": null
                 }
               },
-              "promql_query": "sum by (sensor) (sensor_power) / 1000000",
+              "promql_query": "sum by (name) (sensor_power) / 1000000",
               "width": "full"
             }
           ]
         },
         {
           "name": "Voltage",
-          "description": "Bus voltage per native sensor identity.",
+          "description": "Bus voltage, one series per channel.",
           "plots": [
             {
               "data": [],
@@ -77,14 +77,14 @@
                   "value_label": null
                 }
               },
-              "promql_query": "sum by (sensor) (sensor_voltage) / 1000",
+              "promql_query": "sum by (name) (sensor_voltage) / 1000",
               "width": "full"
             }
           ]
         },
         {
           "name": "Current",
-          "description": "Current per native sensor identity.",
+          "description": "Current, one series per channel.",
           "plots": [
             {
               "data": [],
@@ -101,7 +101,7 @@
                   "value_label": null
                 }
               },
-              "promql_query": "sum by (sensor) (sensor_current) / 1000",
+              "promql_query": "sum by (name) (sensor_current) / 1000",
               "width": "full"
             }
           ]
@@ -125,7 +125,7 @@
                   "value_label": null
                 }
               },
-              "promql_query": "sum by (sensor) (sensor_fan_speed)",
+              "promql_query": "sum by (name) (sensor_fan_speed)",
               "width": "full"
             }
           ]
@@ -153,7 +153,7 @@
                   "value_label": null
                 }
               },
-              "promql_query": "sum by (sensor) (sensor_fan_pwm) / 255",
+              "promql_query": "sum by (name) (sensor_fan_pwm) / 255",
               "width": "full"
             }
           ]
@@ -177,7 +177,7 @@
                   "value_label": null
                 }
               },
-              "promql_query": "sum by (sensor) (sensor_cooling_state)",
+              "promql_query": "sum by (name) (sensor_cooling_state)",
               "width": "full"
             }
           ]

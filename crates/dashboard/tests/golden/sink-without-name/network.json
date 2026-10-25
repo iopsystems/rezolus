@@ -1,0 +1,970 @@
+{
+  "interval": 1.0,
+  "source": "rezolus",
+  "version": "6.0.0",
+  "filename": "",
+  "start_time": 1700000000000.0,
+  "end_time": 1700000060000.0,
+  "groups": [
+    {
+      "name": "Traffic",
+      "id": "traffic",
+      "subgroups": [
+        {
+          "name": "Host Bandwidth",
+          "description": "Bits per second crossing the host boundary, counted once at the interface bound to a device driver — the wire on bare metal, the hypervisor boundary in a VM guest. Matches the NIC's own counters. Excludes intra-host traffic between virtual interfaces (container east-west, loopback).",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Host Bandwidth Transmit",
+                "id": "host-bandwidth-tx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_host_bytes{direction=\"transmit\"}[5m])) * 8"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Host Bandwidth Receive",
+                "id": "host-bandwidth-rx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_host_bytes{direction=\"receive\"}[5m])) * 8"
+            }
+          ]
+        },
+        {
+          "name": "Host Packets",
+          "description": "Packet rate crossing the host boundary, counted once per packet rather than once per interface it traverses.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Host Packets Transmit",
+                "id": "host-packets-tx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_host_packets{direction=\"transmit\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Host Packets Receive",
+                "id": "host-packets-rx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_host_packets{direction=\"receive\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Interface Bandwidth",
+          "description": "Bits per second summed over every network interface the traffic traverses. A packet crossing a stacked interface (bond, VLAN, bridge, tunnel) is counted once per layer, so this reads higher than the host bandwidth above — roughly 2x on a bonded host, 3x for VLAN-over-bond. It also includes loopback and intra-host virtual traffic that never reaches a NIC, which on a container or VM host can dominate.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Bandwidth Transmit",
+                "id": "bandwidth-tx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Bandwidth Receive",
+                "id": "bandwidth-rx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8"
+            }
+          ]
+        },
+        {
+          "name": "Interface Packets",
+          "description": "Packet rate summed over every network interface the traffic traverses — see the interface bandwidth note above.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Packets Transmit",
+                "id": "packets-tx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_packets{direction=\"transmit\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Packets Receive",
+                "id": "packets-rx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_packets{direction=\"receive\"}[5m]))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Errors",
+      "id": "errors",
+      "subgroups": [
+        {
+          "name": "Drops & Retransmits",
+          "description": "Packets dropped at the network layer and TCP-level retransmissions — key health signals.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Packet Drops",
+                "id": "packet-drops",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_drop[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "TCP Retransmits",
+                "id": "tcp-retransmits",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_retransmit[5m]))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "TCP",
+      "id": "tcp",
+      "subgroups": [
+        {
+          "name": "Packet Latency",
+          "description": "Time from packet received to being processed by the application.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "TCP Packet Rate",
+                "id": "tcp-packet-latency-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(histogram_irate(tcp_packet_latency))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "TCP Packet Mean/Total",
+                "id": "tcp-packet-latency-mean",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Mean",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "histogram_mean(tcp_packet_latency)",
+              "promql_query_total": "histogram_sum(tcp_packet_latency)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "TCP Packet Latency",
+                "id": "tcp-packet-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Latency",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "tcp_packet_latency",
+              "width": "full"
+            }
+          ]
+        },
+        {
+          "name": "Retransmission & Loss Recovery",
+          "description": "Retransmission timeouts stall a connection for at least the minimum RTO (200 ms by default); tail loss probes and fast recovery repair loss without waiting for one. D-SACKs received are retransmissions the peer did not need.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "RTO Expirations",
+                "id": "tcp-rto-expirations",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_rto_expirations[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Segments Retransmitted",
+                "id": "tcp-segments-retransmitted",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_segments_retransmitted[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Lost Segments Retransmitted",
+                "id": "tcp-loss-retransmits",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (kind) (irate(tcp_loss_retransmits[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Tail Loss Probes",
+                "id": "tcp-loss-probes",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_loss_probes[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Loss Probe Recoveries",
+                "id": "tcp-loss-probe-recoveries",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_loss_probe_recoveries[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Fast Recoveries",
+                "id": "tcp-fast-recoveries",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (kind) (irate(tcp_fast_recoveries[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Spurious RTOs",
+                "id": "tcp-spurious-rtos",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_spurious_rtos[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Retransmits Lost Again",
+                "id": "tcp-retransmits-lost",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_retransmits_lost[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "D-SACKs Received",
+                "id": "tcp-dsacks-received",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (kind) (irate(tcp_dsacks_received[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "D-SACKs Sent",
+                "id": "tcp-dsacks-sent",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (kind) (irate(tcp_dsacks_sent[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Delayed ACKs & Autocorking",
+          "description": "A delayed-ACK firing means this host held an ACK for the delayed-ACK timeout (40 ms minimum) because nothing outgoing carried it; a peer sending with Nagle, or limited by its congestion or receive window, may be waiting for it. Duplicate data segments are usually the peer retransmitting data already received; on each one the kernel sends its next ACKs immediately, up to 16. Autocorking holds back small sends while earlier data is still queued in the qdisc or device.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Delayed ACKs",
+                "id": "tcp-delayed-acks",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_delayed_acks[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Delayed ACKs Deferred",
+                "id": "tcp-delayed-ack-deferrals",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_delayed_ack_deferrals[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Duplicate Data Segments",
+                "id": "tcp-duplicate-data-segments",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_duplicate_data_segments[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Autocorks",
+                "id": "tcp-autocorks",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_autocorks[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Receive Window",
+          "description": "A receiver advertises a zero window when the application is not reading fast enough to keep its receive buffer from filling; the sender then stops until the window reopens.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Zero Window Transitions",
+                "id": "tcp-zero-window-transitions",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (kind) (irate(tcp_zero_window_transitions[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Zero Window Withheld",
+                "id": "tcp-zero-window-withheld",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_zero_window_withheld[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Zero Window Drops",
+                "id": "tcp-zero-window-drops",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_zero_window_drops[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Receive Memory",
+          "description": "Receive-side memory work and drops. Pruning and collapsing run when a socket cannot be charged memory for an incoming segment. A prune failure is usually followed by a receive-buffer drop, which discards a segment the peer has to retransmit, so the two overlap; a prune failure on an empty receive queue queues the segment anyway.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Prune Attempts",
+                "id": "tcp-prune-attempts",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_prune_attempts[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Prune Failures",
+                "id": "tcp-prune-failures",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_prune_failures[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Out-of-Order Prunes",
+                "id": "tcp-out-of-order-prunes",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_out_of_order_prunes[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Collapsed Buffers",
+                "id": "tcp-collapsed-buffers",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_collapsed_buffers[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Receive Buffer Drops",
+                "id": "tcp-rcvbuf-drops",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (kind) (irate(tcp_rcvbuf_drops[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Backlog Drops",
+                "id": "tcp-backlog-drops",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_backlog_drops[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Out-of-Order Queued",
+                "id": "tcp-out-of-order-queued",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_out_of_order_queued[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Memory Pressure Entries",
+                "id": "tcp-memory-pressure-entries",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_memory_pressure_entries[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Connections",
+          "description": "Connection state changes, failures and errors in the agent's network namespace.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Established Connections",
+                "id": "tcp-established-connections",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(tcp_established_connections)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Open Failures",
+                "id": "tcp-open-failures",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_open_failures[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Established Resets",
+                "id": "tcp-established-resets",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_established_resets[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Resets Sent",
+                "id": "tcp-resets-sent",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_resets_sent[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Aborts",
+                "id": "tcp-aborts",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (reason) (irate(tcp_aborts[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Listen Overflows",
+                "id": "tcp-listen-overflows",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_listen_overflows[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Listen Drops",
+                "id": "tcp-listen-drops",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_listen_drops[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Input Errors",
+                "id": "tcp-input-errors",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_input_errors[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Checksum Errors",
+                "id": "tcp-checksum-errors",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_checksum_errors[5m]))"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "name": "Overview",
+      "route": "/overview"
+    },
+    {
+      "name": "Exceptions",
+      "route": "/exceptions"
+    },
+    {
+      "name": "Query Explorer",
+      "route": "/query"
+    },
+    {
+      "name": "CPU",
+      "route": "/cpu"
+    },
+    {
+      "name": "GPU",
+      "route": "/gpu"
+    },
+    {
+      "name": "Hardware Sensors",
+      "route": "/hw_sensors"
+    },
+    {
+      "name": "Memory",
+      "route": "/memory"
+    },
+    {
+      "name": "Network",
+      "route": "/network"
+    },
+    {
+      "name": "Scheduler",
+      "route": "/scheduler"
+    },
+    {
+      "name": "Syscall",
+      "route": "/syscall"
+    },
+    {
+      "name": "Softirq",
+      "route": "/softirq"
+    },
+    {
+      "name": "BlockIO",
+      "route": "/blockio"
+    },
+    {
+      "name": "Filesystem",
+      "route": "/filesystem"
+    },
+    {
+      "name": "ext4",
+      "route": "/ext4"
+    },
+    {
+      "name": "XFS",
+      "route": "/xfs"
+    },
+    {
+      "name": "cgroups",
+      "route": "/cgroups"
+    },
+    {
+      "name": "Rezolus",
+      "route": "/rezolus"
+    }
+  ]
+}

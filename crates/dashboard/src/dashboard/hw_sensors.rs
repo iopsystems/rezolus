@@ -1,7 +1,20 @@
-//! Native Linux hardware sensor readings, kept separate by `sensor` identity.
+//! Native Linux hardware sensor readings, one series per channel. A
+//! recording from an agent that labels channels with `name` is grouped by
+//! it; an older one, which has no `name`, by the `sensor` identity, since
+//! `sum by (name)` over series without the label adds them all together.
 
 use crate::MetricsSource;
 use crate::plot::*;
+
+/// The label a family's chart groups by: `name` when the recording has it,
+/// else `sensor`.
+fn by(data: &dyn MetricsSource, metric: &str) -> &'static str {
+    if metric_unique_label_count(data, metric, "name") > 0 {
+        "name"
+    } else {
+        "sensor"
+    }
+}
 
 pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
@@ -10,11 +23,14 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     if has_metric(data, "sensor_temperature") {
         let temperatures = sensors.subgroup("Temperature");
         temperatures.describe(
-            "Temperatures from each native sensor identity. Missing or unreadable sensors are absent.",
+            "Temperatures, one series per channel. Missing or unreadable sensors are absent.",
         );
         temperatures.plot_promql_full(
             PlotOpts::gauge("Temperature", "sensor-temperature", Unit::Count).with_axis_label("°C"),
-            "sum by (sensor) (sensor_temperature) / 1000".to_string(),
+            format!(
+                "sum by ({}) (sensor_temperature) / 1000",
+                by(data, "sensor_temperature")
+            ),
         );
     }
 
@@ -27,25 +43,34 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
         power.plot_promql_full(
             PlotOpts::gauge("Power", "sensor-power", Unit::Power).with_axis_label("Watts"),
-            "sum by (sensor) (sensor_power) / 1000000".to_string(),
+            format!(
+                "sum by ({}) (sensor_power) / 1000000",
+                by(data, "sensor_power")
+            ),
         );
     }
 
     if has_metric(data, "sensor_voltage") {
         let voltage = sensors.subgroup("Voltage");
-        voltage.describe("Bus voltage per native sensor identity.");
+        voltage.describe("Bus voltage, one series per channel.");
         voltage.plot_promql_full(
             PlotOpts::gauge("Voltage", "sensor-voltage", Unit::Count).with_axis_label("Volts"),
-            "sum by (sensor) (sensor_voltage) / 1000".to_string(),
+            format!(
+                "sum by ({}) (sensor_voltage) / 1000",
+                by(data, "sensor_voltage")
+            ),
         );
     }
 
     if has_metric(data, "sensor_current") {
         let current = sensors.subgroup("Current");
-        current.describe("Current per native sensor identity.");
+        current.describe("Current, one series per channel.");
         current.plot_promql_full(
             PlotOpts::gauge("Current", "sensor-current", Unit::Count).with_axis_label("Amps"),
-            "sum by (sensor) (sensor_current) / 1000".to_string(),
+            format!(
+                "sum by ({}) (sensor_current) / 1000",
+                by(data, "sensor_current")
+            ),
         );
     }
 
@@ -54,7 +79,10 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         speed.describe("Measured fan speed in revolutions per minute, separate from PWM demand.");
         speed.plot_promql_full(
             PlotOpts::gauge("Fan Speed", "sensor-fan-speed", Unit::Count).with_axis_label("RPM"),
-            "sum by (sensor) (sensor_fan_speed)".to_string(),
+            format!(
+                "sum by ({}) (sensor_fan_speed)",
+                by(data, "sensor_fan_speed")
+            ),
         );
     }
 
@@ -67,7 +95,10 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             PlotOpts::gauge("Fan PWM", "sensor-fan-pwm", Unit::Percentage)
                 .with_axis_label("Percent")
                 .percentage_range(),
-            "sum by (sensor) (sensor_fan_pwm) / 255".to_string(),
+            format!(
+                "sum by ({}) (sensor_fan_pwm) / 255",
+                by(data, "sensor_fan_pwm")
+            ),
         );
     }
 
@@ -79,7 +110,10 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         state.plot_promql_full(
             PlotOpts::gauge("Cooling State", "sensor-cooling-state", Unit::Count)
                 .with_axis_label("State"),
-            "sum by (sensor) (sensor_cooling_state)".to_string(),
+            format!(
+                "sum by ({}) (sensor_cooling_state)",
+                by(data, "sensor_cooling_state")
+            ),
         );
     }
 
@@ -109,12 +143,21 @@ mod tests {
     ];
 
     fn store_with(metrics: &[&str]) -> MemoryStore {
+        store_with_labels(metrics, true)
+    }
+
+    /// `with_name: false` is a recording from an agent that did not label
+    /// channels with `name`.
+    fn store_with_labels(metrics: &[&str], with_name: bool) -> MemoryStore {
         let store = MemoryStore::builder().sampling_interval_ms(1000).build();
         let gauges = metrics
             .iter()
             .map(|name| {
                 let mut metadata = HashMap::new();
                 metadata.insert("sensor".to_string(), format!("{name}:native-0"));
+                if with_name {
+                    metadata.insert("name".to_string(), format!("{name} native-0"));
+                }
                 metriken_exposition::Gauge::new(name.to_string(), 1, metadata)
             })
             .collect();
@@ -133,12 +176,25 @@ mod tests {
     }
 
     fn store_with_sensor_values(metric: &str, values: &[(&str, i64)]) -> MemoryStore {
+        store_with_sensor_values_named(metric, values, true)
+    }
+
+    fn store_with_sensor_values_named(
+        metric: &str,
+        values: &[(&str, i64)],
+        with_name: bool,
+    ) -> MemoryStore {
         let store = MemoryStore::builder().sampling_interval_ms(1000).build();
         let gauges = values
             .iter()
             .map(|(sensor, value)| {
                 let mut metadata = HashMap::new();
-                metadata.insert("sensor".to_string(), (*sensor).to_string());
+                // The agent's identity and its readable name; the dashboard
+                // groups by the name.
+                metadata.insert("sensor".to_string(), format!("hwmon:{sensor}"));
+                if with_name {
+                    metadata.insert("name".to_string(), (*sensor).to_string());
+                }
                 metriken_exposition::Gauge::new(metric.to_string(), *value, metadata)
             })
             .collect();
@@ -180,15 +236,50 @@ mod tests {
         assert_eq!(
             actual,
             [
-                "sum by (sensor) (sensor_temperature) / 1000",
-                "sum by (sensor) (sensor_power) / 1000000",
-                "sum by (sensor) (sensor_voltage) / 1000",
-                "sum by (sensor) (sensor_current) / 1000",
-                "sum by (sensor) (sensor_fan_speed)",
-                "sum by (sensor) (sensor_fan_pwm) / 255",
-                "sum by (sensor) (sensor_cooling_state)",
+                "sum by (name) (sensor_temperature) / 1000",
+                "sum by (name) (sensor_power) / 1000000",
+                "sum by (name) (sensor_voltage) / 1000",
+                "sum by (name) (sensor_current) / 1000",
+                "sum by (name) (sensor_fan_speed)",
+                "sum by (name) (sensor_fan_pwm) / 255",
+                "sum by (name) (sensor_cooling_state)",
             ]
         );
+    }
+
+    #[test]
+    fn a_recording_without_name_groups_by_sensor() {
+        let view = generate(&store_with_labels(METRICS, false), Vec::<Section>::new());
+        let actual: Vec<String> = plots(&view)
+            .iter()
+            .map(|plot| plot["promql_query"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            actual.iter().all(|q| q.starts_with("sum by (sensor) (")),
+            "{actual:?}"
+        );
+        assert_eq!(actual.len(), METRICS.len());
+    }
+
+    #[test]
+    fn a_recording_without_name_keeps_one_series_per_sensor() {
+        // `sum by (name)` over series that lack `name` would add them into one.
+        let store = store_with_sensor_values_named(
+            "sensor_temperature",
+            &[("a", 40_000), ("b", 50_000), ("c", 60_000)],
+            false,
+        );
+        let view = generate(&store, vec![]);
+        let query = plots(&view)[0]["promql_query"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let result = store.query(&query, Some(1_700_000_000.0)).unwrap();
+        let n = match result {
+            metriken_query::QueryResult::Vector { result } => result.len(),
+            other => panic!("expected vector, got {other:?}"),
+        };
+        assert_eq!(n, 3);
     }
 
     #[test]
@@ -196,9 +287,9 @@ mod tests {
         let store = store_with_sensor_values(
             "sensor_temperature",
             &[
-                ("ambient:below-freezing", -5_000),
-                ("thermal_zone:CPU", 42_500),
-                ("hwmon:GPU", 55_250),
+                ("board ambient i2c-1", -5_000),
+                ("thermal CPU thermal_zone0", 42_500),
+                ("amdgpu edge 0000:0e:00.0", 55_250),
             ],
         );
         let view = generate(&store, vec![]);
@@ -210,7 +301,7 @@ mod tests {
         let mut series: Vec<(String, f64)> = match result {
             metriken_query::QueryResult::Vector { result } => result
                 .into_iter()
-                .map(|sample| (sample.metric["sensor"].clone(), sample.value.1))
+                .map(|sample| (sample.metric["name"].clone(), sample.value.1))
                 .collect(),
             other => panic!("expected vector, got {other:?}"),
         };
@@ -218,9 +309,9 @@ mod tests {
         assert_eq!(
             series,
             [
-                ("ambient:below-freezing".to_string(), -5.0),
-                ("hwmon:GPU".to_string(), 55.25),
-                ("thermal_zone:CPU".to_string(), 42.5),
+                ("amdgpu edge 0000:0e:00.0".to_string(), 55.25),
+                ("board ambient i2c-1".to_string(), -5.0),
+                ("thermal CPU thermal_zone0".to_string(), 42.5),
             ]
         );
     }
