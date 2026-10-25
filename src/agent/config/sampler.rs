@@ -25,20 +25,33 @@ pub struct Sampler {
     #[serde(default)]
     cgroup_attribution: Option<bool>,
     /// Whether a sampler that keeps per-task accounting also exports it as
-    /// per-task series (`cpu_usage`'s `task_cpu_usage`, and the per-process
-    /// totals `process_cpu_usage`). Off by default: the accounting stays
-    /// (host and cgroup totals are computed from it), and what is dropped is
-    /// the export — a task-metadata event per new task and per rename, a
-    /// process-metadata event per new process and per leader rename, the
-    /// `task_rename` program, the two per-process arrays (64 MiB), the walk
-    /// of each per-pid map each time a snapshot is served (the slots with
-    /// metadata for V3, every slot for V2), contention on a process's counter
-    /// when its threads run on many CPUs (principle 7 in
-    /// `docs/principles.md`), and one series per thread plus one per rename
-    /// and one per process in every recording. `None` means the default.
+    /// per-task series (`cpu_usage`'s `task_cpu_usage`). Off by default: the
+    /// accounting stays (host and cgroup totals are computed from it), and
+    /// what is dropped is the export — a task-metadata event per new task
+    /// and per rename, a task-exit event per exit that is not a group's
+    /// last, the `task_rename` program unless `process_attribution` is on,
+    /// the walk of the per-pid map each time a snapshot is served
+    /// (the slots with metadata for V3, every slot for V2), and one series
+    /// per thread plus one per rename in every recording. `None` means the
+    /// default.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     task_attribution: Option<bool>,
+    /// Whether a sampler that keeps per-task accounting also keeps a total
+    /// per process (`cpu_usage`'s `process_cpu_usage`). Off by default; on,
+    /// it costs two per-pid arrays (64 MiB) and a 256 KiB ring, a
+    /// process-metadata event per new process and per leader rename, a
+    /// task-exit event per process exit when `task_attribution` is off (one
+    /// from each last thread that exits concurrently), the `task_rename`
+    /// program (one run per thread rename), a walk
+    /// of the per-process map each time a snapshot is served, contention on
+    /// a process's counter when its threads run on many CPUs (principle 7
+    /// in `docs/principles.md`), and one series per process in every
+    /// recording. Independent of `task_attribution`. `None` means the
+    /// default.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[serde(default)]
+    process_attribution: Option<bool>,
     /// The parts of a sampler that merged several older ones, each on by
     /// default (`syscall`: `counts`, `latency`; `blockio`: `requests`,
     /// `latency`; `scheduler`: `runqueue`, `migrations`). See `Config::part`.
@@ -95,6 +108,11 @@ impl Sampler {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn task_attribution(&self) -> Option<bool> {
         self.task_attribution
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn process_attribution(&self) -> Option<bool> {
+        self.process_attribution
     }
 
     /// The part switches this section sets, by name.

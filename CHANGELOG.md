@@ -1094,16 +1094,18 @@
 ### Added
 
 - **`process_cpu_usage`: CPU time per process.** With
-  `task_attribution = true`, `cpu_usage` also exports one series per thread
+  `process_attribution = true` (off by default, independent of
+  `task_attribution`), `cpu_usage` exports one series per thread
   group, labelled `tgid`, `comm` (the group leader's, relabelled on exec and
   on the leader's renames) and `cgroup`. It counts every thread of the
   process, including threads that have exited and threads with no series of
   their own, so a process's total no longer depends on how many threads it
   created. Its series ends within one snapshot interval of the process's
-  last thread exiting. It adds 64 MiB of kernel memory to
-  `task_attribution` (two per-pid arrays) and a 256 KiB ring, a metadata
-  event per new process and per leader rename, and two marker reads and a
-  counter add per accounting event that adds CPU. A process whose threads
+  last thread exiting. It costs 64 MiB of kernel memory (two per-pid
+  arrays) and a 256 KiB ring, a metadata event per new process and per
+  leader rename, an exit event per process when `task_attribution` is off,
+  the `task_rename` program (one run per thread rename), and two marker
+  reads and a counter add per accounting event that adds CPU. A process whose threads
   run on many CPUs contends on its counter: with 48 threads of one process
   on a 56-vCPU host at HZ=250, each run of the `cpu_usage` BPF programs
   took about 310 ns, against about 200 ns with 48 one-thread processes and

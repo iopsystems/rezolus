@@ -187,7 +187,7 @@ struct {
 
 // per-process cpu usage in nanoseconds (user + system of every thread of the
 // group, exported), at pid_slot(tgid); userspace assigns each process's
-// series to that index. Only with task_attribution; see process_start_times.
+// series to that index. Only with process_attribution; see process_start_times.
 // Every CPU running one of the process's threads writes its slot, at most about
 // once per tick each; docs/principles.md, principle 7, has the measured cost of
 // keeping one copy.
@@ -281,20 +281,24 @@ struct {
 u64 attach_ns = 0;
 
 /*
- * Per-task export is the config option `task_attribution`, off by default.
- * The accounting below runs either way -- the per-CPU and per-cgroup deltas
- * are computed from each task's utime/stime baseline, and exited tasks' CPU
- * is folded from task_cpu_usage into the exited counters -- so what the
- * switch removes is only what exists for the per-task and per-process
- * series: the task_info event (a ringbuf reserve and four string reads per
- * new task), the task_exit event, the process_info event, start_process and
- * account_process, the per-process maps (not created), and the
- * task_rename program, which is not loaded. Userspace does not read
- * task_cpu_usage or process_cpu_usage or drain those three ringbufs when it
- * is off. Written into read-only data before load, so the verifier removes
- * the sends rather than testing a flag per event.
+ * Per-task export is the config option `task_attribution`, and the
+ * per-process total is `process_attribution`; both are off by default. The
+ * accounting below runs either way -- the per-CPU and per-cgroup deltas are
+ * computed from each task's utime/stime baseline, and exited tasks' CPU is
+ * folded from task_cpu_usage into the exited counters.
+ *
+ * task_attribution off removes the task_info event (a ringbuf reserve and
+ * four string reads per new task) and the task_exit event of an exit that
+ * is not a group's last. process_attribution off removes the process_info
+ * event, start_process and account_process, and the per-process maps (not
+ * created). The task_exit event of a group's last exit is sent when either
+ * is on, and the task_rename program is loaded when either is on.
+ * Userspace reads and drains only what the switches it was given export.
+ * Written into read-only data before load, so the verifier removes the
+ * sends rather than testing a flag per event.
  */
 const volatile __u8 task_attribution = 0;
+const volatile __u8 process_attribution = 0;
 
 /**
  * send_task_info - Send one task's metadata to userspace
@@ -361,7 +365,7 @@ static __always_inline int send_process_info(struct task_struct* leader, const c
  * thread's event added in between.
  */
 static __always_inline void start_process(struct task_struct* task) {
-    if (!task_attribution)
+    if (!process_attribution)
         return;
 
     u32 tgid = BPF_CORE_READ(task, tgid);
@@ -673,7 +677,7 @@ static __always_inline int handle_cpuacct_account_field(struct task_struct* task
         array_add(&task_cpu_usage, slot, delta_total);
     }
 
-    if (task_attribution && delta_total > 0)
+    if (process_attribution && delta_total > 0)
         account_process(task, btf, delta_total, seen == EXITED_INSTANCE);
 
     if (!cgroup_attribution)
@@ -757,7 +761,10 @@ static __always_inline void retire_task(struct task_struct* task, bool btf, u32 
     u64 zero = 0;
     bpf_map_update_elem(&task_cpu_usage, &slot, &zero, BPF_ANY);
 
-    if (!task_attribution)
+    // A group's last exit is sent for the per-process series too: its
+    // dead_tgid lets userspace release labels whose marker a racing rename
+    // left pending after the exit (DEAD_GROUPS in mod.rs).
+    if (!task_attribution && !(process_attribution && dead_tgid != 0))
         return;
 
     struct task_exit* exit_event = bpf_ringbuf_reserve(&task_exit, sizeof(struct task_exit), 0);
@@ -829,7 +836,7 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
     // The group's last exit: its process instance has ended. The counter is
     // zeroed after the marker, as retire_task zeroes a task's. Userspace's
     // sweep releases its labels; a new group with this tgid starts again.
-    if (task_attribution && dead_tgid != 0 && dead_tgid < MAX_PID) {
+    if (process_attribution && dead_tgid != 0 && dead_tgid < MAX_PID) {
         u32 process_slot = pid_slot(dead_tgid);
         u64* process_marker = bpf_map_lookup_elem(&process_start_times, &process_slot);
         if (process_marker && *process_marker) {
@@ -957,7 +964,8 @@ static __always_inline void rename_process(struct task_struct* task, bool btf, u
  * takes task_lock in __set_task_comm, two concurrent renames of one thread
  * can be traced in one order and copied in the other.
  *
- * Loaded only with task_attribution on (see disabled_programs in mod.rs).
+ * Loaded only with task_attribution or process_attribution on (see
+ * disabled_programs in mod.rs); each relabels only its own series.
  */
 static __always_inline int account__task_rename(u64* ctx, bool btf) {
     /* TP_PROTO(struct task_struct *task, const char *comm) */
@@ -978,8 +986,11 @@ static __always_inline int account__task_rename(u64* ctx, bool btf) {
     // The group leader's name is the process's: relabel the process too.
     // Exec renames the exec'ing thread after de_thread has made it the
     // leader, so a process is relabelled with the program it executes.
-    if (BTF_READ(btf, task, tgid) == pid)
+    if (process_attribution && BTF_READ(btf, task, tgid) == pid)
         rename_process(task, btf, pid, comm, ts);
+
+    if (!task_attribution)
+        return 0;
 
     u64* marker = bpf_map_lookup_elem(&task_start_times, &slot);
     if (!marker)
