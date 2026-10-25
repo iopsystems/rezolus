@@ -441,6 +441,50 @@ fn an_uploaded_experiment_is_refused_beside_a_combined_view() {
     assert!(body.starts_with("exp2.dendro holds 2 recordings"), "{body}");
     assert!(body.contains("carry `arm` labels"), "{body}");
     assert!(!body.contains("--ab baseline="), "{body}");
+
+    // With no experiment attached, the archive saves again.
+    let (status, body) = upload(
+        &viewer,
+        "/api/v1/save_with_selection",
+        "selection.json",
+        br#"{"entries":[]}"#,
+    );
+    assert!(body.starts_with("SQLite format 3"), "{status}: {body:.200}");
+}
+
+/// The baseline slot holds a recording without an arm, chosen by
+/// `--baseline`, beside recordings that carry arms: an experiment of several
+/// recordings is refused without the `--ab` step all the same.
+#[test]
+fn arms_anywhere_in_the_baseline_file_leave_out_the_ab_step() {
+    let dir = tempfile::tempdir().unwrap();
+    rez::fixtures::multi_recording(
+        &dir.path().join("three.dendro"),
+        &[
+            ("redis", "web-01"),
+            ("valkey", "web-02"),
+            ("envoy", "web-03"),
+        ],
+    );
+    rez::fixtures::multi_recording(
+        &dir.path().join("exp2.dendro"),
+        &[("redis", "web-01"), ("rezolus", "web-09")],
+    );
+    run(
+        dir.path(),
+        "rezolus recording combine three.dendro --ab baseline=0 experiment=1 -o big.dendro",
+    );
+    let viewer = serve(
+        dir.path(),
+        "rezolus view big.dendro --baseline source=envoy --experiment source=redis",
+    );
+    let status = request(&viewer, "DELETE", "/api/v1/captures/experiment");
+    assert!(status.contains(" 200 "), "{status}");
+    let exp2 = std::fs::read(dir.path().join("exp2.dendro")).unwrap();
+    let (status, body) = upload(&viewer, "/api/v1/captures/experiment", "exp2.dendro", &exp2);
+    assert!(status.contains(" 400 "), "{status}: {body}");
+    assert!(body.contains("carry `arm` labels"), "{body}");
+    assert!(!body.contains("--ab baseline="), "{body}");
 }
 
 /// Before any replacement, a comparison archive saves a report.

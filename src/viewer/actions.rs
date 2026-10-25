@@ -231,7 +231,9 @@ fn ingest_rez_from_path(
             Some(Arc::new(::dashboard::combined::FixedCatalog(reader)));
         *state.parquet_path.write() = Some(rez_path.clone());
         *state.baseline_name.write() = Some(display_filename.clone());
-        *state.baseline_file.write() = super::state::BaselineFile::Combined(combined.labels.len());
+        *state.baseline_file.write() = super::state::BaselineFile::Combined {
+            recordings: combined.labels.len(),
+        };
         *state.experiment_parquet_path.write() = None;
         *state.cli_experiment_path.write() = None;
         *state.selection.write() = selection;
@@ -353,10 +355,7 @@ fn ingest_rez_from_path(
     *state.anchor_labels.write() = Some(b_labels.clone());
     *state.parquet_path.write() = Some(rez_path.clone());
     *state.baseline_name.write() = Some(display_filename.clone());
-    *state.baseline_file.write() = match labels.len() {
-        1 => super::state::BaselineFile::One,
-        n => super::state::BaselineFile::Comparison(n),
-    };
+    *state.baseline_file.write() = super::state::BaselineFile::compared(&labels);
     *state.experiment_parquet_path.write() = None;
     *state.cli_experiment_path.write() = None;
     state.captures.set_baseline_systeminfo(b_systeminfo);
@@ -454,7 +453,10 @@ fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
         .unwrap_or_else(|| "BASELINE.dendro".to_string());
     // An experiment is compared with one baseline recording; a combined
     // view of several has none to compare it with.
-    if let super::state::BaselineFile::Combined(combined) = *state.baseline_file.read() {
+    if let super::state::BaselineFile::Combined {
+        recordings: combined,
+    } = *state.baseline_file.read()
+    {
         return (
             StatusCode::BAD_REQUEST,
             ::rez::container::one_recording_hint(
@@ -485,7 +487,7 @@ fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
         &temp_path,
         &filename,
         &baseline,
-        super::baseline_has_arms(state),
+        state.baseline_file.read().arms(),
         Arc::clone(&state.pool),
     ) {
         Ok(opened) => opened,
@@ -820,10 +822,13 @@ impl ReportSources {
     /// archives, so it would hold the archive's own experiment as well.
     fn refusal(&self, baseline: &str) -> Option<String> {
         match (self.baseline_file, &self.experiment) {
-            (super::state::BaselineFile::Comparison(n), Some((_, experiment))) => Some(format!(
+            (
+                super::state::BaselineFile::Comparison { recordings: n, .. },
+                Some((_, experiment)),
+            ) => Some(format!(
                 "Save as Report cannot save this comparison: {baseline} holds {n} recordings, \
-                 and a report copies whole files, so it would hold {baseline}'s own \
-                 experiment beside {}. Open {baseline} alone to save a report of it",
+                 and a report copies whole files, so it would hold every recording of \
+                 {baseline} beside {}. Open {baseline} alone to save a report of it",
                 experiment.filename_or_default()
             )),
             _ => None,

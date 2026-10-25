@@ -217,7 +217,6 @@ pub fn refresh_combined_members(state: &AppState) {
     };
     let before = state.members.read().len();
     let combined = super::combine_recordings(readers);
-    *state.baseline_file.write() = super::state::BaselineFile::Combined(combined.labels.len());
     warn!(
         "{} now holds {} recordings (was {before}): {}; its sections were rebuilt, reload \
          the page to see them",
@@ -233,6 +232,13 @@ pub fn refresh_combined_members(state: &AppState) {
     state.captures.set_baseline_systeminfo(combined.systeminfo);
     if let Some(slot) = state.combined_live.lock().as_mut() {
         slot.1 = changes;
+        // Only while this archive is still the baseline: an upload may have
+        // replaced it during the reread.
+        if Arc::ptr_eq(&slot.0, &live) {
+            *state.baseline_file.write() = super::state::BaselineFile::Combined {
+                recordings: combined.labels.len(),
+            };
+        }
     }
     regenerate_dashboards(state);
 }

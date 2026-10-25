@@ -166,17 +166,17 @@
 
 ### Removed
 
-- **Breaking: every command but `rezolus recording upgrade` opens `.dendro`
-  archives only.** A `.rez` archive (v1, v2 or v3), a standalone `.parquet`
-  file and a `.parquet.ab.tar` A/B tarball are refused by `view` (a file, a
-  browser upload, a URL load and an attached experiment), the static-site
-  viewer, `mcp` (CLI and stdio), Save as Report and every other `recording`
-  subcommand, with the command that converts the file:
-  `rezolus recording upgrade FILE`, which writes `FILE`'s name with a
-  `.dendro` extension. Nothing converts a recording when it is opened, in
-  memory or into a temporary file. `upgrade` now also converts a
-  `.parquet.ab.tar` into a two-recording `.dendro` labelled
-  `arm=baseline`/`arm=experiment`, which the viewer opens as the
+- **Breaking: every command but `rezolus recording upgrade` opens
+  `.dendro` archives only.** A `.rez` archive (v1, v2 or v3), a standalone
+  `.parquet` file and a `.parquet.ab.tar` A/B tarball are refused by
+  `view` (a file, a browser upload, a URL load and an attached
+  experiment), the static-site viewer, `mcp` (CLI and stdio), Save as
+  Report and every other `recording` subcommand, with the command that
+  converts the file: `rezolus recording upgrade FILE`, which writes
+  `FILE`'s name with a `.dendro` extension. Nothing converts a recording
+  when it is opened, in memory or into a temporary file. `upgrade` now
+  also converts a `.parquet.ab.tar` into a two-recording `.dendro`
+  labelled `arm=baseline`/`arm=experiment`, which the viewer opens as the
   comparison; the tarball's aliases and category are not carried over. The
   edit commands' `-o` no longer converts a legacy input; it still writes
   the edited copy of a `.dendro` elsewhere. `recording filter` loses
@@ -187,15 +187,16 @@
   URL pair) takes a one-recording `.dendro` as the experiment. On the
   command line the baseline is one recording too: `rezolus view a b` with
   an archive of several recordings as `a` exits with an error (a second
-  file beside a `.rez` or `.dendro` used to be ignored with a warning). In the browser and through the upload API the
-  baseline may also be an archive that opens as a comparison, whose
-  experiment the second file replaces; Save as Report is then refused,
-  since a report copies whole files and would hold the archive's own
-  experiment too. Beside an archive that opens as one combined view, an
-  experiment is refused. Each refusal names the `recording combine` and
-  `view --baseline/--experiment` commands that compare two recordings. The static-site demo recordings
-  are `.dendro` files; a link that names a demo's old `.parquet` file
-  loads its `.dendro`.
+  file beside a `.rez` or `.dendro` used to be ignored with a warning). In
+  the browser and through the upload API the baseline may also be an
+  archive that opens as a comparison, whose experiment the second file
+  replaces; Save as Report is then refused, since a report copies whole
+  files and would hold every recording of the archive. Beside an archive
+  that opens as one combined view, an experiment is refused. Each refusal
+  of a file names the `recording combine` and `view
+  --baseline/--experiment` commands that compare two recordings. The
+  static-site demo recordings are `.dendro` files; a link that names a
+  demo's old `.parquet` file loads its `.dendro`.
 - **The viewer's Time selector (Aligned/Raw) is gone.** Every dashboard
   chart is on the step grid. Raw mode is a per-chart view: the expanded
   chart (the open-in-new-tab link) has SHOW SAMPLES, which reruns its query

@@ -1254,6 +1254,7 @@ impl WasmCaptureRegistry {
             self.baseline = None;
         } else {
             self.others.retain(|(id, _)| id != capture);
+            self.replaced_experiment = None;
         }
     }
 
@@ -1550,8 +1551,9 @@ impl WasmCaptureRegistry {
                 .unwrap_or_default();
             return Err(JsValue::from_str(&format!(
                 "Save as Report cannot save this comparison: {name} holds several \
-                 recordings, and a report copies whole files, so it would hold {name}'s \
-                 own experiment beside {experiment}. Open {name} alone to save a report of it"
+                 recordings, and a report copies whole files, so it would hold every \
+                 recording of {name} beside {experiment}. Open {name} alone to save a \
+                 report of it"
             )));
         }
 

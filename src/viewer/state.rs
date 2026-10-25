@@ -258,15 +258,40 @@ impl ProxyState {
     }
 }
 
-/// How the baseline's file is shown (`dashboard::combined::layout`).
+/// How the baseline's file is shown (`dashboard::combined::layout`), and
+/// whether any of its recordings carries an `arm` label, which
+/// `recording combine --ab` does not replace. A combined view's recordings
+/// carry none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BaselineFile {
     /// One recording, a live session, or no file yet.
-    One,
-    /// An archive of this many recordings, shown as a comparison.
-    Comparison(usize),
-    /// An archive of this many recordings, shown as one combined view.
-    Combined(usize),
+    One { arms: bool },
+    /// An archive of `recordings` recordings, shown as a comparison.
+    Comparison { recordings: usize, arms: bool },
+    /// An archive of `recordings` recordings, shown as one combined view.
+    Combined { recordings: usize },
+}
+
+impl BaselineFile {
+    /// The file's recordings labelled as `labels`, shown as a comparison
+    /// (or as the one recording it holds).
+    pub fn compared(labels: &[std::collections::BTreeMap<String, String>]) -> Self {
+        let arms = labels
+            .iter()
+            .any(|l| l.contains_key(::dashboard::combined::ARM_LABEL));
+        match labels.len() {
+            1 => Self::One { arms },
+            recordings => Self::Comparison { recordings, arms },
+        }
+    }
+
+    /// Whether any of the file's recordings carries an `arm` label.
+    pub fn arms(self) -> bool {
+        match self {
+            Self::One { arms } | Self::Comparison { arms, .. } => arms,
+            Self::Combined { .. } => false,
+        }
+    }
 }
 
 pub struct AppState {
@@ -380,7 +405,7 @@ impl AppState {
             follow: Mutex::new(None),
             parquet_path: RwLock::new(None),
             baseline_name: RwLock::new(None),
-            baseline_file: RwLock::new(BaselineFile::One),
+            baseline_file: RwLock::new(BaselineFile::One { arms: false }),
             experiment_parquet_path: RwLock::new(None),
             cli_experiment_path: RwLock::new(None),
             category_name: RwLock::new(None),
@@ -438,7 +463,7 @@ impl AppState {
         self.replace_baseline(session.reader());
         *self.parquet_path.write() = Some(session.path().to_path_buf());
         *self.baseline_name.write() = None;
-        *self.baseline_file.write() = BaselineFile::One;
+        *self.baseline_file.write() = BaselineFile::One { arms: false };
         *slot = Some(session);
     }
 

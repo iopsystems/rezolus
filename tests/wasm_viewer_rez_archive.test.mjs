@@ -220,7 +220,11 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
             (e) => String(e).includes(
                 'Save as Report cannot save this comparison: ab.dendro holds several recordings'),
         );
-        // A new baseline clears it.
+        // Detaching the experiment clears it, as a new baseline does.
+        registry.detach('experiment');
+        assert.ok(registry.save_with_selection('{"entries":[]}').length > 0);
+        registry.attach('experiment', one, 'exp.dendro');
+        assert.throws(() => registry.save_with_selection('{"entries":[]}'));
         registry.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
         assert.ok(registry.save_with_selection('{"entries":[]}').length > 0);
 

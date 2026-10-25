@@ -659,16 +659,6 @@ fn init_file_mode(
     init_file_mode_rez(config, path, registry, pool)
 }
 
-/// Whether the baseline's recording carries an `arm` label: then the
-/// baseline file's recordings cannot be relabelled by `combine --ab`.
-pub(super) fn baseline_has_arms(state: &AppState) -> bool {
-    state
-        .anchor_labels
-        .read()
-        .as_ref()
-        .is_some_and(|l| l.contains_key(::dashboard::combined::ARM_LABEL))
-}
-
 /// Open the dendro archive at `path` as the experiment of a two-file
 /// comparison: its one recording, with the systeminfo and metadata the
 /// captures registry keeps. A legacy file is refused with the upgrade
@@ -975,7 +965,9 @@ fn init_file_mode_combined(
     );
     *state.parquet_path.write() = Some(path.to_path_buf());
     *state.baseline_name.write() = Some(path.display().to_string());
-    *state.baseline_file.write() = state::BaselineFile::Combined(combined.labels.len());
+    *state.baseline_file.write() = state::BaselineFile::Combined {
+        recordings: combined.labels.len(),
+    };
     *state.selection.write() = selection;
     *state.trimmed_report_marker.write() = report_marker;
     state.captures.set_baseline_systeminfo(combined.systeminfo);
@@ -1227,10 +1219,7 @@ fn init_file_mode_rez(
     *state.anchor_labels.write() = Some(b_labels.clone());
     *state.parquet_path.write() = Some(path.to_path_buf());
     *state.baseline_name.write() = Some(path.display().to_string());
-    *state.baseline_file.write() = match n {
-        1 => state::BaselineFile::One,
-        n => state::BaselineFile::Comparison(n),
-    };
+    *state.baseline_file.write() = state::BaselineFile::compared(&all_labels);
     *state.selection.write() = b_selection;
     // A saved report stamps `KEY_REPORT=trimmed` on its anchor recording.
     // Without this a reloaded report would render its (mostly trimmed)
@@ -1278,7 +1267,7 @@ fn init_file_mode_rez(
             exp_path,
             &name,
             &baseline,
-            baseline_has_arms(&state),
+            state.baseline_file.read().arms(),
             Arc::clone(&pool),
         )
         .unwrap_or_else(|e| {
