@@ -27,6 +27,15 @@
   readings in a 1 s recording) from isolated points into a line. A decimated
   per-entity chart's min/max envelope and uncertainty ribbon spanned a
   missing bucket that its line broke at; they now break there too. (#1519)
+- **A cgroup whose name holds a backslash or a quote can be selected.** The
+  picker put selected names into the query unescaped, so systemd's `\x2d`
+  (an escaped `-`) was consumed by the PromQL string and the cgroup was
+  neither shown on the individual side nor removed from the aggregate. Names
+  are now quoted for the PromQL string. A cgroup is offered for selection
+  when its name is letters, digits, `/ _ . : @ - = , ~ %` and `\xHH`
+  escapes, which cover systemd units, container ids and pod names; any other
+  name is shown disabled with the reason, and a link that selects one drops
+  it with a console warning. (#1523)
 - **`task_cpu_usage` drops a series within one snapshot interval of its thread
   exiting, even when the exit event is lost.** A `task_exit` dropped because
   its ringbuf was full left the thread's labels exported at 0 until the pid

@@ -10,9 +10,37 @@ import { collectGroupPlots } from './group_utils.js';
 import { writeViewState } from '../ui/url_state.js';
 import { discoverCgroups } from './cgroup_discovery.js';
 
+// Why a cgroup cannot be selected, or null when it can. A selection reaches
+// the query engine as a regex matcher, `name=~"a|b"`: promql-parser unquotes
+// the string and requires it to compile as a regex, then metriken-storage
+// `match_pattern` compares each `|`-separated alternative with the name
+// literally, after turning `\.` into `.`. A name made of letters, digits,
+// `/ _ . : @ - = , ~ %` and `\xHH` escapes (systemd's escaped characters)
+// compiles and compares equal to itself; those characters cover systemd
+// units, container ids and pod names. Any other name, and the empty name, is
+// not offered, including a few the engine could match (`{`, `"`).
+const SELECTABLE = /^(?:[A-Za-z0-9/_.:@=,~%-]|\\x[0-9A-Fa-f]{2})+$/;
+export const cgroupUnselectableReason = (name) => (SELECTABLE.test(name)
+    ? null
+    : 'Cannot be selected: the name has characters outside those the selector can quote safely');
+
+// A name inside a PromQL double-quoted string: backslashes and quotes escaped,
+// so the string unquotes to the name itself (a systemd `\x2d` stays `\x2d`).
+const quoteForPromql = (name) => name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
+// The pattern substituted for `__SELECTED_CGROUPS__`: the selectable names,
+// quoted, joined by `|` and parenthesised when there are several. null when
+// none can be selected.
+export const cgroupPattern = (names) => {
+    const usable = names.filter((n) => !cgroupUnselectableReason(n)).map(quoteForPromql);
+    return usable.length > 1 ? '(' + usable.join('|') + ')' : usable[0] || null;
+};
+
 
 /** Render a custom multi-select list with a color swatch per item.
- *  Supports shift+click range selection via lastClicked / setLastClicked. */
+ *  Supports shift+click range selection via lastClicked / setLastClicked.
+ *  An item cgroupUnselectableReason rejects is drawn disabled, with the
+ *  reason as its title, and cannot be marked. */
 const selectList = (title, items, selectionSet, onToggle, emptyLabel, lastClicked, setLastClicked) =>
     m('div.selector-column', [
         m('h4', title),
@@ -25,8 +53,13 @@ const selectList = (title, items, selectionSet, onToggle, emptyLabel, lastClicke
                 m('li.cgroup-select-item', {
                     role: 'option',
                     'aria-selected': selectionSet.has(item) ? 'true' : 'false',
-                    class: selectionSet.has(item) ? 'selected' : '',
+                    'aria-disabled': cgroupUnselectableReason(item) ? 'true' : undefined,
+                    title: cgroupUnselectableReason(item) || undefined,
+                    class: cgroupUnselectableReason(item)
+                        ? 'disabled'
+                        : (selectionSet.has(item) ? 'selected' : ''),
                     onclick: (e) => {
+                        if (cgroupUnselectableReason(item)) return;
                         if (e.shiftKey && lastClicked != null) {
                             const from = items.indexOf(lastClicked);
                             const to = items.indexOf(item);
@@ -34,7 +67,7 @@ const selectList = (title, items, selectionSet, onToggle, emptyLabel, lastClicke
                                 const lo = Math.min(from, to);
                                 const hi = Math.max(from, to);
                                 for (let i = lo; i <= hi; i++) {
-                                    selectionSet.add(items[i]);
+                                    if (!cgroupUnselectableReason(items[i])) selectionSet.add(items[i]);
                                 }
                             }
                         } else {
@@ -68,18 +101,19 @@ let persistedOriginalQueries = null; // Map<string, string>
 // available list arrives (fetchAvailableCgroups); unknown ones are dropped
 // there with a warning rather than left to render empty charts.
 export const seedSelectedCgroups = (names) => {
-    persistedSelectedCgroups = new Set(
-        (Array.isArray(names) ? names : []).filter((n) => typeof n === 'string' && n !== ''),
-    );
+    const seeded = (Array.isArray(names) ? names : []).filter((n) => typeof n === 'string' && n !== '');
+    const unusable = seeded.filter((n) => cgroupUnselectableReason(n));
+    if (unusable.length > 0) {
+        console.warn(`[cgroups] dropping selection the selector cannot quote: ${unusable.join(', ')}`);
+    }
+    persistedSelectedCgroups = new Set(seeded.filter((n) => !cgroupUnselectableReason(n)));
+    if (unusable.length > 0) writeViewState({ cgroup: [...persistedSelectedCgroups] });
 };
 
 // The selection as the pattern the selector substitutes for
 // `__SELECTED_CGROUPS__`, or null when nothing is selected. A page that does
 // not mount the selector (an expanded chart) reads the selection from here.
-export const selectedCgroupPattern = () => {
-    const selected = Array.from(persistedSelectedCgroups);
-    return selected.length > 1 ? '(' + selected.join('|') + ')' : selected[0] || null;
-};
+export const selectedCgroupPattern = () => cgroupPattern(Array.from(persistedSelectedCgroups));
 
 export const CgroupSelector = {
     oninit(vnode) {
@@ -165,10 +199,7 @@ export const CgroupSelector = {
         vnode.state.updateInProgress = true;
         vnode.state.cancelUpdate = false;
 
-        const selected = Array.from(vnode.state.selectedCgroups);
-        const selectedPattern = selected.length > 1
-            ? '(' + selected.join('|') + ')'
-            : selected[0] || '';
+        const selectedPattern = cgroupPattern(Array.from(vnode.state.selectedCgroups)) || '';
 
         setActiveCgroupPattern(selectedPattern || null);
 
@@ -249,6 +280,7 @@ export const CgroupSelector = {
     transfer(vnode, items, direction) {
         const op = direction === 'add' ? 'add' : 'delete';
         for (const cg of items) {
+            if (op === 'add' && cgroupUnselectableReason(cg)) continue;
             vnode.state.selectedCgroups[op](cg);
         }
         persistedSelectedCgroups = new Set(vnode.state.selectedCgroups);
@@ -263,6 +295,7 @@ export const CgroupSelector = {
         const unselected = Array.from(st.availableCgroups)
             .filter((cg) => !st.selectedCgroups.has(cg))
             .sort();
+        const selectable = unselected.filter((cg) => !cgroupUnselectableReason(cg));
         const selected = Array.from(st.selectedCgroups).sort();
 
         const leftItems = st.loading
@@ -293,8 +326,8 @@ export const CgroupSelector = {
                         st.leftSelected.size === 0,
                         () => this.transfer(vnode, st.leftSelected, 'add')),
                     transferBtn('>>', '⇊', 'Move all to individual',
-                        unselected.length === 0,
-                        () => this.transfer(vnode, unselected, 'add')),
+                        selectable.length === 0,
+                        () => this.transfer(vnode, selectable, 'add')),
                     transferBtn('<<', '⇈', 'Move all to aggregate',
                         selected.length === 0,
                         () => this.transfer(vnode, selected, 'remove')),
