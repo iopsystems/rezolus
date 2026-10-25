@@ -1,0 +1,258 @@
+{
+  "interval": 1.0,
+  "source": "rezolus",
+  "version": "6.0.0",
+  "filename": "",
+  "start_time": 1700000000000.0,
+  "end_time": 1700000060000.0,
+  "groups": [
+    {
+      "name": "Hardware Sensors",
+      "id": "hw_sensors",
+      "subgroups": [
+        {
+          "name": "Temperature",
+          "description": "Temperatures, one series per channel. Missing or unreadable sensors are absent.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Temperature",
+                "id": "sensor-temperature",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "°C",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (sensor) (sensor_temperature) / 1000",
+              "width": "full"
+            }
+          ]
+        },
+        {
+          "name": "Power",
+          "description": "Power per native channel, including direct readings and marked derived readings. Derived power can pair sequential voltage and current reads; channels are not summed across rails because rails can overlap.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Power",
+                "id": "sensor-power",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Watts",
+                  "unit_system": "power",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (sensor) (sensor_power) / 1000000",
+              "width": "full"
+            }
+          ]
+        },
+        {
+          "name": "Voltage",
+          "description": "Bus voltage, one series per channel.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Voltage",
+                "id": "sensor-voltage",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Volts",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (sensor) (sensor_voltage) / 1000",
+              "width": "full"
+            }
+          ]
+        },
+        {
+          "name": "Current",
+          "description": "Current, one series per channel.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Current",
+                "id": "sensor-current",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Amps",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (sensor) (sensor_current) / 1000",
+              "width": "full"
+            }
+          ]
+        },
+        {
+          "name": "Fan Speed",
+          "description": "Measured fan speed in revolutions per minute, separate from PWM demand.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Fan Speed",
+                "id": "sensor-fan-speed",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "RPM",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (sensor) (sensor_fan_speed)",
+              "width": "full"
+            }
+          ]
+        },
+        {
+          "name": "Fan PWM",
+          "description": "Fan PWM demand converted from the native 0–255 value to a percentage; it is not fan speed.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Fan PWM",
+                "id": "sensor-fan-pwm",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Percent",
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (sensor) (sensor_fan_pwm) / 255",
+              "width": "full"
+            }
+          ]
+        },
+        {
+          "name": "Cooling State",
+          "description": "The driver-defined state index. This is an ordinal device state, not a throttling percentage.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Cooling State",
+                "id": "sensor-cooling-state",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "State",
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (sensor) (sensor_cooling_state)",
+              "width": "full"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "name": "Overview",
+      "route": "/overview"
+    },
+    {
+      "name": "Exceptions",
+      "route": "/exceptions"
+    },
+    {
+      "name": "Query Explorer",
+      "route": "/query"
+    },
+    {
+      "name": "CPU",
+      "route": "/cpu"
+    },
+    {
+      "name": "GPU",
+      "route": "/gpu"
+    },
+    {
+      "name": "Hardware Sensors",
+      "route": "/hw_sensors"
+    },
+    {
+      "name": "Memory",
+      "route": "/memory"
+    },
+    {
+      "name": "Network",
+      "route": "/network"
+    },
+    {
+      "name": "Scheduler",
+      "route": "/scheduler"
+    },
+    {
+      "name": "Syscall",
+      "route": "/syscall"
+    },
+    {
+      "name": "Softirq",
+      "route": "/softirq"
+    },
+    {
+      "name": "BlockIO",
+      "route": "/blockio"
+    },
+    {
+      "name": "Filesystem",
+      "route": "/filesystem"
+    },
+    {
+      "name": "ext4",
+      "route": "/ext4"
+    },
+    {
+      "name": "XFS",
+      "route": "/xfs"
+    },
+    {
+      "name": "cgroups",
+      "route": "/cgroups"
+    },
+    {
+      "name": "Rezolus",
+      "route": "/rezolus"
+    }
+  ]
+}

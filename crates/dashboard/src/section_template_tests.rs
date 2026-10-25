@@ -101,6 +101,32 @@ impl Catalog {
         }
     }
 
+    /// Every series without `key`, so a predicate on the label is seen
+    /// false while the metrics are present.
+    fn without_label(&self, key: &str) -> Self {
+        let strip = |m: &BTreeMap<String, Vec<Labels>>| {
+            m.iter()
+                .map(|(k, v)| {
+                    let v = v
+                        .iter()
+                        .map(|l| {
+                            l.iter()
+                                .filter(|(lk, _)| lk.as_str() != key)
+                                .map(|(a, b)| (a.clone(), b.clone()))
+                                .collect()
+                        })
+                        .collect();
+                    (k.clone(), v)
+                })
+                .collect()
+        };
+        Self {
+            counters: strip(&self.counters),
+            gauges: strip(&self.gauges),
+            histograms: strip(&self.histograms),
+        }
+    }
+
     fn rename(&mut self, from: &str, to: &str) {
         for m in [&mut self.counters, &mut self.gauges, &mut self.histograms] {
             if let Some(v) = m.remove(from) {
@@ -252,6 +278,7 @@ fn sink(bench: &Catalog) -> Catalog {
             ("engine_class", "render"),
             ("frequency", "actual"),
             ("sensor", "coretemp:native-0"),
+            ("name", "coretemp temp1 native-0"),
             ("kind", "net_rx"),
         ]),
         labels(&[
@@ -264,6 +291,7 @@ fn sink(bench: &Catalog) -> Catalog {
             ("engine_class", "video"),
             ("frequency", "requested"),
             ("sensor", "coretemp:native-1"),
+            ("name", "coretemp temp1 native-1"),
             ("kind", "timer"),
         ]),
     ];
@@ -481,6 +509,9 @@ fn named_catalogs() -> Vec<(&'static str, Catalog)> {
         ("sink", sink.clone()),
         ("sink-single", sink.single()),
         ("sink-gauges", sink.as_gauges()),
+        // A recording from an agent that did not label hw_sensors channels
+        // with `name`.
+        ("sink-without-name", sink.without_label("name")),
         ("gpus", gpus()),
         ("gpus-sharing-an-id", gpus_sharing_an_id()),
         ("gpus-without-vendor", gpus_without_vendor()),

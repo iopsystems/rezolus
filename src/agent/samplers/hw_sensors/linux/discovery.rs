@@ -52,9 +52,9 @@ pub struct Descriptor {
     /// Stable, family-local identity. It contains no discovery-root prefix.
     pub sensor: String,
     /// A readable name, unique within the family: the chip, the label (or the
-    /// channel when there is none), and the short device. Built only from
-    /// this descriptor's fields, so it does not change when other sensors
-    /// come or go.
+    /// channel when there is none), and the short device. `disambiguate_names`
+    /// adds the channel when another descriptor of the family has the same
+    /// name in that discovery pass. A slot keeps the name it was given first.
     pub name: String,
     /// The last component of the device path: a PCI address such as
     /// `0000:0b:00.1`, a platform or I2C device name, or `thermal_zoneN`.
@@ -162,10 +162,12 @@ pub fn discover(sysfs: &Path) -> Discovery {
     found
 }
 
-/// A name shared by two descriptors of one family (a driver that repeats a
-/// label across channels) gets the channel added, so a dashboard grouping by
-/// name cannot sum two channels together. A chip's channels are discovered
-/// together, so the result is the same on every pass.
+/// A name shared by two descriptors of one family in one discovery pass (a
+/// driver that repeats a label across channels) gets the channel added, so a
+/// dashboard grouping by name cannot sum two channels together. A channel
+/// that appears in a later pass (an `asusec` header connected while running)
+/// can repeat a label the earlier one kept undisambiguated; both names stay
+/// unique, but the first can change after a restart.
 fn disambiguate_names(descriptors: &mut [Descriptor]) {
     let mut counts = std::collections::HashMap::new();
     for d in descriptors.iter() {

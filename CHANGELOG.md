@@ -17,7 +17,9 @@
   `hw_sensors` now also labels each channel with `device`, the last component
   of the device path, and `name`, `<chip> <label or channel> <device>`
   (for example `bnxt_en temp1 0000:0b:00.1`), and the charts group by
-  `name`. (#1518)
+  `name`. A recording without `name` (from an older agent) is still grouped
+  by `sensor`; one that mixes both sums its series without `name` into one
+  line. (#1518)
 - **A per-entity line chart has no legend.** A chart with one line per
   sensor, mount or cgroup drew a legend that wrapped to as many rows as it
   had series, over the plot and the time axis. The tooltip names every series

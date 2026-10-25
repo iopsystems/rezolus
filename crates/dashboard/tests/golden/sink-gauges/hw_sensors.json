@@ -12,7 +12,7 @@
       "subgroups": [
         {
           "name": "Temperature",
-          "description": "Temperatures from each native sensor identity. Missing or unreadable sensors are absent.",
+          "description": "Temperatures, one series per channel. Missing or unreadable sensors are absent.",
           "plots": [
             {
               "data": [],
@@ -60,7 +60,7 @@
         },
         {
           "name": "Voltage",
-          "description": "Bus voltage per native sensor identity.",
+          "description": "Bus voltage, one series per channel.",
           "plots": [
             {
               "data": [],
@@ -84,7 +84,7 @@
         },
         {
           "name": "Current",
-          "description": "Current per native sensor identity.",
+          "description": "Current, one series per channel.",
           "plots": [
             {
               "data": [],

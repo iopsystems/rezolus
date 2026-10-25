@@ -1455,12 +1455,15 @@ every 60 seconds and adds it once it reports another value.
 
 Each family identifies a native channel with `sensor`, `source`, `chip`,
 `channel`, and a native `label` when supplied by the kernel. `device` is the
-last component of the device path (a PCI address such as `0000:0b:00.1`, a
-platform or I2C device, or `thermal_zoneN`). `name` is a readable name unique
+last component of the device path: a PCI address such as `0000:0b:00.1`, a
+platform or I2C device, `thermal_zoneN`, `cooling_deviceN`, or `hwmonN` for an
+hwmon with no parent device (that one can renumber across reboots). `name` is a readable name unique
 within the family, `<chip> <label or channel> <device>`, for example
 `k10temp Tctl 0000:00:18.3`; when a driver repeats a label across channels,
 the channel is added, `<chip> <label> (<channel>) <device>`. The Hardware
-Sensors charts name their series by `name`. `board_model` and
+Sensors charts group by `name` when the recording has it and by `sensor`
+otherwise; a recording that mixes both (it spans an agent upgrade, or combines
+hosts on different versions) sums the series without `name` into one line. `board_model` and
 `soc_compatible` preserve platform identity when available; `scope` records
 verified board-specific interpretation. Derived power carries
 `derived=voltage_x_current`.
