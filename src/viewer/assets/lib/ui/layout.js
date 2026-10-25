@@ -262,7 +262,7 @@ const TopNav = {
             // GPU selection lives in the GPU section body (a two-panel picker
             // mirroring the cgroups selector), not in the top nav.
             // Three sibling buttons sit next to REZOLUS in single-capture
-            // mode: file metadata (filename text + dropdown), Load Parquet,
+            // mode: file metadata (filename text + dropdown), Load Recording,
             // Load Selection. Compare mode puts filename + per-side Load
             // Parquet inside .compare-badge instead, but Load Selection
             // still appears here.
@@ -288,7 +288,7 @@ const TopNav = {
                         ? 'Replace current view (a .dendro recording)'
                         : 'Upload a .dendro recording',
                 }, [
-                    m('span', 'Load Parquet'),
+                    m('span', 'Load Recording'),
                     m.trust(UPLOAD_ICON_SVG),
                 ]),
                 attrs.onUploadParquet && m('button.transport-btn.import-btn', {

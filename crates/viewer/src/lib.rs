@@ -1073,8 +1073,9 @@ impl WasmCaptureRegistry {
     }
 
     /// The baseline's file name for the refusal of a multi-recording
-    /// experiment, when the name it was attached under is not one: a label
-    /// the page shows, or a URL (pass its last path segment).
+    /// experiment, when the name it was attached under is a label the page
+    /// shows. A URL is reduced to its last path segment when the refusal is
+    /// built.
     pub fn set_baseline_name(&mut self, name: &str) {
         self.baseline_name = Some(name.to_string());
     }

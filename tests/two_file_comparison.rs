@@ -235,3 +235,55 @@ fn recordings_labels_cannot_tell_apart_compare_by_position() {
     assert_eq!(slot(&slots, "baseline"), "baseline", "{slots:?}");
     assert_eq!(slot(&slots, "experiment"), "experiment", "{slots:?}");
 }
+
+/// A recording with no rows is left out of describe-recording's list but
+/// keeps its archive position, which `--ab` counts: the listing prints each
+/// recording's position, so the one meant is the one labelled.
+#[test]
+fn positions_count_a_recording_with_no_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    rez::fixtures::multi_recording(&dir.path().join("one.dendro"), &[("rezolus", "web-01")]);
+    let mut sources = rez::fixtures::multi_recording_sources(&[
+        ("rezolus", "web-00"),
+        ("rezolus", "web-01"),
+        ("rezolus", "web-02"),
+    ]);
+    sources[0].rows.clear();
+    rez::fixtures::write_dendro(
+        &dir.path().join("two.dendro"),
+        &sources,
+        None,
+        rez::fixtures::Finish::Finalized,
+    );
+    let (stderr, commands) = refusal(dir.path(), "one.dendro", "two.dendro");
+    assert_eq!(commands.len(), 5, "{stderr}");
+    run(dir.path(), &commands[0]);
+    let listing = String::from_utf8_lossy(&run(dir.path(), &commands[1]).stdout).to_string();
+    // web-02's position, as describe-recording prints it.
+    let line = listing
+        .lines()
+        .find(|l| l.contains("host=web-02"))
+        .unwrap_or_else(|| panic!("web-02 in:\n{listing}"));
+    let position = line
+        .split("(position ")
+        .nth(1)
+        .and_then(|r| r.split(')').next())
+        .unwrap_or_else(|| panic!("a position in {line:?}"));
+    assert_eq!(
+        position, "3",
+        "the rowless web-00 is position 1:\n{listing}"
+    );
+    run(
+        dir.path(),
+        &commands[3]
+            .replacen("baseline=N", "baseline=0", 1)
+            .replacen("experiment=M", &format!("experiment={position}"), 1),
+    );
+    let described = run(dir.path(), "rezolus mcp describe-recording ab.dendro");
+    let described = String::from_utf8_lossy(&described.stdout).to_string();
+    let line = described
+        .lines()
+        .find(|l| l.contains("arm=experiment"))
+        .unwrap_or_else(|| panic!("arm=experiment in:\n{described}"));
+    assert!(line.contains("host=web-02"), "{line}");
+}

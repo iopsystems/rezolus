@@ -169,7 +169,7 @@ async function loadParquet(data, filename, fileName = filename) {
         selectionPayload: state.selectionPayload,
         queryRange: state.queryRange,
         reportMode,
-        // Wire the topnav "Load Parquet" button to the same handler the
+        // Wire the topnav "Load Recording" button to the same handler the
         // landing-page dropzone uses. The server viewer uploads via
         // /api/v1/upload; here we take the File bytes and reuse
         // loadParquet directly.
@@ -189,7 +189,7 @@ async function loadParquet(data, filename, fileName = filename) {
 
 // Shared file-upload entry point: reads the File's bytes and runs the
 // usual loadParquet flow. Used by both the landing-page Choose-File /
-// drop zone and the topnav "Load Parquet" button after a capture is
+// drop zone and the topnav "Load Recording" button after a capture is
 // already loaded (which destroys the splash and re-enters loadParquet
 // with the new bytes — same lifecycle as `loadCapture`).
 async function loadFile(file) {

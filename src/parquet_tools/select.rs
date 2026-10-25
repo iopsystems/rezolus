@@ -278,8 +278,9 @@ pub(crate) fn render_labels(labels: &BTreeMap<String, String>) -> String {
 /// Printing the selector rather than only the labels is the point: the
 /// caller's next command is a copy of a line it was just given.
 ///
-/// Deliberately unnumbered — an index would invite `--recording 1`, which is
-/// not a supported selector.
+/// A selectable recording is listed without its position, which would invite
+/// `--recording 1`, not a supported selector; an unselectable one is listed
+/// with it, for `recording combine --ab`.
 pub(crate) fn describe_candidates(
     all: &[BTreeMap<String, String>],
     highlight: &[usize],
@@ -287,19 +288,23 @@ pub(crate) fn describe_candidates(
     program: &str,
 ) -> String {
     let positions: Vec<usize> = (0..all.len()).collect();
-    describe_candidates_at(all, &positions, highlight, syntax, program)
+    describe_candidates_at(all, &positions, highlight, syntax, program, false)
 }
 
 /// [`describe_candidates`], where `positions[i]` is recording `i`'s position
 /// in its archive (`RezReader::open_recordings` order, which `recording
 /// combine FILE --ab baseline=N experiment=M` takes): `all` may leave out
-/// recordings with no rows.
+/// recordings with no rows. With `numbered`, a selectable recording's
+/// position is printed too, as `describe-recording` lists them: every
+/// recording then carries the position `--ab` takes, which counting the
+/// list's lines would not give when a recording with no rows is left out.
 pub(crate) fn describe_candidates_at(
     all: &[BTreeMap<String, String>],
     positions: &[usize],
     highlight: &[usize],
     syntax: SelectorSyntax,
     program: &str,
+    numbered: bool,
 ) -> String {
     let indices: Vec<usize> = if highlight.is_empty() {
         (0..all.len()).collect()
@@ -351,8 +356,13 @@ pub(crate) fn describe_candidates_at(
             continue;
         };
 
+        let position = if numbered {
+            format!(" (position {})", positions[i])
+        } else {
+            String::new()
+        };
         out.push_str(&format!(
-            "  - {rendered}\n    select with: {}\n",
+            "  - {rendered}{position}\n    select with: {}\n",
             picker_form(pairs, syntax)
         ));
     }
@@ -997,6 +1007,7 @@ mod tests {
             &[],
             SelectorSyntax::Flag("--recording"),
             "rezolus",
+            false,
         );
         assert!(out.contains("--ab baseline=2 experiment=3"), "{out}");
     }

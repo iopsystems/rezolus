@@ -484,7 +484,7 @@
   "result": {
     "content": [
       {
-        "text": "multi.dendro holds 2 recordings of one run, read together: every series carries its recording's labels, so a matcher on one (`{host=\"...\"}`) selects its series. A recording and its copies (one source copied, or recorded twice from one agent process) are one recording, read once. Separate recordings whose labels are identical are told apart in queries by `__recording__` (the archive index of each one's first source), which no recording selector can name:\n  - host=web-01, source=rezolus\n    select with: recording {\"host\": \"web-01\"}\n  - host=web-02, source=rezolus\n    select with: recording {\"host\": \"web-02\"}\n\nRun any tool with one of the selectors above to read that recording alone.",
+        "text": "multi.dendro holds 2 recordings of one run, read together: every series carries its recording's labels, so a matcher on one (`{host=\"...\"}`) selects its series. A recording and its copies (one source copied, or recorded twice from one agent process) are one recording, read once. Separate recordings whose labels are identical are told apart in queries by `__recording__` (the archive index of each one's first source), which no recording selector can name:\n  - host=web-01, source=rezolus (position 0)\n    select with: recording {\"host\": \"web-01\"}\n  - host=web-02, source=rezolus (position 1)\n    select with: recording {\"host\": \"web-02\"}\n\nRun any tool with one of the selectors above to read that recording alone.",
         "type": "text"
       }
     ]

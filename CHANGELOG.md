@@ -1411,7 +1411,7 @@
 
 ### Changed
 
-- **`record` and `hindsight` write dendro archives by default** (`.dendro`),
+- **`record` and `hindsight` write dendro archives** (`.dendro`),
   through metriken-archive's `ArchiveWriter`. A bare `rezolus record` writes
   `rezolus.dendro`; hindsight's default output is
   `/var/lib/rezolus/rezolus.dendro`. Groups with slots (threads, cgroups, CPUs) are
@@ -1470,7 +1470,7 @@
   0.1.0's, the relabel metriken-query 0.32.0's).
   Series carry the occupant's labels plus an internal `__occupant__`, and
   filters on those labels work. Checked against the same data written one
-  column per slot: every query agrees. Nothing writes this layout yet.
+  column per slot: every query agrees.
 
 - `rezolus view`, `rezolus mcp` and the static-site viewer open dendro
   archives. Checked on two real recordings (581 MB and 1.28 GB): the same

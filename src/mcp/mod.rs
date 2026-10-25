@@ -340,7 +340,8 @@ pub(crate) fn open_source_with_pool_labeled(
                     &universe_idx,
                     &[],
                     syntax,
-                    env!("CARGO_BIN_NAME")
+                    env!("CARGO_BIN_NAME"),
+                    false
                 )
             )));
         }
@@ -375,7 +376,8 @@ pub(crate) fn open_source_with_pool_labeled(
                     &universe_idx,
                     &hits,
                     syntax,
-                    env!("CARGO_BIN_NAME")
+                    env!("CARGO_BIN_NAME"),
+                    false
                 )
             );
             // Only the NO-SELECTOR case is `NeedsSelection`: it is the one a
@@ -772,12 +774,18 @@ fn listing(
     } else {
         Some("No recording in this archive can be selected by labels.")
     };
-    let body = match positions {
-        Some(positions) => {
-            describe_candidates_at(recordings, positions, &[], syntax, env!("CARGO_BIN_NAME"))
-        }
-        None => describe_candidates(recordings, &[], syntax, env!("CARGO_BIN_NAME")),
-    };
+    // Every recording carries its archive position here: the refusal of a
+    // two-file comparison sends the user to this listing for the positions
+    // `recording combine --ab` takes.
+    let identity: Vec<usize> = (0..recordings.len()).collect();
+    let body = describe_candidates_at(
+        recordings,
+        positions.unwrap_or(&identity),
+        &[],
+        syntax,
+        env!("CARGO_BIN_NAME"),
+        true,
+    );
     match close {
         Some(close) => format!("{lead}\n{body}\n{close}"),
         // `body` ends in a newline (one entry per line), so trim rather than

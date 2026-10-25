@@ -183,8 +183,7 @@ pub fn one_recording_hint(
          {program} mcp describe-recording both.dendro\n  \
          {program} view both.dendro --baseline KEY=VALUE --experiment KEY=VALUE\n\
          If describe-recording says a recording cannot be selected by labels, label \
-         the two by position (each recording's place in describe-recording's list, \
-         counting from 0) and view that archive:\n  \
+         the two by the positions describe-recording prints and view that archive:\n  \
          {program} recording combine both.dendro --ab baseline=N experiment=M -o ab.dendro\n  \
          {program} view ab.dendro",
         shell_word(baseline),
