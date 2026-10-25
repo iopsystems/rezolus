@@ -224,7 +224,7 @@ impl<'a> Host<'a> {
                 "{list_recordings_order}",
                 self.list_recordings.map_or_else(
                     || "in archive order".to_string(),
-                    |c| format!("in the order `{c}` lists them"),
+                    |c| format!("as `{c}` prints them (each recording's `(position N)`)"),
                 ),
             ),
             (
@@ -299,7 +299,7 @@ impl<'a> Host<'a> {
     /// Where `combine --ab` positions come from, for its refusal.
     pub(super) fn positions_from(&self) -> String {
         match self.list_recordings {
-            Some(c) => format!("as `{c}` lists them"),
+            Some(c) => format!("as `{c}` prints them (each recording's `(position N)`)"),
             None => "in archive order".to_string(),
         }
     }

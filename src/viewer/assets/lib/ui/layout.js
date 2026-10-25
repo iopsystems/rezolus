@@ -263,9 +263,8 @@ const TopNav = {
             // mirroring the cgroups selector), not in the top nav.
             // Three sibling buttons sit next to REZOLUS in single-capture
             // mode: file metadata (filename text + dropdown), Load Recording,
-            // Load Selection. Compare mode puts filename + per-side Load
-            // Parquet inside .compare-badge instead, but Load Selection
-            // still appears here.
+            // Load Selection. Compare mode also puts a per-side upload icon
+            // in .compare-badge.
             m('div.topnav-actions', [
                 (() => {
                     const displayLabel = attrs.selectedNode || attrs.filename;

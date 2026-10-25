@@ -914,7 +914,7 @@ Error: --ab experiment=7: multi.dendro holds 2 recording(s), numbered from 0
 --- exit 1
 --- stdout
 --- stderr
-Error: --ab baseline="zero": with one input, name a recording by its position (0, 1, ...) as `rezolus mcp describe-recording` lists them
+Error: --ab baseline="zero": with one input, name a recording by its position (0, 1, ...) as `rezolus mcp describe-recording` prints them (each recording's `(position N)`)
 
 === rezolus recording combine ab.dendro ab3.dendro -o two-arms-each.dendro
 --- exit 0

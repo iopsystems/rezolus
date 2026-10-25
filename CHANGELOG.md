@@ -382,7 +382,7 @@
   are identical (two agents recorded as `source=rezolus` on one host), no
   selector can name either one; label them by position instead: `rezolus
   recording combine ab.dendro --ab baseline=0 experiment=1 -o ab-arms.dendro`
-  (positions in the order `describe-recording` lists them, from 0), which
+  (the `(position N)` `describe-recording` prints for each recording), which
   copies the archive with the two arms and opens A/B. `combine` takes one
   input only in this form.
 - **A combined archive that is still being written is followed as one

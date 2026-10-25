@@ -956,9 +956,9 @@ what the archive holds and the flag that picks each one:
 ```
 $ rezolus mcp describe-recording ab.dendro
 ab.dendro holds 2 recordings with data (a multi-host or A/B archive):
-  - host=web-01, source=redis
+  - host=web-01, source=redis (position 0)
     select with: --recording source=redis
-  - host=web-01, source=valkey
+  - host=web-01, source=valkey (position 1)
     select with: --recording source=valkey
 
 Run any tool with one of the selectors above to analyze that recording.

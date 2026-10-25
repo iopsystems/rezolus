@@ -11,7 +11,7 @@ enum AbPlan {
     /// Two inputs: each input's recordings take that input's arm.
     Inputs([&'static str; 2]),
     /// One input: the recordings at these positions (0-based, in the
-    /// archive's order, as `describe-recording` lists them) take these arms.
+    /// archive's order, as `describe-recording` prints them) take these arms.
     /// For an archive assembled before `--ab` existed, whose two recordings
     /// may carry the same labels.
     Positions([(usize, &'static str); 2]),
@@ -132,7 +132,7 @@ impl AbPlan {
     /// The arm each source of the output takes, and the input it came
     /// from: `counts` is how many sources each input contributed, in the
     /// order they were copied. `groups` is the one input's recordings as
-    /// `rezolus mcp describe-recording` lists them (its read groups, each by
+    /// `rezolus mcp describe-recording` numbers them (its read groups, each by
     /// the catalog positions of its sources), which `--ab baseline=0
     /// experiment=1` positions index; every source of a named recording
     /// takes its arm.
@@ -1124,7 +1124,7 @@ mod tests {
         assert_eq!(answer(&both[0].1), answer(&one[0].1));
     }
 
-    /// `--ab` positions index the recordings `describe-recording` lists (the
+    /// `--ab` positions index the recordings `describe-recording` numbers (the
     /// read groups), not the archive's sources. An original, its snapshot and
     /// a later recording are three sources but two recordings: position 0 is
     /// the original with its copy, and both of its sources take the arm;

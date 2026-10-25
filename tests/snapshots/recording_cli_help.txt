@@ -441,7 +441,7 @@ baseline/experiment comparison; an input recording that already carries
 the other arm is refused, naming the input. With two inputs, each value
 is an input's path or file name. With ONE archive input, each value is
 the position of one of its recordings, from 0,
-in the order `rezolus mcp describe-recording` lists them.
+as `rezolus mcp describe-recording` prints them (each recording's `(position N)`).
 Every source of a recording, such as a source and its snapshot, takes
 its arm. That is the way to compare the two recordings of an archive
 combined without --ab, whose labels may be identical.
