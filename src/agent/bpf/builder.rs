@@ -14,7 +14,7 @@ use perf_event::ReadFormat;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::mem::MaybeUninit;
-use std::os::fd::{AsFd, AsRawFd, FromRawFd};
+use std::os::fd::{AsFd, AsRawFd};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Arc;
@@ -1208,12 +1208,11 @@ where
             .collect();
 
             for (name, values) in self.maps.into_iter() {
-                let fd = skel.map(name).as_fd().as_raw_fd();
-                let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
+                let fd = skel.map(name).as_fd();
                 let mut mmap = unsafe {
                     memmap2::MmapOptions::new()
                         .len(std::mem::size_of::<u64>() * values.len())
-                        .map_mut(&file)
+                        .map_mut(&fd)
                         .expect("failed to mmap() bpf map")
                 };
 
