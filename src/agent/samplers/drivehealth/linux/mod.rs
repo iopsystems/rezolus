@@ -41,15 +41,23 @@ use device::*;
 use ec2::{Ec2Stats, Ec2Storage};
 use stats::*;
 
-/// The NVMe-only throttle counter groups, in a fixed order, for per-drive label
-/// application at discovery.
-static NVME_COUNTER_GROUPS: &[&dyn metriken::group::SlotMetadata] = &[
+/// The NVMe-only groups (thermal counters and Temperature Sensor gauges), in a
+/// fixed order, for per-drive label application at discovery.
+static NVME_GROUPS: &[&dyn metriken::group::SlotMetadata] = &[
     &DRIVE_TEMPERATURE_WARNING_TIME,
     &DRIVE_TEMPERATURE_CRITICAL_TIME,
     &DRIVE_THERMAL_THROTTLE_TIME_1,
     &DRIVE_THERMAL_THROTTLE_TIME_2,
     &DRIVE_THERMAL_THROTTLE_TRANSITIONS_1,
     &DRIVE_THERMAL_THROTTLE_TRANSITIONS_2,
+    &DRIVE_TEMPERATURE_SENSOR_1,
+    &DRIVE_TEMPERATURE_SENSOR_2,
+    &DRIVE_TEMPERATURE_SENSOR_3,
+    &DRIVE_TEMPERATURE_SENSOR_4,
+    &DRIVE_TEMPERATURE_SENSOR_5,
+    &DRIVE_TEMPERATURE_SENSOR_6,
+    &DRIVE_TEMPERATURE_SENSOR_7,
+    &DRIVE_TEMPERATURE_SENSOR_8,
 ];
 
 /// The per-drive labels: `device`, `type`, and `model`/`serial` when present.
@@ -79,7 +87,7 @@ static SWEEP_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[&[&DR
 static NVME_IDENTITY: metriken::group::SlotIdentity =
     metriken::group::SlotIdentity::grouped(NVME_IDENTITY_GROUPS);
 
-static NVME_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[NVME_COUNTER_GROUPS];
+static NVME_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[NVME_GROUPS];
 
 /// The EC2 statistics groups: EBS volumes and instance store volumes are
 /// separate populations.
@@ -333,6 +341,13 @@ impl Sampler for DriveHealth {
                     ];
                     for (group, value) in counters {
                         let _ = group.set(idx, value);
+                    }
+                    for (group, celsius) in
+                        DRIVE_TEMPERATURE_SENSORS.iter().zip(h.sensor_temperature_c)
+                    {
+                        if let Some(celsius) = celsius {
+                            let _ = group.set(idx, celsius);
+                        }
                     }
                 }
                 // EC2 statistics, microseconds published as nanoseconds.

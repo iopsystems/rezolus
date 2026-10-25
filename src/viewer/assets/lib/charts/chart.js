@@ -1227,7 +1227,8 @@ export class Chart {
             throw new Error(`Unknown chart style: ${style}`);
         }
 
-        // Compact layout for cgroup paired charts: same grid for both, hide echarts legend
+        // Compact layout for cgroup paired charts: same grid for both, and no
+        // echarts legend (the pair draws its own)
         if (this.spec.compactGrid && this.echart) {
             this.echart.setOption({
                 grid: { top: '20' },

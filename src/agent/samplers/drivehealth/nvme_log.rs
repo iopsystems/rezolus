@@ -32,19 +32,27 @@ pub struct NvmeHealth {
     pub thermal_mgmt_transitions: [u64; 2],
     /// Cumulative seconds spent in the TMT1/TMT2 thermal-management states.
     pub thermal_mgmt_time_s: [u64; 2],
+    /// Temperature Sensors 1 to 8 in °C, `None` for a sensor the controller
+    /// does not implement (the field reads 0).
+    pub sensor_temperature_c: [Option<i64>; 8],
 }
 
 /// Parse the NVMe SMART / Health log page (0x02) into [`NvmeHealth`]. Field
 /// offsets per the NVMe Base Spec: Warning/Critical Composite Temperature Time
-/// (192/196, u32 minutes → seconds), Thermal Management Temperature transition
-/// counts (216/220, u32) and total times (224/228, u32 seconds). Returns `None`
-/// if the buffer is shorter than the last field used.
+/// (192/196, u32 minutes → seconds), Temperature Sensors 1-8 (200..216, u16
+/// Kelvin each, 0 when not implemented), Thermal Management Temperature
+/// transition counts (216/220, u32) and total times (224/228, u32 seconds).
+/// Returns `None` if the buffer is shorter than the last field used.
 pub fn parse_health(buf: &[u8]) -> Option<NvmeHealth> {
     // Last field used is Total Time For TMT2 at offset 228..232.
     if buf.len() < 232 {
         return None;
     }
     let u32le = |o: usize| u32::from_le_bytes([buf[o], buf[o + 1], buf[o + 2], buf[o + 3]]) as u64;
+    let sensor = |n: usize| {
+        let kelvin = u16::from_le_bytes([buf[200 + 2 * n], buf[201 + 2 * n]]) as i64;
+        (kelvin != 0).then_some(kelvin - 273)
+    };
 
     Some(NvmeHealth {
         temperature_c: parse_smart_temperature(buf),
@@ -52,6 +60,7 @@ pub fn parse_health(buf: &[u8]) -> Option<NvmeHealth> {
         critical_temp_time_s: u32le(196) * 60,
         thermal_mgmt_transitions: [u32le(216), u32le(220)],
         thermal_mgmt_time_s: [u32le(224), u32le(228)],
+        sensor_temperature_c: std::array::from_fn(sensor),
     })
 }
 
@@ -126,5 +135,32 @@ mod tests {
     #[test]
     fn health_too_short_is_none() {
         assert_eq!(parse_health(&[0u8; 100]), None);
+    }
+
+    #[test]
+    fn temperature_sensors_decode_and_absent_sensors_are_none() {
+        let mut buf = vec![0u8; 512];
+        // Sensor 1 = 318 K (45 °C), sensor 2 = 300 K (27 °C), sensor 8 = 273 K
+        // (0 °C); sensors 3-7 read 0 (not implemented).
+        for (n, kelvin) in [(0usize, 318u16), (1, 300), (7, 273)] {
+            let [lo, hi] = kelvin.to_le_bytes();
+            buf[200 + 2 * n] = lo;
+            buf[201 + 2 * n] = hi;
+        }
+        let h = parse_health(&buf).unwrap();
+        assert_eq!(
+            h.sensor_temperature_c,
+            [Some(45), Some(27), None, None, None, None, None, Some(0)]
+        );
+    }
+
+    #[test]
+    fn temperature_sensors_do_not_overlap_neighbouring_fields() {
+        let mut buf = vec![0u8; 512];
+        // Critical Composite Temperature Time ends at 199; TMT1 transitions start at 216.
+        buf[196..200].copy_from_slice(&u32::MAX.to_le_bytes());
+        buf[216..220].copy_from_slice(&u32::MAX.to_le_bytes());
+        let h = parse_health(&buf).unwrap();
+        assert_eq!(h.sensor_temperature_c, [None; 8]);
     }
 }
