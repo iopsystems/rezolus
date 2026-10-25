@@ -11,9 +11,6 @@ import {
     getTooltipFormatter,
     applyNoData,
     applyChartOption,
-    CHART_GRID_TOP_WITH_LEGEND,
-    COLORS,
-    FONTS,
 } from './base.js';
 import globalColorMapper from './util/colormap.js';
 import { buildBandSeries } from './line.js';
@@ -179,7 +176,7 @@ export function configureMultiSeriesChart(chart) {
         }
     }
 
-    // Ensure "Other" category is the last in the series array so it appears in the legend last.
+    // Keep the "Other" category last in the series array.
     const otherIndex = series.findIndex(s => s.name === "Other");
     if (otherIndex !== -1 && otherIndex !== series.length - 1) {
         const otherSeries = series.splice(otherIndex, 1)[0];
@@ -190,8 +187,7 @@ export function configureMultiSeriesChart(chart) {
     // decimated spikes aren't smoothed away by the median line (multi charts draw
     // their own lines above, so noMedian). Reuses the boxplot columns already
     // fetched (chart.spec.boxplot), clamped to range like the lines. z=0 keeps
-    // the bands behind every line (which are z≥1). The band fills carry no name,
-    // so they stay out of the legend.
+    // the bands behind every line (which are z≥1).
     const boxcols = (Array.isArray(chart.spec.boxplot) && chart.spec.boxplot.length === lineCount)
         ? chart.spec.boxplot
         : null;
@@ -225,25 +221,11 @@ export function configureMultiSeriesChart(chart) {
         }
     }
 
+    // No legend: a per-entity chart can carry dozens of series, and a legend
+    // that wraps past one row covers the plot. The tooltip names every series
+    // at the cursor.
     const option = {
         ...baseOption,
-        grid: { ...baseOption.grid, top: String(CHART_GRID_TOP_WITH_LEGEND) },
-        legend: {
-            show: true,
-            top: '42',
-            right: '16',
-            icon: 'roundRect',
-            itemWidth: 10,
-            itemHeight: 10,
-            itemGap: 12,
-            // Only the named line series belong in the legend — the band fills
-            // added below carry no name.
-            data: series.map(s => s.name).filter(Boolean),
-            textStyle: {
-                color: COLORS.fgSecondary,
-                ...FONTS.legend,
-            },
-        },
         yAxis: getBaseYAxisOption(logScale, unitSystem),
         tooltip: {
             ...baseOption.tooltip,

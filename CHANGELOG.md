@@ -11,6 +11,12 @@
 
 ### Fixed
 
+- **A per-entity line chart has no legend.** A chart with one line per
+  sensor, mount or cgroup drew a legend that wrapped to as many rows as it
+  had series, over the plot and the time axis. The tooltip names every series
+  at the cursor, and the plot now starts where a single-series chart's does.
+  Clicking a legend entry hid that series; per-entity charts lose that. The
+  compare-mode overlay keeps its two-entry legend. (#1517)
 - **A compare chart's decimated baseline draws an unbroken line, and a
   decimated envelope breaks at a missing bucket.** A compare chart's baseline
   arrives in decimated buckets while its experiment arrives at the
