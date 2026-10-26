@@ -500,7 +500,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_usage{name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_usage{name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -518,7 +518,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_swap_usage{name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_swap_usage{name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -536,7 +536,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"anon\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"anon\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -554,7 +554,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"file\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"file\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -572,7 +572,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"shmem\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"shmem\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -590,7 +590,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"kernel\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"kernel\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -608,7 +608,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"sock\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"sock\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -626,7 +626,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"slab_reclaimable\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"slab_reclaimable\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -644,7 +644,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"slab_unreclaimable\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"slab_unreclaimable\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -662,7 +662,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"pagetables\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"pagetables\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -680,7 +680,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"kernel_stack\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"kernel_stack\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -698,7 +698,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"file_dirty\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"file_dirty\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -716,7 +716,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"file_writeback\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"file_writeback\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -734,7 +734,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"file_mapped\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"file_mapped\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -752,7 +752,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"active_anon\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"active_anon\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -770,7 +770,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"inactive_anon\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"inactive_anon\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -788,7 +788,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"active_file\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"active_file\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -806,7 +806,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"inactive_file\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"inactive_file\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -824,7 +824,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"unevictable\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"unevictable\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -842,7 +842,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"slab\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"slab\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -860,7 +860,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"sec_pagetables\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"sec_pagetables\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -878,7 +878,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"percpu\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"percpu\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -896,7 +896,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"vmalloc\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"vmalloc\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -914,7 +914,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"hugetlb\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"hugetlb\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -932,7 +932,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"anon_thp\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"anon_thp\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -950,7 +950,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"file_thp\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"file_thp\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -968,7 +968,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"shmem_thp\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"shmem_thp\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -986,7 +986,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"swapcached\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"swapcached\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -1004,7 +1004,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"zswap\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"zswap\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],
@@ -1022,7 +1022,7 @@
                 },
                 "style": "multi"
               },
-              "promql_query": "cgroup_memory_stat{kind=\"zswapped\",name=~\"__SELECTED_CGROUPS__\"}"
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"zswapped\",name=~\"__SELECTED_CGROUPS__\"})"
             },
             {
               "data": [],

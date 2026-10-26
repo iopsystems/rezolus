@@ -40,8 +40,13 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         }
     };
 
-    // Memory accounting includes descendants. Keep individual subtree series;
-    // summing non-selected ancestors and children would double-count memory.
+    // Memory accounting includes descendants, so there is no aggregate (left
+    // side) memory plot: summing non-selected ancestors and children would
+    // double-count. Individual plots keep one series per cgroup; `sum by
+    // (name)` is the identity there and is what lets the selector derive a
+    // per-group query (cgroup_selection.js `cgroupQueryVariants`) for a unit
+    // selected as one entry. That sum is exact when the group's members are
+    // siblings and over-counts a member that contains another.
     if individual {
         plot(
             group,
@@ -50,7 +55,7 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
                 "individual-memory",
                 Unit::Bytes,
             ),
-            format!("cgroup_memory_usage{{{filter}}}"),
+            format!("sum by (name) (cgroup_memory_usage{{{filter}}})"),
         );
         plot(
             group,
@@ -59,7 +64,7 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
                 "individual-memory-swap",
                 Unit::Bytes,
             ),
-            format!("cgroup_memory_swap_usage{{{filter}}}"),
+            format!("sum by (name) (cgroup_memory_swap_usage{{{filter}}})"),
         );
         for (kind, title) in [
             ("anon", "Anonymous Pages"),
@@ -94,7 +99,7 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
             plot(
                 group,
                 PlotOpts::gauge(title, format!("individual-memory-{kind}"), Unit::Bytes),
-                format!("cgroup_memory_stat{{kind=\"{kind}\",{filter}}}"),
+                format!("sum by (name) (cgroup_memory_stat{{kind=\"{kind}\",{filter}}})"),
             );
         }
     }
