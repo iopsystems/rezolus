@@ -1,9 +1,9 @@
 // Parity guard: the WASM viewer's `timestamps()` passthrough must return the
 // same raw, un-gridded per-sample collection timestamps as the server's
 // `/api/v1/timestamps` endpoint. Both backends read `MetricsSource::
-// sample_timestamps()` off the same `ParquetReader` and wrap it in the same
-// `{"source","timestamps"}` shape, so identity holds by construction — this
-// test only pins the WASM side's shape and sanity-checks the fixture's
+// sample_timestamps()` off the recording's `ArchiveReader` and wrap it in the
+// same `{"source","timestamps"}` shape, so identity holds by construction —
+// this test only pins the WASM side's shape and sanity-checks the fixture's
 // values (real jitter, not a synthetic grid).
 //
 // Requires the WASM bundle to be built first: `./crates/viewer/build.sh`.
@@ -31,11 +31,11 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
     const { initSync, WasmCaptureRegistry } = await import(pathToFileURL(wasmJsCopy).href);
     initSync({ module: fs.readFileSync(pkgWasm) });
 
-    const parquet = fs.readFileSync(path.join(repoRoot, 'site/viewer/data/simple_capture.parquet'));
+    const recording = fs.readFileSync(path.join(repoRoot, 'tests/fixtures/upgraded/simple_capture.dendro'));
 
     test('WASM timestamps returns raw jittered timestamps', () => {
         const registry = new WasmCaptureRegistry();
-        registry.attach('baseline', new Uint8Array(parquet), 'simple_capture.parquet');
+        registry.attach('baseline', new Uint8Array(recording), 'simple_capture.dendro');
 
         const resp = JSON.parse(registry.timestamps('baseline', null));
 

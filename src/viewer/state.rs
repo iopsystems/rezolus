@@ -258,6 +258,28 @@ impl ProxyState {
     }
 }
 
+/// How the baseline's file is shown (`dashboard::combined::layout`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BaselineFile {
+    /// One recording, a live session, or no file yet.
+    One,
+    /// An archive of `recordings` recordings, shown as a comparison.
+    Comparison { recordings: usize },
+    /// An archive of `recordings` recordings, shown as one combined view.
+    Combined { recordings: usize },
+}
+
+impl BaselineFile {
+    /// A file of `recordings` recordings shown as a comparison, or as the
+    /// one recording it holds.
+    pub fn compared(recordings: usize) -> Self {
+        match recordings {
+            1 => Self::One,
+            recordings => Self::Comparison { recordings },
+        }
+    }
+}
+
 pub struct AppState {
     pub sections: RwLock<LazySectionStore>,
     /// Per-capture data store + metadata. Single-capture callers always target
@@ -275,20 +297,28 @@ pub struct AppState {
     /// The opened archive file being followed while its writer appends
     /// (file mode only). Replacing the baseline ends it.
     pub follow: Mutex<Option<super::follow::Follow>>,
-    /// Original parquet file path (file mode only).
+    /// The baseline archive's path: the file given on the command line, an
+    /// upload's staged copy, or a live session's archive.
     pub parquet_path: RwLock<Option<PathBuf>>,
-    /// Temp parquet path for the HTTP-attached experiment capture.
+    /// The baseline file's name as the user knows it (the path given on the
+    /// command line, an upload's file name); `None` in live mode, which has
+    /// no file of the user's to name.
+    pub baseline_name: RwLock<Option<String>>,
+    /// How the baseline file is shown. An uploaded experiment is refused
+    /// beside a combined view, and a report is not saved after one replaced
+    /// a comparison's experiment.
+    pub baseline_file: RwLock<BaselineFile>,
+    /// The staged copy of the HTTP-attached experiment archive.
     pub experiment_parquet_path: RwLock<Option<PathBuf>>,
-    /// User-supplied experiment parquet path from the CLI.
+    /// The experiment archive path given on the command line.
     pub cli_experiment_path: RwLock<Option<PathBuf>>,
     /// Active category template name (when `--category` was supplied).
     pub category_name: RwLock<Option<String>>,
-    /// Serialized selection JSON from parquet metadata.
+    /// Serialized selection JSON from the recording's metadata.
     pub selection: RwLock<Option<String>>,
     /// SHA-256 hex digest of the source parquet file (file mode only).
     pub file_checksum: RwLock<Option<String>>,
     pub proxy: ProxyState,
-    pub combined_ab_marker: RwLock<Option<crate::parquet_metadata::AbContainers>>,
     pub trimmed_report_marker: RwLock<Option<String>>,
     /// Shared LRU row-group cache for all `ParquetReader`s in this process.
     ///
@@ -360,13 +390,14 @@ impl AppState {
             live: AtomicBool::new(false),
             follow: Mutex::new(None),
             parquet_path: RwLock::new(None),
+            baseline_name: RwLock::new(None),
+            baseline_file: RwLock::new(BaselineFile::One),
             experiment_parquet_path: RwLock::new(None),
             cli_experiment_path: RwLock::new(None),
             category_name: RwLock::new(None),
             selection: RwLock::new(None),
             file_checksum: RwLock::new(None),
             proxy: ProxyState::default(),
-            combined_ab_marker: RwLock::new(None),
             trimmed_report_marker: RwLock::new(None),
             pool,
             queries: Arc::new(tokio::sync::Semaphore::new(default_query_concurrency())),
@@ -417,6 +448,8 @@ impl AppState {
         let mut slot = self.live_session.lock();
         self.replace_baseline(session.reader());
         *self.parquet_path.write() = Some(session.path().to_path_buf());
+        *self.baseline_name.write() = None;
+        *self.baseline_file.write() = BaselineFile::One;
         *slot = Some(session);
     }
 
@@ -445,10 +478,6 @@ impl AppState {
     /// the file is finalized or removed, or the baseline is replaced.
     pub fn following(&self) -> bool {
         self.follow.lock().as_ref().is_some_and(|f| f.active())
-    }
-
-    pub fn combined_ab(&self) -> bool {
-        self.combined_ab_marker.read().is_some()
     }
 
     /// Single lookup that hides the CLI-vs-HTTP-attach split; CLI wins.

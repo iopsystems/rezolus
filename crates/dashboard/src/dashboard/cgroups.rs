@@ -18,6 +18,20 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         "name!~\"__SELECTED_CGROUPS__\""
     };
 
+    // An individual plot draws a line per cgroup, named and coloured by the
+    // cgroup, also when one cgroup is selected; inferred from the result, one
+    // series would be a plain line in the accent colour.
+    let plot = |group: &mut Group, opts: PlotOpts, query: String| {
+        group.plot_promql(
+            if individual {
+                opts.with_style("multi")
+            } else {
+                opts
+            },
+            query,
+        )
+    };
+
     let rate = |metric: &str| {
         if individual {
             format!("sum by (name) (irate({metric}{{{filter}}}[5m]))")
@@ -29,7 +43,8 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
     // Memory accounting includes descendants. Keep individual subtree series;
     // summing non-selected ancestors and children would double-count memory.
     if individual {
-        group.plot_promql(
+        plot(
+            group,
             PlotOpts::gauge(
                 "Memory (Including Descendants)",
                 "individual-memory",
@@ -37,7 +52,8 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
             ),
             format!("cgroup_memory_usage{{{filter}}}"),
         );
-        group.plot_promql(
+        plot(
+            group,
             PlotOpts::gauge(
                 "Swap (Including Descendants)",
                 "individual-memory-swap",
@@ -75,14 +91,16 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
             ("zswap", "Zswap Compressed Pool"),
             ("zswapped", "Pages Backed by Zswap"),
         ] {
-            group.plot_promql(
+            plot(
+                group,
                 PlotOpts::gauge(title, format!("individual-memory-{kind}"), Unit::Bytes),
                 format!("cgroup_memory_stat{{kind=\"{kind}\",{filter}}}"),
             );
         }
     }
 
-    group.plot_promql(
+    plot(
+        group,
         PlotOpts::counter(
             "Total CPU Cores",
             format!("{prefix}-total-cores"),
@@ -91,29 +109,40 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         format!("{} / 1000000000", rate("cgroup_cpu_usage")),
     );
 
-    group.plot_promql(
-        PlotOpts::counter("User CPU Cores", format!("{prefix}-user-cores"), Unit::Count),
+    plot(
+        group,
+        PlotOpts::counter(
+            "User CPU Cores",
+            format!("{prefix}-user-cores"),
+            Unit::Count,
+        ),
         if individual {
-            format!("sum by (name) (irate(cgroup_cpu_usage{{state=\"user\",{filter}}}[5m])) / 1000000000")
+            format!(
+                "sum by (name) (irate(cgroup_cpu_usage{{state=\"user\",{filter}}}[5m])) / 1000000000"
+            )
         } else {
             format!("sum(irate(cgroup_cpu_usage{{state=\"user\",{filter}}}[5m])) / 1000000000")
         },
     );
 
-    group.plot_promql(
+    plot(
+        group,
         PlotOpts::counter(
             "System CPU Cores",
             format!("{prefix}-system-cores"),
             Unit::Count,
         ),
         if individual {
-            format!("sum by (name) (irate(cgroup_cpu_usage{{state=\"system\",{filter}}}[5m])) / 1000000000")
+            format!(
+                "sum by (name) (irate(cgroup_cpu_usage{{state=\"system\",{filter}}}[5m])) / 1000000000"
+            )
         } else {
             format!("sum(irate(cgroup_cpu_usage{{state=\"system\",{filter}}}[5m])) / 1000000000")
         },
     );
 
-    group.plot_promql(
+    plot(
+        group,
         PlotOpts::counter(
             "CPU Migrations",
             format!("{prefix}-cpu-migrations"),
@@ -122,7 +151,8 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         rate("cgroup_cpu_migrations"),
     );
 
-    group.plot_promql(
+    plot(
+        group,
         PlotOpts::counter(
             "CPU Throttled Time",
             format!("{prefix}-cpu-throttled-time"),
@@ -131,7 +161,8 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         rate("cgroup_cpu_throttled_time"),
     );
 
-    group.plot_promql(
+    plot(
+        group,
         PlotOpts::counter(
             "ext4 Blocked Time",
             format!("{prefix}-ext4-blocked-time"),
@@ -140,7 +171,8 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         rate("cgroup_ext4_op_time"),
     );
 
-    group.plot_promql(
+    plot(
+        group,
         PlotOpts::counter(
             "XFS Log Blocked Time",
             format!("{prefix}-xfs-log-blocked-time"),
@@ -149,21 +181,28 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         rate("cgroup_xfs_log_wait_time"),
     );
 
-    group.plot_promql(
+    plot(
+        group,
         PlotOpts::counter("IPC", format!("{prefix}-ipc"), Unit::Count),
         if individual {
-            format!("sum by (name) (irate(cgroup_cpu_instructions{{{filter}}}[5m])) / sum by (name) (irate(cgroup_cpu_cycles{{{filter}}}[5m]))")
+            format!(
+                "sum by (name) (irate(cgroup_cpu_instructions{{{filter}}}[5m])) / sum by (name) (irate(cgroup_cpu_cycles{{{filter}}}[5m]))"
+            )
         } else {
-            format!("sum(irate(cgroup_cpu_instructions{{{filter}}}[5m])) / sum(irate(cgroup_cpu_cycles{{{filter}}}[5m]))")
+            format!(
+                "sum(irate(cgroup_cpu_instructions{{{filter}}}[5m])) / sum(irate(cgroup_cpu_cycles{{{filter}}}[5m]))"
+            )
         },
     );
 
-    group.plot_promql(
+    plot(
+        group,
         PlotOpts::counter("TLB Flushes", format!("{prefix}-tlb-flush"), Unit::Rate),
         rate("cgroup_cpu_tlb_flush"),
     );
 
-    group.plot_promql(
+    plot(
+        group,
         PlotOpts::counter("Syscalls", format!("{prefix}-syscall"), Unit::Rate),
         rate("cgroup_syscall"),
     );
@@ -189,7 +228,8 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         "Other",
     ] {
         let op_lower = op.to_lowercase();
-        group.plot_promql(
+        plot(
+            group,
             PlotOpts::counter(
                 format!("Syscall {op}"),
                 format!("{prefix}-syscall-{op_lower}"),

@@ -334,15 +334,29 @@ impl Config {
 
     /// Whether `name` exports its per-task accounting as per-task series
     /// (per-sampler override, falling back to the `defaults` section, then
-    /// off). Consumed by `cpu_usage`: with it off, `task_cpu_usage` is absent
-    /// and the task-metadata and task-exit events are not sent, while the
-    /// per-task accounting the host and cgroup totals rely on still runs.
+    /// off). Consumed by `cpu_usage`: with it off, `task_cpu_usage` is
+    /// absent and the task-metadata events are not sent, while the per-task
+    /// accounting the host and cgroup totals rely on still runs.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn task_attribution(&self, name: &str) -> bool {
         self.samplers
             .get(name)
             .and_then(|v| v.task_attribution())
             .or_else(|| self.defaults.task_attribution())
+            .unwrap_or(false)
+    }
+
+    /// Whether `name` keeps and exports a CPU total per process
+    /// (per-sampler override, falling back to the `defaults` section, then
+    /// off). Consumed by `cpu_usage`: with it off, `process_cpu_usage` is
+    /// absent, the process-metadata events are not sent, and the
+    /// per-process maps are not created.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn process_attribution(&self, name: &str) -> bool {
+        self.samplers
+            .get(name)
+            .and_then(|v| v.process_attribution())
+            .or_else(|| self.defaults.process_attribution())
             .unwrap_or(false)
     }
 
@@ -559,6 +573,11 @@ mod tests {
                 "{name}: task_attribution"
             );
             assert_eq!(
+                packaged.process_attribution(name),
+                bare.process_attribution(name),
+                "{name}: process_attribution"
+            );
+            assert_eq!(
                 packaged.sampler_interval(name),
                 bare.sampler_interval(name),
                 "{name}: interval"
@@ -626,6 +645,22 @@ mod tests {
         assert!(c.task_attribution("cpu_usage"), "defaults fallback");
         // Independent of cgroup attribution.
         assert!(!c.cgroup_attribution("cpu_usage"));
+    }
+
+    #[test]
+    fn process_attribution_is_off_unless_asked_for() {
+        let c = config("[samplers.cpu_usage]\n");
+        assert!(!c.process_attribution("cpu_usage"), "off by default");
+        let c = config("[samplers.cpu_usage]\nprocess_attribution = true\n");
+        assert!(c.process_attribution("cpu_usage"));
+        assert!(!c.task_attribution("cpu_usage"), "independent of task");
+        let c = config("[defaults]\nprocess_attribution = true\n");
+        assert!(c.process_attribution("cpu_usage"), "defaults fallback");
+        let c = config("[samplers.cpu_usage]\ntask_attribution = true\n");
+        assert!(
+            !c.process_attribution("cpu_usage"),
+            "task does not imply it"
+        );
     }
 
     #[test]

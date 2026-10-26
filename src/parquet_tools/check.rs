@@ -34,7 +34,6 @@ use super::select::{
 };
 use ::dashboard::{Event, ServiceExtension, TemplateRegistry};
 use dashboard::{Bound, Check, Kpi, Severity};
-use metriken_storage::rez::rez::RezFormat;
 
 /// Exit status when a check with `severity: fail` failed.
 pub(super) const EXIT_FAIL: i32 = 1;
@@ -542,43 +541,22 @@ pub(crate) struct Target {
     pub(crate) reader: Arc<dyn MetricsSource>,
 }
 
-/// Open the recordings `--recording` names. The same readers the MCP path
-/// opens (`ParquetReader` for a parquet file, `RezReader::open_recordings`
-/// for a `.rez`); what differs is that with no selector a multi-recording
-/// archive is checked whole, one verdict list per recording, where the MCP
-/// tools would ask for a choice.
+/// Open the recordings `--recording` names in the dendro archive at `path`,
+/// as the MCP tools open them (`RezReader::open_recordings`); what differs is
+/// that with no selector a multi-recording archive is checked whole, one
+/// verdict list per recording, where the MCP tools would ask for a choice.
+/// Any other file is refused, one an earlier release wrote with the
+/// `upgrade` command spelled with `program`.
 pub(crate) fn open_targets(
     path: &Path,
     selector: &RecordingSelector,
     program: &str,
-) -> Result<(RezFormat, Vec<Target>, usize), String> {
+) -> Result<(Vec<Target>, usize), String> {
     if !path.exists() {
         return Err(format!("Recording file not found: {}", path.display()));
     }
+    ::rez::container::require_dendro(path, program)?;
     let pool = metriken_storage::BufferPool::new(256 * 1024 * 1024);
-    let format = metriken_storage::rez::rez::detect_rez_format(path).unwrap_or(RezFormat::NotRez);
-    if format == RezFormat::NotRez {
-        if !selector.is_empty() {
-            return Err(format!(
-                "{} is not a .rez archive and holds no recordings to select between; \
-                 --recording applies only to a multi-recording .rez",
-                path.display()
-            ));
-        }
-        let reader = metriken_query::ParquetReader::open_with_pool(path, pool)
-            .map(::dashboard::combined::label_parquet_by_source)
-            .map_err(|e| format!("failed to load {}: {e}", path.display()))?;
-        return Ok((
-            format,
-            vec![Target {
-                index: 0,
-                labels: None,
-                reader: Arc::new(reader),
-            }],
-            1,
-        ));
-    }
-
     let recordings = ::rez::reader::RezReader::open_recordings(path, pool)
         .map_err(|e| format!("failed to load {}: {e}", path.display()))?;
     if recordings.is_empty() {
@@ -621,7 +599,7 @@ pub(crate) fn open_targets(
             });
         }
     }
-    Ok((format, targets, total))
+    Ok((targets, total))
 }
 
 /// The KPIs carrying a check for one recording: from `--queries` when
@@ -753,7 +731,7 @@ pub(crate) fn run_checks(
     registry: &TemplateRegistry,
     program: &str,
 ) -> Result<CheckRun, String> {
-    let (_, targets, total_recordings) = open_targets(path, selector, program)?;
+    let (targets, total_recordings) = open_targets(path, selector, program)?;
 
     let mut results: Vec<CheckResult> = Vec::new();
     let mut per_recording_events: Vec<Vec<Event>> = vec![Vec::new(); total_recordings];
@@ -833,14 +811,8 @@ fn run_inner(
         } else {
             // With --json, stdout is the array and nothing else.
             let output = args.output.as_deref();
-            let line = annotate_events(
-                path,
-                output,
-                run.per_recording_events.clone(),
-                super::legacy::command_with_output,
-                program,
-            )
-            .map_err(|e| e.to_string())?;
+            let line = annotate_events(path, output, run.per_recording_events.clone(), program)
+                .map_err(|e| e.to_string())?;
             if json {
                 eprintln!("{line}");
             } else {
@@ -854,19 +826,16 @@ fn run_inner(
 
 /// Write the violation windows into the recording as events, through the
 /// writer `recording annotate` uses: into the dendro archive at `path`, or
-/// with `output` into a new `.dendro` there (a legacy `.rez` or parquet input
-/// needs one: it is converted there first, and without one the refusal
-/// `refusal` builds names the way to give it). `per_recording` is indexed
+/// with `output` into a copy of it there. `per_recording` is indexed
 /// as [`open_targets`] lists the recordings. Returns the report line; the
 /// caller decides which stream it goes to.
 pub(crate) fn annotate_events(
     path: &Path,
     output: Option<&Path>,
     per_recording: Vec<Vec<Event>>,
-    refusal: impl FnOnce(&Path) -> String,
     program: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let edit = super::legacy::edit_target(path, output, refusal)?;
+    let edit = super::legacy::edit_target(path, output, program)?;
     let annotation = super::annotate::RezAnnotation {
         program,
         ext_json: None,

@@ -424,6 +424,21 @@ mod stream_tests {
     use futures::StreamExt;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    /// How long a test on the real clock waits for the stream before it
+    /// fails as hung.
+    ///
+    /// Every pass takes `BUILDER_TEST_LOCK` (`snapshot.rs`: `create`,
+    /// `create_v3`, `latest_stream_long`), as does every other test in this
+    /// binary that walks the builder, and a test's first walk holds it for
+    /// about 300 ms in a debug build. The wait for it grows with
+    /// `--test-threads` and with load on the host, and it counts against this
+    /// deadline: with 32 threads beside 32 busy loops on a 16-core Mac, a
+    /// stream test waited 23 s for one pass (#1529). Nothing here measures
+    /// latency, so the deadline only has to end a hung test. The paused-clock
+    /// tests' deadlines are stream time, and a lock wait does not count
+    /// against them.
+    const STREAM_DEADLINE: Duration = Duration::from_secs(60);
+
     /// A one-second subscription in `layout`, as the handler builds one.
     fn subscription(layout: Layout) -> StreamSubscription {
         StreamSubscription::new(
@@ -467,11 +482,10 @@ mod stream_tests {
 
         // Build one snapshot before the clock below starts. The first pass
         // misses the skeleton cache and builds every group's schema from the
-        // global registry: about 200 ms in a debug build alone, and seconds
-        // when the rest of this binary's tests run beside it, which is how a
-        // CI runner once spent the whole 10 s timeout before the first
-        // interval. Later passes hit the cache, so the interval waited on
-        // below is the stream's own latency rather than a one-time build.
+        // global registry: about 300 ms in a debug build alone, and seconds
+        // when the rest of this binary's tests run beside it. Later passes
+        // hit the cache, so the wait below holds no one-time build (it can
+        // still hold a wait for the lock; see `STREAM_DEADLINE`).
         state.builder.lock().await.rows_at(Instant::now()).await;
 
         // Port 0: the OS picks a free one, so this cannot collide with another
@@ -506,7 +520,7 @@ mod stream_tests {
         );
         assert!(sub.handshake().epoch().is_some(), "the agent's epoch");
 
-        tokio::time::timeout(Duration::from_secs(10), sub.next_interval())
+        tokio::time::timeout(STREAM_DEADLINE, sub.next_interval())
             .await
             .expect("an interval arrives inside the timeout")
             .expect("the stream is well formed")
@@ -540,8 +554,8 @@ mod stream_tests {
             subscribers: Subscribers::new(),
             ttl: Duration::from_secs(1),
         };
-        // Warm the builders, as the test above does, so the first interval is
-        // the stream's own latency.
+        // Warm the builders, as the test above does, so the first interval
+        // does not wait for a one-time build.
         state
             .builder
             .lock()
@@ -584,7 +598,7 @@ mod stream_tests {
         let mut last = (0u64, 0i64);
         let mut decoder = metriken_storage::StreamDecoder::new();
         while intervals.len() < 2 {
-            let applied = tokio::time::timeout(Duration::from_secs(10), sub.next_interval())
+            let applied = tokio::time::timeout(STREAM_DEADLINE, sub.next_interval())
                 .await
                 .expect("an interval arrives inside the timeout")
                 .expect("the stream is well formed")
@@ -902,7 +916,7 @@ mod stream_tests {
                     let mut body = Vec::new();
                     // The opening, then one chunk per interval.
                     for _ in 0..=TICKS {
-                        let chunk = tokio::time::timeout(Duration::from_secs(10), stream.next())
+                        let chunk = tokio::time::timeout(STREAM_DEADLINE, stream.next())
                             .await
                             .expect("a frame inside the timeout")
                             .expect("the stream yields")
@@ -1511,7 +1525,11 @@ mod stream_tests {
             base.clone(),
             interval,
             crate::recorder::stream::Layout::Wide,
-            Duration::from_secs(10),
+            // Well past the longest lock wait measured under load (23 s, see
+            // `STREAM_DEADLINE`), so a slow pass is not reported as silence
+            // before the kill below. The pump also bounds each reconnect
+            // attempt by it.
+            STREAM_DEADLINE,
             tx,
         ));
 
@@ -1521,7 +1539,7 @@ mod stream_tests {
             rx: &mut tokio::sync::mpsc::Receiver<(usize, StreamEvent)>,
             mut want: impl FnMut(StreamEvent) -> Option<T>,
         ) -> T {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+            let deadline = tokio::time::Instant::now() + STREAM_DEADLINE;
             loop {
                 let (idx, event) = tokio::time::timeout_at(deadline, rx.recv())
                     .await

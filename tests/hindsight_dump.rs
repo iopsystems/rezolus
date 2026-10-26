@@ -665,6 +665,7 @@ struct Status {
 #[derive(Debug, serde::Deserialize)]
 struct TableStatus {
     sampler: String,
+    rows: u64,
     segments: u64,
     live_wal_rows: u64,
 }
@@ -850,28 +851,17 @@ fn sealing_continues_while_file_dumps_are_in_flight() {
 /// captures is a couple of milliseconds of polling, which the fixture assertion
 /// on coverage still has to clear.
 ///
-/// A *fatter* buffer than the HTTP paths use — 60 segments rather than 12 —
-/// because a SIGHUP capture takes no time range, and on the `.rez` buffer
-/// (removed in 6.0) an unbounded dump was a whole-file `VACUUM INTO` that ran
-/// several times faster than the ranged copy the HTTP tests take; the
-/// calibration loop in `sealing_continues_through` grows the buffer further
-/// when a capture is still too fast. Calibrated against the unfixed daemon,
-/// which is the only calibration worth anything here: at 12 segments a
-/// capture finished in
-/// ~66 ms, inside a single 100 ms tick, and this test passed on a daemon that
-/// paused; at 40 it took ~220 ms and the daemon still got 3 of the 4 seals the
-/// assertion demands through the gaps; at 60 it took ~330 ms and a paused
-/// daemon was not close.
-///
-/// That calibration was for a V2 agent, whose table carries a window pair per
-/// metric. Hindsight records the stream now, and a V3 group's table has one
-/// window pair for the whole group, so at 2,000 counters a capture of 60
-/// segments fell to 67–77 ms and the fixture check failed. At
-/// [`WIDE_SIGHUP`] = 4,000 it took 169–215 ms over five runs. At 8,000 it
-/// took ~410 ms, but seals then fell behind the ticks on one run in three.
+/// A wider agent than the HTTP paths use, [`WIDE_SIGHUP`] = 4,000 counters,
+/// because a SIGHUP capture takes no time range: at 2,000 counters a capture
+/// of 60 segments took 67–77 ms, inside one tick, and at 4,000 it took
+/// 169–215 ms over five runs. Like the HTTP paths it starts from 12 segments,
+/// and the calibration loop in `sealing_continues_through` grows the buffer
+/// until the shorter of two captures outlasts two ticks. A fixed 60 segments
+/// needed 120 sealed rows before the test began, which a CI run on main did
+/// not reach inside the 60 s wait (103 ticks, 52 segments).
 #[test]
 fn sealing_continues_while_a_sighup_capture_is_in_flight() {
-    sealing_continues_through("SIGHUP", 60, WIDE_SIGHUP, |h| h.capture_via_sighup());
+    sealing_continues_through("SIGHUP", 12, WIDE_SIGHUP, |h| h.capture_via_sighup());
 }
 
 /// A stop signal while a SIGHUP capture is in flight stops the daemon after
@@ -1010,10 +1000,13 @@ fn sealing_continues_through(
     // A dump has to outlast a tick for the window below to test anything,
     // and how big a buffer that takes depends on the host: a fast runner
     // copied this one in 85 ms against a 100 ms tick. Grow the buffer until
-    // one dump takes a tick and a half, or a minute has gone by.
+    // the shorter of two consecutive dumps takes two ticks, or a minute has
+    // gone by. The shorter of two, because a single dump can run slower than
+    // the ones after it: starting from 12 segments, one suite run in eight
+    // averaged 95 ms SIGHUP captures when a single dump was the gauge.
     let mut target = min_segments;
     let calibrating = Instant::now() + Duration::from_secs(60);
-    while dump(&h) < INTERVAL * 3 / 2 && Instant::now() < calibrating {
+    while dump(&h).min(dump(&h)) < INTERVAL * 2 && Instant::now() < calibrating {
         target *= 2;
         h.wait_until("a buffer big enough to make a dump slow", |s| {
             s.segments(TABLE) >= target
@@ -1024,40 +1017,68 @@ fn sealing_continues_through(
     // Back-to-back dumps. Each one opens its own connection, takes its own read
     // mark, and copies every segment in the buffer.
     //
-    // Kept up until enough ticks have gone by to say anything about them, not
-    // for a fixed span: the comparison below is seals against ticks, so the
-    // window has to contain enough ticks for the ratio to mean something. How
-    // long that takes is the host's business — a loaded one runs the loop at a
-    // fraction of its configured rate — and waiting for the ticks measures the
-    // mechanism where waiting for the clock measures the machine.
-    const MIN_TICKS: u64 = 8;
+    // Kept up until enough rows have been committed to say anything about
+    // them, not for a fixed span. How long that takes depends on the host: a
+    // loaded one runs the loop at a fraction of its configured rate.
+    //
+    // The claim is that sealing keeps up with the commits while dumps run,
+    // stated with a lag of two commits allowed. A commit's rows and their seal
+    // are sent to the writer thread as two consecutive messages, so a /status
+    // read can fall between them, and a recorder that is behind drains every
+    // queued stream frame (up to 16) into one commit. On a loaded host a read
+    // therefore sees up to a commit's batch unsealed with or without a dump in
+    // flight: CI saw 10 seals for 25 ticks across one 1.7 s dump. So the
+    // comparison is between what is sealed at the end and what had been
+    // committed two distinct readings earlier, all counted from the buffer
+    // (sealed rows plus live WAL rows, from one /status reply, read as two
+    // queries; a reading lower than the last is a torn one and is skipped). A
+    // writer whose seals stop while dumps run is left with what it had sealed
+    // before the window, and fails. One whose seals land in the gaps between
+    // dumps, or that dumps stop entirely (rows and seals together), is not
+    // caught here. For GET, the time each dump call takes includes reading
+    // the staged file and sending it after `buffer::dump` returns, so a writer
+    // blocked only inside `buffer::dump` seals during that time and mostly
+    // passes.
+    const MIN_ROWS: u64 = 8;
+    let committed = |s: &Status| s.table(TABLE).rows;
+    let sealed = |s: &Status| s.table(TABLE).rows - s.table(TABLE).live_wal_rows;
+    // Distinct committed-row counts, oldest first, starting from `before`.
+    let mut readings = vec![committed(&before)];
+    let two_back = |r: &[u64]| r[r.len().saturating_sub(3)];
     let window = Duration::from_secs(1);
     let deadline = Instant::now() + Duration::from_secs(60);
     let started = Instant::now();
     let mut dumps = 0u32;
     let mut busy = Duration::ZERO;
     let mut after = h.status();
-    while (started.elapsed() < window || after.ticks_recorded - before.ticks_recorded < MIN_TICKS)
+    while (started.elapsed() < window || two_back(&readings) - readings[0] < MIN_ROWS)
         && Instant::now() < deadline
     {
         busy += dump(&h);
         dumps += 1;
         // Only once the window is up: before then the loop continues whatever
-        // the tick count, and a /status request is time no dump occupies,
+        // the row count, and a /status request is time no dump occupies,
         // which the coverage check below counts against the fixture. CI saw
         // dumps cover 913 ms of a 1,430 ms window when every iteration made one.
         if started.elapsed() >= window {
             after = h.status();
+            if committed(&after) > *readings.last().unwrap() {
+                readings.push(committed(&after));
+            }
         }
     }
     let elapsed = started.elapsed();
-    let (a, b) = (before.segments(TABLE), after.segments(TABLE));
     let ticks = after.ticks_recorded - before.ticks_recorded;
+    let due = two_back(&readings);
 
     println!(
-        "MEASURED {trigger}: {ticks} ticks and {} seals over {elapsed:?} \
-         ({dumps} dumps, {busy:?} spent inside one, {:?} each)",
-        b - a,
+        "MEASURED {trigger}: {ticks} ticks, rows {} -> {} committed and {} -> {} \
+         sealed over {elapsed:?} ({dumps} dumps, {busy:?} spent inside one, {:?} \
+         each)",
+        committed(&before),
+        committed(&after),
+        sealed(&before),
+        sealed(&after),
         busy / dumps
     );
 
@@ -1078,34 +1099,25 @@ fn sealing_continues_through(
         busy / dumps
     );
 
-    // The claim, in ticks rather than wall-clock. What must hold is that
-    // sealing keeps pace with the rows that actually arrive; how many rows
-    // arrive per second is a property of the machine, and a shared CI runner
-    // reaches a fraction of the configured rate. Stating it as "~5 seals in a
-    // second" measures the runner, and fails on a slow one while a genuinely
-    // blocked writer on a fast one could still clear the bar.
-    //
-    // Still sharp: were dumps blocking the writer, ticks would go on arriving
-    // and segments would not follow, which is exactly what this compares. The
-    // `-1` allows the one partial segment left open at the window's edge.
-    let due = ticks / SEGMENT_ROWS;
     assert!(
-        b - a + 1 >= due,
-        "sealing fell behind the ticks it was given during the {trigger} \
-         dumps: {} segments sealed ({a} -> {b}) against {ticks} ticks at \
-         {SEGMENT_ROWS} rows per segment, so ~{due} are due ({dumps} dumps, \
-         {busy:?} spent inside one, over {elapsed:?})",
-        b - a
+        sealed(&after) >= due,
+        "sealing fell behind the commits during the {trigger} dumps: {} rows \
+         sealed at the end, against {due} committed two readings earlier \
+         (committed-row readings {readings:?}; {dumps} dumps, {busy:?} spent \
+         inside one, over {elapsed:?})\n{}",
+        sealed(&after),
+        h.log_text()
     );
     // And the loop kept running while the dumps did. The window above is held
-    // open until this many ticks land, so falling short means they stopped
-    // arriving entirely — which, given the fixture established that dumps
-    // covered most of the window, is a loop that stopped for its dumps.
+    // open until this many rows are committed, so falling short means they
+    // stopped arriving entirely — which, given the fixture established that
+    // dumps covered most of the window, is a loop that stopped for its dumps.
+    let rows = *readings.last().unwrap() - readings[0];
     assert!(
-        ticks >= MIN_TICKS,
-        "the scrape loop stalled during the {trigger} dumps: only {ticks} \
-         ticks in {elapsed:?} at a {INTERVAL:?} interval ({dumps} dumps, \
-         {busy:?} spent inside one)"
+        rows >= MIN_ROWS,
+        "the scrape loop stalled during the {trigger} dumps: only {rows} rows \
+         committed in {elapsed:?} at a {INTERVAL:?} interval ({ticks} ticks, \
+         {dumps} dumps, {busy:?} spent inside one)"
     );
 }
 
@@ -1338,59 +1350,50 @@ fn a_dump_cuts_the_timeline_at_its_snapshot_and_seals_the_live_tail() {
     }
 }
 
-/// What a dump costs on disk: **while a dump holds its read mark, the `-wal`
-/// sidecar cannot be recycled, so a long enough dump grows it.**
+/// What dumps cost on disk: **the `-wal` sidecar stops growing once they
+/// end.**
 ///
-/// The read mark is what makes a dump consistent, and it is also what stops
-/// SQLite from rewinding the write-ahead log: a checkpoint may not recycle
-/// frames a reader might still need. In steady state the log reaches
-/// `wal_autocheckpoint` (4 MiB, set in bytes by `apply_connection_pragmas`) and
-/// then stays that size forever, because SQLite recycles it **in place** — the
-/// file is the log's high-water mark, not its contents. A dump suspends the
-/// recycling, so the writer appends past the mark and the file grows.
+/// In steady state the log reaches `wal_autocheckpoint` (4 MiB, set in bytes
+/// by dendro's `apply_connection_pragmas`) and SQLite then reuses it in place,
+/// so the file holds at the log's high-water mark. A checkpoint may not reset
+/// the log while a reader may still need its frames, so a read transaction
+/// held open lets the writer append past that mark. A dump is a read
+/// transaction, and one that never ended would grow the sidecar without
+/// bound; that is what this asserts against.
 ///
-/// Two findings, and the first is the one an operator will meet:
+/// Measured on this fixture (2,000 counters at 10 Hz, about 450 KB committed
+/// per tick, a 4.83 MB plateau), and reported rather than asserted:
 ///
-/// - **A short dump costs little or nothing**, because it is bounded by the
-///   dump's duration and often lands entirely inside the space the file
-///   already has. Measured here across runs: a ~130-220 ms dump moved the
-///   sidecar by **20-41 KB**, depending on how much headroom the log
-///   happened to have left when it started.
-/// - **A long one grows it at the writer's WAL byte rate** and keeps the space
-///   afterwards: on top of a 4.78 MB plateau, **+2.7 to +9.4 MB over ~2.1 s
-///   of continuous dumping (1.3-4.3 MB/s)**, and **+0 to +21 KB** in the
-///   second after the last dump returned. The growth is `rate x duration`
-///   and stops when the read mark is released.
+/// - **One dump of 40-180 ms moved the sidecar by 0 to +16 KB**, within the
+///   creep below (measured from the plateau sample, so it includes time
+///   before the dump).
+/// - **With no dump in flight it still crept**, by +82 KB in 2 s and +103 to
+///   +120 KB in 60 s, and then held.
+/// - **Back-to-back dumps grew it by +82 KB to +1.1 MB.** Some windows
+///   grew it no more than the creep; others stepped it up once, by +0.22 to
+///   +1.1 MB at an unpredictable point, after which it held, whether the
+///   dumps ran for 2 s or 60 s. Each dump is a separate read transaction, so
+///   the log is not held open continuously. Which dumps SQLite resets the
+///   log under has not been traced; a read transaction that begins after the
+///   checkpointer has copied every frame does not need the log, which would
+///   explain it.
+/// - **One read transaction held for 8 s grew it by +32 MB**, about the whole
+///   of what was committed meanwhile.
 ///
-/// The shape is asserted; the magnitude is reported, because it is not
-/// portable — it is the writer's WAL write rate, which depends on the host,
-/// the scrape payload and the seal policy. This host's numbers are in the
-/// test's own output and in the commit message.
+/// Growth during the dumps is not asserted because the two cases overlap:
+/// the smallest step seen under dumps (+222 KB, CI) is about twice the creep
+/// without them (+103 to +120 KB).
 ///
 /// Steady state first, and it is a precondition rather than a warm-up: before
 /// the log has reached the autocheckpoint threshold it grows on its own, and
-/// "it grew during the dump" would mean nothing.
+/// "it stopped growing" would mean nothing.
 #[test]
-fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
+fn the_wal_sidecar_stops_growing_once_dumps_end() {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
-    /// How long to keep dumps in flight. Only has to exceed the log's
-    /// remaining headroom (up to 4 MiB at the measured 3.7-7.5 MB/s, i.e.
-    /// ~1 s here); the rest is margin.
+    /// How long to keep dumps in flight.
     const SUSTAINED: Duration = Duration::from_secs(2);
-    /// Ceiling on how long the read mark is held while waiting for the sidecar
-    /// to pass its target. Reached only when the daemon is committing far below
-    /// its configured rate; a failure here means the growth never happened, not
-    /// that it was merely slow.
-    const SUSTAINED_MAX: Duration = Duration::from_secs(60);
-    /// How far past its unpinned high-water the sidecar has to grow while
-    /// the read mark is held: 256 pages. Without a held mark it creeps by
-    /// one page in the same window (see the assertion below), so this
-    /// separates the two by two orders of magnitude, and it is a fixed size
-    /// rather than a fraction of the plateau, so a host that commits slowly
-    /// reaches it within the deadline.
-    const GROWTH: u64 = 1 << 20;
 
     let h = Hindsight::start(2, WIDE);
     let dir = tempfile::tempdir().unwrap();
@@ -1403,8 +1406,8 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
     let size = || std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
 
     // Enough segments that a dump outlasts a tick, then a sidecar that has
-    // stopped growing on its own: SQLite is now recycling the log at every
-    // autocheckpoint, which is the state a dump interrupts.
+    // stopped growing on its own: SQLite is now reusing the log at every
+    // autocheckpoint.
     h.wait_until("a buffer big enough to make a dump slow", |s| {
         s.segments(TABLE) >= 12
     });
@@ -1444,22 +1447,12 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
     let one_took = h.dump_to(&dest);
     let after_one = size();
 
-    // Then dumps back to back, so the read mark is effectively continuous.
-    //
-    // Held until the sidecar has actually grown past its unpinned high-water,
-    // rather than for a fixed span. What is being demonstrated is that a held
-    // read mark lets committed data accumulate past the point autocheckpoint
-    // would otherwise cap the file at — and how long that takes is a function
-    // of how fast the daemon commits, which on a loaded machine is a fraction
-    // of the configured rate. A fixed window asserts the host's throughput; a
-    // target with a generous deadline asserts the mechanism.
+    // Then dumps back to back for `SUSTAINED`.
     let before = size();
-    let target = plateau + GROWTH;
-    let deadline = Instant::now() + SUSTAINED_MAX;
     let started = Instant::now();
     let (mut dumps, mut busy, mut longest_gap) = (0u32, Duration::ZERO, Duration::ZERO);
     let mut last_end = Instant::now();
-    while (started.elapsed() < SUSTAINED || size() < target) && Instant::now() < deadline {
+    while started.elapsed() < SUSTAINED {
         longest_gap = longest_gap.max(last_end.elapsed());
         busy += h.dump_to(&dest);
         last_end = Instant::now();
@@ -1469,23 +1462,28 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
     let held = started.elapsed();
     let during = size();
 
-    // Read mark released. A second of the same ticking, for the contrast.
-    // Wait for the sidecar to STOP growing rather than sampling a fixed second
-    // of it. Releasing the read mark lets the checkpointer recycle the log, but
-    // it does not do so instantly, and on a loaded machine a one-second sample
-    // can land entirely inside the catch-up and read as "still growing at the
-    // dump rate" — which is the claim below inverted. Waiting for the plateau
-    // asks the question the test is named for and does not race the
-    // checkpointer to do it.
-    /// How long the sidecar gets to stop growing once no mark is held. Generous
-    /// because it covers the checkpointer's backlog on a loaded host, not
-    /// because the ceiling is expected to take that long.
+    // Dumps ended. Wait for the sidecar to stop growing rather than sampling a
+    // fixed second of it: once no read transaction is open the checkpointer
+    // can reset the log, but it has a backlog to work off while the daemon
+    // keeps committing, and on a loaded machine a one-second sample can land
+    // entirely inside that catch-up. "Stopped" is the same size across
+    // `SETTLE_TICKS` committed ticks rather than across a span of wall time:
+    // a read transaction left open only grows the file when a commit lands,
+    // and a slow runner can go a second without one.
+    /// How long the sidecar gets to stop growing once the dumps have ended.
+    /// Generous because it covers the checkpointer's backlog on a loaded host,
+    /// not because the ceiling is expected to take that long.
     const SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
+    /// Committed ticks the sidecar has to hold its size across.
+    const SETTLE_TICKS: u64 = 3;
     let settle_deadline = Instant::now() + SETTLE_TIMEOUT;
     let mut after = size();
     let mut settled = false;
     loop {
-        std::thread::sleep(Duration::from_millis(250));
+        let from = h.status().ticks_recorded;
+        h.wait_until("the daemon to commit more ticks", |s| {
+            s.ticks_recorded >= from + SETTLE_TICKS
+        });
         let now = size();
         if now == after {
             settled = true;
@@ -1515,7 +1513,7 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
          after one {one_took:?} dump  {after_one} B ({:+} B)\n  \
          after {held:?} of dumps  {during} B ({:+} B, {:.2} MB/s; {dumps} dumps, \
          {busy:?} inside one, longest gap {longest_gap:?})\n  \
-         1 s after the last dump        {after} B ({:+} B)\n  \
+         once settled                   {after} B ({:+} B)\n  \
          peak over {} samples           {} B",
         after_one as i64 - plateau as i64,
         grew as i64,
@@ -1525,60 +1523,23 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
         peak,
     );
 
-    // Fixture check: was the read mark effectively continuous? Measured
-    // against the length of a dump rather than as a fraction of the window,
-    // because the window holds very few dumps — a run that produced this
-    // assertion's last failure managed two, of ~1.3 s each. Per-iteration
-    // overhead amortized over two iterations is a large share of the window
-    // and none of it means the mark lapsed, so a fixed coverage ratio measures
-    // the host's scheduling, which is what the rest of this test is written to
-    // avoid asserting. What would actually break the fixture is a gap long
-    // enough to be a lapse in its own right, and a dump is the natural scale
-    // for that.
     assert!(dumps > 0, "fixture: no dump ran inside the {held:?} window");
-    let average_dump = busy / dumps;
-    assert!(
-        longest_gap < average_dump,
-        "fixture: the longest gap between dumps was {longest_gap:?}, against an \
-         average dump of {average_dump:?} ({dumps} dumps, {busy:?} inside one, \
-         {held:?} window) — the read mark lapsed rather than being held across \
-         the window"
-    );
-    // Past the UNPINNED high-water, by `GROWTH`. The threshold is what makes
-    // this test mean anything: with the read mark removed the sidecar still
-    // creeps — it went up by 4,120 B, one page, in the same window — because
-    // each individual statement takes a brief mark of its own. `during >
-    // before` is true of that too. What only a HELD mark can do is push the
-    // file past the size autocheckpoint would otherwise cap it at.
-    assert!(
-        during >= target,
-        "the sidecar must grow past its unpinned high-water while a dump holds \
-         the log open: plateau {plateau} B, {before} B before, {during} B \
-         after {held:?} of dumps — either nothing was committed during them, \
-         or the log was recycled under a read mark"
-    );
     assert!(
         after >= during,
         "the sidecar shrank on its own: {during} B at the end of the dumps, \
-         {after} B a second later — SQLite recycles the log in place, it does \
-         not truncate the file"
+         {after} B once settled — SQLite reuses the log in place, it does not \
+         truncate the file"
     );
-    // And it was the read mark that did it, not the workload: released, the
-    // sidecar reaches a new ceiling and stops, where under a held mark the same
-    // ticking grew it without bound.
-    //
     // "It stops" is the assertion, not "it stopped within some size or some
-    // second". Releasing the mark lets the checkpointer recycle the log, but it
-    // has a backlog to work off while the daemon keeps committing, so the file
-    // goes on growing for a while first — on a loaded host, by as much as it
-    // grew under the mark. That growth is the catch-up, and bounding it means
-    // asserting the host's speed. Reaching a ceiling at all is what a held mark
-    // prevents, and what the test is named for.
+    // second". The catch-up after the dumps can grow the file for a while
+    // first, on a loaded host by as much as it grew during them, and bounding
+    // that would assert the host's speed. A read transaction that stayed open
+    // after its dump would keep the file growing past the timeout.
     assert!(
         settled,
         "the sidecar never stopped growing once the dumps ended: {after} B and \
-         still climbing after {:?}, against {during} B when the last mark was \
-         released and {grew} B of growth under the marks",
+         still climbing after {:?}, against {during} B when the last dump \
+         returned and {grew} B of growth during the dumps",
         SETTLE_TIMEOUT
     );
 }

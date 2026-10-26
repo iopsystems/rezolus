@@ -4,24 +4,15 @@
 //! A report is a `.dendro` archive: the recordings the page shows, trimmed
 //! to the columns its saved selection queries (the "trim") and to its time
 //! range, with the selection, the report marker and the events embedded on
-//! the baseline's recording. A dendro source is copied; a tar `.rez` and
-//! standalone parquet files are converted into the report in memory
-//! (metriken-storage's `to_dendro`), so the browser builds the same report
-//! the server does. A v3 `.rez` is converted by path, which only the server
-//! has (`legacy::convert` there), and handed in as a dendro archive. Both
-//! consumers work on bytes; the server reads its file first.
+//! the baseline's recording. The source is a dendro archive, or two
+//! one-recording archives compared side by side, which the report holds as
+//! two recordings labelled `arm=baseline` and `arm=experiment`. Both
+//! consumers work on bytes; the server reads its files first.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use bytes::Bytes;
 use dashboard::Event;
 use metriken_query::MetricsSource;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use parquet::arrow::ArrowWriter;
-use parquet::file::metadata::KeyValue;
-use parquet::file::properties::WriterProperties;
-use parquet::file::reader::FileReader;
-use parquet::file::serialized_reader::SerializedFileReader;
 use serde::Deserialize;
 use tracing::warn;
 
@@ -32,11 +23,6 @@ pub const KEY_REPORT: &str = "report";
 pub const REPORT_VALUE_TRIMMED: &str = "trimmed";
 pub const KEY_SELECTION: &str = "selection";
 pub use dashboard::keys::{KEY_DESCRIPTIONS, KEY_EVENTS};
-
-/// Row group size of the in-memory parquet a time range cuts a parquet
-/// source to before it is converted
-/// (`rezolus::parquet_metadata::MAX_ROW_GROUP_SIZE`).
-pub const MAX_ROW_GROUP_SIZE: usize = 1800;
 
 // ── Payload types ────────────────────────────────────────────────────
 
@@ -71,12 +57,6 @@ pub struct TrimRangeMs {
 pub struct TimeRange {
     pub start_ns: u64,
     pub end_ns: u64,
-}
-
-impl TimeRange {
-    fn contains(&self, ts: u64) -> bool {
-        self.start_ns <= ts && ts <= self.end_ns
-    }
 }
 
 impl ReportPayload {
@@ -162,16 +142,14 @@ pub fn resolve_kept_columns(
 pub enum ReportSource<'a> {
     /// A dendro archive's bytes.
     Dendro(&'a [u8]),
-    /// A v1 or v2 (tar) `.rez`'s bytes.
-    RezTar(&'a [u8]),
-    /// A v3 (SQLite) `.rez`'s bytes, its own WAL table included. The server
-    /// converts a v3 `.rez` by path instead, which also reads SQLite's
-    /// `-wal` sidecar beside the file.
-    RezV3(&'a [u8]),
-    /// Standalone parquet files' bytes, a recording each, baseline first.
-    /// Two files are a compare: the report labels them `arm=baseline` and
-    /// `arm=experiment`, so it reopens as the comparison it was saved from.
-    Parquet(Vec<&'a [u8]>),
+    /// Two dendro archives' bytes, the baseline and the experiment of a
+    /// comparison opened from two files. The report labels their recordings
+    /// `arm=baseline` and `arm=experiment`, so it reopens as the comparison
+    /// it was saved from.
+    Compare {
+        baseline: &'a [u8],
+        experiment: &'a [u8],
+    },
 }
 
 /// Build a dendro report of `source`: every recording copied (trimmed to
@@ -180,10 +158,9 @@ pub enum ReportSource<'a> {
 /// baseline capture's; else the first), and only what `range` holds.
 /// Returns the archive's bytes.
 ///
-/// `range` keeps the segments overlapping it from an archive, a segment
-/// copied whole, so the report holds rows up to a segment's span beyond
-/// each end; a parquet source is cut to the rows inside it before it is
-/// converted. An error when `range` keeps nothing.
+/// `range` keeps the segments overlapping it, a segment copied whole, so
+/// the report holds rows up to a segment's span beyond each end. An error
+/// when `range` keeps nothing, and for bytes that are not a dendro archive.
 pub fn build_report(
     source: ReportSource<'_>,
     anchor: Option<&BTreeMap<String, String>>,
@@ -192,74 +169,53 @@ pub fn build_report(
     selection_json: &str,
     events_json: Option<&str>,
 ) -> Result<Vec<u8>, String> {
-    use dendro::archive::{Archive, ArchiveMut};
-    let err = |e: Box<dyn std::error::Error + Send + Sync>| e.to_string();
+    use dendro::archive::Archive;
+    let open = |bytes: &[u8]| -> Result<Archive, String> {
+        let container = rez::container::Container::of_bytes(bytes);
+        if container != rez::container::Container::Dendro {
+            return Err(format!(
+                "a report is built from a .dendro archive, not a {}",
+                container.name()
+            ));
+        }
+        Archive::open_bytes(bytes.to_vec()).map_err(|e| e.to_string())
+    };
     match source {
-        ReportSource::Dendro(bytes) => {
-            let src = Archive::open_bytes(bytes.to_vec()).map_err(|e| e.to_string())?;
-            build_dendro_report(
-                &src,
-                anchor,
-                keep_metrics,
-                range,
-                selection_json,
-                events_json,
-            )
-        }
-        ReportSource::RezTar(bytes) => {
-            let mut converted = ArchiveMut::create_in_memory().map_err(|e| e.to_string())?;
-            metriken_storage::rez::to_dendro::convert_tar_into(
-                std::io::Cursor::new(bytes),
-                &mut converted,
-                &metriken_storage::WriterConfig::default(),
-            )
-            .map_err(err)?;
-            build_dendro_report(
-                &converted,
-                anchor,
-                keep_metrics,
-                range,
-                selection_json,
-                events_json,
-            )
-        }
-        ReportSource::RezV3(bytes) => {
-            let db = metriken_storage::rez::rez_sqlite::RezDb::open_bytes(bytes.to_vec())?;
-            let mut converted = ArchiveMut::create_in_memory().map_err(|e| e.to_string())?;
-            metriken_storage::rez::to_dendro::convert_v3_into(&db, &mut converted).map_err(err)?;
-            build_dendro_report(
-                &converted,
-                anchor,
-                keep_metrics,
-                range,
-                selection_json,
-                events_json,
-            )
-        }
-        ReportSource::Parquet(files) => {
-            let mut converted = ArchiveMut::create_in_memory().map_err(|e| e.to_string())?;
-            let arms: &[&str] = if files.len() == 2 {
-                &["baseline", "experiment"]
-            } else {
-                &[]
-            };
-            for (i, bytes) in files.iter().enumerate() {
-                let cut = match range {
-                    Some(r) => Bytes::from(parquet_rows_in(bytes, r)?),
-                    None => Bytes::copy_from_slice(bytes),
-                };
-                let mut converter = parquet_converter(&cut);
-                if let Some(arm) = arms.get(i) {
-                    converter = converter.label("arm", *arm);
+        ReportSource::Dendro(bytes) => build_dendro_report(
+            &open(bytes)?,
+            anchor,
+            keep_metrics,
+            range,
+            selection_json,
+            events_json,
+        ),
+        ReportSource::Compare {
+            baseline,
+            experiment,
+        } => {
+            // Each file is one recording (read group), as the viewers count
+            // them: several would all carry its arm, and the report would
+            // not open as a comparison.
+            for (bytes, arm) in [(baseline, "baseline"), (experiment, "experiment")] {
+                let recordings = rez::reader::RezReader::open_recordings_from_bytes(
+                    bytes.to_vec(),
+                    metriken_storage::BufferPool::new(8 << 20),
+                )
+                .map_err(|e| e.to_string())?
+                .len();
+                if recordings != 1 {
+                    return Err(format!(
+                        "the {arm} file holds {recordings} recordings; a report of a \
+                         two-file comparison takes one recording from each file"
+                    ));
                 }
-                converter.convert_into(cut, &mut converted).map_err(err)?;
             }
-            // The rows are already cut, so the copy keeps every segment.
+            let joined = arms(&open(baseline)?, &open(experiment)?)?;
             build_dendro_report(
-                &converted,
+                &joined,
                 anchor,
                 keep_metrics,
-                None,
+                range,
                 selection_json,
                 events_json,
             )
@@ -267,121 +223,39 @@ pub fn build_report(
     }
 }
 
-/// The converter for the parquet file `bytes`: its source labelled as the
-/// viewer labels the file when it reads it
-/// (`dashboard::combined::parquet_source_label`), so the report presents as
-/// the file did.
-fn parquet_converter(bytes: &Bytes) -> metriken_storage::to_dendro::ParquetToArchive {
-    let converter = metriken_storage::to_dendro::ParquetToArchive::new();
-    match metriken_query::ParquetReader::open_bytes(bytes.clone())
-        .ok()
-        .and_then(|r| dashboard::combined::parquet_source_label(&r))
-    {
-        Some(source) => converter.label("source", source),
-        None => converter,
+/// `baseline` and `experiment` joined into one in-memory archive, every
+/// source of each copied whole (its live tail sealed) and labelled
+/// `arm=baseline` or `arm=experiment`.
+fn arms(
+    baseline: &dendro::archive::Archive,
+    experiment: &dendro::archive::Archive,
+) -> Result<dendro::archive::ArchiveMut, String> {
+    use dendro::archive::ArchiveMut;
+    use dendro::rewrite::{copy_sources_into, CopySpec};
+    let err = |e: dendro::Error| e.to_string();
+    let mut dst = ArchiveMut::create_in_memory().map_err(err)?;
+    let mut arm_of = Vec::new();
+    for (src, arm) in [(baseline, "baseline"), (experiment, "experiment")] {
+        let copied = dst
+            .transaction(|tx| {
+                src.read_snapshot(|src| {
+                    let encoder = metriken_storage::Encoder::for_archive(src)?;
+                    copy_sources_into(src, tx, &CopySpec::everything(), &encoder)
+                })
+            })
+            .map_err(err)?;
+        arm_of.extend(std::iter::repeat_n(arm, copied));
     }
+    let sources = dst.read_sources().map_err(err)?;
+    for (source, arm) in sources.iter().zip(arm_of) {
+        let mut labels = source.meta.labels.clone();
+        labels.insert(dashboard::combined::ARM_LABEL.to_string(), arm.to_string());
+        dst.update_source_labels(source.id, &labels).map_err(err)?;
+    }
+    Ok(dst)
 }
 
 // ── Internals ────────────────────────────────────────────────────────
-
-fn read_file_metadata(bytes: Bytes) -> Result<Vec<KeyValue>, String> {
-    let reader = SerializedFileReader::new(bytes).map_err(|e| e.to_string())?;
-    Ok(reader
-        .metadata()
-        .file_metadata()
-        .key_value_metadata()
-        .cloned()
-        .unwrap_or_default())
-}
-
-/// Rewrite a parquet with `kv_meta` as its footer, keeping the columns in
-/// `projection` (all when `None`) and the rows whose `timestamp` is inside
-/// `rows` (all when `None`). An error when `rows` keeps no row.
-fn rewrite_parquet_bytes(
-    source: Bytes,
-    kv_meta: Vec<KeyValue>,
-    projection: Option<&[usize]>,
-    rows: Option<TimeRange>,
-) -> Result<Vec<u8>, String> {
-    let builder = ParquetRecordBatchReaderBuilder::try_new(source).map_err(|e| e.to_string())?;
-    let schema = builder.schema().clone();
-    let reader = builder.build().map_err(|e| e.to_string())?;
-    let timestamp = match rows {
-        Some(_) => Some(
-            schema
-                .index_of("timestamp")
-                .map_err(|_| "a time range needs a timestamp column".to_string())?,
-        ),
-        None => None,
-    };
-    let mut kept_rows = 0usize;
-
-    let output_schema = match projection {
-        Some(indices) => std::sync::Arc::new(schema.project(indices).map_err(|e| e.to_string())?),
-        None => schema,
-    };
-
-    let props = WriterProperties::builder()
-        .set_key_value_metadata(Some(kv_meta))
-        .set_max_row_group_row_count(Some(MAX_ROW_GROUP_SIZE))
-        .set_compression(parquet::basic::Compression::ZSTD(Default::default()))
-        .build();
-
-    let mut buf = Vec::new();
-    {
-        let mut writer = ArrowWriter::try_new(
-            std::io::Cursor::new(&mut buf),
-            output_schema.clone(),
-            Some(props),
-        )
-        .map_err(|e| e.to_string())?;
-        for batch in reader {
-            let batch = batch.map_err(|e| e.to_string())?;
-            let batch = match (rows, timestamp) {
-                (Some(range), Some(col)) => filter_rows(&batch, col, range)?,
-                _ => batch,
-            };
-            kept_rows += batch.num_rows();
-            let batch = match projection {
-                Some(indices) => batch.project(indices).map_err(|e| e.to_string())?,
-                None => batch,
-            };
-            writer.write(&batch).map_err(|e| e.to_string())?;
-        }
-        writer.close().map_err(|e| e.to_string())?;
-    }
-    if rows.is_some() && kept_rows == 0 {
-        return Err("the time range holds no rows".to_string());
-    }
-    Ok(buf)
-}
-
-/// The rows of `batch` whose `UInt64` column `col` (nanoseconds) is inside
-/// `range`.
-fn filter_rows(
-    batch: &arrow::record_batch::RecordBatch,
-    col: usize,
-    range: TimeRange,
-) -> Result<arrow::record_batch::RecordBatch, String> {
-    use arrow::array::{Array, BooleanArray, UInt64Array};
-    let ts = batch
-        .column(col)
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .ok_or_else(|| "the timestamp column is not UInt64".to_string())?;
-    let mask: BooleanArray = (0..ts.len())
-        .map(|i| Some(!ts.is_null(i) && range.contains(ts.value(i))))
-        .collect();
-    arrow::compute::filter_record_batch(batch, &mask).map_err(|e| e.to_string())
-}
-
-/// `bytes` with only the rows inside `range`, footer unchanged: an
-/// in-memory parquet, converted into the report.
-fn parquet_rows_in(bytes: &[u8], range: TimeRange) -> Result<Vec<u8>, String> {
-    let bytes = Bytes::copy_from_slice(bytes);
-    let kv_meta = read_file_metadata(bytes.clone())?;
-    rewrite_parquet_bytes(bytes, kv_meta, None, Some(range))
-}
 
 /// Remove an earlier report's keys from `metadata`. A recording without a
 /// selection keeps its events: they are its own (`recording annotate
@@ -543,6 +417,27 @@ pub const OCCUPANT_RESTATE_NS: u64 = 300_000_000_000;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::arrow::ArrowWriter;
+    use parquet::file::metadata::KeyValue;
+    use parquet::file::properties::WriterProperties;
+
+    /// A parquet fixture's bytes as a one-source dendro archive, converted
+    /// as `recording upgrade` converts a parquet file.
+    fn dendro(parquet: &[u8]) -> Vec<u8> {
+        let mut out = dendro::archive::ArchiveMut::create_in_memory().unwrap();
+        let bytes = Bytes::copy_from_slice(parquet);
+        let source = metriken_query::ParquetReader::open_bytes(bytes.clone())
+            .ok()
+            .and_then(|r| dashboard::combined::parquet_source_label(&r));
+        let mut converter = metriken_storage::to_dendro::ParquetToArchive::new();
+        if let Some(source) = source {
+            converter = converter.label("source", source);
+        }
+        converter.convert_into(bytes, &mut out).unwrap();
+        out.serialize().unwrap()
+    }
     use arrow::array::{Int64Array, UInt64Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -780,7 +675,7 @@ mod tests {
             .collect();
         let body = r#"{"version":1,"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
         let out = build_report(
-            ReportSource::Parquet(vec![&bytes]),
+            ReportSource::Dendro(&dendro(&bytes)),
             None,
             Some(&keep),
             None,
@@ -808,7 +703,7 @@ mod tests {
         let (bytes, _reader) = build_test(true);
         let events = r#"{"events":[{"timestamp":1000000000,"description":"x"}]}"#;
         let out = build_report(
-            ReportSource::Parquet(vec![&bytes]),
+            ReportSource::Dendro(&dendro(&bytes)),
             None,
             None,
             None,
@@ -902,7 +797,10 @@ mod tests {
         let b = rez_test_parquet("valkey", "cpu_usage", "cpu_cycles");
         let keep: BTreeSet<String> = ["cpu_cycles".to_string()].into_iter().collect();
         let out = build_report(
-            ReportSource::Parquet(vec![&a, &b]),
+            ReportSource::Compare {
+                baseline: &dendro(&a),
+                experiment: &dendro(&b),
+            },
             None,
             Some(&keep),
             None,
@@ -922,6 +820,116 @@ mod tests {
         assert!(!sources[1].1.contains_key(KEY_SELECTION));
     }
 
+    /// A side holding two recordings (here a report of a comparison) is
+    /// refused: both would be labelled with its arm.
+    #[test]
+    fn a_compare_side_of_two_recordings_is_refused() {
+        let a = rez_test_parquet("redis", "cpu_usage", "cpu_cycles");
+        let b = rez_test_parquet("valkey", "cpu_usage", "cpu_cycles");
+        let two = build_report(
+            ReportSource::Compare {
+                baseline: &dendro(&a),
+                experiment: &dendro(&b),
+            },
+            None,
+            None,
+            None,
+            "{}",
+            None,
+        )
+        .unwrap();
+        let err = build_report(
+            ReportSource::Compare {
+                baseline: &two,
+                experiment: &dendro(&a),
+            },
+            None,
+            None,
+            None,
+            "{}",
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            err.starts_with("the baseline file holds 2 recordings"),
+            "{err}"
+        );
+    }
+
+    /// An archive of `parts`' sources, each copied whole, and labelled `labels`
+    /// when given (a copy keeps its source's uuid).
+    fn joined(parts: &[(&[u8], Option<&[(&str, &str)]>)]) -> Vec<u8> {
+        use dendro::archive::{Archive, ArchiveMut};
+        use dendro::rewrite::{copy_sources_into, CopySpec};
+        let mut dst = ArchiveMut::create_in_memory().unwrap();
+        for (bytes, labels) in parts {
+            let src = Archive::open_bytes(bytes.to_vec()).unwrap();
+            let before = dst.read_sources().unwrap().len();
+            dst.transaction(|tx| {
+                src.read_snapshot(|src| {
+                    let encoder = metriken_storage::Encoder::for_archive(src)?;
+                    copy_sources_into(src, tx, &CopySpec::everything(), &encoder)
+                })
+            })
+            .unwrap();
+            if let Some(labels) = labels {
+                for source in &dst.read_sources().unwrap()[before..] {
+                    let labels = labels
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect();
+                    dst.update_source_labels(source.id, &labels).unwrap();
+                }
+            }
+        }
+        dst.serialize().unwrap()
+    }
+
+    /// A side is counted in recordings (read groups), as the viewers count
+    /// them: a source and its copy with an extra label are one recording and
+    /// save; two sources of separate recorders with identical labels are two
+    /// and are refused.
+    #[test]
+    fn a_compare_side_is_counted_in_recordings() {
+        let a = dendro(&rez_test_parquet("redis", "cpu_usage", "cpu_cycles"));
+        let b = dendro(&rez_test_parquet("valkey", "cpu_usage", "cpu_cycles"));
+        let save = |baseline: &[u8]| {
+            build_report(
+                ReportSource::Compare {
+                    baseline,
+                    experiment: &b,
+                },
+                None,
+                None,
+                None,
+                "{}",
+                None,
+            )
+        };
+        let copy = joined(&[
+            (&a, None),
+            (&a, Some(&[("source", "redis"), ("env", "prod")])),
+        ]);
+        let out = save(&copy).unwrap();
+        let opened = rez::reader::RezReader::open_recordings_from_bytes(
+            out,
+            metriken_storage::BufferPool::new(8 << 20),
+        )
+        .unwrap();
+        let labels: Vec<_> = opened.iter().map(|(l, _)| l.clone()).collect();
+        assert!(
+            dashboard::combined::arm_slots(&labels).is_ok(),
+            "{labels:?}"
+        );
+
+        let twins = joined(&[(&a, None), (&b, Some(&[("source", "redis")]))]);
+        let err = save(&twins).unwrap_err();
+        assert!(
+            err.starts_with("the baseline file holds 2 recordings"),
+            "{err}"
+        );
+    }
+
     /// A dendro source is copied, and saving again from a report moves the
     /// markers to the new anchor: an earlier report's keys leave the others.
     #[test]
@@ -929,7 +937,10 @@ mod tests {
         let a = rez_test_parquet("redis", "cpu_usage", "cpu_cycles");
         let b = rez_test_parquet("valkey", "cpu_usage", "cpu_cycles");
         let first = build_report(
-            ReportSource::Parquet(vec![&a, &b]),
+            ReportSource::Compare {
+                baseline: &dendro(&a),
+                experiment: &dendro(&b),
+            },
             None,
             None,
             None,
@@ -960,64 +971,20 @@ mod tests {
         assert_eq!(marked, ["valkey"]);
     }
 
-    /// A v3 `.rez` converts into the report in memory, as the browser saves
-    /// one: the committed `v3-multi.rez`'s two recordings, with their labels,
-    /// and `v3-live.rez`'s rows still in its WAL table.
+    /// A legacy recording's bytes are refused, naming what they are.
     #[test]
-    fn a_v3_rez_saves_a_dendro_report() {
-        let fixture = |name: &str| {
-            std::fs::read(
+    fn a_legacy_source_is_refused() {
+        for name in ["v3-multi.rez", "v2.rez"] {
+            let bytes = std::fs::read(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("../rez/tests/fixtures/rez")
                     .join(name),
             )
-            .unwrap()
-        };
-        let out = build_report(
-            ReportSource::RezV3(&fixture("v3-multi.rez")),
-            None,
-            None,
-            None,
-            "{}",
-            None,
-        )
-        .unwrap();
-        let sources = sources_of(out);
-        assert_eq!(sources.len(), 2);
-        assert_eq!(
-            sources[0].1.get(KEY_SELECTION).map(String::as_str),
-            Some("{}")
-        );
-        let live = build_report(
-            ReportSource::RezV3(&fixture("v3-live.rez")),
-            None,
-            None,
-            None,
-            "{}",
-            None,
-        )
-        .unwrap();
-        assert_eq!(sources_of(live).len(), 1);
-    }
-
-    /// A tar `.rez` source converts into the report in memory, as the
-    /// browser saves one: the committed `v2.rez`'s one recording, with its
-    /// labels.
-    #[test]
-    fn a_tar_rez_saves_a_dendro_report() {
-        let tar = std::fs::read(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../rez/tests/fixtures/rez/v2.rez"),
-        )
-        .unwrap();
-        let out = build_report(ReportSource::RezTar(&tar), None, None, None, "{}", None).unwrap();
-        let sources = sources_of(out);
-        assert_eq!(sources.len(), 1);
-        assert_eq!(sources[0].0.get("host").map(String::as_str), Some("web-01"));
-        assert_eq!(
-            sources[0].1.get(KEY_SELECTION).map(String::as_str),
-            Some("{}")
-        );
+            .unwrap();
+            let err = build_report(ReportSource::Dendro(&bytes), None, None, None, "{}", None)
+                .unwrap_err();
+            assert!(err.contains(".rez archive"), "{name}: {err}");
+        }
     }
 
     fn ranged_payload(start: f64, end: f64, trim_columns: bool) -> ReportPayload {
@@ -1055,14 +1022,15 @@ mod tests {
         );
     }
 
-    /// A range keeps only a parquet's rows inside it.
+    /// A range keeps the segments overlapping it whole: the fixture's one
+    /// segment, rows 1 s to 3 s, for a range from 1.5 s.
     #[test]
-    fn a_parquet_report_keeps_only_rows_in_the_range() {
+    fn a_range_keeps_the_segments_overlapping_it() {
         let sec = 1_000_000_000u64;
         let (bytes, _reader) = build_test(true);
         let range = ranged_payload(1500.0, 3000.0, false).time_range().unwrap();
         let out = build_report(
-            ReportSource::Parquet(vec![&bytes]),
+            ReportSource::Dendro(&dendro(&bytes)),
             None,
             None,
             range,
@@ -1070,7 +1038,7 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(report_timestamps(out), vec![2 * sec, 3 * sec]);
+        assert_eq!(report_timestamps(out), vec![sec, 2 * sec, 3 * sec]);
     }
 
     #[test]
@@ -1080,7 +1048,7 @@ mod tests {
             .time_range()
             .unwrap();
         let err = build_report(
-            ReportSource::Parquet(vec![&bytes]),
+            ReportSource::Dendro(&dendro(&bytes)),
             None,
             None,
             range,
@@ -1101,6 +1069,7 @@ mod tests {
         let ms = |ns: u64| (ns as f64 / 1e9) * 1000.0;
         let p = ranged_payload(ms(first), ms(last), false);
         let r = p.time_range().unwrap().unwrap();
-        assert!(r.contains(first) && r.contains(last), "{r:?}");
+        let within = |t: u64| r.start_ns <= t && t <= r.end_ns;
+        assert!(within(first) && within(last), "{r:?}");
     }
 }

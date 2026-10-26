@@ -3,7 +3,7 @@
 
 import { ChartsState, Chart } from './charts/chart.js';
 import { QueryExplorer, SingleChartView } from './features/explorers.js';
-import { CgroupSelector, seedSelectedCgroups, selectedCgroupPattern } from './features/cgroup_selector.js';
+import { CgroupSelector, seedSelectedCgroups, selectedCgroupSelection, loadCgroupGroups, clearCgroupGroups } from './features/cgroup_selector.js';
 import { GpuSelector } from './features/gpu_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
@@ -49,7 +49,7 @@ let activeSectionRoute = null;
 const DEFAULT_DOCUMENT_TITLE = (typeof document !== 'undefined' && document.title) || 'Rezolus';
 
 // Update browser tab title to reflect the active section + loaded file
-// so pasted URLs (e.g. .../viewer/?demo=vllm.parquet#/gpu) preview
+// so pasted URLs (e.g. .../viewer/?demo=vllm.dendro#/gpu) preview
 // usefully in link-unfurling and tab strips.
 const updateDocumentTitle = (sectionKey) => {
     if (typeof document === 'undefined') return;
@@ -77,6 +77,8 @@ let selectedGpus = [];     // selected {vendor, id} GPUs filtering the GPU secti
 let gpuEntries = [];       // available {vendor, id} GPUs, from the section metadata
 let serviceInstances = {};
 let selectedInstances = {};
+// The cgroup selection the section's queries take (cgroup_selection.js's
+// resolveCgroupSelection), or null.
 let activeCgroupPattern = null;
 let heatmapEnabled = false;
 let heatmapLoading = false;
@@ -98,7 +100,6 @@ const withCachedSections = (data) => withSharedSections(sectionCacheState, data)
 const getCachedSections = () => getSections(sectionCacheState);
 
 let compareMode = false;
-let combinedAB = false;
 let reportMode = false;
 let experimentAttached = false;
 let experimentSystemInfo = null;
@@ -337,7 +338,7 @@ const detachExperiment = async () => {
     m.redraw();
 };
 
-// Replace the currently attached experiment with a new parquet. Unlike
+// Replace the currently attached experiment with a new recording. Unlike
 // detachExperiment + attachExperiment, this preserves compareMode across
 // the transition so the UI doesn't bounce back to single-capture mode.
 const loadExperiment = async (file) => {
@@ -360,6 +361,7 @@ const clearViewerCaches = () => {
     heatmapDataCache.clear();
     chartsState.clear();
     clearCaptureMemo();
+    clearCgroupGroups();
 };
 
 const applyMultiNodeInfo = (experimentFileMetadata = null) => {
@@ -411,8 +413,10 @@ const applyMultiNodeInfo = (experimentFileMetadata = null) => {
     }
 };
 
-// `cgroupPattern` replaces the selector's pattern for this load: an expanded
-// chart passes the link's selection, since it mounts no selector.
+// `cgroupPattern` replaces the selector's selection for this load: an
+// expanded chart passes the link's selection, since it mounts no selector.
+// It may be a function of the section's data that resolves to the selection,
+// for a selection that needs the section's scope to resolve.
 // Section loads in flight, by section. A section loaded with `early` is
 // cached, and drawn, before its histogram queries land. A load caches
 // only while its generation is current: clearing the section cache, or
@@ -522,7 +526,8 @@ const fetchSection = async (section, { cgroupPattern = activeCgroupPattern, earl
     // Show the section once its counter and gauge charts have data; the
     // histogram charts show as loading until theirs land. Compare mode
     // waits for every chart: each fetches its experiment when it mounts.
-    const processedData = await processDashboardData(data, cgroupPattern, `/${section}`, {
+    const selection = typeof cgroupPattern === 'function' ? await cgroupPattern(data) : cgroupPattern;
+    const processedData = await processDashboardData(data, selection, `/${section}`, {
         onPrimary: (!early || compareMode) ? null : (partial) => {
             if (!current()) return;
             cacheSectionResponse(section, partial);
@@ -1057,7 +1062,6 @@ const SectionContent = {
                 baselineAlias,
                 experimentAlias,
                 experimentFilename,
-                combinedAB,
             });
         }
 
@@ -1257,7 +1261,6 @@ const initDashboard = (config = {}) => {
     compareMode = config.compareMode === true;
     experimentAttached = compareMode;
     refreshCompareCaptures();
-    combinedAB = config.combinedAB === true;
     reportMode = config.reportMode === true;
     experimentSystemInfo = config.experimentSystemInfo || null;
     experimentDurationMs = durationFromFileMetadata(config.experimentFileMetadata);
@@ -1275,8 +1278,8 @@ const initDashboard = (config = {}) => {
     }
 
     // Restore step override from whichever store carries one. Report
-    // (loaded-from-parquet) wins when both exist so a shared annotated
-    // parquet shows the granularity its author intended.
+    // (loaded from the recording) wins when both exist so a shared annotated
+    // recording shows the granularity its author intended.
     const restoredStep =
         reportStore.stepOverride ?? notebookStore.stepOverride ?? null;
     if (restoredStep != null) {
@@ -1377,7 +1380,7 @@ const initDashboard = (config = {}) => {
             experimentAlias,
             captures: compareCaptures,
             // The WASM viewer has no onUploadParquet handler — that path
-            // is how the site viewer loads its initial parquet on its own.
+            // is how the site viewer loads its initial recording on its own.
             // Use its absence as the "WASM mode" signal and hide both
             // per-capture Load buttons there. Server viewer always has it.
             onLoadBaseline: onUploadParquet ? (file) => onUploadParquet(file) : null,
@@ -1494,7 +1497,7 @@ const initDashboard = (config = {}) => {
                                     chartId: decodeURIComponent(params.chartId),
                                     applyResultToPlot,
                                     sectionRoute: `/${sectionKey}`,
-                                    activeCgroupPattern: activeCgroupPattern ?? selectedCgroupPattern(),
+                                    activeCgroupPattern: activeCgroupPattern ?? selectedCgroupSelection(`/${sectionKey}`),
                                 }),
                             ]),
                         ]);
@@ -1504,8 +1507,23 @@ const initDashboard = (config = {}) => {
                 // Resolve synchronously regardless of cache state — see
                 // the matching comment in '/:section' below for rationale.
                 if (!sectionResponseCache[sectionKey]) {
+                    // A group in the link's selection resolves to its members
+                    // only once the section's cgroups are discovered, through
+                    // the queries the section's selector would run.
+                    const route = `/${sectionKey}`;
                     loadSection(sectionKey, {
-                        cgroupPattern: activeCgroupPattern ?? selectedCgroupPattern(),
+                        cgroupPattern: activeCgroupPattern ?? (async (section) => {
+                            try {
+                                await loadCgroupGroups(route, (q) => {
+                                    const node = getSelectedNode();
+                                    if (node) q = injectLabel(q, 'node', node);
+                                    return executePromQLRangeQuery(applyScope(q, section.metadata?.scope));
+                                });
+                            } catch (e) {
+                                console.warn('[cgroups] group discovery failed:', e);
+                            }
+                            return selectedCgroupSelection(route);
+                        }),
                     })
                         .then(() => m.redraw())
                         .catch(() => {});

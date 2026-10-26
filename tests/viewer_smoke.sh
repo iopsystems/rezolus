@@ -23,9 +23,9 @@ PORT_AB=18502
 PORT_PROXY=18503
 PORT_NWAY=18504
 
-PARQUET_FILE=site/viewer/data/cachecannon.parquet
-PARQUET_AB_A=site/viewer/data/AB_base.parquet
-PARQUET_AB_B=site/viewer/data/AB_base_pin.parquet
+RECORDING_FILE=site/viewer/data/cachecannon.dendro
+RECORDING_AB_A=site/viewer/data/AB_base.dendro
+RECORDING_AB_B=site/viewer/data/AB_base_pin.dendro
 
 LOGDIR=$(mktemp -d -t rezolus-smoke-XXXXXX)
 echo "logs: $LOGDIR"
@@ -54,12 +54,12 @@ export REZOLUS_NO_OPEN=1
     > "$LOGDIR/upload.log" 2>&1 &
 PID_UPLOAD=$!
 
-./target/debug/rezolus view "$PARQUET_FILE" \
+./target/debug/rezolus view "$RECORDING_FILE" \
     --listen 127.0.0.1:$PORT_FILE \
     > "$LOGDIR/file.log" 2>&1 &
 PID_FILE=$!
 
-./target/debug/rezolus view "$PARQUET_AB_A" "$PARQUET_AB_B" \
+./target/debug/rezolus view "$RECORDING_AB_A" "$RECORDING_AB_B" \
     --listen 127.0.0.1:$PORT_AB \
     > "$LOGDIR/ab.log" 2>&1 &
 PID_AB=$!
@@ -181,6 +181,13 @@ sections=$(curl -fsS "http://127.0.0.1:$PORT_FILE/api/v1/sections")
 echo "$sections" | jq -e '.data.sections | length > 0' >/dev/null \
     || fail "sections payload empty" "$sections" "non-empty .data.sections" "$LOGDIR/file.log"
 
+echo "==> the built-in templates: the cachecannon recording carries no KPIs of its own"
+# The cachecannon KPI section comes from the built-in cachecannon template,
+# matched by the recording's source; with an empty built-in registry it is
+# absent.
+echo "$sections" | jq -e '[.data.sections[].route] | any(. == "/service/cachecannon")' >/dev/null \
+    || fail "no built-in cachecannon KPI section" "$(echo "$sections" | jq -c '[.data.sections[].route]')" "/service/cachecannon" "$LOGDIR/file.log"
+
 echo "==> /data/<section>.json returns groups"
 overview=$(curl -fsS "http://127.0.0.1:$PORT_FILE/data/overview.json")
 echo "$overview" | jq -e '.groups | length > 0' >/dev/null \
@@ -196,22 +203,22 @@ lu=$(curl -fsS -X POST -H 'content-type: application/json' \
      "http://127.0.0.1:$PORT_UPLOAD/api/v1/load_url")
 eq "load_url forbidden envelope" "$(echo "$lu" | jq -r .errorType)" "forbidden" "$LOGDIR/upload.log"
 
-echo "==> /api/v1/load_url proxies when allowed (httpbin returns non-parquet → invalid_parquet)"
+echo "==> /api/v1/load_url proxies when allowed (httpbin returns no recording → invalid_recording)"
 # Network test: tolerate a transient httpbin outage by warning rather
 # than failing. The response shape (envelope with errorType) is what
 # we're really verifying.
 if lu=$(curl -fsS --max-time 10 -X POST -H 'content-type: application/json' \
         -d '{"url":"https://httpbin.org/bytes/100"}' \
         "http://127.0.0.1:$PORT_PROXY/api/v1/load_url"); then
-    eq "load_url proxied errorType" "$(echo "$lu" | jq -r .errorType)" "invalid_parquet" "$LOGDIR/proxy.log"
+    eq "load_url proxied errorType" "$(echo "$lu" | jq -r .errorType)" "invalid_recording" "$LOGDIR/proxy.log"
 else
     echo "    (skipped: httpbin.org unreachable)"
 fi
 
 echo "==> POST /api/v1/captures/experiment attaches experiment"
-curl -fsS -X POST --data-binary @"$PARQUET_AB_B" \
+curl -fsS -X POST --data-binary @"$RECORDING_AB_B" \
     -H 'Content-Type: application/octet-stream' \
-    -H "x-rezolus-filename: $(basename "$PARQUET_AB_B")" \
+    -H "x-rezolus-filename: $(basename "$RECORDING_AB_B")" \
     "http://127.0.0.1:$PORT_FILE/api/v1/captures/experiment" >/dev/null
 sleep 1
 mode=$(mode_at $PORT_FILE)
@@ -321,21 +328,35 @@ echo "==> recording combine --ab writes a .dendro the viewer opens as a compare"
 # side. Generated at test time (see `examples/gen_ab_fixtures.rs`) rather
 # than checked in — keeps the tree free of binary blobs whose meaning
 # would silently drift from the writer.
+# The example writes parquet, which `recording upgrade` converts.
 AB_A="$LOGDIR/ab_source_a.parquet"
 AB_B="$LOGDIR/ab_source_b.parquet"
 ./target/debug/examples/gen_ab_fixtures "$AB_A" "$AB_B" \
     > "$LOGDIR/gen-ab.log" 2>&1 \
     || fail "gen_ab_fixtures failed" "$(cat "$LOGDIR/gen-ab.log")" "exit 0" "$LOGDIR/gen-ab.log"
+# The parquet itself is refused, naming the upgrade.
+if ./target/debug/rezolus recording combine "$AB_A" "$AB_B" -o "$LOGDIR/refused.dendro" \
+    > "$LOGDIR/combine-legacy.log" 2>&1; then
+    fail "combine of parquet inputs was not refused" "exit 0" "exit 1" "$LOGDIR/combine-legacy.log"
+fi
+grep -q 'recording upgrade' "$LOGDIR/combine-legacy.log" \
+    || fail "the refusal does not name the upgrade" "$(cat "$LOGDIR/combine-legacy.log")" "recording upgrade" "$LOGDIR/combine-legacy.log"
+for f in "$AB_A" "$AB_B"; do
+    ./target/debug/rezolus recording upgrade "$f" >> "$LOGDIR/combine-ab.log" 2>&1 \
+        || fail "recording upgrade failed" "$(cat "$LOGDIR/combine-ab.log")" "exit 0" "$LOGDIR/combine-ab.log"
+done
+AB_A="${AB_A%.parquet}.dendro"
+AB_B="${AB_B%.parquet}.dendro"
 ./target/debug/rezolus recording combine \
     "$AB_A" \
     "$AB_B" \
     -o "$COMBINED_AB" \
-    --ab baseline=ab_source_a.parquet experiment=ab_source_b.parquet \
+    --ab baseline=ab_source_a.dendro experiment=ab_source_b.dendro \
     > "$LOGDIR/combine-ab.log" 2>&1 \
     || fail "recording combine --ab failed" "$(cat "$LOGDIR/combine-ab.log")" "exit 0" "$LOGDIR/combine-ab.log"
-# The 5.x outputs are refused, naming the .dendro to write.
+# Outputs other than .dendro are refused, naming the .dendro to write.
 if ./target/debug/rezolus recording combine "$AB_A" "$AB_B" -o "$LOGDIR/x.parquet.ab.tar" \
-    --ab baseline=ab_source_a.parquet experiment=ab_source_b.parquet > "$LOGDIR/combine-tar.log" 2>&1; then
+    --ab baseline=ab_source_a.dendro experiment=ab_source_b.dendro > "$LOGDIR/combine-tar.log" 2>&1; then
     fail "combine to a .parquet.ab.tar was not refused" "exit 0" "exit 1" "$LOGDIR/combine-tar.log"
 fi
 grep -q '.dendro' "$LOGDIR/combine-tar.log" \
@@ -370,18 +391,18 @@ SELECTION=$(cat <<JSON
 }
 JSON
 )
-REPORT_PARQUET="$LOGDIR/report.dendro"
+REPORT_RECORDING="$LOGDIR/report.dendro"
 curl -fsS -X POST -H 'content-type: application/json' \
      -d "$SELECTION" \
      "http://127.0.0.1:$PORT_FILE/api/v1/save_with_selection" \
-     --output "$REPORT_PARQUET" \
+     --output "$REPORT_RECORDING" \
      || fail "save_with_selection failed" "" "exit 0" "$LOGDIR/file.log"
-[ -s "$REPORT_PARQUET" ] || fail "report is empty" "0" ">0" "$LOGDIR/file.log"
-head -c 16 "$REPORT_PARQUET" | grep -q 'SQLite format 3' \
-    || fail "report is not a .dendro (SQLite) archive" "$(head -c 16 "$REPORT_PARQUET" | od -c | head -1)" "SQLite format 3" "$LOGDIR/file.log"
+[ -s "$REPORT_RECORDING" ] || fail "report is empty" "0" ">0" "$LOGDIR/file.log"
+head -c 16 "$REPORT_RECORDING" | grep -q 'SQLite format 3' \
+    || fail "report is not a .dendro (SQLite) archive" "$(head -c 16 "$REPORT_RECORDING" | od -c | head -1)" "SQLite format 3" "$LOGDIR/file.log"
 
 echo "==> trimmed report loads in a fresh viewer with report mode active"
-./target/debug/rezolus view "$REPORT_PARQUET" \
+./target/debug/rezolus view "$REPORT_RECORDING" \
     --listen 127.0.0.1:$PORT_REPORT \
     > "$LOGDIR/report.log" 2>&1 &
 PID_REPORT=$!
@@ -399,8 +420,10 @@ sections=$(curl -fsS "http://127.0.0.1:$PORT_REPORT/api/v1/sections")
 section_count=$(echo "$sections" | jq -r '.data.sections | length')
 eq "report mode section count" "$section_count"                          "0"    "$LOGDIR/report.log"
 
-# Simple-capture mode: non-Rezolus parquet (Prometheus source).
-# Fixture regeneration:
+# Simple-capture mode: a non-Rezolus recording (Prometheus source),
+# tests/fixtures/upgraded/simple_capture.dendro, the upgrade of the parquet
+# fixture in tests/fixtures/legacy (see tests/fixtures/README.md). That
+# parquet was made with a 5.x recorder:
 #   cat > /tmp/metrics <<'PROM'
 #   # HELP http_requests_total Total HTTP requests
 #   # TYPE http_requests_total counter
@@ -413,12 +436,12 @@ eq "report mode section count" "$section_count"                          "0"    
 #   ( cd /tmp && python3 -m http.server 18651 >/dev/null 2>&1 & echo $! > /tmp/prom.pid )
 #   sleep 1
 #   target/debug/rezolus record --interval 1s --duration 3s \
-#       http://127.0.0.1:18651/metrics site/viewer/data/simple_capture.parquet
+#       http://127.0.0.1:18651/metrics simple_capture.parquet
 #   kill "$(cat /tmp/prom.pid)"
 PORT_SIMPLE=18507
-PARQUET_SIMPLE=site/viewer/data/simple_capture.parquet
-echo "==> simple-capture: non-Rezolus parquet fixture"
-./target/debug/rezolus view "$PARQUET_SIMPLE" \
+RECORDING_SIMPLE=tests/fixtures/upgraded/simple_capture.dendro
+echo "==> simple-capture: non-Rezolus recording fixture"
+./target/debug/rezolus view "$RECORDING_SIMPLE" \
     --listen 127.0.0.1:$PORT_SIMPLE \
     > "$LOGDIR/simple.log" 2>&1 &
 PID_SIMPLE=$!
@@ -450,6 +473,21 @@ echo "==> simple-capture: /api/v1/timestamps returns non-empty timestamps array"
 timestamps_json=$(curl -fsS "$BASE/api/v1/timestamps?source=127.0.0.1-18651")
 echo "$timestamps_json" | jq -e '.timestamps | length > 0' >/dev/null \
     || fail "simple-capture timestamps empty" "$timestamps_json" "non-empty .timestamps" "$LOGDIR/simple.log"
+
+echo "==> a legacy file is refused with the command that converts it"
+LEGACY=tests/fixtures/legacy/simple_capture.parquet
+if ./target/debug/rezolus view "$LEGACY" --listen 127.0.0.1:18509 > "$LOGDIR/legacy.log" 2>&1; then
+    fail "view of a parquet file was not refused" "exit 0" "exit 1" "$LOGDIR/legacy.log"
+fi
+grep -q "rezolus recording upgrade $LEGACY" "$LOGDIR/legacy.log" \
+    || fail "view's refusal does not name the upgrade" "$(cat "$LOGDIR/legacy.log")" "rezolus recording upgrade $LEGACY" "$LOGDIR/legacy.log"
+up=$(curl -fsS -X POST --data-binary @"$LEGACY" \
+    -H 'Content-Type: application/octet-stream' \
+    -H 'x-rezolus-filename: old.parquet' \
+    "http://127.0.0.1:$PORT_UPLOAD/api/v1/upload")
+eq "legacy upload errorType" "$(echo "$up" | jq -r .errorType)" "invalid_recording" "$LOGDIR/upload.log"
+echo "$up" | jq -r .error | grep -q "rezolus recording upgrade old.parquet" \
+    || fail "upload refusal does not name the upgrade" "$up" "rezolus recording upgrade old.parquet" "$LOGDIR/upload.log"
 
 echo
 echo "ALL VIEWER SMOKE TESTS PASSED"

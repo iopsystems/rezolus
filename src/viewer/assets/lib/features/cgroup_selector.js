@@ -2,18 +2,39 @@
 //   groups: array of group objects with plots
 //   executeQuery: (query) => Promise<result> — runs a PromQL range query
 //   applyResultToPlot: (plot, result) => void — applies PromQL result to a plot
-//   substitutePattern: (query, pattern) => string — substitutes cgroup placeholder
-//   setActiveCgroupPattern: (pattern) => void — sets the global active cgroup pattern
+//   substitutePattern: (query, selection) => string — substitutes cgroup placeholder
+//   setActiveCgroupPattern: (selection) => void — sets the global active cgroup
+//     selection (resolveCgroupSelection's shape, or null)
+//   sectionRoute: the section's route; groups are kept per route, since each
+//     recording of a combined archive has its own
 
 import globalColorMapper from '../charts/util/colormap.js';
 import { collectGroupPlots } from './group_utils.js';
 import { writeViewState } from '../ui/url_state.js';
 import { discoverCgroups } from './cgroup_discovery.js';
+import {
+    cgroupUnselectableReason,
+    cgroupGroupUnselectableReason,
+    isCgroupGroupKey,
+    deriveCgroupGroups,
+    cgroupTree,
+    coveringGroup,
+    addCgroupEntries,
+    resolveCgroupSelection,
+    normalizeCgroupSelection,
+    cgroupQueryVariants,
+    runCgroupVariants,
+} from './cgroup_selection.js';
 
+export { cgroupPattern, cgroupUnselectableReason } from './cgroup_selection.js';
 
 /** Render a custom multi-select list with a color swatch per item.
- *  Supports shift+click range selection via lastClicked / setLastClicked. */
-const selectList = (title, items, selectionSet, onToggle, emptyLabel, lastClicked, setLastClicked) =>
+ *  Supports shift+click range selection via lastClicked / setLastClicked.
+ *  `describe(item)` gives `{ label, depth, reason, note }`: the text shown,
+ *  how far it is indented (a group's members sit under it), why it cannot be
+ *  marked or null, and a title for an item that can. An item with a reason
+ *  is drawn disabled, with the reason as its title. */
+const selectList = (title, items, selectionSet, onToggle, emptyLabel, lastClicked, setLastClicked, describe) =>
     m('div.selector-column', [
         m('h4', title),
         m('ul.cgroup-select', {
@@ -21,12 +42,21 @@ const selectList = (title, items, selectionSet, onToggle, emptyLabel, lastClicke
             'aria-multiselectable': 'true',
         }, items.length === 0
             ? m('li.cgroup-select-empty', emptyLabel)
-            : items.map((item) =>
-                m('li.cgroup-select-item', {
+            : items.map((item) => {
+                const { label, depth, reason, note } = describe(item);
+                return m('li.cgroup-select-item', {
+                    key: item,
                     role: 'option',
                     'aria-selected': selectionSet.has(item) ? 'true' : 'false',
-                    class: selectionSet.has(item) ? 'selected' : '',
+                    'aria-disabled': reason ? 'true' : undefined,
+                    title: reason || note || undefined,
+                    class: [
+                        reason ? 'disabled' : (selectionSet.has(item) ? 'selected' : ''),
+                        isCgroupGroupKey(item) ? 'group' : '',
+                    ].filter(Boolean).join(' '),
+                    style: depth > 0 ? { paddingLeft: `${0.5 + depth * 1.25}rem` } : undefined,
                     onclick: (e) => {
+                        if (reason) return;
                         if (e.shiftKey && lastClicked != null) {
                             const from = items.indexOf(lastClicked);
                             const to = items.indexOf(item);
@@ -34,7 +64,7 @@ const selectList = (title, items, selectionSet, onToggle, emptyLabel, lastClicke
                                 const lo = Math.min(from, to);
                                 const hi = Math.max(from, to);
                                 for (let i = lo; i <= hi; i++) {
-                                    selectionSet.add(items[i]);
+                                    if (!describe(items[i]).reason) selectionSet.add(items[i]);
                                 }
                             }
                         } else {
@@ -46,9 +76,9 @@ const selectList = (title, items, selectionSet, onToggle, emptyLabel, lastClicke
                     m('span.cgroup-select-swatch', {
                         style: { background: globalColorMapper.getColorByName(item) },
                     }),
-                    m('span.cgroup-select-name', item),
-                ]),
-            ),
+                    m('span.cgroup-select-name', label),
+                ]);
+            }),
         ),
     ]);
 
@@ -60,31 +90,76 @@ const transferBtn = (lrLabel, udLabel, title, disabled, onclick) =>
     ]);
 
 // Persisted state — survives component remount across navigations.
+// The selection holds cgroup names and group keys (cgroup_selection.js).
 let persistedSelectedCgroups = new Set();
 let persistedOriginalQueries = null; // Map<string, string>
+// Each section's groups, once discovered: route -> Map of key -> members.
+const persistedGroups = new Map();
 
 // Seed the selection before the component first mounts, from the link's
 // `cgroup=` keys. Names are validated against the recording once the
 // available list arrives (fetchAvailableCgroups); unknown ones are dropped
 // there with a warning rather than left to render empty charts.
 export const seedSelectedCgroups = (names) => {
-    persistedSelectedCgroups = new Set(
-        (Array.isArray(names) ? names : []).filter((n) => typeof n === 'string' && n !== ''),
-    );
+    const seeded = (Array.isArray(names) ? names : []).filter((n) => typeof n === 'string' && n !== '');
+    const unusable = seeded.filter((n) => cgroupUnselectableReason(n));
+    if (unusable.length > 0) {
+        console.warn(`[cgroups] dropping selection the selector cannot quote: ${unusable.join(', ')}`);
+    }
+    persistedSelectedCgroups = new Set(seeded.filter((n) => !cgroupUnselectableReason(n)));
+    if (unusable.length > 0) writeViewState({ cgroup: [...persistedSelectedCgroups] });
 };
 
-// The selection as the pattern the selector substitutes for
-// `__SELECTED_CGROUPS__`, or null when nothing is selected. A page that does
-// not mount the selector (an expanded chart) reads the selection from here.
-export const selectedCgroupPattern = () => {
-    const selected = Array.from(persistedSelectedCgroups);
-    return selected.length > 1 ? '(' + selected.join('|') + ')' : selected[0] || null;
+// The selection as resolveCgroupSelection resolves it for the section at
+// `route`, or null when nothing is selected. A page that does not mount the
+// selector (an expanded chart) reads the selection from here; a group in it
+// resolves only once that section's groups are known (loadCgroupGroups).
+export const selectedCgroupSelection = (route) => (persistedSelectedCgroups.size > 0
+    ? resolveCgroupSelection(
+        normalizeCgroupSelection(persistedSelectedCgroups, persistedGroups.get(route) || new Map()),
+        persistedGroups.get(route) || new Map(),
+    )
+    : null);
+
+// Discover the groups of the section at `route` if the selection names one
+// and they are not yet known. `executeQuery` runs a PromQL range query
+// restricted as that section's charts are.
+export const loadCgroupGroups = async (route, executeQuery) => {
+    if (persistedGroups.has(route) || ![...persistedSelectedCgroups].some(isCgroupGroupKey)) return;
+    persistedGroups.set(route, deriveCgroupGroups(await discoverCgroups(executeQuery)));
+};
+
+// Forget every section's groups, for a recording that replaces this one.
+export const clearCgroupGroups = () => { persistedGroups.clear(); };
+
+const GROUP_NOTE = 'The cgroups recorded under this unit. The agent names a cgroup more than three '
+    + 'levels deep by its last three path components, so one more than two levels below the unit '
+    + 'is not included.';
+
+// Why an entry cannot be selected given the selection, or null.
+const entryReason = (key, selected, groups) => {
+    if (isCgroupGroupKey(key)) {
+        const members = groups.get(key) || [];
+        const reason = cgroupGroupUnselectableReason(members);
+        if (reason) return reason;
+    } else {
+        const reason = cgroupUnselectableReason(key);
+        if (reason) return reason;
+    }
+    const covering = coveringGroup(key, selected, groups);
+    if (!covering) return null;
+    const members = new Set(groups.get(covering) || []);
+    return isCgroupGroupKey(key) && !(groups.get(key) || []).every((n) => members.has(n))
+        ? `Shares cgroups with ${covering}`
+        : `Included in ${covering}`;
 };
 
 export const CgroupSelector = {
     oninit(vnode) {
         vnode.state.selectedCgroups = new Set(persistedSelectedCgroups);
         vnode.state.availableCgroups = new Set();
+        const route = vnode.attrs.sectionRoute || '/cgroups';
+        vnode.state.groups = persistedGroups.get(route) || new Map();
         vnode.state.loading = true;
         vnode.state.error = null;
         vnode.state.leftSelected = new Set();
@@ -113,7 +188,10 @@ export const CgroupSelector = {
         // before the first mount), re-run queries so the individual cgroup
         // charts get populated. updateQueries snapshots the original queries
         // itself on its first run, so a missing snapshot is no reason to skip.
-        if (persistedSelectedCgroups.size > 0) {
+        // A selection with a group waits until discovery has found the
+        // groups' members; fetchAvailableCgroups runs the queries then.
+        const waitForGroups = !persistedGroups.has(route) && [...persistedSelectedCgroups].some(isCgroupGroupKey);
+        if (persistedSelectedCgroups.size > 0 && !waitForGroups) {
             this.debouncedUpdateQueries(vnode);
         }
     },
@@ -129,20 +207,41 @@ export const CgroupSelector = {
             }
 
             vnode.state.availableCgroups = cgroups;
+            vnode.state.groups = deriveCgroupGroups(cgroups);
+            persistedGroups.set(vnode.attrs.sectionRoute || '/cgroups', vnode.state.groups);
 
-            // A selection that names cgroups this recording does not have
-            // (a link from another host, a stale persisted set) would render
-            // every individual chart empty with nothing to say why. Drop the
-            // unknown names, say so once, and rewrite the link to match.
+            // A selection that names cgroups or groups this recording does
+            // not have (a link from another host, a stale persisted set) would
+            // render every individual chart empty with nothing to say why.
+            // Drop the unknown entries, say so once, and rewrite the link to
+            // match. A group with a member the selector cannot quote is
+            // dropped too, rather than plotted as a partial sum.
+            let changed = false;
             if (cgroups.size > 0 && vnode.state.selectedCgroups.size > 0) {
-                const unknown = [...vnode.state.selectedCgroups].filter((cg) => !cgroups.has(cg));
+                const groups = vnode.state.groups;
+                // A link's group key resolves to this recording's key for the
+                // unit, and a group takes the place of the members a link
+                // also holds, as it does when selected here.
+                const before = [...vnode.state.selectedCgroups].sort().join('\n');
+                vnode.state.selectedCgroups = normalizeCgroupSelection(vnode.state.selectedCgroups, groups);
+                if ([...vnode.state.selectedCgroups].sort().join('\n') !== before) changed = true;
+                const unknown = [...vnode.state.selectedCgroups].filter((cg) => (isCgroupGroupKey(cg)
+                    ? !groups.has(cg) || cgroupGroupUnselectableReason(groups.get(cg))
+                    : !cgroups.has(cg)));
                 if (unknown.length > 0) {
                     console.warn(`[cgroups] dropping selection not in this recording: ${unknown.join(', ')}`);
                     for (const cg of unknown) vnode.state.selectedCgroups.delete(cg);
+                    changed = true;
+                }
+                if (changed) {
                     persistedSelectedCgroups = new Set(vnode.state.selectedCgroups);
                     writeViewState({ cgroup: [...persistedSelectedCgroups] });
-                    this.debouncedUpdateQueries(vnode);
                 }
+            }
+            // The groups' members are known now; a selection that holds a
+            // group, or lost an entry, runs its queries again.
+            if (changed || [...vnode.state.selectedCgroups].some(isCgroupGroupKey)) {
+                this.debouncedUpdateQueries(vnode);
             }
         } catch (error) {
             console.error('Failed to fetch available cgroups:', error);
@@ -165,12 +264,11 @@ export const CgroupSelector = {
         vnode.state.updateInProgress = true;
         vnode.state.cancelUpdate = false;
 
-        const selected = Array.from(vnode.state.selectedCgroups);
-        const selectedPattern = selected.length > 1
-            ? '(' + selected.join('|') + ')'
-            : selected[0] || '';
+        const selection = vnode.state.selectedCgroups.size > 0
+            ? resolveCgroupSelection(vnode.state.selectedCgroups, vnode.state.groups)
+            : null;
 
-        setActiveCgroupPattern(selectedPattern || null);
+        setActiveCgroupPattern(selection);
 
         // Snapshot original queries on first update
         if (!vnode.state.originalQueries) {
@@ -188,15 +286,22 @@ export const CgroupSelector = {
         const generation = ++vnode.state.updateGeneration || 1;
         vnode.state.updateGeneration = generation;
 
-        // Collect plots whose original query contains the cgroup placeholder
+        // Collect plots whose original query contains the cgroup placeholder.
+        // An individual plot runs a query per selected group as well as one
+        // for the individually selected names (cgroupQueryVariants); a query
+        // left with its placeholder has nothing selected and is not run.
         const plotsToUpdate = [];
         for (const [gi, group] of (vnode.attrs.groups || []).entries()) {
             for (const [pi, plot] of collectGroupPlots(group).entries()) {
                 const orig = vnode.state.originalQueries.get(`${gi}-${pi}`);
                 if (orig && orig.includes('__SELECTED_CGROUPS__')) {
+                    const queries = cgroupQueryVariants(orig, selection)
+                        .map((v) => ({ query: substitutePattern(v.query, v.selection), label: v.label }))
+                        .filter(({ query }) => !query.includes('__SELECTED_CGROUPS__'));
                     plotsToUpdate.push({
                         plot,
-                        query: substitutePattern(orig, selectedPattern || null),
+                        queries,
+                        query: queries[0]?.query ?? substitutePattern(orig, selection),
                     });
                 }
             }
@@ -216,10 +321,18 @@ export const CgroupSelector = {
             }
 
             const batch = plotsToUpdate.slice(i, i + BATCH_SIZE);
-            await Promise.all(batch.map(async ({ plot, query }) => {
+            await Promise.all(batch.map(async ({ plot, query, queries }) => {
                 plot.promql_query = query;
+                // Every query the plot draws, for a pinned or expanded copy
+                // of it; null when its one query is promql_query.
+                plot.cgroup_queries = queries.length > 1 || queries[0]?.label ? queries : null;
                 try {
-                    const result = await executeQuery(query);
+                    if (queries.length === 0) {
+                        plot.data = [];
+                        plot.series_names = [];
+                        return;
+                    }
+                    const result = await runCgroupVariants(queries, executeQuery);
                     if (vnode.state.updateGeneration !== generation) return;
                     applyResultToPlot(plot, result);
                 } catch (error) {
@@ -245,11 +358,17 @@ export const CgroupSelector = {
         vnode.state.updateTimer = setTimeout(() => this.updateQueries(vnode), 300);
     },
 
-    /** Move items between selected/available and trigger a query update. */
+    /** Move items between selected/available and trigger a query update.
+     *  Adding a group replaces every selected entry it shares a name with. */
     transfer(vnode, items, direction) {
-        const op = direction === 'add' ? 'add' : 'delete';
-        for (const cg of items) {
-            vnode.state.selectedCgroups[op](cg);
+        const st = vnode.state;
+        if (direction === 'add') {
+            const usable = [...items].filter((cg) => !(isCgroupGroupKey(cg)
+                ? cgroupGroupUnselectableReason(st.groups.get(cg) || [])
+                : cgroupUnselectableReason(cg)));
+            st.selectedCgroups = addCgroupEntries(st.selectedCgroups, usable, st.groups);
+        } else {
+            for (const cg of items) st.selectedCgroups.delete(cg);
         }
         persistedSelectedCgroups = new Set(vnode.state.selectedCgroups);
         writeViewState({ cgroup: [...persistedSelectedCgroups] });
@@ -260,10 +379,28 @@ export const CgroupSelector = {
 
     view(vnode) {
         const st = vnode.state;
-        const unselected = Array.from(st.availableCgroups)
-            .filter((cg) => !st.selectedCgroups.has(cg))
-            .sort();
+        // Each group above its members, which are indented under it.
+        const tree = cgroupTree(st.availableCgroups, st.groups)
+            .filter(({ item }) => !st.selectedCgroups.has(item));
+        const depthOf = new Map(tree.map(({ item, depth }) => [item, depth]));
+        const unselected = tree.map(({ item }) => item);
+        // "Move all" selects every cgroup on its own, as it did before groups.
+        const selectable = unselected.filter((cg) => !isCgroupGroupKey(cg)
+            && !entryReason(cg, st.selectedCgroups, st.groups));
         const selected = Array.from(st.selectedCgroups).sort();
+        const describe = (item) => {
+            const reason = entryReason(item, st.selectedCgroups, st.groups);
+            return {
+                label: isCgroupGroupKey(item)
+                    ? `${item} (${(st.groups.get(item) || []).length} cgroups)`
+                    : item,
+                depth: depthOf.get(item) || 0,
+                reason,
+                note: !reason && isCgroupGroupKey(item) ? GROUP_NOTE : null,
+            };
+        };
+        const describeSelected = (item) => ({ ...describe(item), depth: 0, reason: null });
+        const availableNames = unselected.filter((cg) => !isCgroupGroupKey(cg)).length;
 
         const leftItems = st.loading
             ? [] // selectList will show emptyLabel
@@ -286,6 +423,7 @@ export const CgroupSelector = {
                     st.loading ? 'Loading cgroups...' : 'No cgroups available',
                     st.lastClickedLeft,
                     (item) => { st.lastClickedLeft = item; },
+                    describe,
                 ),
 
                 m('div.selector-controls', [
@@ -293,8 +431,8 @@ export const CgroupSelector = {
                         st.leftSelected.size === 0,
                         () => this.transfer(vnode, st.leftSelected, 'add')),
                     transferBtn('>>', '⇊', 'Move all to individual',
-                        unselected.length === 0,
-                        () => this.transfer(vnode, unselected, 'add')),
+                        selectable.length === 0,
+                        () => this.transfer(vnode, selectable, 'add')),
                     transferBtn('<<', '⇈', 'Move all to aggregate',
                         selected.length === 0,
                         () => this.transfer(vnode, selected, 'remove')),
@@ -311,10 +449,11 @@ export const CgroupSelector = {
                     'No cgroups selected',
                     st.lastClickedRight,
                     (item) => { st.lastClickedRight = item; },
+                    describeSelected,
                 ),
             ]),
             m('div.selector-info', [
-                m('small', `${unselected.length} available, ${selected.length} selected`),
+                m('small', `${availableNames} available, ${selected.length} selected`),
             ]),
         ]);
     },

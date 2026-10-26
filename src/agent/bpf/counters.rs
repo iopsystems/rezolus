@@ -8,7 +8,7 @@ use metriken::{CounterGroup, LazyCounter};
 use crate::agent::timing::AcquisitionGroup;
 use metriken::group::SlotIdentity;
 
-use std::os::fd::{AsFd, AsRawFd, FromRawFd};
+use std::os::fd::AsFd;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
@@ -40,12 +40,11 @@ impl<'a> CounterMap<'a> {
         // our total mapped region size in bytes
         let total_bytes = bank_cachelines * CACHELINE_SIZE * banks;
 
-        let fd = map.as_fd().as_raw_fd();
-        let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
+        let fd = map.as_fd();
         let mmap: MmapMut = unsafe {
             MmapOptions::new()
                 .len(total_bytes)
-                .map_mut(&file)
+                .map_mut(&fd)
                 .map_err(|e| error!("failed to mmap() bpf counterset: {e}"))
         }?;
 
@@ -295,12 +294,11 @@ impl<'a> PackedCounters<'a> {
 
         let total_bytes = counters.entries() * std::mem::size_of::<u64>();
 
-        let fd = map.as_fd().as_raw_fd();
-        let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
+        let fd = map.as_fd();
         let mmap: MmapMut = unsafe {
             MmapOptions::new()
                 .len(total_bytes)
-                .map_mut(&file)
+                .map_mut(&fd)
                 .expect("failed to mmap() bpf counterset")
         };
 
@@ -417,12 +415,11 @@ impl<'a> CgroupCounters<'a> {
                     MAX_CGROUPS,
                     "a per-cgroup CounterGroup has one entry per cgroup slot"
                 );
-                let fd = map.as_fd().as_raw_fd();
-                let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
+                let fd = map.as_fd();
                 let mmap: MmapMut = unsafe {
                     MmapOptions::new()
                         .len(total_bytes)
-                        .map_mut(&file)
+                        .map_mut(&fd)
                         .expect("failed to mmap() bpf per-cgroup counters")
                 };
                 (CgroupMap { _map: map, mmap }, counters)

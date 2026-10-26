@@ -1318,11 +1318,11 @@ impl MetricsSource for Scoped<'_> {
 
 // ── A parquet file's source as a series label ───────────────────────────
 
-/// The `source` label [`label_parquet_by_source`] gives `reader`'s series:
-/// the file's `source` when it names one source and no series carries a
-/// `source` label of its own; `None` otherwise. A parquet file converted to
-/// `.dendro` gets its source labelled with it, so it presents as the file
-/// does.
+/// The `source` label a parquet file's source gets when it is converted to
+/// `.dendro` (`recording upgrade`): the file's `source` when it names one
+/// source and no series carries a `source` label of its own; `None`
+/// otherwise. The 5.x viewer labelled the file's series the same way, so the
+/// converted archive presents as the file did.
 pub fn parquet_source_label(reader: &metriken_query::ParquetReader) -> Option<String> {
     let source = MetricsSource::source(reader);
     if !crate::source_templates::is_one_source_name(&source) {
@@ -1343,39 +1343,6 @@ pub fn parquet_source_label(reader: &metriken_query::ParquetReader) -> Option<St
             .iter()
             .any(|n| carries_source(reader.histogram_labels(n)));
     (!native).then_some(source)
-}
-
-/// `reader` with its file-level `source` as a label on every series, as an
-/// archive recording's series carry its recording's labels, so a template
-/// written for an archive (`{source="llm-perf"}`) matches the same producer's
-/// parquet. A selector on `source` is decided against the file's value.
-///
-/// `reader` unchanged when its `source` does not name one source (a
-/// combined parquet's is a JSON array, and its columns carry their own
-/// `source`), or when any of its series already carries a `source` label: the
-/// reader's composition replaces a series' own value rather than keeping it
-/// under `exported_source`, as an archive does, and the second needs
-/// metriken-storage's `LabeledSource` behind a `ParquetReader`.
-pub fn label_parquet_by_source(
-    reader: metriken_query::ParquetReader,
-) -> metriken_query::ParquetReader {
-    let Some(source) = parquet_source_label(&reader) else {
-        return reader;
-    };
-    let filename = reader.filename().map(str::to_string);
-    let labels: BTreeMap<String, String> = [("source".to_string(), source)].into();
-    let reader = std::sync::Arc::new(reader);
-    let mut builder = metriken_query::ParquetBuilder::new()
-        .reader_labeled(std::sync::Arc::clone(&reader), labels);
-    if let Some(name) = filename {
-        builder = builder.filename(name);
-    }
-    match builder.build() {
-        Ok(labelled) => labelled,
-        // One source composed from an open reader does no I/O and has a
-        // member, so this is not reached; keep the reader as it was.
-        Err(_) => std::sync::Arc::try_unwrap(reader).unwrap_or_else(|_| unreachable!()),
-    }
 }
 
 #[cfg(test)]
@@ -1812,62 +1779,6 @@ mod tests {
             restrict_query("sum(x) # don't {count} y\n/ z", &h1()),
             "sum(x{host=\"h1\"}) # don't {count} y\n/ z{host=\"h1\"}"
         );
-    }
-
-    fn fixture(name: &str) -> metriken_query::ParquetReader {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../site/viewer/data")
-            .join(name);
-        metriken_query::ParquetReader::open(&path).unwrap()
-    }
-
-    fn series(data: &dyn MetricsSource, query: &str) -> usize {
-        let (start, end) = data.time_range().unwrap();
-        match data.query_range(query, start, end, 1.0).unwrap() {
-            metriken_query::QueryResult::Matrix { result } => result.len(),
-            other => panic!("{query}: {other:?}"),
-        }
-    }
-
-    /// A single-source parquet's series carry its `source`, so a matcher on
-    /// it selects them, and one naming another source selects none.
-    #[test]
-    fn a_parquets_source_is_a_series_label() {
-        let plain = fixture("demo.parquet");
-        assert_eq!(series(&plain, r#"cpu_cores{source="rezolus"}"#), 0);
-        let labelled = label_parquet_by_source(fixture("demo.parquet"));
-        assert_eq!(series(&labelled, r#"cpu_cores{source="rezolus"}"#), 1);
-        assert_eq!(series(&labelled, r#"cpu_cores{source="other"}"#), 0);
-        assert!(
-            labelled
-                .gauge_labels("cpu_cores")
-                .iter()
-                .all(|l| l.get("source").map(String::as_str) == Some("rezolus"))
-        );
-        assert_eq!(labelled.filename(), plain.filename());
-        assert_eq!(
-            MetricsSource::source(&labelled),
-            MetricsSource::source(&plain)
-        );
-        assert_eq!(labelled.time_range_ns(), plain.time_range_ns());
-    }
-
-    /// A combined parquet (its `source` a list, each column its own), and a
-    /// parquet some of whose series carry `source` themselves, are left as
-    /// they are.
-    #[test]
-    fn a_parquet_with_its_own_source_labels_is_left_alone() {
-        for name in ["vllm.parquet", "simple_capture.parquet"] {
-            let plain = fixture(name);
-            let labelled = label_parquet_by_source(fixture(name));
-            for n in plain.counter_names() {
-                assert_eq!(
-                    labelled.counter_labels(&n),
-                    plain.counter_labels(&n),
-                    "{name} {n}"
-                );
-            }
-        }
     }
 
     #[test]

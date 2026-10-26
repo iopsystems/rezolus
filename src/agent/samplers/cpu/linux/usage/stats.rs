@@ -39,7 +39,8 @@ pub static SOFTIRQ_TIME_ACQ: AcquisitionGroup = AcquisitionGroup::new(
 // `CGROUP_CPU_USAGE_EXITED` is a distinct metric name (a subset quantity,
 // not another state of the same family — see its doc comment in this
 // file) and gets its own group. `TASK_CPU_USAGE` is a third, separate
-// family (per-task, not per-cgroup) with its own group.
+// family (per-task, not per-cgroup) with its own group, and
+// `PROCESS_CPU_USAGE` (per thread group) a fourth.
 pub static CGROUP_USAGE_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
     crate::agent::samplers::bpf_sampler_name("cpu_usage"),
     "cpu_usage_cgroup_usage",
@@ -51,6 +52,10 @@ pub static CGROUP_EXITED_ACQ: AcquisitionGroup = AcquisitionGroup::new_slotted(
 pub static TASK_USAGE_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
     crate::agent::samplers::bpf_sampler_name("cpu_usage"),
     "cpu_usage_task",
+);
+pub static PROCESS_USAGE_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+    crate::agent::samplers::bpf_sampler_name("cpu_usage"),
+    "cpu_usage_process",
 );
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
@@ -65,6 +70,8 @@ static CGROUP_USAGE_ACQ_REG: &'static AcquisitionGroup = &CGROUP_USAGE_ACQ;
 static CGROUP_EXITED_ACQ_REG: &'static AcquisitionGroup = &CGROUP_EXITED_ACQ;
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static TASK_USAGE_ACQ_REG: &'static AcquisitionGroup = &TASK_USAGE_ACQ;
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static PROCESS_USAGE_ACQ_REG: &'static AcquisitionGroup = &PROCESS_USAGE_ACQ;
 
 /*
  * bpf prog stats
@@ -147,6 +154,17 @@ pub static CGROUP_CPU_USAGE_EXITED: CounterGroup = CounterGroup::new(MAX_CGROUPS
     metadata = { unit = "nanoseconds", acq_group = "cpu_usage_task" }
 )]
 pub static TASK_CPU_USAGE: CounterGroup = CounterGroup::new(MAX_PID);
+
+/*
+ * per-process metrics
+ */
+
+#[metric(
+    name = "process_cpu_usage",
+    description = "The amount of CPU time used on a per-process basis, by every thread of the process including those that have exited",
+    metadata = { unit = "nanoseconds", acq_group = "cpu_usage_process" }
+)]
+pub static PROCESS_CPU_USAGE: CounterGroup = CounterGroup::new(MAX_PID);
 
 /*
  * softirq metrics

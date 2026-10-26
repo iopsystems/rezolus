@@ -1,6 +1,6 @@
-//! `RezReader`: an archive opened by `metriken_storage::rez::open` (a
-//! `.rez` or dendro archive, recognized by content), read as one
-//! `metriken_query::MetricsSource` per recording.
+//! `RezReader`: a dendro archive read as one
+//! `metriken_query::MetricsSource` per recording. A file an earlier release
+//! wrote is refused with the command that converts it.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -12,11 +12,11 @@ use metriken_query::{
 pub use metriken_storage::ArchiveReader;
 use metriken_storage::BufferPool;
 
-/// A `.rez` or dendro archive read as a `MetricsSource`: metriken-storage's
-/// [`ArchiveReader`], opened from a path or bytes by content. Derefs to it,
+/// A dendro archive read as a `MetricsSource`: metriken-storage's
+/// [`ArchiveReader`], opened from a path or bytes. Derefs to it,
 /// so its methods (`composition_sources`, `metric_metadata`, `complete`, ...)
 /// are this type's.
-pub struct RezReader(pub ArchiveReader, Option<HashMap<String, String>>);
+pub struct RezReader(pub ArchiveReader);
 
 impl std::ops::Deref for RezReader {
     type Target = ArchiveReader;
@@ -28,150 +28,39 @@ impl std::ops::Deref for RezReader {
 /// One `RezReader` per recording, paired with that recording's label set.
 pub type LabeledRecordings = Vec<(BTreeMap<String, String>, RezReader)>;
 
-/// The metadata key a recording's timeline events are stored under
-/// (`parquet_metadata::KEY_EVENTS` in the binary).
-const KEY_EVENTS: &str = "events";
-
-/// The metadata of a read group of several sources. `events` is the union
-/// of every source's events: events are records a source gains one at a
-/// time (an annotate of a copy, a check of the original), so the group
-/// shows each of them once, deduplicated by `id` (the first source's copy
-/// kept), an event with no `id` kept unless an identical one is already
-/// there, sorted by timestamp. Every other key (KPIs, systeminfo,
-/// descriptions, the agent version) is a whole value with no merge rule, and
-/// is taken from the first source (in archive order) that has it: the
-/// sources of a group are copies of one recording or recordings of one
-/// agent process, so they agree on a key both hold unless one was edited
-/// alone, and a key only one holds (KPIs annotated onto a snapshot before it
-/// was combined with its original) is the group's whichever order they were
-/// combined in. So removing KPIs from one copy (`recording annotate --undo`)
-/// does not remove them from a combined recording whose other source still
-/// has them; annotate the combined recording instead, which edits every
-/// source. A payload that does not parse is skipped, as a reader of one
-/// source would fail to read it.
-fn group_metadata(members: &[ArchiveReader]) -> HashMap<String, String> {
-    let mut metadata: HashMap<String, String> = HashMap::new();
-    for member in members {
-        for (key, value) in member.file_metadata() {
-            metadata.entry(key).or_insert(value);
-        }
-    }
-    let mut events: Vec<serde_json::Value> = Vec::new();
-    let mut ids = std::collections::HashSet::new();
-    let mut payloads = 0;
-    for member in members {
-        let Some(raw) = member.file_metadata().remove(KEY_EVENTS) else {
-            continue;
-        };
-        let Ok(serde_json::Value::Object(mut payload)) = serde_json::from_str(&raw) else {
-            continue;
-        };
-        payloads += 1;
-        let Some(serde_json::Value::Array(list)) = payload.remove(KEY_EVENTS) else {
-            continue;
-        };
-        for event in list {
-            let fresh = match event.get("id").and_then(|v| v.as_str()) {
-                Some(id) if !id.is_empty() => ids.insert(id.to_string()),
-                _ => !events.contains(&event),
-            };
-            if fresh {
-                events.push(event);
-            }
-        }
-    }
-    // One payload is already in `metadata` as it is.
-    if payloads > 1 {
-        events.sort_by_key(|e| {
-            (
-                e.get("timestamp").and_then(|t| t.as_u64()).unwrap_or(0),
-                e.get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-            )
-        });
-        metadata.insert(
-            KEY_EVENTS.to_string(),
-            serde_json::json!({ KEY_EVENTS: events }).to_string(),
-        );
-    }
-    metadata
-}
-
-/// `recordings`, one reader per archive source, joined into one reader per
-/// read group (`metriken_storage::process::read_groups`): a source and its
-/// copies (one uuid), and sources of one producer epoch over overlapping
-/// time, are one recording, labelled with the group's labels. A source in no
-/// group stays a recording of its own. The grouping is the one
-/// `ArchiveReader::read_groups` makes over the same sources joined, so a
-/// group read here answers as it does inside a combined reader.
-///
-/// What a caller sees as "a recording" (the viewer's slots and members, the
-/// MCP and `recording check` selectors) is a read group; a writer that edits
-/// sources maps a group back to them through its reader's
-/// `ArchiveReader::sources`.
-fn read_groups(recordings: metriken_storage::LabeledRecordings) -> LabeledRecordings {
-    let one_each = recordings.iter().all(|(_, r)| r.sources().len() == 1);
-    if recordings.len() < 2 || !one_each {
-        return recordings
-            .into_iter()
-            .map(|(l, r)| (l, RezReader(r, None)))
-            .collect();
-    }
-    let groups = {
-        let infos: Vec<metriken_storage::process::SourceInfo> = recordings
-            .iter()
-            .map(|(_, r)| r.sources()[0].clone())
-            .collect();
-        let tables: Vec<Vec<&metriken_storage::reader::SamplerReader>> = recordings
-            .iter()
-            .map(|(_, r)| r.owners_of(&r.all_names()))
-            .collect();
-        // As `ArchiveReader::process_groups` asks: a source holds a row in
-        // the range when any of its tables does, and cannot tell when none
-        // does and one cannot tell.
-        let formed = metriken_storage::process::form(&infos, &mut |source, lo, hi| {
-            let mut unknown = false;
-            for t in &tables[source] {
-                match t.has_row_in(lo, hi) {
-                    Some(true) => return Some(true),
-                    Some(false) => {}
-                    None => unknown = true,
-                }
-            }
-            (!unknown).then_some(false)
-        });
-        metriken_storage::process::read_groups(&infos, &formed)
-    };
-    let mut slots: Vec<Option<ArchiveReader>> =
-        recordings.into_iter().map(|(_, r)| Some(r)).collect();
-    groups
+/// Wrap each reader of a read-group listing as a `RezReader`.
+fn labeled(recordings: metriken_storage::LabeledRecordings) -> LabeledRecordings {
+    recordings
         .into_iter()
-        .map(|group| {
-            let mut members: Vec<ArchiveReader> = group
-                .sources
-                .iter()
-                .map(|&i| slots[i].take().expect("a source is in one read group"))
-                .collect();
-            if members.len() == 1 {
-                return (
-                    group.labels,
-                    RezReader(members.pop().expect("one member"), None),
-                );
-            }
-            let metadata = group_metadata(&members);
-            let filename = members[0].filename();
-            (
-                group.labels,
-                RezReader(ArchiveReader::flatten(members, filename), Some(metadata)),
-            )
-        })
+        .map(|(labels, reader)| (labels, RezReader(reader)))
         .collect()
 }
 
+/// The refusal of a file that is not a dendro archive, for a caller that has
+/// not checked first ([`crate::container::require_dendro`] spells the
+/// command with the program's name).
+fn refusal(what: &str, container: crate::container::Container) -> String {
+    if container.is_legacy() {
+        format!(
+            "{what} is a {}, not a .dendro archive; convert it with `recording upgrade`",
+            container.name()
+        )
+    } else {
+        format!("{what} is not a recording (a .dendro archive)")
+    }
+}
+
+fn dendro_only(path: &Path) -> Result<(), String> {
+    match crate::container::Container::of_path(path) {
+        crate::container::Container::Dendro => Ok(()),
+        c => Err(refusal(&path.display().to_string(), c)),
+    }
+}
+
 impl RezReader {
-    /// Open an archive at `path`, flattening every recording into one view.
+    /// Open the dendro archive at `path`, flattening every recording into
+    /// one view. Any other file is refused (`recording upgrade` converts
+    /// the formats earlier releases wrote).
     ///
     /// A query over the flattened view is answered from every recording,
     /// each series under its recording's labels; the tests below pin that,
@@ -183,41 +72,59 @@ impl RezReader {
         path: &Path,
         pool: Arc<BufferPool>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(RezReader(
-            metriken_storage::rez::open::open_with_pool(path, pool)?,
-            None,
-        ))
+        dendro_only(path)?;
+        Ok(RezReader(metriken_storage::rez::open::open_with_pool(
+            path, pool,
+        )?))
     }
 
     /// [`open_recordings`](Self::open_recordings) for an archive that exists
-    /// only as bytes: the browser's entry point. Containers are recognized
-    /// by content, as for a path.
+    /// only as bytes: the browser's entry point. The bytes must be a dendro
+    /// archive, recognized by content as for a path.
     pub fn open_recordings_from_bytes(
         bytes: Vec<u8>,
         pool: Arc<BufferPool>,
     ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
-        Ok(read_groups(
-            metriken_storage::rez::open::open_recordings_from_bytes(bytes, pool)?,
-        ))
+        let container = crate::container::Container::of_bytes(&bytes);
+        if container != crate::container::Container::Dendro {
+            return Err(refusal("the recording", container).into());
+        }
+        Ok(labeled(ArchiveReader::open_read_groups_from_bytes(
+            bytes, pool,
+        )?))
     }
 
-    /// Open an archive as one `RezReader` **per recording**, paired with that
+    /// Open a dendro archive as one `RezReader` **per recording**, paired with that
     /// recording's labels. Used by the viewer to map a 2-recording archive
     /// onto baseline/experiment without cross-recording name collisions.
     ///
-    /// A recording is a read group of the archive's sources (`read_groups`
-    /// above): a source and its copies are one.
+    /// A recording is a read group of the archive's sources
+    /// (`ArchiveReader::open_read_groups`): a source and its copies, and
+    /// sources of one producer epoch over overlapping time, are one,
+    /// labelled with the group's labels, and its metadata is the group's
+    /// (`metriken_storage::process::merge_metadata`: the union of the
+    /// sources' events, every other key from the first source holding it).
+    ///
+    /// What a caller sees as "a recording" (the viewer's slots and members,
+    /// the MCP and `recording check` selectors) is a read group; a writer
+    /// that edits sources maps a group back to them through its reader's
+    /// `ArchiveReader::sources`.
     pub fn open_recordings(
         path: &Path,
         pool: Arc<BufferPool>,
     ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
-        Ok(read_groups(metriken_storage::rez::open::open_recordings(
-            path, pool,
-        )?))
+        dendro_only(path)?;
+        Ok(labeled(ArchiveReader::open_read_groups(path, pool)?))
     }
 }
 
 impl RezReader {
+    /// This recording, reporting `filename` as its file name: the name a
+    /// browser upload was given, rather than the recording's slug.
+    pub fn with_filename(self, filename: String) -> Self {
+        RezReader(ArchiveReader::flatten(vec![self.0], Some(filename)))
+    }
+
     /// Join `recordings` into one reader, the combined view of an archive
     /// that holds several recordings of one run: a query is answered from
     /// every recording, each series under its recording's labels (and
@@ -242,8 +149,6 @@ impl RezReader {
                 .map(|t| t.recording_labels() as *const BTreeMap<String, String> as usize)
         };
         let ids: Vec<Option<usize>> = recordings.iter().map(|(_, r)| identity(&r.0)).collect();
-        // The first recording's metadata, its group's events merged.
-        let metadata = recordings.first().and_then(|(_, r)| r.1.clone());
         let joined =
             ArchiveReader::flatten(recordings.into_iter().map(|(_, r)| r.0).collect(), filename);
         let names = joined.all_names();
@@ -258,7 +163,7 @@ impl RezReader {
                 Some(joined.series_labels().of(table).inner.clone())
             })
             .collect();
-        (RezReader(joined, metadata), labels)
+        (RezReader(joined), labels)
     }
 }
 
@@ -337,10 +242,7 @@ impl MetricsSource for RezReader {
         self.0.metadata_get(key)
     }
     fn file_metadata(&self) -> HashMap<String, String> {
-        match &self.1 {
-            Some(metadata) => metadata.clone(),
-            None => self.0.file_metadata(),
-        }
+        self.0.file_metadata()
     }
     fn sample_timestamps(&self) -> Vec<u64> {
         self.0.sample_timestamps()
@@ -349,6 +251,66 @@ impl MetricsSource for RezReader {
 
 #[cfg(test)]
 mod tests {
+    /// The legacy formats read as `recording upgrade` reads them, through
+    /// metriken-storage's container dispatch and its read groups:
+    /// what these tests compare a conversion against. `RezReader` itself
+    /// opens dendro archives only (`legacy_files_are_refused` below).
+    pub(super) mod legacy {
+        use super::super::{labeled, ArchiveReader, LabeledRecordings, RezReader};
+        use metriken_storage::BufferPool;
+        use std::path::Path;
+        use std::sync::Arc;
+
+        pub(crate) fn open_recordings(
+            path: &Path,
+            pool: Arc<BufferPool>,
+        ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
+            Ok(labeled(ArchiveReader::flatten_read_groups(
+                metriken_storage::rez::open::open_recordings(path, pool)?,
+            )))
+        }
+
+        pub(crate) fn open_recordings_from_bytes(
+            bytes: Vec<u8>,
+            pool: Arc<BufferPool>,
+        ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
+            Ok(labeled(ArchiveReader::flatten_read_groups(
+                metriken_storage::rez::open::open_recordings_from_bytes(bytes, pool)?,
+            )))
+        }
+
+        pub(crate) fn open_with_pool(
+            path: &Path,
+            pool: Arc<BufferPool>,
+        ) -> Result<RezReader, Box<dyn std::error::Error>> {
+            Ok(RezReader(metriken_storage::rez::open::open_with_pool(
+                path, pool,
+            )?))
+        }
+    }
+
+    /// Every legacy fixture is refused by path and by bytes, naming the
+    /// upgrade.
+    #[test]
+    fn legacy_files_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["v2.rez", "v3.rez", "v3-live.rez", "v3-multi.rez"] {
+            let path = crate::fixtures::committed_rez(name, dir.path());
+            let pool = || BufferPool::new(8 << 20);
+            let err = RezReader::open_recordings(&path, pool())
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(err.contains("recording upgrade"), "{name}: {err}");
+            assert!(RezReader::open_with_pool(&path, pool()).is_err(), "{name}");
+            let err = RezReader::open_recordings_from_bytes(std::fs::read(&path).unwrap(), pool())
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(err.contains("recording upgrade"), "{name}: {err}");
+        }
+    }
+
     use super::*;
     use crate::fixtures::{self, Finish, Source};
     use crate::rez;
@@ -776,7 +738,7 @@ mod tests {
 
         for out in [&tar, &dendro] {
             let pool = BufferPool::new(64 * 1024 * 1024);
-            let readers = RezReader::open_recordings(out, pool).unwrap();
+            let readers = legacy::open_recordings(out, pool).unwrap();
             assert_eq!(readers.len(), 2, "{}", out.display());
             assert_eq!(readers[0].0.get("arm").map(String::as_str), Some("arm0"));
             assert_eq!(readers[1].0.get("arm").map(String::as_str), Some("arm1"));
@@ -789,9 +751,8 @@ mod tests {
     /// and the value of `query` at its last row, so a reader that opened the
     /// wrong recording is visible.
     fn assert_bytes_match_disk(path: &std::path::Path, query: &str) {
-        let from_disk =
-            RezReader::open_recordings(path, BufferPool::new(16 * 1024 * 1024)).unwrap();
-        let from_bytes = RezReader::open_recordings_from_bytes(
+        let from_disk = legacy::open_recordings(path, BufferPool::new(16 * 1024 * 1024)).unwrap();
+        let from_bytes = legacy::open_recordings_from_bytes(
             std::fs::read(path).unwrap(),
             BufferPool::new(16 * 1024 * 1024),
         )
@@ -893,7 +854,7 @@ mod tests {
         );
         drop(db);
 
-        let readers = RezReader::open_recordings_from_bytes(
+        let readers = legacy::open_recordings_from_bytes(
             std::fs::read(&path).unwrap(),
             BufferPool::new(16 * 1024 * 1024),
         )
@@ -984,11 +945,10 @@ mod tests {
             "fixture sanity: the table is in the sidecar"
         );
 
-        let err =
-            match RezReader::open_recordings_from_bytes(copy, BufferPool::new(8 * 1024 * 1024)) {
-                Ok(_) => panic!("a mid-write copy has no catalog in it"),
-                Err(e) => e.to_string(),
-            };
+        let err = match legacy::open_recordings_from_bytes(copy, BufferPool::new(8 * 1024 * 1024)) {
+            Ok(_) => panic!("a mid-write copy has no catalog in it"),
+            Err(e) => e.to_string(),
+        };
         assert!(err.contains("-wal"), "{err}");
         assert!(err.contains("still being written"), "{err}");
         drop(conn);
@@ -1001,7 +961,7 @@ mod tests {
     fn a_v2_tar_archive_also_opens_from_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let p = fixtures::committed_rez("v2.rez", dir.path());
-        let from_bytes = RezReader::open_recordings_from_bytes(
+        let from_bytes = legacy::open_recordings_from_bytes(
             std::fs::read(&p).unwrap(),
             BufferPool::new(16 * 1024 * 1024),
         )
@@ -1024,7 +984,7 @@ mod tests {
         let path = fixtures::committed_rez("v3-multi.rez", dir.path());
 
         let pool = BufferPool::new(16 * 1024 * 1024);
-        let flattened = RezReader::open_with_pool(&path, Arc::clone(&pool)).unwrap();
+        let flattened = legacy::open_with_pool(&path, Arc::clone(&pool)).unwrap();
         let err = match flattened.composition_sources() {
             Ok(_) => panic!("composing a flattened 2-recording v3 archive must refuse"),
             Err(e) => e,
@@ -1035,7 +995,7 @@ mod tests {
         );
 
         // Per recording, each composes on its own.
-        let per_recording = RezReader::open_recordings(&path, pool).unwrap();
+        let per_recording = legacy::open_recordings(&path, pool).unwrap();
         assert_eq!(per_recording.len(), 2);
         for (_labels, reader) in &per_recording {
             assert!(reader.composition_sources().is_ok());
@@ -1070,7 +1030,7 @@ mod tests {
         for out in [&tar, &dendro] {
             let pool = BufferPool::new(64 * 1024 * 1024);
             // The flattening path — NOT open_recordings.
-            let flattened = RezReader::open_with_pool(out, Arc::clone(&pool)).unwrap();
+            let flattened = legacy::open_with_pool(out, Arc::clone(&pool)).unwrap();
             // `CompositionSource` is opaque and not `Debug`, so match rather
             // than `expect_err`.
             let err = match flattened.composition_sources() {
@@ -1089,7 +1049,7 @@ mod tests {
             // ...and the same archive opened per recording composes fine,
             // proving the refusal is about flattening and not about the
             // fixture.
-            let per_recording = RezReader::open_recordings(out, pool).unwrap();
+            let per_recording = legacy::open_recordings(out, pool).unwrap();
             assert_eq!(per_recording.len(), 2);
             for (_labels, reader) in &per_recording {
                 assert!(
@@ -1122,7 +1082,7 @@ mod tests {
         ] {
             let pool = BufferPool::new(64 * 1024 * 1024);
             // The flattening path — NOT open_recordings.
-            let reader = RezReader::open_with_pool(out, pool).unwrap();
+            let reader = legacy::open_with_pool(out, pool).unwrap();
             let (start, end) = reader.time_range().unwrap();
 
             let QueryResult::Matrix { result } = reader
@@ -1151,8 +1111,7 @@ mod tests {
             assert_eq!(arms[0].1, arms[1].1, "both recordings hold the same rows");
 
             // A single-recording archive of the same data gives that series.
-            let single =
-                RezReader::open_with_pool(single, BufferPool::new(64 * 1024 * 1024)).unwrap();
+            let single = legacy::open_with_pool(single, BufferPool::new(64 * 1024 * 1024)).unwrap();
             let QueryResult::Matrix { result } = single
                 .query_range(&format!("sum(irate({counter}[2s]))"), start, end, 1.0)
                 .unwrap()
@@ -1164,7 +1123,7 @@ mod tests {
 
         // And a sum across the tar's recordings counts both: `mem_free` is
         // 1000 - t in each, so 2 * 989 at 11 s.
-        let reader = RezReader::open_with_pool(&tar, BufferPool::new(64 * 1024 * 1024)).unwrap();
+        let reader = legacy::open_with_pool(&tar, BufferPool::new(64 * 1024 * 1024)).unwrap();
         let json = serde_json::to_value(
             reader
                 .query("sum(mem_free)", Some(1_700_000_011.0))
@@ -1199,8 +1158,8 @@ mod tests {
             "fixture sanity: `b/g` is WAL rows only"
         );
         drop(db);
-        let by_path = RezReader::open_with_pool(&path, BufferPool::new(16 * 1024 * 1024)).unwrap();
-        let mut by_bytes = RezReader::open_recordings_from_bytes(
+        let by_path = legacy::open_with_pool(&path, BufferPool::new(16 * 1024 * 1024)).unwrap();
+        let mut by_bytes = legacy::open_recordings_from_bytes(
             std::fs::read(&path).unwrap(),
             BufferPool::new(16 * 1024 * 1024),
         )
@@ -1410,7 +1369,7 @@ mod tests {
         }
 
         fn open(path: &std::path::Path) -> RezReader {
-            RezReader::open_with_pool(path, BufferPool::new(64 * 1024 * 1024)).unwrap()
+            super::legacy::open_with_pool(path, BufferPool::new(64 * 1024 * 1024)).unwrap()
         }
 
         /// The only source's id.
@@ -2310,7 +2269,7 @@ mod tests {
                 assert_same_answers(&open(&rez), &open(&dendro), &queries);
 
                 let from_bytes = |p: &std::path::Path| {
-                    let mut r = RezReader::open_recordings_from_bytes(
+                    let mut r = legacy::open_recordings_from_bytes(
                         std::fs::read(p).unwrap(),
                         BufferPool::new(64 * 1024 * 1024),
                     )
@@ -3472,7 +3431,7 @@ mod tests {
 
         fn open(path: &Path) -> RezReader {
             let mut readers =
-                RezReader::open_recordings(path, BufferPool::new(16 * 1024 * 1024)).unwrap();
+                super::legacy::open_recordings(path, BufferPool::new(16 * 1024 * 1024)).unwrap();
             assert_eq!(readers.len(), 1);
             readers.pop().unwrap().1
         }
@@ -3879,7 +3838,7 @@ mod tests {
         }
 
         fn open(path: &Path) -> RezReader {
-            RezReader::open_with_pool(path, BufferPool::new(64 * 1024 * 1024)).unwrap()
+            super::legacy::open_with_pool(path, BufferPool::new(64 * 1024 * 1024)).unwrap()
         }
 
         /// A result with `__occupant__` taken off every series and the series

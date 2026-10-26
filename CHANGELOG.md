@@ -11,6 +11,65 @@
 
 ### Fixed
 
+- **A single selected cgroup keeps its colour after a zoom or refresh.** With
+  one cgroup selected, a zoom drew its individual charts as "Series 1" in a
+  colour other than the picker's swatch, and a live refresh drew them as a
+  plain line in the accent colour. The display path now names a lone series
+  on a `multi` chart, as the JSON path does, and the individual cgroup charts
+  are `multi` in the dashboard definition rather than only on the plots
+  present when the selector mounted. (#1289)
+- **Hardware Sensors series have short names.** Each chart was grouped by
+  `sensor`, the full sysfs identity (for example
+  `hwmon:/devices/pci0000:00/0000:00:02.1/0000:02:00.0/0000:03:08.0/0000:0b:00.1:bnxt_en:temp1`).
+  `hw_sensors` now also labels each channel with `device`, the last component
+  of the device path, and `name`, `<chip> <label or channel> <device>`
+  (for example `bnxt_en temp1 0000:0b:00.1`), and the charts group by
+  `name`. A recording without `name` (from an older agent) is still grouped
+  by `sensor`; one that mixes both sums its series without `name` into one
+  line. (#1518)
+- **NVMe health metrics carry an acquisition window on Linux.** The Linux
+  `drivehealth` sweep never acquired its NVMe acquisition group, so the
+  temperature-time and thermal-management counters and the
+  `drive_temperature_sensor` gauges published with no window. The sweep now
+  stamps it when any drive's health log read, as the macOS sampler does. A
+  recording now holds one NVMe row per sweep instead of one per tick, and
+  `rate()` on these counters gets an uncertainty band. (#1548)
+- **A per-entity line chart has no legend.** A chart with one line per
+  sensor, mount or cgroup drew a legend that wrapped to as many rows as it
+  had series, over the plot and the time axis. The tooltip names every series
+  at the cursor, and the plot now starts where a single-series chart's does.
+  Clicking a legend entry hid that series; per-entity charts lose that. The
+  compare-mode overlay keeps its two-entry legend. (#1517)
+- **A compare chart's decimated baseline draws an unbroken line, and a
+  decimated envelope breaks at a missing bucket.** A compare chart's baseline
+  arrives in decimated buckets while its experiment arrives at the
+  recording's interval, and both were gapped against the interval, so the
+  baseline drew as dashes. Each series is now gapped and stepped by its own
+  spacing: one spaced at least 1.5 times the interval draws unstepped, which
+  also turns a slow sampler's series on a line chart (for example 5 s sensor
+  readings in a 1 s recording) from isolated points into a line. A decimated
+  per-entity chart's min/max envelope and uncertainty ribbon spanned a
+  missing bucket that its line broke at; they now break there too. (#1519)
+- **A cgroup whose name holds a backslash or a quote can be selected.** The
+  picker put selected names into the query unescaped, so systemd's `\x2d`
+  (an escaped `-`) was consumed by the PromQL string and the cgroup was
+  neither shown on the individual side nor removed from the aggregate. Names
+  are now quoted for the PromQL string. A cgroup is offered for selection
+  when its name is letters, digits, `/ _ . : @ - = , ~ %` and `\xHH`
+  escapes, which cover systemd units, container ids and pod names; any other
+  name is shown disabled with the reason, and a link that selects one drops
+  it with a console warning. (#1523)
+- **`task_cpu_usage` drops a series within one snapshot interval of its thread
+  exiting, even when the exit event is lost.** A `task_exit` dropped because
+  its ringbuf was full left the thread's labels exported at 0 until the pid
+  was reused; measured earlier, 1,573 such series under heavy thread churn
+  more than five minutes after their threads exited. After each drain the
+  sampler now checks every labelled task slot against the BPF side's
+  `task_start_times` and releases the ones whose instance has exited or been
+  replaced, and every slot of a thread group whose last thread has exited
+  (when that exit's event is delivered). This also covers a rename that races
+  its thread's exit (#1514), and the old thread id of a thread whose exec
+  failed after taking the leader's pid.
 - **The cgroups section's aggregate charts leave out the selected cgroups.**
   The aggregate charts are the sum over the cgroups not selected, but the
   viewer removed their `name!~` exclusion before every query, so a cgroup
@@ -71,22 +130,10 @@
   creator's or its previous name for the rest of its life. The sampler now
   attaches to the `task:task_rename` tracepoint when `task_attribution` is
   on and relabels the thread's series; a rename starts a new series. (#1489)
-- **`recording combine … -o out.parquet` keeps each input's KPI template.**
-  It copied a fixed list of keys and dropped a top-level `service_queries`,
-  so a combined parquet showed only the built-in registry's KPIs. Each
-  input's template now goes into its source's entry in
-  `per_source_metadata`, where both viewers read it. An already-combined
-  input's top-level template goes to the source its `service_name` names,
-  and is dropped with a warning when that is none of its sources. A
-  `dashboard` section template is not carried: a parquet input never has
-  one, since only stream recordings (`.dendro`) keep it.
-- **`recording filter` and the viewer's Metadata section read a combined
-  parquet's templates where combine writes them**,
-  `per_source_metadata.<source>.<entry>.service_queries`. Both looked one
-  level up, so `filter` kept only the registry's KPIs' columns for a
-  combined file and the Metadata section listed no templates. Re-combining
-  a combined file that was annotated after combining keeps its newer
-  top-level template, which replaces the one nested by the earlier combine.
+- **The viewer's Metadata section reads a combined recording's templates
+  where 5.x `recording combine` wrote them**,
+  `per_source_metadata.<source>.<entry>.service_queries` (a 5.x combined
+  parquet, upgraded). It looked one level up and listed no templates.
 - **The viewer escapes recording text it puts into chart HTML.** Chart
   tooltips, the heatmap tooltips and the embed demo's status line inserted
   strings from the recording as markup: plot titles from section templates
@@ -138,6 +185,38 @@
 
 ### Removed
 
+- **Breaking: every command but `rezolus recording upgrade` opens
+  `.dendro` archives only.** A `.rez` archive (v1, v2 or v3), a standalone
+  `.parquet` file and a `.parquet.ab.tar` A/B tarball are refused by
+  `view` (a file, a browser upload, a URL load and an attached
+  experiment), the static-site viewer, `mcp` (CLI and stdio), Save as
+  Report and every other `recording` subcommand, with the command that
+  converts the file: `rezolus recording upgrade FILE`, which writes
+  `FILE`'s name with a `.dendro` extension. Nothing converts a recording
+  when it is opened, in memory or into a temporary file. `upgrade` now
+  also converts a `.parquet.ab.tar` into a two-recording `.dendro`
+  labelled `arm=baseline`/`arm=experiment`, which the viewer opens as the
+  comparison; the tarball's aliases and category are not carried over. The
+  edit commands' `-o` no longer converts a legacy input; it still writes
+  the edited copy of a `.dendro` elsewhere. `recording filter` loses
+  `--queries` and `--templates` (they chose a parquet file's KPI columns),
+  and `recording metadata` loses `--schema`, `--file`, `--geometry` and
+  `--field` (they described a parquet footer). A two-file comparison
+  (`rezolus view a.dendro b.dendro`, the browser's experiment upload, a
+  URL pair) takes a one-recording `.dendro` as the experiment. On the
+  command line the baseline is one recording too: `rezolus view a b` with
+  an archive of several recordings as `a` exits with an error (a second
+  file beside a `.rez` or `.dendro` used to be ignored with a warning). In
+  the browser and through the upload API the baseline may also be an
+  archive that opens as a comparison, whose experiment the second file
+  replaces; Save as Report is then refused, since a report copies whole
+  files and would hold every recording of the archive. Beside an archive
+  that opens as one combined view, an experiment is refused. A
+  one-recording baseline loaded in place of another keeps an experiment
+  that is a file of its own. Each refusal of a file names the `recording
+  combine` and `view --baseline/--experiment` commands that compare two
+  recordings. The static-site demo recordings are `.dendro` files; a link
+  that names a demo's old `.parquet` file loads its `.dendro`.
 - **The viewer's Time selector (Aligned/Raw) is gone.** Every dashboard
   chart is on the step grid. Raw mode is a per-chart view: the expanded
   chart (the open-in-new-tab link) has SHOW SAMPLES, which reruns its query
@@ -155,38 +234,30 @@
   The refusal quotes the path as it was given (`-o`, the positional OUTPUT,
   or the config file's `output`) and names a 5.x recorder (5.27.0 or later),
   which still writes those formats; `rezolus recording upgrade` converts a
-  `.rez` or a parquet file. Reading `.rez` and parquet is unchanged.
-- **The `recording` tools write `.dendro` only, and never change a `.rez` or
-  a parquet file.** metriken-storage 0.5 has no `.rez` writer; legacy
-  recordings are converted with its converters (0.5.1).
-  - `combine` writes one `.dendro` from any mix of `.dendro`, `.rez` and
-    `.parquet` inputs, a recording per input recording; `--ab` is kept and
-    labels each input's recordings `arm=baseline`/`arm=experiment`. An
-    output ending in `.parquet` (the row-merge), `.parquet.ab.tar` or `.rez`
-    is refused, naming `-o <name>.dendro`, and so are `--pinned`,
-    `--category` and `--bypass-time-check`, which applied to those outputs.
+  `.rez` or a parquet file.
+- **The `recording` tools write `.dendro` only.** metriken-storage 0.5 has
+  no `.rez` writer.
+  - `combine` writes one `.dendro` from `.dendro` inputs, a recording per
+    input recording; `--ab` is kept and labels each input's recordings
+    `arm=baseline`/`arm=experiment`. An output ending in `.parquet` (the
+    row-merge), `.parquet.ab.tar` or `.rez` is refused, naming `-o
+    <name>.dendro`, and so are `--pinned`, `--category` and
+    `--bypass-time-check`, which applied to those outputs.
   - `filter`, `annotate` and `check --annotate` edit a `.dendro` in place,
-    or a copy given `-o`. A `.rez` or `.parquet` input needs `-o
-    <new>.dendro`; without it the command is refused (exit 1; `check`, exit
-    2) and the error prints the command line with `-o` added. A parquet
-    `filter` with neither `--samplers` nor `--metrics` keeps the metrics its
-    KPIs name, as before. `annotate`'s `--undo`, `--node`, `--source`,
-    `--systeminfo` and `--filter` edited a parquet footer; they are ignored
-    with a warning.
-  - `snapshot` of a `.rez` writes a `.dendro`.
-  - `upgrade` converts any `.rez` (v1, v2, v3) or `.parquet` into a
-    `.dendro` (the input's name with `.dendro` for its extension, without
-    `-o`; `upgrade x.dendro` says it is already one); `--to v3` is refused.
+    or a copy given `-o`. `annotate`'s `--node`, `--source` and `--filter`
+    set a parquet footer key or dropped parquet columns; they are refused
+    (exit 1), naming what to use instead.
+  - `upgrade` converts any `.rez` (v1, v2, v3), `.parquet` or
+    `.parquet.ab.tar` into a `.dendro` (without `-o`, the input's name with
+    `.dendro` for its extension, a `.parquet.ab.tar` losing both; `upgrade
+    x.dendro` says it is already one); `--to v3` is refused.
   - `convert` turns a raw msgpack recording into a `.dendro`.
   - The MCP server's `add_event`, `remove_events` and `run_checks`
-    (`annotate=true`) take an `output` path, required for a `.rez` or
-    parquet recording, as `-o` is. `export_query` is unchanged.
+    (`annotate=true`) take an `output` path, to write the edited copy there
+    as `-o` does. `export_query` is unchanged.
 - **Save as Report writes a `.dendro`**, in the server viewer and the static
-  site, from a `.dendro`, a `.rez` or one or two parquet files. A two-file
-  parquet compare is saved with `arm=baseline`/`arm=experiment`, so it
-  reopens as the comparison. The static site converts a `.rez` in memory; an
-  uploaded v3 `.rez` has no SQLite `-wal` sidecar, so a copy taken from under
-  a running recorder can be shorter than `rezolus view` reads from the file.
+  site. A two-file comparison is saved with `arm=baseline`/`arm=experiment`,
+  so it reopens as the comparison.
 - **`record` refuses every Rezolus agent that cannot stream.** An agent older
   than 5.21.0, a v2 agent, or a stream route that answers 404, 409 or a
   foreign content type is refused at startup (exit 1, nothing written) or,
@@ -245,9 +316,19 @@
   empty header, is skipped. `[samplers.hw_sensors] enabled = false` turns it off, and an
   existing config that sets it keeps the sampler off.
 - **metriken 0.11.4, metriken-exposition 0.25, metriken-model 0.2,
-  metriken-storage 0.5.2, metriken-query 0.42.1, metriken-recorder 0.5.1.** The
+  metriken-storage 0.5.4, metriken-query 0.42.2, metriken-recorder 0.5.1.** The
   counting histogram types are named for their kind (`AtomicCounterHistogram`,
   `RwLockCounterHistogram`, `CounterHistogramGroup`).
+- **The sample-timestamp (jitter) plot works for a `.dendro` recording**
+  (metriken-query 0.42.2, metriken-storage 0.5.4); it was empty for every
+  `.dendro`. It plots the instants at which the recording's first source
+  with rows was read, in any sampler; a second recorder of the same agent
+  is not merged in. The first request after the viewer opens or refreshes
+  a recording reads every table's timestamps (the read took 6.6 s on a
+  9.6 h, 49-table recording); later requests reuse them. The
+  timestamp read does not add the segments it opens to the segment cache
+  (metriken-storage 0.5.4), so it does not evict segments that chart
+  queries cached.
 - **A recording and its copies are read once.** metriken-query 0.42 forms
   process groups: sources that share a uuid (a source and its snapshot or
   hindsight dump), or share a `producer_epoch` and overlap in time (one agent
@@ -293,12 +374,11 @@
   http://b:4241,arm=experiment` (new: `arm=` labels that endpoint's
   recording, over a run-wide `--label arm=`); `rezolus recording combine
   a.dendro b.dendro --ab baseline=a.dendro experiment=b.dendro -o ab.dendro`
-  (new for `.rez` and `.dendro` outputs and for parquet inputs into a
-  `.rez`: each value names an input by its path or file name, every recording
+  (new: each value names an input by its path or file name, every recording
   of it is labelled `arm=baseline` or `arm=experiment`, and an input
   recording that already carries another arm is refused before anything is
   copied, naming the input; `--ab` never replaces an arm); and `rezolus view
-  ab.rez --baseline host=web-01 --experiment host=web-02`
+  ab.dendro --baseline host=web-01 --experiment host=web-02`
   (`WasmCaptureRegistry::set_compare_requested`, or `?compare=1` on the static
   site). The arm values fill the slots, whatever the archive's order:
   `arm=baseline` is the baseline and `arm=experiment` the experiment
@@ -327,13 +407,13 @@
   without `--ab` when the inputs' own arms would be. **An archive assembled by
   `recording combine` before this release
   carries no `arm` and now opens combined.** When its recordings' labels
-  differ, `rezolus view ab.rez --baseline source=redis --experiment
+  differ, `rezolus view ab.dendro --baseline source=redis --experiment
   source=valkey` (any labels that name the two; `rezolus mcp
-  describe-recording ab.rez` lists them) opens it A/B as before. When they
+  describe-recording ab.dendro` lists them) opens it A/B as before. When they
   are identical (two agents recorded as `source=rezolus` on one host), no
   selector can name either one; label them by position instead: `rezolus
-  recording combine ab.rez --ab baseline=0 experiment=1 -o ab-arms.rez`
-  (positions in the order `describe-recording` lists them, from 0), which
+  recording combine ab.dendro --ab baseline=0 experiment=1 -o ab-arms.dendro`
+  (the `(position N)` `describe-recording` prints for each recording), which
   copies the archive with the two arms and opens A/B. `combine` takes one
   input only in this form.
 - **A combined archive that is still being written is followed as one
@@ -344,19 +424,12 @@
   the throughput of a service recorded on that host (none for a host with
   no service), and System Info lists each recording's hardware under its
   host.
-- **A single-source parquet's `source` is a series label.** Its series
-  carry the file's `source`, as an archive recording's series carry its
-  recording's labels, so a KPI template carried in the parquet (llm-perf's)
-  whose queries select `{source="llm-perf"}` matches them: `rezolus view
-  run.parquet` draws those KPIs where it listed them all as unavailable, and
-  `rezolus mcp query`, `recording check` and the static viewer read the same
-  series. The `.dendro` a parquet file is converted to (`recording annotate
-  run.parquet --queries kpis.json -o run.dendro`, `recording upgrade`) labels
-  its recording with the same `source`, so the template matches there too. A combined
+- **A single-source parquet's `source` labels its upgraded recording.**
+  `rezolus recording upgrade run.parquet` labels the recording with the
+  file's `source`, so a KPI template carried in the parquet (llm-perf's)
+  whose queries select `{source="llm-perf"}` matches its series. A combined
   parquet, whose columns carry their own `source`, and a parquet any of
-  whose series already carry a `source` label are read as before. A series
-  that had no visible label now has `source`, so a chart of one such series
-  can be named by it (a lone series named "rezolus" where it was unnamed).
+  whose series already carry a `source` label are converted unlabelled.
 - **`rezolus mcp` reads an archive of one run combined.** Without
   `--recording` (or the stdio server's `recording` object), `query`,
   `describe-metrics`, `detect-anomalies` and `analyze-correlation` read every
@@ -396,18 +469,18 @@
   three quarters of its TTL.
 
 - **Both viewers take a source's KPI template from the recording, ahead of
-  the built-in one.** The `service_queries` key of a source's metadata (a
-  parquet footer, a `.rez` recording, a dendro source; what `rezolus
-  recording annotate` writes) renders by default; the built-in registry is
-  consulted for a source only when its metadata has none. `rezolus view
+  the built-in one.** The `service_queries` key of a dendro source's
+  metadata (what `rezolus recording annotate` writes) renders by default;
+  the built-in registry is consulted for a source only when its metadata
+  has none. `rezolus view
   --registry-templates` renders the built-in template instead for sources
   the registry knows. The WASM viewer exposes the same switch as
   `WasmCaptureRegistry::set_prefer_registry_templates`, which the static
   site has no control for yet. The server viewer read `service_queries`
-  only from a parquet's footer, so a `.rez` or `.dendro` showed no KPI
-  sections, and the static-site viewer matched the registry by source name
-  only, so a template embedded by `annotate` showed on `rezolus view` and not
-  in the browser. Each recording of a multi-recording archive uses its own
+  only from a parquet's footer, so an archive showed no KPI sections, and
+  the static-site viewer matched the registry by source name only, so a
+  template embedded by `annotate` showed on `rezolus view` and not in the
+  browser. Each recording of a multi-recording archive uses its own
   template; when two recordings have the same source name, the baseline's
   renders for both. A template that does not parse is replaced by another
   template the metadata carries for the source, else the built-in one, else
@@ -415,15 +488,14 @@
   log, the browser console), not a failed load. In a comparison, a notice
   describes that recording's own lookup; the baseline's template renders for
   a source name both recordings share. A top-level template on a file whose
-  `source` names several sources (a combined parquet's JSON array) is keyed
-  by the template's own `service_name`; one that does not parse there is
-  ignored. A live agent's handshake metadata is read only by the terminal UI
+  `source` names several sources (an upgraded combined parquet's JSON
+  array) is keyed by the template's own `service_name`; one that does not
+  parse there is ignored. A live agent's handshake metadata is read only by the terminal UI
   (`--tui`), which rebuilds its sections each tick; the browser dashboard of
   a live agent builds its sections once, with no KPI sections. The server
-  viewer now also classifies a `.rez` or `.dendro` source from its metadata,
-  so a simple capture's section is named by its `source`
-  (`/source/127.0.0.1-18651`) rather than the file name, as the WASM viewer
-  and a parquet of the same capture name it. The `dashboard` key holds the
+  viewer now also classifies a dendro source from its metadata, so a simple
+  capture's section is named by its `source` (`/source/127.0.0.1-18651`)
+  rather than the file name, as the WASM viewer names it. The `dashboard` key holds the
   section template for the built-in sections (see Added).
 
 - **`memory_slabinfo` publishes `memory_slab_cache_bytes` for every slab
@@ -517,7 +589,7 @@
   return the average over `r`, so a `recording check` can pass a spike
   shorter than `r` that it failed before; use `irate` for the per-step rate.
 
-  Every series read from a `.rez` or `.dendro` carries its recording's
+  Every series read from a `.dendro` carries its recording's
   labels (`source`, `host` and any `record --label`), a single recording's
   included, and a series' own value of one of those keys moves to
   `exported_<key>`; `mcp query` prints them. A chart's legend, the Query
@@ -673,8 +745,8 @@
     content type they got: `record --stream` from 5.21.0 through 5.26.x, and
     `record` to `.dendro`, `hindsight` and the live viewer from 6.0.0-alpha
     builds through alpha.44. Drop `--stream` (5.x), upgrade, or record to
-    `.rez` or parquet, which scrape `/metrics/binary`; that path is
-    unchanged.
+    `.rez` or parquet with 5.x, which scrapes `/metrics/binary`; that path
+    is unchanged.
   - A subscriber reads the time it woke before waiting for the pass lock,
     so subscribers at one boundary share one sampling pass. Before, one
     queued behind a pass longer than the TTL found it stale and sampled
@@ -715,14 +787,13 @@
 - **The `.rez` format and the archive reader and writer are
   `metriken-storage`'s** (0.2.0, feature `rez`), and queries over an archive
   are `metriken-query` 0.36.0's. metriken-archive and metriken-segment are no
-  longer dependencies; msgpack-to-parquet conversion (`recording convert`,
-  the recorder's parquet output) is metriken-storage's `convert`.
+  longer dependencies; raw msgpack conversion (`recording convert`) is
+  metriken-storage's `convert`.
   `crates/rez` keeps `RezReader` and `LiveReader` and re-exports the rest at
-  its old paths. The files `record`, `hindsight` and `recording` write and
-  read are unchanged.
+  its old paths.
 - **An agent restart is written into the recording's metadata.** When the
   agent restarts mid-recording, an archive written by `record` or `hindsight`
-  (`.dendro` or `.rez`) is amended once the first row from the new process is
+  is amended once the first row from the new process is
   staged: `producer_epoch` becomes the new epoch, `producer_epochs` (dendro's
   key) lists every epoch with the timestamp of its first row and the version
   it reported, and `version`, `systeminfo` and `descriptions` are read again
@@ -730,7 +801,7 @@
   so the rows from before the restart stay described. A `version` set with
   `--metadata` is kept. Before, the metadata described only the process the
   recording opened with, and a log warning was the only record of the
-  restart. A parquet recording still has no history.
+  restart.
 - The viewer asks for about one bucket per 4 pixels of chart width (75 to
   300) instead of one per pixel, and the server rounds the width up. On a
   9.6-hour recording at 1 s in a 1,600-pixel window, a half-width chart of
@@ -777,7 +848,7 @@
 - metriken-query 0.34.7 and metriken-archive 0.3.5. The viewer's charts are
   reduced to their point budget while the query is computed, instead of
   after the full-resolution result is built. A `sum`, `avg`, `min`, `max`
-  or `count` chart of `rate`/`irate` over a .rez or .dendro recording also
+  or `count` chart of `rate`/`irate` over a .dendro recording also
   holds each group's points only until they are final.
   - On a 9.6-hour recording of a per-task group stored long, an
     unaggregated `irate(...)` chart took 9.4 GB of memory and 6.0 s, and
@@ -806,11 +877,10 @@
   - a chart in raw rate mode, or of a histogram, keeps to its point budget.
 - metriken-query 0.34.4 and metriken-archive 0.3.4. `rate`/`irate`, alone
   or under `sum`/`avg`/`min`/`max`/`count`, are computed in one pass over a
-  `.dendro` or `.rez` archive's columns, including in an expression that
+  `.dendro` archive's columns, including in an expression that
   reads several tables of one recording (such as
-  `sum(irate(cpu_usage[5m])) / cpu_cores`). A `.parquet` file, raw rate
-  mode, and a query joining samplers of different cadence are computed per
-  series as before. On a 9.6-hour recording of a per-task group at a 1 s
+  `sum(irate(cpu_usage[5m])) / cpu_cores`). Raw rate mode and a query
+  joining samplers of different cadence are computed per series as before. On a 9.6-hour recording of a per-task group at a 1 s
   step, a warm `sum(irate(...))` took 9.7 s (table stored long) or 14 s
   (stored wide) and takes 0.89 s or 1.18 s; `sum by (comm)` took 10-11 s or
   15 s and takes 1.07 s or 1.38 s (these "before" figures are from the same
@@ -894,8 +964,7 @@
   then costs that task's labels instead of the group's whole member list.
   The agent builds the wide snapshot only when something reads it, so an
   agent that is only streamed long never builds it. `record` to `.dendro`,
-  hindsight and the live viewer ask for the long layout; a `.rez` hindsight
-  buffer asks for the wide one. An agent that does not serve the long
+  hindsight and the live viewer ask for the long layout. An agent that does not serve the long
   layout is recorded through the wide one, and `record` logs that when it
   connects. The response names the layout served in `x-rezolus-layout`.
 - metriken-query 0.34.0, metriken-exposition 0.21.4, metriken-archive 0.3.2
@@ -991,29 +1060,26 @@
   that comes up later, or that answers a reconnect with such a refusal, is
   left out from then on (a reconnecting agent's recording keeps the rows it
   had and is finalized) while the other endpoints keep recording, the
-  archive is finalized, and the run exits 1. Record such an agent to a
-  `.rez` or parquet, which scrape. An agent that answers but whose stream
+  archive is finalized, and the run exits 1. Record such an agent with a
+  5.x recorder, which scrapes. An agent that answers but whose stream
   fails with an error that can change (a 5xx, a handshake timeout) is retried
   each tick. A wrapped command that exits on its own waits for each agent's
   frame covering the exit, at most one interval plus the scrape timeout
   (twice the interval, between 2 s and 10 s). A run whose every endpoint has
   been refused ends there, and each refused endpoint is named at the end.
-  A refusal points at `rezolus recording upgrade --to dendro` to convert a
-  `.rez` of the agent afterwards.
-  `record --stream` is removed: a `.dendro` records agents by stream and
-  `.rez`, parquet and raw scrape, so the output format decides the
-  transport, and passing `--stream` is an unknown-argument error (exit 2).
-  `.rez`, parquet and raw output are otherwise unchanged. `.rez` is no
-  longer a stream target, and the identity
-  index that `.rez --stream` stored beside its rows is gone with it: the
+  `record --stream` is removed: `record` writes `.dendro`, which records
+  agents by stream, and passing `--stream` is an unknown-argument error
+  (exit 2). The identity index that a 5.x `.rez --stream` stored beside its
+  rows is gone: the
   agent no longer sends `Frame::Index` on `/metrics/stream` (every rows frame
   names dendro's `NO_INDEX_STATE`), no longer keeps the slot-change broadcast
   or index history, and `/status` drops `index_resyncs`. Slot identity
   reaches a `.dendro` through each group's schema, `__uid__` included.
-  `.rez` archives written by a 5.x `record --stream` are read without that
-  index: each slot column keeps the labels its segment was built with, which
-  splits reused slots where a member carries its labels (what released agents
-  wrote), and each indexed table logs a warning. 5.x keeps `.rez --stream` on
+  `recording upgrade` copies that index from a `.rez` a 5.x `record
+  --stream` wrote into the `.dendro` as caller rows, and it is not read:
+  each slot column keeps the labels its segment was built with, which
+  splits reused slots where a member carries its labels, and each indexed
+  table logs a warning. 5.x keeps `.rez --stream` on
   `release/5.x`; a 5.x `record --stream -o out.rez` against a 6.0 agent
   receives no index frames, so it no longer records an identity index. A 6.0
   recorder ignores a 5.x agent's index frames.
@@ -1053,6 +1119,52 @@
 
 ### Added
 
+- **A systemd unit's cgroups can be selected as one entry.** The cgroup
+  selector lists each `*.scope` or `*.service` unit with two or more recorded
+  cgroups that name it (a libvirt guest's `vcpuN` and `emulator` threads, a
+  service's child cgroups) as a group above its members. The agent records a
+  cgroup more than three levels deep by its last three path components
+  (`.../machine-qemu-2-vm1.scope/libvirt/vcpu0`), so a group holds the unit's
+  own cgroup and those up to two levels below it; a cgroup further down is not
+  in it. A selected group plots one line per individual chart, from its own
+  query over the members, so a group's IPC is its summed instructions over its
+  summed cycles; the aggregate charts exclude its members. While a group is
+  selected, an entry that shares a cgroup with it cannot be selected, and
+  selecting a group replaces the selected entries it holds. The link carries a
+  group as its unit path with a trailing slash
+  (`cgroup=.../machine-qemu-2-vm1.scope/`), and the members are found again in
+  whichever recording opens it. A key that carries more or less of the unit's
+  path than that recording's key for it (`/machine.slice/...` against `.../`)
+  resolves to it when exactly one group matches, and a link that holds a group
+  and one of its members is rewritten to the group. A group with a member the
+  selector cannot quote is not selectable. A group's members are found when
+  the section opens, so in a live view a cgroup created under the unit after
+  that is counted in the aggregate until the section is opened again. A pinned
+  chart that draws a group is not compared in A/B mode. (#1544)
+- **`process_cpu_usage`: CPU time per process.** With
+  `process_attribution = true` (off by default, independent of
+  `task_attribution`), `cpu_usage` exports one series per thread
+  group, labelled `tgid`, `comm` (the group leader's, relabelled on exec and
+  on the leader's renames) and `cgroup`. It counts every thread of the
+  process, including threads that have exited and threads with no series of
+  their own, so a process's total no longer depends on how many threads it
+  created. Its series ends within one snapshot interval of the process's
+  last thread exiting. It costs 64 MiB of kernel memory (two per-pid
+  arrays) and a 256 KiB ring, a metadata event per new process and per
+  leader rename, an exit event per process when `task_attribution` is off,
+  the `task_rename` program (one run per thread rename), and two marker
+  reads and a counter add per accounting event that adds CPU. A process whose threads
+  run on many CPUs contends on its counter: with 48 threads of one process
+  on a 56-vCPU host at HZ=250, each run of the `cpu_usage` BPF programs
+  took about 310 ns, against about 200 ns with 48 one-thread processes and
+  170 ns without the counter. (#1490)
+
+- **`drive_temperature_sensor`: NVMe Temperature Sensors 1 to 8.**
+  `drivehealth` decodes them from the SMART/Health log it already reads
+  (bytes 200 to 215), labelled `sensor={1..8}` and with the drive's labels,
+  on Linux and macOS. A sensor the controller does not implement has no
+  value. These are the per-sensor readings `hw_sensors` stopped collecting
+  when it left `nvme` hwmon chips to `drivehealth`. (#1526)
 - **`record --endpoint url,host=NAME` sets the recording's `host` label.**
   `record` names labels that a Rezolus agent's metadata brought too late to
   put on the recording (metriken-recorder's `LabelsNotApplied`), with the
@@ -1109,7 +1221,7 @@
   explorer and its own views (system info, metadata, notebook, selection,
   report) by route, so a template section named like one of them is an
   ordinary section.
-  A recording without the key (parquet, `.rez`, anything scraped, or a
+  A recording without the key (one upgraded from a `.rez` or parquet, or a
   recording of an older agent) renders the embedded template, which draws
   the same JSON as the generators did. A `dashboard` that is too large or
   does not parse renders the embedded template, with a warning once per
@@ -1215,7 +1327,7 @@
   the warning and critical temperature-time counters and the thermal-throttle
   counters from each NVMe drive's SMART log. Neither needs root.
 - **The viewer follows an archive file that is still being written.**
-  `rezolus view` on a `.dendro` or `.rez` (v3) that is not finalized, such as
+  `rezolus view` on a `.dendro` that is not finalized, such as
   a running hindsight buffer or a `rezolus record` in progress, reopens it
   and the page refreshes the current section every 5 seconds as in live
   mode. Before, the view showed the file as it was when the viewer opened
@@ -1223,8 +1335,8 @@
   while a writer is running it reopens every 2 seconds however rarely rows
   arrive. When no writer is running (heartbeat unchanged for three
   intervals: a killed or paused writer, a `rezolus recording snapshot`
-  copy, or a `cp` of a running archive), and for a file with no heartbeat
-  (a `.rez`), it reopens every 2 seconds while rows arrive and doubles the
+  copy, or a `cp` of a running archive), it reopens every 2 seconds while
+  rows arrive and doubles the
   wait after a reopen that finds no new row, up to 60 seconds; a writer
   that beats again returns it to 2 seconds. Following stops when the writer
   finalizes the file, when the file is removed, or when another file is
@@ -1370,19 +1482,16 @@
 
 ### Changed
 
-- **`record` and `hindsight` write dendro archives by default** (`.dendro`),
+- **`record` and `hindsight` write dendro archives** (`.dendro`),
   through metriken-archive's `ArchiveWriter`. A bare `rezolus record` writes
   `rezolus.dendro`; hindsight's default output is
-  `/var/lib/rezolus/rezolus.dendro`, and any hindsight `output` not ending in
-  `.rez` gets a dendro buffer. Groups with slots (threads, cgroups, CPUs) are
+  `/var/lib/rezolus/rezolus.dendro`. Groups with slots (threads, cgroups, CPUs) are
   stored one row per occupant, with the occupants' labels in a
   `<table>/occupants` stream. Replayed against the `.rez` writer on four
   recordings, the archives were 3.3–8.8 times smaller, with the same answers
   to 213 of 213 queries on each and a tick p99 of 16–38 ms against
   375–407 ms. Segments are zstd-3 (55–57% smaller than lz4 for about 4% more
-  encode time). `-o out.rez`, `--format rez` or a hindsight `output` ending
-  in `.rez` still writes a `.rez`, and every tool still reads one. Built in
-  stages: `record` (#1326), hindsight, whose snapshots are fully sealed
+  encode time). Built in stages: `record` (#1326), hindsight, whose snapshots are fully sealed
   copies (#1329), `record --stream` (#1336), and `recording` metadata,
   annotate, check, snapshot, filter and combine (#1339, #1340, #1342) and
   Save-as-Report in both viewers (#1345) on dendro archives. Design and
@@ -1390,8 +1499,7 @@
 
 - The archive reader moved to metriken-archive 0.1.0 (`ArchiveReader`), with
   no change in behaviour: every reader test passes unchanged. `RezReader`
-  is now a wrapper that recognizes the container (a `.rez` v1/v2/v3 or a
-  dendro archive) and derefs to `ArchiveReader`, so call sites are
+  is now a wrapper that derefs to `ArchiveReader`, so call sites are
   unchanged. `RezDb` implements `metriken_archive::Catalog`, and the
   identity index is read through `reader::IdentityIndex`, an
   `metriken_archive::IndexRelabel`. `catalog::Container::of_path` returns
@@ -1433,26 +1541,19 @@
   0.1.0's, the relabel metriken-query 0.32.0's).
   Series carry the occupant's labels plus an internal `__occupant__`, and
   filters on those labels work. Checked against the same data written one
-  column per slot: every query agrees. Nothing writes this layout yet.
+  column per slot: every query agrees.
 
 - `rezolus view`, `rezolus mcp` and the static-site viewer open dendro
-  archives, recognized by content like a `.rez`. `RezReader` reads its
-  container through a `Catalog` trait (`crates/rez/src/catalog.rs`) that
-  `.rez` v3 and dendro both implement, so an archive written by
-  `recording upgrade --to dendro` reads as the `.rez` it came from. Checked on
-  two real recordings (581 MB and 1.28 GB): the same `mcp query` answers from
-  the original and the conversion, per-thread and per-cgroup queries
-  included. The `recording` subcommands still take `.rez` only.
+  archives. Checked on two real recordings (581 MB and 1.28 GB): the same
+  `mcp query` answers from a `.rez` and its `recording upgrade` conversion,
+  per-thread and per-cgroup queries included.
 
 - `recording upgrade --to dendro in.rez -o out.dendro` writes a copy of a
   `.rez` (v1, v2 or v3) as a dendro archive, the container #1224 plans for
   6.0. Recordings become sources and tables become streams; segment, WAL and
   caller-row bytes are copied unchanged, and WAL rows a sealed segment
   already holds are dropped. A timestamp above `i64::MAX` is refused rather
-  than wrapped. `-o` is required and must not exist, because no rezolus
-  release reads the output yet; opening one anywhere a `.rez` is expected now
-  fails naming it as a dendro archive rather than with `no such table:
-  recordings`. Measured on a 1.28 GB, 5,874-segment archive: 7.0 s, and the
+  than wrapped. `-o` must not exist. Measured on a 1.28 GB, 5,874-segment archive: 7.0 s, and the
   output matches the input table by table.
 
 ### Changed
@@ -1568,9 +1669,8 @@
 - Save as Report's "Trim to the time range shown" keeps only that range. The
   option sent a range that neither the server nor the browser build read, so
   the report held the whole recording; and it was offered only for a chart zoom, not for a zoom that
-  refetched the charts, so a zoomed view usually did not offer it. A parquet
-  report keeps the rows inside the range. A `.rez` or `.dendro` report keeps
-  whole segments, so it reaches up to one segment's span past each end (5
+  refetched the charts, so a zoomed view usually did not offer it. A report
+  keeps whole segments, so it reaches up to one segment's span past each end (5
   minutes in a recorded archive), and a further 5 minutes before the start
   when the archive has long tables, so their occupants stay named. A 1-hour
   trim of a 9.6-hour recording was 154 MB, against 1.27 GB of segments in the

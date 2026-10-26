@@ -185,6 +185,40 @@ struct {
     __uint(max_entries, MAX_PID);
 } task_cpu_usage SEC(".maps");
 
+// per-process cpu usage in nanoseconds (user + system of every thread of the
+// group, exported), at pid_slot(tgid); userspace assigns each process's
+// series to that index. Only with process_attribution; see process_start_times.
+// Every CPU running one of the process's threads writes its slot, at most about
+// once per tick each; docs/principles.md, principle 7, has the measured cost of
+// keeping one copy.
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_PID);
+} process_cpu_usage SEC(".maps");
+
+// per-process instance marker, at pid_slot(tgid): the thread group's start
+// time (its leader's, which a thread that execs from outside the leader
+// inherits in de_thread), with METADATA_PENDING and INSTANCE_EXITED as in
+// task_start_times. INSTANCE_EXITED is set at the group's last exit. Read by
+// userspace's sweep (sweep_process_slots in mod.rs).
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_PID);
+} process_start_times SEC(".maps");
+
+// process metadata: a task_info describing the thread group's leader, sent
+// when the group is first seen and when the leader is renamed
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, TASK_RINGBUF_CAPACITY);
+} process_info SEC(".maps");
+
 // per-cgroup user
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -247,18 +281,24 @@ struct {
 u64 attach_ns = 0;
 
 /*
- * Per-task export is the config option `task_attribution`, off by default.
- * The accounting below runs either way -- the per-CPU and per-cgroup deltas
- * are computed from each task's utime/stime baseline, and exited tasks' CPU
- * is folded from task_cpu_usage into the exited counters -- so what the
- * switch removes is only what exists for the per-task series: the task_info
- * event (a ringbuf reserve and four string reads per new task), the
- * task_exit event, and the task_rename program, which is not loaded.
- * Userspace does not read task_cpu_usage or drain either ringbuf when it is
- * off. Written into read-only data before load, so the verifier removes the
+ * Per-task export is the config option `task_attribution`, and the
+ * per-process total is `process_attribution`; both are off by default. The
+ * accounting below runs either way -- the per-CPU and per-cgroup deltas are
+ * computed from each task's utime/stime baseline, and exited tasks' CPU is
+ * folded from task_cpu_usage into the exited counters.
+ *
+ * task_attribution off removes the task_info event (a ringbuf reserve and
+ * four string reads per new task) and the task_exit event of an exit that
+ * is not a group's last. process_attribution off removes the process_info
+ * event, start_process and account_process, and the per-process maps (not
+ * created). The task_exit event of a group's last exit is sent when either
+ * is on, and the task_rename program is loaded when either is on.
+ * Userspace reads and drains only what the switches it was given export.
+ * Written into read-only data before load, so the verifier removes the
  * sends rather than testing a flag per event.
  */
 const volatile __u8 task_attribution = 0;
+const volatile __u8 process_attribution = 0;
 
 /**
  * send_task_info - Send one task's metadata to userspace
@@ -281,6 +321,133 @@ static __always_inline int send_task_info(struct task_struct* task) {
     info->ts = bpf_ktime_get_ns();
     bpf_ringbuf_submit(info, 0);
     return 1;
+}
+
+/**
+ * send_process_info - Send a thread group's metadata to userspace
+ * @leader: The group leader's task_struct
+ * @comm: The name to send, or NULL for the leader's current comm
+ * @ts: The event's bpf_ktime_get_ns()
+ *
+ * Returns 1 when the event was submitted, 0 when the ringbuf was full.
+ */
+static __always_inline int send_process_info(struct task_struct* leader, const char* comm, u64 ts) {
+    struct task_info* info = bpf_ringbuf_reserve(&process_info, sizeof(struct task_info), 0);
+    if (!info)
+        return 0;
+
+    __builtin_memset(info, 0, sizeof(struct task_info));
+    populate_task_info(leader, info);
+    if (comm) {
+        __builtin_memset(&info->comm, 0, TASK_COMM_LEN);
+        bpf_probe_read_kernel_str(&info->comm, TASK_COMM_LEN, comm);
+    }
+    info->ts = ts;
+    bpf_ringbuf_submit(info, 0);
+    return 1;
+}
+
+/*
+ * start_process - Start a thread group's per-process counter, once
+ *
+ * Called for each new task instance and at an exec from outside the group
+ * leader. The group's first one zeroes the
+ * counter at pid_slot(tgid), commits the group's start time as the marker,
+ * pending, and sends the group's metadata; the others find the marker in
+ * place. A full ringbuf leaves METADATA_PENDING set, and the group's next
+ * accounted event retries the send (account_process).
+ *
+ * A group whose marker shows it exited is not started again: a task first
+ * seen after its group's last exit is in the rest of do_exit.
+ *
+ * Two threads of a group the agent has not seen, first seen at the same time
+ * on two CPUs, can both start it; the second zeroing drops what the first
+ * thread's event added in between.
+ */
+static __always_inline void start_process(struct task_struct* task) {
+    if (!process_attribution)
+        return;
+
+    u32 tgid = BPF_CORE_READ(task, tgid);
+    if (tgid == 0 || tgid >= MAX_PID)
+        return;
+
+    u32 slot = pid_slot(tgid);
+    u64* marker = bpf_map_lookup_elem(&process_start_times, &slot);
+    if (!marker)
+        return;
+
+    struct task_struct* leader = BPF_CORE_READ(task, group_leader);
+    u64 start_time = BPF_CORE_READ(leader, start_time);
+    u64 m = *marker;
+    if ((m & ~METADATA_PENDING) == start_time || m == (start_time | INSTANCE_EXITED))
+        return;
+
+    u64 zero = 0;
+    bpf_map_update_elem(&process_cpu_usage, &slot, &zero, BPF_ANY);
+
+    // Pending before the send, as in handle_new_task: the sweep releases
+    // labels the marker does not hold live.
+    m = start_time | METADATA_PENDING;
+    bpf_map_update_elem(&process_start_times, &slot, &m, BPF_ANY);
+    if (send_process_info(leader, NULL, bpf_ktime_get_ns()))
+        bpf_map_update_elem(&process_start_times, &slot, &start_time, BPF_ANY);
+}
+
+/*
+ * account_process - Add an accounted delta to the task's thread group, and
+ * retry the group's metadata if it is owed
+ *
+ * Every delta credited to the per-CPU totals while the group is tracked
+ * (from its start_process until its last exit) is added, including CPU an
+ * exited thread uses in the rest of do_exit before that last exit, so the
+ * per-process total includes every thread of the group, exported or not,
+ * live or exited.
+ *
+ * The group's last exit zeroes the counter, so a dead group's slot is 0,
+ * which a V2 snapshot skips. An add that read the marker before that exit
+ * can land after the zero; the marker is read again after the add, and the
+ * slot zeroed again if it shows the group exited. That closes the race
+ * where the atomic add is a full barrier (x86). On arm64 the add and the
+ * exit's two stores are not ordered, so a late add can still leave a
+ * non-zero slot with no labels, which a V2 snapshot exports. So can a marker
+ * left pending after the exit (see sweep_process_slots in mod.rs).
+ *
+ * `exiting`: the task is past its own sched_process_exit. It does not retry
+ * the send, so a thread in the rest of do_exit cannot mark the group's
+ * metadata sent after the group's last exit has marked it exited.
+ */
+static __always_inline void account_process(struct task_struct* task, bool btf, u64 delta,
+                                            bool exiting) {
+    u32 tgid = BTF_READ(btf, task, tgid);
+    if (tgid == 0 || tgid >= MAX_PID)
+        return;
+
+    u32 slot = pid_slot(tgid);
+    u64* marker = bpf_map_lookup_elem(&process_start_times, &slot);
+    if (!marker)
+        return;
+
+    u64 m = *marker;
+    if (m == 0 || (m & INSTANCE_EXITED))
+        return;
+
+    array_add(&process_cpu_usage, slot, delta);
+
+    if (*marker & INSTANCE_EXITED) {
+        u64 zero = 0;
+        bpf_map_update_elem(&process_cpu_usage, &slot, &zero, BPF_ANY);
+        return;
+    }
+
+    if (!(m & METADATA_PENDING) || exiting)
+        return;
+
+    struct task_struct* leader = BTF_READ(btf, task, group_leader);
+    if (send_process_info(leader, NULL, bpf_ktime_get_ns())) {
+        u64 start_time = m & ~METADATA_PENDING;
+        bpf_map_update_elem(&process_start_times, &slot, &start_time, BPF_ANY);
+    }
 }
 
 /**
@@ -336,9 +503,9 @@ static __always_inline int send_task_info(struct task_struct* task) {
  * the exited leader's, measured from the leader's baselines; that counts the
  * difference between its utime/stime and the leader's again when positive.
  * Its sched_process_exit then sets the baselines to its own utime/stime. Its
- * old pid's slot is never retired:
- * it keeps its labels, and its per-task total is not folded into the exited
- * counters, until the pid is reused.
+ * old pid's slot is never retired: its per-task total is not folded into the
+ * exited counters, and its labels stay until the group's last exit releases
+ * every slot of the group (task_exit.dead_tgid) or the pid is reused.
  *
  * A task past exit_notify (exit_state set) whose marker is neither its live
  * nor its exited one is not the slot's instance. Usually it is the old group
@@ -404,10 +571,18 @@ static __noinline int handle_new_task(struct task_struct* task, u32 pid, u64 sta
     }
     bpf_map_update_elem(&task_cpu_usage, &slot, &zero, BPF_ANY);
 
-    marker = start_time;
-    if (!send_task_info(task))
-        marker |= METADATA_PENDING;
+    // A thread that exec'd from outside the leader stays in its group; the
+    // group is started here too when this is its first thread seen.
+    start_process(task);
+
+    // The marker is committed, pending, before the send: userspace's sweep
+    // releases labels whose instance the marker does not hold, so a
+    // task_info drained before the marker named this instance would be
+    // released, and nothing would send it again.
+    marker = start_time | METADATA_PENDING;
     bpf_map_update_elem(&task_start_times, &slot, &marker, BPF_ANY);
+    if (send_task_info(task))
+        bpf_map_update_elem(&task_start_times, &slot, &start_time, BPF_ANY);
 
     return 0;
 }
@@ -502,6 +677,9 @@ static __always_inline int handle_cpuacct_account_field(struct task_struct* task
         array_add(&task_cpu_usage, slot, delta_total);
     }
 
+    if (process_attribution && delta_total > 0)
+        account_process(task, btf, delta_total, seen == EXITED_INSTANCE);
+
     if (!cgroup_attribution)
         return 0;
 
@@ -552,10 +730,13 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index
  *
  * The counter is zeroed whether or not the task_exit event fits in the
  * ringbuf. A dropped event leaves the slot's old labels in userspace with an
- * unchanging 0 until the pid is reused and handle_new_task sends the new
- * task's labels.
+ * unchanging 0 until userspace's next sweep of task_start_times, after the
+ * next drain, finds the instance exited (sweep_task_slots in mod.rs).
  */
-static __always_inline void retire_task(struct task_struct* task, bool btf, u32 pid, u32 slot) {
+// `dead_tgid`: the tgid of the thread group this retirement leaves with no
+// live thread, else 0 (see task_exit.dead_tgid).
+static __always_inline void retire_task(struct task_struct* task, bool btf, u32 pid, u32 slot,
+                                        u32 dead_tgid) {
     u64* usage = bpf_map_lookup_elem(&task_cpu_usage, &slot);
     if (usage && *usage) {
         u32 cpu = bpf_get_smp_processor_id();
@@ -580,13 +761,17 @@ static __always_inline void retire_task(struct task_struct* task, bool btf, u32 
     u64 zero = 0;
     bpf_map_update_elem(&task_cpu_usage, &slot, &zero, BPF_ANY);
 
-    if (!task_attribution)
+    // A group's last exit is sent for the per-process series too: its
+    // dead_tgid lets userspace release labels whose marker a racing rename
+    // left pending after the exit (DEAD_GROUPS in mod.rs).
+    if (!task_attribution && !(process_attribution && dead_tgid != 0))
         return;
 
     struct task_exit* exit_event = bpf_ringbuf_reserve(&task_exit, sizeof(struct task_exit), 0);
     if (exit_event) {
         __builtin_memset(exit_event, 0, sizeof(struct task_exit));
         exit_event->pid = pid;
+        exit_event->dead_tgid = dead_tgid;
         exit_event->ts = bpf_ktime_get_ns();
         bpf_ringbuf_submit(exit_event, 0);
     }
@@ -603,6 +788,17 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
     u32 slot = pid_slot(pid);
     u64 start_time = BTF_READ(btf, task, start_time);
 
+    // do_exit decrements signal->live before this tracepoint, so 0 means every
+    // thread of the group has entered do_exit (with concurrent exits, more
+    // than one sees 0). A slot labelled with its tgid before this exit is a
+    // thread that has exited or is exiting. The only such slot nothing else
+    // releases is the old pid's slot of a thread that exec'd from outside
+    // the leader and failed after de_thread, which gets no exit and keeps a
+    // live marker.
+    u32 dead_tgid = 0;
+    if (BPF_CORE_READ(task, signal, live.counter) == 0)
+        dead_tgid = BTF_READ(btf, task, tgid);
+
     // Mark the instance exited rather than clearing the slot; see
     // INSTANCE_EXITED. The baselines stay as the last event left them, so
     // CPU the task uses in the rest of do_exit is counted once. For a task
@@ -614,7 +810,7 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
     // was counted under its own pid.
     u64* marker = bpf_map_lookup_elem(&task_start_times, &slot);
     if (!marker) {
-        retire_task(task, btf, pid, slot);
+        retire_task(task, btf, pid, slot, dead_tgid);
         return 0;
     }
 
@@ -635,7 +831,21 @@ static __always_inline int account__sched_process_exit(u64* ctx, bool btf) {
     // After the marker: an event nested in this program on this CPU then
     // finds the instance exited, so it neither adds to the per-task counter
     // after the fold nor sends a task_info stamped after the task_exit.
-    retire_task(task, btf, pid, slot);
+    retire_task(task, btf, pid, slot, dead_tgid);
+
+    // The group's last exit: its process instance has ended. The counter is
+    // zeroed after the marker, as retire_task zeroes a task's. Userspace's
+    // sweep releases its labels; a new group with this tgid starts again.
+    if (process_attribution && dead_tgid != 0 && dead_tgid < MAX_PID) {
+        u32 process_slot = pid_slot(dead_tgid);
+        u64* process_marker = bpf_map_lookup_elem(&process_start_times, &process_slot);
+        if (process_marker && *process_marker) {
+            u64 ended = (*process_marker & ~METADATA_PENDING) | INSTANCE_EXITED;
+            bpf_map_update_elem(&process_start_times, &process_slot, &ended, BPF_ANY);
+            u64 zero = 0;
+            bpf_map_update_elem(&process_cpu_usage, &process_slot, &zero, BPF_ANY);
+        }
+    }
 
     return 0;
 }
@@ -695,18 +905,44 @@ static __always_inline int account__sched_process_exec(u64* ctx, bool btf) {
         bpf_map_update_elem(&task_stime, &new_slot, &stime, BPF_ANY);
         bpf_map_update_elem(&task_cpu_usage, &new_slot, &zero, BPF_ANY);
 
-        u64 live = start_time;
-        if (!send_task_info(task))
-            live |= METADATA_PENDING;
-        bpf_map_update_elem(&task_start_times, &new_slot, &live, BPF_ANY);
+        // Committed, pending, before the send, as in handle_new_task.
+        u64 pending = start_time | METADATA_PENDING;
+        bpf_map_update_elem(&task_start_times, &new_slot, &pending, BPF_ANY);
+        if (send_task_info(task))
+            bpf_map_update_elem(&task_start_times, &new_slot, &start_time, BPF_ANY);
     }
 
-    retire_task(task, btf, old_pid, slot);
+    // The group may not have been seen before its exec.
+    start_process(task);
+
+    retire_task(task, btf, old_pid, slot, 0);
 
     u64 zero = 0;
     bpf_map_update_elem(&task_start_times, &slot, &zero, BPF_ANY);
 
     return 0;
+}
+
+/*
+ * Relabel a renamed group leader's process, when its process instance is
+ * live and its metadata has been sent. A full ringbuf sets METADATA_PENDING,
+ * and the group's next accounted event sends the leader's task->comm.
+ */
+static __always_inline void rename_process(struct task_struct* task, bool btf, u32 tgid,
+                                           const char* comm, u64 ts) {
+    u32 slot = pid_slot(tgid);
+    u64* marker = bpf_map_lookup_elem(&process_start_times, &slot);
+    if (!marker)
+        return;
+
+    u64 start_time = BTF_READ(btf, task, start_time);
+    if (*marker != start_time)
+        return;
+
+    if (!send_process_info(task, comm, ts)) {
+        u64 pending = start_time | METADATA_PENDING;
+        bpf_map_update_elem(&process_start_times, &slot, &pending, BPF_ANY);
+    }
 }
 
 /*
@@ -728,7 +964,8 @@ static __always_inline int account__sched_process_exec(u64* ctx, bool btf) {
  * takes task_lock in __set_task_comm, two concurrent renames of one thread
  * can be traced in one order and copied in the other.
  *
- * Loaded only with task_attribution on (see disabled_programs in mod.rs).
+ * Loaded only with task_attribution or process_attribution on (see
+ * disabled_programs in mod.rs); each relabels only its own series.
  */
 static __always_inline int account__task_rename(u64* ctx, bool btf) {
     /* TP_PROTO(struct task_struct *task, const char *comm) */
@@ -745,6 +982,15 @@ static __always_inline int account__task_rename(u64* ctx, bool btf) {
     // marks the instance after this check is, in most interleavings, also
     // stamped after this event (see ASSIGNED_AT in mod.rs).
     u64 ts = bpf_ktime_get_ns();
+
+    // The group leader's name is the process's: relabel the process too.
+    // Exec renames the exec'ing thread after de_thread has made it the
+    // leader, so a process is relabelled with the program it executes.
+    if (process_attribution && BTF_READ(btf, task, tgid) == pid)
+        rename_process(task, btf, pid, comm, ts);
+
+    if (!task_attribution)
+        return 0;
 
     u64* marker = bpf_map_lookup_elem(&task_start_times, &slot);
     if (!marker)

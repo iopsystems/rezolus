@@ -16,3 +16,6 @@ results/
 /rezolus.dendro
 /rezolus.rez
 /rezolus.parquet
+# SQLite sidecars a viewer leaves beside an archive it opened
+*.dendro-wal
+*.dendro-shm

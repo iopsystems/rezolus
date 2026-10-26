@@ -205,9 +205,9 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <p class="text-lg text-slate-500 dark:text-slate-400 mb-3">Compare two recordings side-by-side &mdash; before/after a change, baseline vs. experiment, or two different machines. The viewer renders each chart twice and surfaces deltas.</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="p-5 font-mono text-base leading-8">
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view baseline.parquet experiment.parquet</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view baseline.dendro experiment.dendro</code></div>
 <div class="mt-3 text-slate-500 text-sm"># Aliases for clearer labels in the UI</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view before=run-a.parquet after=run-b.parquet</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view before=run-a.dendro after=run-b.dendro</code></div>
 </div>
 </div>
 </div>
@@ -239,7 +239,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <p class="text-lg text-slate-500 dark:text-slate-400 mb-3">Same workflow as in the one-off case: any two recordings can be compared, regardless of when or how they were captured. Useful when you already have an archive of runs and want to spot regressions between specific pairs.</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="p-5 font-mono text-base leading-8">
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view 2025-12-01.parquet 2026-01-15.parquet</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view 2025-12-01.dendro 2026-01-15.dendro</code></div>
 </div>
 </div>
 </div>
@@ -250,7 +250,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <p class="text-lg text-slate-500 dark:text-slate-400 mb-3">CPU, Scheduler, and Syscall samplers emit per-cgroup metrics. In the viewer, switch the cgroup selector to a specific container to see only its CPU usage, runqueue latency, syscall mix &mdash; isolating one tenant on a noisy host.</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="p-5 font-mono text-base leading-8">
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view recording.parquet</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view recording.dendro</code></div>
 <div class="mt-3 text-slate-500 text-sm"># In the viewer: Cgroups section → pick a container → all charts re-scope</div>
 </div>
 </div>
@@ -263,7 +263,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="p-5 font-mono text-base leading-8">
 <div class="text-slate-500 text-sm"># One-shot CLI mode</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp detect-anomalies recording.parquet</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp detect-anomalies recording.dendro</code></div>
 <div class="mt-3 text-slate-500 text-sm"># Or register the stdio server with Claude Code, with its skill</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp install</code></div>
 </div>

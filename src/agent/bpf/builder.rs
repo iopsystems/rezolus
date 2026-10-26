@@ -14,7 +14,7 @@ use perf_event::ReadFormat;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::mem::MaybeUninit;
-use std::os::fd::{AsFd, AsRawFd, FromRawFd};
+use std::os::fd::{AsFd, AsRawFd};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Arc;
@@ -484,6 +484,10 @@ impl PerfEvent {
     }
 }
 
+/// A sampler callback run by [`Builder::map_sweep`] after every ringbuf
+/// drain, over an atomic view of a map's values.
+type MapSweep = fn(&[std::sync::atomic::AtomicU64]);
+
 pub struct Builder<T: 'static + SkelBuilder<'static>> {
     name: &'static str,
     skel: fn() -> T,
@@ -535,6 +539,7 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     )>,
     #[allow(clippy::type_complexity)]
     ringbuf_handler: Vec<(&'static str, fn(&[u8]) -> i32)>,
+    map_sweeps: Vec<(&'static str, MapSweep)>,
     btf_path: Option<String>,
     /// Optional list of program names to enable. If None, all programs are
     /// enabled (default behavior). If Some, only the listed programs will have
@@ -590,6 +595,7 @@ where
             cgroup_counters: Vec::new(),
             filesystem_counters: Vec::new(),
             ringbuf_handler: Vec::new(),
+            map_sweeps: Vec::new(),
             btf_path: config.general().btf_path().map(|s| s.to_string()),
             enabled_programs: None,
             disabled_programs: None,
@@ -1141,6 +1147,34 @@ where
                 Some(builder.build().expect("failed to initialize ringbuffer"))
             };
 
+            // Mapped through the map's borrowed fd, so nothing here closes
+            // the fd libbpf owns.
+            let map_sweeps: Vec<(memmap2::Mmap, MapSweep)> = self
+                .map_sweeps
+                .into_iter()
+                .map(|(name, sweep)| {
+                    let map = skel.map(name);
+                    assert_eq!(
+                        map.value_size() as usize,
+                        std::mem::size_of::<u64>(),
+                        "{name}: map_sweep needs 8-byte values"
+                    );
+                    let len = map.max_entries() as usize * std::mem::size_of::<u64>();
+                    // SAFETY: the map is BPF_F_MMAPABLE and lives as long as
+                    // the skeleton, which outlives this thread's loop.
+                    let mmap = unsafe { memmap2::MmapOptions::new().len(len).map(&map.as_fd()) }
+                        .expect("failed to mmap() bpf map");
+                    // SAFETY: as in the loop below.
+                    let (_, values, _) = unsafe { mmap.align_to::<std::sync::atomic::AtomicU64>() };
+                    assert_eq!(
+                        values.len(),
+                        map.max_entries() as usize,
+                        "{name}: mmap width"
+                    );
+                    (mmap, sweep)
+                })
+                .collect();
+
             let mut packed_counters: Vec<PackedCounters> = self
                 .packed_counters
                 .into_iter()
@@ -1174,12 +1208,11 @@ where
             .collect();
 
             for (name, values) in self.maps.into_iter() {
-                let fd = skel.map(name).as_fd().as_raw_fd();
-                let file = unsafe { std::fs::File::from_raw_fd(fd as _) };
+                let fd = skel.map(name).as_fd();
                 let mut mmap = unsafe {
                     memmap2::MmapOptions::new()
                         .len(std::mem::size_of::<u64>() * values.len())
-                        .map_mut(&file)
+                        .map_mut(&fd)
                         .expect("failed to mmap() bpf map")
                 };
 
@@ -1205,6 +1238,13 @@ where
 
                 if let Some(ref rb) = ringbuffer {
                     let _ = rb.consume();
+                }
+
+                for (mmap, sweep) in &map_sweeps {
+                    // SAFETY: AtomicU64 has u64's size and layout, and a
+                    // mapping is page aligned.
+                    let (_, values, _) = unsafe { mmap.align_to::<std::sync::atomic::AtomicU64>() };
+                    sweep(values);
                 }
 
                 for v in &mut counters {
@@ -1490,6 +1530,16 @@ where
 
     pub fn ringbuf_handler(mut self, name: &'static str, handler: fn(&[u8]) -> i32) -> Self {
         self.ringbuf_handler.push((name, handler));
+        self
+    }
+
+    /// Run `sweep` after every ringbuf drain with a read-only view of the
+    /// named map's values, for a sampler that checks what userspace holds
+    /// against the BPF side's state. The map must be `BPF_F_MMAPABLE` with
+    /// 8-byte values; the BPF side keeps writing it, so `sweep` reads each
+    /// value with an atomic load.
+    pub fn map_sweep(mut self, name: &'static str, sweep: MapSweep) -> Self {
+        self.map_sweeps.push((name, sweep));
         self
     }
 

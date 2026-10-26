@@ -119,7 +119,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white p-4 overflow-x-auto">
 <img src="architecture.svg" width="839" height="598"
      class="w-full h-auto min-w-[560px]"
-     alt="What you can do with Rezolus: the rezolus agent collects from your systems (CPU, GPU, kernel, containers, services). From there you can expose Prometheus metrics with rezolus exporter, watch a live dashboard with rezolus view, or capture a recording with rezolus record or rezolus hindsight. Recordings are .dendro archives (older ones .rez archives or .parquet files) you can explore in the viewer, analyze with an AI assistant via rezolus mcp, or manage with rezolus recording." />
+     alt="What you can do with Rezolus: the rezolus agent collects from your systems (CPU, GPU, kernel, containers, services). From there you can expose Prometheus metrics with rezolus exporter, watch a live dashboard with rezolus view, or capture a recording with rezolus record or rezolus hindsight. Recordings are .dendro archives (rezolus recording upgrade converts the .rez archives and .parquet files older releases wrote) you can explore in the viewer, analyze with an AI assistant via rezolus mcp, or manage with rezolus recording." />
 </div>
 <figcaption class="text-base text-slate-500 dark:text-slate-400 mt-3 leading-relaxed">Solid boxes are all the same <code class="text-sm px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800">rezolus</code> binary &mdash; you just pick the subcommand for the job. Dashed boxes are what you point it at: the systems and services being measured, which are not part of Rezolus.</figcaption>
 </figure>
@@ -193,7 +193,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <code class="text-sm text-slate-400">rezolus view &lt;input&gt; [listen]</code>
 </div>
 </div>
-<p class="text-base text-slate-500 dark:text-slate-400 leading-relaxed">Web-based interactive dashboard for exploring <code>.dendro</code>, <code>.rez</code> and Parquet recordings or streaming live from a running agent. Includes a built-in TSDB with PromQL query support and pre-built dashboards for each metric category.</p>
+<p class="text-base text-slate-500 dark:text-slate-400 leading-relaxed">Web-based interactive dashboard for exploring <code>.dendro</code> recordings or streaming live from a running agent. Includes a built-in TSDB with PromQL query support and pre-built dashboards for each metric category.</p>
 </div>
 
 <div class="p-6 rounded-xl border border-slate-200 dark:border-slate-800">

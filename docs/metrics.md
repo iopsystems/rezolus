@@ -79,8 +79,9 @@ A task is attributed to its CPU controller's task group. A service whose
 cgroup has no CPU controller of its own is counted under the nearest
 ancestor that has one, usually its slice.
 
-`task_attribution` is the per-task counterpart, for `cpu_usage` only, off by
-default: see [cpu_usage](#cpu_usage).
+`task_attribution` and `process_attribution` are the per-task and
+per-process counterparts, for `cpu_usage` only, off by default: see
+[cpu_usage](#cpu_usage).
 
 ## Table of Contents
 
@@ -365,6 +366,7 @@ optimizing workloads.
 | `cpu_usage_exited_tasks` | CPU time of tasks that have exited, per CPU the exit ran on; includes the CPU a thread used under its own thread id before it exec'd from outside the group leader | `id` |
 | `cgroup_cpu_usage_exited_tasks` | CPU time of a cgroup's tasks that have exited | `name` |
 | `task_cpu_usage` | CPU time (user and system) per thread; only with `task_attribution = true` | `pid`, `tgid`, `comm`, `cgroup` |
+| `process_cpu_usage` | CPU time (user and system) per process, by every thread of the process including exited ones; only with `process_attribution = true` | `tgid`, `comm`, `cgroup` |
 
 The sampler accounts CPU per task in every configuration: the per-CPU and
 per-cgroup deltas are computed from each thread's `utime`/`stime` whether
@@ -377,6 +379,29 @@ populated slots each time a snapshot is served, and one series per thread
 plus one per rename in every recording, which on a host with thread churn
 or frequent renames is most of the recording. Set `task_attribution = true`
 in `[samplers.cpu_usage]` (or `[defaults]`) to get it.
+
+`process_cpu_usage` is the option `process_attribution`, off by default
+and independent of `task_attribution`: one series per process (thread
+group), keyed by `tgid`. Every CPU delta credited to `cpu_usage` for
+a thread of the process is added to it, until the exit of its last thread,
+including the CPU of threads that have exited. So `rate(process_cpu_usage)` is the process's
+CPU however many threads it created and however many of them have their own
+series. Like `task_cpu_usage`, it counts from when the process started, or
+from when the agent first saw it for a process that predates the agent. Its
+`comm` and `cgroup` are the group leader's. The leader's renames relabel
+it, and so does exec, so a forked child is relabelled with the program it
+runs. The series ends within one snapshot interval of the process's last
+thread exiting. As with `task_cpu_usage`, a process that exits between a
+drain and the snapshot that follows it has a last sample of 0, so read it
+with `rate()` or `increase()`. It costs two per-pid arrays (64 MiB of
+kernel memory), a 256 KiB ring, a metadata event per new process and per
+leader rename, an exit event per process when `task_attribution` is off,
+the `task_rename` program (one run per thread rename), and two marker
+reads and a counter add per accounting event that adds CPU. A process's counter is written by every CPU running one of
+its threads: with 48 threads of one process spinning on a 56-vCPU host
+at HZ=250, each run of the `cpu_usage` BPF programs took about 310 ns,
+against about 200 ns with 48 one-thread processes and 170 ns without
+`process_cpu_usage`.
 
 `comm` follows renames. A thread whose name changes (`pthread_setname_np`,
 `prctl(PR_SET_NAME)`, a write to `/proc/<pid>/task/<tid>/comm`, or exec) is
@@ -444,6 +469,7 @@ counters are always maintained by the controller.
 | `drive_temperature_critical_time` | Cumulative seconds at/above the NVMe critical temperature threshold (CCTEMP) | `device`, `type=nvme`, `model`, `serial` |
 | `drive_thermal_throttle_time` | Cumulative seconds in NVMe host thermal-management state | `level={1,2}`, `device`, `type=nvme`, … |
 | `drive_thermal_throttle_transitions` | Count of transitions into NVMe host thermal-management state | `level={1,2}`, `device`, `type=nvme`, … |
+| `drive_temperature_sensor` | An NVMe Temperature Sensor (1 to 8) in degrees Celsius; no value for a sensor the controller does not implement | `sensor={1..8}`, `device`, `type=nvme`, … |
 
 On Linux on Amazon EC2 Nitro instances, the same read of an EBS volume's or NVMe
 instance store volume's controller also fetches the device's detailed
@@ -1545,7 +1571,16 @@ Such a channel gets no slot and is not read on each sweep; discovery reads it
 every 60 seconds and adds it once it reports another value.
 
 Each family identifies a native channel with `sensor`, `source`, `chip`,
-`channel`, and a native `label` when supplied by the kernel. `board_model` and
+`channel`, and a native `label` when supplied by the kernel. `device` is the
+last component of the device path: a PCI address such as `0000:0b:00.1`, a
+platform or I2C device, `thermal_zoneN`, `cooling_deviceN`, or `hwmonN` for an
+hwmon with no parent device (that one can renumber across reboots). `name` is a readable name, unique
+within the family while the devices' paths differ in their last component, `<chip> <label or channel> <device>`, for example
+`k10temp Tctl 0000:00:18.3`; when a driver repeats a label across channels,
+the channel is added, `<chip> <label> (<channel>) <device>`. The Hardware
+Sensors charts group by `name` when the recording has it and by `sensor`
+otherwise; a recording that mixes both (it spans an agent upgrade, or combines
+hosts on different versions) sums the series without `name` into one line. `board_model` and
 `soc_compatible` preserve platform identity when available; `scope` records
 verified board-specific interpretation. Derived power carries
 `derived=voltage_x_current`.

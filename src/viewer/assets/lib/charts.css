@@ -575,6 +575,20 @@
     color: var(--bg-void);
 }
 
+.cgroup-select-item.disabled {
+    color: var(--fg-muted);
+    cursor: not-allowed;
+}
+
+.cgroup-select-item.disabled:hover {
+    background: none;
+}
+
+/* A cgroup group (a unit's subtree); its members are indented under it. */
+.cgroup-select-item.group .cgroup-select-name {
+    font-weight: 600;
+}
+
 .cgroup-select-swatch {
     display: inline-block;
     width: 10px;

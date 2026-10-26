@@ -1,7 +1,8 @@
-// The static-site viewer must open a multi-recording archive — a `.dendro`,
-// which is what 6.x writes, and a `.rez`, which earlier releases wrote — not
-// just a parquet. `rezolus` is a binary-only crate, so nothing could depend on
-// its archive reader; it lives in `crates/rez`, which this bundle links.
+// The static-site viewer opens `.dendro` archives, single- and
+// multi-recording, and refuses a `.rez` or parquet file with the command that
+// converts it on the user's machine. `rezolus` is a binary-only crate, so
+// nothing could depend on its archive reader; it lives in `crates/rez`, which
+// this bundle links.
 //
 // The behaviour is unit-tested natively in `crates/viewer` — this test is the
 // one that runs the shipped WASM in a JS runtime, which is where a
@@ -22,7 +23,7 @@ const pkgJs = path.join(repoRoot, 'site/viewer/pkg/wasm_viewer.js');
 const pkgWasm = path.join(repoRoot, 'site/viewer/pkg/wasm_viewer_bg.wasm');
 
 if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
-    test('WASM .rez support (bundle not built — skipped)', { skip: true }, () => {});
+    test('WASM archive support (bundle not built — skipped)', { skip: true }, () => {});
 } else {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rezolus-wasm-rez-'));
     const wasmJsCopy = path.join(tmpDir, 'wasm_viewer.mjs');
@@ -44,10 +45,32 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         );
         return new Uint8Array(fs.readFileSync(out));
     };
-    // Nothing writes a `.rez` any more; this one is committed, written by the
+    // Nothing writes a `.rez` any more; these are committed, written by the
     // last `.rez` writer (see `crates/rez/src/fixtures.rs` `committed_rez`).
     const committedRez = (name) => new Uint8Array(fs.readFileSync(
         path.join(repoRoot, 'crates/rez/tests/fixtures/rez', name)));
+    // The same files after `rezolus recording upgrade`, committed in
+    // `tests/fixtures/upgraded` (see its README).
+    const upgraded = (name) => new Uint8Array(fs.readFileSync(
+        path.join(repoRoot, 'tests/fixtures/upgraded', name)));
+
+    test('a .rez or parquet upload is refused with the upgrade command', () => {
+        const parquet = new Uint8Array(fs.readFileSync(
+            path.join(repoRoot, 'tests/fixtures/legacy/simple_capture.parquet')));
+        for (const [bytes, name] of [
+            [committedRez('v3.rez'), 'old.rez'],
+            [committedRez('v2.rez'), 'tar.rez'],
+            [parquet, 'run.parquet'],
+        ]) {
+            const registry = new WasmCaptureRegistry();
+            assert.throws(
+                () => registry.attach('baseline', bytes, name),
+                (e) => String(e).includes(`rezolus recording upgrade ${name}`),
+                name,
+            );
+            assert.equal(registry.has('baseline'), false, name);
+        }
+    });
 
     // The fixture's recordings are of one run (one time range), so they
     // attach as one combined capture unless a comparison is asked for, as
@@ -116,11 +139,138 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         assert.equal(registry.has('experiment'), false);
     });
 
-    // The committed v3 `.rez`: two recordings, host=web-01 and host=web-02,
-    // three ticks of the gauge mem_free each, (i + 1) * 1000 + t.
-    test('a two-recording .rez of one run is one combined capture', () => {
+    // An experiment is one recording. Beside a one-recording baseline or a
+    // comparison it fills the experiment slot; beside a combined view of
+    // several recordings it is refused and the view is unchanged.
+    test('an experiment is one recording, refused beside a combined view', () => {
+        const one = fixture('exp-one.dendro', 1);
+        const two = fixture('exp-two.dendro', 2);
+
+        const single = new WasmCaptureRegistry();
+        single.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
+        single.attach('experiment', one, 'exp.dendro');
+        assert.equal(single.has('experiment'), true);
+        assert.throws(
+            () => single.attach('experiment', two, 'exp2.dendro'),
+            (e) => String(e).startsWith('exp2.dendro holds 2 recordings; the experiment')
+                && String(e).includes('rezolus recording combine base.dendro exp2.dendro -o both.dendro'),
+        );
+
+        const combined = new WasmCaptureRegistry();
+        combined.attach('baseline', two, 'fleet.dendro');
+        assert.throws(
+            () => combined.attach('experiment', one, 'exp.dendro'),
+            (e) => String(e).startsWith('fleet.dendro holds 2 recordings; the baseline')
+                && String(e).includes('rezolus recording combine fleet.dendro exp.dendro -o both.dendro'),
+        );
+        assert.equal(combined.has('experiment'), false);
+        // A one-recording baseline replacing it takes an experiment again.
+        combined.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
+        combined.attach('experiment', one, 'exp.dendro');
+        assert.equal(combined.has('experiment'), true);
+
+        // The file replaces a comparison's experiment arm (valkey).
+        const ab = new WasmCaptureRegistry();
+        ab.set_compare_requested(true);
+        ab.attach('baseline', two, 'ab.dendro');
+        assert.match(ab.file_metadata_json('experiment'), /valkey/);
+        ab.attach('experiment', one, 'exp.dendro');
+        assert.doesNotMatch(ab.file_metadata_json('experiment'), /valkey/);
+        assert.match(ab.file_metadata_json('baseline'), /redis/);
+    });
+
+    // An archive of `recordings` recordings labelled `arm=` in turn from
+    // `arms` (`baseline,experiment` is an A/B archive).
+    const armed = (name, recordings, arms) => {
+        const out = path.join(tmpDir, name);
+        execFileSync(
+            'cargo',
+            ['run', '-q', '-p', 'rez', '--features', 'test-support',
+             '--example', 'write_fixture', '--', out, String(recordings), arms],
+            { cwd: repoRoot, stdio: ['ignore', 'ignore', 'inherit'] },
+        );
+        return new Uint8Array(fs.readFileSync(out));
+    };
+    const abArchive = () => armed('arms.dendro', 2, 'baseline,experiment');
+
+    // Beside an A/B archive an experiment replaces its arm, after which no
+    // report is saved (a report copies whole files); a refusal of several
+    // recordings prints the `--ab` step and notes that it keeps an arm.
+    test('an experiment beside an A/B archive, and A/B archives refused', () => {
+        const ab = abArchive();
+        const one = fixture('exp-one.dendro', 1);
+
         const registry = new WasmCaptureRegistry();
-        registry.attach('baseline', committedRez('v3-multi.rez'), 'fleet.rez');
+        registry.attach('baseline', ab, 'ab.dendro');
+        assert.equal(registry.has('experiment'), true);
+        assert.ok(registry.save_with_selection('{"entries":[]}').length > 0);
+        assert.throws(
+            () => registry.attach('experiment', fixture('exp-two.dendro', 2), 'exp2.dendro'),
+            (e) => String(e).startsWith('exp2.dendro holds 2 recordings; the experiment')
+                && String(e).includes('--ab baseline=N experiment=M')
+                && String(e).includes('keeps an `arm` label'),
+        );
+        registry.attach('experiment', one, 'exp.dendro');
+        assert.throws(
+            () => registry.save_with_selection('{"entries":[]}'),
+            (e) => String(e).includes(
+                'Save as Report cannot save this comparison: ab.dendro holds several recordings'),
+        );
+        // Detaching the experiment clears it, as a new baseline does.
+        registry.detach('experiment');
+        assert.ok(registry.save_with_selection('{"entries":[]}').length > 0);
+        registry.attach('experiment', one, 'exp.dendro');
+        assert.throws(() => registry.save_with_selection('{"entries":[]}'));
+        registry.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
+        assert.ok(registry.save_with_selection('{"entries":[]}').length > 0);
+
+        // A one-recording baseline in place of another keeps an experiment
+        // that is a file of its own, and the pair saves a report.
+        const swapped = new WasmCaptureRegistry();
+        swapped.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
+        swapped.attach('experiment', one, 'exp.dendro');
+        swapped.attach('baseline', fixture('base-two.dendro', 1), 'base2.dendro');
+        assert.equal(swapped.has('experiment'), true);
+        assert.ok(swapped.save_with_selection('{"entries":[]}').length > 0);
+        // So does one in place of an A/B archive whose experiment it replaced.
+        const afterAb = new WasmCaptureRegistry();
+        afterAb.attach('baseline', ab, 'ab.dendro');
+        afterAb.attach('experiment', one, 'exp.dendro');
+        afterAb.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
+        assert.equal(afterAb.has('experiment'), true);
+        assert.ok(afterAb.save_with_selection('{"entries":[]}').length > 0);
+
+        // A one-recording baseline after an A/B archive drops the archive's
+        // experiment arm, and saves a report of itself.
+        const replaced = new WasmCaptureRegistry();
+        replaced.attach('baseline', ab, 'ab.dendro');
+        replaced.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
+        assert.equal(replaced.has('experiment'), false);
+        assert.ok(replaced.save_with_selection('{"entries":[]}').length > 0);
+
+        // A baseline that fails to attach (two recordings carry each arm)
+        // leaves the one before it, which compares and saves as before.
+        const clash = armed('clash.dendro', 4, 'baseline,experiment,baseline,experiment');
+        const kept = new WasmCaptureRegistry();
+        kept.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
+        assert.throws(() => kept.attach('baseline', clash, 'clash.dendro'));
+        kept.attach('experiment', one, 'exp.dendro');
+        assert.ok(kept.save_with_selection('{"entries":[]}').length > 0);
+
+        const single = new WasmCaptureRegistry();
+        single.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
+        assert.throws(
+            () => single.attach('experiment', ab, 'ab.dendro'),
+            (e) => String(e).startsWith('ab.dendro holds 2 recordings; the experiment')
+                && String(e).includes('-o ab-2.dendro'),
+        );
+    });
+
+    // The committed v3 `.rez`, upgraded: two recordings, host=web-01 and
+    // host=web-02, three ticks of the gauge mem_free each, (i + 1) * 1000 + t.
+    test('an upgraded two-recording .rez of one run is one combined capture', () => {
+        const registry = new WasmCaptureRegistry();
+        registry.attach('baseline', upgraded('v3-multi.dendro'), 'fleet.dendro');
         assert.equal(registry.has('baseline'), true);
         assert.equal(registry.has('experiment'), false);
         const info = JSON.parse(registry.info('baseline'));
@@ -132,10 +282,10 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         assert.deepEqual(hosts, ['web-01', 'web-02'], JSON.stringify(result));
     });
 
-    test('a two-recording .rez loads as an A/B comparison on request', () => {
+    test('an upgraded two-recording .rez loads as an A/B comparison on request', () => {
         const registry = new WasmCaptureRegistry();
         registry.set_compare_requested(true);
-        registry.attach('baseline', committedRez('v3-multi.rez'), 'fleet.rez');
+        registry.attach('baseline', upgraded('v3-multi.dendro'), 'fleet.dendro');
         assert.equal(registry.has('baseline'), true);
         assert.equal(registry.has('experiment'), true, 'both arms of the archive load');
         const info = JSON.parse(registry.info('baseline'));
@@ -143,16 +293,15 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         assert.ok(info.maxTime > info.minTime, `empty range: ${JSON.stringify(info)}`);
     });
 
-    test('a v2 tar .rez is one capture', () => {
+    test('an upgraded v2 tar .rez is one capture', () => {
         const registry = new WasmCaptureRegistry();
-        registry.attach('baseline', committedRez('v2.rez'), 'one.rez');
+        registry.attach('baseline', upgraded('v2.dendro'), 'one.dendro');
         assert.equal(registry.has('baseline'), true);
         const info = JSON.parse(registry.info('baseline'));
         assert.deepEqual(info.counter_names, ['ops']);
     });
 
-    // Save as Report writes a .dendro whatever the source, built in the
-    // browser: a `.rez` (tar or v3) and a parquet are converted in memory
+    // Save as Report writes a .dendro, built in the browser
     // (`ArchiveMut::create_in_memory`), which is what this checks in the
     // shipped WASM.
     const SQLITE_MAGIC = 'SQLite format 3\0';
@@ -170,26 +319,25 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         return JSON.parse(registry.info('baseline'));
     };
 
-    test('Save as Report of a tar .rez, a parquet or a .dendro is a .dendro', () => {
-        assert.deepEqual(reopened(saved(committedRez('v2.rez'), 'one.rez')).counter_names, ['ops']);
-        const parquet = new Uint8Array(fs.readFileSync(
-            path.join(repoRoot, 'site/viewer/data/simple_capture.parquet')));
-        assert.ok(reopened(saved(parquet, 'simple.parquet')).gauge_names.includes('queue_depth'));
+    test('Save as Report of an archive is a .dendro', () => {
+        assert.deepEqual(reopened(saved(upgraded('v2.dendro'), 'one.dendro')).counter_names, ['ops']);
+        const simple = upgraded('simple_capture.dendro');
+        assert.ok(reopened(saved(simple, 'simple.dendro')).gauge_names.includes('queue_depth'));
         assert.deepEqual(
             reopened(saved(fixture('report-src.dendro', 1), 'one.dendro')).counter_names,
             ['cpu_cycles'],
         );
     });
 
-    test('Save as Report of a v3 .rez is a .dendro', () => {
-        assert.deepEqual(reopened(saved(committedRez('v3.rez'), 'one.rez')).counter_names, ['ops']);
+    test('Save as Report of an upgraded v3 .rez is a .dendro', () => {
+        assert.deepEqual(reopened(saved(upgraded('v3.dendro'), 'one.dendro')).counter_names, ['ops']);
         // Two recordings: the report holds both, the selection on the first.
         const registry = new WasmCaptureRegistry();
-        registry.attach('baseline', saved(committedRez('v3-multi.rez'), 'multi.rez'), 'r.dendro');
+        registry.attach('baseline', saved(upgraded('v3-multi.dendro'), 'multi.dendro'), 'r.dendro');
         assert.match(registry.file_metadata_json('baseline'), /selection/);
-        // Every row the `.rez` reads comes across: the live archive's
-        // segments and WAL rows, and WAL rows alone (`v3-wal-only.rez`, the
-        // live archive with its segments deleted).
+        // Every row the upgraded archive reads comes across: the live
+        // archive's segments and WAL rows, and WAL rows alone
+        // (`v3-wal-only.rez`, the live archive with its segments deleted).
         const rows = (bytes, name) => {
             const registry = new WasmCaptureRegistry();
             registry.attach('baseline', bytes, name);
@@ -199,8 +347,8 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
             ));
             return result.data.result.reduce((n, s) => n + s.values.length, 0);
         };
-        for (const name of ['v3-live.rez', 'v3-wal-only.rez']) {
-            const bytes = committedRez(name);
+        for (const name of ['v3-live.dendro', 'v3-wal-only.dendro']) {
+            const bytes = upgraded(name);
             const want = rows(bytes, name);
             assert.ok(want > 0, `${name}: the fixture holds rows`);
             assert.equal(rows(saved(bytes, name), 'r.dendro'), want, name);

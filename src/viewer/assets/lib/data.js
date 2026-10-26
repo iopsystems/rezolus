@@ -2,6 +2,7 @@ import { ViewerApi } from './viewer_api.js';
 import { resolveStyle, buildHistogramQuery, isHistogramPlot } from './charts/metric_types.js';
 import { collectGroupPlots, baseRoute } from './features/group_utils.js';
 import { firstVisibleLabelValue, seriesNamer } from './labels.js';
+import { cgroupQueryVariants, runCgroupVariants } from './features/cgroup_selection.js';
 
 // Capture-id constants. Typos become grep-able; use these in place of
 // raw 'baseline' / 'experiment' string literals.
@@ -602,7 +603,11 @@ const applyDisplayToPlot = (plot, decoded) => {
     plot.boxplotDecimated = series.some((s) => s.decimated);
     plot.series_metrics = series.map((s) => s.metric || {});
     const nameOf = seriesNamer(series.map((s) => s.metric || {}));
-    plot.series_names = series.length > 1
+    // A `multi` chart is drawn by multi.js even with one series, as on the
+    // JSON path (applyResultToPlot). multi.js colours a line by its name, so
+    // an unnamed one would be "Series 1" in another colour (#1289).
+    const asMulti = series.length > 1 || plot.opts?.style === 'multi';
+    plot.series_names = asMulti
         ? series.map((s, i) => nameOf(s.metric || {}) ?? `Series ${i + 1}`)
         : [];
     // Measurement-uncertainty bands from the aggregated uncLo/uncHi columns —
@@ -610,7 +615,7 @@ const applyDisplayToPlot = (plot, decoded) => {
     // (exact per-sample interval at native resolution). Mirror applyResultToPlot's
     // single vs multi split so line.js reads `intervals` and multi/scatter read
     // `series_intervals`, clearing the other to avoid a stale band ghosting.
-    if (series.length > 1) {
+    if (asMulti) {
         plot.series_intervals = series.map(displayIntervals);
         plot.intervals = null;
     } else {
@@ -621,7 +626,7 @@ const applyDisplayToPlot = (plot, decoded) => {
     // same as `intervals` above: line.js reads `plot.interpolated`, and multi
     // and scatter have no overlay to draw. Cleared in the multi case so a
     // previous single-series render cannot leave a stale flag behind.
-    plot.interpolated = series.length > 1 ? null : displayInterpolated(series[0]);
+    plot.interpolated = asMulti ? null : displayInterpolated(series[0]);
     // Resolve the render style the same way the JSON path does: percentile
     // histograms → scatter, single line-ish → line, multi line-ish → multi.
     plot._resolvedStyle = plot.opts?.style
@@ -797,23 +802,28 @@ const applyScope = (query, scope) => {
 const injectLabelRegex = (query, labelName, regexValue) =>
     injectLabel(query, labelName, regexValue, '=~');
 
-// Fill a cgroup query's `__SELECTED_CGROUPS__` placeholder with the
-// selection's pattern. The aggregate plots exclude the selection
-// (`name!~"__SELECTED_CGROUPS__"`) and the individual plots select it
-// (`name=~`), so both take the same pattern. With nothing selected the
-// exclusion is removed, leaving the aggregate over every cgroup; other
-// matchers in the selector are kept. The pattern is the selected names joined
-// by `|`, unescaped. promql-parser unquotes the string and requires a valid
-// regex, then metriken-storage `match_pattern` compares each `|`-separated
-// alternative literally, so a `.` in a name matches only a `.`. A name
-// containing `\`, `"`, `|`, `[` or an unbalanced parenthesis is not matched
-// correctly.
-const substituteCgroupPattern = (query, pattern) => {
-    if (pattern) return query.replace(/__SELECTED_CGROUPS__/g, pattern);
-    return query
-        .replace(/,?\s*name!~"__SELECTED_CGROUPS__"/g, '')
-        .replace(/\{\s*,\s*/g, '{')
-        .replace(/\{\s*\}/g, '');
+// Fill a cgroup query's `__SELECTED_CGROUPS__` placeholder from the
+// selection. The aggregate plots exclude every selected name and group member
+// (`name!~"__SELECTED_CGROUPS__"`, the selection's `excluded` pattern) and the
+// individual plots select the individually selected names (`name=~`, its
+// `leaf` pattern). A string is one pattern for both. With nothing to exclude
+// the exclusion is removed, leaving the aggregate over every cgroup; other
+// matchers in the selector are kept. With no `leaf` pattern a `name=~`
+// placeholder is left in place. The patterns come from cgroup_selection.js's
+// `cgroupPattern`, which quotes each name for the PromQL string and leaves out
+// names the engine cannot match.
+const substituteCgroupPattern = (query, selection) => {
+    const { leaf = null, excluded = null } = typeof selection === 'string'
+        ? { leaf: selection, excluded: selection }
+        : (selection || {});
+    let q = excluded
+        ? query.replace(/name!~"__SELECTED_CGROUPS__"/g, () => `name!~"${excluded}"`)
+        : query
+            .replace(/,?\s*name!~"__SELECTED_CGROUPS__"/g, '')
+            .replace(/\{\s*,\s*/g, '{')
+            .replace(/\{\s*\}/g, '');
+    if (leaf) q = q.replace(/__SELECTED_CGROUPS__/g, () => leaf);
+    return q;
 };
 
 // PromQL result → plot-data shape helpers. Same transforms the baseline
@@ -1278,13 +1288,9 @@ const createDataApi = ({
         // A counter's irate needs no rewrite: the engine computes it per step
         // from the `step` we pass. rate(x[r]) averages over r at any step.
         if (q.includes('__SELECTED_CGROUPS__')) {
-            if (activeCgroupPattern) {
-                q = substituteCgroupPattern(q, activeCgroupPattern);
-            } else if (q.includes('!~')) {
-                q = substituteCgroupPattern(q, null);
-            } else {
-                return null;
-            }
+            q = substituteCgroupPattern(q, activeCgroupPattern);
+            // An individual plot with nothing individually selected.
+            if (q.includes('__SELECTED_CGROUPS__')) return null;
         }
         if (_selectedNode && sectionRoute && !sectionRoute.startsWith('/service/')) {
             q = injectLabel(q, 'node', _selectedNode);
@@ -1304,6 +1310,29 @@ const createDataApi = ({
             if (inst) q = injectLabel(q, 'instance', inst);
         }
         return q;
+    };
+
+    // The queries a plot runs, as `{ query, label }`: one per cgroup query
+    // variant (cgroupQueryVariants) when `activeCgroupPattern` is a selection
+    // with groups, otherwise buildEffectiveQuery's one query with a null
+    // label. A plot the cgroup selector has already substituted carries its
+    // queries in `cgroup_queries`, with the first as its `promql_query`; those
+    // are run while the query is unchanged. null when there is nothing to run.
+    const buildEffectiveQueries = (plot, opts = {}) => {
+        if (!plot.promql_query) return null;
+        const selection = opts.activeCgroupPattern ?? null;
+        const variants = plot.cgroup_queries && plot.promql_query === plot.cgroup_queries[0]?.query
+            ? plot.cgroup_queries.map(({ query, label }) => ({ query, label, selection: null }))
+            : cgroupQueryVariants(plot.promql_query, selection);
+        const out = [];
+        for (const v of variants) {
+            const query = buildEffectiveQuery(
+                { ...plot, promql_query: v.query },
+                { ...opts, activeCgroupPattern: v.selection },
+            );
+            if (query != null) out.push({ query, label: v.label });
+        }
+        return out.length > 0 ? out : null;
     };
 
     // freshMetadata: bypass the module-level metadata cache (forces the
@@ -1328,13 +1357,13 @@ const createDataApi = ({
         for (const group of data.groups || []) {
             for (const plot of collectGroupPlots(group)) {
                 if (plot.promql_query) {
-                    const queryToRun = buildEffectiveQuery(plot, {
+                    const queries = buildEffectiveQueries(plot, {
                         sectionRoute,
                         activeCgroupPattern,
                         serviceName: data.metadata?.service_name,
                     });
-                    if (queryToRun == null) continue;
-                    queryPlots.push({ plot, query: queryToRun });
+                    if (queries == null) continue;
+                    queryPlots.push({ plot, query: queries[0].query, queries });
                 }
             }
         }
@@ -1363,7 +1392,13 @@ const createDataApi = ({
         for (const { plot } of secondary) {
             if (!plotHasData(plot)) plot.pending = true;
         }
-        const run = async ({ plot, query }) => {
+        const run = async ({ plot, queries }) => {
+            const matrix = (fetch) => runCgroupVariants(queries, fetch);
+            // A chart of several cgroup queries is fetched as matrices: each
+            // display query is bucketed on its own and may be served from a
+            // cached tile of another width, so their timestamps can differ.
+            // So is a group's query alone, which the matrix path names.
+            const display = _displayMode && queries.length === 1 && queries[0].label == null;
             try {
                 // Display mode: line-ish plots fetch the decimated boxplot
                 // binary, which now carries the aggregated measurement-
@@ -1372,24 +1407,24 @@ const createDataApi = ({
                 // uncertainty bands render at every zoom level. On any failure
                 // (e.g. a non-Series result), fall back to the JSON matrix so a
                 // hiccup never blanks a chart.
-                if (_displayMode && plotUsesDisplay(plot)) {
+                if (display && plotUsesDisplay(plot)) {
                     try {
-                        const decoded = await fetchDisplaySeries(query, metadata, signal);
+                        const decoded = await fetchDisplaySeries(queries[0].query, metadata, signal);
                         if (superseded()) return;
                         applyDisplayToPlot(plot, decoded);
                     } catch (_) {
                         if (superseded()) return;
-                        const res = await executePromQLRangeQuery(query, metadata, signal);
+                        const res = await matrix((q) => executePromQLRangeQuery(q, metadata, signal));
                         if (superseded()) return;
                         applyResultToPlot(plot, res);
                     }
-                } else if (_displayMode && isEntityQuery(plot.promql_query)
+                } else if (display && isEntityQuery(plot.promql_query)
                     && plot.opts?.type !== 'histogram') {
-                    const res = await fetchEntityHeatmap(query, metadata, signal);
+                    const res = await matrix((q) => fetchEntityHeatmap(q, metadata, signal));
                     if (superseded()) return;
                     applyResultToPlot(plot, res);
                 } else {
-                    const res = await executePromQLRangeQuery(query, metadata, signal);
+                    const res = await matrix((q) => executePromQLRangeQuery(q, metadata, signal));
                     if (superseded()) return;
                     applyResultToPlot(plot, res);
                 }
@@ -1662,6 +1697,7 @@ const createDataApi = ({
         processDashboardData,
         clearMetadataCache,
         buildEffectiveQuery,
+        buildEffectiveQueries,
     };
 };
 
@@ -1675,6 +1711,7 @@ const {
     processDashboardData,
     clearMetadataCache,
     buildEffectiveQuery,
+    buildEffectiveQueries,
 } = defaultDataApi;
 
 export {
@@ -1700,7 +1737,9 @@ export {
     applyScope,
     injectLabelRegex,
     buildEffectiveQuery,
+    buildEffectiveQueries,
     plotUsesDisplay,
+    applyDisplayToPlot,
     // LOD tile cache internals (exported for tests)
     clipDecoded,
     tileLookup,

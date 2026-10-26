@@ -16,7 +16,7 @@ system-level evidence, not individual request traces or call-stack profiles.
 [Quick start](#quick-start) · [Choose a workflow](#choose-a-workflow) ·
 [Metrics](docs/metrics.md) · [Documentation map](#documentation-map)
 
-**See it before installing:** [explore the sample recording in the web viewer](https://rezolus.com/viewer/?capture=demo.parquet).
+**See it before installing:** [explore the sample recording in the web viewer](https://rezolus.com/viewer/?capture=demo.dendro).
 The sample loads automatically and is processed in your browser. A viewer URL
 carries the time range and selectors, so a link reopens the same view (see
 [linking to a view](docs/usage.md#linking-to-a-view)). Explore the
@@ -165,16 +165,15 @@ Recorder and Hindsight write **`.dendro`** archives only: a recording per
 endpoint, each acquisition group at its own cadence. One archive can hold
 Rezolus agents and Prometheus endpoints. An output path not ending in
 `.dendro` is refused; a rezolus 5.x recorder (5.27.0 or later) still writes
-`.rez`, parquet and raw. Every tool still reads `.rez` and `.parquet`, and
-`rezolus recording upgrade` converts either to a `.dendro`; the `recording`
-tools write `.dendro` only and never change a `.rez` or `.parquet`. See
+`.rez`, parquet and raw. Every other command opens `.dendro` only: a `.rez`,
+`.parquet` or `.parquet.ab.tar` from an earlier release is refused with the
+command that converts it, `rezolus recording upgrade FILE`. See
 [Output format](docs/usage.md#output-format) for the overwrite rules.
 
 `rezolus view` runs a local Rust server that evaluates queries and serves the
 web dashboard. The [browser-only viewer](https://rezolus.com/viewer/) instead
 uses WebAssembly to process uploaded recordings entirely in the browser.
-Both can inspect `.dendro`, `.rez` and `.parquet` recordings; the CLI viewer
-also connects to live agents.
+Both open `.dendro` recordings; the CLI viewer also connects to live agents.
 
 ## Analyze with an agent
 
@@ -183,9 +182,9 @@ capabilities as one-shot CLI commands. Start by discovering what is actually
 in the recording:
 
 ```bash
-rezolus mcp describe-recording run.rez
-rezolus mcp describe-metrics run.rez
-rezolus mcp extract-features run.rez
+rezolus mcp describe-recording run.dendro
+rezolus mcp describe-metrics run.dendro
+rezolus mcp extract-features run.dendro
 ```
 
 `extract-features` produces versioned JSON with summary statistics, anomalies,
@@ -194,7 +193,7 @@ least 10 seconds of data. Then query a specific hypothesis using the metric
 names, types, and labels returned by `describe-metrics`:
 
 ```bash
-rezolus mcp query run.rez 'sum(irate(cpu_cycles[1m]))'
+rezolus mcp query run.dendro 'sum(irate(cpu_cycles[1m]))'
 ```
 
 For a multi-recording archive, first run `describe-recording` without a selector

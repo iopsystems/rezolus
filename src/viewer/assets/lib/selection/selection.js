@@ -6,6 +6,7 @@ import { ChartsState, Chart } from '../charts/chart.js';
 import { CompareChartWrapper } from '../viewer_core.js';
 import { compareToggle } from '../ui/chart_controls.js';
 import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, getRangeOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
+import { runCgroupVariants } from '../features/cgroup_selection.js';
 import { notify, showSaveModal } from '../ui/overlays.js';
 import { isHistogramPlot } from '../charts/metric_types.js';
 import { pinnedCompares } from '../features/group_utils.js';
@@ -147,6 +148,8 @@ const entriesFromPayload = (entries) => (entries || []).map(e => ({
     promql_query: e.promql_query,
     // Optional on pre-fix payloads; null degrades to single-query compare.
     promql_query_experiment: e.promql_query_experiment || null,
+    // An individual cgroup chart's queries when it draws cgroup groups.
+    cgroup_queries: e.cgroup_queries || null,
     category_members: e.category_members || null,
     single_capture: e.single_capture === true || undefined,
     note: e.note || '',
@@ -276,6 +279,7 @@ const persistStore = (key, store) => {
                 groupName: e.groupName || '',
                 promql_query: e.promql_query,
                 promql_query_experiment: e.promql_query_experiment || undefined,
+                cgroup_queries: e.cgroup_queries || undefined,
                 category_members: e.category_members || undefined,
                 single_capture: e.single_capture || undefined,
                 note: e.note,
@@ -531,6 +535,8 @@ const toggleSelection = (spec, sectionKey, sectionName, groupName, compareMeta =
         // re-renders only the baseline arm (experiment runs the
         // wrong query and returns no data).
         promql_query_experiment: spec.promql_query_experiment || null,
+        // An individual cgroup chart's group queries (cgroup_selector.js).
+        cgroup_queries: spec.cgroup_queries || null,
         category_members: compareMeta?.categoryMembers || null,
         // Pinned from a recording shown beside a comparison: draws as one
         // capture wherever the entry is rendered.
@@ -699,6 +705,7 @@ const buildPayload = (store, attrs, { includeNotes = true } = {}) => ({
         groupName: e.groupName || '',
         promql_query: e.promql_query,
         promql_query_experiment: e.promql_query_experiment || undefined,
+        cgroup_queries: e.cgroup_queries || undefined,
         category_members: e.category_members || undefined,
         single_capture: e.single_capture || undefined,
         note: includeNotes ? e.note : '',
@@ -715,7 +722,7 @@ const exportJSON = async (store, attrs) => {
             attrs.baselineAlias || attrs.filename,
             attrs.experimentAlias || attrs.experimentFilename,
         ) + '-selection'
-        : (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-selection';
+        : (attrs.filename || 'rezolus-capture').replace(/\.(dendro|parquet)$/, '') + '-selection';
     const result = await showSaveModal(defaultPrefix, '.json');
     if (!result) return;
     const filename = result.filename;
@@ -942,9 +949,12 @@ const chartLoaderMixin = (store, component) => ({
                 // Histogram metrics need histogram_quantiles / heatmap
                 // wrapping; the dashboard pipeline does this via
                 // buildEffectiveQuery, but the stored entry only has
-                // the raw metric name.
-                const effective = buildEffectiveQuery(spec) || entry.promql_query;
-                const result = await executePromQLRangeQuery(effective);
+                // the raw metric name. An individual cgroup chart that
+                // drew cgroup groups runs one query per group as well.
+                const queries = entry.cgroup_queries
+                    || [{ query: entry.promql_query, label: null }];
+                const result = await runCgroupVariants(queries, (q) => executePromQLRangeQuery(
+                    buildEffectiveQuery({ ...spec, promql_query: q }) || q));
                 if (result) {
                     applyResultToPlot(spec, result);
                 }
