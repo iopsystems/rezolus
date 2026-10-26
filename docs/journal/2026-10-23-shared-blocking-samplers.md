@@ -95,3 +95,29 @@ quota; that test passed when rerun with temporary files on the workspace disk.
 The checked-in benchmark and its Clippy check passed. Root Clippy across all
 targets again reported only the existing `manual_range_contains` warning.
 Formatting and diff whitespace checks passed.
+
+## Restacked on the reviewed parent (2026-10-26)
+
+PR #1537 took its GitHub review fixes in `acd6063c` and added principle 19
+(runtime capability detection with a fallback) in `8dd96451`, then merged main
+at `b78e9da7` (alpha.68) in `cbeb2dd0` and wrapped the individual memory plots in
+`sum by (name)` for main's group selection in `fe00c836`, and moved zstd to
+0.14.3 for the RustSec zstd advisories in `0954d966`. This branch is rebased onto
+that head: the two
+commits here replay cleanly apart from the version, which moves to
+`6.0.0-alpha.70` (the parent is alpha.69), and the journal index, where both
+branches had added a row. The cgroup module merges both changes without
+conflict: the parent's `Unsupported` init result and no-slot-for-an-unread-path
+rule sit inside the shared `BlockingWorker` dispatch.
+
+The parent documents that a consumer polling at exactly the sampler interval
+reads every other poll, because `last_read` is set at sweep completion. The
+shared worker here keeps completion anchoring for cgroup memory and drive
+health (`Cadence::FromCompletion`), so that note still describes this branch;
+anchoring on dispatch unless the previous sweep overran is the suggested change
+from the #1537 review and is not made here.
+
+Validation after the rebase: blocking worker, cgroup, acquisition cache,
+drivehealth, hw_sensors and timing tests passed 71 (four hardware/capacity
+tests ignored); formatting clean; clippy only the existing
+`manual_range_contains` warning in `src/mcp/link.rs`.
