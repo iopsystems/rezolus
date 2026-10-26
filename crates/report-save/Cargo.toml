@@ -11,9 +11,6 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
-arrow = "60.0.0"
-bytes = "1"
-parquet = { version = "60.0.0", default-features = false, features = ["arrow", "simdutf8", "zstd"] }
 serde.workspace = true
 serde_json.workspace = true
 dashboard.workspace = true
@@ -23,10 +20,16 @@ tracing = "0.1"
 # build one in the browser. The binary unifies this to the full `write` build
 # via its own dependency.
 rez = { path = "../rez", default-features = false }
-# A report is a dendro archive: dendro's copy, metriken-storage's encoder and
-# column filter, and its converters (`to_dendro`, `rez::to_dendro`) for a tar
-# `.rez` or a parquet source. `write` is metriken-storage's archive writer,
-# which needs no `metriken` and spawns no thread on these paths (the crate
-# checks for wasm32 with `rez` and `write`).
+# A report is a dendro archive: dendro's copy and metriken-storage's encoder
+# and column filter. `write` is metriken-storage's archive writer, which
+# needs no `metriken` and spawns no thread on these paths (the crate checks
+# for wasm32 with `rez` and `write`).
 dendro = { workspace = true, features = ["archive"] }
 metriken-storage = { workspace = true, features = ["archive", "rez", "write"] }
+
+# The tests build parquet fixtures and convert them, as `recording upgrade`
+# does, into the dendro archives a report is built from.
+[dev-dependencies]
+arrow = "60.0.0"
+bytes = "1"
+parquet = { version = "60.0.0", default-features = false, features = ["arrow", "simdutf8", "zstd"] }

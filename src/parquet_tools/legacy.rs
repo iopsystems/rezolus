@@ -1,73 +1,20 @@
-//! Recordings in the formats earlier releases wrote (`.rez` archives, both
-//! containers, and standalone parquet files), turned into `.dendro`.
+//! Recordings in the formats earlier releases wrote (`.rez` archives,
+//! both containers, standalone parquet files, `.parquet.ab.tar` A/B
+//! tarballs), turned into `.dendro` by `recording upgrade`, and the staging
+//! every command that writes an archive shares.
 //!
-//! 6.x writes `.dendro` only. Every format stays readable, and a command
-//! that changes a recording (`annotate`, `filter`, `combine`, `snapshot`,
-//! `check --annotate`, the MCP event tools) writes the result to a new
-//! `.dendro` when its input is in an older format, converted here through
-//! metriken-storage's converters (`to_dendro`).
+//! No other command opens those formats: each refuses one with the upgrade
+//! command (`rez::container::not_dendro`).
 
 use std::path::{Path, PathBuf};
 
-/// What a recording file is, by content.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Container {
-    Dendro,
-    /// A v3 (SQLite) `.rez`.
-    RezV3,
-    /// A v1 or v2 (tar) `.rez`.
-    RezTar,
-    Parquet,
-    /// Anything else, or a file that could not be read.
-    Unknown,
-}
-
-impl Container {
-    /// The container of the file at `path`.
-    pub(crate) fn of(path: &Path) -> Self {
-        use metriken_storage::rez::rez::{detect_rez_format, RezFormat};
-        if metriken_storage::DendroCatalog::is_archive(path).unwrap_or(false) {
-            return Self::Dendro;
-        }
-        match detect_rez_format(path) {
-            Ok(RezFormat::V3Sqlite) => return Self::RezV3,
-            Ok(RezFormat::V2Tar) => return Self::RezTar,
-            _ => {}
-        }
-        let mut magic = [0u8; 4];
-        let parquet = std::fs::File::open(path)
-            .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut magic))
-            .is_ok()
-            && &magic == b"PAR1";
-        if parquet {
-            Self::Parquet
-        } else {
-            Self::Unknown
-        }
-    }
-
-    /// Whether this is a format 6.x reads but does not write.
-    pub(crate) fn is_legacy(self) -> bool {
-        matches!(self, Self::RezV3 | Self::RezTar | Self::Parquet)
-    }
-
-    /// The format's name in a message.
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Self::Dendro => "dendro archive",
-            Self::RezV3 => "v3 .rez archive",
-            Self::RezTar => "v1/v2 (tar) .rez archive",
-            Self::Parquet => "parquet recording",
-            Self::Unknown => "file",
-        }
-    }
-}
+pub(crate) use ::rez::container::Container;
 
 /// The parquet converter for the file at `path`: its source labelled
 /// `source=<name>` when the file's `source` metadata names one source and no
-/// series carries a `source` label of its own, as the viewer labels the file
-/// when it reads it (`dashboard::combined::label_parquet_by_source`), so the
-/// converted archive presents as the file did.
+/// series carries a `source` label of its own
+/// (`dashboard::combined::parquet_source_label`), so a KPI template that
+/// selects `{source="<name>"}` matches the converted recording's series.
 pub(crate) fn parquet_converter(path: &Path) -> metriken_storage::to_dendro::ParquetToArchive {
     let converter = metriken_storage::to_dendro::ParquetToArchive::new();
     match metriken_query::ParquetReader::open(path)
@@ -80,27 +27,11 @@ pub(crate) fn parquet_converter(path: &Path) -> metriken_storage::to_dendro::Par
 }
 
 /// Convert the legacy recording at `input` into a new `.dendro` at
-/// `output`, which must not exist. Returns a one-line summary of what was
-/// written.
+/// `output`, which must not exist, as `upgrade` does: for tests that need
+/// an upgraded fixture.
+#[cfg(test)]
 pub(crate) fn convert(input: &Path, output: &Path) -> Result<String, Box<dyn std::error::Error>> {
-    convert_for(input, output, output)
-}
-
-/// [`convert`] into `output`, a staging file the caller turns into `shown`:
-/// the summary names `shown`, the path the user asked for.
-pub(crate) fn convert_for(
-    input: &Path,
-    output: &Path,
-    shown: &Path,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let summary = convert_quiet(input, output)?;
-    Ok(format!(
-        "converted {} ({}) {} {}: {summary}",
-        input.display(),
-        Container::of(input).name(),
-        if output == shown { "to" } else { "for" },
-        shown.display()
-    ))
+    convert_quiet(input, output)
 }
 
 /// Convert `input` to `output` and say what was written (sources,
@@ -110,7 +41,7 @@ pub(crate) fn convert_quiet(
     output: &Path,
 ) -> Result<String, Box<dyn std::error::Error>> {
     use metriken_storage::to_dendro::{convert_path, ConvertedFrom};
-    let container = Container::of(input);
+    let container = Container::of_path(input);
     let summary = match container {
         Container::Parquet => {
             let w = parquet_converter(input)
@@ -134,12 +65,14 @@ pub(crate) fn convert_quiet(
                 _ => "converted".to_string(),
             }
         }
+        Container::AbTar => super::ab_tarball::convert(input, output)?,
         Container::Dendro => {
             return Err(format!("{} is already a dendro archive", input.display()).into())
         }
         Container::Unknown => {
             return Err(format!(
-                "{} is not a recording (.dendro, .rez or .parquet)",
+                "{} is not a recording (a .dendro archive, or a .rez, .parquet or \
+                 .parquet.ab.tar to upgrade)",
                 input.display()
             )
             .into())
@@ -171,7 +104,7 @@ pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
 pub(crate) fn check_new_dendro(output: &Path) -> Result<(), String> {
     if output.extension().and_then(|e| e.to_str()) != Some("dendro") {
         return Err(format!(
-            "{}: 6.x writes .dendro archives only; give an output ending in .dendro",
+            "{}: the output is a .dendro archive; give a name ending in .dendro",
             output.display()
         ));
     }
@@ -216,25 +149,6 @@ pub(crate) fn dendro_beside(input: &Path) -> PathBuf {
         }
     }
     input.with_extension("dendro")
-}
-
-/// The command line this process was started with, `-o <output>` added: the
-/// command to run for an edit of a legacy recording, which must be written
-/// to a new archive.
-pub(crate) fn command_with_output(output: &Path) -> String {
-    let mut words: Vec<String> = std::env::args().collect();
-    if let Some(first) = words.first_mut() {
-        if let Some(name) = Path::new(first.as_str()).file_name() {
-            *first = name.to_string_lossy().into_owned();
-        }
-    }
-    words.push("-o".to_string());
-    words.push(output.display().to_string());
-    words
-        .iter()
-        .map(|w| crate::parquet_tools::select::shell_word(w))
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// Where an edit of a recording is written: [`edit_target`]'s result.
@@ -361,18 +275,16 @@ fn copy_new(staged: &Path, output: &Path) -> Result<(), Box<dyn std::error::Erro
 /// Where an edit of the recording at `input` is written.
 ///
 /// A dendro archive is edited in place, or with `output` the edit goes to a
-/// copy of it there. A legacy recording is not changed: it is converted for
-/// `output`, a new `.dendro`, and the edit goes there; without `output`,
-/// `refusal` says how to ask for one. A copy or conversion is staged beside
-/// `output` and moved there by [`EditTarget::commit`], so a failed edit
-/// leaves nothing at `output`.
+/// copy of it there, staged beside `output` and moved there by
+/// [`EditTarget::commit`], so a failed edit leaves nothing at `output`. Any
+/// other file is refused; one an earlier release wrote names the `upgrade`
+/// command, spelled with `program`.
 pub(crate) fn edit_target(
     input: &Path,
     output: Option<&Path>,
-    refusal: impl FnOnce(&Path) -> String,
+    program: &str,
 ) -> Result<EditTarget, Box<dyn std::error::Error>> {
-    let container = Container::of(input);
-    match (container, output) {
+    match (Container::of_path(input), output) {
         (Container::Dendro, None) => Ok(EditTarget {
             path: input.to_path_buf(),
             note: None,
@@ -393,34 +305,9 @@ pub(crate) fn edit_target(
                 staged: Some((dir, output.to_path_buf())),
             })
         }
-        (c, None) if c.is_legacy() => Err(format!(
-            "{} is a {}; 6.x writes .dendro only and does not change it. Write the \
-             result to a new archive instead:\n  {}",
-            input.display(),
-            c.name(),
-            refusal(&dendro_beside(input))
-        )
-        .into()),
-        (c, Some(output)) if c.is_legacy() => {
-            check_new_dendro(output)?;
-            let (dir, staged) = stage_beside(output)?;
-            let summary = convert_quiet(input, &staged)?;
-            Ok(EditTarget {
-                path: staged,
-                note: Some(format!(
-                    "converted {} ({}) to {}: {summary}",
-                    input.display(),
-                    c.name(),
-                    output.display()
-                )),
-                staged: Some((dir, output.to_path_buf())),
-            })
+        (c, _) => {
+            Err(::rez::container::not_dendro(&input.display().to_string(), c, program).into())
         }
-        _ => Err(format!(
-            "{} is not a recording (.dendro, .rez or .parquet)",
-            input.display()
-        )
-        .into()),
     }
 }
 

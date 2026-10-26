@@ -128,20 +128,25 @@ target/release/rezolus record -o bench.dendro -- ./bench.sh   # record for the c
 # and 6.0-alpha consumers through alpha.44 refuse a current agent's stream by its content type. --stream was
 # removed before 6.0.0 (clap's unknown-argument error).
 
-# Viewer - web dashboard for parquet files, live agents, or upload mode
-target/release/rezolus view output.parquet [experiment.parquet] [--listen ADDR]
-target/release/rezolus view out.rez [--listen ADDR]                 # archive: one run's recordings = one combined view
-target/release/rezolus view fleet.rez --baseline host=web-01 --experiment host=web-02  # pick two arms
+# Viewer - web dashboard for .dendro recordings, live agents, or upload mode
+target/release/rezolus view out.dendro [--listen ADDR]              # archive: one run's recordings = one combined view
+target/release/rezolus view a.dendro b.dendro                       # two-file A/B: each a one-recording .dendro
+target/release/rezolus view fleet.dendro --baseline host=web-01 --experiment host=web-02  # pick two arms
+#   Every input (file, upload, URL load, attached experiment, the WASM viewer) is .dendro only: a .rez,
+#   .parquet or .parquet.ab.tar is refused with `<program> recording upgrade FILE` (rez::container::not_dendro);
+#   nothing converts on load. The experiment of a two-file comparison is one recording; the baseline is one
+#   recording on the command line, and in an upload or the WASM viewer may also be an archive shown as a
+#   comparison (the experiment replaces its arm; Save as Report is then refused). Anything else is refused with the combine /
+#   describe-recording / view --baseline --experiment commands (rez::container::one_recording_hint).
 target/release/rezolus view http://localhost:4241 [--listen ADDR]   # live agent connection
 target/release/rezolus view [--listen ADDR]                         # upload-only mode (no file)
-target/release/rezolus view --tui output.parquet                    # terminal UI (parquet or live agent; not upload-only)
+target/release/rezolus view --tui out.dendro                        # terminal UI (recording or live agent; not upload-only)
 target/release/rezolus view --tui http://localhost:4241             # terminal UI, live agent
 target/release/rezolus view out.dendro --registry-templates          # built-in KPI templates over the recording's own
-#   A source's KPI template is its metadata's `service_queries` (parquet footer, .rez recording, dendro source),
+#   A source's KPI template is its metadata's `service_queries` (a dendro source's metadata),
 #   ahead of the built-in registry, which is consulted only for a source without one; --registry-templates
 #   inverts that for sources the registry knows. Shared lookup: crates/dashboard/src/source_templates.rs
-#   (both shells; WASM: WasmCaptureRegistry::set_prefer_registry_templates, no site UI). A combined parquet's array
-#   `source` keys a top-level template by its service_name. `dashboard` is the section template for the built-in
+#   (both shells; WASM: WasmCaptureRegistry::set_prefer_registry_templates, no site UI). `dashboard` is the section template for the built-in
 #   sections: a Rezolus agent sends it in its stream handshake (src/agent/exposition/http/mod.rs `handshake_metadata`,
 #   revision `rezolus <version>`), dendro sources keep it, and both viewers expand it (<= 1 MiB and it parses) or the
 #   embedded one (crates/dashboard/src/rezolus_template.rs); --registry-templates picks the embedded one here too.
@@ -149,20 +154,16 @@ target/release/rezolus view out.dendro --registry-templates          # built-in 
 # Hindsight - rolling .dendro buffer for incident analysis (an output not ending in .dendro is refused)
 target/release/rezolus hindsight config/hindsight.toml
 
-# Recording tools - file operations on recordings (.dendro, .rez, .parquet)
-target/release/rezolus recording metadata -i run.dendro               # an archive: recordings, labels, tables + cadence
-target/release/rezolus recording metadata -i file.parquet --json      # a parquet: file/column metadata as JSON
-target/release/rezolus recording metadata -i file.parquet --field source
-# The recording tools write .dendro only and never change a .rez or .parquet (metriken-storage 0.5 has no
-# .rez writer). An edit of a legacy input (annotate, filter, check --annotate, MCP add_event/remove_events/
-# run_checks) needs -o <new>.dendro (MCP: "output"): it is converted there (src/parquet_tools/legacy.rs
-# `edit_target`, metriken-storage 0.5.1's to_dendro converters) and the copy edited; without -o it is refused
-# and the error prints the command line with -o added. A .dendro is edited in place, or copied to -o first.
+# Recording tools - file operations on .dendro recordings
+target/release/rezolus recording metadata -i run.dendro               # recordings, labels, tables + cadence
+target/release/rezolus recording metadata -i run.dendro --json
+# Only `upgrade` opens a legacy file (.rez v1/v2/v3, .parquet, .parquet.ab.tar); every other subcommand
+# refuses one with `<program> recording upgrade FILE` (rez::container::{Container, not_dendro, require_dendro}).
+# A .dendro is edited in place, or copied to -o first (src/parquet_tools/legacy.rs `edit_target`).
 target/release/rezolus recording annotate run.dendro --queries ext.json   # embed KPIs into each recording
 target/release/rezolus recording annotate run.dendro --event 'time=2026-05-12T15:23Z,kind=deploy,description=rollout'
-target/release/rezolus recording annotate old.rez --queries ext.json -o old.dendro   # legacy input: a new .dendro
 target/release/rezolus recording check run.dendro                     # evaluate the KPI checks the recording carries; exit 1 on FAIL, 2 on ERROR
-target/release/rezolus recording check file.parquet --queries kpis.json --json   # checks from a file instead, verdicts as JSON
+target/release/rezolus recording check run.dendro --queries kpis.json --json   # checks from a file instead, verdicts as JSON
 target/release/rezolus recording check fleet.dendro --recording host=web-01 --annotate  # one recording; write FAIL/WARN windows as kind=check events
 # A check is `"check": {"above"|"below": <n>, "for": "10s", "severity": "fail"|"warn", "quantile": 0.99}` on a KPI
 # (crates/dashboard/src/service_extension.rs). Values with an acquisition band are compared by the band; a
@@ -173,21 +174,21 @@ target/release/rezolus recording convert rezolus.raw -o out.dendro --interval 25
 # is given; -m/--metadata key=value tags the source (`source` also labels it); --force overwrites an existing
 # output. Raw input only; MsgpackToArchive (metriken-storage `convert`).
 target/release/rezolus recording combine web-01.dendro web-02.dendro -o run.dendro   # one archive, a recording per input recording (opens combined)
-target/release/rezolus recording combine a.dendro b.parquet --ab baseline=a.dendro experiment=b.parquet -o ab.dendro  # A/B: stamps arm on each input's recordings
-target/release/rezolus recording combine old.rez --ab baseline=0 experiment=1 -o ab.dendro   # one archive input: arms by position
-# combine takes any mix of .dendro/.rez/.parquet inputs; legacy ones are converted into a staging dir first,
-#   then every input is copied with dendro's copy_sources_into (live tail sealed, uuids kept). Any output but a
+target/release/rezolus recording combine a.dendro b.dendro --ab baseline=a.dendro experiment=b.dendro -o ab.dendro  # A/B: stamps arm on each input's recordings
+target/release/rezolus recording combine two.dendro --ab baseline=0 experiment=1 -o ab.dendro   # one archive input: arms by position
+# combine takes .dendro inputs, each copied with dendro's copy_sources_into (live tail sealed, uuids kept). Any output but a
 #   new .dendro is refused (the 5.x parquet row-merge, .parquet.ab.tar, .rez), as are --pinned, --category and
 #   --bypass-time-check. A conflicting existing arm is refused before copying, naming the input; the viewer
 #   fills the slots by arm value (dashboard::combined::arm_slots): one recording per arm, every other shown
-#   beside (dashboard::dashboard::add_beside_sections). A parquet has no acquisition windows, so its recording
-#   is WINDOWLESS (no rate band).
+#   beside (dashboard::dashboard::add_beside_sections).
 target/release/rezolus recording filter run.dendro --samplers cpu_usage,scheduler -o slim.dendro   # keep those samplers' streams
 target/release/rezolus recording filter run.dendro --metrics cpu_usage,cpu_frequency                # in place: keep those metrics
-target/release/rezolus recording filter file.parquet -o slim.dendro   # parquet, no flags: keep what its KPIs need
 target/release/rezolus recording upgrade old.rez                      # any .rez (v1/v2/v3) or .parquet -> old.dendro
 target/release/rezolus recording upgrade in.parquet -o out.dendro     # (metriken-storage to_dendro::convert_path; --to v3 is refused)
-target/release/rezolus recording snapshot live.dendro -o incident.dendro   # complete copy of an archive still being written (a .rez -> a .dendro)
+target/release/rezolus recording upgrade ab.parquet.ab.tar            # A/B tarball -> two recordings, arm=baseline/experiment
+#   (src/parquet_tools/ab_tarball.rs; the tarball's aliases and category are not carried over)
+target/release/rezolus recording snapshot live.dendro -o incident.dendro   # complete copy of an archive still being written
+# A parquet upgraded to .dendro has no acquisition windows, so its recording is WINDOWLESS (no rate band).
 
 # MCP - AI analysis server or CLI commands
 # Status - agent health check (exits 1 if any sampler is degraded/failed/pmu-limited)
@@ -200,18 +201,18 @@ target/release/rezolus mcp install [--scope user|project] [--dry-run] [--no-skil
 #   registers the server with Claude Code via `claude mcp add` (project scope writes .mcp.json
 #   when `claude` is absent) and installs the rezolus-mcp skill (src/mcp/skill/SKILL.md,
 #   embedded; replaced only when the file there is ours). src/mcp/install.rs.
-target/release/rezolus mcp describe-recording file.parquet                    # describe recording
-target/release/rezolus mcp describe-metrics file.parquet                      # list all metrics
-target/release/rezolus mcp detect-anomalies file.parquet                      # exhaustive anomaly detection
-target/release/rezolus mcp detect-anomalies file.parquet "cpu_usage"          # targeted anomaly detection
-target/release/rezolus mcp query file.parquet "sum(irate(cpu_cycles[1m]))"     # PromQL query
+target/release/rezolus mcp describe-recording run.dendro                   # describe recording
+target/release/rezolus mcp describe-metrics run.dendro                     # list all metrics
+target/release/rezolus mcp detect-anomalies run.dendro                     # exhaustive anomaly detection
+target/release/rezolus mcp detect-anomalies run.dendro "cpu_usage"          # targeted anomaly detection
+target/release/rezolus mcp query run.dendro "sum(irate(cpu_cycles[1m]))"     # PromQL query
 # query prints an acquisition-window uncertainty band [lo, hi] beside rate()/irate() values
 # (scalar ops scale the band, e.g. rate(x)*k; series-op-series combines both operands'
 # bands by interval arithmetic; non-rate/non-histogram queries have no band to show)
-target/release/rezolus mcp analyze-correlation file.parquet "metric1" "metric2"
-target/release/rezolus mcp extract-features file.parquet             # structured feature record (JSON)
-target/release/rezolus mcp describe-recording multi.rez              # lists the recordings + their selectors, not an error
-target/release/rezolus mcp query multi.rez "sum(irate(cpu_cycles[1m]))" --recording source=redis  # pick one recording
+target/release/rezolus mcp analyze-correlation run.dendro "metric1" "metric2"
+target/release/rezolus mcp extract-features run.dendro            # structured feature record (JSON)
+target/release/rezolus mcp describe-recording multi.dendro             # lists the recordings + their selectors, not an error
+target/release/rezolus mcp query multi.dendro "sum(irate(cpu_cycles[1m]))" --recording source=redis  # pick one recording
 # --recording key=value (repeatable, ANDed) is on all six subcommands, and the stdio server's
 #   tools take an optional recording object, e.g. {"source": "redis"}, same semantics;
 # it must name exactly one recording: none or several is an error listing the candidates, never a
@@ -226,9 +227,8 @@ target/release/rezolus mcp query multi.rez "sum(irate(cpu_cycles[1m]))" --record
 #   recording, as the CLI does. timestamp/duration: RFC 3339 or humantime strings, or numbers in
 #   seconds; digit-only strings are refused as ambiguous. Handlers: src/mcp/server.rs; the write
 #   path is parquet_tools::events::{add_events_selected, remove_events_selected} over the annotate
-#   writer, whose report line the reply carries. A .rez or parquet input needs "output" (a new
-#   .dendro it is converted to, staged and moved there when the edit succeeds); a .dendro is edited
-#   in place. Each write first drops the server's cached readers of its input and output, since
+#   writer, whose report line the reply carries. A .dendro is edited in place, or copied to
+#   "output" first; a legacy input is refused with the upgrade command. Each write first drops the server's cached readers of its input and output, since
 #   dendro will not open for writing an archive a reader holds.
 #   export_query (src/mcp/export.rs) writes a range query as long-form CSV/parquet (series,
 #   timestamp, value, lo, hi) under `rezolus mcp --export-dir DIR` only, bare filename, never
@@ -247,9 +247,9 @@ The binary operates in seven modes via subcommands:
 2. **Exporter** (`src/exporter/`) - Pulls from agent's msgpack endpoint, exposes Prometheus metrics.
 3. **Recorder** (`src/recorder/`) - Writes metrics to a `.dendro` archive, the only format 6.x writes, through metriken-recorder's `Recorder` (metriken's `docs/journal/2026-10-12-metriken-recorder.md`): detection, the stream and scrape transports, restart metadata, the tick and the archive are the library's, and `src/recorder/mod.rs` is the CLI, the wrapped command, signals, exit codes and messages. Detects each endpoint by stream (`metriken_recorder::detect`, with the Rezolus `Probe` hook in `agent_probe.rs`): producers serving `/metrics/stream` are streamed and Prometheus endpoints scraped, an agent that cannot stream is refused, pointing at a 5.x recorder, and a streamed producer's `source`, labels and metadata come from its handshake below the user's and the hook's. Defaults to `rezolus.dendro` when no `-o` is given; any output not ending in `.dendro`, `--format` other than `dendro`, and `--separate` are refused (exit 2). Several endpoints in one run write one multi-recording archive, a recording each. Supports `--metadata key=value`; `--label key=value` tags every archive recording in the run, so `--endpoint url,source=name` is what distinguishes two endpoints (see "`.rez` archive format" below).
 4. **Hindsight** (`src/hindsight/`) - Maintains a rolling archive buffer on disk (the archive writer with retention: everything older than `duration` is evicted each tick) for post-incident snapshots. It is a stream consumer, like `record`: a metriken-recorder `Recorder` with one streamed source (`Transport::Stream`, the Rezolus probe hook) and `retain` set to the lookback, which writes each interval at the agent's own stamp; `/status` counts passes and the retention bound from its `Committed` events. An agent that cannot stream is refused at startup. The buffer is readable live by the viewer/MCP/`recording metadata`. It is a dendro archive (`buffer.rs`'s `HindsightBuffer` remains as the tests' direct writer); an `output` not ending in `.dendro` is refused at config load (`config/general.rs` `check_output`), as `record` refuses one. Its snapshots go through dendro's `copy_sources_into` on the read handle, which seals the live tail into the copy (a fully sealed artifact, no WAL rows), and a ranged one starts one occupant restatement period early so long tables keep their labels.
-5. **Viewer** (`src/viewer/`) - Web dashboard with PromQL query engine and TSDB (from `metriken-query` crate). Supports parquet files, archives (`.dendro`, `.rez`), live agent connections and upload-only mode. An archive of several recordings opens as ONE combined view unless it is a comparison (`dashboard::combined::layout`, one function both shells call: A/B is opt-in: when `--baseline`/`--experiment` (`?compare=1` on the static site) are given or any recording carries `arm`, from `record --endpoint url,arm=` or `recording combine --ab`; combined otherwise, nothing inferred from timing). Combined: `RezReader::combine` joins the recordings (every series under its recording's labels, metriken-storage `series_labels`), `dashboard::dashboard::build_combined_context` instantiates each template once per recording that carries it (the first instance at the template's routes, the others at `<route>@<key>`, `Section::instance` naming the host for the sidebar's per-instance groups), and every query of an instance is restricted to its recording by `combined::restrict_query` (a token-level rewrite adding the recording's discriminating label matchers to every selector: `k="v"` for a label it has, `k!="v"`/`k!~"v1|v2"` for one only other recordings carry), rendered against `combined::Scoped` (the recording's catalog and header). A comparison: >2 recordings shows the first two unless `--baseline k=v` / `--experiment k=v` name which recordings fill the slots — repeatable, ANDed, subset match, the same selector semantics as the MCP `--recording` flag, and each must name exactly one recording or the run is refused with a listing. Live agent connections are a stream consumer (`src/viewer/live.rs` records `/metrics/stream` into a temporary dendro archive through a metriken-recorder `Recorder` with no retention and reads it through `rez::live::LiveReader`, which reopens after each `Committed` event because an open `ArchiveReader`'s view is fixed; saving copies the archive). A `.dendro` or `.rez` v3 file opened while unfinalized (a running hindsight buffer, a `record` in progress) is followed: `src/viewer/follow.rs` wraps every recording shown (baseline, experiment and any further capture) in a `LiveReader`, and a thread reopens the archive and hands each reader its recording (`LiveReader::replace`, matched by full label set). Each reopen of a dendro archive first reads the catalog's `sources` once (before `open_recordings`, so a source the catalog reads as finalized is finalized in the open that follows) and judges each followed recording's writer with a `dendro::archive::HeartbeatWatch` (matched by exact label set): any `Live` → reopen every 2 s with no backoff, however slowly rows arrive; otherwise (`Stopped`: killed, paused, or a `cp`/`recording snapshot` copy; or `Unknown`: a `.rez`, or a dendro source with no heartbeat) → 2 s while the newest row advances, and after a reopen that finds no new row the wait doubles, capped at 60 s (`follow::MAX_WAIT`); a `Stopped` writer that beats again is `Live` again. The follow ends only when every recording is finalized, when the file is removed (hindsight removes its buffer on SIGTERM/SIGINT without finalizing it), or when the baseline is replaced. Do not end a follow on time since the last row or on `Stopped`: a writer may sample once a minute, `interval()` reads 1 s for an archive with too few rows, and a paused writer reads `Stopped` until it beats again. Detaching the experiment drops its reader from the follow; replacing the baseline ends it; a comparison whose shown recordings share a label set with another recording is not followed; a combined archive is followed as one `LiveReader::combined`, which joins every recording again on each reopen. `/api/v1/mode` reports `following` (distinct from `live`), and the page polls as in live mode but keeps the file-mode label, `from`/`to` handling and compare; in compare mode `noteRecordingExtent` replaces `experimentQueryRange` when the experiment's range changes, and `CompareChartWrapper` fetches again when that range changes. A finalized file is never reopened. Generates service KPI dashboards from `ServiceExtension` metadata.
+5. **Viewer** (`src/viewer/`) - Web dashboard with PromQL query engine and TSDB (from `metriken-query` crate). Supports `.dendro` archives (a legacy `.rez`/`.parquet`/`.parquet.ab.tar` is refused with the upgrade command), a two-file comparison of two one-recording archives, live agent connections and upload-only mode. An archive of several recordings opens as ONE combined view unless it is a comparison (`dashboard::combined::layout`, one function both shells call: A/B is opt-in: when `--baseline`/`--experiment` (`?compare=1` on the static site) are given or any recording carries `arm`, from `record --endpoint url,arm=` or `recording combine --ab`; combined otherwise, nothing inferred from timing). Combined: `RezReader::combine` joins the recordings (every series under its recording's labels, metriken-storage `series_labels`), `dashboard::dashboard::build_combined_context` instantiates each template once per recording that carries it (the first instance at the template's routes, the others at `<route>@<key>`, `Section::instance` naming the host for the sidebar's per-instance groups), and every query of an instance is restricted to its recording by `combined::restrict_query` (a token-level rewrite adding the recording's discriminating label matchers to every selector: `k="v"` for a label it has, `k!="v"`/`k!~"v1|v2"` for one only other recordings carry), rendered against `combined::Scoped` (the recording's catalog and header). A comparison: >2 recordings shows the first two unless `--baseline k=v` / `--experiment k=v` name which recordings fill the slots — repeatable, ANDed, subset match, the same selector semantics as the MCP `--recording` flag, and each must name exactly one recording or the run is refused with a listing. Live agent connections are a stream consumer (`src/viewer/live.rs` records `/metrics/stream` into a temporary dendro archive through a metriken-recorder `Recorder` with no retention and reads it through `rez::live::LiveReader`, which reopens after each `Committed` event because an open `ArchiveReader`'s view is fixed; saving copies the archive). A `.dendro` opened while unfinalized (a running hindsight buffer, a `record` in progress) is followed: `src/viewer/follow.rs` wraps every recording shown (baseline, experiment and any further capture) in a `LiveReader`, and a thread reopens the archive and hands each reader its recording (`LiveReader::replace`, matched by full label set). Each reopen of a dendro archive first reads the catalog's `sources` once (before `open_recordings`, so a source the catalog reads as finalized is finalized in the open that follows) and judges each followed recording's writer with a `dendro::archive::HeartbeatWatch` (matched by exact label set): any `Live` → reopen every 2 s with no backoff, however slowly rows arrive; otherwise (`Stopped`: killed, paused, or a `cp`/`recording snapshot` copy; or `Unknown`: a source with no heartbeat) → 2 s while the newest row advances, and after a reopen that finds no new row the wait doubles, capped at 60 s (`follow::MAX_WAIT`); a `Stopped` writer that beats again is `Live` again. The follow ends only when every recording is finalized, when the file is removed (hindsight removes its buffer on SIGTERM/SIGINT without finalizing it), or when the baseline is replaced. Do not end a follow on time since the last row or on `Stopped`: a writer may sample once a minute, `interval()` reads 1 s for an archive with too few rows, and a paused writer reads `Stopped` until it beats again. Detaching the experiment drops its reader from the follow; replacing the baseline ends it; a comparison whose shown recordings share a label set with another recording is not followed; a combined archive is followed as one `LiveReader::combined`, which joins every recording again on each reopen. `/api/v1/mode` reports `following` (distinct from `live`), and the page polls as in live mode but keeps the file-mode label, `from`/`to` handling and compare; in compare mode `noteRecordingExtent` replaces `experimentQueryRange` when the experiment's range changes, and `CompareChartWrapper` fetches again when that range changes. A finalized file is never reopened. Generates service KPI dashboards from `ServiceExtension` metadata.
 6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation, PromQL queries, feature extraction). Runs as stdio server or one-shot CLI commands. `query` prints acquisition-window uncertainty bands `[lo, hi]` beside `rate()`/`irate()` values (scalar ops scale the band; series-op-series combines both operands' bands by interval arithmetic, and operands from *different* acquisition tables have their bands widened to the union of both spans first — identical edges mean the same read, so the common case widens by nothing; non-rate/non-histogram queries have no band). See `docs/journal/2026-08-21-cross-table-uncertainty.md`. `extract-features` emits a deterministic, versioned overview record (JSON) summarizing a recording's Rezolus-native features.
-7. **Recording tools** (`src/parquet_tools/`, `rezolus recording`, alias `parquet`) - File operations, writing `.dendro` only: `metadata` (inspect any recording), `annotate` (KPIs with `--queries` or removed with `--undo`, a systeminfo JSON with `--systeminfo`, timeline events, into each recording's source metadata, in place; `--source`, `--node` and `--filter` are refused), `check` (KPI check verdicts, `--annotate` writes them as events), `combine` (any mix of `.dendro`/`.rez`/`.parquet` into one `.dendro`, `--ab` labels arms), `filter` (keep named samplers or metrics; a parquet with neither keeps what its KPIs need), `convert` (raw msgpack, plain or zstd, into a `.dendro`), `snapshot` (a complete sealed copy of an archive still being written — `cp` leaves SQLite's `-wal` sidecar behind and silently ends early; a `.rez` snapshots to a `.dendro`), `upgrade` (any `.rez` or `.parquet` into a `.dendro`). A `.rez` or `.parquet` is never changed: an edit of one goes to `-o <new>.dendro` (`src/parquet_tools/legacy.rs` `edit_target`, which stages the conversion or copy beside the output and moves it there once the edit succeeded). Every new output (edits, `combine`, `filter -o`, `snapshot`, `upgrade`, `convert`) is staged in a directory beside it named `.<output>.rezolus-staging.<pid>.<random>` and published with `legacy::publish`: a hard link, then the staged name removed (a `create_new` copy where links are unsupported), so an output that appeared meanwhile is refused, never replaced (an in-place `filter` and `convert --force` rename over the file, as asked). A process killed mid-write leaves that directory behind; nothing cleans it up.
+7. **Recording tools** (`src/parquet_tools/`, `rezolus recording`, alias `parquet`) - File operations on `.dendro` only (every subcommand but `upgrade` refuses a legacy file with `<program> recording upgrade FILE`): `metadata` (inspect a recording), `annotate` (KPIs with `--queries` or removed with `--undo`, a systeminfo JSON with `--systeminfo`, timeline events, into each recording's source metadata, in place; `--source`, `--node` and `--filter` are refused), `check` (KPI check verdicts, `--annotate` writes them as events), `combine` (`.dendro` inputs into one `.dendro`, `--ab` labels arms), `filter` (keep named samplers or metrics), `convert` (raw msgpack, plain or zstd, into a `.dendro`), `snapshot` (a complete sealed copy of an archive still being written — `cp` leaves SQLite's `-wal` sidecar behind and silently ends early), `upgrade` (any `.rez`, `.parquet` or `.parquet.ab.tar` into a `.dendro`; the input is never changed). An edit with `-o` goes to a copy (`src/parquet_tools/legacy.rs` `edit_target`, which stages the copy beside the output and moves it there once the edit succeeded). Every new output (edits, `combine`, `filter -o`, `snapshot`, `upgrade`, `convert`) is staged in a directory beside it named `.<output>.rezolus-staging.<pid>.<random>` and published with `legacy::publish`: a hard link, then the staged name removed (a `create_new` copy where links are unsupported), so an output that appeared meanwhile is refused, never replaced (an in-place `filter` and `convert --force` rename over the file, as asked). A process killed mid-write leaves that directory behind; nothing cleans it up.
 
 ### Sampler Architecture
 
@@ -288,7 +288,7 @@ File-level metadata keys are defined in `crates/dashboard/src/keys.rs` (the keys
 
 ### `.rez` Archive Format
 
-The `.rez` format (metriken-storage's `src/rez/`: `rez.rs`, `rez_sqlite.rs`, `open.rs`; rezolus's `crates/rez/src/reader.rs`) is a container holding many parquet tables plus a `manifest.json`, rather than a single parquet file. Two container shapes exist and both are readable:
+The `.rez` format, which only `rezolus recording upgrade` reads now (metriken-storage's `src/rez/`: `rez.rs`, `rez_sqlite.rs`, `open.rs`), is a container holding many parquet tables plus a `manifest.json`, rather than a single parquet file. Two container shapes exist and both are readable:
 
 - **v2 (tar)** — a tar archive with `manifest.json` and one table per sampler (`<recording>/<sampler>.parquet`).
 - **v3 (SQLite)** — a SQLite container (metriken-storage's `src/rez/rez_sqlite.rs`; the writer was removed in 0.5) with a real WAL: rows land in the WAL and are periodically sealed into parquet segments. This is what a 5.x `hindsight` maintains as its rolling buffer (6.x keeps a `.dendro`), and it is readable live while a writer is still appending.
@@ -308,8 +308,11 @@ A `.dendro` (and a `.rez` from a 5.x recorder) holds any number of endpoints, re
 
 ### `.rez` lives in its own crate
 
-The `.rez` format is `metriken-storage`'s (feature `rez`; with `write`, the
-`.rez`-to-dendro converters): container (v2 tar, v3 SQLite `RezDb`) and opening
+`crates/rez` opens `.dendro` only: `RezReader::open*` and `open_recordings*`
+refuse anything else, and `rez::container` names the container
+(`Container::of_path`/`of_bytes`) and words the refusal (`not_dendro`,
+`require_dendro`). The `.rez` format is `metriken-storage`'s (feature `rez`; with `write`, the
+`.rez`-to-dendro converters), read in rezolus only by `recording upgrade`: container (v2 tar, v3 SQLite `RezDb`) and opening
 an archive by content (`metriken_storage::rez::open`). metriken-storage 0.5 has
 no `.rez` writer. The converters (0.5.1) are `to_dendro::convert_path` (any
 `.rez` or a parquet file to a new `.dendro`, by path), `ParquetToArchive` and
@@ -329,7 +332,7 @@ warning and keeps the labels its segments carry.
 It is a workspace crate rather than a module of the binary because `rezolus` is
 **binary-only** (no `lib` target), so nothing can depend on it: a reader living
 there was reachable by the server viewer and by nothing else; the static-site
-WASM viewer reads `.rez` through `crates/rez`.
+WASM viewer reads archives through `crates/rez`.
 
 The binary re-exports the modules under the paths call sites already use
 (`crate::recorder::rez`, `crate::rez_reader`, …), so `.rez` code reads the same
@@ -340,7 +343,7 @@ rather than `#[cfg(test)]`: a `#[cfg(test)]` module in another crate is
 invisible to the binary crate's tests. The binary and `crates/viewer` enable
 that feature as a dev-dependency. A test writes a `.dendro` through
 metriken-storage's `ArchiveWriter` (`write_dendro`, `one_run`,
-`multi_recording`); a test about reading a `.rez` reads one of the archives the
+`multi_recording`); a test of `upgrade` (or of a refusal) reads one of the archives the
 last `.rez` writer produced, committed in `crates/rez/tests/fixtures/rez/`
 (`committed_rez`; `edited_rez`, `rez_with_identity`, `add_rez_metadata` and
 `append_rez_wal_tick` derive the catalog state a test needs from one with
@@ -375,7 +378,7 @@ back onto the read path.
 
 ### Service Extensions
 
-Service-level KPI dashboards are defined in `src/viewer/service_extension.rs` (`ServiceExtension`/`Kpi` structs). They allow the viewer to generate custom dashboard sections from PromQL queries embedded in parquet metadata. The `parquet annotate` command validates and embeds these. Templates live in `src/parquet_tools/templates/`.
+Service-level KPI dashboards are defined in `crates/dashboard/src/service_extension.rs` (`ServiceExtension`/`Kpi` structs). They allow the viewer to generate custom dashboard sections from PromQL queries embedded in a recording's metadata. The `recording annotate` command validates and embeds these. Templates live in `crates/dashboard/templates/`.
 
 ### Built-in sections and section templates
 
@@ -387,11 +390,11 @@ The `site/` directory hosts a browser-only viewer deployed to GitHub Pages. It s
 
 The WASM crate lives at `crates/viewer/`. It targets `wasm32-unknown-unknown` and builds via `./crates/viewer/build.sh`; output goes to `site/viewer/pkg/` where the frontend imports it as `../pkg/wasm_viewer.js`. It is a workspace member like any other, but it cannot depend on `rezolus` itself — that is a **binary-only** crate with no `lib` target — so anything both viewers need lives in a shared crate (`dashboard`, `rez`) instead. See the `viewer-parity` skill.
 
-**It opens both parquet files and `.rez` archives.** A `.rez` is recognized by content, not by filename, exactly as the CLI recognizes it, and a multi-recording archive opens as `rezolus view` opens it: one combined capture (`Viewer::new` and `WasmCaptureRegistry::attach` alike) unless it is a comparison by `dashboard::combined::layout`, or `WasmCaptureRegistry::set_compare_requested(true)` asks for one (the server's `--baseline`/`--experiment`), when its recordings fill the A/B slots and the rest attach after.
+**It opens `.dendro` archives only.** A recording is recognized by content, not by filename, exactly as the CLI recognizes it; a `.rez`, `.parquet` or `.parquet.ab.tar` upload is refused with a message naming `rezolus recording upgrade FILE`, to run locally. The experiment slot takes a one-recording `.dendro`. A multi-recording archive opens as `rezolus view` opens it: one combined capture (`Viewer::new` and `WasmCaptureRegistry::attach` alike) unless it is a comparison by `dashboard::combined::layout`, or `WasmCaptureRegistry::set_compare_requested(true)` asks for one (the server's `--baseline`/`--experiment`), when its recordings fill the A/B slots and the rest attach after.
 
-Save-as-Report writes a `.dendro` whatever the source (`report_save::build_report`, one function for both viewers): a dendro source is copied (`build_dendro_report`, which seals the live tail with metriken-storage's `Encoder`, available without a feature gate on wasm32); a `.rez` and parquet files are converted into an in-memory `ArchiveMut` first (`convert_tar_into`, `convert_v3_into` over `RezDb::open_bytes`, `ParquetToArchive::convert_into`), a ranged parquet cut to the range before conversion, and a two-file parquet compare labelled `arm=baseline`/`arm=experiment` so it reopens as the comparison. The server converts a v3 `.rez` by path instead (`legacy::convert` into a temp file), which also reads SQLite's `-wal` sidecar beside it.
+Save-as-Report writes a `.dendro` (`report_save::build_report`, one function for both viewers; `crates/report-save`'s `ReportSource::{Dendro, Compare}`): a dendro source is copied (`build_dendro_report`, which seals the live tail with metriken-storage's `Encoder`, available without a feature gate on wasm32), and a two-file comparison copies both archives into one in-memory `ArchiveMut`, labelled `arm=baseline`/`arm=experiment` so it reopens as the comparison. A legacy source cannot reach it, since neither viewer opens one; given legacy bytes it refuses them.
 
-One thing the browser cannot have: SQLite's `-wal` **sidecar**. An archive (`.dendro`, or a v3 `.rez`) carries its own unsealed rows in a WAL table inside the file, and those travel with an upload — but SQLite also commits into a sidecar file not yet checkpointed into the archive, and an upload is one file. `rezolus view archive.dendro` opens by path with the sidecar beside it and sees further. This only differs for a copy taken from under a running recorder. `rezolus recording snapshot <archive> -o out.dendro` reads through the sidecar for an exact copy, without pausing the writer. The viewer says when a copy may be short rather than rendering short in silence: `RezReader::complete()` is false for an unfinalized archive, and `WasmCaptureRegistry::notices()` reports it.
+One thing the browser cannot have: SQLite's `-wal` **sidecar**. An archive carries its own unsealed rows in a WAL table inside the file, and those travel with an upload — but SQLite also commits into a sidecar file not yet checkpointed into the archive, and an upload is one file. `rezolus view archive.dendro` opens by path with the sidecar beside it and sees further. This only differs for a copy taken from under a running recorder. `rezolus recording snapshot <archive> -o out.dendro` reads through the sidecar for an exact copy, without pausing the writer. The viewer says when a copy may be short rather than rendering short in silence: `RezReader::complete()` is false for an unfinalized archive, and `WasmCaptureRegistry::notices()` reports it.
 
 Two constraints shape how that works, and both are runtime failures rather than compile errors if broken:
 

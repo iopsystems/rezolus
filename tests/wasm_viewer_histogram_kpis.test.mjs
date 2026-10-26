@@ -27,7 +27,7 @@ initSync({ module: fs.readFileSync(pkgWasm) });
 
 test('static WASM viewer keeps vLLM latency histograms available', () => {
     const registry = new WasmCaptureRegistry();
-    const parquet = fs.readFileSync(path.join(repoRoot, 'site/viewer/data/vllm.parquet'));
+    const recording = fs.readFileSync(path.join(repoRoot, 'site/viewer/data/vllm.dendro'));
     const template = JSON.parse(
         fs.readFileSync(
             path.join(repoRoot, 'crates/dashboard/templates/vllm.json'),
@@ -35,7 +35,7 @@ test('static WASM viewer keeps vLLM latency histograms available', () => {
         ),
     );
 
-    registry.attach('baseline', new Uint8Array(parquet), 'vllm.parquet');
+    registry.attach('baseline', new Uint8Array(recording), 'vllm.dendro');
     registry.init_templates('baseline', JSON.stringify([template]));
 
     const sectionJson = registry.get_section('baseline', 'service/vllm');

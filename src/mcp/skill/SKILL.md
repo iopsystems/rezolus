@@ -1,22 +1,22 @@
 ---
 name: rezolus-mcp
-description: Investigate a Rezolus performance recording (.parquet, .rez, .dendro) through the rezolus MCP server. Discovery before query, verdicts and marks written back, links to the viewer.
+description: Investigate a Rezolus performance recording (.dendro) through the rezolus MCP server. Discovery before query, verdicts and marks written back, links to the viewer.
 ---
 
 # Investigating a Rezolus recording
 
 The `rezolus` MCP server opens a recording file and answers about it.
 Every tool that reads a recording takes `parquet_file`, the path to a
-`.parquet`, `.rez` or `.dendro` file (the name is historical; the format is
-detected by content). A `.rez` is Rezolus's archive, which can hold several
-recordings; a `.dendro` is the newer archive container and reads the same
-way. `viewer_link` reads no recording and takes no path. Ask the person for
+`.dendro` archive (the name is historical), which can hold several
+recordings. A `.rez` or `.parquet` from an earlier release is refused with
+the command that converts it, `rezolus recording upgrade FILE`; run it, or
+ask the person to, and use the `.dendro` it writes. `viewer_link` reads no recording and takes no path. Ask the person for
 the file if you were not given one; `rezolus record -o out.dendro` writes one.
 
 ## Workflow
 
 1. **`describe_recording`** first. It says what the file holds: source,
-   agent version, time range, duration, and, for a multi-recording `.rez`,
+   agent version, time range, duration, and, for a multi-recording archive,
    the list of recordings with the `recording` selector that picks each.
 2. **`describe_metrics`** before any query. Metric names, types and labels
    come from the recording, not from memory. A counter is queried with
@@ -39,7 +39,7 @@ Rules that hold on every recording:
   acquisition window: in `query` JSON it is the `bands` (and `intervals`)
   list aligned with `values`. A difference inside the band is not a
   difference. A recording with no acquisition windows (for example a
-  parquet combined into a `.rez`) has no band, which says nothing about its
+  parquet file upgraded to a `.dendro`) has no band, which says nothing about its
   precision.
 - Correlation does not establish causation. Report it as co-movement.
 - On a multi-recording archive of one run, the tools read every recording

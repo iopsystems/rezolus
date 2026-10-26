@@ -114,7 +114,7 @@ fn read_tools() -> Vec<Value> {
                 "properties": {
                     "parquet_file": {
                         "type": "string",
-                        "description": "Path to the parquet file"
+                        "description": "Path to the recording (.dendro)"
                     },
                     "recording": {
                         "type": "object",
@@ -133,7 +133,7 @@ fn read_tools() -> Vec<Value> {
                 "properties": {
                     "parquet_file": {
                         "type": "string",
-                        "description": "Path to the parquet file"
+                        "description": "Path to the recording (.dendro)"
                     },
                     "recording": {
                         "type": "object",
@@ -160,7 +160,7 @@ fn read_tools() -> Vec<Value> {
                 "properties": {
                     "parquet_file": {
                         "type": "string",
-                        "description": "Path to the parquet file"
+                        "description": "Path to the recording (.dendro)"
                     },
                     "recording": {
                         "type": "object",
@@ -179,7 +179,7 @@ fn read_tools() -> Vec<Value> {
                 "properties": {
                     "parquet_file": {
                         "type": "string",
-                        "description": "Path to the parquet file"
+                        "description": "Path to the recording (.dendro)"
                     },
                     "recording": {
                         "type": "object",
@@ -202,7 +202,7 @@ fn read_tools() -> Vec<Value> {
                 "properties": {
                     "parquet_file": {
                         "type": "string",
-                        "description": "Path to the parquet file"
+                        "description": "Path to the recording (.dendro)"
                     },
                     "recording": {
                         "type": "object",
@@ -225,7 +225,7 @@ fn read_tools() -> Vec<Value> {
                 "properties": {
                     "parquet_file": {
                         "type": "string",
-                        "description": "Path to the recording (.dendro, .rez or .parquet)"
+                        "description": "Path to the recording (.dendro)"
                     },
                     "recording": {
                         "type": "object",
@@ -262,9 +262,9 @@ fn additive_tools() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "parquet_file": {"type": "string", "description": "Path to the recording (.dendro, .rez or .parquet)"},
+                    "parquet_file": {"type": "string", "description": "Path to the recording (.dendro)"},
                     "recording": recording_property(),
-                    "output": {"type": "string", "description": "A new .dendro to write the edited recording to. Required when parquet_file is a .rez or .parquet, which 6.x does not change (it is converted there and the copy written); for a .dendro, write a copy instead of editing it in place."},
+                    "output": {"type": "string", "description": "A new .dendro to write the edited recording to, a copy, instead of editing it in place."},
                     "timestamp": {"type": ["string", "number"], "description": "When the event starts: an RFC 3339 string (e.g. 2026-09-28T14:03:11Z), or Unix seconds as a JSON number (never as a string: a digit-only string is refused as ambiguous)."},
                     "description": {"type": "string", "description": "One line, what happened. Shown on the timeline."},
                     "kind": {"type": "string", "description": "A short category such as deploy, incident, spike, or finding. Alignment and filters key on it."},
@@ -280,15 +280,15 @@ fn additive_tools() -> Vec<Value> {
         }),
         json!({
             "name": "run_checks",
-            "description": "Evaluate the recording's KPI checks (the `check` blocks embedded by `recording annotate --queries`, or the ones in `queries`) and return each verdict with its violation windows. With annotate=true the violation windows are also written into the recording as kind=check events, the same as `rezolus recording check --annotate` (into `output` for a .rez or .parquet). On a multi-recording archive with no `recording` selector every recording is evaluated and each gets its own verdicts, as the CLI does.",
+            "description": "Evaluate the recording's KPI checks (the `check` blocks embedded by `recording annotate --queries`, or the ones in `queries`) and return each verdict with its violation windows. With annotate=true the violation windows are also written into the recording as kind=check events, the same as `rezolus recording check --annotate`. On a multi-recording archive with no `recording` selector every recording is evaluated and each gets its own verdicts, as the CLI does.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "parquet_file": {"type": "string", "description": "Path to the recording (.dendro, .rez or .parquet)"},
+                    "parquet_file": {"type": "string", "description": "Path to the recording (.dendro)"},
                     "recording": recording_property(),
                     "queries": {"type": "object", "description": "A ServiceExtension object evaluated instead of the recording's embedded KPIs: {\"service_name\": \"...\", \"kpis\": [{\"role\": \"...\", \"title\": \"...\", \"query\": \"<PromQL producing ONE series>\", \"type\": \"gauge\"|\"counter\"|\"histogram\", \"check\": {\"above\": N} | {\"below\": N}, optional \"quantile\", \"for\" (seconds), \"severity\": \"fail\"|\"warn\"}]}."},
                     "annotate": {"type": "boolean", "description": "Write the violation windows into the recording as events. Default false."},
-                    "output": {"type": "string", "description": "A new .dendro to write the edited recording to. Required when parquet_file is a .rez or .parquet, which 6.x does not change (it is converted there and the copy written); for a .dendro, write a copy instead of editing it in place."}
+                    "output": {"type": "string", "description": "A new .dendro to write the edited recording to, a copy, instead of editing it in place."}
                 },
                 "required": ["parquet_file"]
             }
@@ -299,7 +299,7 @@ fn additive_tools() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "parquet_file": {"type": "string", "description": "Path to the recording (.dendro, .rez or .parquet)"},
+                    "parquet_file": {"type": "string", "description": "Path to the recording (.dendro)"},
                     "recording": recording_property(),
                     "query": {"type": "string", "description": "PromQL expression, as for the query tool. A heatmap result is refused: export histogram_quantile(...) of it instead."},
                     "format": {"type": "string", "enum": ["csv", "parquet"], "description": "Default csv."},
@@ -344,9 +344,9 @@ fn mutating_tools() -> Vec<Value> {
         "inputSchema": {
             "type": "object",
             "properties": {
-                "parquet_file": {"type": "string", "description": "Path to the recording (.dendro, .rez or .parquet)"},
+                "parquet_file": {"type": "string", "description": "Path to the recording (.dendro)"},
                 "recording": recording_property(),
-                "output": {"type": "string", "description": "A new .dendro to write the edited recording to. Required when parquet_file is a .rez or .parquet, which 6.x does not change (it is converted there and the copy written); for a .dendro, write a copy instead of editing it in place."},
+                "output": {"type": "string", "description": "A new .dendro to write the edited recording to, a copy, instead of editing it in place."},
                 "ids": {"type": "array", "items": {"type": "string"}, "description": "Event ids to remove (as returned by add_event, or check:<hash> for verdicts)."},
                 "kind": {"type": "string", "description": "Remove events of this kind."},
                 "source": {"type": "string", "description": "Remove events with this source, e.g. mcp for every agent-written event."}
@@ -1323,12 +1323,6 @@ impl Server {
                     path,
                     output.as_deref().map(Path::new),
                     run.per_recording_events.clone(),
-                    |suggested| {
-                        format!(
-                            "pass \"output\": {:?} (a new .dendro the events are written to)",
-                            suggested.display().to_string()
-                        )
-                    },
                     env!("CARGO_BIN_NAME"),
                 )?;
                 self.evict(output.as_deref().unwrap_or(parquet_file));
@@ -1513,33 +1507,22 @@ mod tests {
         );
     }
 
-    /// The server's open must dispatch a v3 (SQLite) `.rez` to `RezReader`, not
-    /// `ParquetReader::open_with_pool`. Mutation check: reverting the
-    /// `detect_rez_format` check to `is_rez_path` makes this fail — a v3 file
-    /// then falls through to `ParquetReader`, which errors on the SQLite
-    /// header instead of opening the archive.
+    /// A `.rez` is refused, naming the upgrade.
     #[tokio::test]
-    async fn get_reader_opens_v3_sqlite_rez() {
+    async fn get_reader_refuses_a_rez_with_the_upgrade() {
         let dir = tempfile::tempdir().unwrap();
         let rez_path = ::rez::fixtures::committed_rez("v3.rez", dir.path());
-        assert_eq!(
-            crate::recorder::rez::detect_rez_format(&rez_path).unwrap(),
-            crate::recorder::rez::RezFormat::V3Sqlite,
-            "fixture sanity: must actually be a v3 SQLite archive"
-        );
-
         let server = Server::new();
-        let result = server
+        let err = server
             .get_reader_selected(
                 rez_path.to_str().unwrap(),
                 &crate::mcp::RecordingSelector::default(),
             )
-            .await;
-        assert!(
-            result.is_ok(),
-            "the server must accept a v3 .rez: {:?}",
-            result.err().map(|e| e.to_string())
-        );
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(err.contains("rezolus recording upgrade"), "{err}");
     }
 
     #[test]
@@ -2455,9 +2438,9 @@ mod tests {
 
     #[tokio::test]
     async fn export_query_needs_the_export_dir_and_then_writes_under_it() {
-        // A shipped recording with a gauge the full-range query resolves.
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("site/viewer/data/simple_capture.parquet");
+        // A recording with a gauge the full-range query resolves.
+        let src = tempfile::tempdir().unwrap();
+        let path = crate::parquet_tools::test_support::simple_dendro(src.path());
         let file = path.to_str().unwrap();
         let args = json!({"parquet_file": file, "query": "queue_depth", "filename": "cpu"});
 

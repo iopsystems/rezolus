@@ -673,7 +673,7 @@ body::after {
 }
 
 /* Single-capture filename dropdown. Lives inside .topnav-actions
- * alongside Load Parquet / Load Selection so the three sit as a
+ * alongside Load Recording / Load Selection so the three sit as a
  * cohesive button group next to the REZOLUS logo. */
 .topnav-source {
     position: relative;

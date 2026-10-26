@@ -174,6 +174,33 @@ const BAD_UNIT: &str = r#"{"service_name": "simple", "kpis": [
 const NO_CHECKS: &str = r#"{"service_name": "simple", "kpis": [
     {"role": "q", "title": "Queue depth", "query": "queue_depth", "type": "gauge"}]}"#;
 
+/// A 5.x `.parquet.ab.tar` at `out`: `parquet` as both arms, and the
+/// manifest naming them `before` and `after`.
+fn ab_tarball(parquet: &Path, out: &Path) {
+    let bytes = std::fs::read(parquet).unwrap();
+    let manifest = serde_json::json!({
+        "version": 1,
+        "baseline": {"alias": "before", "sources": []},
+        "experiment": {"alias": "after", "sources": []},
+    })
+    .to_string();
+    let mut builder = tar::Builder::new(std::fs::File::create(out).unwrap());
+    builder.mode(tar::HeaderMode::Deterministic);
+    for (name, data) in [
+        ("baseline.parquet", bytes.as_slice()),
+        ("experiment.parquet", bytes.as_slice()),
+        ("ab.json", manifest.as_bytes()),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_path(name).unwrap();
+        header.set_size(data.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder.append(&header, data).unwrap();
+    }
+    builder.into_inner().unwrap();
+}
+
 /// A raw msgpack recording, as a 5.x `record -o out.raw` wrote: one V2
 /// snapshot per second, each with one counter.
 fn raw_recording(count: u64) -> Vec<u8> {
@@ -213,15 +240,11 @@ fn invocations_are_unchanged() {
         std::fs::copy(rez.join(name), t.join(name)).unwrap();
     }
     std::fs::copy(
-        repo().join("site/viewer/data/simple_capture.parquet"),
+        repo().join("tests/fixtures/legacy/simple_capture.parquet"),
         t.join("simple.parquet"),
     )
     .unwrap();
-    std::fs::copy(
-        repo().join("site/viewer/data/cachecannon.parquet"),
-        t.join("cachecannon.parquet"),
-    )
-    .unwrap();
+    ab_tarball(&t.join("simple.parquet"), &t.join("ab.parquet.ab.tar"));
     for (name, body) in [
         ("pass.json", PASSING),
         ("fail.json", FAILING),
@@ -293,6 +316,9 @@ fn invocations_are_unchanged() {
         "recording check missing.parquet --queries pass.json",
         "recording check simple.parquet --queries pass.json --recording source=x",
         "recording check simple.parquet --queries pass.json --recording nonsense",
+        "recording check simple.dendro --queries pass.json",
+        "recording check simple.dendro --queries error.json",
+        "recording check simple.dendro --queries fail.json --json",
         "recording check simple.dendro --queries fail.json",
         "recording check multi.dendro --queries pass.json",
         "recording check multi.dendro --queries pass.json --recording host=nowhere",
@@ -327,6 +353,7 @@ fn invocations_are_unchanged() {
         "recording filter simple.dendro",
         "recording filter v3.rez --samplers a",
         "recording filter v3.rez --samplers a -o v3-a.dendro",
+        "recording filter v3.dendro --samplers a -o v3-a.dendro",
         "recording filter v3.rez --samplers a -o v3-a.rez",
         "recording filter v3-a.dendro --metrics mem_free -o v3-mem.dendro",
         "recording filter v3.dendro --metrics ops -o v3-ops.dendro",
@@ -344,9 +371,6 @@ fn invocations_are_unchanged() {
         "recording check simple.dendro --templates tmpl",
         "recording check simple.dendro --templates tmpl --json",
         "recording filter simple.parquet --templates tmpl -o slim3.dendro",
-        // The built-in templates: the cachecannon capture carries no KPIs, so
-        // filtering it keeps what the built-in cachecannon template names.
-        "recording filter cachecannon.parquet -o cc-slim.dendro",
         // combine.
         "recording combine v3.dendro -o one.dendro",
         "recording combine v3.dendro simple.dendro -o c.rez",
@@ -356,6 +380,7 @@ fn invocations_are_unchanged() {
         "recording combine v3.dendro simple.dendro -o c.dendro",
         "recording metadata -i c.dendro",
         "recording combine v3.dendro simple.parquet --ab baseline=v3.dendro experiment=simple.parquet -o ab.dendro",
+        "recording combine v3.dendro simple.dendro --ab baseline=v3.dendro experiment=simple.dendro -o ab.dendro",
         "recording metadata -i ab.dendro",
         "recording combine v3.dendro simple.dendro --ab baseline=v3.dendro experiment=nope -o ab2.dendro",
         "recording combine multi.dendro --ab baseline=0 experiment=1 -o ab3.dendro",
@@ -381,6 +406,12 @@ fn invocations_are_unchanged() {
         "recording metadata -i tagged.dendro",
         // snapshot.
         "recording snapshot v3-live.rez -o snap.dendro",
+        "recording upgrade v3-live.rez -o live.dendro",
+        "recording snapshot live.dendro -o snap.dendro",
+        // A 5.x A/B tarball upgrades to a two-arm archive.
+        "recording upgrade ab.parquet.ab.tar -o from-tarball.dendro",
+        "recording metadata -i ab.parquet.ab.tar",
+        "recording metadata -i from-tarball.dendro",
         "recording snapshot v3-live.rez -o snap.rez",
         "recording snapshot snap.dendro -o snap2.dendro",
         "recording snapshot snap.dendro -o snap2.dendro",
@@ -412,7 +443,7 @@ fn mcp_session_is_unchanged() {
     let tmp = tempfile::tempdir().unwrap();
     let t = tmp.path();
     std::fs::copy(
-        repo().join("site/viewer/data/simple_capture.parquet"),
+        repo().join("tests/fixtures/legacy/simple_capture.parquet"),
         t.join("simple.parquet"),
     )
     .unwrap();

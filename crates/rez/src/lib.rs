@@ -1,8 +1,11 @@
-//! The `.rez` archive format, now `metriken-storage`'s (feature `rez`),
-//! re-exported under the paths rezolus uses. What stays here is what
-//! implements `metriken_query::MetricsSource`: [`reader::RezReader`] and
-//! [`live::LiveReader`].
+//! Reading recordings: [`reader::RezReader`] and [`live::LiveReader`],
+//! which implement `metriken_query::MetricsSource` over a dendro archive,
+//! and [`container`], which names a file by content and refuses one that is
+//! not a dendro archive. The `.rez` format modules are metriken-storage's
+//! (feature `rez`), re-exported for `recording upgrade`, which converts the
+//! formats earlier releases wrote.
 
+pub mod container;
 #[cfg(any(all(test, feature = "write"), feature = "test-support"))]
 pub mod fixtures;
 pub mod live;

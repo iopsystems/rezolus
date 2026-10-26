@@ -100,3 +100,23 @@ separated from the bytes it guards, which is the same failure the warning is
 about. That is why the warning is duplicated into the JSON's own `_comment`
 field, so a raw fetch carries it too. If you genuinely must vendor, copy that
 field along with the bytes.
+
+## `legacy/simple_capture.parquet`
+
+A standalone parquet recording from a 5.x recorder, formerly the static
+site's sample. It is the input of `recording upgrade`'s tests and of the
+refusal tests: every command but `upgrade` must refuse it and print
+`rezolus recording upgrade FILE`.
+
+## `upgraded/*.dendro`
+
+`rezolus recording upgrade` of `legacy/simple_capture.parquet` and of the
+`.rez` archives in `crates/rez/tests/fixtures/rez/` (`v2`, `v3`, `v3-multi`,
+`v3-live`, `v3-wal-only`), for the WASM viewer's node tests and
+`viewer_smoke.sh`, which open `.dendro` only. The Rust tests convert their
+fixtures when they run. Regenerate one, only when the converter changes, with
+
+    rezolus recording upgrade crates/rez/tests/fixtures/rez/v3.rez -o tests/fixtures/upgraded/v3.dendro
+
+after removing the old file. Two conversions of one input are not
+byte-identical, so no test pins these files' bytes.

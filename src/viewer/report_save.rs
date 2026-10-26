@@ -2,23 +2,17 @@
 //! `save_with_selection` handler has paths on disk; this reads them into
 //! bytes and hands them to `report_save::build_report`, which the WASM
 //! static-site viewer shares. A report is always a `.dendro`.
-//!
-//! A v3 `.rez` source is converted to dendro by path first
-//! (`parquet_tools::legacy`), since only a path can be opened as one; a tar
-//! `.rez` and parquet files are converted inside the shared crate.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 pub use report_save::ReportPayload;
 
-use crate::parquet_tools::legacy::Container;
-
-/// Build a dendro report of the recordings at `paths`: one archive, or one
-/// or two parquet files (baseline first). See `report_save::build_report`
-/// for the semantics (trim when `keep_metrics` is `Some`, keep what `range`
-/// holds, embed the selection and events, stamp the report marker on the
-/// recording labelled `anchor`).
+/// Build a dendro report of the recordings at `paths`: one archive, or the
+/// two of a two-file comparison (baseline first). See
+/// `report_save::build_report` for the semantics (trim when `keep_metrics`
+/// is `Some`, keep what `range` holds, embed the selection and events, stamp
+/// the report marker on the recording labelled `anchor`).
 pub fn build_report(
     paths: &[&Path],
     anchor: Option<&BTreeMap<String, String>>,
@@ -30,7 +24,6 @@ pub fn build_report(
     use ::report_save::ReportSource;
     let read =
         |p: &Path| std::fs::read(p).map_err(|e| format!("failed to read {}: {e}", p.display()));
-    let first = *paths.first().ok_or("nothing to save")?;
     let build = |source| {
         ::report_save::build_report(
             source,
@@ -41,22 +34,13 @@ pub fn build_report(
             events_json,
         )
     };
-    match Container::of(first) {
-        Container::Dendro => build(ReportSource::Dendro(&read(first)?)),
-        Container::RezV3 => {
-            let staging = tempfile::tempdir().map_err(|e| e.to_string())?;
-            let converted = staging.path().join("converted.dendro");
-            crate::parquet_tools::legacy::convert(first, &converted).map_err(|e| e.to_string())?;
-            build(ReportSource::Dendro(&read(&converted)?))
-        }
-        Container::RezTar => build(ReportSource::RezTar(&read(first)?)),
-        Container::Parquet => {
-            let files: Vec<Vec<u8>> = paths.iter().map(|p| read(p)).collect::<Result<_, _>>()?;
-            build(ReportSource::Parquet(
-                files.iter().map(Vec::as_slice).collect(),
-            ))
-        }
-        Container::Unknown => Err(format!("{} is not a recording", first.display())),
+    match paths {
+        [one] => build(ReportSource::Dendro(&read(one)?)),
+        [baseline, experiment] => build(ReportSource::Compare {
+            baseline: &read(baseline)?,
+            experiment: &read(experiment)?,
+        }),
+        _ => Err("nothing to save".to_string()),
     }
 }
 
@@ -64,6 +48,15 @@ pub fn build_report(
 mod tests {
     use super::*;
     use crate::parquet_metadata::{KEY_EVENTS, KEY_REPORT, KEY_SELECTION, REPORT_VALUE_TRIMMED};
+
+    /// The committed legacy fixture `name` upgraded to a `.dendro` in
+    /// `dir`, as a user upgrades it before opening it.
+    fn upgraded(name: &str, dir: &Path) -> std::path::PathBuf {
+        let src = ::rez::fixtures::committed_rez(name, dir);
+        let out = dir.join(format!("{name}.dendro"));
+        crate::parquet_tools::legacy::convert(&src, &out).unwrap();
+        out
+    }
 
     fn set(names: &[&str]) -> BTreeSet<String> {
         names.iter().map(|s| s.to_string()).collect()
@@ -79,13 +72,13 @@ mod tests {
         (streams, sources[0].meta.metadata.clone())
     }
 
-    /// A v3 `.rez` source saves a dendro report, trimmed: the selection and
-    /// the marker on its recording, the table holding none of the kept
-    /// metrics dropped. The source is not changed.
+    /// An archive saves a trimmed report: the selection and the marker on
+    /// its recording, the table holding none of the kept metrics dropped.
+    /// The source is not changed.
     #[test]
-    fn a_rez_source_saves_a_trimmed_dendro_report() {
+    fn an_upgraded_rez_saves_a_trimmed_dendro_report() {
         let dir = tempfile::tempdir().unwrap();
-        let src = ::rez::fixtures::committed_rez("v3.rez", dir.path());
+        let src = upgraded("v3.rez", dir.path());
         let before = std::fs::read(&src).unwrap();
         // `ops` is table `a`'s; `mem_free` is table `b`'s.
         let bytes = build_report(
@@ -110,12 +103,15 @@ mod tests {
         assert_eq!(std::fs::read(&src).unwrap(), before);
     }
 
-    /// A tar `.rez` source saves a dendro report too, untrimmed: every
-    /// table, the selection, no marker.
+    /// An untrimmed report keeps every table and the selection, and no
+    /// marker; a legacy file is refused.
     #[test]
-    fn a_tar_rez_source_saves_an_untrimmed_dendro_report() {
+    fn an_untrimmed_report_keeps_every_table_and_a_legacy_file_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let src = ::rez::fixtures::committed_rez("v2.rez", dir.path());
+        let legacy = ::rez::fixtures::committed_rez("v2.rez", dir.path());
+        let err = build_report(&[&legacy], None, None, None, "{}", None).unwrap_err();
+        assert!(err.contains(".rez archive"), "{err}");
+        let src = upgraded("v2.rez", dir.path());
         let bytes = build_report(&[&src], None, None, None, "{}", None).unwrap();
         let (streams, md) = dendro_report(&bytes);
         assert_eq!(streams, ["a", "b"]);
@@ -128,12 +124,14 @@ mod tests {
     #[test]
     fn a_save_with_no_events_clears_a_stale_events_key() {
         let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("src.rez");
+        let edited = dir.path().join("src.rez");
         ::rez::fixtures::edited_rez(
             "v3.rez",
-            &src,
+            &edited,
             r#"UPDATE recordings SET metadata = '{"events":"{\"events\":[{\"timestamp\":1,\"description\":\"x\"}]}"}';"#,
         );
+        let src = dir.path().join("src.dendro");
+        crate::parquet_tools::legacy::convert(&edited, &src).unwrap();
         let bytes = build_report(&[&src], None, None, None, "{}", None).unwrap();
         let (_, md) = dendro_report(&bytes);
         assert!(
@@ -311,12 +309,12 @@ mod tests {
         assert!(rates.iter().all(|(comm, _)| !comm.is_empty()));
     }
 
-    /// A ranged report of a `.rez` keeps the segments overlapping the range,
-    /// and a range after the data is an error.
+    /// A ranged report keeps the segments overlapping the range, and a
+    /// range after the data is an error.
     #[test]
-    fn a_ranged_rez_report_drops_segments_outside_the_range() {
+    fn a_ranged_report_drops_segments_outside_the_range() {
         let dir = tempfile::tempdir().unwrap();
-        let src = ::rez::fixtures::committed_rez("v3.rez", dir.path());
+        let src = upgraded("v3.rez", dir.path());
         const ANCHOR: u64 = 1_700_000_000_000_000_000;
 
         let after = ::report_save::TimeRange {

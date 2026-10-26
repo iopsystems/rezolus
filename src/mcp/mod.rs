@@ -162,8 +162,6 @@ pub(crate) fn open_source_with_pool_labeled(
     syntax: SelectorSyntax,
     combined_ok: bool,
 ) -> Result<Opened, OpenError> {
-    use crate::recorder::rez::RezFormat;
-
     // Ahead of the open, and HERE rather than in each front end, so a typo'd
     // path is diagnosed the same way wherever it was typed. The stdio server
     // used to carry this check itself while the CLI had none, so the same
@@ -176,42 +174,9 @@ pub(crate) fn open_source_with_pool_labeled(
             file.display()
         )));
     }
-
-    if crate::recorder::rez::detect_rez_format(file).unwrap_or(RezFormat::NotRez)
-        == RezFormat::NotRez
-    {
-        // Silently ignoring the selector here would be its own wrong answer:
-        // the caller believes it narrowed the data and it did not.
-        //
-        // "not a .rez archive" rather than "is a parquet file": this branch
-        // takes everything `detect_rez_format` calls `NotRez`, which includes
-        // a text file or a truncated download, and asserting parquet would be
-        // a guess. The advice is phrased without naming a flag because the
-        // stdio server reaches this with a JSON object, not `--recording`.
-        if !selector.is_empty() {
-            return Err(OpenError::other(format!(
-                "{} is not a .rez archive and holds no recordings to select between; \
-                 a recording selector applies only to a multi-recording .rez",
-                file.display()
-            )));
-        }
-        // No labels: a bare parquet file is one recording with no label set
-        // of its own, which is a stable identity for exactly one path.
-        let reader = metriken_query::ParquetReader::open_with_pool(file, pool)
-            .map(::dashboard::combined::label_parquet_by_source)
-            .map_err(OpenError::Other)?;
-        return Ok(Opened {
-            labels: std::collections::BTreeMap::new(),
-            reader: std::sync::Arc::new(reader),
-            all_empty_recordings: Vec::new(),
-            // Not a `.rez`: whether this is a rezolus recording is the
-            // `source` metadata's question again, as it has always been for a
-            // plain parquet file.
-            rezolus_native: false,
-            combined: Vec::new(),
-            combined_positions: Vec::new(),
-        });
-    }
+    // A recording is a dendro archive; one an earlier release wrote is
+    // refused with the command that converts it.
+    ::rez::container::require_dendro(file, env!("CARGO_BIN_NAME")).map_err(OpenError::other)?;
 
     // Open the recordings ONCE and build the reader from the one that was
     // selected.
@@ -375,7 +340,8 @@ pub(crate) fn open_source_with_pool_labeled(
                     &universe_idx,
                     &[],
                     syntax,
-                    env!("CARGO_BIN_NAME")
+                    env!("CARGO_BIN_NAME"),
+                    false
                 )
             )));
         }
@@ -410,7 +376,8 @@ pub(crate) fn open_source_with_pool_labeled(
                     &universe_idx,
                     &hits,
                     syntax,
-                    env!("CARGO_BIN_NAME")
+                    env!("CARGO_BIN_NAME"),
+                    false
                 )
             );
             // Only the NO-SELECTOR case is `NeedsSelection`: it is the one a
@@ -807,12 +774,18 @@ fn listing(
     } else {
         Some("No recording in this archive can be selected by labels.")
     };
-    let body = match positions {
-        Some(positions) => {
-            describe_candidates_at(recordings, positions, &[], syntax, env!("CARGO_BIN_NAME"))
-        }
-        None => describe_candidates(recordings, &[], syntax, env!("CARGO_BIN_NAME")),
-    };
+    // Every recording carries its archive position here: the refusal of a
+    // two-file comparison sends the user to this listing for the positions
+    // `recording combine --ab` takes.
+    let identity: Vec<usize> = (0..recordings.len()).collect();
+    let body = describe_candidates_at(
+        recordings,
+        positions.unwrap_or(&identity),
+        &[],
+        syntax,
+        env!("CARGO_BIN_NAME"),
+        true,
+    );
     match close {
         Some(close) => format!("{lead}\n{body}\n{close}"),
         // `body` ends in a newline (one entry per line), so trim rather than
@@ -1482,9 +1455,7 @@ fn recording_arg() -> clap::Arg {
              under its recording's labels; extract-features, and any tool on a\n\
              comparison (recordings carrying `arm`), need it.\n\
              Run `rezolus mcp describe-recording FILE` with no --recording to list\n\
-             an archive's recordings and the selector that picks each one.\n\
-             Not accepted for a .parquet file, which holds one recording and so has\n\
-             nothing to select between.",
+             an archive's recordings and the selector that picks each one.",
         )
         .action(clap::ArgAction::Append)
 }
@@ -1494,10 +1465,11 @@ pub fn command() -> Command {
     Command::new("mcp")
         .about("Run Rezolus MCP server for AI analysis or execute analysis commands")
         .long_about(
-            "AI-assisted analysis of a recording — a .parquet file or a .rez archive, told\n\
-             apart by content rather than by name. With no subcommand, runs as a Model\n\
-             Context Protocol server over stdio for an LLM client. Each subcommand also runs\n\
-             one-shot from the CLI, printing the same analysis to stdout.\n\n\
+            "AI-assisted analysis of a recording, a .dendro archive. With no subcommand,\n\
+             runs as a Model Context Protocol server over stdio for an LLM client. Each\n\
+             subcommand also runs one-shot from the CLI, printing the same analysis to\n\
+             stdout. A .rez archive or .parquet file from an earlier release is refused\n\
+             with the command that converts it: `rezolus recording upgrade FILE`.\n\n\
              SUBCOMMANDS:\n    \
              describe-recording   Summarize a recording (source, version, time range, duration)\n    \
              describe-metrics     List every metric in a recording with its type and labels\n    \
@@ -1518,9 +1490,9 @@ pub fn command() -> Command {
              # Run as a stdio MCP server for an LLM client\n    \
              rezolus mcp\n\n    \
              # One-shot: list the metrics in a recording\n    \
-             rezolus mcp describe-metrics file.parquet\n\n    \
+             rezolus mcp describe-metrics file.dendro\n\n    \
              # One-shot: run a PromQL query\n    \
-             rezolus mcp query file.parquet \"sum(irate(cpu_cycles[1m]))\"\n\n    \
+             rezolus mcp query file.dendro \"sum(irate(cpu_cycles[1m]))\"\n\n    \
              # Register with Claude Code (user scope) and install the skill\n    \
              rezolus mcp install",
         )
@@ -1575,12 +1547,12 @@ pub fn command() -> Command {
                      Both arguments are full PromQL expressions, not bare metric names; wrap\n\
                      counters in rate()/irate() as you would in a query.\n\n\
                      EXAMPLE:\n    \
-                     rezolus mcp analyze-correlation file.parquet \\\n        \
+                     rezolus mcp analyze-correlation file.dendro \\\n        \
                      \"irate(cgroup_cpu_usage[1m])\" \"cgroup_memory_used\"",
                 )
                 .arg(
                     clap::Arg::new("FILE")
-                        .help("Recording to analyze: a .parquet file or a .rez archive")
+                        .help("Recording to analyze: a .dendro archive")
                         .value_parser(clap::value_parser!(PathBuf))
                         .required(true)
                         .index(1),
@@ -1607,11 +1579,11 @@ pub fn command() -> Command {
                      wall-clock time range it spans, and total duration. Start here to confirm\n\
                      you have the right file before querying it.\n\n\
                      EXAMPLE:\n    \
-                     rezolus mcp describe-recording file.parquet",
+                     rezolus mcp describe-recording file.dendro",
                 )
                 .arg(
                     clap::Arg::new("FILE")
-                        .help("Recording to describe: a .parquet file or a .rez archive")
+                        .help("Recording to describe: a .dendro archive")
                         .value_parser(clap::value_parser!(PathBuf))
                         .required(true)
                         .index(1),
@@ -1627,11 +1599,11 @@ pub fn command() -> Command {
                      find exact metric names and see how to phrase a PromQL expression for each\n\
                      type.\n\n\
                      EXAMPLE:\n    \
-                     rezolus mcp describe-metrics file.parquet",
+                     rezolus mcp describe-metrics file.dendro",
                 )
                 .arg(
                     clap::Arg::new("FILE")
-                        .help("Recording to analyze: a .parquet file or a .rez archive")
+                        .help("Recording to analyze: a .dendro archive")
                         .value_parser(clap::value_parser!(PathBuf))
                         .required(true)
                         .index(1),
@@ -1647,13 +1619,13 @@ pub fn command() -> Command {
                      If QUERY is omitted, performs exhaustive analysis on all metrics in the recording.\n\n\
                      EXAMPLES:\n    \
                      # Sweep every metric in the recording\n    \
-                     rezolus mcp detect-anomalies out.rez\n\n    \
+                     rezolus mcp detect-anomalies out.dendro\n\n    \
                      # Focus on one metric\n    \
-                     rezolus mcp detect-anomalies out.rez cpu_usage"
+                     rezolus mcp detect-anomalies out.dendro cpu_usage"
                 )
                 .arg(
                     clap::Arg::new("FILE")
-                        .help("Recording to analyze: a .parquet file or a .rez archive")
+                        .help("Recording to analyze: a .dendro archive")
                         .value_parser(clap::value_parser!(PathBuf))
                         .required(true)
                         .index(1),
@@ -1685,13 +1657,13 @@ pub fn command() -> Command {
                      to show.\n\n\
                      EXAMPLES:\n    \
                      # Total cycles per second across all CPUs\n    \
-                     rezolus mcp query out.rez 'sum(irate(cpu_cycles[1m]))'\n\n    \
+                     rezolus mcp query out.dendro 'sum(irate(cpu_cycles[1m]))'\n\n    \
                      # A ratio: both operands' bands are combined\n    \
-                     rezolus mcp query out.rez 'sum(irate(cpu_usage[1m])) / cpu_cores'"
+                     rezolus mcp query out.dendro 'sum(irate(cpu_usage[1m])) / cpu_cores'"
                 )
                 .arg(
                     clap::Arg::new("FILE")
-                        .help("Recording to query: a .parquet file or a .rez archive")
+                        .help("Recording to query: a .dendro archive")
                         .value_parser(clap::value_parser!(PathBuf))
                         .required(true)
                         .index(1),
@@ -1716,13 +1688,13 @@ pub fn command() -> Command {
                      least 10 seconds.\n\n\
                      EXAMPLES:\n    \
                      # Emit the feature record\n    \
-                     rezolus mcp extract-features out.rez\n\n    \
+                     rezolus mcp extract-features out.dendro\n\n    \
                      # Keep it for an assessment step\n    \
-                     rezolus mcp extract-features out.rez > features.json",
+                     rezolus mcp extract-features out.dendro > features.json",
                 )
                 .arg(
                     clap::Arg::new("FILE")
-                        .help("Recording to analyze: a .parquet file or a .rez archive")
+                        .help("Recording to analyze: a .dendro archive")
                         .value_parser(clap::value_parser!(PathBuf))
                         .required(true)
                         .index(1),
@@ -1878,30 +1850,27 @@ pub(crate) mod tests {
         ::rez::fixtures::write_dendro(path, &sources, None, ::rez::fixtures::Finish::Finalized);
     }
 
+    /// A dendro archive opens; a `.rez` and a parquet file are refused,
+    /// naming the upgrade.
     #[test]
-    fn open_source_reads_archives_and_parquet() {
+    fn open_source_reads_archives_and_refuses_legacy_files() {
         let dir = tempfile::tempdir().unwrap();
-
-        // A dendro archive and a `.rez`, opened via open_source.
         let dendro_path = dir.path().join("rec.dendro");
         multi_recording(&dendro_path, &["rezolus"], &[true]);
+        let source = open_source(&dendro_path).unwrap();
+        assert!(!source.counter_names().is_empty());
+
         let rez_path = ::rez::fixtures::committed_rez("v2.rez", dir.path());
-        for path in [&dendro_path, &rez_path] {
-            let source = open_source(path).unwrap();
+        let parquet_path = dir.path().join("rec.parquet");
+        bare_parquet(&parquet_path);
+        for path in [&rez_path, &parquet_path] {
+            let err = open_source(path).err().unwrap().to_string();
             assert!(
-                !source.counter_names().is_empty(),
-                "{} should expose counter names",
+                err.contains("rezolus recording upgrade"),
+                "{}: {err}",
                 path.display()
             );
         }
-
-        // A bare parquet table, opened via open_source.
-        let parquet_path = dir.path().join("rec.parquet");
-        bare_parquet(&parquet_path);
-        assert!(
-            open_source(&parquet_path).is_ok(),
-            "bare parquet should open as a MetricsSource"
-        );
     }
 
     /// A bare parquet table at `path`: the one sealed segment of a dendro
@@ -2044,27 +2013,13 @@ pub(crate) mod tests {
         );
     }
 
-    /// `open_source` must dispatch a v3 (SQLite) `.rez` to `RezReader`, not
-    /// `ParquetReader`. Mutation check: reverting the `detect_rez_format`
-    /// check in `open_source` to `is_rez_path` makes this fail — `is_rez_path`
-    /// (a tar sniff) reports `false` for a SQLite file, so the call falls
-    /// through to `ParquetReader::open`, which errors on the SQLite header.
+    /// A v3 `.rez` is refused like the other legacy containers.
     #[test]
-    fn open_source_reads_v3_sqlite_rez() {
+    fn open_source_refuses_a_v3_rez() {
         let dir = tempfile::tempdir().unwrap();
         let rez_path = ::rez::fixtures::committed_rez("v3.rez", dir.path());
-
-        assert_eq!(
-            crate::recorder::rez::detect_rez_format(&rez_path).unwrap(),
-            crate::recorder::rez::RezFormat::V3Sqlite,
-            "fixture sanity: must actually be a v3 SQLite archive"
-        );
-        let source = open_source(&rez_path);
-        assert!(
-            source.is_ok(),
-            "open_source must accept a v3 .rez: {:?}",
-            source.err()
-        );
+        let err = open_source(&rez_path).err().unwrap().to_string();
+        assert!(err.contains("v3 .rez archive"), "{err}");
     }
 
     #[test]
@@ -2202,6 +2157,8 @@ pub(crate) mod tests {
         assert!(msg.contains("source=valkey"), "{msg}");
     }
 
+    /// A selector against a parquet file is refused as the file is: it is
+    /// not a dendro archive.
     #[test]
     fn a_selector_against_a_parquet_file_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
@@ -2210,26 +2167,10 @@ pub(crate) mod tests {
 
         let sel = RecordingSelector::parse("--recording", ["source=redis".to_string()]).unwrap();
         let msg = match open_source_selected(&parquet_path, &sel) {
-            Ok(_) => panic!("a parquet file has no recordings to select"),
+            Ok(_) => panic!("a parquet file is not opened"),
             Err(e) => e.to_string(),
         };
-        assert!(msg.contains("no recordings"), "{msg}");
-        // Says what the file is NOT, rather than asserting it is parquet:
-        // this branch also takes a text file or a truncated download, so
-        // naming the format would be a guess. The check also distinguishes
-        // this from the `.rez` path's own "holds no recordings", which the
-        // test would otherwise accept if a parquet file were somehow routed
-        // into the archive branch and rejected there for another reason.
-        assert!(
-            msg.contains("not a .rez archive"),
-            "must say why there is nothing to select: {msg}"
-        );
-        // Phrased for both front ends: the stdio server passes a JSON object,
-        // so advice spelled as a CLI flag would be wrong there.
-        assert!(
-            !msg.contains("--recording"),
-            "must not name a CLI flag the server caller never typed: {msg}"
-        );
+        assert!(msg.contains("recording upgrade"), "{msg}");
     }
 
     #[test]
@@ -2666,28 +2607,6 @@ pub(crate) mod tests {
         assert_eq!(
             opened.provenance(),
             crate::analysis::extract::Provenance::RezolusAgent
-        );
-    }
-
-    /// ...and a plain parquet file is unchanged: its `source` metadata is
-    /// still the only thing that can answer, exactly as before.
-    #[test]
-    fn a_parquet_file_still_decides_provenance_from_its_metadata() {
-        let dir = tempfile::tempdir().unwrap();
-        let parquet_path = dir.path().join("rec.parquet");
-        bare_parquet(&parquet_path);
-
-        let opened = open_selected_labeled(
-            &parquet_path,
-            &RecordingSelector::default(),
-            SelectorSyntax::Flag("--recording"),
-            false,
-        )
-        .unwrap();
-        assert!(!opened.rezolus_native);
-        assert_eq!(
-            opened.provenance(),
-            crate::analysis::extract::Provenance::FromMetadata
         );
     }
 

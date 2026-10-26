@@ -4,9 +4,9 @@
 //! what the viewer reads back, so both are exercised through the real binary
 //! against the small `simple_capture.parquet` fixture (five samples of a
 //! gauge `queue_depth`, constant at 3, and a counter `http_requests_total`
-//! with two label sets). `--annotate` writes into a dendro archive, so the
-//! tests that annotate run on the fixture converted with `recording upgrade`;
-//! a two-recording archive is two copies combined with `--ab`.
+//! with two label sets), converted with `recording upgrade`, as a user
+//! converts one before checking it; a two-recording archive is two copies
+//! combined with `--ab`.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -15,8 +15,23 @@ fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_rezolus")
 }
 
+/// The committed parquet capture, which only `recording upgrade` opens.
+fn legacy_fixture() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/legacy/simple_capture.parquet")
+}
+
+/// The capture upgraded to a `.dendro`, once per test process; read only
+/// (a test that writes takes [`dendro_fixture`]).
 fn fixture() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("site/viewer/data/simple_capture.parquet")
+    static UPGRADED: std::sync::OnceLock<(tempfile::TempDir, PathBuf)> = std::sync::OnceLock::new();
+    UPGRADED
+        .get_or_init(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dendro_fixture(dir.path());
+            (dir, path)
+        })
+        .1
+        .clone()
 }
 
 fn rezolus(args: &[&str]) -> Output {
@@ -167,9 +182,10 @@ fn json_output_is_an_array_of_verdicts() {
     assert_eq!(results[0]["check"]["above"], 10.0);
     assert_eq!(results[0]["check"]["severity"], "fail");
     assert_eq!(results[0]["windows"].as_array().unwrap().len(), 0);
-    assert!(
-        results[0].get("recording").is_none(),
-        "a parquet file has no labels"
+    assert_eq!(
+        results[0]["recording"],
+        serde_json::json!({}),
+        "the upgraded capture's recording has no labels"
     );
 
     assert_eq!(results[1]["status"], "fail");
@@ -183,13 +199,13 @@ fn json_output_is_an_array_of_verdicts() {
     assert_eq!(w["points"], 4);
 }
 
-/// A `.dendro` converted from a copy of the fixture.
+/// A `.dendro` converted from the fixture, in `dir`.
 fn dendro_fixture(dir: &Path) -> PathBuf {
     let dendro = dir.join("copy.dendro");
     let out = rezolus(&[
         "recording",
         "upgrade",
-        fixture().to_str().unwrap(),
+        legacy_fixture().to_str().unwrap(),
         "-o",
         dendro.to_str().unwrap(),
     ]);
@@ -213,34 +229,31 @@ fn events_of(path: &Path) -> Vec<serde_json::Value> {
     }
 }
 
-/// A parquet file is not changed by `--annotate`: without `-o` it is
-/// refused, naming the command to run; with `-o` the events go into a new
-/// `.dendro`.
+/// A parquet file is refused, by `--annotate` as by a plain check, naming
+/// the upgrade, and is not changed.
 #[test]
-fn annotate_on_a_parquet_writes_a_new_dendro() {
+fn a_parquet_is_refused_with_the_upgrade() {
     let dir = tempfile::tempdir().unwrap();
     let copy = dir.path().join("copy.parquet");
-    std::fs::copy(fixture(), &copy).unwrap();
+    std::fs::copy(legacy_fixture(), &copy).unwrap();
     let before = std::fs::read(&copy).unwrap();
     let queries = write_queries(dir.path(), "q.json", FAILING);
-    let mut args = vec![
-        "recording",
-        "check",
-        copy.to_str().unwrap(),
-        "--queries",
-        queries.to_str().unwrap(),
-        "--annotate",
-    ];
-    let out = rezolus(&args);
-    assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
-    let advice = format!("-o {}", dir.path().join("copy.dendro").display());
-    assert!(stderr(&out).contains(&advice), "{}", stderr(&out));
-
-    let dendro = dir.path().join("copy.dendro");
-    args.extend(["-o", dendro.to_str().unwrap()]);
-    let out = rezolus(&args);
-    assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
-    assert_eq!(events_of(&dendro).len(), 1);
+    for annotate in [false, true] {
+        let mut args = vec![
+            "recording",
+            "check",
+            copy.to_str().unwrap(),
+            "--queries",
+            queries.to_str().unwrap(),
+        ];
+        if annotate {
+            args.push("--annotate");
+        }
+        let out = rezolus(&args);
+        assert_eq!(out.status.code(), Some(2), "stderr: {}", stderr(&out));
+        let advice = format!("rezolus recording upgrade {}", copy.display());
+        assert!(stderr(&out).contains(&advice), "{}", stderr(&out));
+    }
     assert_eq!(std::fs::read(&copy).unwrap(), before);
 }
 
@@ -352,10 +365,11 @@ fn two_checks_with_one_title_write_two_events() {
 /// A two-recording `.dendro` from two copies of the fixture, labelled
 /// arm=baseline and arm=experiment.
 fn two_recording_rez(dir: &Path) -> PathBuf {
-    let a = dir.join("a.parquet");
-    let b = dir.join("b.parquet");
-    std::fs::copy(fixture(), &a).unwrap();
-    std::fs::copy(fixture(), &b).unwrap();
+    let (da, db) = (dir.join("a"), dir.join("b"));
+    std::fs::create_dir_all(&da).unwrap();
+    std::fs::create_dir_all(&db).unwrap();
+    let a = dendro_fixture(&da);
+    let b = dendro_fixture(&db);
     let ab = dir.join("ab.dendro");
     let out = rezolus(&[
         "recording",
@@ -363,8 +377,8 @@ fn two_recording_rez(dir: &Path) -> PathBuf {
         a.to_str().unwrap(),
         b.to_str().unwrap(),
         "--ab",
-        "baseline=a.parquet",
-        "experiment=b.parquet",
+        &format!("baseline={}", a.display()),
+        &format!("experiment={}", b.display()),
         "-o",
         ab.to_str().unwrap(),
     ]);

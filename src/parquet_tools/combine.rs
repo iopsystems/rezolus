@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use super::legacy::{self, Container};
+use super::legacy;
 
 /// How `--ab` assigns arms.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -11,7 +11,7 @@ enum AbPlan {
     /// Two inputs: each input's recordings take that input's arm.
     Inputs([&'static str; 2]),
     /// One input: the recordings at these positions (0-based, in the
-    /// archive's order, as `describe-recording` lists them) take these arms.
+    /// archive's order, as `describe-recording` prints them) take these arms.
     /// For an archive assembled before `--ab` existed, whose two recordings
     /// may carry the same labels.
     Positions([(usize, &'static str); 2]),
@@ -132,7 +132,7 @@ impl AbPlan {
     /// The arm each source of the output takes, and the input it came
     /// from: `counts` is how many sources each input contributed, in the
     /// order they were copied. `groups` is the one input's recordings as
-    /// `rezolus mcp describe-recording` lists them (its read groups, each by
+    /// `rezolus mcp describe-recording` numbers them (its read groups, each by
     /// the catalog positions of its sources), which `--ab baseline=0
     /// experiment=1` positions index; every source of a named recording
     /// takes its arm.
@@ -222,28 +222,23 @@ fn stamped_labels(
 }
 
 /// Refuse a plan an input's recordings already contradict, before anything
-/// is copied: each input's source labels, read from the dendro archive it is
-/// copied from (`inputs`, the converted ones for a legacy input), named by
-/// the input as given (`files`). Whether the arms fill a comparison is
+/// is copied: each input's source labels, read from the dendro archive
+/// (`files`, as given). Whether the arms fill a comparison is
 /// checked after the copy (`check_slots`), when the output's recordings are
 /// known: a source and its copy in two inputs are one recording.
-fn check_ab_plan(
-    plan: &AbPlan,
-    files: &[PathBuf],
-    inputs: &[PathBuf],
-) -> Result<(), Box<dyn std::error::Error>> {
+fn check_ab_plan(plan: &AbPlan, files: &[PathBuf]) -> Result<(), Box<dyn std::error::Error>> {
     if *plan == AbPlan::Nothing {
         return Ok(());
     }
     let mut labels = Vec::new();
     let mut counts = Vec::new();
-    for input in inputs {
+    for input in files {
         let sources = dendro::archive::Archive::open(input)?.read_sources()?;
         counts.push(sources.len());
         labels.extend(sources.into_iter().map(|s| s.meta.labels));
     }
     let groups = match plan {
-        AbPlan::Positions(_) => read_groups_of(&inputs[0])?,
+        AbPlan::Positions(_) => read_groups_of(&files[0])?,
         _ => Vec::new(),
     };
     stamped_labels(&labels, &plan.per_recording(&counts, files, &groups)?)?;
@@ -371,6 +366,9 @@ pub(super) fn run(
         return Err("combine takes two or more inputs (or one archive with --ab)".into());
     }
     legacy::check_new_dendro(output)?;
+    for file in files {
+        ::rez::container::require_dendro(file, host.program)?;
+    }
     let plan = ab_plan(ab_raw, files, &host.positions_from())?;
     combine_dendro(&host.viewer_refuses(), files, output, &plan)
 }
@@ -378,8 +376,8 @@ pub(super) fn run(
 /// Assemble one dendro archive from `files`, a source per input recording,
 /// in one transaction: the output holds every input or does not exist.
 ///
-/// A `.rez` or parquet input is converted first into the staging directory,
-/// as `recording upgrade` converts it. Each input is then copied through
+/// Every input is a dendro archive (`run` refuses anything else). Each is
+/// copied through
 /// `copy_sources_into` in its own read snapshot, its live tail sealed
 /// (`crate::dendro_copy`), and each source keeps its uuid, so a source and a
 /// copy of it (the same uuid, e.g. a file and its snapshot) stay one
@@ -396,33 +394,9 @@ fn combine_dendro(
     // Beside the output, never in $TMPDIR: a link across filesystems fails.
     let staging = legacy::staging_dir(output)?;
 
-    let mut inputs: Vec<PathBuf> = Vec::with_capacity(files.len());
-    let mut converted = 0usize;
-    for (i, file) in files.iter().enumerate() {
-        match Container::of(file) {
-            Container::Dendro => inputs.push(file.clone()),
-            c if c.is_legacy() => {
-                let staged = staging.path().join(format!("converted-{i}.dendro"));
-                legacy::convert(file, &staged)?;
-                converted += 1;
-                inputs.push(staged);
-            }
-            c => {
-                return Err(format!(
-                    "{} is a {}, not a recording (.dendro, .rez or .parquet)",
-                    file.display(),
-                    c.name()
-                )
-                .into())
-            }
-        }
-    }
-    if converted > 0 {
-        say!("converted {converted} .rez or parquet input(s) to dendro for the assembly");
-    }
-    check_ab_plan(plan, files, &inputs)?;
+    check_ab_plan(plan, files)?;
 
-    let archives: Vec<Archive> = inputs
+    let archives: Vec<Archive> = files
         .iter()
         .map(|p| Archive::open(p))
         .collect::<Result<_, _>>()?;
@@ -538,83 +512,6 @@ pub(crate) fn run_combine_for_test(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ::dashboard::keys::{KEY_SAMPLING_INTERVAL_MS, KEY_SOURCE};
-    use arrow::array::{Int64Array, UInt64Array};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use parquet::arrow::ArrowWriter;
-    use parquet::file::metadata::KeyValue;
-    use parquet::file::properties::WriterProperties;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use tempfile::NamedTempFile;
-
-    /// 1 second in nanoseconds — use as a multiplier so test timestamps
-    /// are at a realistic scale relative to the sampling interval.
-    const SEC: u64 = 1_000_000_000;
-
-    /// A parquet recording as a 5.x recorder wrote one: a timestamp column, a
-    /// duration column, and one gauge metric column.
-    fn make_test_file(
-        timestamps: &[u64],
-        metric_name: &str,
-        metric_values: &[Option<i64>],
-        source: &str,
-        sampling_interval_ms: &str,
-    ) -> (NamedTempFile, PathBuf) {
-        let ts_field =
-            Field::new("timestamp", DataType::UInt64, false).with_metadata(HashMap::from([
-                ("metric_type".to_string(), "timestamp".to_string()),
-                ("unit".to_string(), "nanoseconds".to_string()),
-            ]));
-        let dur_field =
-            Field::new("duration", DataType::UInt64, true).with_metadata(HashMap::from([
-                ("metric_type".to_string(), "duration".to_string()),
-                ("unit".to_string(), "nanoseconds".to_string()),
-            ]));
-        let metric_field = Field::new(metric_name, DataType::Int64, true).with_metadata(
-            HashMap::from([("metric_type".to_string(), "gauge".to_string())]),
-        );
-
-        let schema = Arc::new(Schema::new(vec![ts_field, dur_field, metric_field]));
-
-        let ts_array = UInt64Array::from(timestamps.to_vec());
-        let dur_array = UInt64Array::from(vec![None::<u64>; timestamps.len()]);
-        let metric_array = Int64Array::from(metric_values.to_vec());
-
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(ts_array),
-                Arc::new(dur_array),
-                Arc::new(metric_array),
-            ],
-        )
-        .unwrap();
-
-        let kv = vec![
-            KeyValue {
-                key: KEY_SOURCE.to_string(),
-                value: Some(source.to_string()),
-            },
-            KeyValue {
-                key: KEY_SAMPLING_INTERVAL_MS.to_string(),
-                value: Some(sampling_interval_ms.to_string()),
-            },
-        ];
-        let props = WriterProperties::builder()
-            .set_key_value_metadata(Some(kv))
-            .build();
-
-        let tmp = NamedTempFile::new().unwrap();
-        let path = tmp.path().to_path_buf();
-        let file = std::fs::File::create(&path).unwrap();
-        let mut writer = ArrowWriter::try_new(file, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        (tmp, path)
-    }
 
     /// Parse `args` as the CLI does and run the combine they name.
     fn combine_args(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
@@ -655,9 +552,18 @@ mod tests {
         combine_args(args)
     }
 
-    /// A one-recording `.rez` labelled `labels`.
+    /// A one-recording archive labelled `labels` at `path`: a `.rez`
+    /// built by the fixture writer, upgraded.
     fn agent_rez(path: &std::path::Path, labels: &[(&str, &str)]) {
-        rez::fixtures::rez_with_identity(path, labels, &[("source", "rezolus")]);
+        identity_rez(path, labels, &[("source", "rezolus")]);
+    }
+
+    /// `rez::fixtures::rez_with_identity` at `path`, upgraded.
+    fn identity_rez(path: &std::path::Path, labels: &[(&str, &str)], metadata: &[(&str, &str)]) {
+        let rez = path.with_extension("legacy.rez");
+        rez::fixtures::rez_with_identity(&rez, labels, metadata);
+        crate::parquet_tools::legacy::convert(&rez, path).unwrap();
+        std::fs::remove_file(rez).unwrap();
     }
 
     /// The labels of an archive's recordings, in catalog order.
@@ -672,13 +578,12 @@ mod tests {
         .collect()
     }
 
-    /// `--ab` stamps `arm` on each input's recordings, from `.rez` and
-    /// parquet inputs, and the archive opens as a comparison; without it
-    /// nothing is stamped and it opens combined.
+    /// `--ab` stamps `arm` on each input's recordings, and the archive opens
+    /// as a comparison; without it nothing is stamped and it opens combined.
     #[test]
     fn combine_ab_stamps_each_inputs_arm() {
         let dir = tempfile::tempdir().unwrap();
-        let (a, b) = (dir.path().join("a.rez"), dir.path().join("b.rez"));
+        let (a, b) = (dir.path().join("a.dendro"), dir.path().join("b.dendro"));
         agent_rez(&a, &[("source", "rezolus"), ("host", "a")]);
         agent_rez(&b, &[("source", "rezolus"), ("host", "b")]);
         let arms = |path: &std::path::Path| -> Vec<(String, Option<String>)> {
@@ -695,7 +600,7 @@ mod tests {
         let ab = dir.path().join("ab.dendro");
         // One input named by its file name, the other by the path as typed.
         let exp = format!("experiment={}", b.display());
-        run_combine_ab(&[a.clone(), b.clone()], &ab, &["baseline=a.rez", &exp]).unwrap();
+        run_combine_ab(&[a.clone(), b.clone()], &ab, &["baseline=a.dendro", &exp]).unwrap();
         assert_eq!(arms(&ab), want);
         let readers = ::rez::reader::RezReader::open_recordings(
             &ab,
@@ -721,42 +626,12 @@ mod tests {
         assert!(crate::viewer::opens_combined(&readers, false));
     }
 
-    /// Parquet inputs, one recording each, take their arms.
-    #[test]
-    fn combine_ab_stamps_parquet_inputs() {
-        let (_t1, p1) = make_test_file(
-            &[100 * SEC, 200 * SEC],
-            "m1",
-            &[Some(1), Some(2)],
-            "redis",
-            "1000",
-        );
-        let (_t2, p2) = make_test_file(
-            &[100 * SEC, 200 * SEC],
-            "m2",
-            &[Some(3), Some(4)],
-            "valkey",
-            "1000",
-        );
-        let dir = tempfile::tempdir().unwrap();
-        let out = dir.path().join("ab.dendro");
-        let base = format!("baseline={}", p2.display());
-        let exp = format!("experiment={}", p1.display());
-        run_combine_ab(&[p1, p2], &out, &[&base, &exp]).unwrap();
-        let arms: BTreeMap<String, String> = archive_labels(&out)
-            .into_iter()
-            .map(|l| (l["source"].clone(), l["arm"].clone()))
-            .collect();
-        assert_eq!(arms["redis"], "experiment");
-        assert_eq!(arms["valkey"], "baseline");
-    }
-
     /// An input recording already carrying the arm it would be given keeps
     /// it; one carrying the other arm is refused and leaves no output.
     #[test]
     fn combine_ab_refuses_a_conflicting_arm() {
         let dir = tempfile::tempdir().unwrap();
-        let (a, b) = (dir.path().join("a.rez"), dir.path().join("b.rez"));
+        let (a, b) = (dir.path().join("a.dendro"), dir.path().join("b.dendro"));
         agent_rez(
             &a,
             &[("source", "rezolus"), ("host", "a"), ("arm", "baseline")],
@@ -769,7 +644,7 @@ mod tests {
         run_combine_ab(
             &[a.clone(), b.clone()],
             &kept,
-            &["baseline=a.rez", "experiment=c.rez"],
+            &["baseline=a.dendro", "experiment=c.dendro"],
         )
         .unwrap_err();
         assert!(!kept.exists());
@@ -777,12 +652,12 @@ mod tests {
         let err = run_combine_ab(
             &[a.clone(), b.clone()],
             &out,
-            &["baseline=a.rez", "experiment=b.rez"],
+            &["baseline=a.dendro", "experiment=b.dendro"],
         )
         .unwrap_err()
         .to_string();
         assert!(
-            err.contains("b.rez") && err.contains("already arm baseline"),
+            err.contains("b.dendro") && err.contains("already arm baseline"),
             "{err}"
         );
         // Refused before the copy: the relabel after it is never reached.
@@ -790,7 +665,7 @@ mod tests {
         let early = run_combine_ab(
             &[a.clone(), b.clone()],
             &dir.path().join("early.dendro"),
-            &["baseline=a.rez", "experiment=b.rez"],
+            &["baseline=a.dendro", "experiment=b.dendro"],
         );
         FAIL_STAMP.with(|f| f.set(false));
         let early = early.unwrap_err().to_string();
@@ -800,17 +675,17 @@ mod tests {
         run_combine_ab(
             &[b.clone(), a.clone()],
             &swapped,
-            &["baseline=a.rez", "experiment=b.rez"],
+            &["baseline=a.dendro", "experiment=b.dendro"],
         )
         .unwrap_err();
         // The matching arm is kept.
-        let c = dir.path().join("c.rez");
+        let c = dir.path().join("c.dendro");
         agent_rez(&c, &[("source", "rezolus"), ("host", "c")]);
         let ok = dir.path().join("ok.dendro");
         run_combine_ab(
             &[a.clone(), c.clone()],
             &ok,
-            &["baseline=a.rez", "experiment=c.rez"],
+            &["baseline=a.dendro", "experiment=c.dendro"],
         )
         .unwrap();
         let arms: Vec<_> = archive_labels(&ok)
@@ -827,13 +702,13 @@ mod tests {
     #[test]
     fn combine_ab_relabels_one_archive_by_position() {
         let dir = tempfile::tempdir().unwrap();
-        let (a, b) = (dir.path().join("a.rez"), dir.path().join("b.rez"));
-        rez::fixtures::rez_with_identity(
+        let (a, b) = (dir.path().join("a.dendro"), dir.path().join("b.dendro"));
+        identity_rez(
             &a,
             &[("source", "rezolus")],
             &[("source", "rezolus"), ("version", "first")],
         );
-        rez::fixtures::rez_with_identity(
+        identity_rez(
             &b,
             &[("source", "rezolus")],
             &[("source", "rezolus"), ("version", "second")],
@@ -888,7 +763,7 @@ mod tests {
     #[test]
     fn combine_ab_keeps_a_case_variant_and_refuses_three_arms() {
         let dir = tempfile::tempdir().unwrap();
-        let (a, b) = (dir.path().join("a.rez"), dir.path().join("b.rez"));
+        let (a, b) = (dir.path().join("a.dendro"), dir.path().join("b.dendro"));
         agent_rez(
             &a,
             &[("source", "rezolus"), ("host", "a"), ("arm", "Baseline")],
@@ -898,7 +773,7 @@ mod tests {
         run_combine_ab(
             &[a.clone(), b.clone()],
             &out,
-            &["baseline=a.rez", "experiment=b.rez"],
+            &["baseline=a.dendro", "experiment=b.dendro"],
         )
         .unwrap();
         let arms: Vec<_> = archive_labels(&out)
@@ -908,12 +783,12 @@ mod tests {
         assert_eq!(arms, ["Baseline", "experiment"]);
 
         let three = dir.path().join("three.dendro");
-        let c = dir.path().join("c.rez");
+        let c = dir.path().join("c.dendro");
         agent_rez(
             &c,
             &[("source", "rezolus"), ("host", "c"), ("arm", "control")],
         );
-        let (d, e) = (dir.path().join("d.rez"), dir.path().join("e.rez"));
+        let (d, e) = (dir.path().join("d.dendro"), dir.path().join("e.dendro"));
         agent_rez(&d, &[("source", "rezolus"), ("host", "d")]);
         agent_rez(&e, &[("source", "rezolus"), ("host", "e")]);
         run_combine_ab(&[d, e, c.clone()], &three, &[]).unwrap();
@@ -936,19 +811,22 @@ mod tests {
     #[test]
     fn a_failed_relabel_leaves_no_output() {
         let dir = tempfile::tempdir().unwrap();
-        let (a, b) = (dir.path().join("a.rez"), dir.path().join("b.rez"));
+        let (a, b) = (dir.path().join("a.dendro"), dir.path().join("b.dendro"));
         agent_rez(&a, &[("source", "rezolus"), ("host", "a")]);
         agent_rez(&b, &[("source", "rezolus"), ("host", "b")]);
         let out = dir.path().join("ab.dendro");
-        let ab = ["baseline=a.rez", "experiment=b.rez"];
+        let ab = ["baseline=a.dendro", "experiment=b.dendro"];
         FAIL_STAMP.with(|f| f.set(true));
         let err = run_combine_ab(&[a.clone(), b.clone()], &out, &ab);
         FAIL_STAMP.with(|f| f.set(false));
         assert!(err.unwrap_err().to_string().contains("injected"));
         assert!(!out.exists());
+        // The inputs, and the sidecars SQLite leaves beside an archive it
+        // read; no staging directory and no output.
         let leftovers: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
-            .map(|e| e.unwrap().file_name())
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| !n.ends_with("-wal") && !n.ends_with("-shm"))
             .collect();
         assert_eq!(leftovers.len(), 2, "{leftovers:?}");
         run_combine_ab(&[a, b], &out, &ab).unwrap();
@@ -966,8 +844,8 @@ mod tests {
         };
         assert_eq!(
             plan(
-                &["experiment=x/a.rez", "baseline=b.rez"],
-                &["x/a.rez", "y/b.rez"]
+                &["experiment=x/a.dendro", "baseline=b.dendro"],
+                &["x/a.dendro", "y/b.dendro"]
             )
             .unwrap(),
             AbPlan::Inputs(["experiment", "baseline"])
@@ -982,7 +860,7 @@ mod tests {
             AbPlan::Inputs(["experiment", "baseline"])
         );
         assert_eq!(
-            plan(&["baseline=1", "experiment=0"], &["old.rez"]).unwrap(),
+            plan(&["baseline=1", "experiment=0"], &["old.dendro"]).unwrap(),
             AbPlan::Positions([(1, "baseline"), (0, "experiment")])
         );
         assert_eq!(plan(&[], &["a", "b", "c"]).unwrap(), AbPlan::Nothing);
@@ -993,86 +871,34 @@ mod tests {
             (&["baseline=a", "experiment=z"][..], &["a", "b"][..]),
             (&["control=a", "experiment=b"][..], &["a", "b"][..]),
             (
-                &["baseline=a.rez", "experiment=b"][..],
-                &["x/a.rez", "y/a.rez"][..],
+                &["baseline=a.dendro", "experiment=b"][..],
+                &["x/a.dendro", "y/a.dendro"][..],
             ),
-            (&["baseline=0", "experiment=0"][..], &["old.rez"][..]),
-            (&["baseline=first", "experiment=1"][..], &["old.rez"][..]),
+            (&["baseline=0", "experiment=0"][..], &["old.dendro"][..]),
+            (&["baseline=first", "experiment=1"][..], &["old.dendro"][..]),
         ] {
             assert!(plan(raw, files).is_err(), "{raw:?} {files:?}");
         }
     }
 
-    /// `.rez` inputs of both containers are converted on the way in, and
-    /// the assembled archive is readable, a recording per input, each
-    /// holding its tables' rows.
+    /// A `.rez` or parquet input is refused, naming the upgrade, and
+    /// nothing is written.
     #[test]
-    fn combine_converts_rez_inputs_into_one_readable_archive() {
+    fn combine_refuses_legacy_inputs() {
         let dir = tempfile::tempdir().unwrap();
         let v3 = rez::fixtures::committed_rez("v3.rez", dir.path());
-        let v2 = rez::fixtures::committed_rez("v2.rez", dir.path());
-        let out = dir.path().join("out.dendro");
-        run_combine(&[v3.clone(), v2.clone()], &out).unwrap();
-
-        let db = dendro::archive::Archive::open(&out).unwrap();
-        let sources = db.read_sources().unwrap();
-        assert_eq!(sources.len(), 2, "one source per input recording");
-        for s in &sources {
-            assert!(s.complete, "an assembled archive is finished");
-            let mut streams = db.all_streams(s.id).unwrap();
-            streams.sort();
-            assert_eq!(streams, ["a", "b"]);
-            for stream in &streams {
-                assert!(db.total_rows(s.id, stream).unwrap() > 0, "{stream}");
-            }
+        let ok = dir.path().join("ok.dendro");
+        crate::parquet_tools::legacy::convert(&v3, &ok).unwrap();
+        let parquet = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/legacy/simple_capture.parquet");
+        for legacy in [v3.clone(), parquet] {
+            let out = dir.path().join("out.dendro");
+            let err = run_combine(&[ok.clone(), legacy.clone()], &out)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("recording upgrade"), "{err}");
+            assert!(!out.exists());
         }
-        drop(db);
-        let readers = ::rez::reader::RezReader::open_recordings(
-            &out,
-            metriken_storage::BufferPool::new(64 * 1024 * 1024),
-        )
-        .unwrap();
-        assert_eq!(readers.len(), 2, "both recordings are readable");
-        let committed = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("crates/rez/tests/fixtures/rez/v3.rez");
-        assert_eq!(
-            std::fs::read(&v3).unwrap(),
-            std::fs::read(committed).unwrap(),
-            "the input is not changed"
-        );
-    }
-
-    /// Parquet inputs become a recording each, labelled with each file's
-    /// `source` as the viewer labels a parquet file.
-    #[test]
-    fn combine_parquet_inputs_into_a_multi_recording_archive() {
-        let (_t1, p1) = make_test_file(
-            &[100 * SEC, 200 * SEC],
-            "m1",
-            &[Some(1), Some(2)],
-            "redis",
-            "1000",
-        );
-        let (_t2, p2) = make_test_file(
-            &[100 * SEC, 200 * SEC],
-            "m2",
-            &[Some(3), Some(4)],
-            "valkey",
-            "1000",
-        );
-        let dir = tempfile::tempdir().unwrap();
-        let out = dir.path().join("ab.dendro");
-        run_combine(&[p1, p2], &out).unwrap();
-        let sources: std::collections::BTreeSet<String> = archive_labels(&out)
-            .into_iter()
-            .filter_map(|l| l.get("source").cloned())
-            .collect();
-        assert_eq!(
-            sources,
-            ["redis".to_string(), "valkey".to_string()]
-                .into_iter()
-                .collect()
-        );
     }
 
     /// 6.x writes `.dendro` only: a `.rez`, `.parquet` or `.parquet.ab.tar`
@@ -1210,7 +1036,7 @@ mod tests {
         let a = dir.path().join("a.dendro");
         crate::dendro_copy::fixtures::recorded(&a, 6, true);
         let copy = dir.path().join("copy.dendro");
-        crate::parquet_tools::snapshot_rez(&a, &copy).unwrap();
+        crate::parquet_tools::snapshot_rez(&a, &copy, "rezolus").unwrap();
         let out = dir.path().join("twice.dendro");
         run_combine(&[a.clone(), copy], &out).unwrap();
 
@@ -1290,7 +1116,7 @@ mod tests {
         assert_eq!(other.len(), 2, "different epochs: two recordings");
 
         let copy = dir.path().join("copy.dendro");
-        crate::parquet_tools::snapshot_rez(&one_path, &copy).unwrap();
+        crate::parquet_tools::snapshot_rez(&one_path, &copy, "rezolus").unwrap();
         let out = dir.path().join("with-copy.dendro");
         run_combine(&[one_path, copy], &out).unwrap();
         let both = ::rez::reader::RezReader::open_recordings(&out, pool()).unwrap();
@@ -1298,7 +1124,7 @@ mod tests {
         assert_eq!(answer(&both[0].1), answer(&one[0].1));
     }
 
-    /// `--ab` positions index the recordings `describe-recording` lists (the
+    /// `--ab` positions index the recordings `describe-recording` numbers (the
     /// read groups), not the archive's sources. An original, its snapshot and
     /// a later recording are three sources but two recordings: position 0 is
     /// the original with its copy, and both of its sources take the arm;
@@ -1321,7 +1147,7 @@ mod tests {
         let a = dir.path().join("a.dendro");
         write_dendro(&a, &[source("E", 0..6)], None, Finish::Finalized);
         let copy = dir.path().join("a-copy.dendro");
-        crate::parquet_tools::snapshot_rez(&a, &copy).unwrap();
+        crate::parquet_tools::snapshot_rez(&a, &copy, "rezolus").unwrap();
         let later = dir.path().join("later.dendro");
         write_dendro(&later, &[source("F", 10..16)], None, Finish::Finalized);
         let three = dir.path().join("three.dendro");

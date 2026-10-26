@@ -6,6 +6,13 @@ test('joins two simple aliases', () => {
     assert.equal(composeAbReportPrefix('before', 'after'), 'before_vs_after');
 });
 
+test('strips trailing .dendro from each side', () => {
+    assert.equal(
+        composeAbReportPrefix('cachecannon.dendro', 'AB_base_pin.dendro'),
+        'cachecannon_vs_AB_base_pin',
+    );
+});
+
 test('strips trailing .parquet from each side', () => {
     assert.equal(
         composeAbReportPrefix('cachecannon.parquet', 'AB_base_pin.parquet'),

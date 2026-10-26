@@ -20,8 +20,8 @@
 //!   file is a copy of a running archive. A paused writer that beats again
 //!   reads as live again, so the follow does not end: the wait backs off as
 //!   below, and returns to [`FOLLOW_INTERVAL`] once a writer beats;
-//! - otherwise, some recording has no heartbeat (a `.rez`, or a dendro
-//!   source whose writer did not record one): [`FOLLOW_INTERVAL`] while rows
+//! - otherwise, some recording has no heartbeat (a source whose writer did
+//!   not record one): [`FOLLOW_INTERVAL`] while rows
 //!   arrive, and after a reopen that finds no new row the wait doubles, up
 //!   to [`MAX_WAIT`].
 //!
@@ -71,9 +71,6 @@ pub struct Follow {
 struct Followed {
     path: PathBuf,
     pool: Arc<BufferPool>,
-    /// Whether the file is a dendro archive, whose sources carry a writer
-    /// heartbeat. A `.rez` has none.
-    dendro: bool,
     /// The wait while the archive grows or a writer is live.
     base: Duration,
     /// Each followed capture's id and reader.
@@ -152,12 +149,10 @@ impl Follow {
             .map(|(_, r)| r.path().to_path_buf())
             .unwrap_or_default();
         let newest = newest_row(&readers);
-        let dendro = metriken_storage::DendroCatalog::is_archive(&path).unwrap_or(false);
         let started = Instant::now();
         let inner = Arc::new(Followed {
             path,
             pool,
-            dendro,
             base: interval,
             readers: Mutex::new(readers),
             progress: Mutex::new(Progress {
@@ -420,8 +415,8 @@ impl Followed {
     /// Each followed recording's writer, judged from its heartbeat; every
     /// recording of a combined reader counts. Reads
     /// the catalog's sources once; a recording is matched to the source with
-    /// its exact label set. Every recording of a `.rez`, of a dendro archive
-    /// whose sources cannot be read, or without a matching source is
+    /// its exact label set. Every recording of an archive whose sources
+    /// cannot be read, or without a matching source, is
     /// [`Unknown`](Writer::Unknown). A failed read is logged once per run of
     /// failures.
     fn writers(
@@ -430,7 +425,7 @@ impl Followed {
         progress: &mut Progress,
         now: Instant,
     ) -> Vec<Writer> {
-        let sources = if self.dendro {
+        let sources =
             match dendro::archive::Archive::open(&self.path).and_then(|a| a.read_sources()) {
                 Ok(sources) => {
                     progress.catalog_failing = false;
@@ -446,10 +441,7 @@ impl Followed {
                     }
                     None
                 }
-            }
-        } else {
-            None
-        };
+            };
         readers
             .iter()
             .flat_map(|(_, reader)| reader.label_sets())
@@ -794,40 +786,6 @@ mod tests {
         assert!(original.following());
         assert!(copied.following());
         drop((source, writer));
-    }
-
-    /// A `.rez` has no heartbeat, so its writer's state is unknown. After a
-    /// reopen that finds no new row the wait doubles, from 2 s up to 60 s,
-    /// a reopen that finds one resets it, and the follow does not end.
-    #[test]
-    fn a_rez_backs_off_while_idle_and_resets_on_growth() {
-        // A `.rez` still being written, as a 5.x recorder or hindsight
-        // leaves one. 6.x writes none, so the fixture is the committed
-        // `v3-live.rez` (12 ticks to 11 s, the newest in its WAL), grown by
-        // a tick at a time the way a 5.x recorder appended one.
-        let dir = tempfile::tempdir().unwrap();
-        let path = ::rez::fixtures::committed_rez("v3-live.rez", dir.path());
-        const LAST: u64 = 1_700_000_011_000_000_000;
-        let record = |i: u64| ::rez::fixtures::append_rez_wal_tick(&path, LAST + i * 60 * SECOND);
-        let state = view(&path);
-        let guard = state.follow.lock();
-        let follow = guard.as_ref().unwrap();
-        assert_eq!(follow.wait(), FOLLOW_INTERVAL);
-
-        let mut clock = Instant::now();
-        for expected in [4, 8, 16, 32, 60, 60, 60] {
-            clock += follow.wait();
-            assert!(follow.refresh_at(clock), "a .rez is never judged stopped");
-            assert_eq!(follow.wait(), Duration::from_secs(expected));
-        }
-        record(1);
-        clock += follow.wait();
-        assert!(follow.refresh_at(clock));
-        assert_eq!(follow.wait(), FOLLOW_INTERVAL);
-        assert_eq!(end_ms(&state), (LAST + 60 * SECOND) / 1_000_000);
-        clock += follow.wait();
-        assert!(follow.refresh_at(clock));
-        assert_eq!(follow.wait(), Duration::from_secs(4));
     }
 
     /// A growing archive of two recordings, each labelled `source=rezolus`,

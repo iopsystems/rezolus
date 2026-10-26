@@ -143,9 +143,9 @@ With no `-o` the recording goes to `rezolus.dendro`. The output path must end in
 `.parquet` or `.raw` (or in anything else), a `--format` other than `dendro`,
 and `--separate` are refused as usage errors (exit 2), as are the same
 settings in a `--config` file. A rezolus 5.x recorder (5.27.0 or later) still
-writes `.rez`, parquet and raw, and `rezolus recording upgrade --to dendro
-in.rez -o out.dendro` converts a `.rez`. Every tool still reads `.rez` and
-parquet.
+writes `.rez`, parquet and raw, and `rezolus recording upgrade in.rez`
+converts a `.rez` (or a parquet file, or a `.parquet.ab.tar`) into a
+`.dendro`, which is the only format every other command opens.
 
 The output path must not already exist — the recorder refuses rather than
 truncate, since the archive is committed as it goes and has no staging file.
@@ -321,9 +321,9 @@ For a file still being written, use `rezolus recording snapshot live.dendro -o
 incident.dendro` to include committed data in SQLite's sidecar; copying only the
 main file can miss recent samples.
 
-`.rez` archives recorded by older releases, tar or SQLite, still open
-everywhere, and `rezolus recording upgrade --to dendro old.rez -o new.dendro`
-converts one.
+`.rez` archives recorded by older releases, tar or SQLite, and `.parquet`
+files are opened only by `rezolus recording upgrade old.rez`, which writes
+`old.dendro`; every other command refuses them with that command.
 
 ### Detection
 
@@ -384,7 +384,7 @@ convert its `.rez` afterwards if you want a `.dendro`, or upgrade the agent:
 # with a rezolus 5.x binary
 rezolus record --url http://old-host:4241 -o run.rez
 # with this one
-rezolus recording upgrade --to dendro run.rez -o run.dendro
+rezolus recording upgrade run.rez
 ```
 
 An agent serves its stream as `application/vnd.metriken.replication.v1+dendro`,
@@ -418,7 +418,8 @@ ctrl-c) wait one interval, at most two seconds.
 Streamed rows and the tick's scrapes go through one archive writer and are
 committed together, once per tick.
 
-A `.rez` recorded by a 5.x `record --stream` still opens.
+A `.rez` recorded by a 5.x `record --stream` converts with `rezolus recording
+upgrade`, its stream labels kept.
 
 ## Viewer
 
@@ -437,8 +438,8 @@ rezolus view ab.dendro
 # one run of several endpoints opens as one combined view; name two
 # recordings to compare them instead
 rezolus view fleet.dendro --baseline host=web-01 --experiment host=web-02
-# two parquet files are compared as given
-rezolus view baseline.parquet experiment.parquet
+# two one-recording archives are compared as given
+rezolus view baseline.dendro experiment.dendro
 # stream live from an agent
 rezolus view http://localhost:4241
 # upload-only mode (no file argument)
@@ -451,7 +452,7 @@ into a temporary `.dendro` archive under the system temp directory, which
 the view reads as it grows and which is deleted when the viewer exits. Save
 capture downloads a copy of it as `rezolus-capture.dendro`.
 
-A `.dendro` or `.rez` file that was not finalized when opened, such as a
+A `.dendro` file that was not finalized when opened, such as a
 running hindsight buffer or a `rezolus record` in progress, is followed: the
 viewer reopens it and the page refreshes the current section every 5
 seconds, as for a live agent. The page keeps its file-mode behavior:
@@ -477,8 +478,8 @@ follows:
   `cp` of a running archive. The wait doubles after each reopen that finds
   no new row, up to 60 seconds, and returns to 2 seconds if the writer
   beats again.
-- Some recording has no heartbeat (a `.rez`, or a `.dendro` whose writer did
-  not record one) and no writer is running: every 2 seconds while rows
+- Some recording has no heartbeat (a source whose writer did not record
+  one) and no writer is running: every 2 seconds while rows
   arrive; after a reopen that finds no new row the wait doubles, up to 60
   seconds, and a new row sets it back to 2 seconds.
 
@@ -511,7 +512,9 @@ open, `Esc`/`h` back, `[` / `]` change the time window, `r` refresh, `?` help,
 The same web dashboard is also available as a browser-only static site under
 [`site/viewer/`](../site/viewer/), powered by the
 [`crates/viewer`](../crates/viewer) WASM module. It runs the PromQL query engine
-client-side, so uploaded `.parquet` and `.rez` recordings never leave the browser.
+client-side, so uploaded `.dendro` recordings never leave the browser. A
+`.rez` or `.parquet` upload is refused with the command that converts it on
+your machine, `rezolus recording upgrade FILE`.
 
 ### Aligning captures in a comparison
 
@@ -536,7 +539,7 @@ and those views show the two captures side by side instead and say why.
 
 ### A baseline made of many recordings
 
-With three or more captures open (a multi-recording `.rez`, or one assembled
+With three or more captures open (a multi-recording archive, or one assembled
 with `recording combine`), the compare badge's **Baseline** menu can switch
 from a single capture to a family: every capture except the experiment
 becomes one baseline, drawn as a band, mean ± kσ (the menu offers k of 1,
@@ -573,7 +576,7 @@ was opened (two files, or an archive whose recordings carry `arm`), and the
 
 ```text
 http://127.0.0.1:4200/?from=2026-09-28T14:03:11.250Z&to=2026-09-28T14:05:40Z#/cpu
-https://rezolus.com/viewer/?capture=demo.parquet&from=2026-05-10T00:36:00Z&to=2026-05-10T00:37:00Z&time=raw#/scheduler/chart/<id>
+https://rezolus.com/viewer/?capture=demo.dendro&from=2026-05-10T00:36:00Z&to=2026-05-10T00:37:00Z&time=raw#/scheduler/chart/<id>
 http://127.0.0.1:4200/?node=web-01&cgroup=/system.slice&cgroup=/user.slice#/cgroups
 ```
 
@@ -585,7 +588,7 @@ http://127.0.0.1:4200/?node=web-01&cgroup=/system.slice&cgroup=/user.slice#/cgro
 | `gpu` | `vendor:id`, repeatable (`gpu=nvidia:0&gpu=nvidia:1`) | Filters the GPU section; a bare id when the sampler set no vendor |
 | `cgroup` | cgroup name, repeatable | Selected cgroups on the cgroups section, one key per name |
 | `instance` | instance id | A service's instance, scoped by the `#/service/<name>` in the hash |
-| `anchor.<capture>` (`baseline`, `experiment`, or a named arm of a multi-recording `.rez`) | signed integer milliseconds, or `kind:<event kind>` | Compare mode only; each key is independent and `0` (no shift) is absent. The value names the instant, measured from that capture's start, that is drawn at `+0s`: `anchor.experiment=1500` puts the experiment's 1.5 s mark at the axis origin, shifting its trace 1.5 s to the left. `anchor.experiment=kind:run_start` uses the earliest `run_start` event in that capture's file instead; a capture with no such event is drawn from its recording start and the compare badge says so |
+| `anchor.<capture>` (`baseline`, `experiment`, or a named arm of a multi-recording archive) | signed integer milliseconds, or `kind:<event kind>` | Compare mode only; each key is independent and `0` (no shift) is absent. The value names the instant, measured from that capture's start, that is drawn at `+0s`: `anchor.experiment=1500` puts the experiment's 1.5 s mark at the axis origin, shifting its trace 1.5 s to the left. `anchor.experiment=kind:run_start` uses the earliest `run_start` event in that capture's file instead; a capture with no such event is drawn from its recording start and the compare badge says so |
 
 Values are ordinary query-string values: a `/` may be written as is, and
 anything else (`&`, `=`, spaces) percent-encoded as a browser would. A
@@ -607,37 +610,37 @@ browser would.
 
 ## Recording tools
 
-`rezolus recording` inspects and transforms recordings: `.dendro` archives,
-and the `.rez` archives and `.parquet` files 5.x wrote. `parquet` remains a
-compatibility alias for the command. Check `rezolus recording <subcommand>
+`rezolus recording` inspects and transforms `.dendro` recordings; `upgrade`
+converts the `.rez` archives, `.parquet` files and `.parquet.ab.tar` A/B
+tarballs 5.x wrote, which every other subcommand refuses with that command.
+`parquet` remains a compatibility alias for the command. Check `rezolus recording <subcommand>
 --help` for each one's flags.
 
 - **Metadata** — inspect a recording: an archive's recordings, labels,
-  metadata and tables, or a parquet file's metadata, geometry and schema.
+  metadata and tables.
 - **Annotate** — embed service extension KPI definitions for custom viewer
   dashboards.
 - **Check** — evaluate the checks a recording's KPIs carry and report a
   verdict per check. See [Checks](#checks) below.
-- **Combine** — combine recordings (`.dendro`, `.rez` or `.parquet`, in any
-  mix) into one `.dendro`, a recording per input recording, which the viewer
+- **Combine** — combine `.dendro` recordings into one `.dendro`, a recording
+  per input recording, which the viewer
   opens as one combined view; `--ab` labels each input's recordings as the
   baseline or experiment arm of a comparison.
-- **Convert** — turn a raw msgpack recording (from a 5.x `record -o out.raw`)
+- **Convert** — turn a raw msgpack recording (`record -o out.raw` in 5.x)
   into a `.dendro`. The input may be plain or zstd-compressed; which one it is
   is detected from the file's contents, not its name.
 - **Filter** — keep the named samplers (`--samplers`) or metrics
-  (`--metrics`); a parquet file with neither keeps the metrics its KPIs need.
-- **Upgrade** — convert a `.rez` archive (v1, v2 or v3) or a `.parquet` file
-  into a `.dendro` (`<name>.dendro` beside it without `-o`).
+  (`--metrics`).
+- **Upgrade** — convert a `.rez` archive (v1, v2 or v3), a `.parquet` file or a
+  `.parquet.ab.tar` A/B tarball into a `.dendro` (`<name>.dendro` beside it
+  without `-o`). A tarball becomes two recordings labelled `arm=baseline` and
+  `arm=experiment`, which the viewer opens as the comparison.
 - **Snapshot** — copy an archive that is still being written consistently,
   including committed data in SQLite's sidecar, into a `.dendro`. Prefer this
   over copying an active file with `cp`.
 
-6.x writes `.dendro` only and never changes a `.rez` or `.parquet` file.
 `annotate`, `filter` and `check --annotate` edit a `.dendro` in place (or a
-copy, given `-o`); for a `.rez` or `.parquet` input they need `-o
-<new>.dendro`, and without it they stop and print the command with `-o`
-added. A recording read from several sources (a recording and its snapshot,
+copy, given `-o`). A recording read from several sources (a recording and its snapshot,
 combined) takes each metadata key from the first source holding it, so
 removing KPIs from one copy with `--undo` does not remove them from a
 combined recording whose other source still has them: annotate the combined
@@ -653,9 +656,8 @@ rezolus recording metadata -i run.dendro
 rezolus recording annotate run.dendro --queries ext.json
 rezolus recording annotate run.dendro --event 'time=2026-09-28T14:03:11Z,kind=deploy,description=rollout'
 rezolus recording annotate run.dendro --event 'time=2026-09-28T14:00Z,duration=90s,kind=warmup,description=warm-up'
-rezolus recording annotate old.rez --queries ext.json -o old.dendro
 rezolus recording check run.dendro --annotate
-rezolus recording combine rezolus.dendro service.parquet -o combined.dendro
+rezolus recording combine rezolus.dendro service.dendro -o combined.dendro
 rezolus recording convert rezolus.raw.zst              # writes rezolus.dendro
 rezolus recording filter run.dendro --samplers cpu_usage -o slim.dendro
 rezolus recording snapshot live.dendro -o incident.dendro
@@ -788,7 +790,7 @@ and `INDETERMINATE` never fail the run. A recording with no checks exits `0`
 with a note on stderr.
 
 `--json` prints the verdicts as an array with one object per check:
-`recording` (the recording's labels, `.rez` only), `title`, `query` (as
+`recording` (the recording's labels), `title`, `query` (as
 evaluated, so a histogram KPI's is wrapped in `histogram_quantile`), `check`
 (as loaded, `for` as a duration string), `status` (`pass`, `warn`, `fail`,
 `indeterminate`, `error`), `windows` and `indeterminate` (each entry has
@@ -807,14 +809,12 @@ content differs (a window that grew, or an event edited in the viewer),
 adds nothing for one that did not change, and leaves a window that no longer
 fires with its old event. Only a stored `kind=check` event is overwritten;
 an event of another kind that carries the same id is kept.
-The viewer draws these as shaded bands. On a multi-recording `.rez` every
+The viewer draws these as shaded bands. On a multi-recording archive every
 recording is checked and each line is prefixed with the recording's labels;
 with `--annotate` each recording's events go into that recording only.
-`--recording k=v` narrows the run, and the write, to one recording. A v1/v2
-(tar) `.rez` is rewritten to v3 (SQLite) in place, as `annotate` does. A
-dendro archive is read-only here: its checks run, but `--annotate` is
-refused. With `--json`, the annotation report goes to stderr so stdout stays
-one JSON array.
+`--recording k=v` narrows the run, and the write, to one recording. With
+`--json`, the annotation report goes to stderr so stdout stays one JSON
+array.
 
 ## MCP Server
 
@@ -849,8 +849,8 @@ Code the first time it opens in that directory.
 
 ```bash
 rezolus mcp                                                  # stdio server
-rezolus mcp detect-anomalies run.rez                 # anomaly detection
-rezolus mcp query run.rez "sum(irate(cpu_cycles[1m]))"
+rezolus mcp detect-anomalies run.dendro              # anomaly detection
+rezolus mcp query run.dendro "sum(irate(cpu_cycles[1m]))"
 ```
 
 `extract-features` distills a whole recording into one deterministic, versioned
@@ -861,7 +861,7 @@ uncertainty; alongside that it reports top cross-metric correlations, resource
 rankings, and subsystem coverage. Requires a recording of at least 10 seconds:
 
 ```bash
-rezolus mcp extract-features run.rez   # parquet or .rez recordings
+rezolus mcp extract-features run.dendro
 ```
 
 The six read tools are `describe_recording`, `describe_metrics`,
@@ -937,11 +937,9 @@ answers with the flag's name. On a multi-recording archive, `add_event` and
 `remove_events` need the `recording` selector below and refuse to write to
 every arm; `run_checks` without a selector evaluates every recording and
 gives each its own verdicts, as `recording check` does. A write edits a
-`.dendro` in place. A `.rez` or `.parquet` recording is not changed: the
-write needs `output`, a new `.dendro` the recording is converted to and the
-edit written into, and is refused without it. The reply of a write carries
-the writer's report line, and for a converted input the line saying what was
-converted.
+`.dendro` in place, or a copy at `output`. Every tool refuses a `.rez` or
+`.parquet` recording with the command that converts it, `rezolus recording
+upgrade FILE`. The reply of a write carries the writer's report line.
 
 ### Multi-recording archives
 
@@ -956,11 +954,11 @@ and so does every tool on a comparison (recordings carrying `arm`).
 what the archive holds and the flag that picks each one:
 
 ```
-$ rezolus mcp describe-recording ab.rez
-ab.rez holds 2 recordings with data (a multi-host or A/B archive):
-  - host=web-01, source=redis
+$ rezolus mcp describe-recording ab.dendro
+ab.dendro holds 2 recordings with data (a multi-host or A/B archive):
+  - host=web-01, source=redis (position 0)
     select with: --recording source=redis
-  - host=web-01, source=valkey
+  - host=web-01, source=valkey (position 1)
     select with: --recording source=valkey
 
 Run any tool with one of the selectors above to analyze that recording.
@@ -970,7 +968,7 @@ Then pass `--recording key=value` (repeatable, ANDed) to any of the six
 subcommands to analyze that one recording:
 
 ```bash
-rezolus mcp query ab.rez "sum(irate(cpu_cycles[1m]))" --recording source=valkey
+rezolus mcp query ab.dendro "sum(irate(cpu_cycles[1m]))" --recording source=valkey
 ```
 
 A selector must name exactly one recording: matching none or several is an

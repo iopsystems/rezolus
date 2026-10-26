@@ -206,20 +206,15 @@ impl<'a> Host<'a> {
             (
                 "{writers}",
                 match (self.record, self.hindsight) {
-                    (Some(r), Some(h)) => format!("`{r}` and\n`{h}`"),
-                    (Some(c), None) | (None, Some(c)) => code(c),
-                    (None, None) => code(p),
+                    (Some(r), Some(h)) => format!("`{r}` and `{h}` write"),
+                    (Some(c), None) | (None, Some(c)) => format!("`{c}` writes"),
+                    (None, None) => format!("`{p}` writes"),
                 },
             ),
             (
                 "{query_engine}",
                 self.mcp
                     .map_or_else(|| "the viewer".to_string(), |m| code(&format!("{m} query"))),
-            ),
-            (
-                "{selector_note}",
-                self.mcp
-                    .map_or_else(String::new, |m| format!(" (the selector\n`{m}` uses)")),
             ),
             (
                 "{viewer}",
@@ -229,31 +224,38 @@ impl<'a> Host<'a> {
                 "{list_recordings_order}",
                 self.list_recordings.map_or_else(
                     || "in archive order".to_string(),
-                    |c| format!("in the order `{c}` lists them"),
+                    |c| format!("as `{c}` prints them (each recording's `(position N)`)"),
                 ),
             ),
             (
                 "{raw_source}",
                 self.record.map_or_else(
-                    || "a raw msgpack recorder".to_string(),
-                    |r| format!("a 5.x `{r} -o out.raw`"),
+                    || "a raw recorder writes them".to_string(),
+                    |r| format!("`{r} -o out.raw` wrote them in earlier releases"),
                 ),
             ),
             (
                 "{raw_example}",
                 self.record.map_or_else(String::new, |r| {
                     format!(
-                        "# The producing side, with a 5.x binary, for reference\n    \
-                         {r} --url http://localhost:4241 -o {}.raw\n\n    ",
+                        "# The producing side, with an earlier release, for reference\n    \
+                         {r} --url http://AGENT -o {}.raw\n\n    ",
                         self.agent
                     )
                 }),
             ),
             (
+                "{tag_example}",
+                match self.record {
+                    Some(r) => format!("# Tag the recording the way `{r} --metadata` would"),
+                    None => "# Tag the recording".to_string(),
+                },
+            ),
+            (
                 "{appenders}",
                 self.hindsight.map_or_else(
                     || "a recorder".to_string(),
-                    |h| format!("a recorder\nor `{}`", last_word(h)),
+                    |h| format!("a recorder or `{}`", last_word(h)),
                 ),
             ),
             (
@@ -297,7 +299,7 @@ impl<'a> Host<'a> {
     /// Where `combine --ab` positions come from, for its refusal.
     pub(super) fn positions_from(&self) -> String {
         match self.list_recordings {
-            Some(c) => format!("as `{c}` lists them"),
+            Some(c) => format!("as `{c}` prints them (each recording's `(position N)`)"),
             None => "in archive order".to_string(),
         }
     }
@@ -307,9 +309,7 @@ impl<'a> Host<'a> {
 // `recording` command's about text, which `command` sets from the host.
 #[derive(Subcommand, Debug)]
 pub enum Recording {
-    #[command(
-        about = "Add service extension KPIs or events to a recording (.dendro; a .rez or .parquet into a new .dendro)"
-    )]
+    #[command(about = "Add service extension KPIs or events to a .dendro recording")]
     Annotate(AnnotateArgs),
     #[command(
         about = "Evaluate the checks a recording's KPIs carry and report a verdict per check"
@@ -317,15 +317,15 @@ pub enum Recording {
     Check(CheckArgs),
     #[command(about = "Combine recordings into one multi-recording .dendro archive")]
     Combine(CombineArgs),
-    #[command(
-        about = "Display the metadata of a recording (.dendro or .rez archive, .parquet file)"
-    )]
+    #[command(about = "Display the metadata of a .dendro recording")]
     Metadata(MetadataArgs),
     #[command(about = "Convert a raw msgpack recording into a .dendro archive")]
     Convert(ConvertArgs),
     // About rendered by `command`: it names the table flag's noun.
     Filter(FilterArgs),
-    #[command(about = "Convert a .rez archive or a .parquet recording to a .dendro archive")]
+    #[command(
+        about = "Convert a .rez archive, a .parquet recording or a .parquet.ab.tar to a .dendro archive"
+    )]
     Upgrade(UpgradeArgs),
     #[command(about = "Copy an archive that is still being written, without stopping the writer")]
     Snapshot(SnapshotArgs),
@@ -336,16 +336,13 @@ pub enum Recording {
 
 #[derive(Args, Debug)]
 pub struct AnnotateArgs {
-    #[arg(
-        value_name = "FILE",
-        help = "The recording to annotate (.dendro, or a .rez or .parquet with -o)"
-    )]
+    #[arg(value_name = "FILE", help = "The recording to annotate (.dendro)")]
     pub file: PathBuf,
     #[arg(
         short = 'o',
         long = "output",
         value_name = "PATH",
-        help = "Write the annotated recording to this new .dendro instead of in place (required for a .rez or .parquet input)"
+        help = "Write the annotated recording to this new .dendro instead of in place"
     )]
     pub output: Option<PathBuf>,
     #[arg(
@@ -366,7 +363,7 @@ pub struct AnnotateArgs {
     #[arg(
         long = "templates",
         value_name = "DIR",
-        help = "Directory containing service extension template JSON files"
+        help = "Accepted and unused: annotate reads no template (a DIR that does not load is warned about)"
     )]
     pub templates: Option<PathBuf>,
     #[arg(
@@ -420,10 +417,7 @@ pub struct AnnotateArgs {
 
 #[derive(Args, Debug)]
 pub struct CheckArgs {
-    #[arg(
-        value_name = "FILE",
-        help = "The recording to check (.parquet or .rez, told apart by content)"
-    )]
+    #[arg(value_name = "FILE", help = "The recording to check (.dendro)")]
     pub file: PathBuf,
     #[arg(
         long = "queries",
@@ -435,10 +429,9 @@ pub struct CheckArgs {
         id = "RECORDING",
         long = "recording",
         value_name = "KEY=VALUE",
-        help = "Which recording of a multi-recording .rez to check, as key=value (e.g. --recording source=redis)\n\
+        help = "Which recording of a multi-recording archive to check, as key=value (e.g. --recording source=redis)\n\
                 Repeatable: the pairs are ANDed and must together name exactly one\n\
-                recording. Without it every recording is checked. Not accepted for\n\
-                a .parquet file."
+                recording. Without it every recording is checked."
     )]
     pub recording: Vec<String>,
     #[arg(
@@ -450,7 +443,7 @@ pub struct CheckArgs {
         short = 'o',
         long = "output",
         value_name = "PATH",
-        help = "With --annotate, write the events into this new .dendro instead of the recording (required for a .rez or .parquet input)",
+        help = "With --annotate, write the events into this new .dendro instead of the recording",
         requires = "annotate"
     )]
     pub output: Option<PathBuf>,
@@ -473,7 +466,7 @@ pub struct CombineArgs {
         value_name = "FILES",
         required = true,
         num_args = 1..,
-        help = "Input recordings: .dendro and .rez archives and .parquet files, in any mix"
+        help = "Input recordings (.dendro)"
     )]
     pub files: Vec<PathBuf>,
     #[arg(
@@ -485,13 +478,13 @@ pub struct CombineArgs {
     pub output: PathBuf,
     #[arg(
         long = "bypass-time-check",
-        help = "Applied to the parquet row-merge, which 6.x does not write; refused"
+        help = "Applied to the parquet row-merge, which is no longer written; refused"
     )]
     pub bypass_time_check: bool,
     #[arg(
         long = "pinned",
         value_name = "pinned",
-        help = "Applied to the parquet row-merge, which 6.x does not write; refused"
+        help = "Applied to the parquet row-merge, which is no longer written; refused"
     )]
     pub pinned: Option<String>,
     #[arg(
@@ -513,7 +506,7 @@ pub struct CombineArgs {
     #[arg(
         long = "category",
         value_name = "NAME",
-        help = "Applied to the A/B tarball, which 6.x does not write; refused",
+        help = "Applied to the A/B tarball, which is no longer written; refused",
         requires = "ab"
     )]
     pub category: Option<String>,
@@ -525,24 +518,9 @@ pub struct MetadataArgs {
         short = 'i',
         long = "input",
         value_name = "input",
-        help = "The recording (.dendro, .rez or .parquet)"
+        help = "The recording (.dendro)"
     )]
     pub input: PathBuf,
-    #[arg(long = "schema", help = "Show only column-level metadata (schema)")]
-    pub schema: bool,
-    #[arg(long = "file", help = "Show only file-level metadata")]
-    pub file: bool,
-    #[arg(
-        long = "geometry",
-        help = "Show only table geometry (shape and row group layout)"
-    )]
-    pub geometry: bool,
-    #[arg(
-        long = "field",
-        value_name = "KEY",
-        help = "Print the value of a specific file-level metadata key"
-    )]
-    pub field: Option<String>,
     #[arg(long = "json", help = "Output in JSON format (for programmatic use)")]
     pub json: bool,
 }
@@ -595,30 +573,15 @@ pub struct ConvertArgs {
 
 #[derive(Args, Debug)]
 pub struct FilterArgs {
-    #[arg(
-        value_name = "FILE",
-        help = "Recording to filter: a .dendro, or a .rez or .parquet with -o"
-    )]
+    #[arg(value_name = "FILE", help = "Recording to filter (.dendro)")]
     pub file: PathBuf,
-    #[arg(
-        long = "queries",
-        value_name = "PATH",
-        help = "Custom service extension JSON file (overrides metadata/template)"
-    )]
-    pub queries: Option<PathBuf>,
     #[arg(
         short = 'o',
         long = "output",
         value_name = "PATH",
-        help = "Write the filtered recording to this .dendro (default: rewrite a .dendro input in place; required for a .rez or .parquet)"
+        help = "Write the filtered recording to this new .dendro (default: rewrite the input in place)"
     )]
     pub output: Option<PathBuf>,
-    #[arg(
-        long = "templates",
-        value_name = "DIR",
-        help = "Directory containing service extension template JSON files"
-    )]
-    pub templates: Option<PathBuf>,
     #[arg(
         long = "samplers",
         value_name = "A,B,...",
@@ -640,14 +603,14 @@ pub struct FilterArgs {
 pub struct UpgradeArgs {
     #[arg(
         value_name = "FILE",
-        help = "The recording to convert: a .rez archive or a .parquet file"
+        help = "The recording to convert: a .rez archive, a .parquet file or a .parquet.ab.tar"
     )]
     pub file: PathBuf,
     #[arg(
         short = 'o',
         long = "output",
         value_name = "DENDRO",
-        help = "The .dendro to write (default: the input with a .dendro extension); must not exist"
+        help = "The .dendro to write (default: the input's name with .dendro for its extension; x.parquet.ab.tar becomes x.dendro); must not exist"
     )]
     pub output: Option<PathBuf>,
     #[arg(
@@ -655,7 +618,7 @@ pub struct UpgradeArgs {
         value_name = "FORMAT",
         default_value = "dendro",
         value_parser = clap::builder::NonEmptyStringValueParser::new(),
-        help = "Target container: `dendro`, the only one 6.x writes (accepted for scripts that pass it)"
+        help = "Target container: `dendro`, the only one written (accepted for scripts that pass it)"
     )]
     pub to: String,
 }
@@ -664,7 +627,7 @@ pub struct UpgradeArgs {
 pub struct SnapshotArgs {
     #[arg(
         value_name = "FILE",
-        help = "The archive to snapshot (.dendro or .rez; may be open for writing)"
+        help = "The archive to snapshot (.dendro; may be open for writing)"
     )]
     pub file: PathBuf,
     #[arg(
@@ -679,7 +642,7 @@ pub struct SnapshotArgs {
 fn command(host: &Host) -> Command {
     let cmd = Recording::augment_subcommands(Command::new("recording"))
         .about(format!(
-            "Inspect and transform {} recordings (.dendro and .rez archives, .parquet files)",
+            "Inspect and transform {} recordings (.dendro archives)",
             host.display_name
         ))
         .long_about(match host.alias {
@@ -743,15 +706,12 @@ fn run(host: &Host, cmd: Recording) -> i32 {
         }
         Recording::Combine(args) => super::combine::run(host, &args),
         Recording::Convert(args) => return super::convert::run(host, &args),
-        Recording::Filter(args) => {
-            let registry = (host.registry)(args.templates.as_deref());
-            return super::filter::run(host, &args, &registry);
-        }
+        Recording::Filter(args) => return super::filter::run(host, &args),
         Recording::Metadata(args) => super::metadata::run(host, &args),
         Recording::Upgrade(args) => {
             super::upgrade_to_dendro(&args.file, args.output.as_deref(), &args.to)
         }
-        Recording::Snapshot(args) => super::snapshot_rez(&args.file, &args.output),
+        Recording::Snapshot(args) => super::snapshot_rez(&args.file, &args.output, host.program),
     };
     match result {
         Ok(()) => 0,
@@ -764,33 +724,32 @@ fn run(host: &Host, cmd: Recording) -> i32 {
 
 /// Help text, with its placeholders rendered by `Host::render`.
 mod help {
-    pub(super) const FILTER_ABOUT: &str = "Shrink a recording to the {table_noun} or metrics named (.dendro; a .rez or .parquet into a new .dendro)";
+    pub(super) const FILTER_ABOUT: &str =
+        "Shrink a .dendro recording to the {table_noun} or metrics named";
 
     pub(super) const FILTER_METRICS: &str = "Comma-separated metric names to KEEP as COLUMNS; every other metric's columns are dropped and re-encoded. Timestamp and acquisition-window sidecars are always kept; a table left with none of the kept metrics is dropped. Combine with {table_flag}, or use either alone";
 
-    pub(super) const RECORDING_LONG: &str = "Offline operations on recordings: the .dendro archives {writers} write, and the .rez archives and .parquet files that 5.x\n\
-                 releases wrote.\n\n\
+    pub(super) const RECORDING_LONG: &str = "Offline operations on recordings: the .dendro archives that\n\
+                 {writers}.\n\n\
                  SUBCOMMANDS:\n    \
-                 metadata   Inspect a recording's metadata, schema, and geometry\n    \
+                 metadata   Describe an archive's recordings, labels, metadata and tables\n    \
                  annotate   Embed service-extension KPIs or events into a recording\n    \
                  check      Evaluate the KPI checks a recording carries and report pass/fail verdicts\n    \
                  combine    Combine recordings into one .dendro archive, optionally labelled as an A/B\n    \
-                 convert    Turn a raw msgpack recording (from a 5.x `record -o out.raw`) into a .dendro\n    \
+                 convert    Turn a raw msgpack recording (`record -o out.raw` in earlier releases) into a .dendro\n    \
                  filter     Shrink a recording to the {table_noun} or metrics named\n    \
                  snapshot   Copy an archive that is still being written into a complete .dendro\n    \
-                 upgrade    Convert a .rez archive or a .parquet file into a .dendro archive\n\n\
-                 6.x writes .dendro archives only. A command that would change a .rez or a\n\
-                 .parquet writes a new .dendro instead, given -o.\n\n\
+                 upgrade    Convert a recording an earlier release wrote into a .dendro archive\n\n\
+                 Every subcommand but `upgrade` opens .dendro archives only. A .rez archive,\n\
+                 a .parquet file or a .parquet.ab.tar A/B tarball is refused with the command\n\
+                 that converts it: `{program} recording upgrade FILE`.\n\n\
                  Run `{program} recording <subcommand> --help` for per-subcommand examples.";
 
     pub(super) const ANNOTATE_LONG: &str = "Embed metadata the viewer reads into each recording of a .dendro archive,\n\
                          in place: service-extension KPIs (--queries, or --undo to remove them),\n\
                          timeline events (--event/--add-events/--clear-events) and a systeminfo JSON\n\
-                         (--systeminfo). At least one is required.\n\n\
-                         A .rez archive or a .parquet file is not changed: 6.x writes .dendro only.\n\
-                         Give -o <new.dendro> and the recording is converted there and the edit\n\
-                         written to the copy; without -o the command is refused, naming the command\n\
-                         to run. A .dendro with -o is copied there and the copy edited.\n\n\
+                         (--systeminfo). At least one is required. With -o <new.dendro> the archive\n\
+                         is copied there and the copy edited.\n\n\
                          --undo removes each recording's KPIs, and --systeminfo stores a systeminfo\n\
                          JSON in each recording. --source, --node and --filter edited a parquet\n\
                          file's footer and are refused: a recording's labels are set when it is\n\
@@ -800,8 +759,8 @@ mod help {
                          {program} recording annotate run.dendro --queries kpis.json\n\n    \
                          # Add a timeline event\n    \
                          {program} recording annotate run.dendro --event 'time=2026-05-12T15:23Z,kind=deploy,description=\"rollout\"'\n\n    \
-                         # Annotate a 5.x recording: the result is a new .dendro\n    \
-                         {program} recording annotate old.rez --queries kpis.json -o old.dendro";
+                         # Leave the original alone: write the annotated copy elsewhere\n    \
+                         {program} recording annotate run.dendro --queries kpis.json -o annotated.dendro";
 
     pub(super) const CHECK_LONG: &str = "Run every KPI check over a recording and print one line per check\n\
                          (PASS / WARN / FAIL / INDETERMINATE / ERROR), then a summary line.\n\n\
@@ -871,9 +830,9 @@ mod help {
                          INDETERMINATE never fail the run. No checks at all is 0, with a note on\n\
                          stderr.\n\n\
                          MULTI-RECORDING ARCHIVE: with no --recording every recording is checked and\n\
-                         each line is prefixed with its labels; --recording k=v{selector_note} narrows to one. A recording and its copies (one\n\
-                         source copied, or recorded twice from one agent process) are one\n\
-                         recording.\n\n\
+                         each line is prefixed with its labels; --recording k=v narrows to one. A\n\
+                         recording and its copies (one source copied, or recorded twice from one\n\
+                         agent process) are one recording.\n\n\
                          --annotate writes each FAIL/WARN window into the recording as a range\n\
                          event: kind=check, timestamp=window start, duration_ns=span (the event\n\
                          ends one step after the last violating point), description=the KPI title,\n\
@@ -882,83 +841,62 @@ mod help {
                          window start: running again rewrites a window that grew and adds nothing\n\
                          for one that did not, and a window that no longer fires keeps its old\n\
                          event. The events go into the recording they were evaluated against (each\n\
-                         recording its own when no --recording is given), in its sources' metadata.\n\
-                         A .dendro is annotated in place, or into a copy with -o <new.dendro>. A .rez\n\
-                         or .parquet is not changed: give -o <new.dendro> and it is converted there\n\
-                         and the copy annotated; without -o the annotation is refused, naming the\n\
-                         command to run. With --json the annotation report goes to stderr so stdout\n\
-                         stays one JSON array.\n\n\
-                         --json prints an array with one object per check: `recording` (labels,\n\
-                         .rez only), `title`, `query` (as evaluated), `check`, `status`, `windows`\n\
-                         and `indeterminate` (each with `start` and `end` as RFC 3339, `start_ns`,\n\
+                         recording its own when no --recording is given), in its sources' metadata:\n\
+                         in place, or into a copy with -o <new.dendro>. With --json the annotation\n\
+                         report goes to stderr so stdout stays one JSON array.\n\n\
+                         --json prints an array with one object per check: `recording` (labels),\n\
+                         `title`, `query` (as evaluated), `check`, `status`, `windows` and\n\
+                         `indeterminate` (each with `start` and `end` as RFC 3339, `start_ns`,\n\
                          `duration_ns`, `points`), and `error` (ERROR only).\n\n\
                          EXAMPLES:\n    \
                          # Run the checks a recording already carries\n    \
                          {program} recording check run.dendro\n\n    \
                          # Run checks from a file instead (nothing is written to the recording)\n    \
-                         {program} recording check run.parquet --queries kpis.json\n\n    \
+                         {program} recording check run.dendro --queries kpis.json\n\n    \
                          # CI: fail the job on a violated check, and store the verdicts as events\n    \
                          {program} recording check run.dendro --annotate || exit 1\n\n    \
                          # One recording of a multi-recording archive, machine-readable\n    \
-                         {program} recording check fleet.dendro --recording host=web-01 --json\n\n    \
-                         # Annotate a 5.x recording's verdicts into a new .dendro\n    \
-                         {program} recording check old.rez --annotate -o old.dendro";
+                         {program} recording check fleet.dendro --recording host=web-01 --json";
 
-    pub(super) const COMBINE_LONG: &str = "Assemble two or more recordings into one .dendro archive, a recording per\n\
-                         input recording, which the viewer opens as one combined view. Requires at\n\
-                         least two inputs (one archive with --ab, below) and an output (-o) ending\n\
-                         in .dendro. 6.x writes .dendro only: an output ending in .parquet (the\n\
-                         row-merge), .rez or .parquet.ab.tar is refused.\n\n\
-                         Inputs may be any mix of .dendro archives, .rez archives (v1, v2 or v3)\n\
-                         and .parquet files; a .rez or parquet input is converted to dendro on the\n\
-                         way in, and is not changed. A parquet file becomes one recording labelled\n\
-                         with its `source`. A recording and its copy (a snapshot, a hindsight dump)\n\
-                         given together are read as one recording, as {viewer} reads them.\n\n\
+    pub(super) const COMBINE_LONG: &str = "Assemble two or more .dendro archives into one, a recording per input\n\
+                         recording, which the viewer opens as one combined view. Requires at least\n\
+                         two inputs (one archive with --ab, below) and an output (-o) ending in\n\
+                         .dendro. A recording and its copy (a snapshot, a hindsight dump) given\n\
+                         together are read as one recording, as {viewer} reads them.\n\n\
                          With `--ab baseline=<input> experiment=<input>` each input's recordings\n\
                          are labelled arm=baseline or arm=experiment and the viewer opens a\n\
                          baseline/experiment comparison; an input recording that already carries\n\
-                         the other arm is refused, naming the input. With ONE archive input,\n\
-                         `--ab baseline=0 experiment=1` labels its recordings by position (from 0,\n\
-                         {list_recordings_order}; every source of\n\
-                         a recording, such as a source and its snapshot, takes its arm): the way to\n\
-                         compare the two recordings of an archive combined before --ab existed,\n\
-                         whose labels may be identical. With two inputs, each value is an input's\n\
-                         path or file name; the source names the 5.x A/B tarball took are refused.\n\n\
+                         the other arm is refused, naming the input. With two inputs, each value\n\
+                         is an input's path or file name. With ONE archive input, each value is\n\
+                         the position of one of its recordings, from 0,\n\
+                         {list_recordings_order}.\n\
+                         Every source of a recording, such as a source and its snapshot, takes\n\
+                         its arm. That is the way to compare the two recordings of an archive\n\
+                         combined without --ab, whose labels may be identical.\n\n\
                          --pinned, --category and --bypass-time-check applied to the parquet\n\
-                         row-merge and the A/B tarball, which 6.x does not write; they are refused.\n\n\
+                         row-merge and the A/B tarball, which are no longer written; they are\n\
+                         refused.\n\n\
                          EXAMPLES:\n    \
                          # Two hosts recorded separately in one run: one combined view\n    \
                          {program} recording combine web-01.dendro web-02.dendro -o run.dendro\n\n    \
                          # A/B compare two captures\n    \
                          {program} recording combine a.dendro b.dendro --ab baseline=a.dendro experiment=b.dendro -o ab.dendro\n\n    \
-                         # 5.x captures: a .rez and two parquet files into one archive\n    \
-                         {program} recording combine agent.rez redis.parquet valkey.parquet -o run.dendro\n\n    \
-                         # Label the two recordings of an older archive as an A/B, by position\n    \
-                         {program} recording combine old.rez --ab baseline=0 experiment=1 -o ab.dendro";
+                         # Label the two recordings of one archive as an A/B, by position\n    \
+                         {program} recording combine run.dendro --ab baseline=0 experiment=1 -o ab.dendro";
 
-    pub(super) const METADATA_LONG: &str = "Describe a recording. For a .dendro or .rez archive: its recordings, their\n\
-                         labels and metadata, and each table with its cadence; --json emits the\n\
-                         description as JSON.\n\n\
-                         For a .parquet file: file-level key/values (source, sampling interval,\n\
-                         systeminfo, descriptions, …), the column schema with each metric's type and\n\
-                         labels, and table geometry (row/column counts and row-group layout). With no\n\
-                         filter flag all sections are shown. Narrow with --file, --schema, or\n\
-                         --geometry; pull a single file-level value with --field <KEY>; add --json\n\
-                         for machine-readable output.\n\n\
+    pub(super) const METADATA_LONG: &str =
+        "Describe a .dendro archive: its recordings, their labels and metadata, and\n\
+                         each table with its cadence; --json emits the description as JSON.\n\n\
                          EXAMPLES:\n    \
                          # Describe an archive\n    \
                          {program} recording metadata -i {agent}.dendro\n\n    \
                          # The same, as JSON\n    \
-                         {program} recording metadata -i {agent}.dendro --json\n\n    \
-                         # Only a parquet file's file-level metadata, as JSON\n    \
-                         {program} recording metadata -i {agent}.parquet --file --json\n\n    \
-                         # Just the value of one parquet metadata key\n    \
-                         {program} recording metadata -i {agent}.parquet --field source";
+                         {program} recording metadata -i {agent}.dendro --json";
 
-    pub(super) const CONVERT_LONG: &str = "Convert a recording made with {raw_source} (concatenated\n\
-                         msgpack snapshots, one per sampling tick) into a .dendro archive that the\n\
-                         viewer, the MCP tools and the rest of `{program} recording` can read. 6.x\n\
-                         records .dendro only, so this is for raw recordings made before 6.0.\n\n\
+    pub(super) const CONVERT_LONG: &str = "Convert a raw recording (concatenated msgpack snapshots, one per sampling\n\
+                         tick, as {raw_source})\n\
+                         into a .dendro archive that the viewer and the rest of\n\
+                         `{program} recording` can read.\n\n\
                          The input may be plain or zstd-compressed; which one it is is detected from\n\
                          the file's contents, not its name. The output path defaults to the input\n\
                          with a trailing .zst and then a trailing .raw stripped, and .dendro\n\
@@ -990,67 +928,65 @@ mod help {
                          # A recording made at a non-default cadence\n    \
                          {program} recording convert {agent}.raw --interval 250ms\n\n    \
                          # Save the two metadata blobs at record time, from the agent being recorded\n    \
-                         curl -s http://localhost:4241/systeminfo > sysinfo.json\n    \
-                         curl -s http://localhost:4241/metrics/descriptions > help.json\n\n    \
+                         curl -s http://AGENT/systeminfo > sysinfo.json\n    \
+                         curl -s http://AGENT/metrics/descriptions > help.json\n\n    \
                          # ...then stamp them into the conversion\n    \
                          {program} recording convert {agent}.raw --systeminfo sysinfo.json --descriptions help.json\n\n    \
                          # Or pipe one of them straight in, with - for stdin\n    \
-                         curl -s http://localhost:4241/systeminfo | {program} recording convert {agent}.raw --systeminfo -\n\n    \
-                         # Tag the recording the way `record --metadata` would\n    \
+                         curl -s http://AGENT/systeminfo | {program} recording convert {agent}.raw --systeminfo -\n\n    \
+                         {tag_example}\n    \
                          {program} recording convert {agent}.raw -m source=llm-perf -m run=boat-7\n\n    \
                          # Replace an output left by an earlier attempt\n    \
                          {program} recording convert {agent}.raw --force\n\n    \
                          # Descriptions were missed the first time -- reconvert over the old output\n    \
                          {program} recording convert {agent}.raw --descriptions help.json --force";
 
-    pub(super) const FILTER_LONG: &str = "Shrink a recording: {table_keep} and --metrics keeps metric COLUMNS (re-encoding each\n\
+    pub(super) const FILTER_LONG: &str = "Shrink a .dendro recording: {table_keep} and --metrics keeps metric COLUMNS (re-encoding each\n\
                          table's segments, always keeping the timestamp and acquisition-window\n\
                          sidecars; a table left with none of the kept metrics is dropped). Use\n\
-                         either alone or together; at least one is required, except for a parquet\n\
-                         file, which with neither keeps what its service-extension KPIs need: the\n\
-                         metrics its KPI queries name (from the file's annotation, a matching\n\
-                         built-in template, or --queries) and every metric of the agent's columns.\n\n\
-                         A .dendro is rewritten in place, or with -o/--output written to a new\n\
-                         .dendro, leaving the original untouched. A .rez or .parquet is not changed:\n\
-                         6.x writes .dendro only, so it needs -o <new.dendro>; it is converted and\n\
-                         the filtered copy written there.\n\n\
+                         either alone or together; at least one is required.\n\n\
+                         The archive is rewritten in place, or with -o/--output written to a new\n\
+                         .dendro, leaving the original untouched.\n\n\
                          EXAMPLES:\n    \
                          # Keep only two {table_noun} of a .dendro, writing a slimmed copy\n    \
                          {program} recording filter capture.dendro {table_flag} cpu_usage,scheduler -o slim.dendro\n\n    \
                          # Keep only specific metric columns, in place\n    \
-                         {program} recording filter capture.dendro --metrics cpu_usage,cpu_frequency\n\n    \
-                         # A 5.x .rez: the filtered recording is a new .dendro\n    \
-                         {program} recording filter out.rez {table_flag} cpu_usage -o slim.dendro\n\n    \
-                         # A parquet file, keeping what its KPIs need\n    \
-                         {program} recording filter service.parquet --queries ext.json -o slim.dendro";
+                         {program} recording filter capture.dendro --metrics cpu_usage,cpu_frequency";
 
-    pub(super) const UPGRADE_LONG: &str = "Write a new .dendro archive holding a recording an earlier release wrote:\n\
-                         a v1, v2 or v3 `.rez`, or a standalone `.parquet`. 6.x writes .dendro only\n\
-                         and reads every older format; converting is how an old recording becomes\n\
-                         one the `recording` tools edit in place.\n\n\
+    pub(super) const UPGRADE_LONG: &str =
+        "Write a new .dendro archive holding a recording an earlier release wrote:\n\
+                         a v1, v2 or v3 `.rez`, a standalone `.parquet`, or a `.parquet.ab.tar`\n\
+                         A/B tarball. Every other command opens .dendro archives only and refuses\n\
+                         these with this command.\n\n\
                          A v3 `.rez`'s recordings become sources and its tables streams; segment,\n\
                          WAL and caller-row bytes are copied unchanged. A tar `.rez`'s recordings\n\
                          become sources with their labels, metadata, clock anchor and `complete`\n\
                          flag. A parquet file becomes one source, labelled with the file's\n\
-                         `source` as the viewer labels it. Tar and parquet tables are re-encoded.\n\n\
-                         The input is never changed. -o defaults to the input with its extension\n\
-                         replaced by .dendro, and an existing output is refused.\n\n\
+                         `source` when that names one source and no series carries its own.\n\
+                         An A/B tarball becomes two sources, its baseline labelled arm=baseline\n\
+                         and its experiment arm=experiment, which the viewer opens as a\n\
+                         comparison. Tar and parquet tables are re-encoded.\n\n\
+                         The input is never changed. -o defaults to the input's name with .dendro\n\
+                         for its extension (x.parquet.ab.tar becomes x.dendro), and an existing\n\
+                         output is refused.\n\n\
                          EXAMPLES:\n    \
                          # Writes old.dendro beside old.rez\n    \
                          {program} recording upgrade old.rez\n\n    \
                          # A parquet recording, to a chosen name\n    \
-                         {program} recording upgrade capture.parquet -o capture.dendro";
+                         {program} recording upgrade capture.parquet -o capture.dendro\n\n    \
+                         # An A/B tarball: writes ab.dendro, a two-arm comparison\n    \
+                         {program} recording upgrade ab.parquet.ab.tar";
 
-    pub(super) const SNAPSHOT_LONG: &str = "Take a complete, standalone .dendro copy of an archive while {appenders} is still appending to it.\n\n\
+    pub(super) const SNAPSHOT_LONG: &str = "Take a complete, standalone .dendro copy of an archive while\n\
+                         {appenders} is still appending to it.\n\n\
                          WHY NOT `cp`: an archive is a SQLite database in WAL mode, so recent\n\
                          commits live in a `<file>-wal` SIDECAR until they are checkpointed into\n\
                          the archive. Copying the archive alone leaves them behind, and the copy\n\
                          reads as a recording that stopped early.\n\n\
-                         A .dendro is copied in one read snapshot, its live tail sealed into the\n\
-                         copy, so the copy holds no WAL rows. A .rez (v1, v2 or v3, which a 5.x\n\
-                         recorder may still be writing) is converted to the .dendro, its sidecar\n\
-                         read through. The writer is never paused and the original is not\n\
-                         modified. The output must end in .dendro and must not exist.\n\n\
+                         The archive is copied in one read snapshot, its live tail sealed into the\n\
+                         copy, so the copy holds no WAL rows. The writer is never paused and the\n\
+                         original is not modified. The output must end in .dendro and must not\n\
+                         exist.\n\n\
                          The result is what to hand to someone else, upload to the static-site\n\
                          viewer (a browser is given one file and cannot see a sidecar), or keep\n\
                          as an incident artifact.\n\n\
@@ -1058,5 +994,5 @@ mod help {
                          {buffer_example}{live_example}\n    \
                          {program} recording snapshot {agent}.dendro -o so-far.dendro";
 
-    pub(super) const CONVERT_METADATA: &str = "Add a file-level metadata tag as key=value; repeat for multiple tags. Split on the first =, so values may contain = and may be empty. Keys are free-form, but `source` is the one the viewer and MCP tools read to identify where a recording came from (it defaults to {agent}). Tags are applied after the two keys convert derives, `source` and `sampling_interval_ms`, so a tag with either name wins -- set the interval with --interval rather than -m sampling_interval_ms=";
+    pub(super) const CONVERT_METADATA: &str = "Add a file-level metadata tag as key=value; repeat for multiple tags. Split on the first =, so values may contain = and may be empty. Keys are free-form, but `source` is the one the viewer reads to identify where a recording came from (it defaults to {agent}). Tags are applied after the two keys convert derives, `source` and `sampling_interval_ms`, so a tag with either name wins -- set the interval with --interval rather than -m sampling_interval_ms=";
 }

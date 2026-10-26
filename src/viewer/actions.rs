@@ -14,13 +14,10 @@ use http::{header, StatusCode};
 use reqwest::{Client, Url};
 use tracing::{error, info, warn};
 
-use metriken_query::{MetricsSource, ParquetReader};
+use metriken_query::MetricsSource;
 
 use super::capture_registry::CaptureId;
-use super::metadata::{
-    build_multinode_systeminfo, classify_sources, compute_file_checksum, extract_parquet_metadata,
-    extract_service_extension_metadata, regenerate_dashboards, validate_service_extensions,
-};
+use super::metadata::{compute_file_checksum, regenerate_dashboards};
 use super::report_save;
 use super::routes::on_query_slot;
 use super::state::{ApiResponse, AppState, LazySectionStore};
@@ -130,7 +127,7 @@ pub async fn load_url(
             .path_segments()
             .and_then(|mut s| s.rfind(|seg| !seg.is_empty()))
             .map(ToString::to_string)
-            .unwrap_or_else(|| "remote.parquet".to_string())
+            .unwrap_or_else(|| "remote.dendro".to_string())
     });
     // Staging, opening and checksumming the file and building the
     // dashboards read the whole file, so they run in a query slot.
@@ -139,16 +136,12 @@ pub async fn load_url(
         if state.live.load(Ordering::Relaxed) {
             return ApiResponse::err("load_url is only available in file mode", "bad_request");
         }
-        let temp_path = baseline_temp_path();
-        if let Err(e) = std::fs::write(&temp_path, &bytes) {
-            return ApiResponse::err(format!("failed to stage upstream bytes: {e}"), "io_error");
-        }
-        ingest_baseline_from_path(state, temp_path, filename)
+        ingest_upload(state, &bytes, filename)
     })
     .await
 }
 
-/// Upload and load a parquet file into file-mode viewer state.
+/// Upload and load a recording into file-mode viewer state.
 pub async fn upload_parquet(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -158,17 +151,18 @@ pub async fn upload_parquet(
         return ApiResponse::err("upload is only available in file mode", "bad_request");
     }
     if body.is_empty() {
-        return ApiResponse::err("missing parquet bytes", "bad_request");
+        return ApiResponse::err("missing recording bytes", "bad_request");
     }
 
-    let filename = filename_header(&headers).unwrap_or_else(|| "upload.parquet".to_string());
+    let filename = filename_header(&headers).unwrap_or_else(|| "upload.dendro".to_string());
     // Storing, opening and checksumming the upload and building the
     // dashboards read the whole file, so they run in a query slot.
     on_query_slot(&state, move |state| ingest_upload(state, &body, filename)).await
 }
 
-/// Store an upload and load it as the baseline, by its content: a `.rez` or
-/// `.dendro` archive, a combined-A/B tarball, or a parquet.
+/// Store an upload and load it as the baseline: a dendro archive, by its
+/// content. Any other file is refused, one an earlier release wrote with the
+/// `recording upgrade` command that converts it.
 fn ingest_upload(
     state: &AppState,
     body: &[u8],
@@ -178,29 +172,24 @@ fn ingest_upload(
     if state.live.load(Ordering::Relaxed) {
         return ApiResponse::err("upload is only available in file mode", "bad_request");
     }
+    let container = ::rez::container::Container::of_bytes(body);
+    if container != ::rez::container::Container::Dendro {
+        return ApiResponse::err(
+            ::rez::container::not_dendro(&filename, container, env!("CARGO_BIN_NAME")),
+            "invalid_recording",
+        );
+    }
     let temp_path = baseline_temp_path();
     if let Err(e) = std::fs::write(&temp_path, body) {
         return ApiResponse::err(format!("failed to store upload: {e}"), "io_error");
     }
-    // `.rez` (v2 tar) is also a tar, so check it before the A/B-tarball
-    // sniffer. Dispatch is by CONTENT of the staged upload, not extension or
-    // filename, and covers both `.rez` containers (v2 tar and v3 SQLite) —
-    // `RezReader` dispatches on the container internally.
-    if crate::recorder::rez::detect_rez_format(&temp_path)
-        .unwrap_or(crate::recorder::rez::RezFormat::NotRez)
-        != crate::recorder::rez::RezFormat::NotRez
-    {
-        return ingest_rez_from_path(state, temp_path, filename);
-    }
-    if super::ab_extract::looks_like_ab_tarball(&temp_path) {
-        return ingest_combined_ab_from_path(state, temp_path, filename);
-    }
-    ingest_baseline_from_path(state, temp_path, filename)
+    ingest_rez_from_path(state, temp_path, filename)
 }
 
-/// Runtime-upload version of `init_file_mode_rez` (mod.rs): load a `.rez` as one
-/// `RezReader` per recording, wiring a 2-recording archive onto the
-/// baseline/experiment slots (>2 shows the first two). Returns an HTTP envelope.
+/// Runtime-upload version of `init_file_mode_rez` (mod.rs): load a dendro
+/// archive as one `RezReader` per recording, wiring a 2-recording archive
+/// onto the baseline/experiment slots (>2 shows the first two). Returns an
+/// HTTP envelope.
 fn ingest_rez_from_path(
     state: &AppState,
     rez_path: PathBuf,
@@ -213,13 +202,13 @@ fn ingest_rez_from_path(
             Ok(r) if !r.is_empty() => r,
             Ok(_) => {
                 let _ = std::fs::remove_file(&rez_path);
-                return ApiResponse::err("empty .rez archive (no recordings)", "invalid_parquet");
+                return ApiResponse::err("the archive holds no recordings", "invalid_recording");
             }
             Err(e) => {
                 let _ = std::fs::remove_file(&rez_path);
                 return ApiResponse::err(
-                    format!("failed to read .rez archive: {e}"),
-                    "invalid_parquet",
+                    format!("failed to read the archive: {e}"),
+                    "invalid_recording",
                 );
             }
         };
@@ -241,6 +230,10 @@ fn ingest_rez_from_path(
         *state.combined_catalog.write() =
             Some(Arc::new(::dashboard::combined::FixedCatalog(reader)));
         *state.parquet_path.write() = Some(rez_path.clone());
+        *state.baseline_name.write() = Some(display_filename.clone());
+        *state.baseline_file.write() = super::state::BaselineFile::Combined {
+            recordings: combined.labels.len(),
+        };
         *state.experiment_parquet_path.write() = None;
         *state.cli_experiment_path.write() = None;
         *state.selection.write() = selection;
@@ -291,7 +284,7 @@ fn ingest_rez_from_path(
             let _ = std::fs::remove_file(&rez_path);
             return ApiResponse::err(
                 format!("{why}; open it with `rezolus view FILE --baseline k=v --experiment k=v`"),
-                "invalid_parquet",
+                "invalid_recording",
             );
         }
     };
@@ -361,8 +354,15 @@ fn ingest_rez_from_path(
     *state.beside.write() = beside;
     *state.anchor_labels.write() = Some(b_labels.clone());
     *state.parquet_path.write() = Some(rez_path.clone());
-    *state.experiment_parquet_path.write() = None;
-    *state.cli_experiment_path.write() = None;
+    *state.baseline_name.write() = Some(display_filename.clone());
+    *state.baseline_file.write() = super::state::BaselineFile::compared(labels.len());
+    // A one-recording baseline replacing another keeps an experiment that is
+    // a file of its own: the comparison goes on with the new baseline.
+    let keep_experiment = labels.len() == 1 && state.resolve_experiment_parquet_path().is_some();
+    if !keep_experiment {
+        *state.experiment_parquet_path.write() = None;
+        *state.cli_experiment_path.write() = None;
+    }
     state.captures.set_baseline_systeminfo(b_systeminfo);
     state.captures.set_baseline_file_metadata(b_file_meta);
     *state.file_checksum.write() = compute_file_checksum(&rez_path);
@@ -379,171 +379,12 @@ fn ingest_rez_from_path(
                 Some(e_alias),
             );
         }
+        None if keep_experiment => {}
         None => state.captures.detach_experiment(),
     }
 
     regenerate_dashboards(state);
-    // Keep the uploaded .rez on disk (parquet_path references it), mirroring the
-    // parquet upload path.
-    ApiResponse::ok(serde_json::json!({ "filename": display_filename }))
-}
-
-/// Runtime-upload version of `init_file_mode_combined_ab` (mod.rs).
-/// Mirrors the CLI state-mutation but returns an HTTP envelope instead
-/// of exiting on failure, and skips strict `--category` validation
-/// (manifest's category, if any, is applied as-is).
-fn ingest_combined_ab_from_path(
-    state: &AppState,
-    tar_path: PathBuf,
-    display_filename: String,
-) -> Json<ApiResponse<serde_json::Value>> {
-    let extracted = match super::ab_extract::extract_ab_tarball(&tar_path) {
-        Ok(e) => e,
-        Err(e) => {
-            let _ = std::fs::remove_file(&tar_path);
-            return ApiResponse::err(
-                format!("failed to extract combined-A/B tarball: {e}"),
-                "invalid_parquet",
-            );
-        }
-    };
-    let manifest = extracted.manifest.clone();
-
-    let open = |label: &str, path: &std::path::Path| -> Result<Arc<dyn MetricsSource>, String> {
-        ParquetReader::open_with_pool(path, Arc::clone(&state.pool))
-            .map(::dashboard::combined::label_parquet_by_source)
-            .map(|r| Arc::new(r.with_filename(display_filename.clone())) as Arc<dyn MetricsSource>)
-            .map_err(|e| format!("failed to load {label} parquet from tarball: {e}"))
-    };
-    let baseline_reader = match open("baseline", &extracted.baseline_path) {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = std::fs::remove_file(&tar_path);
-            return ApiResponse::err(e, "invalid_parquet");
-        }
-    };
-    let experiment_reader = match open("experiment", &extracted.experiment_path) {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = std::fs::remove_file(&tar_path);
-            return ApiResponse::err(e, "invalid_parquet");
-        }
-    };
-
-    let (baseline_systeminfo, baseline_selection, baseline_file_meta) =
-        extract_parquet_metadata(&extracted.baseline_path);
-    let baseline_multinode = build_multinode_systeminfo(&extracted.baseline_path);
-    let (experiment_systeminfo, _experiment_selection, experiment_file_meta) =
-        extract_parquet_metadata(&extracted.experiment_path);
-    let experiment_multinode = build_multinode_systeminfo(&extracted.experiment_path);
-    let file_checksum = compute_file_checksum(&tar_path);
-
-    state.replace_baseline(baseline_reader);
-    *state.parquet_path.write() = Some(extracted.baseline_path.clone());
-    *state.cli_experiment_path.write() = Some(extracted.experiment_path.clone());
-    *state.experiment_parquet_path.write() = None;
-    state
-        .captures
-        .set_baseline_systeminfo(baseline_multinode.or(baseline_systeminfo));
-    *state.selection.write() = baseline_selection;
-    *state.file_checksum.write() = file_checksum;
-    state
-        .captures
-        .set_baseline_file_metadata(baseline_file_meta);
-    *state.trimmed_report_marker.write() = super::read_footer_kv(
-        &extracted.baseline_path,
-        crate::parquet_metadata::KEY_REPORT,
-    );
-    state
-        .captures
-        .set_baseline_alias(Some(manifest.baseline.alias.clone()));
-    state.captures.attach_experiment(
-        experiment_reader,
-        experiment_multinode.or(experiment_systeminfo),
-        experiment_file_meta,
-        Some(manifest.experiment.alias.clone()),
-    );
-    *state.category_name.write() = manifest.category.clone();
-    *state.combined_ab_marker.write() = Some(manifest);
-
-    // Keep the extracted tempdir alive — both per-side parquet paths
-    // reference it. CLI does the same in `init_file_mode_combined_ab`.
-    std::mem::forget(extracted);
-
-    regenerate_dashboards(state);
-
-    let _ = std::fs::remove_file(&tar_path);
-    ApiResponse::ok(serde_json::json!({ "filename": display_filename }))
-}
-
-/// Shared baseline-ingest path used by upload and load_url. Takes
-/// ownership of `temp_path`; the file is deleted on parquet-load
-/// failure and retained on success (AppState references it).
-pub fn ingest_baseline_from_path(
-    state: &AppState,
-    temp_path: PathBuf,
-    filename: String,
-) -> Json<ApiResponse<serde_json::Value>> {
-    let reader = match ParquetReader::open_with_pool(&temp_path, Arc::clone(&state.pool))
-        .map(::dashboard::combined::label_parquet_by_source)
-    {
-        Ok(r) => r.with_filename(filename),
-        Err(e) => {
-            let _ = std::fs::remove_file(&temp_path);
-            return ApiResponse::err(format!("failed to load parquet: {e}"), "invalid_parquet");
-        }
-    };
-    let filesize = std::fs::metadata(&temp_path).map(|m| m.len()).ok();
-    let reader_arc: Arc<dyn MetricsSource> = Arc::new(reader);
-
-    // Mirror the regenerate_dashboards short-circuit: a trimmed report
-    // gets an empty section list so /api/v1/sections is consistent with
-    // CLI-mode loading of the same parquet.
-    let report_marker = super::read_footer_kv(&temp_path, crate::parquet_metadata::KEY_REPORT);
-    let context = if report_marker.is_some() {
-        ::dashboard::dashboard::DashboardContext {
-            filesize,
-            ..Default::default()
-        }
-    } else {
-        let mut service_exts = extract_service_extension_metadata(
-            &temp_path,
-            &state.templates,
-            state.template_preference,
-        );
-        validate_service_extensions(reader_arc.as_ref(), &mut service_exts);
-        let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
-        // Classify sources so an uploaded simple-capture parquet gets its
-        // source: section here too — matching CLI load (regenerate_dashboards)
-        // and the WASM viewer, all of which share this classifier.
-        let sources = classify_sources(Some(&temp_path), reader_arc.as_ref(), &service_exts);
-        ::dashboard::dashboard::build_template_context(
-            super::metadata::capture_dashboard_template(
-                reader_arc.as_ref(),
-                state.template_preference,
-            ),
-            filesize,
-            &service_refs,
-            None,
-            &sources,
-        )
-    };
-    let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
-    let file_checksum = compute_file_checksum(&temp_path);
-
-    let display_filename = reader_arc.filename_or_default();
-    state.replace_baseline(reader_arc);
-    *state.sections.write() = LazySectionStore::new(context);
-    let multinode_sysinfo = build_multinode_systeminfo(&temp_path);
-    *state.parquet_path.write() = Some(temp_path);
-    *state.trimmed_report_marker.write() = report_marker;
-    state
-        .captures
-        .set_baseline_systeminfo(multinode_sysinfo.or(systeminfo));
-    *state.selection.write() = selection;
-    *state.file_checksum.write() = file_checksum;
-    state.captures.set_baseline_file_metadata(file_meta);
-
+    // Keep the uploaded archive on disk: parquet_path references it.
     ApiResponse::ok(serde_json::json!({ "filename": display_filename }))
 }
 
@@ -564,8 +405,11 @@ fn filename_header(headers: &HeaderMap) -> Option<String> {
 
 // ── Experiment attach / detach ────────────────────────────────────────
 
-/// Attach an experiment parquet for A/B comparison. Body is raw parquet
-/// bytes. Returns 409 if an experiment is already attached.
+/// Attach a one-recording dendro archive as the experiment of an A/B
+/// comparison. Body is the archive's bytes. Returns 409 if an experiment is
+/// already attached (an archive's own experiment arm included), and 400 with
+/// the commands that compare two recordings when the upload holds several or
+/// the baseline is a combined view of several.
 pub async fn attach_experiment(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -579,17 +423,17 @@ pub async fn attach_experiment(
             .into_response();
     }
     if body.is_empty() {
-        return (StatusCode::BAD_REQUEST, "missing parquet bytes").into_response();
+        return (StatusCode::BAD_REQUEST, "missing recording bytes").into_response();
     }
 
-    let filename = filename_header(&headers).unwrap_or_else(|| "experiment.parquet".to_string());
+    let filename = filename_header(&headers).unwrap_or_else(|| "experiment.dendro".to_string());
     // Writing the upload, opening it and rebuilding the dashboards (which run
     // KPI validation queries) are blocking file reads, so they run in a query
     // slot.
     on_query_slot(&state, move |state| attach_upload(state, &body, filename)).await
 }
 
-/// Store an uploaded experiment parquet and attach it.
+/// Store an uploaded experiment archive and attach it.
 fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
     // Checked again here: another attach can finish during the slot wait, and
     // both would write the same temp file.
@@ -600,8 +444,40 @@ fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
         )
             .into_response();
     }
+    let container = ::rez::container::Container::of_bytes(body);
+    if container != ::rez::container::Container::Dendro {
+        return (
+            StatusCode::BAD_REQUEST,
+            ::rez::container::not_dendro(&filename, container, env!("CARGO_BIN_NAME")),
+        )
+            .into_response();
+    }
+    let baseline = state
+        .baseline_name
+        .read()
+        .clone()
+        .unwrap_or_else(|| "BASELINE.dendro".to_string());
+    // An experiment is compared with one baseline recording; a combined
+    // view of several has none to compare it with.
+    if let super::state::BaselineFile::Combined {
+        recordings: combined,
+    } = *state.baseline_file.read()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            ::rez::container::one_recording_hint(
+                env!("CARGO_BIN_NAME"),
+                &baseline,
+                "the baseline",
+                combined,
+                &baseline,
+                &filename,
+            ),
+        )
+            .into_response();
+    }
     let temp_path =
-        std::env::temp_dir().join(format!("rezolus-experiment-{}.parquet", std::process::id()));
+        std::env::temp_dir().join(format!("rezolus-experiment-{}.dendro", std::process::id()));
     if let Err(e) = std::fs::write(&temp_path, body) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -610,21 +486,19 @@ fn attach_upload(state: &AppState, body: &[u8], filename: String) -> Response {
             .into_response();
     }
 
-    let exp_reader = match ParquetReader::open_with_pool(&temp_path, Arc::clone(&state.pool))
-        .map(::dashboard::combined::label_parquet_by_source)
-    {
-        Ok(r) => r.with_filename(filename),
-        Err(e) => {
-            let _ = std::fs::remove_file(&temp_path);
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("failed to load parquet: {e}"),
-            )
-                .into_response();
-        }
-    };
+    let (exp_reader, sysinfo, file_meta) =
+        match super::open_experiment(&temp_path, &filename, &baseline, Arc::clone(&state.pool)) {
+            Ok(opened) => opened,
+            Err(e) => {
+                let _ = std::fs::remove_file(&temp_path);
+                // The hint names the staged file; the caller knows it by the
+                // name it uploaded.
+                let e = e.replace(&temp_path.display().to_string(), &filename);
+                return (StatusCode::BAD_REQUEST, e).into_response();
+            }
+        };
+    let exp_reader = exp_reader.with_filename(filename);
 
-    let (sysinfo, _selection, file_meta) = extract_parquet_metadata(&temp_path);
     // HTTP-attached experiments don't carry an alias today; the
     // parameter is here so a future `x-rezolus-alias` header can thread
     // one through without further signature changes.
@@ -852,11 +726,10 @@ pub async fn save_capture(State(state): State<Arc<AppState>>) -> Response {
     finalize_attachment(result, "rezolus-capture.dendro", parquet_attachment)
 }
 
-/// File mode: column-trim the loaded parquet (or build a 2-recording `.rez`
-/// from a parquet compare) using the saved selection, embed the
-/// selection JSON in the output footer, and stream it back. Live mode takes
-/// the archive branch: `parquet_path` is the live archive, and the report is
-/// a trimmed `.dendro`.
+/// Save as Report: a trimmed `.dendro` of the loaded archive (of both
+/// archives, arm-labelled, for a two-file comparison) carrying the saved
+/// selection, streamed back. In live mode `parquet_path` is the live
+/// archive.
 ///
 /// The report is built in a query slot: resolving the kept columns builds a
 /// reader for each table a saved query touches, and the build reads the
@@ -884,6 +757,14 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
             .body(Body::empty())
             .unwrap();
     };
+    let baseline = state
+        .baseline_name
+        .read()
+        .clone()
+        .unwrap_or_else(|| path.display().to_string());
+    if let Some(refusal) = sources.refusal(&baseline) {
+        return ApiResponse::<()>::err(refusal, "bad_request").into_response();
+    }
     let selection_json = body;
     let payload: report_save::ReportPayload = match serde_json::from_str(&selection_json) {
         Ok(p) => p,
@@ -913,6 +794,8 @@ struct ReportSources {
     /// The labels of the archive recording the baseline reads
     /// (`AppState::anchor_labels`): the report's markers go on it.
     anchor: Option<std::collections::BTreeMap<String, String>>,
+    /// How the baseline's file is shown.
+    baseline_file: super::state::BaselineFile,
 }
 
 impl ReportSources {
@@ -928,6 +811,25 @@ impl ReportSources {
                 .resolve_experiment_parquet_path()
                 .zip(state.captures.get(CaptureId::Experiment)),
             anchor: state.anchor_labels.read().clone(),
+            baseline_file: *state.baseline_file.read(),
+        }
+    }
+
+    /// Why no report can be saved: an uploaded experiment is attached beside
+    /// an archive shown as a comparison. A report copies whole archives, so
+    /// it would hold every recording of the archive beside the upload.
+    fn refusal(&self, baseline: &str) -> Option<String> {
+        match (self.baseline_file, &self.experiment) {
+            (
+                super::state::BaselineFile::Comparison { recordings: n, .. },
+                Some((_, experiment)),
+            ) => Some(format!(
+                "Save as Report cannot save this comparison: {baseline} holds {n} recordings, \
+                 and a report copies whole files, so it would hold every recording of \
+                 {baseline} beside {}. Open {baseline} alone to save a report of it",
+                experiment.filename_or_default()
+            )),
+            _ => None,
         }
     }
 }
@@ -969,15 +871,11 @@ fn build_report(
         set
     });
 
-    // An archive source is one file; a parquet compare is the baseline's
-    // file and the experiment's, one recording each.
-    let archive = crate::parquet_tools::legacy::Container::of(path)
-        != crate::parquet_tools::legacy::Container::Parquet;
+    // One archive, or a two-file comparison: the baseline's file and the
+    // experiment's, one recording each.
     let mut paths: Vec<&std::path::Path> = vec![path];
-    if !archive {
-        if let Some((experiment_path, _)) = &sources.experiment {
-            paths.push(experiment_path);
-        }
+    if let Some((experiment_path, _)) = &sources.experiment {
+        paths.push(experiment_path);
     }
     let result = super::report_save::build_report(
         &paths,
@@ -1056,6 +954,33 @@ mod tests {
         let meta = |id: &str| state.captures.file_metadata_by_id(id).unwrap();
         assert!(meta("baseline").contains("s1"), "{}", meta("baseline"));
         assert!(meta("experiment").contains("s0"), "{}", meta("experiment"));
+    }
+
+    /// An uploaded experiment of several recordings is refused naming the
+    /// uploaded baseline by the name it was uploaded as, quoted for a shell,
+    /// not by its staged copy.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_multi_recording_experiment_upload_names_the_uploaded_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("staged-copy");
+        ::rez::fixtures::multi_recording(&base, &[("redis", "web-01")]);
+        let two = dir.path().join("two.dendro");
+        ::rez::fixtures::multi_recording(&two, &[("redis", "web-02"), ("valkey", "web-03")]);
+        let state = upload_only_state();
+        let _ = ingest_rez_from_path(&state, base, "my base.dendro".to_string());
+
+        let body = std::fs::read(&two).unwrap();
+        let response = attach_upload(&state, &body, "exp.dendro".to_string());
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let text = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&text);
+        assert!(
+            text.contains("recording combine 'my base.dendro' exp.dendro -o both.dendro"),
+            "{text}"
+        );
+        assert!(!text.contains("staged-copy"), "{text}");
     }
 
     /// An upload with one armed recording among unarmed ones is refused, and
@@ -1327,12 +1252,12 @@ mod tests {
         }
     }
 
-    /// Save as Report of a `.rez` source returns a `.dendro` report carrying
-    /// the selection, through the handler.
+    /// Save as Report returns a `.dendro` report carrying the selection,
+    /// through the handler.
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn save_with_selection_returns_a_dendro_report_for_a_rez_source() {
+    async fn save_with_selection_returns_a_dendro_report() {
         let dir = tempfile::tempdir().unwrap();
-        let src = ::rez::fixtures::committed_rez("v3.rez", dir.path());
+        let src = crate::parquet_tools::test_support::simple_dendro(dir.path());
         let state = upload_only_state();
         *state.parquet_path.write() = Some(src);
 
@@ -1361,31 +1286,39 @@ mod tests {
         );
     }
 
-    /// `upload_parquet` must dispatch a v3 (SQLite) `.rez` upload to
-    /// `ingest_rez_from_path`, not the plain-parquet ingest path. Mutation
-    /// check: reverting the `detect_rez_format` check on the staged upload to
-    /// `is_rez_path` makes this fail — the sniff runs on CONTENT, not
-    /// filename, so a v3 upload then falls through to
-    /// `ingest_baseline_from_path`, which tries to open the SQLite bytes as a
-    /// bare parquet and returns an `invalid_parquet` error instead of
-    /// `success`.
+    /// An upload is opened by its content: a dendro archive loads, a `.rez`
+    /// is refused with the upgrade command, whatever either is called.
     #[tokio::test]
-    async fn upload_parquet_accepts_v3_sqlite_rez() {
+    async fn an_upload_is_a_dendro_archive_and_a_rez_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let rez_path = ::rez::fixtures::committed_rez("v3.rez", dir.path());
-        assert_eq!(
-            crate::recorder::rez::detect_rez_format(&rez_path).unwrap(),
-            crate::recorder::rez::RezFormat::V3Sqlite,
-            "fixture sanity: must actually be a v3 SQLite archive"
-        );
-        let bytes = std::fs::read(&rez_path).unwrap();
+        let rez = std::fs::read(::rez::fixtures::committed_rez("v3.rez", dir.path())).unwrap();
+        let dendro = std::fs::read(crate::parquet_tools::test_support::simple_dendro(
+            dir.path(),
+        ))
+        .unwrap();
+        let named = |name: &str| {
+            let mut h = HeaderMap::new();
+            h.insert("x-rezolus-filename", name.parse().unwrap());
+            h
+        };
 
         let state = upload_only_state();
-        let response = upload_parquet(State(state), HeaderMap::new(), Bytes::from(bytes)).await;
+        let response = upload_parquet(
+            State(Arc::clone(&state)),
+            named("old.rez"),
+            Bytes::from(rez),
+        )
+        .await;
         let value = serde_json::to_value(&response.0).unwrap();
-        assert_eq!(
-            value["status"], "success",
-            "upload_parquet must accept a v3 .rez upload: {value}"
+        assert_eq!(value["status"], "error", "{value}");
+        assert!(
+            value["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("rezolus recording upgrade old.rez")),
+            "{value}"
         );
+        let response = upload_parquet(State(state), named("x.parquet"), Bytes::from(dendro)).await;
+        let value = serde_json::to_value(&response.0).unwrap();
+        assert_eq!(value["status"], "success", "{value}");
     }
 }
