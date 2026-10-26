@@ -285,7 +285,13 @@ assets = [
     ],
 ]
 
+# Tests walk the metric registry for every snapshot, and in an unoptimized
+# build that walk's time is mostly hashing in these two crates
+# (`metriken_model::schema::fnv1a_128`,
+# `metriken_exposition::group_builder::identity_fold`). debug-assertions and
+# overflow-checks stay on.
+[profile.dev.package.metriken-model]
+opt-level = 3
 
-
-
-
+[profile.dev.package.metriken-exposition]
+opt-level = 3
