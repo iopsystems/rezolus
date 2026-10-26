@@ -180,10 +180,10 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
     });
 
     // An A/B archive (`recording combine --ab`) of two one-recording files.
-    const abArchive = () => {
+    const abArchive = (name = 'arms.dendro') => {
         const a = path.join(tmpDir, 'arm-a.dendro');
         const b = path.join(tmpDir, 'arm-b.dendro');
-        const out = path.join(tmpDir, 'arms.dendro');
+        const out = path.join(tmpDir, name);
         fs.writeFileSync(a, fixture('arm-a.dendro', 1));
         fs.writeFileSync(b, fixture('arm-b.dendro', 1));
         fs.rmSync(out, { force: true });
@@ -195,6 +195,11 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         );
         return new Uint8Array(fs.readFileSync(out));
     };
+
+    const cargoRezolus = (args) => execFileSync(
+        'cargo', ['run', '-q', '--bin', 'rezolus', '--', ...args],
+        { cwd: repoRoot, stdio: ['ignore', 'ignore', 'inherit'] },
+    );
 
     // Beside an A/B archive an experiment replaces its arm, after which no
     // report is saved (a report copies whole files); a refusal of several
@@ -226,6 +231,29 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         assert.throws(() => registry.save_with_selection('{"entries":[]}'));
         registry.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
         assert.ok(registry.save_with_selection('{"entries":[]}').length > 0);
+
+        // A one-recording baseline after an A/B archive drops the archive's
+        // experiment arm, and saves a report of itself.
+        const replaced = new WasmCaptureRegistry();
+        replaced.attach('baseline', ab, 'ab.dendro');
+        replaced.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
+        assert.equal(replaced.has('experiment'), false);
+        assert.ok(replaced.save_with_selection('{"entries":[]}').length > 0);
+
+        // A baseline that fails to attach (two recordings carry each arm)
+        // leaves the one before it, which compares and saves as before.
+        abArchive('arms-1.dendro');
+        abArchive('arms-2.dendro');
+        const clash = path.join(tmpDir, 'clash.dendro');
+        fs.rmSync(clash, { force: true });
+        cargoRezolus(['recording', 'combine', path.join(tmpDir, 'arms-1.dendro'),
+            path.join(tmpDir, 'arms-2.dendro'), '-o', clash]);
+        const kept = new WasmCaptureRegistry();
+        kept.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
+        assert.throws(() => kept.attach('baseline', new Uint8Array(fs.readFileSync(clash)),
+            'clash.dendro'));
+        kept.attach('experiment', one, 'exp.dendro');
+        assert.ok(kept.save_with_selection('{"entries":[]}').length > 0);
 
         const single = new WasmCaptureRegistry();
         single.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');

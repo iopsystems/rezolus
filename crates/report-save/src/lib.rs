@@ -208,7 +208,9 @@ pub fn build_report(
 
 /// `baseline` and `experiment` joined into one in-memory archive, every
 /// source of each copied whole (its live tail sealed) and labelled
-/// `arm=baseline` or `arm=experiment`.
+/// `arm=baseline` or `arm=experiment`. An error when either holds sources
+/// of more than one label set: several recordings would carry one arm, and
+/// the report would not open as a comparison.
 fn arms(
     baseline: &dendro::archive::Archive,
     experiment: &dendro::archive::Archive,
@@ -216,6 +218,21 @@ fn arms(
     use dendro::archive::ArchiveMut;
     use dendro::rewrite::{copy_sources_into, CopySpec};
     let err = |e: dendro::Error| e.to_string();
+    for (src, arm) in [(baseline, "baseline"), (experiment, "experiment")] {
+        let labels: std::collections::BTreeSet<_> = src
+            .read_sources()
+            .map_err(err)?
+            .into_iter()
+            .map(|s| s.meta.labels)
+            .collect();
+        if labels.len() > 1 {
+            return Err(format!(
+                "the {arm} file now holds {} recordings; a report of a two-file \
+                 comparison takes one recording from each file",
+                labels.len()
+            ));
+        }
+    }
     let mut dst = ArchiveMut::create_in_memory().map_err(err)?;
     let mut arm_of = Vec::new();
     for (src, arm) in [(baseline, "baseline"), (experiment, "experiment")] {
@@ -801,6 +818,42 @@ mod tests {
             Some(r#"{"entries":[]}"#)
         );
         assert!(!sources[1].1.contains_key(KEY_SELECTION));
+    }
+
+    /// A side holding two recordings (here a report of a comparison) is
+    /// refused: both would be labelled with its arm.
+    #[test]
+    fn a_compare_side_of_two_recordings_is_refused() {
+        let a = rez_test_parquet("redis", "cpu_usage", "cpu_cycles");
+        let b = rez_test_parquet("valkey", "cpu_usage", "cpu_cycles");
+        let two = build_report(
+            ReportSource::Compare {
+                baseline: &dendro(&a),
+                experiment: &dendro(&b),
+            },
+            None,
+            None,
+            None,
+            "{}",
+            None,
+        )
+        .unwrap();
+        let err = build_report(
+            ReportSource::Compare {
+                baseline: &two,
+                experiment: &dendro(&a),
+            },
+            None,
+            None,
+            None,
+            "{}",
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            err.starts_with("the baseline file now holds 2 recordings"),
+            "{err}"
+        );
     }
 
     /// A dendro source is copied, and saving again from a report moves the

@@ -989,22 +989,26 @@ impl WasmCaptureRegistry {
         self.notices
             .extend(incomplete_notice(&recordings, filename));
         if recordings.len() >= 2 {
-            // A report of this capture is a report of THIS archive.
-            self.rez_source = Some(Bytes::copy_from_slice(data));
+            // A report of this capture is a report of THIS archive, kept
+            // once the attach has succeeded.
+            let source = Bytes::copy_from_slice(data);
             if opens_combined(&recordings, self.compare_requested) {
                 let viewer = Viewer::combined(recordings, pool);
                 self.others.clear();
                 self.set_capture(capture, viewer);
+                self.rez_source = Some(source);
                 return Ok(n);
             }
-            return self
-                .attach_rez_comparison(recordings, pool, filename)
-                .map(|()| 1);
+            self.attach_rez_comparison(recordings, pool, filename)?;
+            self.rez_source = Some(source);
+            return Ok(1);
         }
         // One recording, a capture of its own: a report is built from its
         // archive, or from both captures' archives in a two-file comparison.
+        // A new baseline drops the experiment, as the server's upload does.
         if capture == "baseline" {
             self.rez_source = None;
+            self.others.clear();
         }
         let (_, reader) = recordings
             .into_iter()
