@@ -971,6 +971,14 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   so a later event retries (`src/agent/bpf/cgroup.h`), but until one arrives the cgroup's
   values have no `name`. Count ringbuf-full drops next to the overflow count,
   so an unrecorded or unnamed cgroup is visible either way.
+- **The memory sampler's cgroupfs root is fixed at `/sys/fs/cgroup`** — Open.
+  `memory_cgroup` (`src/agent/samplers/memory/linux/cgroup/mod.rs`, `ROOT`)
+  cannot be pointed at a host hierarchy mounted elsewhere. In a container with
+  its own cgroup namespace, cgroupfs paths are relative to the container's root
+  while the BPF samplers report host-absolute levels, so the two families'
+  `name` labels stop matching. Make the root configurable, and decide what
+  `name` means when the agent runs inside a namespace. Source: the review of
+  PR #1537.
 - **Tasks cannot overflow the same way** — By design. `MAX_PID = 4194304`
   (`src/agent/bpf/task.h:14`) equals the kernel's `PID_MAX_LIMIT` on 64-bit
   (`include/linux/threads.h:34`), so every TID fits.

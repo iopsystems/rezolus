@@ -124,6 +124,18 @@
   `a_prometheus_label_value_is_stored_as_the_exposition_spells_it`. A line
   the exposition parser cannot read is skipped and logged once per endpoint.
 
+### Added
+
+- **Per-cgroup memory accounting.** The opt-in `memory_cgroup` sampler reads
+  cgroup v2 `memory.current`, `memory.swap.current` and the 28 byte-valued
+  `memory.stat` fields for up to 4096 cgroups, off the scrape path at a
+  configurable interval (60s default), and the cgroups dashboard plots every
+  kind for the selected cgroups. A host without cgroup v2 or without the
+  memory controller reports the sampler as unsupported, not failed.
+  `/metrics/binary` reuses a sampler-stamped acquisition group's encoded bytes
+  across scrapes until its sampler writes again, so idle cgroup series cost a
+  copy rather than a re-encode per scrape. (#1537)
+
 ### Removed
 
 - **The viewer's Time selector (Aligned/Raw) is gone.** Every dashboard

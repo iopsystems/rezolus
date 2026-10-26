@@ -1030,7 +1030,7 @@ must be available; Rezolus does not enable controllers or change limits.
 
 | Metric | Type | Unit | Description |
 |--------|------|------|-------------|
-| `cgroup_memory_usage` | Gauge | bytes | `memory.current`: resident memory charged to the cgroup, including descendants |
+| `cgroup_memory_usage` | Gauge | bytes | `memory.current`: all memory charged to the cgroup and its descendants, including page cache, kernel and socket memory |
 | `cgroup_memory_swap_usage` | Gauge | bytes | `memory.swap.current`: swap usage, including descendants |
 | `cgroup_memory_stat` | Gauge | bytes | Byte-valued `memory.stat` fields, distinguished by `kind` |
 
@@ -1043,11 +1043,19 @@ distinguish cgroups whose abbreviated names collide.
 
 Up to 4096 cgroups are tracked concurrently, independently of kernel cgroup
 IDs. Discovery runs each sweep; deleted groups are removed and their slots
-reused. Excess groups trigger a warning. In a successful sweep, missing files,
+reused. Above 4096, which cgroups are tracked is arbitrary, and a warning is
+logged once per agent process. In a successful sweep, missing files,
 unsupported fields, and failed individual reads yield absent values rather
-than zeros. If discovery fails or every attempted read fails, the entire
+than zeros; a cgroup discovered but gone before any of its files could be read
+gets no series. If discovery fails or every attempted read fails, the entire
 previous observation (values, labels, and window) remains unchanged. An empty
 hierarchy is a successful sweep and removes the previous groups.
+
+The interval is counted from the end of the previous sweep, and a sweep starts
+only when a scrape finds the interval elapsed. A consumer that polls at exactly
+the configured interval therefore gets a new reading every other poll, about
+every two intervals. Poll more often than the interval, or set the interval
+below the poll period, to read once per interval.
 
 The `kind` label includes `anon`, `file`, `kernel`, `shmem`, `sock`,
 `kernel_stack`, `pagetables`, `sec_pagetables`, `percpu`, `vmalloc`,
@@ -1057,7 +1065,7 @@ The `kind` label includes `anon`, `file`, `kernel`, `shmem`, `sock`,
 `zswap`, `zswapped`, and `hugetlb`, when exposed by the running kernel.
 Page counts and event counters in `memory.stat` are excluded.
 
-These are overlapping views, **not additive buckets**: `file` includes shared
+These are overlapping views, not additive buckets: `file` includes shared
 memory/tmpfs (`shmem`), `kernel` includes slab/page tables/stacks, and dirty,
 mapped, active/inactive, and huge-page fields describe subsets. There is no
 standalone per-cgroup equivalent of the host's `Buffers` metric; file cache,

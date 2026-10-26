@@ -19,8 +19,9 @@ independently of scrapes (principle 17). One acquisition group brackets the
 cgroup-major sweep; cached values retain that window between reads.
 
 Three byte-valued gauge families are exposed: `cgroup_memory_usage`,
-`cgroup_memory_swap_usage`, and `cgroup_memory_stat{kind=...}`. The `name` label
-is the complete path relative to `/sys/fs/cgroup`. Concurrent membership is
+`cgroup_memory_swap_usage`, and `cgroup_memory_stat{kind=...}`. The `path` label
+is the complete path relative to `/sys/fs/cgroup`; `name` is the BPF samplers'
+abbreviated display name. Concurrent membership is
 capped at 4096 cgroups, using reusable userspace slots rather than indexing by
 kernel cgroup ID. Disappearing groups lose their metadata and values; missing
 fields/read failures become absent values. The sampler changes no controller
@@ -28,7 +29,8 @@ settings or limits.
 
 The snapshot builder now supports metadata-based membership for sampler-stamped
 groups independently of reader stamping. This lets each metric use its own
-sparse index space (the breakdown flattens cgroup × kind) without emitting the
+sparse index space (the breakdown first flattened cgroup × kind; each kind is
+now its own metric sharing one slot space) without emitting the
 backing array's entire capacity or refreshing timestamps on cached samples.
 Existing reader-stamped groups keep their previous behavior.
 
@@ -200,7 +202,8 @@ This matters because a failed acquisition can clear values without publishing
 a new window. Reusing solely by window would retain stale values in that case.
 The snapshot builder checks the revision before and after reading the group;
 if an acquisition overlaps the build, it serves the last completed snapshot
-instead. Completed deletions replace the cache with an empty group. The
+instead. A completed deletion that empties the group leaves the cache entry
+with no snapshot, so the group is absent until a sweep repopulates it. The
 optimization excludes reader-stamped groups, whose values can change without
 a sampler acquisition guard.
 
@@ -387,3 +390,52 @@ PR advances to `6.0.0-alpha.66`. The merge brings in the reviewed CI workflow
 changes; sampler, cache, dashboard and test sources are unchanged from
 `615695c8`. The shared-worker follow-up remains stacked in PR #1542 and must
 advance to alpha.67 on top of this revision.
+
+## After the GitHub review (2026-10-25)
+
+The review of `37f3e29e` ([PR #1537](https://github.com/iopsystems/rezolus/pull/1537))
+found the acquisition cache sound and listed eleven items. Applied here:
+
+- Version: main had reached `alpha.68` (#1531, #1555, #1557, #1554), so this PR
+  moves to `6.0.0-alpha.69` and #1542 must follow at alpha.70. The paragraph
+  above describing alpha.65/alpha.66 records the state at that time.
+- A host without cgroup v2 at `/sys/fs/cgroup`, or without the memory
+  controller, returns `sampler_status::Unsupported` from `init`, so `rezolus
+  status` no longer exits 1 for a fleet config that enables the sampler on a v1
+  or hybrid host.
+- The 17 `memory.stat` kinds that were collected but not plotted are now in the
+  Cgroups section template and generator ("you record it, you display it").
+- A path discovered but gone before any of its three files could be read no
+  longer takes a slot and labels for one sweep.
+- The encoder test now encodes a group with the cached group's name, schema and
+  window but different values, which is the case the value comparison in
+  `Cached::matches` exists for; before, replacing that comparison with `true`
+  passed every test.
+- CHANGELOG entry; docs and comment wording; the hard-coded cgroupfs root is a
+  backlog item (containers with their own cgroup namespace).
+
+Deferred: a cgroup's `id` label is its slot, which `HashSet` iteration order
+assigns, so it changes across agent restarts. Tracked in
+[#1550](https://github.com/iopsystems/rezolus/issues/1550), to land before the
+next release.
+
+Read cadence: `last_read` is set when a sweep completes and a sweep is admitted
+only from a scrape, so a consumer polling at exactly the interval reads every
+other poll. #1542's shared worker anchors on dispatch unless the previous sweep
+overran; this PR documents the behavior in `docs/metrics.md` and `config/agent.toml`.
+
+Principle 16, measured by the reviewer on this head (release build, 56-vCPU
+x86 VM, Debian 13, kernels 6.12.63 and 7.1.13, `memory_cgroup` only at a 5s
+interval, scraped at 1 Hz on `/metrics/binary`): sweeps take 39–40 ms at 611
+cgroups, 258–262 ms at 3995, and 397–436 ms at 3996 under memory churn, about
+65 µs per cgroup and linear; the kernel version makes no difference. At the
+60s default that is 0.07%, 0.43% and 0.7% of one core. Over half the sweep is
+cgroupfs access (`openat` of three files per cgroup, `getdents64`, `statx`,
+`close`); the memcg stats flush is under 1%. Export (every thread but the
+sweep's) cost 0.23%, 1.2–1.4% and 5.1–5.5% of one core at 1 Hz, dominated by
+`memmove`, then msgpack encoding. The 4x export increase under churn is not
+explained; the cache's value comparison is not a candidate, since the group's
+revision advances on every sweep and the group is re-encoded once per sweep
+regardless of values. Every scrape does clone the cached `GroupSnapshot` into
+the response (about 120k optional values at capacity), which is the likely
+`memmove` source and is unmeasured.

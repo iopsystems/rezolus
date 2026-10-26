@@ -1589,8 +1589,10 @@ pub fn pid_slot(pid: usize) -> usize {
     (pid & !511) | (pid.wrapping_mul(PID_SLOT_MULTIPLIER) & 511)
 }
 
-/// The display identity shared by BPF and cgroupfs samplers. BPF supplies
-/// NUL-terminated, 64-byte components; cgroupfs callers apply that same bound.
+/// The cgroup display name shared by the BPF cgroup samplers and the cgroupfs
+/// memory sampler. BPF supplies NUL-terminated, 64-byte components; cgroupfs
+/// callers apply that same bound. `cpu_usage`'s per-task `cgroup` label keeps
+/// its own formatter (`samplers/cpu/linux/usage`), which spells the root `/`.
 pub(crate) fn cgroup_name_label(
     name: &[u8],
     parent: &[u8],

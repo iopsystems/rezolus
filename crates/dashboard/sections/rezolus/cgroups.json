@@ -292,6 +292,125 @@
               "query": "cgroup_memory_stat{kind=\"file_writeback\",name=~\"__SELECTED_CGROUPS__\"}"
             },
             {
+              "kind": "gauge",
+              "title": "Mapped File Pages",
+              "id": "individual-memory-file_mapped",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"file_mapped\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Active Anonymous Pages",
+              "id": "individual-memory-active_anon",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"active_anon\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Inactive Anonymous Pages",
+              "id": "individual-memory-inactive_anon",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"inactive_anon\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Active File Pages",
+              "id": "individual-memory-active_file",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"active_file\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Inactive File Pages",
+              "id": "individual-memory-inactive_file",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"inactive_file\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Unevictable Pages",
+              "id": "individual-memory-unevictable",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"unevictable\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Slab (Total)",
+              "id": "individual-memory-slab",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"slab\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Secondary Page Tables",
+              "id": "individual-memory-sec_pagetables",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"sec_pagetables\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Per-CPU Allocations",
+              "id": "individual-memory-percpu",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"percpu\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "vmalloc",
+              "id": "individual-memory-vmalloc",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"vmalloc\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "HugeTLB Pages",
+              "id": "individual-memory-hugetlb",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"hugetlb\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Anonymous Transparent Huge Pages",
+              "id": "individual-memory-anon_thp",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"anon_thp\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "File Transparent Huge Pages",
+              "id": "individual-memory-file_thp",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"file_thp\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Shared Memory Transparent Huge Pages",
+              "id": "individual-memory-shmem_thp",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"shmem_thp\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Swap Cache",
+              "id": "individual-memory-swapcached",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"swapcached\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Zswap Compressed Pool",
+              "id": "individual-memory-zswap",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"zswap\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
+              "kind": "gauge",
+              "title": "Pages Backed by Zswap",
+              "id": "individual-memory-zswapped",
+              "unit": "bytes",
+              "query": "cgroup_memory_stat{kind=\"zswapped\",name=~\"__SELECTED_CGROUPS__\"}"
+            },
+            {
               "kind": "counter",
               "title": "Total CPU Cores",
               "id": "individual-total-cores",

@@ -248,10 +248,10 @@ impl AcquisitionGroup {
     /// Opt into whole-snapshot reuse for a sparse, sampler-stamped group.
     /// Acquisition runs on a blocking worker: its write lock may wait briefly
     /// for an in-progress snapshot copy. Scrapes only try the read lock.
-    /// EVERY change to values, membership or metadata must be inside this
+    /// Every change to values, membership or metadata must be inside this
     /// group's acquire/drop bracket, including failed reads and removals.
     /// Reader-stamped/mmap groups cannot use this: their writers run outside
-    /// the acquisition bracket. Existing samplers keep the uncached behavior.
+    /// the acquisition bracket. Groups built with other constructors are not cached.
     pub(crate) const fn new_cached_sparse(sampler: &'static str, name: &'static str) -> Self {
         let mut group = Self::new_slotted(sampler, name);
         group.cache_snapshots = true;

@@ -52,19 +52,35 @@ fn init(config: Arc<Config>) -> SamplerResult {
 }
 
 fn memory_enabled_for_children(root: &Path) -> anyhow::Result<bool> {
-    let has_memory = |file: &str| -> anyhow::Result<bool> {
-        let path = root.join(file);
-        let contents = std::fs::read_to_string(&path).with_context(|| {
-            format!("reading {} for cgroup v2 memory accounting", path.display())
-        })?;
+    let has_memory = |file: &str| -> std::io::Result<bool> {
+        let contents = std::fs::read_to_string(root.join(file))?;
         Ok(contents.split_whitespace().any(|c| c == "memory"))
     };
-    anyhow::ensure!(
-        has_memory("cgroup.controllers")?,
-        "cgroup v2 memory controller is unavailable at {}",
-        root.display()
-    );
-    has_memory("cgroup.subtree_control")
+    // No cgroup v2 hierarchy at the root, or no memory controller in it, is a
+    // host this sampler cannot serve rather than a failure: `rezolus status`
+    // must not report a v1 or hybrid host as broken.
+    let unsupported =
+        |reason: String| anyhow::Error::from(crate::agent::sampler_status::Unsupported(reason));
+    let controllers = root.join("cgroup.controllers");
+    let available = has_memory("cgroup.controllers").map_err(|e| {
+        unsupported(format!(
+            "no cgroup v2 hierarchy: reading {}: {e}",
+            controllers.display()
+        ))
+    })?;
+    if !available {
+        return Err(unsupported(format!(
+            "cgroup v2 memory controller is unavailable at {}",
+            root.display()
+        )));
+    }
+    let subtree_control = root.join("cgroup.subtree_control");
+    has_memory("cgroup.subtree_control").with_context(|| {
+        format!(
+            "reading {} for cgroup v2 memory accounting",
+            subtree_control.display()
+        )
+    })
 }
 
 #[distributed_slice(SAMPLERS)]
@@ -240,6 +256,10 @@ impl State {
         for (path, total, swap, values) in readings {
             let slot = if let Some(slot) = self.slots.get(path) {
                 *slot
+            } else if total.is_none() && swap.is_none() && values.iter().all(Option::is_none) {
+                // Discovered, then gone before it could be read: no slot and
+                // no labels, so the stream never carries a phantom occupant.
+                continue;
             } else if let Some(slot) = free.next() {
                 self.slots.insert(path.clone(), slot);
                 label_slot(slot, path.strip_prefix(root).unwrap());
@@ -345,18 +365,26 @@ mod tests {
     fn controller_diagnostics_distinguish_availability_and_child_enablement() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
+        use crate::agent::sampler_status::Unsupported;
+        // No hierarchy and no memory controller are `Unsupported`, which the
+        // agent records as such rather than as a failed sampler.
         let error = memory_enabled_for_children(root).unwrap_err();
         assert!(error
             .to_string()
             .contains(&root.join("cgroup.controllers").display().to_string()));
+        assert!(error.downcast_ref::<Unsupported>().is_some());
         std::fs::write(root.join("cgroup.controllers"), "cpu io\n").unwrap();
-        assert!(memory_enabled_for_children(root)
-            .unwrap_err()
+        let error = memory_enabled_for_children(root).unwrap_err();
+        assert!(error
             .to_string()
             .contains("memory controller is unavailable"));
+        assert!(error.downcast_ref::<Unsupported>().is_some());
+        // A v2 hierarchy with the controller but an unreadable subtree file is
+        // a real failure.
         std::fs::write(root.join("cgroup.controllers"), "cpu memory io\n").unwrap();
         let error = memory_enabled_for_children(root).unwrap_err();
         assert!(error.to_string().contains("cgroup.subtree_control"));
+        assert!(error.downcast_ref::<Unsupported>().is_none());
         std::fs::write(root.join("cgroup.subtree_control"), "cpu\n").unwrap();
         assert!(!memory_enabled_for_children(root).unwrap());
         // Enabling accounting later needs no change to controller availability.
@@ -483,7 +511,10 @@ mod tests {
             CGROUP_MEMORY_USAGE.value(state.slots[&existing]),
             Some(8192)
         );
-        assert_eq!(CGROUP_MEMORY_USAGE.value(state.slots[&added]), None);
+        // A path whose reads all failed, such as a cgroup deleted between
+        // discovery and the read, gets no slot and no labels.
+        assert!(!state.slots.contains_key(&added));
+        assert_eq!(CGROUP_MEMORY_USAGE.metadata_snapshot().len(), 1);
         std::fs::remove_dir_all(&existing).unwrap();
         std::fs::remove_dir_all(&added).unwrap();
         assert_eq!(state.sweep(root).unwrap(), 0);

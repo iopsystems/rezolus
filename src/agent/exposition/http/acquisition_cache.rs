@@ -134,8 +134,10 @@ impl V3Builder {
 }
 /// Same self-contained V3 MessagePack as serde's canonical encoder. Reusing
 /// encoded groups avoids walking thousands of unchanged label strings; it
-/// does NOT omit schemas or require any per-client state. Old formats use the
-/// original encoder. V3's four-field positional shape is frozen upstream.
+/// does not omit schemas or require any per-client state. V1/V2 snapshots are
+/// encoded with `rmp_serde`. A test checks the V3 output byte for byte against
+/// `rmp_serde`, at array-length boundaries and with cached and uncached groups
+/// mixed, so a change to the upstream shape fails there.
 pub(super) fn encode_snapshot(snapshot: &Snapshot, cache: &V3Builder) -> anyhow::Result<Vec<u8>> {
     let Snapshot::V3(s) = snapshot else {
         return Ok(rmp_serde::encode::to_vec(snapshot)?);
@@ -318,6 +320,18 @@ mod tests {
         assert_eq!(
             encode_snapshot(&failed, &cache).unwrap(),
             rmp_serde::to_vec(&failed).unwrap()
+        );
+        // Same name, schema and window as the cached group, different values:
+        // the value comparison is what keeps the cached bytes from standing in
+        // for this older observation.
+        assert!(Arc::ptr_eq(
+            changed_group.schema.as_ref().unwrap(),
+            failed_group.schema.as_ref().unwrap()
+        ));
+        assert_eq!(changed_group.window, failed_group.window);
+        assert_eq!(
+            encode_snapshot(&changed, &cache).unwrap(),
+            rmp_serde::to_vec(&changed).unwrap()
         );
 
         // Deterministically schedule a writer between the two revision checks.

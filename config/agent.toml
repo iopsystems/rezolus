@@ -353,6 +353,8 @@ enabled = false
 # Reads cgroupfs off the scrape path, at most once per minute by default.
 # Opt-in: 30 series per cgroup still add export cost to every scrape, even
 # between reads. Suitable for memory trends; can miss short-lived spikes/groups.
+# The interval counts from the end of the previous read, and a read starts on a
+# scrape, so a consumer polling exactly every `interval` reads every other poll.
 [samplers.memory_cgroup]
 enabled = false
 # interval = "60s"
