@@ -1005,10 +1005,13 @@ impl WasmCaptureRegistry {
         }
         // One recording, a capture of its own: a report is built from its
         // archive, or from both captures' archives in a two-file comparison.
-        // A new baseline drops the experiment, as the server's upload does.
+        // A new baseline keeps an experiment that is a file of its own, and
+        // drops one that was the outgoing archive's arm, as the server does.
         if capture == "baseline" {
+            if self.rez_source.is_some() && self.replaced_experiment.is_none() {
+                self.others.clear();
+            }
             self.rez_source = None;
-            self.others.clear();
         }
         let (_, reader) = recordings
             .into_iter()

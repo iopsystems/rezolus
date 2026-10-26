@@ -193,6 +193,23 @@ pub fn build_report(
             baseline,
             experiment,
         } => {
+            // Each file is one recording (read group), as the viewers count
+            // them: several would all carry its arm, and the report would
+            // not open as a comparison.
+            for (bytes, arm) in [(baseline, "baseline"), (experiment, "experiment")] {
+                let recordings = rez::reader::RezReader::open_recordings_from_bytes(
+                    bytes.to_vec(),
+                    metriken_storage::BufferPool::new(8 << 20),
+                )
+                .map_err(|e| e.to_string())?
+                .len();
+                if recordings != 1 {
+                    return Err(format!(
+                        "the {arm} file holds {recordings} recordings; a report of a \
+                         two-file comparison takes one recording from each file"
+                    ));
+                }
+            }
             let joined = arms(&open(baseline)?, &open(experiment)?)?;
             build_dendro_report(
                 &joined,
@@ -208,9 +225,7 @@ pub fn build_report(
 
 /// `baseline` and `experiment` joined into one in-memory archive, every
 /// source of each copied whole (its live tail sealed) and labelled
-/// `arm=baseline` or `arm=experiment`. An error when either holds sources
-/// of more than one label set: several recordings would carry one arm, and
-/// the report would not open as a comparison.
+/// `arm=baseline` or `arm=experiment`.
 fn arms(
     baseline: &dendro::archive::Archive,
     experiment: &dendro::archive::Archive,
@@ -218,21 +233,6 @@ fn arms(
     use dendro::archive::ArchiveMut;
     use dendro::rewrite::{copy_sources_into, CopySpec};
     let err = |e: dendro::Error| e.to_string();
-    for (src, arm) in [(baseline, "baseline"), (experiment, "experiment")] {
-        let labels: std::collections::BTreeSet<_> = src
-            .read_sources()
-            .map_err(err)?
-            .into_iter()
-            .map(|s| s.meta.labels)
-            .collect();
-        if labels.len() > 1 {
-            return Err(format!(
-                "the {arm} file now holds {} recordings; a report of a two-file \
-                 comparison takes one recording from each file",
-                labels.len()
-            ));
-        }
-    }
     let mut dst = ArchiveMut::create_in_memory().map_err(err)?;
     let mut arm_of = Vec::new();
     for (src, arm) in [(baseline, "baseline"), (experiment, "experiment")] {
@@ -851,7 +851,81 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            err.starts_with("the baseline file now holds 2 recordings"),
+            err.starts_with("the baseline file holds 2 recordings"),
+            "{err}"
+        );
+    }
+
+    /// An archive of `parts`' sources, each copied whole, and labelled `labels`
+    /// when given (a copy keeps its source's uuid).
+    fn joined(parts: &[(&[u8], Option<&[(&str, &str)]>)]) -> Vec<u8> {
+        use dendro::archive::{Archive, ArchiveMut};
+        use dendro::rewrite::{copy_sources_into, CopySpec};
+        let mut dst = ArchiveMut::create_in_memory().unwrap();
+        for (bytes, labels) in parts {
+            let src = Archive::open_bytes(bytes.to_vec()).unwrap();
+            let before = dst.read_sources().unwrap().len();
+            dst.transaction(|tx| {
+                src.read_snapshot(|src| {
+                    let encoder = metriken_storage::Encoder::for_archive(src)?;
+                    copy_sources_into(src, tx, &CopySpec::everything(), &encoder)
+                })
+            })
+            .unwrap();
+            if let Some(labels) = labels {
+                for source in &dst.read_sources().unwrap()[before..] {
+                    let labels = labels
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect();
+                    dst.update_source_labels(source.id, &labels).unwrap();
+                }
+            }
+        }
+        dst.serialize().unwrap()
+    }
+
+    /// A side is counted in recordings (read groups), as the viewers count
+    /// them: a source and its copy with an extra label are one recording and
+    /// save; two sources of separate recorders with identical labels are two
+    /// and are refused.
+    #[test]
+    fn a_compare_side_is_counted_in_recordings() {
+        let a = dendro(&rez_test_parquet("redis", "cpu_usage", "cpu_cycles"));
+        let b = dendro(&rez_test_parquet("valkey", "cpu_usage", "cpu_cycles"));
+        let save = |baseline: &[u8]| {
+            build_report(
+                ReportSource::Compare {
+                    baseline,
+                    experiment: &b,
+                },
+                None,
+                None,
+                None,
+                "{}",
+                None,
+            )
+        };
+        let copy = joined(&[
+            (&a, None),
+            (&a, Some(&[("source", "redis"), ("env", "prod")])),
+        ]);
+        let out = save(&copy).unwrap();
+        let opened = rez::reader::RezReader::open_recordings_from_bytes(
+            out,
+            metriken_storage::BufferPool::new(8 << 20),
+        )
+        .unwrap();
+        let labels: Vec<_> = opened.iter().map(|(l, _)| l.clone()).collect();
+        assert!(
+            dashboard::combined::arm_slots(&labels).is_ok(),
+            "{labels:?}"
+        );
+
+        let twins = joined(&[(&a, None), (&b, Some(&[("source", "redis")]))]);
+        let err = save(&twins).unwrap_err();
+        assert!(
+            err.starts_with("the baseline file holds 2 recordings"),
             "{err}"
         );
     }

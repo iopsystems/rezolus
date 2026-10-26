@@ -356,8 +356,13 @@ fn ingest_rez_from_path(
     *state.parquet_path.write() = Some(rez_path.clone());
     *state.baseline_name.write() = Some(display_filename.clone());
     *state.baseline_file.write() = super::state::BaselineFile::compared(labels.len());
-    *state.experiment_parquet_path.write() = None;
-    *state.cli_experiment_path.write() = None;
+    // A one-recording baseline replacing another keeps an experiment that is
+    // a file of its own: the comparison goes on with the new baseline.
+    let keep_experiment = labels.len() == 1 && state.resolve_experiment_parquet_path().is_some();
+    if !keep_experiment {
+        *state.experiment_parquet_path.write() = None;
+        *state.cli_experiment_path.write() = None;
+    }
     state.captures.set_baseline_systeminfo(b_systeminfo);
     state.captures.set_baseline_file_metadata(b_file_meta);
     *state.file_checksum.write() = compute_file_checksum(&rez_path);
@@ -374,6 +379,7 @@ fn ingest_rez_from_path(
                 Some(e_alias),
             );
         }
+        None if keep_experiment => {}
         None => state.captures.detach_experiment(),
     }
 

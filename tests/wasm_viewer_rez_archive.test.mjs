@@ -232,6 +232,22 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         registry.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
         assert.ok(registry.save_with_selection('{"entries":[]}').length > 0);
 
+        // A one-recording baseline in place of another keeps an experiment
+        // that is a file of its own, and the pair saves a report.
+        const swapped = new WasmCaptureRegistry();
+        swapped.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
+        swapped.attach('experiment', one, 'exp.dendro');
+        swapped.attach('baseline', fixture('base-two.dendro', 1), 'base2.dendro');
+        assert.equal(swapped.has('experiment'), true);
+        assert.ok(swapped.save_with_selection('{"entries":[]}').length > 0);
+        // So does one in place of an A/B archive whose experiment it replaced.
+        const afterAb = new WasmCaptureRegistry();
+        afterAb.attach('baseline', ab, 'ab.dendro');
+        afterAb.attach('experiment', one, 'exp.dendro');
+        afterAb.attach('baseline', fixture('base-one.dendro', 1), 'base.dendro');
+        assert.equal(afterAb.has('experiment'), true);
+        assert.ok(afterAb.save_with_selection('{"entries":[]}').length > 0);
+
         // A one-recording baseline after an A/B archive drops the archive's
         // experiment arm, and saves a report of itself.
         const replaced = new WasmCaptureRegistry();

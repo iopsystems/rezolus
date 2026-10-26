@@ -547,3 +547,59 @@ fn the_position_step_works_beside_an_arm_label() {
     assert_eq!(slot(&slots, "baseline"), "baseline", "{slots:?}");
     assert_eq!(slot(&slots, "experiment"), "experiment", "{slots:?}");
 }
+
+/// The file name the viewer reports for `capture`.
+fn capture_filename(viewer: &Viewer, capture: &str) -> String {
+    let mut stream = TcpStream::connect(&viewer.addr).unwrap();
+    write!(
+        stream,
+        "GET /api/v1/metadata?capture={capture} HTTP/1.0\r\nHost: {}\r\n\r\n",
+        viewer.addr
+    )
+    .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let body = response.split_once("\r\n\r\n").unwrap().1;
+    let json: serde_json::Value = serde_json::from_str(body).unwrap();
+    json["data"]["filename"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// A one-recording baseline uploaded in place of another keeps an experiment
+/// that is a file of its own, and the pair saves a report; it drops an A/B
+/// archive's own experiment.
+#[test]
+fn a_new_baseline_keeps_an_experiment_file() {
+    let dir = tempfile::tempdir().unwrap();
+    rez::fixtures::multi_recording(&dir.path().join("a.dendro"), &[("redis", "web-01")]);
+    rez::fixtures::multi_recording(&dir.path().join("b.dendro"), &[("valkey", "web-02")]);
+    rez::fixtures::multi_recording(&dir.path().join("c.dendro"), &[("envoy", "web-03")]);
+    run(
+        dir.path(),
+        "rezolus recording combine a.dendro b.dendro \
+         --ab baseline=a.dendro experiment=b.dendro -o ab.dendro",
+    );
+    let read = |name: &str| std::fs::read(dir.path().join(name)).unwrap();
+
+    let viewer = serve(dir.path(), "rezolus view a.dendro b.dendro");
+    let (status, body) = upload(&viewer, "/api/v1/upload", "c.dendro", &read("c.dendro"));
+    assert!(status.contains(" 200 "), "{status}: {body}");
+    assert_eq!(slots(&viewer).len(), 2, "{:?}", slots(&viewer));
+    // b.dendro's recording.
+    assert_eq!(capture_filename(&viewer, "experiment"), "valkey-web-02");
+    let (_, body) = upload(
+        &viewer,
+        "/api/v1/save_with_selection",
+        "selection.json",
+        br#"{"entries":[]}"#,
+    );
+    assert!(body.starts_with("SQLite format 3"), "{body:.200}");
+
+    let viewer = serve(dir.path(), "rezolus view ab.dendro");
+    assert_eq!(slots(&viewer).len(), 2);
+    let (status, body) = upload(&viewer, "/api/v1/upload", "c.dendro", &read("c.dendro"));
+    assert!(status.contains(" 200 "), "{status}: {body}");
+    assert_eq!(slots(&viewer).len(), 1, "{:?}", slots(&viewer));
+}

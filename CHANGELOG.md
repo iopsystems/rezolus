@@ -192,11 +192,12 @@
   archive that opens as a comparison, whose experiment the second file
   replaces; Save as Report is then refused, since a report copies whole
   files and would hold every recording of the archive. Beside an archive
-  that opens as one combined view, an experiment is refused. Each refusal
-  of a file names the `recording combine` and `view
-  --baseline/--experiment` commands that compare two recordings. The
-  static-site demo recordings are `.dendro` files; a link that names a
-  demo's old `.parquet` file loads its `.dendro`.
+  that opens as one combined view, an experiment is refused. A
+  one-recording baseline loaded in place of another keeps an experiment
+  that is a file of its own. Each refusal of a file names the `recording
+  combine` and `view --baseline/--experiment` commands that compare two
+  recordings. The static-site demo recordings are `.dendro` files; a link
+  that names a demo's old `.parquet` file loads its `.dendro`.
 - **The viewer's Time selector (Aligned/Raw) is gone.** Every dashboard
   chart is on the step grid. Raw mode is a per-chart view: the expanded
   chart (the open-in-new-tab link) has SHOW SAMPLES, which reruns its query

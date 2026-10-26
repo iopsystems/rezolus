@@ -133,9 +133,10 @@ const uploadParquet = async (file) => {
         chartsState.resetAll();
         await fetchBackendState();
         // Node and instance selections come from the new file, as they do
-        // on the initial load. The server keeps an attached experiment
-        // across a baseline upload, so in compare mode the node list is
-        // the union of both captures, as on the initial load.
+        // on the initial load. The server keeps an experiment that is a
+        // file of its own across a one-recording baseline upload, so in
+        // compare mode the node list is the union of both captures, as on
+        // the initial load.
         let uploadedExperimentFm = null;
         try {
             const mode = await ViewerApi.getMode();
