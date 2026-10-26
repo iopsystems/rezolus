@@ -597,6 +597,21 @@ fn a_new_baseline_keeps_an_experiment_file() {
     );
     assert!(body.starts_with("SQLite format 3"), "{body:.200}");
 
+    // An A/B archive uploaded in place of a one-recording baseline brings
+    // its own experiment, which replaces the file, and saves.
+    let viewer = serve(dir.path(), "rezolus view a.dendro c.dendro");
+    let (status, body) = upload(&viewer, "/api/v1/upload", "ab.dendro", &read("ab.dendro"));
+    assert!(status.contains(" 200 "), "{status}: {body}");
+    assert_eq!(slots(&viewer).len(), 2, "{:?}", slots(&viewer));
+    assert_eq!(capture_filename(&viewer, "experiment"), "valkey-web-02");
+    let (_, body) = upload(
+        &viewer,
+        "/api/v1/save_with_selection",
+        "selection.json",
+        br#"{"entries":[]}"#,
+    );
+    assert!(body.starts_with("SQLite format 3"), "{body:.200}");
+
     let viewer = serve(dir.path(), "rezolus view ab.dendro");
     assert_eq!(slots(&viewer).len(), 2);
     let (status, body) = upload(&viewer, "/api/v1/upload", "c.dendro", &read("c.dendro"));
