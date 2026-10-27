@@ -2,6 +2,8 @@
 
 ### Security
 
+- zstd 0.14.3, zstd-safe 8.2.0 and zstd-sys 2.1.2, for RUSTSEC-2026-0391,
+  0398, 0403 and 0410; one zstd in the tree instead of two. (#1537)
 - rustls-webpki 0.103.16 and webpki-root-certs 1.0.10, for RUSTSEC-2026-0382
   and RUSTSEC-2026-0383. (#1510)
 - rustls 0.23.46, for RUSTSEC-2026-0346 through 0349. (#1467)
