@@ -1,5 +1,6 @@
 //! Cumulative memory event counters on macOS, and wired memory: the values
-//! no sysctl reports, from one `host_statistics64` call per refresh.
+//! with no sysctl in Apple's published kernel source, from one
+//! `host_statistics64` call per refresh.
 //!
 //! That call can return a cached result (see the module doc in
 //! `memory/macos`), and the kernel copies into that cache without a lock, so

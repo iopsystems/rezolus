@@ -1125,8 +1125,8 @@
   (`memory_compressed`, `memory_compressed_stored`, compressions and
   decompressions) and file page-ins and page-outs. The gauges come from
   sysctls; the counters and wired memory come from `host_statistics64`, which
-  macOS rate-limits for third-party processes, and a read that repeats the
-  previous one is dropped.
+  macOS rate-limits for third-party processes, and a read that is not newer
+  than the last one published is dropped.
 - **A systemd unit's cgroups can be selected as one entry.** The cgroup
   selector lists each `*.scope` or `*.service` unit with two or more recorded
   cgroups that name it (a libvirt guest's `vcpuN` and `emulator` threads, a

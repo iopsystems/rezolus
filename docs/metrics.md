@@ -1264,8 +1264,9 @@ counters without `CONFIG_TRANSPARENT_HUGEPAGE`, the working-set split before
 5.9) leaves its metric absent rather than 0.
 
 On macOS the sampler reads `host_statistics64` (the call `vm_stat` makes),
-unprivileged, for the values no sysctl reports. It sets `memory_page_faults`, `memory_swap_in` and
-`memory_swap_out`, and the macOS-only metrics below; the rest are absent.
+unprivileged, for the values with no sysctl in Apple's published kernel
+source. It sets `memory_page_faults`, `memory_swap_in` and `memory_swap_out`,
+and the macOS-only metrics below; the rest are absent.
 Swap on macOS holds compressed memory, so the swap counters are kernel pages
 (16 KiB on Apple silicon) of compressed data moved to and from the swap files,
 not pages of memory as on Linux. There is no major-fault count;
