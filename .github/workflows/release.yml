@@ -346,35 +346,6 @@ jobs:
           path: target/viewer-static/
           pattern: viewer-static
 
-      # Upload debs to systemslab registry (stable releases only)
-      - uses: google-github-actions/auth@v2
-        if: steps.check-release.outputs.is_stable == 'true'
-        id: auth-systemslab
-        with:
-          credentials_json: "${{ secrets.GCP_CREDENTIALS }}"
-
-      - uses: google-github-actions/setup-gcloud@v2
-        if: steps.check-release.outputs.is_stable == 'true'
-
-      - name: upload debs to systemslab registry (stable releases only)
-        if: steps.check-release.outputs.is_stable == 'true'
-        run: |
-          gcloud config set artifacts/repository systemslab
-          gcloud config set artifacts/location us
-
-          for artifact in target/artifacts/deb_*/*; do
-            [ -f "$artifact" ] || continue
-            name="$(basename "$artifact")"
-            directory="$(basename "$(dirname "$artifact")")"
-            # directory format: deb_<distro>_<release>_<arch>
-            release="$(echo "$directory" | cut -d _ -f 3)"
-
-            echo "::group::upload to systemslab $release $name"
-            gcloud artifacts apt upload "$release" --source "$artifact"
-            gcloud artifacts apt upload "$release-public" --source "$artifact"
-            echo "::endgroup::"
-          done
-
       # Upload debs to rezolus registry (stable releases only)
       - uses: google-github-actions/auth@v2
         if: steps.check-release.outputs.is_stable == 'true'
