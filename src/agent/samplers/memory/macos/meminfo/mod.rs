@@ -1,18 +1,18 @@
 //! Memory gauges on macOS: capacity, the page cache and anonymous memory,
-//! swap, and the compressor.
+//! swap, and the compressor, all from sysctls, which are not rate-limited.
 //!
 //! `memory_available` has the Linux meaning: memory the kernel can hand out
 //! without compressing or swapping anonymous memory. That is free pages,
-//! file-backed pages and purgeable pages. Speculative pages (file read-ahead)
-//! are counted in both `free_count` and the file-backed count, so they are
-//! taken out of free. Activity Monitor's "Memory Used" leaves out roughly the
-//! same pages, so total minus it is close to this figure but not equal.
+//! file-backed pages and purgeable pages. `vm.page_free_count` excludes
+//! speculative pages (file read-ahead), which the file-backed count includes.
+//! The page-queue sysctls omit the pages on per-CPU local queues, which
+//! `host_statistics64` adds, so `vm_stat` can read slightly higher.
 
 const NAME: &str = "memory_meminfo";
 
 use crate::agent::*;
 
-use super::{host, page_size, sysctl, vm_statistics};
+use super::{page_size, swap_usage, sysctl_u64};
 
 mod stats {
     include!("../../linux/meminfo/stats.rs");
@@ -27,23 +27,19 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    let host = host();
-    let page_size = page_size().ok_or_else(|| anyhow::anyhow!("{NAME}: no hw.pagesize"))?;
+    let page_size = page_size().ok_or_else(|| anyhow::anyhow!("{NAME}: no vm.pagesize"))?;
     let total =
-        sysctl::<u64>(c"hw.memsize").ok_or_else(|| anyhow::anyhow!("{NAME}: no hw.memsize"))?;
+        sysctl_u64(c"hw.memsize").ok_or_else(|| anyhow::anyhow!("{NAME}: no hw.memsize"))?;
 
-    if vm_statistics(host).is_none() {
+    let sampler = Meminfo { page_size, total };
+    if sampler.read().is_none() {
         return Err(crate::agent::sampler_status::Unsupported(
-            "host_statistics64 has no compressor counts".to_string(),
+            "the vm.page_* and vm.compressor sysctls are not readable".to_string(),
         )
         .into());
     }
 
-    Ok(Some(Box::new(Meminfo {
-        host,
-        page_size,
-        total,
-    })))
+    Ok(Some(Box::new(sampler)))
 }
 
 #[distributed_slice(SAMPLERS)]
@@ -54,9 +50,33 @@ static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::sampl
 };
 
 struct Meminfo {
-    host: libc::mach_port_t,
     page_size: u64,
     total: u64,
+}
+
+/// One read of every sysctl the gauges come from, in pages unless named.
+struct Reading {
+    free: u64,
+    speculative: u64,
+    file: u64,
+    anon: u64,
+    purgeable: u64,
+    compressed_stored: u64,
+    compressed_bytes: u64,
+}
+
+impl Meminfo {
+    fn read(&self) -> Option<Reading> {
+        Some(Reading {
+            free: sysctl_u64(c"vm.page_free_count")?,
+            speculative: sysctl_u64(c"vm.page_speculative_count")?,
+            file: sysctl_u64(c"vm.page_pageable_external_count")?,
+            anon: sysctl_u64(c"vm.page_pageable_internal_count")?,
+            purgeable: sysctl_u64(c"vm.page_purgeable_count")?,
+            compressed_stored: sysctl_u64(c"vm.compressor.pages_compressed")?,
+            compressed_bytes: sysctl_u64(c"vm.compressor_bytes_used")?,
+        })
+    }
 }
 
 #[async_trait]
@@ -68,33 +88,28 @@ impl Sampler for Meminfo {
     async fn refresh(&self) {
         let guard = MEMINFO_ACQ.acquire();
 
-        let Some(vm) = vm_statistics(self.host) else {
+        let Some(r) = self.read() else {
             return;
         };
-        let swap = sysctl::<libc::xsw_usage>(c"vm.swapusage");
+        let swap = swap_usage();
 
         let bytes = |pages: u64| (pages * self.page_size) as i64;
 
-        let free = (vm.free_count.saturating_sub(vm.speculative_count)) as u64;
-        let file = vm.external_page_count as u64;
-        let purgeable = vm.purgeable_count as u64;
-
         MEMORY_TOTAL.set(self.total as i64);
-        MEMORY_FREE.set(bytes(free));
-        MEMORY_AVAILABLE.set(bytes(free + file + purgeable));
-        MEMORY_CACHED.set(bytes(file));
-        MEMORY_ANON.set(bytes(vm.internal_page_count as u64));
+        MEMORY_FREE.set(bytes(r.free));
+        MEMORY_AVAILABLE.set(bytes(r.free + r.file + r.purgeable));
+        MEMORY_CACHED.set(bytes(r.file));
+        MEMORY_ANON.set(bytes(r.anon));
 
         if let Some(swap) = swap {
             MEMORY_SWAP_TOTAL.set(swap.xsu_total as i64);
             MEMORY_SWAP_FREE.set(swap.xsu_avail as i64);
         }
 
-        MEMORY_WIRED.set(bytes(vm.wire_count as u64));
-        MEMORY_PURGEABLE.set(bytes(purgeable));
-        MEMORY_SPECULATIVE.set(bytes(vm.speculative_count as u64));
-        MEMORY_COMPRESSED.set(bytes(vm.compressor_page_count as u64));
-        MEMORY_COMPRESSED_STORED.set(bytes(vm.total_uncompressed_pages_in_compressor));
+        MEMORY_PURGEABLE.set(bytes(r.purgeable));
+        MEMORY_SPECULATIVE.set(bytes(r.speculative));
+        MEMORY_COMPRESSED.set(r.compressed_bytes as i64);
+        MEMORY_COMPRESSED_STORED.set(bytes(r.compressed_stored));
 
         guard.finish();
     }
@@ -138,7 +153,6 @@ mod tests {
             ("available", &MEMORY_AVAILABLE),
             ("cached", &MEMORY_CACHED),
             ("anon", &MEMORY_ANON),
-            ("wired", &MEMORY_WIRED),
             ("compressed", &MEMORY_COMPRESSED),
         ] {
             let v = gauge.value();

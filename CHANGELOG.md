@@ -1116,15 +1116,17 @@
 ### Added
 
 - **Memory metrics on macOS.** `memory_meminfo` and `memory_vmstat` now run
-  on macOS, reading `host_statistics64` and the `hw.memsize` and
-  `vm.swapusage` sysctls, unprivileged. They set `memory_total`,
-  `memory_free`, `memory_available`, `memory_cached`, `memory_anon`, swap
-  total and free, `memory_page_faults` and swap in and out, so the memory
-  dashboard's capacity, used and swap charts draw on a Mac.
-  `memory_available` has the Linux meaning: free, file-backed and purgeable
-  pages. macOS-only gauges cover wired memory and the compressor
-  (`memory_compressed`, `memory_compressed_stored`), and counters cover
-  compressions, decompressions and file page-ins and page-outs.
+  on macOS, unprivileged. They set `memory_total`, `memory_free`,
+  `memory_available`, `memory_cached`, `memory_anon`, swap total and free,
+  `memory_page_faults` and swap in and out, so the memory dashboard's
+  capacity, used and swap charts draw on a Mac. `memory_available` has the
+  Linux meaning: free, file-backed and purgeable pages. macOS-only metrics
+  cover wired memory, purgeable and speculative pages, the compressor
+  (`memory_compressed`, `memory_compressed_stored`, compressions and
+  decompressions) and file page-ins and page-outs. The gauges come from
+  sysctls; the counters and wired memory come from `host_statistics64`, which
+  macOS rate-limits for third-party processes, and a read that repeats the
+  previous one is dropped.
 - **A systemd unit's cgroups can be selected as one entry.** The cgroup
   selector lists each `*.scope` or `*.service` unit with two or more recorded
   cgroups that name it (a libvirt guest's `vcpuN` and `emulator` threads, a

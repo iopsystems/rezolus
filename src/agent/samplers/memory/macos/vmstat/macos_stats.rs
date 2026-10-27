@@ -1,7 +1,15 @@
-//! macOS memory counters with no Linux equivalent, in the same acquisition
-//! group as the shared ones.
+//! macOS memory metrics with no Linux equivalent that come from
+//! `host_statistics64`, in the same acquisition group as the shared counters.
+//! `memory_wired` is a gauge; it is here because no sysctl reports it.
 
 use metriken::*;
+
+#[metric(
+    name = "memory_wired",
+    description = "Memory wired down: it cannot be paged out or compressed (wire_count, which on macOS also counts throttled pages and free low-memory pages)",
+    metadata = { unit = "bytes", acq_group = "memory_vmstat_read" }
+)]
+pub static MEMORY_WIRED: LazyGauge = LazyGauge::new(Gauge::default);
 
 #[metric(
     name = "memory_compressions",

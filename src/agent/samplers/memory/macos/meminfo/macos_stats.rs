@@ -4,15 +4,8 @@
 use metriken::*;
 
 #[metric(
-    name = "memory_wired",
-    description = "Memory wired down: it cannot be paged out or compressed (wire_count, which on macOS includes throttled pages)",
-    metadata = { unit = "bytes", acq_group = "memory_meminfo_read" }
-)]
-pub static MEMORY_WIRED: LazyGauge = LazyGauge::new(Gauge::default);
-
-#[metric(
     name = "memory_purgeable",
-    description = "Anonymous memory its owner marked purgeable, which the kernel may discard without saving; counted in memory_anon and memory_available",
+    description = "Unwired anonymous memory in objects marked volatile, which the kernel may discard without saving; counted in memory_anon and memory_available",
     metadata = { unit = "bytes", acq_group = "memory_meminfo_read" }
 )]
 pub static MEMORY_PURGEABLE: LazyGauge = LazyGauge::new(Gauge::default);
@@ -26,7 +19,7 @@ pub static MEMORY_SPECULATIVE: LazyGauge = LazyGauge::new(Gauge::default);
 
 #[metric(
     name = "memory_compressed",
-    description = "Physical memory the compressor occupies",
+    description = "Compressed data the compressor holds, in bytes",
     metadata = { unit = "bytes", acq_group = "memory_meminfo_read" }
 )]
 pub static MEMORY_COMPRESSED: LazyGauge = LazyGauge::new(Gauge::default);

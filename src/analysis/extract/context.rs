@@ -317,7 +317,7 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("memory_swap_total", "memory_meminfo"),
     ("memory_total", "memory_meminfo"),
     ("memory_unevictable", "memory_meminfo"),
-    ("memory_wired", "memory_meminfo"),
+    ("memory_wired", "memory_vmstat"),
     ("memory_writeback", "memory_meminfo"),
     ("network_bytes", "network_traffic"),
     ("network_drop", "network_interfaces"),
