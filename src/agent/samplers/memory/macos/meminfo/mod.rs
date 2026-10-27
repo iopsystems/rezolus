@@ -5,8 +5,12 @@
 //! without compressing or swapping anonymous memory. That is free pages,
 //! file-backed pages and purgeable pages. `vm.page_free_count` excludes
 //! speculative pages (file read-ahead), which the file-backed count includes.
-//! The page-queue sysctls omit the pages on per-CPU local queues, which
-//! `host_statistics64` adds, so `vm_stat` can read slightly higher.
+//! `vm.page_pageable_internal_count` omits anonymous pages on the per-CPU
+//! local queues, which `host_statistics64` adds, so `vm_stat`'s "Anonymous
+//! pages" can read slightly higher.
+//!
+//! The compressor gauges are set only when their sysctls are readable; the
+//! sampler does not depend on them.
 
 const NAME: &str = "memory_meminfo";
 
@@ -34,7 +38,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     let sampler = Meminfo { page_size, total };
     if sampler.read().is_none() {
         return Err(crate::agent::sampler_status::Unsupported(
-            "the vm.page_* and vm.compressor sysctls are not readable".to_string(),
+            "the vm.page_* sysctls are not readable".to_string(),
         )
         .into());
     }
@@ -54,15 +58,13 @@ struct Meminfo {
     total: u64,
 }
 
-/// One read of every sysctl the gauges come from, in pages unless named.
+/// One read of the page-queue sysctls, in pages.
 struct Reading {
     free: u64,
     speculative: u64,
     file: u64,
     anon: u64,
     purgeable: u64,
-    compressed_stored: u64,
-    compressed_bytes: u64,
 }
 
 impl Meminfo {
@@ -73,8 +75,6 @@ impl Meminfo {
             file: sysctl_u64(c"vm.page_pageable_external_count")?,
             anon: sysctl_u64(c"vm.page_pageable_internal_count")?,
             purgeable: sysctl_u64(c"vm.page_purgeable_count")?,
-            compressed_stored: sysctl_u64(c"vm.compressor.pages_compressed")?,
-            compressed_bytes: sysctl_u64(c"vm.compressor_bytes_used")?,
         })
     }
 }
@@ -108,8 +108,12 @@ impl Sampler for Meminfo {
 
         MEMORY_PURGEABLE.set(bytes(r.purgeable));
         MEMORY_SPECULATIVE.set(bytes(r.speculative));
-        MEMORY_COMPRESSED.set(r.compressed_bytes as i64);
-        MEMORY_COMPRESSED_STORED.set(bytes(r.compressed_stored));
+        if let Some(n) = sysctl_u64(c"vm.compressor_bytes_used") {
+            MEMORY_COMPRESSED.set(n as i64);
+        }
+        if let Some(n) = sysctl_u64(c"vm.compressor_segment_pages_compressed") {
+            MEMORY_COMPRESSED_STORED.set(bytes(n));
+        }
 
         guard.finish();
     }

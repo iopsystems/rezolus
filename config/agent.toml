@@ -348,11 +348,11 @@ enabled = false
 # interval = "1s"
 
 # Memory utilization from /proc/meminfo. On macOS, from the vm.* sysctls and
-# vm.swapusage; see docs/metrics.md#memory_meminfo.
+# hw.memsize; see docs/metrics.md#memory_meminfo.
 [samplers.memory_meminfo]
 
-# Memory event counters from /proc/vmstat. On macOS, from host_statistics64 and
-# the swap sysctls, with wired memory; see docs/metrics.md#memory_vmstat.
+# Memory event counters from /proc/vmstat. On macOS, from host_statistics64,
+# with wired memory; see docs/metrics.md#memory_vmstat.
 [samplers.memory_vmstat]
 
 # Bytes held by every slab cache, labeled by cache name, and object counts for

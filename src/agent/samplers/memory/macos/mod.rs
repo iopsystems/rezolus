@@ -14,9 +14,10 @@
 //! rate-limited for every process that is not an Apple platform binary: all
 //! such processes share one budget of 2 to 10 calls per second, and a call
 //! over it returns the last result any of them fetched, with `KERN_SUCCESS`.
-//! Only the values with no sysctl (faults, page-ins and page-outs,
-//! compressions and decompressions, wired pages) are read that way, once per
-//! refresh, by `memory_vmstat`.
+//! Only the values with no sysctl in Apple's published kernel source (faults,
+//! page-ins and page-outs, compressions and decompressions, swap-ins and
+//! swap-outs, wired pages) are read that way, once per refresh, by
+//! `memory_vmstat`.
 
 mod meminfo;
 mod vmstat;

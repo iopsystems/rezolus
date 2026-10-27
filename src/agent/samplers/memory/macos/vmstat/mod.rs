@@ -2,26 +2,27 @@
 //! no sysctl reports, from one `host_statistics64` call per refresh.
 //!
 //! That call can return a cached result (see the module doc in
-//! `memory/macos`). A cached copy of this sampler's own previous read has the
-//! same fault count, and is discarded: the group keeps its previous window
-//! and the series has no new point. Faults are counted continuously on a
-//! running Mac, so two real reads with the same count are not expected. A
-//! copy cached by another process's call cannot be told apart from a fresh
-//! read; it is at most one second old.
+//! `memory/macos`), and the kernel copies into that cache without a lock, so
+//! a cached result can be older than one this sampler already published, or
+//! mix fields from two reads. A read is published only if its fault count is
+//! higher than the last published one and none of its counters is lower;
+//! otherwise the group keeps its previous window and the series has no new
+//! point. Faults are counted continuously on a running Mac, so a real read
+//! almost always passes. A newer copy cached by another process's call cannot
+//! be told apart from a fresh read; it is from the current one-second window.
 //!
 //! Swap on macOS holds compressed memory. `memory_swap_in` and
-//! `memory_swap_out` come from the `vm.compressor.swapper` sysctls and count
-//! kernel pages (16 KiB on Apple silicon) of compressed data moved to and
-//! from the swap files, not pages of memory as Linux's `pswpin` and `pswpout`
-//! do.
+//! `memory_swap_out` count kernel pages (16 KiB on Apple silicon) of
+//! compressed data moved to and from the swap files, not pages of memory as
+//! Linux's `pswpin` and `pswpout` do.
 
 const NAME: &str = "memory_vmstat";
 
 use crate::agent::*;
 
-use super::{page_size, sysctl_u64, vm_statistics};
+use super::{page_size, vm_statistics};
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 mod stats {
     include!("../../linux/vmstat/stats.rs");
@@ -51,7 +52,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     Ok(Some(Box::new(Vmstat {
         host,
         page_size,
-        last_faults: AtomicU64::new(0),
+        last: Mutex::new(None),
     })))
 }
 
@@ -65,33 +66,53 @@ static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::sampl
 struct Vmstat {
     host: libc::mach_port_t,
     page_size: u64,
-    /// The fault count of the last read published.
-    last_faults: AtomicU64,
+    /// The counters of the last read published.
+    last: Mutex<Option<Counters>>,
+}
+
+/// The cumulative counters, in the order they are compared and published:
+/// faults, compressions, decompressions, page-ins, page-outs, swap-ins,
+/// swap-outs.
+type Counters = [u64; 7];
+
+fn counters(vm: &libc::vm_statistics64) -> Counters {
+    [
+        vm.faults,
+        vm.compressions,
+        vm.decompressions,
+        vm.pageins,
+        vm.pageouts,
+        vm.swapins,
+        vm.swapouts,
+    ]
+}
+
+/// True if `now` is newer than `last`: more faults, and no counter lower.
+fn is_newer(now: &Counters, last: &Counters) -> bool {
+    now[0] > last[0] && now.iter().zip(last).all(|(n, l)| n >= l)
 }
 
 impl Vmstat {
     /// Set every metric from `vm` and return true, or return false and set
-    /// nothing if `vm` repeats the last published read's fault count.
+    /// nothing if `vm` is not newer than the last published read.
     fn publish(&self, vm: &libc::vm_statistics64) -> bool {
-        if vm.faults == self.last_faults.load(Ordering::Relaxed) {
+        let now = counters(vm);
+        let mut last = self.last.lock().unwrap();
+        if last.is_some_and(|last| !is_newer(&now, &last)) {
             return false;
         }
 
-        MEMORY_PAGE_FAULTS.set(vm.faults);
-        MEMORY_COMPRESSIONS.set(vm.compressions);
-        MEMORY_DECOMPRESSIONS.set(vm.decompressions);
-        MEMORY_PAGEINS.set(vm.pageins);
-        MEMORY_PAGEOUTS.set(vm.pageouts);
+        let [faults, compressions, decompressions, pageins, pageouts, swapins, swapouts] = now;
+        MEMORY_PAGE_FAULTS.set(faults);
+        MEMORY_COMPRESSIONS.set(compressions);
+        MEMORY_DECOMPRESSIONS.set(decompressions);
+        MEMORY_PAGEINS.set(pageins);
+        MEMORY_PAGEOUTS.set(pageouts);
+        MEMORY_SWAP_IN.set(swapins);
+        MEMORY_SWAP_OUT.set(swapouts);
         MEMORY_WIRED.set((vm.wire_count as u64 * self.page_size) as i64);
 
-        if let Some(n) = sysctl_u64(c"vm.compressor.swapper.swapins_total") {
-            MEMORY_SWAP_IN.set(n);
-        }
-        if let Some(n) = sysctl_u64(c"vm.compressor.swapper.swapouts_total") {
-            MEMORY_SWAP_OUT.set(n);
-        }
-
-        self.last_faults.store(vm.faults, Ordering::Relaxed);
+        *last = Some(now);
         true
     }
 }
@@ -148,11 +169,11 @@ mod tests {
     }
 
     #[test]
-    fn a_repeated_read_publishes_nothing() {
+    fn only_a_newer_read_is_published() {
         let sampler = Vmstat {
             host: 0,
             page_size: 16384,
-            last_faults: AtomicU64::new(0),
+            last: Mutex::new(None),
         };
         // SAFETY: plain integers; all-zero is valid.
         let mut vm: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
@@ -163,8 +184,17 @@ mod tests {
         vm.compressions = 3;
 
         assert!(sampler.publish(&vm));
-        vm.compressions = 4;
-        assert!(!sampler.publish(&vm), "same fault count is a cached copy");
-        assert_eq!(sampler.last_faults.load(Ordering::Relaxed), 7);
+        assert!(!sampler.publish(&vm), "a repeat is a cached copy");
+
+        vm.faults = 6;
+        assert!(!sampler.publish(&vm), "fewer faults is an older copy");
+
+        vm.faults = 8;
+        vm.compressions = 2;
+        assert!(!sampler.publish(&vm), "a counter went down");
+
+        vm.compressions = 3;
+        assert!(sampler.publish(&vm));
+        assert_eq!(*sampler.last.lock().unwrap(), Some([8, 3, 0, 0, 0, 0, 0]));
     }
 }

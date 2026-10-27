@@ -19,14 +19,14 @@ pub static MEMORY_SPECULATIVE: LazyGauge = LazyGauge::new(Gauge::default);
 
 #[metric(
     name = "memory_compressed",
-    description = "Compressed data the compressor holds, in bytes",
+    description = "Compressed data the compressor holds in memory, in bytes; excludes segments swapped out and unused space within segments",
     metadata = { unit = "bytes", acq_group = "memory_meminfo_read" }
 )]
 pub static MEMORY_COMPRESSED: LazyGauge = LazyGauge::new(Gauge::default);
 
 #[metric(
     name = "memory_compressed_stored",
-    description = "Uncompressed size of the memory the compressor holds; its ratio to memory_compressed is the compression ratio",
+    description = "Uncompressed size of every page the compressor holds, including pages in segments swapped out (vm_stat's Pages stored in compressor)",
     metadata = { unit = "bytes", acq_group = "memory_meminfo_read" }
 )]
 pub static MEMORY_COMPRESSED_STORED: LazyGauge = LazyGauge::new(Gauge::default);
