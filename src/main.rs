@@ -53,8 +53,8 @@ fn recording_host() -> parquet_tools::Host<'static> {
 
 fn main() {
     // custom panic hook: print the message and a backtrace, then exit with
-    // status 101. The hook runs before unwinding starts, so a panic on any
-    // thread ends the process and no destructors run.
+    // status 101. The hook runs before unwinding starts, so neither
+    // catch_unwind nor a tokio JoinHandle sees the panic, and no destructors run.
     std::panic::set_hook(Box::new(|s| {
         eprintln!("{s}");
         eprintln!("{:?}", Backtrace::new());
