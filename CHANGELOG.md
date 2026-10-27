@@ -26,14 +26,14 @@
   default, like `memory_vmstat`. The viewer's Network section plots each
   metric under TCP when the recording has it. Backported from 6.0 (#1472) in #1478.
 - Ubuntu 26.04 (resolute) packages, for amd64 and arm64, published to the
-  `ubuntu-resolute` apt repository.
+  `ubuntu-resolute` apt repository. (#1573)
 
 ### Changed
 
 - Debian and Ubuntu packages are published only to rezolus's own apt
   repositories (`<distro>-<codename>`), no longer also to the SystemsLab
   package registry. The `systemslab-repo` package (0.0.14 and later) lists
-  rezolus's repositories.
+  rezolus's repositories. (#1573)
 
 ### Fixed
 
