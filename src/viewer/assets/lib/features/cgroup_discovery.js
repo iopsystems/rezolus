@@ -1,6 +1,7 @@
 // Which cgroups a recording has, from the labels of its per-cgroup series.
 //
-// `cgroup_cpu_usage` is tried first, as it always was: when present it covers
+// Memory names are always included because idle cgroups may not have CPU data.
+// `cgroup_cpu_usage` is then tried first among the CPU sources: it covers
 // every cgroup that ran. Every per-cgroup series can now be switched off per
 // sampler (`cgroup_attribution`), so a recording can lack it while other
 // samplers still carry per-cgroup series. Then the names come from the union
@@ -58,12 +59,13 @@ export const discoverCgroups = async (executeQuery) => {
         }
     };
 
+    const memory = await run('group by (name) (cgroup_memory_usage)');
     for (const query of PRIMARY_QUERIES) {
         const names = await run(query);
-        if (names.size > 0) return names;
+        if (names.size > 0) return new Set([...names, ...memory]);
     }
 
-    const union = new Set();
+    const union = new Set(memory);
     for (const metric of FALLBACK_CGROUP_METRICS) {
         for (const name of await run(`group by (name) (${metric})`)) {
             union.add(name);

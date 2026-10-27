@@ -748,6 +748,70 @@ two ringbuf gauges and external metrics (both described above, both
 structurally outside a read-section bracket rather than pending work). Any
 future remaining migration goes through the checklist below.
 
+---
+
+### 19. Detect capabilities at runtime; take the best entry point available, fall back otherwise
+
+The fleet runs a range of kernels, and the cheapest source for a metric is
+often the newest one: a kfunc or BPF iterator where only a cgroupfs walk
+existed before, `fentry` where only `kprobe` was possible, a tracepoint added
+in a recent release, an mmap'able map where userspace used to do lookups. A
+sampler probes for the better entry point at startup, uses it where the
+kernel has it, and keeps the older, more expensive path as the fallback. The
+fleet's oldest kernel does not set the ceiling for every host, and the newest
+kernel is never a requirement.
+
+*Why detect, not version-check.* A version number is a proxy. Distributions
+backport, configs differ (`CONFIG_` options, in-kernel BTF, module BTF), and
+the same release behaves differently across architectures (principle 4's
+`fentry` caveats). Detect the capability itself: the symbol in BTF, the file
+in sysfs, the attach or open that succeeds. Principle 4 already applies this
+to attach types, selecting `fentry` twins with `kernel_can_fentry` and
+tracepoint twins with `kernel_btf_has_tracepoints`, never on `kernel_has_btf`
+alone.
+
+*Why keep the fallback.* The sampler is always-on everywhere (principle 1). A
+metric that exists only on new kernels fractures the fleet view, and an
+operator comparing two hosts should see the same series from both. The
+fallback may cost more; it must be correct and emit the same metrics, with the
+same names, labels and semantics. Which path a host took is an implementation
+detail, reported once at startup, not a difference the consumer has to know
+about. Where a semantic difference is unavoidable (resolution, a field one
+source lacks), document it next to the metric.
+
+**How to apply.**
+- Detect once, at init or on rediscovery, never per refresh. Log the path
+  taken once; where the fallback changes cost or coverage, say so in the
+  sampler's status.
+- Detect the capability, not the kernel version: try to attach, open or read,
+  and fall back on the specific error. `Unsupported` is for when no path
+  works, not for the absence of the better one.
+- Both paths emit the same metrics. A new path that needs different names or
+  labels is a new sampler, not a fast path.
+- The fallback stays tested and measured. It still has to meet principles 13,
+  16 and 17 (measured cost, throttled and off-cycle if expensive), and CI's
+  older kernels are where it runs; do not let "modern kernels have the fast
+  path" leave it unexercised.
+- Document the ladder in the module: which paths exist, which kernel
+  capability gates each, and what the fallback costs.
+
+**What we refuse.**
+- A sampler that requires a kernel newer than the fleet floor when an older
+  path exists.
+- Gating on `uname -r` or a version tuple when the capability can be probed
+  directly.
+- A fast path whose series differ in name, labels or meaning from the
+  fallback's.
+- An untested or unmeasured fallback.
+
+*Standing example.* `memory_cgroup` reads cgroupfs: a walk of the hierarchy
+and three `openat`s per cgroup, measured at about 65 µs per cgroup with over
+half the time in `openat` and `getdents64`. Kernels 7.0 and later expose memcg
+kfuncs (`mm/bpf_memcontrol.c`) reachable from a BPF cgroup iterator, which
+avoids the walk, the opens and the text formatting. Under this principle that
+path is added gated on the kfuncs' presence in BTF, the cgroupfs sweep stays as
+the fallback, and both emit the same `cgroup_memory_*` series.
+
 ## Reviewing or writing a sampler — operational checklist
 
 A short pass an agent or human reviewer can run literally over a sampler
@@ -829,6 +893,12 @@ change. Each item is a yes/no question, or "justify in a comment."
   page-table walk)? If so, it must read on its own bounded interval decoupled
   from the scrape cycle and run off the async worker, with the principle-10
   departure documented. (Principle 17.)
+- **Best available entry point, with a fallback.** Does a newer kernel offer
+  a cheaper source for this data (a kfunc or iterator, `fentry`, a new
+  tracepoint, an mmap'able map)? If so, detect that capability at init, not a
+  version number; use it where present; keep the older path as the fallback
+  with the same metrics and labels; and keep the fallback tested and
+  measured. (Principle 19.)
 - **Verifier-friendly patterns.** Defensive bounds checks
   (`if (id >= MAX) return 0;`), `__always_inline` helpers, branch trees
   in place of loops, `bpf_ringbuf_reserve` for large structs — these are

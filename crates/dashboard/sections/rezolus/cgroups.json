@@ -13,7 +13,10 @@
           "cgroup_cpu_cycles",
           "cgroup_cpu_instructions",
           "cgroup_cpu_tlb_flush",
-          "cgroup_syscall"
+          "cgroup_syscall",
+          "cgroup_memory_usage",
+          "cgroup_memory_swap_usage",
+          "cgroup_memory_stat"
         ]
       }
     }
@@ -197,6 +200,246 @@
       "subgroups": [
         {
           "plots": [
+            {
+              "kind": "gauge",
+              "title": "Memory (Including Descendants)",
+              "id": "individual-memory",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_usage{name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Swap (Including Descendants)",
+              "id": "individual-memory-swap",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_swap_usage{name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Anonymous Pages",
+              "id": "individual-memory-anon",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"anon\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "File Cache (Includes Shared Memory)",
+              "id": "individual-memory-file",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"file\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Shared Memory / tmpfs",
+              "id": "individual-memory-shmem",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"shmem\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Kernel Memory",
+              "id": "individual-memory-kernel",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"kernel\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Socket Buffers",
+              "id": "individual-memory-sock",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"sock\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Reclaimable Slab",
+              "id": "individual-memory-slab_reclaimable",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"slab_reclaimable\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Unreclaimable Slab",
+              "id": "individual-memory-slab_unreclaimable",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"slab_unreclaimable\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Page Tables",
+              "id": "individual-memory-pagetables",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"pagetables\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Kernel Stacks",
+              "id": "individual-memory-kernel_stack",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"kernel_stack\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Dirty File Pages",
+              "id": "individual-memory-file_dirty",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"file_dirty\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "File Pages Under Writeback",
+              "id": "individual-memory-file_writeback",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"file_writeback\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Mapped File Pages",
+              "id": "individual-memory-file_mapped",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"file_mapped\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Active Anonymous Pages",
+              "id": "individual-memory-active_anon",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"active_anon\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Inactive Anonymous Pages",
+              "id": "individual-memory-inactive_anon",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"inactive_anon\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Active File Pages",
+              "id": "individual-memory-active_file",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"active_file\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Inactive File Pages",
+              "id": "individual-memory-inactive_file",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"inactive_file\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Unevictable Pages",
+              "id": "individual-memory-unevictable",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"unevictable\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Slab (Total)",
+              "id": "individual-memory-slab",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"slab\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Secondary Page Tables",
+              "id": "individual-memory-sec_pagetables",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"sec_pagetables\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Per-CPU Allocations",
+              "id": "individual-memory-percpu",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"percpu\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "vmalloc",
+              "id": "individual-memory-vmalloc",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"vmalloc\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "HugeTLB Pages",
+              "id": "individual-memory-hugetlb",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"hugetlb\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Anonymous Transparent Huge Pages",
+              "id": "individual-memory-anon_thp",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"anon_thp\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "File Transparent Huge Pages",
+              "id": "individual-memory-file_thp",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"file_thp\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Shared Memory Transparent Huge Pages",
+              "id": "individual-memory-shmem_thp",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"shmem_thp\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Swap Cache",
+              "id": "individual-memory-swapcached",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"swapcached\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Zswap Compressed Pool",
+              "id": "individual-memory-zswap",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"zswap\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "kind": "gauge",
+              "title": "Pages Backed by Zswap",
+              "id": "individual-memory-zswapped",
+              "style": "multi",
+              "unit": "bytes",
+              "query": "sum by (name) (cgroup_memory_stat{kind=\"zswapped\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
             {
               "kind": "counter",
               "title": "Total CPU Cores",

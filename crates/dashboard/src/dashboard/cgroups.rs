@@ -40,6 +40,70 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         }
     };
 
+    // Memory accounting includes descendants, so there is no aggregate (left
+    // side) memory plot: summing non-selected ancestors and children would
+    // double-count. Individual plots keep one series per cgroup; `sum by
+    // (name)` is the identity there and is what lets the selector derive a
+    // per-group query (cgroup_selection.js `cgroupQueryVariants`) for a unit
+    // selected as one entry. That sum is exact when the group's members are
+    // siblings and over-counts a member that contains another.
+    if individual {
+        plot(
+            group,
+            PlotOpts::gauge(
+                "Memory (Including Descendants)",
+                "individual-memory",
+                Unit::Bytes,
+            ),
+            format!("sum by (name) (cgroup_memory_usage{{{filter}}})"),
+        );
+        plot(
+            group,
+            PlotOpts::gauge(
+                "Swap (Including Descendants)",
+                "individual-memory-swap",
+                Unit::Bytes,
+            ),
+            format!("sum by (name) (cgroup_memory_swap_usage{{{filter}}})"),
+        );
+        for (kind, title) in [
+            ("anon", "Anonymous Pages"),
+            ("file", "File Cache (Includes Shared Memory)"),
+            ("shmem", "Shared Memory / tmpfs"),
+            ("kernel", "Kernel Memory"),
+            ("sock", "Socket Buffers"),
+            ("slab_reclaimable", "Reclaimable Slab"),
+            ("slab_unreclaimable", "Unreclaimable Slab"),
+            ("pagetables", "Page Tables"),
+            ("kernel_stack", "Kernel Stacks"),
+            ("file_dirty", "Dirty File Pages"),
+            ("file_writeback", "File Pages Under Writeback"),
+            ("file_mapped", "Mapped File Pages"),
+            ("active_anon", "Active Anonymous Pages"),
+            ("inactive_anon", "Inactive Anonymous Pages"),
+            ("active_file", "Active File Pages"),
+            ("inactive_file", "Inactive File Pages"),
+            ("unevictable", "Unevictable Pages"),
+            ("slab", "Slab (Total)"),
+            ("sec_pagetables", "Secondary Page Tables"),
+            ("percpu", "Per-CPU Allocations"),
+            ("vmalloc", "vmalloc"),
+            ("hugetlb", "HugeTLB Pages"),
+            ("anon_thp", "Anonymous Transparent Huge Pages"),
+            ("file_thp", "File Transparent Huge Pages"),
+            ("shmem_thp", "Shared Memory Transparent Huge Pages"),
+            ("swapcached", "Swap Cache"),
+            ("zswap", "Zswap Compressed Pool"),
+            ("zswapped", "Pages Backed by Zswap"),
+        ] {
+            plot(
+                group,
+                PlotOpts::gauge(title, format!("individual-memory-{kind}"), Unit::Bytes),
+                format!("sum by (name) (cgroup_memory_stat{{kind=\"{kind}\",{filter}}})"),
+            );
+        }
+    }
+
     plot(
         group,
         PlotOpts::counter(
@@ -201,7 +265,10 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 "cgroup_cpu_cycles",
                 "cgroup_cpu_instructions",
                 "cgroup_cpu_tlb_flush",
-                "cgroup_syscall"
+                "cgroup_syscall",
+                "cgroup_memory_usage",
+                "cgroup_memory_swap_usage",
+                "cgroup_memory_stat"
             ]
         }),
     );

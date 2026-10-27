@@ -487,6 +487,546 @@
             {
               "data": [],
               "opts": {
+                "title": "Memory (Including Descendants)",
+                "id": "individual-memory",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_usage{name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Swap (Including Descendants)",
+                "id": "individual-memory-swap",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_swap_usage{name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Anonymous Pages",
+                "id": "individual-memory-anon",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"anon\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "File Cache (Includes Shared Memory)",
+                "id": "individual-memory-file",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"file\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Shared Memory / tmpfs",
+                "id": "individual-memory-shmem",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"shmem\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Kernel Memory",
+                "id": "individual-memory-kernel",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"kernel\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Socket Buffers",
+                "id": "individual-memory-sock",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"sock\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Reclaimable Slab",
+                "id": "individual-memory-slab_reclaimable",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"slab_reclaimable\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Unreclaimable Slab",
+                "id": "individual-memory-slab_unreclaimable",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"slab_unreclaimable\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Page Tables",
+                "id": "individual-memory-pagetables",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"pagetables\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Kernel Stacks",
+                "id": "individual-memory-kernel_stack",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"kernel_stack\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Dirty File Pages",
+                "id": "individual-memory-file_dirty",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"file_dirty\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "File Pages Under Writeback",
+                "id": "individual-memory-file_writeback",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"file_writeback\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Mapped File Pages",
+                "id": "individual-memory-file_mapped",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"file_mapped\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Active Anonymous Pages",
+                "id": "individual-memory-active_anon",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"active_anon\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Inactive Anonymous Pages",
+                "id": "individual-memory-inactive_anon",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"inactive_anon\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Active File Pages",
+                "id": "individual-memory-active_file",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"active_file\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Inactive File Pages",
+                "id": "individual-memory-inactive_file",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"inactive_file\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Unevictable Pages",
+                "id": "individual-memory-unevictable",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"unevictable\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Slab (Total)",
+                "id": "individual-memory-slab",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"slab\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Secondary Page Tables",
+                "id": "individual-memory-sec_pagetables",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"sec_pagetables\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Per-CPU Allocations",
+                "id": "individual-memory-percpu",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"percpu\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "vmalloc",
+                "id": "individual-memory-vmalloc",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"vmalloc\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "HugeTLB Pages",
+                "id": "individual-memory-hugetlb",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"hugetlb\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Anonymous Transparent Huge Pages",
+                "id": "individual-memory-anon_thp",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"anon_thp\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "File Transparent Huge Pages",
+                "id": "individual-memory-file_thp",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"file_thp\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Shared Memory Transparent Huge Pages",
+                "id": "individual-memory-shmem_thp",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"shmem_thp\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Swap Cache",
+                "id": "individual-memory-swapcached",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"swapcached\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Zswap Compressed Pool",
+                "id": "individual-memory-zswap",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"zswap\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Pages Backed by Zswap",
+                "id": "individual-memory-zswapped",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (cgroup_memory_stat{kind=\"zswapped\",name=~\"__SELECTED_CGROUPS__\"})"
+            },
+            {
+              "data": [],
+              "opts": {
                 "title": "Total CPU Cores",
                 "id": "individual-total-cores",
                 "type": "delta_counter",
@@ -1059,7 +1599,10 @@
         "cgroup_cpu_cycles",
         "cgroup_cpu_instructions",
         "cgroup_cpu_tlb_flush",
-        "cgroup_syscall"
+        "cgroup_syscall",
+        "cgroup_memory_usage",
+        "cgroup_memory_swap_usage",
+        "cgroup_memory_stat"
       ]
     }
   }

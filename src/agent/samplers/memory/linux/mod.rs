@@ -1,3 +1,4 @@
+mod cgroup;
 mod meminfo;
 mod pagecache;
 mod slabinfo;

@@ -27,7 +27,13 @@ fn enabled() -> bool {
 /// explicitly opted into with `enabled = true` in their own `[samplers.<name>]`
 /// section. Reserved for samplers whose cost makes accidental activation
 /// (e.g. via an absent/commented config) unacceptable.
-const OPT_IN_SAMPLERS: &[&str] = &["ext4_ops", "gpu_amd_pmu", "memory_pagecache", "xfs_log"];
+const OPT_IN_SAMPLERS: &[&str] = &[
+    "ext4_ops",
+    "gpu_amd_pmu",
+    "memory_cgroup",
+    "memory_pagecache",
+    "xfs_log",
+];
 
 /// An old sampler, the part of the merged sampler it became, and whether it
 /// had a per-cgroup path (so its `cgroup_attribution` carries over).
@@ -289,7 +295,7 @@ impl Config {
     /// back to the `defaults` section). `None` if unset anywhere, in which case
     /// the sampler applies its own built-in default. Consumed by samplers that
     /// read cost-bearing sources off the sample cycle (`drivehealth`,
-    /// `filesystem`, GPU PMUs and `hw_sensors`).
+    /// `filesystem`, `memory_cgroup`, GPU PMUs and `hw_sensors`).
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn sampler_interval(&self, name: &str) -> Option<std::time::Duration> {
         self.samplers
@@ -661,30 +667,35 @@ mod tests {
     fn opt_in_sampler_off_when_section_absent() {
         // [defaults] enabled = true, but the opt-in sampler has no section.
         let c = config("[defaults]\nenabled = true\n");
-        assert!(
-            !c.enabled("gpu_amd_pmu"),
-            "opt-in sampler must not follow defaults=true"
-        );
+        for name in OPT_IN_SAMPLERS {
+            assert!(!c.enabled(name), "{name} must not follow defaults=true");
+        }
         // A normal sampler does follow defaults=true.
         assert!(c.enabled("cpu_usage"));
-        // hw_sensors follows the defaults: its device reads run off the
-        // scrape path at its own interval.
         assert!(c.enabled("hw_sensors"));
-        // The request-path ext4 sampler is opt-in for its probe cost.
-        assert!(!c.enabled("ext4_ops"));
     }
 
     #[test]
     fn opt_in_sampler_off_when_section_present_without_enabled() {
         // Section present but no explicit `enabled` -> still off.
-        let c = config("[defaults]\nenabled = true\n\n[samplers.gpu_amd_pmu]\n");
-        assert!(!c.enabled("gpu_amd_pmu"));
+        for name in OPT_IN_SAMPLERS {
+            let c = config(&format!(
+                "[defaults]\nenabled = true\n\n[samplers.{name}]\n"
+            ));
+            assert!(!c.enabled(name));
+        }
     }
 
     #[test]
     fn opt_in_sampler_on_only_when_explicitly_enabled() {
-        let c = config("[defaults]\nenabled = true\n\n[samplers.gpu_amd_pmu]\nenabled = true\n");
-        assert!(c.enabled("gpu_amd_pmu"));
+        for name in OPT_IN_SAMPLERS {
+            for default in [true, false] {
+                let c = config(&format!(
+                    "[defaults]\nenabled = {default}\n\n[samplers.{name}]\nenabled = true\n"
+                ));
+                assert!(c.enabled(name));
+            }
+        }
     }
 
     #[test]
@@ -703,8 +714,10 @@ mod tests {
 
     #[test]
     fn opt_in_sampler_off_when_explicitly_disabled() {
-        let c = config("[samplers.gpu_amd_pmu]\nenabled = false\n");
-        assert!(!c.enabled("gpu_amd_pmu"));
+        for name in OPT_IN_SAMPLERS {
+            let c = config(&format!("[samplers.{name}]\nenabled = false\n"));
+            assert!(!c.enabled(name));
+        }
     }
 
     #[test]

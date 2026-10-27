@@ -2,6 +2,8 @@
 
 ### Security
 
+- zstd 0.14.3, zstd-safe 8.2.0 and zstd-sys 2.1.2, for RUSTSEC-2026-0391,
+  0398, 0403 and 0410; one zstd in the tree instead of two. (#1537)
 - rustls-webpki 0.103.16 and webpki-root-certs 1.0.10, for RUSTSEC-2026-0382
   and RUSTSEC-2026-0383. (#1510)
 - rustls 0.23.46, for RUSTSEC-2026-0346 through 0349. (#1467)
@@ -170,6 +172,18 @@
   the same labels; reading an existing recording does not change. Pinned by
   `a_prometheus_label_value_is_stored_as_the_exposition_spells_it`. A line
   the exposition parser cannot read is skipped and logged once per endpoint.
+
+### Added
+
+- **Per-cgroup memory accounting.** The opt-in `memory_cgroup` sampler reads
+  cgroup v2 `memory.current`, `memory.swap.current` and the 28 byte-valued
+  `memory.stat` fields for up to 4096 cgroups, off the scrape path at a
+  configurable interval (60s default), and the cgroups dashboard plots every
+  kind for the selected cgroups. A host without cgroup v2 or without the
+  memory controller reports the sampler as unsupported, not failed.
+  `/metrics/binary` reuses a sampler-stamped acquisition group's encoded bytes
+  across scrapes until its sampler writes again, so idle cgroup series cost a
+  copy rather than a re-encode per scrape. (#1537)
 
 ### Removed
 
