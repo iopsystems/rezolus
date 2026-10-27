@@ -68,51 +68,99 @@ impl UsageInner {
         })
     }
 
+    // `host_processor_info` returns, per CPU, `CPU_STATE_MAX` u32 tick
+    // counters; at `CLK_TCK` = 100 Hz each wraps after ~497 days in its state.
+    // The kernel allocates the array in this task and the caller must
+    // `vm_deallocate` it, or every refresh leaks a page.
     async fn refresh(&mut self) {
-        let mut num_cpu: u32 = 0;
-        let mut cpu_info: *mut i32 = std::ptr::null_mut();
-        let mut cpu_info_len: u32 = 0;
+        let guard = CPU_USAGE_ACQ.acquire();
 
-        let mut user: u64 = 0;
-        let mut system: u64 = 0;
-        let mut nice: u64 = 0;
+        let mut num_cpu: libc::natural_t = 0;
+        let mut cpu_info: libc::processor_info_array_t = std::ptr::null_mut();
+        let mut cpu_info_len: libc::mach_msg_type_number_t = 0;
 
-        unsafe {
-            if libc::host_processor_info(
+        let rc = unsafe {
+            libc::host_processor_info(
                 self.port,
                 libc::PROCESSOR_CPU_LOAD_INFO,
-                &mut num_cpu as *mut u32,
-                &mut cpu_info as *mut *mut i32,
-                &mut cpu_info_len as *mut u32,
-            ) == libc::KERN_SUCCESS
-            {
-                for cpu in 0..num_cpu {
-                    user = user.wrapping_add(
-                        (*cpu_info.offset(
-                            (cpu as i32 * libc::CPU_STATE_MAX + libc::CPU_STATE_USER) as isize,
-                        ) as u64)
-                            .wrapping_mul(self.nanos_per_tick),
-                    );
-                    system = system.wrapping_add(
-                        (*cpu_info.offset(
-                            (cpu as i32 * libc::CPU_STATE_MAX + libc::CPU_STATE_SYSTEM) as isize,
-                        ) as u64)
-                            .wrapping_mul(self.nanos_per_tick),
-                    );
-                    nice = nice.wrapping_add(
-                        (*cpu_info.offset(
-                            (cpu as i32 * libc::CPU_STATE_MAX + libc::CPU_STATE_NICE) as isize,
-                        ) as u64)
-                            .wrapping_mul(self.nanos_per_tick),
-                    );
-                }
+                &mut num_cpu,
+                &mut cpu_info,
+                &mut cpu_info_len,
+            )
+        };
 
-                CPU_CORES.set(num_cpu as i64);
-
-                CPU_USAGE_USER.set(user);
-                CPU_USAGE_SYSTEM.set(system);
-                CPU_USAGE_NICE.set(nice);
-            }
+        if rc != libc::KERN_SUCCESS {
+            return;
         }
+
+        // SAFETY: on success `cpu_info` points to `cpu_info_len` integers.
+        let info = unsafe { std::slice::from_raw_parts(cpu_info, cpu_info_len as usize) };
+
+        let cpus = (num_cpu as usize).min(MAX_CPUS);
+
+        let (per_cpu, _) = info.as_chunks::<{ libc::CPU_STATE_MAX as usize }>();
+
+        for (id, ticks) in per_cpu.iter().take(cpus).enumerate() {
+            let nanos = |state: i32| (ticks[state as usize] as u32 as u64) * self.nanos_per_tick;
+
+            CPU_USAGE_USER.set(
+                id,
+                nanos(libc::CPU_STATE_USER) + nanos(libc::CPU_STATE_NICE),
+            );
+            CPU_USAGE_SYSTEM.set(id, nanos(libc::CPU_STATE_SYSTEM));
+        }
+
+        #[allow(deprecated)]
+        unsafe {
+            libc::vm_deallocate(
+                libc::mach_task_self(),
+                cpu_info as libc::vm_address_t,
+                cpu_info_len as libc::vm_size_t * std::mem::size_of::<libc::integer_t>(),
+            );
+        }
+
+        CPU_CORES.set(num_cpu as i64);
+
+        CPU_USAGE_ACQ.set_member_bound(cpus);
+        guard.finish();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The per-CPU series are published only if their module resolves to this
+    // sampler; under any other name the group is unbacked and bounded to zero.
+    #[test]
+    fn stats_attribute_to_this_sampler() {
+        let stats = format!("{}::stats", module_path!().trim_end_matches("::tests"));
+        let modules = crate::agent::samplers::sampler_modules();
+
+        assert_eq!(
+            crate::agent::samplers::attribute_sampler(&stats, &modules),
+            NAME
+        );
+        assert_eq!(CPU_USAGE_ACQ.sampler, NAME);
+    }
+
+    #[tokio::test]
+    async fn refresh_sets_every_cpu_and_stamps_the_group() {
+        let mut inner = UsageInner::new().unwrap();
+        inner.refresh().await;
+
+        let cpus = CPU_CORES.value() as usize;
+        assert!(cpus > 0);
+        assert_eq!(CPU_USAGE_ACQ.member_bound(), Some(cpus));
+        assert!(CPU_USAGE_ACQ.window().is_some());
+
+        for id in 0..cpus {
+            assert!(CPU_USAGE_USER.value(id).is_some(), "cpu {id} user unset");
+            assert!(
+                CPU_USAGE_SYSTEM.value(id).is_some(),
+                "cpu {id} system unset"
+            );
+        }
+        assert!(CPU_USAGE_USER.value(cpus).is_none());
     }
 }

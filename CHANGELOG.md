@@ -11,6 +11,10 @@
 
 ### Fixed
 
+- **The macOS agent no longer leaks memory on every CPU sample.** The
+  `cpu_usage` sampler never freed the array `host_processor_info` returns,
+  so each refresh leaked one page (16 KiB on Apple Silicon), about 1.4 GB a
+  day at a 1s interval.
 - **A single selected cgroup keeps its colour after a zoom or refresh.** With
   one cgroup selected, a zoom drew its individual charts as "Series 1" in a
   colour other than the picker's swatch, and a live refresh drew them as a
@@ -290,6 +294,10 @@
 
 ### Changed
 
+- **`cpu_usage` on macOS is per CPU.** It was three host-wide counters; it
+  is now one series per CPU in each of `user` and `system`, labelled `id`,
+  as on Linux, so the per-CPU charts draw on a Mac. Niced time is counted
+  as `user`, as on Linux, and the `nice` state is gone.
 - **`hw_sensors` is on by default.** It follows `[defaults]` like other
   samplers. On five lab hosts at the 5 second default it cost at most 0.08% of
   a core. Sweeps took 22 to 27 ms median on two x86 hosts, 323 ms on a board
