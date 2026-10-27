@@ -68,8 +68,9 @@ impl UsageInner {
         })
     }
 
-    // `host_processor_info` returns, per CPU, `CPU_STATE_MAX` u32 tick
-    // counters; at `CLK_TCK` = 100 Hz each wraps after ~497 days in its state.
+    // `host_processor_info` returns, per CPU, `CPU_STATE_MAX` tick counters,
+    // read as u32. At 100 Hz (`CLK_TCK` on macOS) each wraps after ~497 days
+    // in its state, and a wrap reads as a counter reset.
     // The kernel allocates the array in this task and the caller must
     // `vm_deallocate` it, or every refresh leaks a page.
     async fn refresh(&mut self) {
@@ -130,8 +131,9 @@ impl UsageInner {
 mod tests {
     use super::*;
 
-    // The per-CPU series are published only if their module resolves to this
-    // sampler; under any other name the group is unbacked and bounded to zero.
+    // The snapshot routes these series to the group registered under (their
+    // module's sampler, `cpu_usage_cpu`), so both must be `cpu_usage`; a group
+    // whose sampler is not running is bounded to zero members.
     #[test]
     fn stats_attribute_to_this_sampler() {
         let stats = format!("{}::stats", module_path!().trim_end_matches("::tests"));

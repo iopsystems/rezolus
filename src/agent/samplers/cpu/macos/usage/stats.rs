@@ -4,11 +4,10 @@ use crate::agent::timing::AcquisitionGroup;
 use crate::agent::MAX_CPUS;
 use linkme::distributed_slice;
 
-// Its own group rather than `cpu::stats::usage::CPU_USAGE_ACQ`: that one is
-// compiled here too, but resolves to the `"unattributed"` sampler off Linux
-// and is bounded to zero members, so nothing set through it would be
-// published. Brackets the single `host_processor_info` call (single writer:
-// this sampler's `refresh()`).
+// `cpu::stats::usage::CPU_USAGE_ACQ` is also compiled on macOS, but its
+// sampler is `"unattributed"`, so it never matches these metrics, which
+// attribute to `cpu_usage`. This group brackets the single
+// `host_processor_info` call; this sampler's `refresh()` is its only writer.
 pub static CPU_USAGE_ACQ: AcquisitionGroup = AcquisitionGroup::new("cpu_usage", "cpu_usage_cpu");
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
@@ -24,7 +23,6 @@ pub static CPU_CORES: LazyGauge = LazyGauge::new(Gauge::default);
 // queries (`sum by (id) (irate(cpu_usage[5m]))`) work on both. Niced time is
 // counted as `user`, as on Linux, where the BPF sampler reads each task's
 // `utime`, which includes it.
-
 #[metric(
     name = "cpu_usage",
     description = "The amount of CPU time spent in each state",
