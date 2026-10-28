@@ -548,6 +548,9 @@ jobs:
           TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"
           brew tap iopsystems/iop
+          # Homebrew refuses to load a formula from a tap it has not been told
+          # to trust.
+          brew trust --tap iopsystems/iop
           brew bump-formula-pr iopsystems/iop/rezolus \
             --url "https://github.com/iopsystems/rezolus/archive/refs/tags/${TAG}.tar.gz" \
             --version "${VERSION}" \
