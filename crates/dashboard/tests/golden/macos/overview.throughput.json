@@ -1,0 +1,578 @@
+{
+  "interval": 1.0,
+  "source": "rezolus",
+  "version": "6.0.0",
+  "filename": "",
+  "start_time": 1700000000000.0,
+  "end_time": 1700000060000.0,
+  "groups": [
+    {
+      "name": "CPU",
+      "id": "cpu",
+      "subgroups": [
+        {
+          "name": "CPU Busy",
+          "description": "Overall CPU utilization and per-core breakdown.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Busy %",
+                "id": "cpu-busy",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Busy %",
+                "id": "cpu-busy-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(cpu_usage[5m])) / 1000000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Network",
+      "id": "network",
+      "subgroups": [
+        {
+          "name": "Interface Bandwidth",
+          "description": "Transmit and receive bit rates summed over every interface traversed. Counts a packet once per stacked layer (bond, VLAN, bridge), and includes intra-host virtual traffic, so this reads higher than the host bandwidth above.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Transmit Bandwidth",
+                "id": "network-transmit-bandwidth",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Receive Bandwidth",
+                "id": "network-receive-bandwidth",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8"
+            }
+          ]
+        },
+        {
+          "name": "Interface Packets",
+          "description": "Transmit and receive packet rates summed over every interface traversed — see the interface bandwidth note above.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Transmit Packets",
+                "id": "network-transmit-packets",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_packets{direction=\"transmit\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Receive Packets",
+                "id": "network-receive-packets",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_packets{direction=\"receive\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "TCP Latency",
+          "description": "Time from packet received to being processed by the application.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "TCP Packet Latency",
+                "id": "tcp-packet-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Latency",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "tcp_packet_latency",
+              "width": "full"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Scheduler",
+      "id": "scheduler",
+      "subgroups": [
+        {
+          "name": "Runqueue Latency",
+          "description": "How long tasks waited on the runqueue before getting CPU time.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Runqueue Latency",
+                "id": "scheduler-runqueue-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Latency",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "scheduler_runqueue_latency",
+              "width": "full"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Syscall",
+      "id": "syscall",
+      "subgroups": [
+        {
+          "name": "Rate & Latency",
+          "description": "Aggregate syscall rate and latency across all operation categories.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Total",
+                "id": "syscall-total",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(syscall[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Total",
+                "id": "syscall-total-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "syscall_latency"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Softirq",
+      "id": "softirq",
+      "subgroups": [
+        {
+          "name": "Rate",
+          "description": "Softirqs handled per second, aggregate and per-CPU.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate",
+                "id": "softirq-total-rate",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Rate",
+                "id": "softirq-total-rate-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "CPU Time",
+          "description": "Fraction of CPU time spent servicing softirqs.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU %",
+                "id": "softirq-total-time",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(softirq_time[5m])) / cpu_cores / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU %",
+                "id": "softirq-total-time-heatmap",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (id) (irate(softirq_time[5m])) / 1000000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "BlockIO",
+      "id": "blockio",
+      "subgroups": [
+        {
+          "name": "Read",
+          "description": "Read throughput and IOPS across all block devices.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Read Throughput",
+                "id": "blockio-throughput-read",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "datarate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(blockio_bytes{op=\"read\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Read IOPS",
+                "id": "blockio-iops-read",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(blockio_operations{op=\"read\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Write",
+          "description": "Write throughput and IOPS across all block devices.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Write Throughput",
+                "id": "blockio-throughput-write",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "datarate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(blockio_bytes{op=\"write\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Write IOPS",
+                "id": "blockio-iops-write",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(blockio_operations{op=\"write\"}[5m]))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Normalized by Throughput",
+      "id": "normalized-throughput",
+      "subgroups": [
+        {
+          "name": "Efficiency Metrics",
+          "description": "Resource consumption normalized by service throughput — lower is more efficient.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "CPU Time / Throughput",
+                "id": "normalized-cpu-busy",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_usage[5m])) / (sum(irate(requests[5m])))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Network TX / Throughput",
+                "id": "normalized-network-tx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "(sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8) / (sum(irate(requests[5m])))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Network RX / Throughput",
+                "id": "normalized-network-rx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "(sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8) / (sum(irate(requests[5m])))"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "name": "Overview",
+      "route": "/overview"
+    },
+    {
+      "name": "Exceptions",
+      "route": "/exceptions"
+    },
+    {
+      "name": "Query Explorer",
+      "route": "/query"
+    },
+    {
+      "name": "CPU",
+      "route": "/cpu"
+    },
+    {
+      "name": "GPU",
+      "route": "/gpu"
+    },
+    {
+      "name": "Hardware Sensors",
+      "route": "/hw_sensors"
+    },
+    {
+      "name": "Memory",
+      "route": "/memory"
+    },
+    {
+      "name": "Network",
+      "route": "/network"
+    },
+    {
+      "name": "Scheduler",
+      "route": "/scheduler"
+    },
+    {
+      "name": "Syscall",
+      "route": "/syscall"
+    },
+    {
+      "name": "Softirq",
+      "route": "/softirq"
+    },
+    {
+      "name": "BlockIO",
+      "route": "/blockio"
+    },
+    {
+      "name": "Filesystem",
+      "route": "/filesystem"
+    },
+    {
+      "name": "ext4",
+      "route": "/ext4"
+    },
+    {
+      "name": "XFS",
+      "route": "/xfs"
+    },
+    {
+      "name": "cgroups",
+      "route": "/cgroups"
+    },
+    {
+      "name": "Rezolus",
+      "route": "/rezolus"
+    }
+  ]
+}
