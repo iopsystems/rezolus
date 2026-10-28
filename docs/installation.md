@@ -15,7 +15,7 @@ package manager.
 
 **Supported distributions:**
 - Debian: 13 (trixie/stable), 12 (bookworm/oldstable)
-- Ubuntu: 22.04 (jammy), 24.04 (noble). 20.04 (focal) was last packaged in 5.22.1.
+- Ubuntu: 22.04 (jammy), 24.04 (noble), 26.04 (resolute). 20.04 (focal) was last packaged in 5.22.1.
 - Enterprise Linux 9 and 10 (Rocky Linux, AlmaLinux, RHEL, CentOS Stream, Oracle Linux)
 - Amazon Linux: 2023
 

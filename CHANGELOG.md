@@ -9,6 +9,12 @@
   (GHSA-rhfx-m35p-ff5j), through metriken-query 0.37, metriken-storage 0.3
   and ratatui 0.30.
 
+### Added
+
+- **Ubuntu 26.04 (resolute) packages.** amd64 and arm64 packages are built
+  for resolute and published to the `ubuntu-resolute` apt repository;
+  `install.sh` installs from it. 5.x ships them from 5.29.0 (#1573). (#1577)
+
 ### Fixed
 
 - **The macOS agent no longer leaks memory on every CPU sample.** The
