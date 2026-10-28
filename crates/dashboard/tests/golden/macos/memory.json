@@ -1,0 +1,415 @@
+{
+  "interval": 1.0,
+  "source": "rezolus",
+  "version": "6.0.0",
+  "filename": "",
+  "start_time": 1700000000000.0,
+  "end_time": 1700000060000.0,
+  "groups": [
+    {
+      "name": "Usage",
+      "id": "usage",
+      "subgroups": [
+        {
+          "name": "Capacity",
+          "description": "How much memory exists and how much of it is unclaimed.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Total",
+                "id": "total",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_total"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Available",
+                "id": "available",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_available"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Free",
+                "id": "free",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_free"
+            }
+          ]
+        },
+        {
+          "name": "Breakdown",
+          "description": "Where allocated memory is going — kernel buffers, page cache, anonymous use — with overall utilization.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Cached",
+                "id": "cached",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_cached"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Used",
+                "id": "used",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_total - memory_available"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Utilization %",
+                "id": "utilization-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "(memory_total - memory_available) / memory_total"
+            }
+          ]
+        },
+        {
+          "name": "Anonymous",
+          "description": "Process heaps, stacks and private data, with the anonymous active and inactive LRU lists and memory the kernel cannot reclaim where the recording has them. A macOS agent records only Anonymous, because macOS does not split its active and inactive queues into anonymous and file pages.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Anonymous",
+                "id": "anon",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_anon"
+            }
+          ]
+        },
+        {
+          "name": "Swap",
+          "description": "Swap in use and the overcommit position. Committed is every allocation processes could touch; it exceeding the commit limit only matters under strict overcommit.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Swap Used",
+                "id": "swap-used",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_swap_total - memory_swap_free"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Swap In",
+                "id": "swap-in",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_swap_in[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Swap Out",
+                "id": "swap-out",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_swap_out[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Wired and Purgeable",
+          "description": "Wired is wire_count: memory that cannot be paged out or compressed, plus throttled pages and free low-memory pages. Purgeable is anonymous memory in volatile objects that the kernel may discard without saving. Speculative is file read-ahead not yet used. Purgeable and speculative are counted in Available.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Wired",
+                "id": "wired",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_wired"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Purgeable",
+                "id": "purgeable",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_purgeable"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Speculative",
+                "id": "speculative",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_speculative"
+            }
+          ]
+        },
+        {
+          "name": "Compressor",
+          "description": "macOS compresses anonymous pages in memory before swapping them. Compressed is the space the compressed data occupies in memory; Stored is the uncompressed size of every page the compressor holds, including pages in segments swapped out. Compressions and decompressions are pages per second.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Compressed",
+                "id": "compressed",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_compressed"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Stored",
+                "id": "compressed-stored",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_compressed_stored"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Compressions",
+                "id": "compressions",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_compressions[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Decompressions",
+                "id": "decompressions",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_decompressions[5m]))"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "name": "Overview",
+      "route": "/overview"
+    },
+    {
+      "name": "Exceptions",
+      "route": "/exceptions"
+    },
+    {
+      "name": "Query Explorer",
+      "route": "/query"
+    },
+    {
+      "name": "CPU",
+      "route": "/cpu"
+    },
+    {
+      "name": "GPU",
+      "route": "/gpu"
+    },
+    {
+      "name": "Hardware Sensors",
+      "route": "/hw_sensors"
+    },
+    {
+      "name": "Memory",
+      "route": "/memory"
+    },
+    {
+      "name": "Network",
+      "route": "/network"
+    },
+    {
+      "name": "Scheduler",
+      "route": "/scheduler"
+    },
+    {
+      "name": "Syscall",
+      "route": "/syscall"
+    },
+    {
+      "name": "Softirq",
+      "route": "/softirq"
+    },
+    {
+      "name": "BlockIO",
+      "route": "/blockio"
+    },
+    {
+      "name": "Filesystem",
+      "route": "/filesystem"
+    },
+    {
+      "name": "ext4",
+      "route": "/ext4"
+    },
+    {
+      "name": "XFS",
+      "route": "/xfs"
+    },
+    {
+      "name": "cgroups",
+      "route": "/cgroups"
+    },
+    {
+      "name": "Rezolus",
+      "route": "/rezolus"
+    }
+  ]
+}

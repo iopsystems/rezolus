@@ -9,8 +9,20 @@
   (GHSA-rhfx-m35p-ff5j), through metriken-query 0.37, metriken-storage 0.3
   and ratatui 0.30.
 
+### Added
+
+- **Ubuntu 26.04 (resolute) packages.** amd64 and arm64 packages are built
+  for resolute and published to the `ubuntu-resolute` apt repository;
+  `install.sh` installs from it. 5.x ships them from 5.29.0 (#1573). (#1577)
+
 ### Fixed
 
+- **`memory_writeback` loads on kernels whose `enum wb_reason` has no
+  `WB_REASON_LAPTOP_TIMER`, such as 7.0.** The CO-RE relocation
+  for it failed, the verifier rejected `writeback_start`, and the sampler
+  failed with `Invalid argument (os error 22)`. Each reason is now compared
+  only when the running kernel's enum has it; `writeback_runs` with
+  `reason=laptop_timer` stays at zero on kernels without it. (#1572)
 - **The macOS agent no longer leaks memory on every CPU sample.** The
   `cpu_usage` sampler never freed the array `host_processor_info` returns,
   so each refresh leaked one page (16 KiB on Apple Silicon), about 1.4 GB a
@@ -294,6 +306,10 @@
 
 ### Changed
 
+- **The memory dashboard draws the Buffers, Swap Cached, Committed and Commit
+  Limit charts and the NUMA group only when the recording has them.** A
+  macOS recording has none of them, and a Linux kernel without `CONFIG_NUMA`
+  has no NUMA counters.
 - **`cpu_usage` on macOS is per CPU.** It was three host-wide counters; it
   is now one series per CPU in each of `user` and `system`, labelled `id`,
   so the per-CPU charts draw on a Mac. Niced time is counted
@@ -1115,6 +1131,20 @@
 
 ### Added
 
+- **Memory metrics on macOS.** `memory_meminfo` and `memory_vmstat` now run
+  on macOS, unprivileged. They set `memory_total`, `memory_free`,
+  `memory_available`, `memory_cached`, `memory_anon`, swap total and free,
+  `memory_page_faults` and swap in and out, so the memory dashboard's
+  capacity, used and swap charts draw on a Mac. `memory_available` has the
+  Linux meaning: free, file-backed and purgeable pages. macOS-only metrics
+  cover wired memory, purgeable and speculative pages, the compressor
+  (`memory_compressed`, `memory_compressed_stored`, compressions and
+  decompressions) and file page-ins and page-outs. The gauges come from
+  sysctls; the counters and wired memory come from `host_statistics64`, which
+  macOS rate-limits for third-party processes, and a read that is not newer
+  than the last one published is dropped. The memory dashboard draws the
+  Anonymous chart whenever `memory_anon` is recorded and adds a Wired and
+  Purgeable subgroup and a Compressor subgroup.
 - **A systemd unit's cgroups can be selected as one entry.** The cgroup
   selector lists each `*.scope` or `*.service` unit with two or more recorded
   cgroups that name it (a libvirt guest's `vcpuN` and `emulator` threads, a

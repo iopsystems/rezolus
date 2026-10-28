@@ -30,10 +30,12 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
 
     let breakdown = usage.subgroup("Breakdown");
     breakdown.describe("Where allocated memory is going — kernel buffers, page cache, anonymous use — with overall utilization.");
-    breakdown.plot_promql(
-        PlotOpts::gauge("Buffers", "buffers", Unit::Bytes),
-        "memory_buffers".to_string(),
-    );
+    if has_metric(data, "memory_buffers") {
+        breakdown.plot_promql(
+            PlotOpts::gauge("Buffers", "buffers", Unit::Bytes),
+            "memory_buffers".to_string(),
+        );
+    }
     breakdown.plot_promql(
         PlotOpts::gauge("Cached", "cached", Unit::Bytes),
         "memory_cached".to_string(),
@@ -164,28 +166,36 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                     .to_string(),
             );
         }
+    }
 
+    if has_metric(data, "memory_anon") {
         let anon = usage.subgroup("Anonymous");
         anon.describe(
-            "Process heaps, stacks and private data by LRU list, plus memory the kernel cannot \
-             reclaim at all.",
+            "Process heaps, stacks and private data, with the anonymous active and inactive LRU \
+             lists and memory the kernel cannot reclaim where the recording has them. A macOS \
+             agent records only Anonymous, because macOS does not split its active and inactive \
+             queues into anonymous and file pages.",
         );
         anon.plot_promql(
             PlotOpts::gauge("Anonymous", "anon", Unit::Bytes),
             "memory_anon".to_string(),
         );
-        anon.plot_promql(
-            PlotOpts::gauge("Active (anon)", "active-anon", Unit::Bytes),
-            "memory_active{kind=\"anon\"}".to_string(),
-        );
-        anon.plot_promql(
-            PlotOpts::gauge("Inactive (anon)", "inactive-anon", Unit::Bytes),
-            "memory_inactive{kind=\"anon\"}".to_string(),
-        );
-        anon.plot_promql(
-            PlotOpts::gauge("Unevictable", "unevictable", Unit::Bytes),
-            "memory_unevictable".to_string(),
-        );
+        if has_metric(data, "memory_active") {
+            anon.plot_promql(
+                PlotOpts::gauge("Active (anon)", "active-anon", Unit::Bytes),
+                "memory_active{kind=\"anon\"}".to_string(),
+            );
+            anon.plot_promql(
+                PlotOpts::gauge("Inactive (anon)", "inactive-anon", Unit::Bytes),
+                "memory_inactive{kind=\"anon\"}".to_string(),
+            );
+        }
+        if has_metric(data, "memory_unevictable") {
+            anon.plot_promql(
+                PlotOpts::gauge("Unevictable", "unevictable", Unit::Bytes),
+                "memory_unevictable".to_string(),
+            );
+        }
     }
 
     if has_metric(data, "pagecache_reads") {
@@ -282,18 +292,24 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             PlotOpts::gauge("Swap Used", "swap-used", Unit::Bytes),
             "memory_swap_total - memory_swap_free".to_string(),
         );
-        swap.plot_promql(
-            PlotOpts::gauge("Swap Cached", "swap-cached", Unit::Bytes),
-            "memory_swap_cached".to_string(),
-        );
-        swap.plot_promql(
-            PlotOpts::gauge("Committed", "committed", Unit::Bytes),
-            "memory_committed".to_string(),
-        );
-        swap.plot_promql(
-            PlotOpts::gauge("Commit Limit", "commit-limit", Unit::Bytes),
-            "memory_commit_limit".to_string(),
-        );
+        if has_metric(data, "memory_swap_cached") {
+            swap.plot_promql(
+                PlotOpts::gauge("Swap Cached", "swap-cached", Unit::Bytes),
+                "memory_swap_cached".to_string(),
+            );
+        }
+        if has_metric(data, "memory_committed") {
+            swap.plot_promql(
+                PlotOpts::gauge("Committed", "committed", Unit::Bytes),
+                "memory_committed".to_string(),
+            );
+        }
+        if has_metric(data, "memory_commit_limit") {
+            swap.plot_promql(
+                PlotOpts::gauge("Commit Limit", "commit-limit", Unit::Bytes),
+                "memory_commit_limit".to_string(),
+            );
+        }
         if has_metric(data, "memory_swap_in") {
             swap.plot_promql(
                 PlotOpts::counter("Swap In", "swap-in", Unit::Count),
@@ -302,6 +318,79 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             swap.plot_promql(
                 PlotOpts::counter("Swap Out", "swap-out", Unit::Count),
                 "sum(irate(memory_swap_out[5m]))".to_string(),
+            );
+        }
+    }
+
+    // macOS-only page classes and the compressor. No compression ratio is
+    // drawn: memory_compressed excludes swapped-out segments and
+    // memory_compressed_stored includes them.
+    if ["memory_wired", "memory_purgeable", "memory_speculative"]
+        .iter()
+        .any(|m| has_metric(data, m))
+    {
+        let classes = usage.subgroup("Wired and Purgeable");
+        classes.describe(
+            "Wired is wire_count: memory that cannot be paged out or compressed, plus \
+             throttled pages and free low-memory pages. Purgeable is anonymous memory in \
+             volatile objects that the kernel may discard without saving. Speculative is file \
+             read-ahead not yet used. Purgeable and speculative are counted in Available.",
+        );
+        if has_metric(data, "memory_wired") {
+            classes.plot_promql(
+                PlotOpts::gauge("Wired", "wired", Unit::Bytes),
+                "memory_wired".to_string(),
+            );
+        }
+        if has_metric(data, "memory_purgeable") {
+            classes.plot_promql(
+                PlotOpts::gauge("Purgeable", "purgeable", Unit::Bytes),
+                "memory_purgeable".to_string(),
+            );
+        }
+        if has_metric(data, "memory_speculative") {
+            classes.plot_promql(
+                PlotOpts::gauge("Speculative", "speculative", Unit::Bytes),
+                "memory_speculative".to_string(),
+            );
+        }
+    }
+
+    if [
+        "memory_compressed",
+        "memory_compressed_stored",
+        "memory_compressions",
+    ]
+    .iter()
+    .any(|m| has_metric(data, m))
+    {
+        let compressor = usage.subgroup("Compressor");
+        compressor.describe(
+            "macOS compresses anonymous pages in memory before swapping them. Compressed is \
+             the space the compressed data occupies in memory; Stored is the uncompressed size \
+             of every page the compressor holds, including pages in segments swapped out. \
+             Compressions and decompressions are pages per second.",
+        );
+        if has_metric(data, "memory_compressed") {
+            compressor.plot_promql(
+                PlotOpts::gauge("Compressed", "compressed", Unit::Bytes),
+                "memory_compressed".to_string(),
+            );
+        }
+        if has_metric(data, "memory_compressed_stored") {
+            compressor.plot_promql(
+                PlotOpts::gauge("Stored", "compressed-stored", Unit::Bytes),
+                "memory_compressed_stored".to_string(),
+            );
+        }
+        if has_metric(data, "memory_compressions") {
+            compressor.plot_promql(
+                PlotOpts::counter("Compressions", "compressions", Unit::Count),
+                "sum(irate(memory_compressions[5m]))".to_string(),
+            );
+            compressor.plot_promql(
+                PlotOpts::counter("Decompressions", "decompressions", Unit::Count),
+                "sum(irate(memory_decompressions[5m]))".to_string(),
             );
         }
     }
@@ -397,47 +486,49 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
 
     view.group(usage);
 
-    let mut numa = Group::new("NUMA", "numa");
+    if has_metric(data, "memory_numa_local") {
+        let mut numa = Group::new("NUMA", "numa");
 
-    // Two questions with different counters: where the allocating task ran
-    // (local/other, which sum to every allocation), and whether the intended
-    // node served it (hit/miss, which also sum to every allocation).
-    let locality = numa.subgroup("Local vs Remote");
-    locality.describe(
-        "Allocations by where the allocating task ran: local allocations were made on the \
-         task's own node (fast); remote ones on another node, across the interconnect (slow). \
-         The two sum to every allocation.",
-    );
-    locality.plot_promql(
-        PlotOpts::counter("Local Rate", "numa-local-rate", Unit::Rate),
-        "irate(memory_numa_local[5m])".to_string(),
-    );
-    locality.plot_promql(
-        PlotOpts::counter("Remote Rate", "numa-remote-rate", Unit::Rate),
-        "irate(memory_numa_other[5m])".to_string(),
-    );
+        // Two questions with different counters: where the allocating task ran
+        // (local/other, which sum to every allocation), and whether the intended
+        // node served it (hit/miss, which also sum to every allocation).
+        let locality = numa.subgroup("Local vs Remote");
+        locality.describe(
+            "Allocations by where the allocating task ran: local allocations were made on the \
+             task's own node (fast); remote ones on another node, across the interconnect (slow). \
+             The two sum to every allocation.",
+        );
+        locality.plot_promql(
+            PlotOpts::counter("Local Rate", "numa-local-rate", Unit::Rate),
+            "irate(memory_numa_local[5m])".to_string(),
+        );
+        locality.plot_promql(
+            PlotOpts::counter("Remote Rate", "numa-remote-rate", Unit::Rate),
+            "irate(memory_numa_other[5m])".to_string(),
+        );
 
-    let policy = numa.subgroup("Memory Policy");
-    policy.describe(
-        "Allocations by whether the intended node (the memory policy's choice, or the node the \
-         caller asked for) served them. Hits were served by the intended node; misses by \
-         another node, usually because the intended node was short of free pages. Interleave \
-         counts allocations under the interleave policy that landed on their intended node.",
-    );
-    policy.plot_promql(
-        PlotOpts::counter("Hit Rate", "numa-hit-rate", Unit::Rate),
-        "irate(memory_numa_hit[5m])".to_string(),
-    );
-    policy.plot_promql(
-        PlotOpts::counter("Miss Rate", "numa-miss-rate", Unit::Rate),
-        "irate(memory_numa_miss[5m])".to_string(),
-    );
-    policy.plot_promql(
-        PlotOpts::counter("Interleave Rate", "numa-interleave-rate", Unit::Rate),
-        "irate(memory_numa_interleave[5m])".to_string(),
-    );
+        let policy = numa.subgroup("Memory Policy");
+        policy.describe(
+            "Allocations by whether the intended node (the memory policy's choice, or the node the \
+             caller asked for) served them. Hits were served by the intended node; misses by \
+             another node, usually because the intended node was short of free pages. Interleave \
+             counts allocations under the interleave policy that landed on their intended node.",
+        );
+        policy.plot_promql(
+            PlotOpts::counter("Hit Rate", "numa-hit-rate", Unit::Rate),
+            "irate(memory_numa_hit[5m])".to_string(),
+        );
+        policy.plot_promql(
+            PlotOpts::counter("Miss Rate", "numa-miss-rate", Unit::Rate),
+            "irate(memory_numa_miss[5m])".to_string(),
+        );
+        policy.plot_promql(
+            PlotOpts::counter("Interleave Rate", "numa-interleave-rate", Unit::Rate),
+            "irate(memory_numa_interleave[5m])".to_string(),
+        );
 
-    view.group(numa);
+        view.group(numa);
+    }
 
     view
 }
@@ -478,13 +569,22 @@ mod tests {
     /// the policy counters have their own subgroup.
     #[test]
     fn numa_locality_pairs_local_with_other_and_policy_has_its_own_plots() {
-        let j = json(&generate(&store_with(&["memory_total"]), vec![]));
+        let j = json(&generate(
+            &store_with(&["memory_total", "memory_numa_local"]),
+            vec![],
+        ));
         assert!(j.contains("irate(memory_numa_local[5m])"));
         assert!(j.contains("irate(memory_numa_other[5m])"));
         assert!(!j.contains("memory_numa_foreign"));
         assert!(j.contains("irate(memory_numa_hit[5m])"));
         assert!(j.contains("irate(memory_numa_miss[5m])"));
         assert!(j.contains("irate(memory_numa_interleave[5m])"));
+    }
+
+    #[test]
+    fn a_host_without_numa_counters_has_no_numa_group() {
+        let j = json(&generate(&store_with(&["memory_total"]), vec![]));
+        assert!(!j.contains("memory_numa"));
     }
 
     #[test]
