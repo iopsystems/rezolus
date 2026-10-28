@@ -8,10 +8,11 @@
   with `Invalid argument (os error 22)`. Each reason is now compared only
   when the running kernel's enum has it; `writeback_runs` with
   `reason=laptop_timer` stays at zero on kernels without it (#1572).
-  Backported from 6.0 (#1578).
+  Backported from 6.0 (#1578) in #1580.
 - The release workflow updates the Homebrew formula again. It failed for
   5.29.0 because Homebrew now refuses formulae from an untrusted tap; the
-  workflow trusts `iopsystems/iop` first. Backported from 6.0 (#1579).
+  workflow runs `brew trust --tap iopsystems/iop` after `brew tap`.
+  Backported from 6.0 (#1579) in #1580.
 
 ## [5.29.0] - 2026-10-27
 
