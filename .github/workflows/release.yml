@@ -38,6 +38,8 @@ jobs:
           - { distro: ubuntu, release: jammy, arch: arm64 } # 22.04
           - { distro: ubuntu, release: noble, arch: x86_64 } # 24.04
           - { distro: ubuntu, release: noble, arch: arm64 } # 24.04
+          - { distro: ubuntu, release: resolute, arch: x86_64 } # 26.04
+          - { distro: ubuntu, release: resolute, arch: arm64 } # 26.04
       fail-fast: false
     env:
       DEB_BUILD_OPTS: nocheck

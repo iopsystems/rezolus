@@ -473,7 +473,7 @@
         },
         {
           "name": "Anonymous",
-          "description": "Process heaps, stacks and private data by LRU list, plus memory the kernel cannot reclaim at all.",
+          "description": "Process heaps, stacks and private data, with the anonymous active and inactive LRU lists and memory the kernel cannot reclaim where the recording has them. A macOS agent records only Anonymous, because macOS does not split its active and inactive queues into anonymous and file pages.",
           "plots": [
             {
               "data": [],
@@ -883,6 +883,137 @@
                 }
               },
               "promql_query": "sum(irate(memory_swap_out[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Wired and Purgeable",
+          "description": "Wired is wire_count: memory that cannot be paged out or compressed, plus throttled pages and free low-memory pages. Purgeable is anonymous memory in volatile objects that the kernel may discard without saving. Speculative is file read-ahead not yet used. Purgeable and speculative are counted in Available.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Wired",
+                "id": "wired",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_wired"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Purgeable",
+                "id": "purgeable",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_purgeable"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Speculative",
+                "id": "speculative",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_speculative"
+            }
+          ]
+        },
+        {
+          "name": "Compressor",
+          "description": "macOS compresses anonymous pages in memory before swapping them. Compressed is the space the compressed data occupies in memory; Stored is the uncompressed size of every page the compressor holds, including pages in segments swapped out. Compressions and decompressions are pages per second.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Compressed",
+                "id": "compressed",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_compressed"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Stored",
+                "id": "compressed-stored",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "memory_compressed_stored"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Compressions",
+                "id": "compressions",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_compressions[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Decompressions",
+                "id": "decompressions",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_decompressions[5m]))"
             }
           ]
         },
