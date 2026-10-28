@@ -370,6 +370,41 @@ fn legacy(bench: &Catalog) -> Catalog {
     out
 }
 
+/// The memory series a macOS agent publishes: no buffers, LRU lists,
+/// commit accounting or swap cache, and the macOS-only page classes and
+/// compressor.
+fn macos() -> Catalog {
+    let mut out = Catalog::default();
+    for name in [
+        "memory_total",
+        "memory_free",
+        "memory_available",
+        "memory_cached",
+        "memory_anon",
+        "memory_swap_total",
+        "memory_swap_free",
+        "memory_purgeable",
+        "memory_speculative",
+        "memory_compressed",
+        "memory_compressed_stored",
+        "memory_wired",
+    ] {
+        out.gauges.insert(name.into(), vec![labels(&[])]);
+    }
+    for name in [
+        "memory_page_faults",
+        "memory_swap_in",
+        "memory_swap_out",
+        "memory_compressions",
+        "memory_decompressions",
+        "memory_pageins",
+        "memory_pageouts",
+    ] {
+        out.counters.insert(name.into(), vec![labels(&[])]);
+    }
+    out
+}
+
 /// Two NVIDIA GPUs and an Intel iGPU that shares id 0 with one of them.
 fn gpus() -> Catalog {
     let mut out = Catalog::default();
@@ -518,6 +553,7 @@ fn named_catalogs() -> Vec<(&'static str, Catalog)> {
         ("gpus-with-unparsed-id", gpus_with_unparsed_id()),
         ("intel-all-engines", intel_all_engines()),
         ("non-canonical-ids", non_canonical_ids()),
+        ("macos", macos()),
         ("empty", Catalog::default()),
     ]
 }
@@ -618,6 +654,42 @@ fn section_template_matches_the_generators_with_each_metric_absent() {
     assert!(
         failures.is_empty(),
         "template differs from the generator without: {failures:#?}"
+    );
+}
+
+/// A subgroup gated on any of several metrics, rendered with only one of
+/// them present, so each alternative of the gate is seen alone. The
+/// each-metric-absent test leaves the others present, which keeps the gate
+/// true whichever one is removed.
+#[test]
+fn section_template_matches_the_generators_with_one_metric_of_each_any_gate() {
+    let t = template();
+    let ctx = build_dashboard_context(None, &[], None, &[]);
+    let gates: [&[&str]; 2] = [
+        &["memory_wired", "memory_purgeable", "memory_speculative"],
+        &[
+            "memory_compressed",
+            "memory_compressed_stored",
+            "memory_compressions",
+        ],
+    ];
+    let mut failures = Vec::new();
+    for gate in gates {
+        for keep in gate {
+            let data = gate
+                .iter()
+                .filter(|m| *m != keep)
+                .fold(macos(), |c, m| c.without(m));
+            if render_generator(&data, "/memory", &ctx)
+                != render_template(&t, &data, "/memory", &ctx)
+            {
+                failures.push(*keep);
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "template differs from the generator with only: {failures:?}"
     );
 }
 

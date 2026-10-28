@@ -1064,6 +1064,29 @@ A line the running kernel does not print (`HardwareCorrupted` without
 `CONFIG_MEMORY_FAILURE`, the huge-page lines without the corresponding
 config) leaves its gauge absent from the snapshot rather than at 0.
 
+On macOS the sampler reads the `vm.page_*` and `vm.compressor` sysctls and
+`hw.memsize` and `vm.swapusage`, unprivileged. It sets
+`memory_total`, `memory_free`, `memory_available`, `memory_cached`,
+`memory_anon`, `memory_swap_total` and `memory_swap_free`, and the macOS-only
+gauges below; the rest are absent. `memory_free` excludes speculative pages,
+as `vm_stat`'s "Pages free" does. `memory_cached` is the file-backed pages.
+`memory_anon` omits anonymous pages on the per-CPU local queues, so
+`vm_stat`'s "Anonymous pages" can read slightly higher.
+`memory_available` has the Linux meaning, memory that can be handed out
+without compressing or swapping anonymous memory: free, file-backed and
+purgeable pages. `memory_active` and `memory_inactive` are absent because
+macOS does not split those lists into file and anonymous pages.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `memory_purgeable` | Unwired anonymous memory in objects marked volatile, which the kernel may discard without saving; counted in `memory_anon` and `memory_available` | |
+| `memory_speculative` | File pages read ahead and not yet used; counted in `memory_cached` and `memory_available` | |
+| `memory_compressed` | Compressed data the compressor holds in memory, in bytes; excludes segments swapped out and unused space within segments | |
+| `memory_compressed_stored` | Uncompressed size of every page the compressor holds, including pages in segments swapped out (`vm_stat`'s "Pages stored in compressor") | |
+
+The two compressor gauges cover different pages, so their ratio is not the
+compression ratio. Each is set only when its sysctl is readable.
+
 ### memory_pagecache
 
 BPF sampler on the page cache, per filesystem and optionally per cgroup:
@@ -1239,6 +1262,31 @@ Counters are in pages or events; the two thresholds are gauges in bytes. A
 line the running kernel does not print (NUMA counters without NUMA, THP
 counters without `CONFIG_TRANSPARENT_HUGEPAGE`, the working-set split before
 5.9) leaves its metric absent rather than 0.
+
+On macOS the sampler reads `host_statistics64` (the call `vm_stat` makes),
+unprivileged, for the values with no sysctl in Apple's published kernel
+source. It sets `memory_page_faults`, `memory_swap_in` and `memory_swap_out`,
+and the macOS-only metrics below; the rest are absent.
+Swap on macOS holds compressed memory, so the swap counters are kernel pages
+(16 KiB on Apple silicon) of compressed data moved to and from the swap files,
+not pages of memory as on Linux. There is no major-fault count;
+`memory_pageins` is file pages only.
+
+`host_statistics64` is rate-limited for every process that is not an Apple
+platform binary: together they get 2 to 10 calls a second, and a call over
+that returns the last result any of them fetched. A read is published only if
+it has more faults than the sampler's last published read and none of its
+counters is lower; otherwise that interval has no point, rather than a rate
+of zero or a counter going backwards. A newer copy fetched by another process
+cannot be detected; it is from the current one-second window.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `memory_wired` | Memory wired down: it cannot be paged out or compressed (`wire_count`, which on macOS also counts throttled pages and free low-memory pages); a gauge, in bytes | |
+| `memory_compressions` | Pages compressed into the compressor | |
+| `memory_decompressions` | Pages decompressed out of the compressor | |
+| `memory_pageins` | Pages read in from files by the pager | |
+| `memory_pageouts` | Pages written out to files by the pager | |
 
 ### memory_writeback
 
