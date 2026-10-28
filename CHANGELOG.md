@@ -17,6 +17,12 @@
 
 ### Fixed
 
+- **`memory_writeback` loads on kernels whose `enum wb_reason` has no
+  `WB_REASON_LAPTOP_TIMER`, such as 7.0.** The CO-RE relocation
+  for it failed, the verifier rejected `writeback_start`, and the sampler
+  failed with `Invalid argument (os error 22)`. Each reason is now compared
+  only when the running kernel's enum has it; `writeback_runs` with
+  `reason=laptop_timer` stays at zero on kernels without it. (#1572)
 - **The macOS agent no longer leaks memory on every CPU sample.** The
   `cpu_usage` sampler never freed the array `host_processor_info` returns,
   so each refresh leaked one page (16 KiB on Apple Silicon), about 1.4 GB a
