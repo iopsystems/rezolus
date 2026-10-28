@@ -347,10 +347,12 @@ enabled = false
 # sampling period. Cached values are served between reads.
 # interval = "1s"
 
-# Memory utilization from /proc/meminfo
+# Memory utilization from /proc/meminfo. On macOS, from the vm.* sysctls and
+# hw.memsize; see docs/metrics.md#memory_meminfo.
 [samplers.memory_meminfo]
 
-# Memory NUMA metrics from /proc/vmstat
+# Memory event counters from /proc/vmstat. On macOS, from host_statistics64,
+# with wired memory; see docs/metrics.md#memory_vmstat.
 [samplers.memory_vmstat]
 
 # Bytes held by every slab cache, labeled by cache name, and object counts for
