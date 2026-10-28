@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [5.29.0] - 2026-10-27
+
 ### Security
 
 - rustls 0.23.46, for RUSTSEC-2026-0346 through 0349. Backported from 6.0
@@ -2054,7 +2056,8 @@ focal.
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.28.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.29.0...HEAD
+[5.29.0]: https://github.com/iopsystems/rezolus/compare/v5.28.0...v5.29.0
 [5.28.0]: https://github.com/iopsystems/rezolus/compare/v5.27.0...v5.28.0
 [5.27.0]: https://github.com/iopsystems/rezolus/compare/v5.26.0...v5.27.0
 [5.26.0]: https://github.com/iopsystems/rezolus/compare/v5.25.1...v5.26.0
