@@ -3,16 +3,20 @@ use metriken::*;
 use crate::agent::timing::AcquisitionGroup;
 use linkme::distributed_slice;
 
-// See the identical comment on `memory_meminfo`'s `MEMINFO_ACQ` (this
-// file is also `include!`d cross-platform via `memory/mod.rs`'s
-// `#[cfg(not(target_os = "linux"))] mod stats` fallback).
-//
-/// Brackets the single `/proc/vmstat` read + parse (single writer: this
-/// sampler's own `refresh()`).
-pub static VMSTAT_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("memory_vmstat"),
-    "memory_vmstat_read",
-);
+// Compiled three ways, as `memory_meminfo`'s stats are; see the comment on
+// its `MEMINFO_ACQ`.
+
+/// The sampler this group belongs to: `memory_vmstat` where that sampler
+/// exists (Linux, macOS), `unattributed` elsewhere.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const GROUP_SAMPLER: &str = "memory_vmstat";
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const GROUP_SAMPLER: &str = crate::agent::samplers::bpf_sampler_name("memory_vmstat");
+
+/// Brackets the sampler's single read (`/proc/vmstat` on Linux,
+/// `host_statistics64` on macOS); its `refresh()` is the only writer.
+pub static VMSTAT_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(GROUP_SAMPLER, "memory_vmstat_read");
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static VMSTAT_ACQ_REG: &'static AcquisitionGroup = &VMSTAT_ACQ;

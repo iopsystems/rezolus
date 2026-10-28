@@ -8,9 +8,8 @@ use super::MAX_GPUS;
 // `gpu_amd_smi`'s `stats.rs` is Linux-only (no cross-platform `include!`
 // fallback for GPU metric identity — `gpu/macos/stats.rs` is a genuinely
 // separate metric set), so this group can use `super::NAME` directly rather
-// than `crate::agent::samplers::bpf_sampler_name` (contrast
-// `memory_meminfo`'s `MEMINFO_ACQ`, whose `stats.rs` IS `include!`d
-// cross-platform).
+// than a cfg'd `GROUP_SAMPLER` (contrast `memory_meminfo`'s `MEMINFO_ACQ`,
+// whose `stats.rs` IS `include!`d cross-platform).
 //
 /// ONE group for the whole per-device sweep in `AmdInner::refresh` (all
 /// `rocm_smi` reads for every GPU, one contiguous synchronous loop — not one
