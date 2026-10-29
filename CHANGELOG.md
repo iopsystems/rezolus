@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Security
+
+- zstd-sys 2.1.2, for RUSTSEC-2026-0410. Main has it through the zstd 0.14
+  move (#1563), which needs parquet 60; here it is a lockfile update in
+  #1595. RUSTSEC-2026-0391, -0398 and -0403 remain on this line.
+
 ### Fixed
 
 - `memory_pagecache` loads on 6.18 and later kernels. From 6.18
