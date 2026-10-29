@@ -1480,6 +1480,17 @@ how frequently they're switched out. High runqueue latencies can indicate CPU
 contention or scheduling inefficiencies that directly impact application
 performance and responsiveness.
 
+On kernels whose BTF shows `sched_switch` with a `prev_state` argument
+(mainline 5.18 and later, built with BTF), whether a switch was voluntary and
+whether the task went into uninterruptible sleep come from that argument,
+the state `__schedule()` read from the task before deciding whether to block
+it. A sleep cancelled by a pending signal counts as involuntary, since the
+task stays queued. Otherwise the state is read from the task, where a wakeup that lands
+during the switch may already have replaced it. There
+`scheduler_uninterruptible` and the `*_uninterruptible_wait` counters can
+undercount short uninterruptible sleeps by an amount that depends on the
+workload.
+
 | Metric | Description | Metadata |
 |--------|-------------|----------|
 | `scheduler_runqueue_latency` | Distribution of the amount of time tasks were waiting in the runqueue | |

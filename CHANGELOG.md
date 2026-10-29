@@ -52,6 +52,16 @@
   the integer read of it failed, the verifier rejected the fill and eviction
   programs, and the sampler failed with `Invalid argument (os error 22)`. The
   flags word is now read from `flags.f` where the kernel wraps it. (#1590)
+- **`scheduler` reads the outgoing task's state from `sched_switch`'s
+  `prev_state` argument where the kernel has one** (5.18 and later, with
+  BTF). Read from the task, the state could already be `TASK_WAKING` from a
+  concurrent wakeup, and an uninterruptible sleep in that state lost its
+  D-state flag. Where the kernel's BTF shows no such argument (mainline
+  before 5.18, or no BTF) the state is still read from the task, so there
+  `scheduler_uninterruptible` and the `*_uninterruptible_wait` counters can
+  undercount by an amount that depends on the workload: the more sleeps end
+  with a wakeup during the switch that started them, the larger it is.
+  (#1591)
 - **`memory_writeback` loads on kernels whose `enum wb_reason` has no
   `WB_REASON_LAPTOP_TIMER`, such as 7.0.** The CO-RE relocation
   for it failed, the verifier rejected `writeback_start`, and the sampler

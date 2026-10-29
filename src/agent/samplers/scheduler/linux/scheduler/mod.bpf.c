@@ -49,6 +49,16 @@ const volatile __u8 cgroup_attribution = 0;
 const volatile __u8 runqueue = 0;
 const volatile __u8 migrations = 0;
 
+// Whether `sched_switch` passes `prev_state` as its fourth argument (5.18+,
+// commit fa2c3254d7cf), set from the tracepoint's arity in kernel BTF. That
+// argument is the state __schedule() read from the task before deciding
+// whether to block it. Without it, prev's state is read from the task, where
+// a concurrent try_to_wake_up() may already have written TASK_WAKING, so an
+// uninterruptible sleep can lose its D flag. With it 0 the verifier treats the
+// branch as dead and never checks the ctx[3] read, which fails verification
+// on a kernel whose sched_switch has three arguments.
+const volatile __u8 sched_switch_prev_state = 0;
+
 // counter positions
 #define IVCSW 0
 #define RUNQ_WAIT 1
@@ -297,8 +307,9 @@ static __always_inline u32 resolve_cgroup(struct task_struct* task, bool btf) {
 // not attributed), which the migrations part reuses.
 // `btf` is a compile-time constant: true in the tp_btf program, whose task
 // arguments are BTF pointers (see task_group_of() in cgroup.h).
-static __always_inline u32 runqueue_switch(struct task_struct* prev, struct task_struct* next,
-                                           u32 next_pid, u32 processor_id, bool btf) {
+static __always_inline u32 runqueue_switch(struct task_struct* prev, s64 prev_state,
+                                           struct task_struct* next, u32 next_pid,
+                                           u32 processor_id, bool btf) {
     u32 idx;
     // prev and next can belong to different cgroups; track each separately so
     // runqueue wait and off-cpu time are never charged to prev's cgroup.
@@ -335,7 +346,6 @@ static __always_inline u32 runqueue_switch(struct task_struct* prev, struct task
     // prev task is moving from running
     // - update prev->pid enqueued_at with now
     // - calculate how long prev task was running and update hist
-    s64 prev_state = get_task_state_btf(prev, btf);
     if (prev_state == TASK_RUNNING) {
         // The idle task is always TASK_RUNNING, so a CPU simply waking up to run
         // something counted as an involuntary context switch -- nothing was
@@ -525,7 +535,8 @@ static __always_inline void migrations_switch(struct task_struct* next, u32 next
 // `btf` is a compile-time constant: true in the tp_btf program.
 static __always_inline int account__sched_switch(u64* ctx, bool btf) {
     /* TP_PROTO(bool preempt, struct task_struct *prev,
-     *      struct task_struct *next)
+     *      struct task_struct *next, unsigned int prev_state)
+     * (prev_state from 5.18)
      */
     struct task_struct* prev = (struct task_struct*)ctx[1];
     struct task_struct* next = (struct task_struct*)ctx[2];
@@ -535,7 +546,20 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
     u32 next_cgroup_id = MAX_CGROUPS;
 
     if (runqueue) {
-        next_cgroup_id = runqueue_switch(prev, next, next_pid, processor_id, btf);
+        s64 prev_state;
+        if (sched_switch_prev_state) {
+            prev_state = (u32)ctx[3];
+            // A pending signal cancels the sleep: __schedule() sets __state to
+            // TASK_RUNNING and leaves the task queued, but before 6.16 still
+            // passes the state it read. A wakeup can only have written
+            // TASK_WAKING by now, so TASK_RUNNING here is that cancel.
+            if (prev_state && get_task_state_btf(prev, btf) == TASK_RUNNING) {
+                prev_state = TASK_RUNNING;
+            }
+        } else {
+            prev_state = get_task_state_btf(prev, btf);
+        }
+        next_cgroup_id = runqueue_switch(prev, prev_state, next, next_pid, processor_id, btf);
     }
 
     if (migrations) {
