@@ -388,7 +388,8 @@ enabled = false
 # Produces network interface statistics from /sys/class/net for TX/RX errors
 [samplers.network_interfaces]
 
-# Produces network traffic statistics using BPF
+# Produces network traffic statistics using BPF. On macOS, from each
+# interface's counters; see docs/metrics.md#network_traffic-on-macos.
 [samplers.network_traffic]
 
 # Sample resource utilization for Rezolus itself
