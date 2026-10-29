@@ -21,6 +21,13 @@
   networking, plus `awdl0`, `llw0` and `ap1` on the wifi radio; not
   loopback, bridges, tunnels or VM interfaces), so the network dashboard's
   traffic charts and the overview's network chart draw on a Mac.
+- **TCP counters on macOS.** `tcp_mib` and `tcp_retransmit` now run on
+  macOS, from the `net.inet.tcp.stats` sysctl, and set `tcp_retransmit`,
+  `tcp_segments_retransmitted`, `tcp_delayed_acks`, `tcp_rto_expirations`,
+  `tcp_checksum_errors` and `tcp_input_errors`. While
+  `net.inet.tcp.disable_access_to_stats` is set (the default), the kernel
+  returns zeros to a process not running as root, so the agent needs root;
+  without it both samplers report themselves unsupported.
 - **Uninterruptible sleep (D state) from the `scheduler` sampler.**
   `scheduler_uninterruptible` is the distribution of off-CPU intervals spent
   in uninterruptible sleep (disk IO, some locks, page faults on slow

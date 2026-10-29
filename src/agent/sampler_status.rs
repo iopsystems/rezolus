@@ -97,7 +97,8 @@ pub enum SamplerState {
     },
     /// Not started because this machine or kernel cannot support it — no L3
     /// cache domains, no GPU of that vendor, an architecture the probe does not
-    /// cover.
+    /// cover — or because the platform gives the data only to a privilege the
+    /// agent does not have, as macOS does with its TCP statistics.
     ///
     /// Deliberately not `Failed`, for the reason `PmuStarved` is not: nothing
     /// broke. A missing capability reported as a fault sends an operator
