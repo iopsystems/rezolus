@@ -61,7 +61,7 @@
   `scheduler_uninterruptible` and the `*_uninterruptible_wait` counters can
   undercount by an amount that depends on the workload: the more sleeps end
   with a wakeup during the switch that started them, the larger it is.
-  (#1591)
+  (#1596)
 - **`memory_writeback` loads on kernels whose `enum wb_reason` has no
   `WB_REASON_LAPTOP_TIMER`, such as 7.0.** The CO-RE relocation
   for it failed, the verifier rejected `writeback_start`, and the sampler
