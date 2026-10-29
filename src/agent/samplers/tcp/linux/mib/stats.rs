@@ -4,30 +4,31 @@ use crate::agent::timing::AcquisitionGroup;
 use linkme::distributed_slice;
 
 // Registered here (not in mod.rs) because this file is also `include!`d
-// directly on non-Linux platforms (see `tcp/mod.rs`'s
-// `#[cfg(not(target_os = "linux"))] mod stats` fallback) to keep metric
-// identity stable across platforms, while `mod.rs`'s procfs reader is
-// Linux-only.
+// by the macOS sampler and, on other platforms, by `tcp/mod.rs`'s `mod stats`
+// fallback, to keep metric identity stable across platforms.
 //
 // Two read sections, one per file: each is its own read of its own source and
-// fails on its own, so each has its own window.
+// fails on its own, so each has its own window. On macOS one sysctl read
+// supplies the metrics of both, and both groups bracket it.
+
+/// The sampler these groups belong to: `tcp_mib` where that sampler exists
+/// (Linux, macOS), `unattributed` elsewhere.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const GROUP_SAMPLER: &str = "tcp_mib";
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const GROUP_SAMPLER: &str = crate::agent::samplers::bpf_sampler_name("tcp_mib");
 
 /// Brackets the `/proc/net/netstat` read + parse of its `TcpExt` section
 /// (single writer: this sampler's own `refresh()`).
-pub static NETSTAT_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("tcp_mib"),
-    "tcp_mib_netstat_read",
-);
+pub static NETSTAT_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(GROUP_SAMPLER, "tcp_mib_netstat_read");
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static NETSTAT_ACQ_REG: &'static AcquisitionGroup = &NETSTAT_ACQ;
 
 /// Brackets the `/proc/net/snmp` read + parse of its `Tcp` section (single
 /// writer: this sampler's own `refresh()`).
-pub static SNMP_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("tcp_mib"),
-    "tcp_mib_snmp_read",
-);
+pub static SNMP_ACQ: AcquisitionGroup = AcquisitionGroup::new(GROUP_SAMPLER, "tcp_mib_snmp_read");
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static SNMP_ACQ_REG: &'static AcquisitionGroup = &SNMP_ACQ;

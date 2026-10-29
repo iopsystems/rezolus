@@ -1702,6 +1702,8 @@ the agent's network namespace and include IPv4 and IPv6 together.
 | `tcp_segments_retransmitted` | Segments retransmitted, in TSO/GSO segments, including tail loss probes and SYN-ACK retransmissions (`RetransSegs`) | |
 | `tcp_established_connections` | Connections in ESTABLISHED or CLOSE-WAIT, a gauge (`CurrEstab`) | |
 
+On macOS, see [TCP on macOS](#tcp-on-macos).
+
 `tcp_segments_retransmitted` and `tcp_retransmit` (below) count different
 things. The kernel adds to `RetransSegs` the segments of each retransmission
 it hands to the transmit path, from every path including tail loss probes and
@@ -1748,6 +1750,8 @@ performance and efficiency.
 |--------|-------------|----------|
 | `tcp_retransmit` | The number of TCP packets that were re-transmitted | |
 
+On macOS, see [TCP on macOS](#tcp-on-macos).
+
 ### tcp_traffic
 
 Samples TCP traffic to get metrics for TX/RX bytes and packets. These metrics
@@ -1761,6 +1765,40 @@ behavior with network activity.
 | `tcp_bytes` | The number of bytes transferred over TCP | `direction={receive,transmit}` |
 | `tcp_packets` | The number of packets transferred over TCP | `direction={receive,transmit}` |
 | `tcp_size` | Distribution of the size of TCP packets | `direction={receive,transmit}` |
+
+#### TCP on macOS
+
+On macOS, `tcp_mib` and `tcp_retransmit` read the kernel's TCP statistics,
+the `net.inet.tcp.stats` sysctl that `netstat -s -p tcp` prints, once per
+refresh each. The kernel returns zeros to a process not running as root
+while `net.inet.tcp.disable_access_to_stats` is set, which is the default,
+so the agent needs root for them; without it both samplers report
+themselves unsupported. The counters cover IPv4 and IPv6 together.
+
+| Metric | XNU counter |
+|--------|-------------|
+| `tcp_retransmit`, `tcp_segments_retransmitted` | `tcps_sndrexmitpack`: retransmissions of data sent |
+| `tcp_delayed_acks` | `tcps_delack`: delayed-ACK timer firings that sent an ACK |
+| `tcp_rto_expirations` | `tcps_rexmttimeo`: retransmission timer expirations |
+| `tcp_checksum_errors` | `tcps_rcvbadsum`: segments received with a bad checksum |
+| `tcp_input_errors` | `tcps_rcvbadsum`, `tcps_rcvbadoff` and `tcps_rcvshort`: a bad checksum, a bad data offset, or a segment shorter than its header or not pulled up for lack of mbufs |
+
+The other metrics of `tcp_mib` are not set. `tcps_sndrexmitpack` counts a
+retransmission sent with TSO once however many segments it spans, so after
+an RTO it can be lower than the segments sent again, and it counts data
+only, so a retransmitted SYN or SYN-ACK is not included.
+
+`tcp_traffic` does not run on macOS. The kernel's received-byte counter
+leaves out bytes that pass through reassembly, and a byte counter can
+advance by 2^32 or more between two reads.
+
+The kernel's counters are 32 bits wide. Each metric starts at zero when its
+sampler starts and adds the increase since the previous read, so it loses
+2^32 for each 2^32 its counter advances between two reads. Reads happen when
+the agent is scraped or streamed; the counters these samplers read count
+events, which stay far below 2^32 between reads at any regular scrape or
+stream interval. An agent left unread for days can lose 2^32 on a busy
+counter.
 
 ## Rezolus
 
