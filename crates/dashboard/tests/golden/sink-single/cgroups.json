@@ -100,6 +100,23 @@
             {
               "data": [],
               "opts": {
+                "title": "Uninterruptible Tasks",
+                "id": "aggregate-uninterruptible-tasks",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cgroup_scheduler_uninterruptible_wait{name!~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
+            },
+            {
+              "data": [],
+              "opts": {
                 "title": "ext4 Blocked Time",
                 "id": "aggregate-ext4-blocked-time",
                 "type": "delta_counter",
@@ -573,6 +590,24 @@
                 "style": "multi"
               },
               "promql_query": "sum by (name) (irate(cgroup_cpu_throttled_time{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Uninterruptible Tasks",
+                "id": "individual-uninterruptible-tasks",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (name) (irate(cgroup_scheduler_uninterruptible_wait{name=~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
             },
             {
               "data": [],
