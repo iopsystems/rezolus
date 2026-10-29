@@ -105,6 +105,19 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
     plot(
         group,
         PlotOpts::counter(
+            "Uninterruptible Tasks",
+            format!("{prefix}-uninterruptible-tasks"),
+            Unit::Count,
+        ),
+        format!(
+            "{} / 1000000000",
+            rate("cgroup_scheduler_uninterruptible_wait")
+        ),
+    );
+
+    plot(
+        group,
+        PlotOpts::counter(
             "ext4 Blocked Time",
             format!("{prefix}-ext4-blocked-time"),
             Unit::Time,

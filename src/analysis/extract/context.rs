@@ -164,6 +164,7 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("cgroup_scheduler_context_switch", "scheduler"),
     ("cgroup_scheduler_offcpu", "scheduler"),
     ("cgroup_scheduler_runqueue_wait", "scheduler"),
+    ("cgroup_scheduler_uninterruptible_wait", "scheduler"),
     ("cgroup_syscall", "syscall"),
     ("cgroup_xfs_log_wait_time", "xfs_log"),
     ("cgroup_xfs_log_waits", "xfs_log"),

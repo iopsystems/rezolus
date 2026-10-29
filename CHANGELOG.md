@@ -21,6 +21,17 @@
   networking, plus `awdl0`, `llw0` and `ap1` on the wifi radio; not
   loopback, bridges, tunnels or VM interfaces), so the network dashboard's
   traffic charts and the overview's network chart draw on a Mac.
+- **Uninterruptible sleep (D state) from the `scheduler` sampler.**
+  `scheduler_uninterruptible` is the distribution of off-CPU intervals spent
+  in uninterruptible sleep (disk IO, some locks, page faults on slow
+  storage), a subset of `scheduler_offcpu`.
+  `scheduler_uninterruptible_wait` (per CPU) and
+  `cgroup_scheduler_uninterruptible_wait` (per cgroup) count the
+  nanoseconds. Each interval is added in full when the task next runs, so
+  over windows much longer than the sleeps their rate is the mean number of tasks
+  in D state, and a long sleep shows as a spike when it ends. Idle kernel
+  threads (`TASK_IDLE`) are left out, as the load average leaves them out.
+  The scheduler and cgroups dashboards plot them. (#1589)
 
 ### Fixed
 
