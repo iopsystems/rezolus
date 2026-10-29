@@ -432,7 +432,8 @@ enabled = false
 # /proc/net/snmp (Tcp): delayed ACKs, RTOs and loss recovery, zero-window
 # advertisements and drops, receive-memory pruning and drops, listen-queue
 # overflows, aborts, resets and established connections. One read of each file
-# per refresh. See docs/metrics.md#tcp_mib.
+# per refresh. See docs/metrics.md#tcp_mib. On macOS, a subset from the
+# net.inet.tcp.stats sysctl, as root; see docs/metrics.md#tcp-on-macos.
 [samplers.tcp_mib]
 
 # BPF sampler that probes TCP receive path to measure latency from a packet
@@ -443,7 +444,8 @@ enabled = false
 # trip time.
 [samplers.tcp_receive]
 
-# BPF sampler that probes TCP retransmit path to measure retransmits.
+# BPF sampler that probes TCP retransmit path to measure retransmits. On macOS,
+# from the net.inet.tcp.stats sysctl, as root; see docs/metrics.md#tcp-on-macos.
 [samplers.tcp_retransmit]
 
 # Samples TCP traffic using a BPF sampler to get metrics for TX/RX bytes and

@@ -164,8 +164,9 @@ fn is_module_prefix(prefix: &str, module: &str) -> bool {
 /// `attribute_sampler` resolves it to `"unattributed"` instead, regardless
 /// of `linux_name`.
 ///
-/// `blockio`, `drivehealth`, `memory_meminfo` and `memory_vmstat` also have
-/// macOS samplers, which compile the shared `stats.rs` inside their own
+/// `blockio`, `drivehealth`, `memory_meminfo`, `memory_vmstat`,
+/// `network_traffic`, `tcp_mib` and `tcp_retransmit` also have macOS
+/// samplers, which compile the shared `stats.rs` inside their own
 /// module, so on macOS their metrics attribute to the real sampler. Their
 /// `stats.rs` names the groups' sampler with a `GROUP_SAMPLER` constant: the
 /// sampler's name on Linux and macOS, and this function's result elsewhere.

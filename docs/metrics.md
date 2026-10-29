@@ -21,7 +21,7 @@ host-level series are unchanged.
 | `cpu_usage` | on | `cgroup_cpu_usage`, `cgroup_cpu_usage_exited_tasks` |
 | `cpu_perf` | on | `cgroup_cpu_cycles`, `cgroup_cpu_instructions` (off also drops the `sched_switch` program) |
 | `cpu_tlb_flush` | on | `cgroup_cpu_tlb_flush` |
-| `scheduler` | on | `cgroup_scheduler_runqueue_wait`, `cgroup_scheduler_offcpu`, `cgroup_scheduler_context_switch`, `cgroup_cpu_migrations` |
+| `scheduler` | on | `cgroup_scheduler_runqueue_wait`, `cgroup_scheduler_offcpu`, `cgroup_scheduler_uninterruptible_wait`, `cgroup_scheduler_context_switch`, `cgroup_cpu_migrations` |
 | `syscall` | on | `cgroup_syscall` |
 | `ext4_ops` | off | `cgroup_ext4_ops`, `cgroup_ext4_op_time` |
 | `xfs_log` | off | `cgroup_xfs_log_waits`, `cgroup_xfs_log_wait_time` |
@@ -1485,6 +1485,8 @@ performance and responsiveness.
 | `scheduler_runqueue_latency` | Distribution of the amount of time tasks were waiting in the runqueue | |
 | `scheduler_running` | Distribution of the amount of time tasks were on-CPU | |
 | `scheduler_offcpu` | Distribution of the amount of time tasks were off-CPU | |
+| `scheduler_uninterruptible` | Distribution of the amount of time tasks were off-CPU in uninterruptible sleep (D state), a subset of `scheduler_offcpu` | |
+| `scheduler_uninterruptible_wait` | Time tasks spent in uninterruptible sleep, added in full when a task next runs, on the CPU it runs on. Over windows much longer than the sleeps, the rate summed across CPUs is the mean number of tasks in D state; a long sleep shows as a spike when it ends | `id`: the CPU |
 | `scheduler_context_switch` | The number of involuntary context switches | `kind=involuntary` |
 
 The migrations part tracks when tasks move from one CPU to another, per CPU
@@ -1702,6 +1704,8 @@ the agent's network namespace and include IPv4 and IPv6 together.
 | `tcp_segments_retransmitted` | Segments retransmitted, in TSO/GSO segments, including tail loss probes and SYN-ACK retransmissions (`RetransSegs`) | |
 | `tcp_established_connections` | Connections in ESTABLISHED or CLOSE-WAIT, a gauge (`CurrEstab`) | |
 
+On macOS, see [TCP on macOS](#tcp-on-macos).
+
 `tcp_segments_retransmitted` and `tcp_retransmit` (below) count different
 things. The kernel adds to `RetransSegs` the segments of each retransmission
 it hands to the transmit path, from every path including tail loss probes and
@@ -1748,6 +1752,8 @@ performance and efficiency.
 |--------|-------------|----------|
 | `tcp_retransmit` | The number of TCP packets that were re-transmitted | |
 
+On macOS, see [TCP on macOS](#tcp-on-macos).
+
 ### tcp_traffic
 
 Samples TCP traffic to get metrics for TX/RX bytes and packets. These metrics
@@ -1761,6 +1767,40 @@ behavior with network activity.
 | `tcp_bytes` | The number of bytes transferred over TCP | `direction={receive,transmit}` |
 | `tcp_packets` | The number of packets transferred over TCP | `direction={receive,transmit}` |
 | `tcp_size` | Distribution of the size of TCP packets | `direction={receive,transmit}` |
+
+#### TCP on macOS
+
+On macOS, `tcp_mib` and `tcp_retransmit` read the kernel's TCP statistics,
+the `net.inet.tcp.stats` sysctl that `netstat -s -p tcp` prints, once per
+refresh each. The kernel returns zeros to a process not running as root
+while `net.inet.tcp.disable_access_to_stats` is set, which is the default,
+so the agent needs root for them; without it both samplers report
+themselves unsupported. The counters cover IPv4 and IPv6 together.
+
+| Metric | XNU counter |
+|--------|-------------|
+| `tcp_retransmit`, `tcp_segments_retransmitted` | `tcps_sndrexmitpack`: retransmissions of data sent |
+| `tcp_delayed_acks` | `tcps_delack`: delayed-ACK timer firings that sent an ACK |
+| `tcp_rto_expirations` | `tcps_rexmttimeo`: retransmission timer expirations |
+| `tcp_checksum_errors` | `tcps_rcvbadsum`: segments received with a bad checksum |
+| `tcp_input_errors` | `tcps_rcvbadsum`, `tcps_rcvbadoff` and `tcps_rcvshort`: a bad checksum, a bad data offset, or a segment shorter than its header or not pulled up for lack of mbufs |
+
+The other metrics of `tcp_mib` are not set. `tcps_sndrexmitpack` counts a
+retransmission sent with TSO once however many segments it spans, so after
+an RTO it can be lower than the segments sent again, and it counts data
+only, so a retransmitted SYN or SYN-ACK is not included.
+
+`tcp_traffic` does not run on macOS. The kernel's received-byte counter
+leaves out bytes that pass through reassembly, and a byte counter can
+advance by 2^32 or more between two reads.
+
+The kernel's counters are 32 bits wide. Each metric starts at zero when its
+sampler starts and adds the increase since the previous read, so it loses
+2^32 for each 2^32 its counter advances between two reads. Reads happen when
+the agent is scraped or streamed; the counters these samplers read count
+events, which stay far below 2^32 between reads at any regular scrape or
+stream interval. An agent left unread for days can lose 2^32 on a busy
+counter.
 
 ## Rezolus
 

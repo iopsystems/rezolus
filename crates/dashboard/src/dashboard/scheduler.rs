@@ -89,6 +89,32 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         "scheduler_running".to_string(),
     );
 
+    let uninterruptible = scheduler.subgroup("Uninterruptible Sleep");
+    uninterruptible.describe(
+        "Time tasks spent off-CPU in uninterruptible sleep (D state): waiting on disk IO, \
+         some locks, or page faults on slow storage. A sleep is added in full when the task \
+         next runs, so Tasks is the mean number of tasks in D state only over windows much \
+         longer than the sleeps: a long sleep shows as a spike when it ends, and a task still \
+         blocked is not counted yet.",
+    );
+    uninterruptible.histogram_rate_mean(
+        "Uninterruptible",
+        "uninterruptible-time",
+        "scheduler_uninterruptible",
+        RateSource::FromHistogram,
+        Unit::Time,
+    );
+    uninterruptible.plot_promql(
+        PlotOpts::histogram_latency("Uninterruptible Time", "uninterruptible-time")
+            .with_axis_label("Time")
+            .with_unit_system("time"),
+        "scheduler_uninterruptible".to_string(),
+    );
+    uninterruptible.plot_promql(
+        PlotOpts::counter("Tasks", "uninterruptible-tasks", Unit::Count),
+        "sum(irate(scheduler_uninterruptible_wait[5m])) / 1000000000".to_string(),
+    );
+
     let switches = scheduler.subgroup("Context Switches");
     switches.describe("Involuntary context-switch rate, aggregate and per-core.");
     if multi_cpu {
@@ -127,6 +153,9 @@ mod tests {
         assert!(json.contains("histogram_mean(scheduler_offcpu)\""));
         assert!(json.contains("sum(histogram_irate(scheduler_running))"));
         assert!(json.contains("histogram_mean(scheduler_running)\""));
+        assert!(json.contains("sum(histogram_irate(scheduler_uninterruptible))"));
+        assert!(json.contains("histogram_mean(scheduler_uninterruptible)\""));
+        assert!(json.contains("sum(irate(scheduler_uninterruptible_wait[5m])) / 1000000000"));
         // runqueue_wait must NOT become a rate source.
         assert!(!json.contains("histogram_irate(scheduler_runqueue_wait"));
         // percentile histograms still present

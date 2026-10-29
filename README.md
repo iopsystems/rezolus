@@ -96,8 +96,8 @@ rezolus view http://linux-host:4241
 
 Viewing and analyzing an existing recording does not require Linux eBPF or
 root. Local collection on macOS covers CPU usage, memory, network traffic,
-block-I/O counters, NVMe drive health and Apple GPU metrics (the GPU metrics
-need root);
+TCP counters, block-I/O counters, NVMe drive health and Apple GPU metrics (the
+TCP counters and GPU metrics need root);
 it does not provide Linux scheduler, syscall, or block-I/O latency
 instrumentation.
 The macOS installer does not install Linux systemd services.
