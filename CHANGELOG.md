@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [5.29.2] - 2026-10-29
+
 ### Security
 
 - zstd-sys 2.1.2, for RUSTSEC-2026-0410, which affects only the WebAssembly
@@ -2088,7 +2090,8 @@ focal.
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.29.1...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.29.2...HEAD
+[5.29.2]: https://github.com/iopsystems/rezolus/compare/v5.29.1...v5.29.2
 [5.29.1]: https://github.com/iopsystems/rezolus/compare/v5.29.0...v5.29.1
 [5.29.0]: https://github.com/iopsystems/rezolus/compare/v5.28.0...v5.29.0
 [5.28.0]: https://github.com/iopsystems/rezolus/compare/v5.27.0...v5.28.0
