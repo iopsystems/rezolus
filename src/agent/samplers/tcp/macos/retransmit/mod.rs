@@ -9,9 +9,7 @@ const NAME: &str = "tcp_retransmit";
 
 use crate::agent::*;
 
-use super::{check, read, Wide};
-
-use std::sync::Mutex;
+use super::{check, sample, Totals};
 
 mod stats {
     include!("../../linux/retransmit/stats.rs");
@@ -26,7 +24,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     check()?;
 
-    Ok(Some(Box::new(Retransmit::default())))
+    Ok(Some(Box::new(Retransmit)))
 }
 
 #[distributed_slice(SAMPLERS)]
@@ -36,10 +34,7 @@ static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::sampl
     init,
 };
 
-#[derive(Default)]
-struct Retransmit {
-    sndrexmitpack: Mutex<Wide>,
-}
+struct Retransmit;
 
 #[async_trait]
 impl Sampler for Retransmit {
@@ -50,15 +45,19 @@ impl Sampler for Retransmit {
     async fn refresh(&self) {
         let mut guard = COUNTERS_ACQ.acquire();
 
-        let Some(s) = read() else {
+        let Some(t) = sample() else {
             return;
         };
         guard.mark_end();
 
-        TCP_RETRANSMIT.set(self.sndrexmitpack.lock().unwrap().update(s.sndrexmitpack));
+        set(&t);
 
         guard.finish();
     }
+}
+
+fn set(t: &Totals) {
+    TCP_RETRANSMIT.set(t.sndrexmitpack);
 }
 
 #[cfg(test)]
@@ -74,5 +73,11 @@ mod tests {
             NAME
         );
         assert_eq!(COUNTERS_ACQ.sampler, NAME);
+    }
+
+    #[test]
+    fn the_metric_reads_its_own_counter() {
+        set(&super::super::tests::distinct_totals());
+        assert_eq!(TCP_RETRANSMIT.value(), 8);
     }
 }

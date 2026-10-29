@@ -19,9 +19,7 @@ const NAME: &str = "tcp_mib";
 
 use crate::agent::*;
 
-use super::{check, read, TcpStat, Wide};
-
-use std::sync::Mutex;
+use super::{check, sample, Totals};
 
 mod stats {
     include!("../../linux/mib/stats.rs");
@@ -36,7 +34,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     check()?;
 
-    Ok(Some(Box::new(Mib::default())))
+    Ok(Some(Box::new(Mib)))
 }
 
 #[distributed_slice(SAMPLERS)]
@@ -46,20 +44,7 @@ static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::sampl
     init,
 };
 
-#[derive(Default)]
-struct Mib {
-    counters: Mutex<Counters>,
-}
-
-#[derive(Default)]
-struct Counters {
-    delack: Wide,
-    rexmttimeo: Wide,
-    sndrexmitpack: Wide,
-    rcvbadsum: Wide,
-    rcvbadoff: Wide,
-    rcvshort: Wide,
-}
+struct Mib;
 
 #[async_trait]
 impl Sampler for Mib {
@@ -72,30 +57,25 @@ impl Sampler for Mib {
         let mut netstat = NETSTAT_ACQ.acquire();
         let mut snmp = SNMP_ACQ.acquire();
 
-        let Some(s) = read() else {
+        let Some(t) = sample() else {
             return;
         };
         netstat.mark_end();
         snmp.mark_end();
 
-        self.counters.lock().unwrap().record(&s);
+        set(&t);
 
         netstat.finish();
         snmp.finish();
     }
 }
 
-impl Counters {
-    fn record(&mut self, s: &TcpStat) {
-        TCP_DELAYED_ACKS.set(self.delack.update(s.delack));
-        TCP_RTO_EXPIRATIONS.set(self.rexmttimeo.update(s.rexmttimeo));
-
-        let badsum = self.rcvbadsum.update(s.rcvbadsum);
-        TCP_CHECKSUM_ERRORS.set(badsum);
-        TCP_INPUT_ERRORS
-            .set(badsum + self.rcvbadoff.update(s.rcvbadoff) + self.rcvshort.update(s.rcvshort));
-        TCP_SEGMENTS_RETRANSMITTED.set(self.sndrexmitpack.update(s.sndrexmitpack));
-    }
+fn set(t: &Totals) {
+    TCP_DELAYED_ACKS.set(t.delack);
+    TCP_RTO_EXPIRATIONS.set(t.rexmttimeo);
+    TCP_CHECKSUM_ERRORS.set(t.rcvbadsum);
+    TCP_INPUT_ERRORS.set(t.rcvbadsum + t.rcvbadoff + t.rcvshort);
+    TCP_SEGMENTS_RETRANSMITTED.set(t.sndrexmitpack);
 }
 
 #[cfg(test)]
@@ -118,25 +98,12 @@ mod tests {
     // wrong field reads a different value.
     #[test]
     fn each_metric_reads_its_own_counter() {
-        let mut counters = Counters::default();
-        let mut s = TcpStat::default();
-        counters.record(&s);
-
-        s.delack = 1;
-        s.rexmttimeo = 2;
-        s.sndrexmitpack = 4;
-        s.rcvbadsum = 8;
-        s.rcvbadoff = 16;
-        s.rcvshort = 32;
-        s.sndtotal = 64;
-        s.rcvtotal = 128;
-        s.timeoutdrop = 256;
-        counters.record(&s);
+        set(&super::super::tests::distinct_totals());
 
         assert_eq!(TCP_DELAYED_ACKS.value(), 1);
         assert_eq!(TCP_RTO_EXPIRATIONS.value(), 2);
-        assert_eq!(TCP_SEGMENTS_RETRANSMITTED.value(), 4);
-        assert_eq!(TCP_CHECKSUM_ERRORS.value(), 8);
-        assert_eq!(TCP_INPUT_ERRORS.value(), 8 + 16 + 32);
+        assert_eq!(TCP_SEGMENTS_RETRANSMITTED.value(), 8);
+        assert_eq!(TCP_CHECKSUM_ERRORS.value(), 32);
+        assert_eq!(TCP_INPUT_ERRORS.value(), 32 + 64 + 128);
     }
 }

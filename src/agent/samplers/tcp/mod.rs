@@ -28,6 +28,7 @@ mod stats {
         include!("./linux/retransmit/stats.rs");
     }
 
+    #[cfg(not(target_os = "macos"))]
     mod traffic {
         include!("./linux/traffic/stats.rs");
     }

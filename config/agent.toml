@@ -449,7 +449,9 @@ enabled = false
 [samplers.tcp_retransmit]
 
 # Samples TCP traffic using a BPF sampler to get metrics for TX/RX bytes and
-# packets
+# packets. On macOS, bytes only, from the net.inet.tcp.stats sysctl, as root,
+# read every 250 ms as well as on each scrape; see
+# docs/metrics.md#tcp-on-macos.
 [samplers.tcp_traffic]
 
 # Samples GPU metrics on Apple Silicon using powermetrics
