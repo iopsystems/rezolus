@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+### Fixed
+
+- `memory_pagecache` loads on 6.18 and later kernels. From 6.18
+  `folio->flags` is a `memdesc_flags_t` struct, so the CO-RE relocation for
+  the integer read of it failed, the verifier rejected the fill and eviction
+  programs, and the sampler failed with `Invalid argument (os error 22)`. The
+  flags word is now read from `flags.f` where the kernel wraps it.
+  Backported from 6.0 (#1590).
+
 ## [5.29.1] - 2026-10-27
 
 ### Fixed
