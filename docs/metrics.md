@@ -1428,6 +1428,32 @@ Known scope limits:
   consuming link bandwidth. Seeing real link utilization under SR-IOV requires
   PF-side hardware counters, which Rezolus does not yet collect.
 
+#### network_traffic on macOS
+
+On macOS the sampler reads each interface's counters, unprivileged, with the
+`IFMIB_IFDATA` sysctl (`net.link.generic.ifdata`).
+`network_bytes` and `network_packets` sum every interface: loopback, bridges,
+`utun` tunnels and the `vmenet` interfaces of virtual machines included, so
+a packet that crosses a bridge and its member interface is counted on each.
+`network_host_bytes` and `network_host_packets` sum two kinds of interface:
+
+- the `IONetworkInterface` entries in the I/O registry that have no
+  `IOResources` ancestor: wifi, Ethernet on PCIe, Thunderbolt or USB, and
+  Thunderbolt networking;
+- the interfaces with no delegate interface whose functional type is wifi
+  or cellular, which adds `awdl0` (Apple Wireless Direct Link, used by
+  AirDrop), `llw0` (low-latency WLAN) and `ap1`, all on the wifi radio.
+
+They exclude `lo0`, bridges and `utun` tunnels, which have no
+`IONetworkInterface`, and `vmenet` interfaces, which are software devices
+under `IOResources`. A tunnel delegated to a wifi interface reports wifi as
+its functional type, and is excluded because it has a delegate.
+
+The counters start at zero when the sampler starts and add each interface's
+increase since the previous read. An interface first listed after the
+sampler started adds its whole count. When an interface goes away, its
+traffic after the last read before that is not counted.
+
 ## Scheduler
 
 Metrics related to the Linux kernel scheduler. The scheduler is responsible for

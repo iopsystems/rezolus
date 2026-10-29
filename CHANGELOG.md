@@ -14,6 +14,13 @@
 - **Ubuntu 26.04 (resolute) packages.** amd64 and arm64 packages are built
   for resolute and published to the `ubuntu-resolute` apt repository;
   `install.sh` installs from it. 5.x ships them from 5.29.0 (#1573). (#1577)
+- **Network traffic on macOS.** `network_traffic` now runs on macOS,
+  unprivileged, and sets `network_bytes` and `network_packets` (every
+  interface) and `network_host_bytes` and `network_host_packets` (the
+  interfaces backed by hardware, such as wifi, Ethernet and Thunderbolt
+  networking, plus `awdl0`, `llw0` and `ap1` on the wifi radio; not
+  loopback, bridges, tunnels or VM interfaces), so the network dashboard's
+  traffic charts and the overview's network chart draw on a Mac.
 
 ### Fixed
 

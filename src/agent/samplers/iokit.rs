@@ -1,5 +1,5 @@
 //! Minimal IOKit and CoreFoundation bindings for the macOS samplers that read
-//! the I/O registry (`blockio`, `drivehealth`).
+//! the I/O registry (`blockio`, `drivehealth`, `network_traffic`).
 //!
 //! Only what those samplers call is bound. Every owned registry object,
 //! CoreFoundation object and plugin interface is wrapped so it is released on
@@ -39,6 +39,12 @@ extern "C" {
         options: u32,
     ) -> CfTypeRef;
     fn IORegistryEntryGetRegistryEntryID(entry: IoObject, id: *mut u64) -> KernReturn;
+    fn IORegistryEntryGetParentEntry(
+        entry: IoObject,
+        plane: *const c_char,
+        parent: *mut IoObject,
+    ) -> KernReturn;
+    fn IOObjectConformsTo(object: IoObject, class_name: *const c_char) -> u32;
     fn IORegistryEntrySearchCFProperty(
         entry: IoObject,
         plane: *const c_char,
@@ -251,6 +257,38 @@ impl Service {
         let v = Owned(v);
         // SAFETY: `v.0` is a live CF object.
         (unsafe { CFGetTypeID(v.0) == CFDictionaryGetTypeID() }).then(|| CfDictionary(v))
+    }
+
+    /// The property `key` of this entry, if it is a string of under 256
+    /// bytes.
+    pub(crate) fn string(&self, key: &CfString) -> Option<String> {
+        // SAFETY: as in `dictionary`.
+        let v = unsafe { IORegistryEntryCreateCFProperty(self.0, key.0 .0, std::ptr::null(), 0) };
+        if v.is_null() {
+            return None;
+        }
+        let v = Owned(v);
+        // SAFETY: `v.0` is a live CF object.
+        unsafe { string_value(v.0) }
+    }
+
+    /// This entry's first parent in the service plane, or `None` at the
+    /// root.
+    pub(crate) fn parent(&self) -> Option<Service> {
+        let mut parent: IoObject = 0;
+        // SAFETY: `self.0` is a live registry entry, the plane name is
+        // NUL-terminated, and on success `parent` is a +1 reference that
+        // `Service` takes over.
+        let kr =
+            unsafe { IORegistryEntryGetParentEntry(self.0, c"IOService".as_ptr(), &mut parent) };
+        (kr == KERN_SUCCESS && parent != 0).then_some(Service(parent))
+    }
+
+    /// True if this entry is an instance of IOKit class `class` or a
+    /// subclass of it.
+    pub(crate) fn conforms_to(&self, class: &std::ffi::CStr) -> bool {
+        // SAFETY: `self.0` is a live object and `class` is NUL-terminated.
+        unsafe { IOObjectConformsTo(self.0, class.as_ptr()) != 0 }
     }
 
     /// The property `key` of this entry, if it is a boolean.
