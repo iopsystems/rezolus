@@ -1,5 +1,21 @@
 ## [Unreleased]
 
+### Security
+
+- zstd-sys 2.1.2, for RUSTSEC-2026-0410, which affects only the WebAssembly
+  viewer. 6.0 has it through the zstd 0.14 move (#1563), which needs parquet
+  60; on 5.x it is taken directly in #1595. RUSTSEC-2026-0391,
+  RUSTSEC-2026-0398 and RUSTSEC-2026-0403 (zstd, zstd-safe) remain on 5.x.
+
+### Fixed
+
+- `memory_pagecache` loads on 6.18 and later kernels. From 6.18
+  `folio->flags` is a `memdesc_flags_t` struct, so the CO-RE relocation for
+  the integer read of it failed, the verifier rejected the fill and eviction
+  programs, and the sampler failed with `Invalid argument (os error 22)`. The
+  flags word is now read from `flags.f` where the kernel wraps it.
+  Backported from 6.0 (#1590) in #1595.
+
 ## [5.29.1] - 2026-10-27
 
 ### Fixed
