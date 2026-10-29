@@ -24,6 +24,11 @@
 
 ### Fixed
 
+- **`memory_pagecache` loads on 6.18 and later kernels.** From 6.18
+  `folio->flags` is a `memdesc_flags_t` struct, so the CO-RE relocation for
+  the integer read of it failed, the verifier rejected the fill and eviction
+  programs, and the sampler failed with `Invalid argument (os error 22)`. The
+  flags word is now read from `flags.f` where the kernel wraps it.
 - **`memory_writeback` loads on kernels whose `enum wb_reason` has no
   `WB_REASON_LAPTOP_TIMER`, such as 7.0.** The CO-RE relocation
   for it failed, the verifier rejected `writeback_start`, and the sampler
