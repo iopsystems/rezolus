@@ -327,12 +327,20 @@ jobs:
           cargo test --workspace --exclude viewer ${{ env.FEATURE_FLAGS }} --doc --locked -- --test-threads 16
       # The smoketest agent runs every sampler, including the opt-in ones that
       # config/agent.toml leaves at `enabled = false`, so that the sampler
-      # health step below covers them.
+      # health step below fails if one does not load. xfs is loaded first
+      # because xfs_log waits for the module and reports unsupported until
+      # then. gpu_amd_pmu reports unsupported without a GPU.
       - name: smoketest config
         shell: bash
         run: |
           sed 's/^enabled = false$/enabled = true/' config/agent.toml > smoketest.toml
-          ! grep -q '^enabled = false' smoketest.toml
+          if grep -q '^enabled = false' smoketest.toml; then
+            echo "::error::smoketest.toml still disables a sampler"
+            exit 1
+          fi
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo modprobe xfs || echo "::warning::xfs module not available; xfs_log will report unsupported"
+          fi
       # Rebuild without test targets: --all-targets unifies dev-dependency
       # features (including rez/test-support) into the earlier agent binary.
       - name: smoketest
