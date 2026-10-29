@@ -31,7 +31,7 @@
   over windows much longer than the sleeps their rate is the mean number of tasks
   in D state, and a long sleep shows as a spike when it ends. Idle kernel
   threads (`TASK_IDLE`) are left out, as the load average leaves them out.
-  The scheduler and cgroups dashboards plot them. (#1583)
+  The scheduler and cgroups dashboards plot them. (#1589)
 
 ### Fixed
 
