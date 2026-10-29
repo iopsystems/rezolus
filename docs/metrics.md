@@ -21,7 +21,7 @@ host-level series are unchanged.
 | `cpu_usage` | on | `cgroup_cpu_usage`, `cgroup_cpu_usage_exited_tasks` |
 | `cpu_perf` | on | `cgroup_cpu_cycles`, `cgroup_cpu_instructions` (off also drops the `sched_switch` program) |
 | `cpu_tlb_flush` | on | `cgroup_cpu_tlb_flush` |
-| `scheduler` | on | `cgroup_scheduler_runqueue_wait`, `cgroup_scheduler_offcpu`, `cgroup_scheduler_context_switch`, `cgroup_cpu_migrations` |
+| `scheduler` | on | `cgroup_scheduler_runqueue_wait`, `cgroup_scheduler_offcpu`, `cgroup_scheduler_uninterruptible_wait`, `cgroup_scheduler_context_switch`, `cgroup_cpu_migrations` |
 | `syscall` | on | `cgroup_syscall` |
 | `ext4_ops` | off | `cgroup_ext4_ops`, `cgroup_ext4_op_time` |
 | `xfs_log` | off | `cgroup_xfs_log_waits`, `cgroup_xfs_log_wait_time` |
@@ -1485,6 +1485,8 @@ performance and responsiveness.
 | `scheduler_runqueue_latency` | Distribution of the amount of time tasks were waiting in the runqueue | |
 | `scheduler_running` | Distribution of the amount of time tasks were on-CPU | |
 | `scheduler_offcpu` | Distribution of the amount of time tasks were off-CPU | |
+| `scheduler_uninterruptible` | Distribution of the amount of time tasks were off-CPU in uninterruptible sleep (D state), a subset of `scheduler_offcpu` | |
+| `scheduler_uninterruptible_wait` | Time tasks spent in uninterruptible sleep, added in full when a task next runs, on the CPU it runs on. Over windows much longer than the sleeps, the rate summed across CPUs is the mean number of tasks in D state; a long sleep shows as a spike when it ends | `id`: the CPU |
 | `scheduler_context_switch` | The number of involuntary context switches | `kind=involuntary` |
 
 The migrations part tracks when tasks move from one CPU to another, per CPU

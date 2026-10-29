@@ -29,6 +29,13 @@
 #define MAX_PID 4194304
 
 #define TASK_RUNNING 0
+#define TASK_UNINTERRUPTIBLE 0x2
+#define TASK_NOLOAD 0x400
+#define TASK_FROZEN 0x8000
+
+// Set in an `offcpu_at` stamp when the task left the CPU in uninterruptible
+// sleep. `bpf_ktime_get_ns()` is time since boot and does not reach bit 63.
+#define OFFCPU_UNINTERRUPTIBLE (1ULL << 63)
 
 // Per-cgroup attribution is the config option `cgroup_attribution`, on by
 // default for this sampler. Written into read-only data before load, so with
@@ -47,6 +54,7 @@ const volatile __u8 migrations = 0;
 #define RUNQ_WAIT 1
 #define DISCARDED 2
 #define VCSW 3
+#define UNINTERRUPTIBLE 4
 
 // migration counter positions
 #define FROM 0
@@ -141,6 +149,14 @@ struct {
     __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
 } offcpu SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, HISTOGRAM_BUCKETS * HISTOGRAM_SLICES);
+} uninterruptible SEC(".maps");
+
 /*
  * cgroup counters
  */
@@ -176,6 +192,14 @@ struct {
     __type(value, u64);
     __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
 } cgroup_offcpu SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CGROUPS * CGROUP_SHARDS);
+} cgroup_uninterruptible SEC(".maps");
 
 /*
  * migrations
@@ -259,6 +283,7 @@ static __always_inline u32 resolve_cgroup(struct task_struct* task, bool btf) {
             cgroup_zero(&cgroup_vcsw, id);
             cgroup_zero(&cgroup_runq_wait, id);
             cgroup_zero(&cgroup_offcpu, id);
+            cgroup_zero(&cgroup_uninterruptible, id);
         }
         if (migrations) {
             cgroup_zero(&cgroup_cpu_migrations, id);
@@ -310,7 +335,8 @@ static __always_inline u32 runqueue_switch(struct task_struct* prev, struct task
     // prev task is moving from running
     // - update prev->pid enqueued_at with now
     // - calculate how long prev task was running and update hist
-    if (get_task_state_btf(prev, btf) == TASK_RUNNING) {
+    s64 prev_state = get_task_state_btf(prev, btf);
+    if (prev_state == TASK_RUNNING) {
         // The idle task is always TASK_RUNNING, so a CPU simply waking up to run
         // something counted as an involuntary context switch -- nothing was
         // competing for the CPU, and no task was preempted. The inflation is
@@ -360,9 +386,19 @@ static __always_inline u32 runqueue_switch(struct task_struct* prev, struct task
         }
     }
 
-    // for all tasks: track when it went off-cpu
+    // for all tasks: track when it went off-cpu, and whether it went into
+    // uninterruptible sleep. The test is the one __schedule() uses to set
+    // sched_contributes_to_load (kernel/sched/core.c), which feeds the load
+    // average. TASK_IDLE (uninterruptible with TASK_NOLOAD) is how idle kernel
+    // threads wait, and is not counted. Before 6.1 a task freezing itself
+    // sleeps in TASK_UNINTERRUPTIBLE with PF_FROZEN in its flags, which is not
+    // read here, so on those kernels a frozen task counts as uninterruptible.
     if (prev_pid) {
-        bpf_map_update_elem(&offcpu_at, &prev_slot, &ts, 0);
+        u64 stamp = ts;
+        if ((prev_state & TASK_UNINTERRUPTIBLE) && !(prev_state & (TASK_NOLOAD | TASK_FROZEN))) {
+            stamp |= OFFCPU_UNINTERRUPTIBLE;
+        }
+        bpf_map_update_elem(&offcpu_at, &prev_slot, &stamp, 0);
     }
 
     // next task has moved into running
@@ -397,8 +433,9 @@ static __always_inline u32 runqueue_switch(struct task_struct* prev, struct task
                 // and increment stats
                 tsp = bpf_map_lookup_elem(&offcpu_at, &next_slot);
                 if (tsp && *tsp) {
-                    if (ts >= *tsp) {
-                        offcpu_ns = ts - *tsp;
+                    u64 offcpu_ts = *tsp & ~OFFCPU_UNINTERRUPTIBLE;
+                    if (ts >= offcpu_ts) {
+                        offcpu_ns = ts - offcpu_ts;
 
                         if (offcpu_ns > delta_ns) {
                             offcpu_ns = offcpu_ns - delta_ns;
@@ -407,6 +444,20 @@ static __always_inline u32 runqueue_switch(struct task_struct* prev, struct task
 
                             if (next_cgroup_id < MAX_CGROUPS) {
                                 cgroup_add(&cgroup_offcpu, next_cgroup_id, offcpu_ns);
+                            }
+
+                            // The same interval again, when it was spent in
+                            // uninterruptible sleep. It is counted when the
+                            // task next runs, on the CPU it runs on.
+                            if (*tsp & OFFCPU_UNINTERRUPTIBLE) {
+                                histogram_incr(&uninterruptible, HISTOGRAM_POWER, offcpu_ns);
+
+                                idx = COUNTER_GROUP_WIDTH * processor_id + UNINTERRUPTIBLE;
+                                array_add(&counters, idx, offcpu_ns);
+
+                                if (next_cgroup_id < MAX_CGROUPS) {
+                                    cgroup_add(&cgroup_uninterruptible, next_cgroup_id, offcpu_ns);
+                                }
                             }
                         }
                     } else {

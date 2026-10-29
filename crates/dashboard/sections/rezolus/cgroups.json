@@ -65,6 +65,13 @@
             },
             {
               "kind": "counter",
+              "title": "Uninterruptible Tasks",
+              "id": "aggregate-uninterruptible-tasks",
+              "unit": "count",
+              "query": "sum(irate(cgroup_scheduler_uninterruptible_wait{name!~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
+            },
+            {
+              "kind": "counter",
               "title": "ext4 Blocked Time",
               "id": "aggregate-ext4-blocked-time",
               "unit": "time",
@@ -236,6 +243,14 @@
               "style": "multi",
               "unit": "time",
               "query": "sum by (name) (irate(cgroup_cpu_throttled_time{name=~\"__SELECTED_CGROUPS__\"}[5m]))"
+            },
+            {
+              "kind": "counter",
+              "title": "Uninterruptible Tasks",
+              "id": "individual-uninterruptible-tasks",
+              "style": "multi",
+              "unit": "count",
+              "query": "sum by (name) (irate(cgroup_scheduler_uninterruptible_wait{name=~\"__SELECTED_CGROUPS__\"}[5m])) / 1000000000"
             },
             {
               "kind": "counter",
