@@ -2,9 +2,10 @@
 
 ### Security
 
-- zstd-sys 2.1.2, for RUSTSEC-2026-0410. Main has it through the zstd 0.14
-  move (#1563), which needs parquet 60; here it is a lockfile update in
-  #1595. RUSTSEC-2026-0391, -0398 and -0403 remain on this line.
+- zstd-sys 2.1.2, for RUSTSEC-2026-0410, which affects only the WebAssembly
+  viewer. 6.0 has it through the zstd 0.14 move (#1563), which needs parquet
+  60; on 5.x it is taken directly in #1595. RUSTSEC-2026-0391,
+  RUSTSEC-2026-0398 and RUSTSEC-2026-0403 (zstd, zstd-safe) remain on 5.x.
 
 ### Fixed
 
