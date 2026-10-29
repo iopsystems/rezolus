@@ -946,6 +946,27 @@ Also found on these runs, separate from the sampler:
   works** — Open. Reproduced on recordings from both the 5.20.0 and the current
   recorder. It forced these measurements to integrate `rate()`.
 
+## Agent — `process_cpu_usage` contention
+
+Source: [Contention on `process_cpu_usage`](journal/2026-10-27-process-cpu-usage-contention.md).
+NO-GO, measured 2026-10-27/28 in a 56-vCPU guest: `main` keeps one copy.
+
+- **Measure 1 × N on a two-socket or 100+ CPU host** — Open. The cost on
+  `main` is about 140 ns per run of the `cpu_usage` programs in one 7-L3
+  guest. If it is several µs, reopen the stripes item below, and write
+  combining once it has the flush and exit path its item names.
+- **L3-assigned stripes of `process_cpu_usage`** — NO-GO on memory (32 MiB
+  per copy). Reopen when per-process slots have a dense index, or the
+  measurement above shows the cost justifies 256 MiB.
+- **Per-CPU write combining** — NO-GO on correctness: up to K − 1 ticks per
+  CPU stay uncommitted on nohz-idle CPUs and are dropped at exit. Reopen only
+  with a flush that does not depend on ticks and an exit path that keeps
+  pending deltas.
+- **Process deltas through a ring buffer** — NO-GO (not built): conflicts
+  with principles 3 and 6. Reopen if the 64 MiB of `process_attribution`
+  maps becomes the problem, with a read-time flush (`BPF_PROG_RUN` on each
+  CPU, 5.10).
+
 ## Agent — cgroup slots
 
 Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archive-layout.md), "Cgroups: long, reversed by the gate".
