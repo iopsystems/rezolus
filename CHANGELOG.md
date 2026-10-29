@@ -7,7 +7,7 @@
   the integer read of it failed, the verifier rejected the fill and eviction
   programs, and the sampler failed with `Invalid argument (os error 22)`. The
   flags word is now read from `flags.f` where the kernel wraps it.
-  Backported from 6.0 (#1590).
+  Backported from 6.0 (#1590) in #1595.
 
 ## [5.29.1] - 2026-10-27
 
