@@ -58,8 +58,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 /// How often the widening thread reads the statistics while `tcp_traffic`
-/// runs. A 32-bit byte counter takes 250 ms to advance by 2^32 - 2^28 at
-/// 128 Gbit/s.
+/// runs. A 32-bit byte counter takes about 250 ms to advance by 2^32 - 2^28
+/// at 128 Gbit/s.
 const WIDEN_INTERVAL: Duration = Duration::from_millis(250);
 
 /// The leading fields of XNU's `struct tcpstat` (`bsd/netinet/tcp_var.h`),
@@ -207,8 +207,10 @@ fn start_widening() -> std::io::Result<()> {
 /// withholds the statistics, which happens if
 /// `net.inet.tcp.disable_access_to_stats` is set while a process not running
 /// as root reads them; taking those zeros as counts would make `Wide` read
-/// the fall to zero as a wrap, adding 2^32 to each metric whose counter is
-/// at 2^28 or more, across the zero read and the next read.
+/// the fall to zero as a wrap: a metric whose counter is between 2^28 and
+/// 2^32 - 2^28 would gain 2^32 across the zero read and the next read, and
+/// one whose counter is higher would jump by 2^32 less the counter and hold
+/// until the counter wraps.
 fn read() -> Option<TcpStat> {
     read_raw().filter(|s| s.sndtotal != 0 || s.rcvtotal != 0)
 }
@@ -371,7 +373,8 @@ mod tests {
     }
 
     // A fall just short of `MAX_BACKWARD` is a racing update; a fall of
-    // `MAX_BACKWARD` is a wrap, and so is an advance of 2^32 - 2^28.
+    // `MAX_BACKWARD` is a wrap, and an advance of 2^32 - 2^28 is counted
+    // whole.
     #[test]
     fn wide_takes_max_backward_as_the_boundary() {
         let mut c = Wide::default();
