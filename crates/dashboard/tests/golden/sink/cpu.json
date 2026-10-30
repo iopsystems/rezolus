@@ -1069,6 +1069,47 @@
               "promql_query": "sum by (id) (irate(cpu_platform_energy[5m])) / 1000000"
             }
           ]
+        },
+        {
+          "name": "SoC Power",
+          "description": "Power drawn by Apple silicon SoC blocks other than the CPU cores, GPU and DRAM, derived from their cumulative energy counters and named as IOReport names them: ANE is the Neural Engine, DISP and DISPEXT the internal and external display pipelines, AVE the video encoder and ISP the image signal processor.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "SoC Power",
+                "id": "soc-power",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "power",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(cpu_soc_energy[5m])) / 1000000"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "SoC Power (Per-Block)",
+                "id": "soc-power-per-block",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "power",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                },
+                "style": "multi"
+              },
+              "promql_query": "sum by (block) (irate(cpu_soc_energy[5m])) / 1000000"
+            }
+          ]
         }
       ]
     },

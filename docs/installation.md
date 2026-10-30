@@ -37,9 +37,9 @@ For macOS users, install via Homebrew:
 brew install iopsystems/iop/rezolus
 ```
 
-Local macOS collection provides CPU usage, memory, network traffic, TCP
-counters, block-I/O counters, filesystem space, NVMe drive health and Apple
-GPU metrics (the TCP counters and GPU metrics need root), not Linux eBPF
+Local macOS collection provides CPU usage, CPU frequency, CPU and SoC energy,
+memory, network traffic, TCP counters, block-I/O counters, filesystem space,
+NVMe drive health and Apple GPU metrics (the TCP counters and GPU metrics need root), not Linux eBPF
 samplers. The viewer, recorder, and analysis tools can also work with remote
 Linux agents or existing recordings. No systemd services are installed on
 macOS.

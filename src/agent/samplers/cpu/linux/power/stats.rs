@@ -45,11 +45,17 @@ use linkme::distributed_slice;
 // union of the core-scope levels -- which is correct precisely because every
 // core reader writes it.
 
+// The sampler the groups belong to: `cpu_power` where a sampler compiles this
+// file in its own module (Linux and macOS), `unattributed` elsewhere.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const GROUP_SAMPLER: &str = "cpu_power";
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const GROUP_SAMPLER: &str = crate::agent::samplers::bpf_sampler_name("cpu_power");
+
 macro_rules! power_acq {
     ($vis_static:ident, $reg:ident, $name:literal, $doc:literal) => {
         #[doc = $doc]
-        pub static $vis_static: AcquisitionGroup =
-            AcquisitionGroup::new(crate::agent::samplers::bpf_sampler_name("cpu_power"), $name);
+        pub static $vis_static: AcquisitionGroup = AcquisitionGroup::new(GROUP_SAMPLER, $name);
 
         #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
         static $reg: &'static AcquisitionGroup = &$vis_static;

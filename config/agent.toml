@@ -191,7 +191,9 @@ enabled = true
 [samplers.cpu_cores]
 
 # Performance Counter based sampler that gathers APERF, MPERF, and TSC which can
-# be used to calculate CPU frequency
+# be used to calculate CPU frequency. On macOS the three counters are derived
+# from IOReport's per-core performance-state residency; see
+# docs/metrics.md#cpu_frequency-on-macos.
 [samplers.cpu_frequency]
 
 # Performance counter based sampler that gathers branch instructions and
@@ -217,7 +219,9 @@ enabled = true
 # creates counters on the CPUs each PMU's cpumask permits, so no CPU vendor or
 # model detection is needed. Only the domains and C-states the hardware
 # actually implements are reported. Needs CAP_PERFMON; typically unavailable in
-# virtualized environments.
+# virtualized environments. On macOS it reads IOReport's energy counters for
+# the CPU cores, GPU, DRAM and the other SoC blocks, unprivileged; see
+# docs/metrics.md#cpu_power-on-macos.
 [samplers.cpu_power]
 
 # BPF sampler that gathers TLB flush event counts by reason.

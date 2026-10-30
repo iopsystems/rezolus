@@ -4,6 +4,13 @@ use crate::agent::timing::AcquisitionGroup;
 use crate::agent::MAX_CPUS;
 use linkme::distributed_slice;
 
+// The sampler the group belongs to: `cpu_frequency` where a sampler compiles
+// this file in its own module (Linux and macOS), `unattributed` elsewhere.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const GROUP_SAMPLER: &str = "cpu_frequency";
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const GROUP_SAMPLER: &str = crate::agent::samplers::bpf_sampler_name("cpu_frequency");
+
 // Registered here (not in mod.rs) because this file is also `include!`d
 // directly on non-Linux platforms (see `cpu/mod.rs`'s
 // `#[cfg(not(target_os = "linux"))] pub mod stats` fallback) to keep metric
@@ -16,10 +23,8 @@ use linkme::distributed_slice;
 /// `acquire()`/`finish()`. One group for all three metrics: `Core::refresh()`
 /// reads aperf/mperf/tsc for one CPU via a single uninterrupted
 /// `read_group()` call, with no phase boundary between the three.
-pub static CPU_FREQUENCY_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("cpu_frequency"),
-    "cpu_frequency_sweep",
-);
+pub static CPU_FREQUENCY_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(GROUP_SAMPLER, "cpu_frequency_sweep");
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static CPU_FREQUENCY_ACQ_REG: &'static AcquisitionGroup = &CPU_FREQUENCY_ACQ;

@@ -225,6 +225,39 @@ Running Frequency = rate(TSC) * (rate(APERF) / rate(MPERF))
 | `cpu_mperf` | MPERF register value | |
 | `cpu_tsc` | TSC register value | |
 
+On macOS, see [cpu_frequency on macOS](#cpu_frequency-on-macos).
+
+#### cpu_frequency on macOS
+
+Apple silicon has no APERF or MPERF. On macOS the sampler reads IOReport's
+`CPU Core Performance States` channels, which count, per core, the ticks of
+the 24 MHz system counter spent in each performance state, idle and powered
+down. The device tree lists each cluster type's state frequencies
+(`voltage-states1-sram` for the E cores, `voltage-states5-sram` for the P
+cores). The sampler publishes the same three counters as on Linux, per
+logical CPU, so the formula above gives each core's average frequency while
+running:
+
+- `cpu_tsc` is the system counter (`CLOCK_UPTIME_RAW` in 24 MHz ticks), so
+  its rate is 24 MHz on every core.
+- `cpu_mperf` is the ticks spent in any performance state.
+- `cpu_aperf` is the ticks in each performance state times that state's
+  frequency over 24 MHz.
+
+`cpu_aperf` is therefore the residency in each state times the state's
+nominal frequency, not a count of cycles. IOReport brings a core's
+residencies up to date when the core changes state, so between two reads
+`cpu_mperf` can advance by more or less than the core ran in that interval,
+by up to a second on a P core. `cpu_aperf` lags with it, so their ratio is
+the frequency over the time counted. Over 30 one-second intervals the
+cluster averages matched `powermetrics` within 0.1%.
+
+IOReport is a private framework with no published interface; it is the one
+`powermetrics` reads, and it needs no privileges. A cluster type whose
+frequency table does not have one entry per performance state is not
+published, and the sampler reports itself unsupported when no core can be
+read.
+
 ### cpu_l3
 
 Tracks L3 cache misses and accesses. A high miss rate might mean inefficient
@@ -268,6 +301,7 @@ default for this sampler.
 Reports CPU energy and idle-state residency from the perf PMUs the kernel
 exposes for them. Everything is read through perf; the sampler needs
 `CAP_PERFMON` but not `CAP_SYS_RAWIO`, and does not open `/dev/cpu/*/msr`.
+On macOS, see [cpu_power on macOS](#cpu_power-on-macos).
 
 Four PMUs are consulted, each optional and each discovered at runtime from
 `/sys/bus/event_source/devices`:
@@ -337,6 +371,39 @@ not: a gauge could only describe the sampler's own refresh interval, so a scrape
 landing mid-interval would read a stale value, and at integer-milliwatt
 resolution a domain drawing microwatts (an idle iGPU) would read `0` while its
 energy counter still advanced.
+
+#### cpu_power on macOS
+
+On macOS the sampler reads IOReport's `Energy Model` channels, which count the
+energy each block of an Apple silicon SoC has used since boot. It needs no
+privileges; IOReport is the private framework `powermetrics` reads. Each
+channel is counted in mJ, uJ or nJ and converted to microjoules.
+
+| Metric | IOReport channel |
+|--------|------------------|
+| `cpu_cores_energy` (id `0`) | `CPU Energy`: every CPU core |
+| `cpu_core_energy` | `EACC_CPU<n>` and `PACC<c>_CPU<n>`: one core, at its logical CPU id |
+| `cpu_igpu_energy` (id `0`) | `GPU Energy` |
+| `cpu_dram_energy` (id `0`) | `DRAM` |
+| `cpu_soc_energy` | every other channel, labelled with its name as `block` |
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `cpu_soc_energy` | Cumulative energy of an SoC block other than the CPU cores, GPU and DRAM. macOS only. | block: the IOReport channel name, less a trailing ` Energy`; unit: `microjoules` |
+
+The blocks vary by chip. An M4 Max reports the Neural Engine (`ANE`), the
+display pipelines (`DISP`, `DISPEXT`), the video encoder (`AVE`), the image
+signal processor (`ISP`), the memory controller (`AMCC`, `DCS`), the PCIe
+ports, and a few blocks Apple does not describe (`AFR`, `MSR`). Not published:
+the clusters' totals (`EACC_CPU`, `PACC<c>_CPU`), which `cpu_core_energy`
+sums to, the clusters' SRAM and CPM channels, the `ECPUDTL` and `PCPUDTL`
+channels, and `GPU`, a second GPU channel in mJ that disagrees with
+`GPU Energy`. macOS has no package or platform total, so `cpu_package_energy`
+and `cpu_platform_energy` are not set, and there are no C-state residencies.
+
+Over 30 one-second intervals `cpu_cores_energy` read 21.3 W on average where
+`powermetrics` read 20.7 W for CPU power, and `cpu_igpu_energy` matched its
+GPU power.
 
 ### cpu_tlb_flush
 
