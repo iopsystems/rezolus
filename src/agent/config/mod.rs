@@ -358,16 +358,16 @@ impl Config {
 
     /// Whether `name` keeps and exports a CPU total per process
     /// (per-sampler override, falling back to the `defaults` section, then
-    /// off). Consumed by `cpu_usage`: with it off, `process_cpu_usage` is
-    /// absent, the process-metadata events are not sent, and the
-    /// per-process maps are not created.
+    /// to `task_attribution`). Consumed by `cpu_usage`: with it off,
+    /// `process_cpu_usage` is absent, the process-metadata events are not
+    /// sent, and the per-process maps are not created.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn process_attribution(&self, name: &str) -> bool {
         self.samplers
             .get(name)
             .and_then(|v| v.process_attribution())
             .or_else(|| self.defaults.process_attribution())
-            .unwrap_or(false)
+            .unwrap_or_else(|| self.task_attribution(name))
     }
 
     /// Whether `name` publishes every slab cache (`caches = "all"`, the
@@ -678,18 +678,37 @@ mod tests {
     }
 
     #[test]
-    fn process_attribution_is_off_unless_asked_for() {
+    fn process_attribution_follows_task_attribution_unless_set() {
         let c = config("[samplers.cpu_usage]\n");
         assert!(!c.process_attribution("cpu_usage"), "off by default");
         let c = config("[samplers.cpu_usage]\nprocess_attribution = true\n");
         assert!(c.process_attribution("cpu_usage"));
-        assert!(!c.task_attribution("cpu_usage"), "independent of task");
+        assert!(!c.task_attribution("cpu_usage"), "does not imply task");
         let c = config("[defaults]\nprocess_attribution = true\n");
         assert!(c.process_attribution("cpu_usage"), "defaults fallback");
         let c = config("[samplers.cpu_usage]\ntask_attribution = true\n");
+        assert!(c.process_attribution("cpu_usage"), "follows task");
+        let c = config("[defaults]\ntask_attribution = true\n");
+        assert!(
+            c.process_attribution("cpu_usage"),
+            "follows task in defaults"
+        );
+        let c =
+            config("[samplers.cpu_usage]\ntask_attribution = true\nprocess_attribution = false\n");
+        assert!(!c.process_attribution("cpu_usage"), "section wins");
+        let c = config(
+            "[defaults]\nprocess_attribution = false\n[samplers.cpu_usage]\ntask_attribution = true\n",
+        );
         assert!(
             !c.process_attribution("cpu_usage"),
-            "task does not imply it"
+            "defaults win over task"
+        );
+        let c = config(
+            "[defaults]\ntask_attribution = true\n[samplers.cpu_usage]\ntask_attribution = false\n",
+        );
+        assert!(
+            !c.process_attribution("cpu_usage"),
+            "follows task as resolved for the sampler"
         );
     }
 
