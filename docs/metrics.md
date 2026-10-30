@@ -399,7 +399,11 @@ before the series first appears add no series; the series has the newest
 name. With `snapshot_format = "v2"` the minimum is 0: a V2 snapshot lists
 every non-zero slot, labelled or not, so a thread held back would appear
 with only its `id`. With either snapshot format, a value that does not
-parse as a humantime duration stops the agent at startup.
+parse as a humantime duration stops the agent at startup. The rates of a
+process's `task_cpu_usage` series sum to less than its CPU. They leave out threads
+that never got a series, each thread's CPU before its series' first sample,
+and each thread's CPU after its last sample. `process_cpu_usage` includes
+all three.
 
 `process_cpu_usage` is the option `process_attribution`, off by default
 and independent of `task_attribution`: one series per process (thread
