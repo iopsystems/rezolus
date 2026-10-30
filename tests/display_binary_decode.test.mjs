@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decodeDisplayBinary, displayInterpolated } from '../src/viewer/assets/lib/data.js';
+import { decodeDisplayBinary, displayInterpolated } from '../src/viewer/assets/lib/charts/display.js';
 
-// Build a display-mode binary buffer exactly as routes.rs
-// `encode_display_binary` does: [u32 LE headerLen][JSON header][pad to 8B]
-// [f64 LE column blobs], columns per series in order t,min,lo,median,hi,max.
+// Build a display-mode binary buffer exactly as
+// crates/dashboard/src/display_wire.rs `encode_display_binary` does:
+// [u32 LE headerLen][JSON header][pad to 8B][f64 LE column blobs],
+// columns per series in order t,min,lo,median,hi,max.
 function encode(series, budget = 500) {
     // A series carries a measurement-uncertainty band iff it has uncLo/uncHi
     // columns; the header `unc` flag tells the decoder to read the two extra

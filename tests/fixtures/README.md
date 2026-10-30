@@ -33,7 +33,7 @@ the frames are meant to change.
 
 Pins the display-mode binary layout (`crates/dashboard/src/display_wire.rs`,
 `encode_display_binary`) that the viewer frontend decodes in
-`src/viewer/assets/lib/data.js` (`decodeDisplayBinary`).
+`src/viewer/assets/lib/charts/display.js` (`decodeDisplayBinary`).
 
 **Why it exists.** The layout has two *optional* column groups, and the failure
 mode is silent: a decoder that reads them in the wrong order, or reads one for a

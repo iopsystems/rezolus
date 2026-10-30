@@ -8,7 +8,7 @@
 // experiment loaded), signalled by COMPARE=1.
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { decodeDisplayBinary, decodeHeatmapBinary } from '../src/viewer/assets/lib/data.js';
+import { decodeDisplayBinary, decodeHeatmapBinary } from '../src/viewer/assets/lib/charts/display.js';
 
 const BASE = process.env.VIEWER_URL;
 const skip = BASE ? false : 'set VIEWER_URL (see tests/display_synthetic.sh)';

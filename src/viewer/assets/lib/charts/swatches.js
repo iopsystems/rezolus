@@ -42,7 +42,7 @@ const TITLES = {
 /**
  * Decide which shade-meaning entries a chart's rendered data implies.
  *
- * `boxplot`: decoded display series (data.js decodeDisplayBinary) or null.
+ * `boxplot`: decoded display series (display.js decodeDisplayBinary) or null.
  * `intervals`: per-series `[[lo,hi]|null, …]` arrays for the native-resolution
  * uncertainty band (line.js buildBandSeries input).
  *
