@@ -11,8 +11,8 @@
 //! * `cpu_usage`
 //! * `cgroup_cpu_usage`
 //! * `task_cpu_usage` — only with `task_attribution = true` (off by default)
-//! * `process_cpu_usage` — only with `process_attribution = true` (off by
-//!   default)
+//! * `process_cpu_usage` — only with `process_attribution = true` (unset,
+//!   it follows `task_attribution`)
 //! * `softirq`
 //! * `softirq_time`
 //!

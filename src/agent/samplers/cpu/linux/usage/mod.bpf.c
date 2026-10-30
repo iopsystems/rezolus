@@ -282,7 +282,8 @@ u64 attach_ns = 0;
 
 /*
  * Per-task export is the config option `task_attribution`, and the
- * per-process total is `process_attribution`; both are off by default. The
+ * per-process total is `process_attribution`; both are off by default, and
+ * `process_attribution` follows `task_attribution` unless it is set. The
  * accounting below runs either way -- the per-CPU and per-cgroup deltas are
  * computed from each task's utime/stime baseline, and exited tasks' CPU is
  * folded from task_cpu_usage into the exited counters.

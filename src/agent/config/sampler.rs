@@ -47,7 +47,8 @@ pub struct Sampler {
     #[serde(default)]
     task_min_lifetime: Option<String>,
     /// Whether a sampler that keeps per-task accounting also keeps a total
-    /// per process (`cpu_usage`'s `process_cpu_usage`). Off by default; on,
+    /// per process (`cpu_usage`'s `process_cpu_usage`). Unset, it follows
+    /// `task_attribution`, so it is off by default; on,
     /// it costs two per-pid arrays (64 MiB) and a 256 KiB ring, a
     /// process-metadata event per new process and per leader rename, a
     /// task-exit event per process exit when `task_attribution` is off (one
@@ -56,8 +57,7 @@ pub struct Sampler {
     /// of the per-process map each time a snapshot is served, contention on
     /// a process's counter when its threads run on many CPUs (principle 7
     /// in `docs/principles.md`), and one series per process in every
-    /// recording. Independent of `task_attribution`. `None` means the
-    /// default.
+    /// recording. `None` means the value of `task_attribution`.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     process_attribution: Option<bool>,

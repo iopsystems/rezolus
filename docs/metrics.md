@@ -80,7 +80,8 @@ cgroup has no CPU controller of its own is counted under the nearest
 ancestor that has one, usually its slice.
 
 `task_attribution` and `process_attribution` are the per-task and
-per-process counterparts, for `cpu_usage` only, off by default: see
+per-process counterparts, for `cpu_usage` only, off by default
+(`process_attribution` follows `task_attribution` unless set): see
 [cpu_usage](#cpu_usage).
 
 ## Table of Contents
@@ -365,7 +366,7 @@ optimizing workloads.
 | `cpu_usage_exited_tasks` | CPU time of tasks that have exited, per CPU the exit ran on; includes the CPU a thread used under its own thread id before it exec'd from outside the group leader | `id` |
 | `cgroup_cpu_usage_exited_tasks` | CPU time of a cgroup's tasks that have exited | `name` |
 | `task_cpu_usage` | CPU time (user and system) per thread; only with `task_attribution = true` | `pid`, `tgid`, `comm`, `cgroup` |
-| `process_cpu_usage` | CPU time (user and system) per process, by every thread of the process including exited ones; only with `process_attribution = true` | `tgid`, `comm`, `cgroup` |
+| `process_cpu_usage` | CPU time (user and system) per process, by every thread of the process including exited ones; only with `process_attribution = true`, or with `task_attribution = true` and `process_attribution` unset | `tgid`, `comm`, `cgroup` |
 
 The sampler accounts CPU per task in every configuration: the per-CPU and
 per-cgroup deltas are computed from each thread's `utime`/`stime` whether
@@ -393,20 +394,23 @@ so its age is the process's, and its CPU before the exec is in
 thread without a series has its CPU in `cpu_usage`, and in
 `cpu_usage_exited_tasks` once it exits. Unless `cgroup_attribution = false`,
 it is also in `cgroup_cpu_usage`, and in `cgroup_cpu_usage_exited_tasks`
-once it exits. With `process_attribution = true`, it is in
+once it exits. When `process_cpu_usage` is exported, it is in
 `process_cpu_usage` until its process exits. Renames
 before the series first appears add no series; the series has the newest
 name. With `snapshot_format = "v2"` the minimum is 0: a V2 snapshot lists
 every non-zero slot, labelled or not, so a thread held back would appear
 with only its `id`. With either snapshot format, a value that does not
 parse as a humantime duration stops the agent at startup. The rates of a
-process's `task_cpu_usage` series sum to less than its CPU. They leave out threads
+process's `task_cpu_usage` series sum to at most its CPU, and usually less. They leave out threads
 that never got a series, each thread's CPU before its series' first sample,
 and each thread's CPU after its last sample. `process_cpu_usage` includes
 all three.
 
-`process_cpu_usage` is the option `process_attribution`, off by default
-and independent of `task_attribution`: one series per process (thread
+`process_cpu_usage` is the option `process_attribution`. Set in neither
+`[samplers.cpu_usage]` nor `[defaults]`, it takes the value
+`task_attribution` resolves to, so it is off by default and on with
+per-task series. Set `process_attribution = false` to keep only the per-task series, or
+`true` to have it without them. It is one series per process (thread
 group), keyed by `tgid`. Every CPU delta credited to `cpu_usage` for
 a thread of the process is added to it, until the exit of its last thread,
 including the CPU of threads that have exited. So `rate(process_cpu_usage)` is the process's
