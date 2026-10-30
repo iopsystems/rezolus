@@ -118,6 +118,23 @@ export const sameExtent = (a, b) => {
     return a.start === b.start && a.end === b.end;
 };
 
+// The warning for a recording whose rows all sit at one timestamp, from its
+// /api/v1/metadata response; null for any other recording. Such a recording
+// opens with its rate and histogram charts empty, since a rate or a histogram
+// quantile needs two samples. Both backends report a recording with no time
+// range as 0/0, which is not a sample and gets no warning. `name` labels the
+// recording in the message ("This recording" when absent).
+export const singleInstantNotice = (meta, name = null) => {
+    const data = meta?.data ?? meta;
+    const start = Number(data?.minTime ?? data?.min_time);
+    const end = Number(data?.maxTime ?? data?.max_time);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end !== start || start <= 0) return null;
+    const at = new Date(start * 1000).toISOString().replace(/\.\d+Z$/, 'Z');
+    return `${name ?? 'This recording'} holds a single sample, at ${at}. `
+        + 'Rates and histogram percentiles need at least two samples, so those '
+        + 'charts are empty.';
+};
+
 // A range override against the recording's current extent `{start, end}`
 // (seconds), for a followed archive whose writer evicts old rows so its start
 // moves forward. Returns the override unchanged when it starts inside the

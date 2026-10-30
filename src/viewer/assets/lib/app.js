@@ -9,13 +9,13 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
 import { collectGroupPlots, baseRoute, sectionCompares, defaultLandingRoute } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, applyScope, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, clampRangeToExtent, sameExtent, nativeInterval, stepAtLeast, CAPTURE_BASELINE, CAPTURE_EXPERIMENT, listCaptures, captureMetadata, clearCaptureMemo } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, applyScope, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, clampRangeToExtent, sameExtent, singleInstantNotice, nativeInterval, stepAtLeast, CAPTURE_BASELINE, CAPTURE_EXPERIMENT, listCaptures, captureMetadata, clearCaptureMemo } from './data.js';
 
 // Opt line-ish charts into display (boxplot decimation) mode: they fetch the
 // decimated boxplot binary instead of the full native-resolution JSON matrix.
 setDisplayMode(true);
 import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor, setFamily } from './selection/selection.js';
-import { SaveModal } from './ui/overlays.js';
+import { SaveModal, notify } from './ui/overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { createSystemInfoView, createMetadataView, renderCgroupSection } from './sections/section_views.js';
 import { buildTopNavAttrs, createMainComponent } from './ui/navigation.js';
@@ -296,6 +296,7 @@ const attachExperiment = async (file) => {
     experimentAttached = true;
     compareMode = true;
     refreshCompareCaptures();
+    warnSingleInstant();
 
     applyMultiNodeInfo(expFileMeta);
 
@@ -335,6 +336,7 @@ const detachExperiment = async () => {
 
     applyMultiNodeInfo(null);
     clearViewerCaches();
+    warnSingleInstant();
     m.redraw();
 };
 
@@ -712,6 +714,31 @@ const resetLinkedViewState = () => {
 const reapplyFileMetadata = (fm, experimentFm = null) => {
     fileMetadata = fm || null;
     applyMultiNodeInfo(experimentFm || null);
+    warnSingleInstant();
+};
+
+// Say so, until dismissed, when a recording shown has every row at one
+// timestamp: its charts are empty and nothing else says why. Not for a live
+// agent or a followed archive, which may still gain rows. Each call replaces
+// the previous call's toasts, so a toast never outlives the recording it
+// names; `singleInstantGen` drops an answer that arrives after a later call.
+let singleInstantToasts = [];
+let singleInstantGen = 0;
+const warnSingleInstant = () => {
+    const gen = ++singleInstantGen;
+    for (const remove of singleInstantToasts) remove();
+    singleInstantToasts = [];
+    if (liveMode || following) return;
+    const shown = compareMode
+        ? [[CAPTURE_BASELINE, baselineAlias || 'baseline'], [CAPTURE_EXPERIMENT, experimentAlias || 'experiment']]
+        : [[CAPTURE_BASELINE, null]];
+    for (const [id, label] of shown) {
+        captureMetadata(id).then((meta) => {
+            if (gen !== singleInstantGen) return;
+            const message = singleInstantNotice(meta, label && `The ${label} recording`);
+            if (message) singleInstantToasts.push(notify('warn', message, 2147483647));
+        }, () => {});
+    }
 };
 
 const applyDisplayWindow = async (win) => {
@@ -1392,6 +1419,7 @@ const initDashboard = (config = {}) => {
     if ((liveMode || following) && onRefresh) {
         liveRefreshInterval = setInterval(onRefresh, 5000);
     }
+    warnSingleInstant();
 
     // Compare anchors from the link, once the compare state is known: a
     // signed ms offset, or `kind:<event kind>` (resolved per capture from
