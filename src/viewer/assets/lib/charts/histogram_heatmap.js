@@ -289,6 +289,8 @@ export function configureHistogramHeatmap(chart) {
                 color: COLORS.fgSecondary,
                 ...FONTS.axisLabel,
                 formatter: xAxisFormatter,
+                // No label at the right edge, as in base.js's time axis.
+                showMaxLabel: false,
             },
             splitLine: {
                 show: true,
