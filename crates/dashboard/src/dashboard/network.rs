@@ -114,6 +114,27 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
 
     let mut tcp = Group::new("TCP", "tcp");
 
+    if has_metric(data, "tcp_bytes") {
+        let traffic = tcp.subgroup("Traffic");
+        traffic.describe(
+            "TCP payload bits per second, without headers. On Linux, transmit is the bytes passed \
+             to send calls, including sends that failed or were retried, and receive is the bytes \
+             read from sockets. On macOS, both are data bytes in segments sent and received, \
+             without retransmissions sent; while a connection loses or reorders packets, receive \
+             leaves out some segments and counts overlapping out-of-order bytes twice.",
+        );
+        traffic.plot_promql(
+            PlotOpts::counter("TCP Bandwidth Transmit", "tcp-bandwidth-tx", Unit::Bitrate)
+                .with_unit_system("bitrate"),
+            "sum(irate(tcp_bytes{direction=\"transmit\"}[5m])) * 8".to_string(),
+        );
+        traffic.plot_promql(
+            PlotOpts::counter("TCP Bandwidth Receive", "tcp-bandwidth-rx", Unit::Bitrate)
+                .with_unit_system("bitrate"),
+            "sum(irate(tcp_bytes{direction=\"receive\"}[5m])) * 8".to_string(),
+        );
+    }
+
     if has_metric(data, "tcp_packet_latency") {
         let latency = tcp.subgroup("Packet Latency");
         latency.describe("Time from packet received to being processed by the application.");
@@ -573,6 +594,32 @@ mod tests {
             json.contains("sum(irate(tcp_rto_expirations[5m]))"),
             "{json}"
         );
+    }
+
+    /// TCP Bandwidth is drawn first in the TCP group when the recording has
+    /// tcp_bytes, as bits per second, and not at all without it.
+    #[test]
+    fn tcp_bandwidth_follows_tcp_bytes() {
+        let json = json_of(&generate(
+            &store_with_histograms(
+                &["tcp_bytes", "tcp_rto_expirations"],
+                &["tcp_packet_latency"],
+            ),
+            vec![],
+        ));
+        let bandwidth = json
+            .find("sum(irate(tcp_bytes{direction=\"transmit\"}[5m])) * 8")
+            .expect("TCP bandwidth transmit missing");
+        assert!(json.contains("sum(irate(tcp_bytes{direction=\"receive\"}[5m])) * 8"));
+        let latency = json.find("tcp_packet_latency").unwrap();
+        let rto = json.find("tcp_rto_expirations").unwrap();
+        assert!(
+            bandwidth < latency && bandwidth < rto,
+            "TCP bandwidth comes before packet latency and the tcp_mib charts"
+        );
+
+        let json = json_of(&generate(&store_with(&["tcp_rto_expirations"]), vec![]));
+        assert!(!json.contains("tcp_bytes"), "{json}");
     }
 
     /// Packet Drops is drawn on its own when the recording has no
