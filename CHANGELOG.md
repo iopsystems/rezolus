@@ -384,6 +384,13 @@
 
 ### Changed
 
+- **`task_cpu_usage` leaves out threads younger than one second.** A thread
+  gets its series at the first snapshot after it has lived
+  `task_min_lifetime` (`[samplers.cpu_usage]` or `[defaults]`, a humantime
+  string, default `"1s"`; `"0s"` restores the previous behaviour), if it is
+  still running then. A thread that exits before that has no series; its
+  CPU is still in `cpu_usage`. Renames before the series first appears add
+  no series. With `snapshot_format = "v2"` the minimum is 0. (#1490)
 - **The memory dashboard draws the Buffers, Swap Cached, Committed and Commit
   Limit charts and the NUMA group only when the recording has them.** A
   macOS recording has none of them, and a Linux kernel without `CONFIG_NUMA`

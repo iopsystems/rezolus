@@ -340,6 +340,22 @@ impl Config {
             .unwrap_or(false)
     }
 
+    /// How long a task must have lived before `name` exports its per-task
+    /// series (per-sampler override, falling back to the `defaults` section,
+    /// then one second). Consumed by `cpu_usage`: a younger task's labels
+    /// are held back, so it has no `task_cpu_usage` series. With
+    /// `snapshot_format = "v2"`, `cpu_usage` uses 0 instead, so this is the
+    /// configured value, not necessarily the one in effect.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn task_min_lifetime(&self, name: &str) -> std::time::Duration {
+        self.samplers
+            .get(name)
+            .and_then(|v| v.task_min_lifetime())
+            .or_else(|| self.defaults.task_min_lifetime())
+            .and_then(|s| s.parse::<humantime::Duration>().ok())
+            .map_or(std::time::Duration::from_secs(1), |d| *d)
+    }
+
     /// Whether `name` keeps and exports a CPU total per process
     /// (per-sampler override, falling back to the `defaults` section, then
     /// off). Consumed by `cpu_usage`: with it off, `process_cpu_usage` is
@@ -567,6 +583,11 @@ mod tests {
                 "{name}: task_attribution"
             );
             assert_eq!(
+                packaged.task_min_lifetime(name),
+                bare.task_min_lifetime(name),
+                "{name}: task_min_lifetime"
+            );
+            assert_eq!(
                 packaged.process_attribution(name),
                 bare.process_attribution(name),
                 "{name}: process_attribution"
@@ -639,6 +660,21 @@ mod tests {
         assert!(c.task_attribution("cpu_usage"), "defaults fallback");
         // Independent of cgroup attribution.
         assert!(!c.cgroup_attribution("cpu_usage"));
+    }
+
+    #[test]
+    fn task_min_lifetime_is_one_second_unless_set() {
+        use std::time::Duration;
+        let c = config("");
+        assert_eq!(c.task_min_lifetime("cpu_usage"), Duration::from_secs(1));
+        let c = config("[samplers.cpu_usage]\ntask_min_lifetime = \"0s\"\n");
+        assert_eq!(c.task_min_lifetime("cpu_usage"), Duration::ZERO);
+        let c = config("[defaults]\ntask_min_lifetime = \"5s\"\n");
+        assert_eq!(
+            c.task_min_lifetime("cpu_usage"),
+            Duration::from_secs(5),
+            "defaults fallback"
+        );
     }
 
     #[test]

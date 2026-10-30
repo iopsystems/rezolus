@@ -375,9 +375,35 @@ change the host or cgroup totals. Exporting that per-task accounting as
 costs a task-metadata event per new thread (comm and three cgroup names)
 and per rename, an exit event per thread, a walk of the per-pid map's
 populated slots each time a snapshot is served, and one series per thread
-plus one per rename in every recording, which on a host with thread churn
-or frequent renames is most of the recording. Set `task_attribution = true`
+still running at a snapshot after it has lived `task_min_lifetime`, plus
+one per rename after its series appears, in every recording. On a host with many threads that live longer than that, or with
+frequent renames, those series are most of the recording. Set `task_attribution = true`
 in `[samplers.cpu_usage]` (or `[defaults]`) to get it.
+
+A thread gets a `task_cpu_usage` series only once it has lived
+`task_min_lifetime` (a humantime string, default `"1s"`; `"0s"` turns the
+minimum off). The age is checked each time a snapshot is taken, when the
+sampler drains its event rings. A thread still running at the first
+snapshot after it reaches that age gets its series in that snapshot. The
+series' first value is the thread's CPU since it started, or since the
+agent first saw it for a thread that predates the agent. A thread that
+execs from outside the group leader takes the leader's pid and start time,
+so its age is the process's, and its CPU before the exec is in
+`cpu_usage_exited_tasks` under its old thread id, not in this series. A
+thread without a series has its CPU in `cpu_usage`, and in
+`cpu_usage_exited_tasks` once it exits. Unless `cgroup_attribution = false`,
+it is also in `cgroup_cpu_usage`, and in `cgroup_cpu_usage_exited_tasks`
+once it exits. With `process_attribution = true`, it is in
+`process_cpu_usage` until its process exits. Renames
+before the series first appears add no series; the series has the newest
+name. With `snapshot_format = "v2"` the minimum is 0: a V2 snapshot lists
+every non-zero slot, labelled or not, so a thread held back would appear
+with only its `id`. With either snapshot format, a value that does not
+parse as a humantime duration stops the agent at startup. The rates of a
+process's `task_cpu_usage` series sum to less than its CPU. They leave out threads
+that never got a series, each thread's CPU before its series' first sample,
+and each thread's CPU after its last sample. `process_cpu_usage` includes
+all three.
 
 `process_cpu_usage` is the option `process_attribution`, off by default
 and independent of `task_attribution`: one series per process (thread
