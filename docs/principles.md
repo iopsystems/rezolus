@@ -659,7 +659,15 @@ enforces, and that reviewers must protect:
   schema is what the sampler registers (bounded by real population — e.g.
   possible CPUs, never the array capacity); a quiet member reports zero,
   it does not vanish. Value-sentinel membership is a V2 transitional
-  behavior confined to the un-migrated default groups.
+  behavior confined to the un-migrated default groups. One exception: a
+  declared group of histograms is published from its first stamp, and its
+  histograms are left out until then rather than published with no values.
+  A histogram group no sampler on the host reads, such as one from a Linux
+  `stats.rs` compiled on macOS, is never stamped and never published. An
+  unstamped declared group of counters or gauges is still published, with
+  null members. A declared group must hold only histograms or no
+  histograms; a test (`no_declared_group_mixes_histograms_with_other_metrics`)
+  checks this.
 - **A changing population may revise its bound on every read.** Most groups
   set `set_member_bound` once at init from a boot-fixed population. A
   sampler whose population changes while it runs — the `filesystem` sweep,
