@@ -4,7 +4,7 @@ import {
 import { formatDateTime } from './util/utils.js';
 import { COLORS, CHART_PALETTE } from './util/colormap.js';
 import { FONTS } from './util/fonts.js';
-import { escapeHtml } from '../html.js';
+import { escapeHtml } from './util/html.js';
 
 export function isDarkTheme() {
     return typeof document !== 'undefined'

@@ -1,4 +1,4 @@
-import { firstVisibleLabelValue } from '../../labels.js';
+import { firstVisibleLabelValue } from './labels.js';
 // Pure comparison math. No DOM, no echarts, no mithril. Safe to run in Node.
 // Null-propagation is the universal rule: if either operand is null,
 // undefined, or NaN, the result is null.

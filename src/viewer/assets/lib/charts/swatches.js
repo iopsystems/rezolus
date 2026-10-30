@@ -12,7 +12,7 @@
 // `chartSwatches` and `swatchRowHtml` are pure (node-tested); `renderSwatchRow`
 // injects the DOM.
 
-import { escapeHtml } from '../html.js';
+import { escapeHtml } from './util/html.js';
 
 const finite = (v) => Number.isFinite(v);
 
@@ -109,7 +109,7 @@ export function renderSwatchRow(domNode, swatches) {
     el.innerHTML = swatchRowHtml(swatches);
 }
 
-/** The swatch row's inner HTML. Every field is escaped (see ../html.js). */
+/** The swatch row's inner HTML. Every field is escaped (see util/html.js). */
 export function swatchRowHtml(swatches) {
     return swatches.map((s) =>
         `<span class="swatch" title="${escapeHtml(s.title)}">`

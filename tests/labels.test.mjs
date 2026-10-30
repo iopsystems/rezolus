@@ -10,7 +10,7 @@ import {
     seriesNamer,
     namerForKeys,
     pairedSeriesNamer,
-} from '../src/viewer/assets/lib/labels.js';
+} from '../src/viewer/assets/lib/charts/util/labels.js';
 
 // The same list metriken_query::STORAGE_KEYS pins on the Rust side.
 test('storage keys match the query engine list', () => {

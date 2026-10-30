@@ -17,7 +17,7 @@ globalThis.document = {
     removeEventListener() {},
 };
 globalThis.getComputedStyle = globalThis.getComputedStyle || (() => ({ getPropertyValue: () => '' }));
-const { escapeHtml } = await import('../src/viewer/assets/lib/html.js');
+const { escapeHtml } = await import('../src/viewer/assets/lib/charts/util/html.js');
 const { getTooltipFormatter, buildFreezeFooterContent } = await import('../src/viewer/assets/lib/charts/base.js');
 const { swatchRowHtml } = await import('../src/viewer/assets/lib/charts/swatches.js');
 const { configureLineChart } = await import('../src/viewer/assets/lib/charts/line.js');

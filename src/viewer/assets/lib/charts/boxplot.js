@@ -1,4 +1,4 @@
-import { visibleLabels } from '../labels.js';
+import { visibleLabels } from './util/labels.js';
 import { insertGapNulls } from './util/utils.js';
 
 // Render a decoded display-mode boxplot series (see data.js

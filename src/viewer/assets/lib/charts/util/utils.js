@@ -1,4 +1,4 @@
-import { getStepOverride } from '../../data.js';
+import { chartHost } from '../host.js';
 
 /**
  * Insert a null data point at each gap in the time series so ECharts
@@ -17,7 +17,7 @@ export function insertGapNulls(zippedData, intervalSec) {
     // When a coarser step is selected, data points are spaced at the step
     // interval rather than the base sampling interval.  Use the effective
     // interval so legitimate step-spaced gaps don't break the line.
-    const effectiveSec = Math.max(intervalSec, getStepOverride() || 0);
+    const effectiveSec = Math.max(intervalSec, chartHost().getStepOverride() || 0);
     const thresholdMs = effectiveSec * 1500; // 1.5x interval in ms
     const result = [zippedData[0]];
     for (let i = 1; i < zippedData.length; i++) {
@@ -52,7 +52,7 @@ export function seriesGapGeometry(timeSec, intervalSec) {
     }
     steps.sort((a, b) => a - b);
     const median = steps.length ? steps[Math.floor(steps.length / 2)] : 0;
-    const effective = Math.max(intervalSec || 0, getStepOverride() || 0);
+    const effective = Math.max(intervalSec || 0, chartHost().getStepOverride() || 0);
     if (effective > 0 && median >= effective * 1.5) {
         return { gapInterval: median, step: false };
     }

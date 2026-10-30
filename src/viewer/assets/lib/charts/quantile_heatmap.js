@@ -18,7 +18,7 @@ import {
     COLORS,
     FONTS,
 } from './base.js';
-import { escapeHtml } from '../html.js';
+import { escapeHtml } from './util/html.js';
 import { rdYlGnColor } from './util/colormap.js';
 import {
     buildGradientCanvas,

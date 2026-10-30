@@ -29,7 +29,7 @@ import {
 } from './boxplot.js';
 import { chartSwatches, renderSwatchRow, SWATCH_ROW_HEIGHT } from './swatches.js';
 import { FAMILY_COLOR } from './util/family_math.js';
-import { executePromQLRangeQuery, applyResultToPlot } from '../data.js';
+import { chartHost } from './host.js';
 
 /**
  * Configures the Chart based on Chart.spec
@@ -467,7 +467,7 @@ async function toggleTotal(chart) {
     chart._totalPending = true;
     refreshTotalCheckbox(chart);
     try {
-        const result = await executePromQLRangeQuery(totalQuery);
+        const result = await chartHost().executePromQLRangeQuery(totalQuery);
         chart._totalPending = false;
         const ok = result?.status === 'success'
             && (result.data?.result?.length ?? 0) > 0;
@@ -476,7 +476,7 @@ async function toggleTotal(chart) {
             refreshTotalCheckbox(chart);
             return;
         }
-        applyResultToPlot(chart.spec, result);
+        chartHost().applyResultToPlot(chart.spec, result);
         chart._totalDataCache = chart.spec.data;
         chart._showTotal = true;
     } catch (e) {
@@ -505,7 +505,8 @@ function positionTotalToggle(chart, container) {
 }
 
 function ensureTotalToggle(chart) {
-    if (!chart.spec.promql_query_total) {
+    const { executePromQLRangeQuery, applyResultToPlot } = chartHost();
+    if (!chart.spec.promql_query_total || !executePromQLRangeQuery || !applyResultToPlot) {
         chart.domNode?.querySelector('.' + TOTAL_TOGGLE_CLASS)?.remove();
         return;
     }

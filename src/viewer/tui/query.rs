@@ -98,7 +98,7 @@ type Labels = HashMap<String, String>;
 
 /// Display labels for the series of one matrix result, in order, by the
 /// rules of the browser viewer (`data.js` with `seriesNamer` from
-/// `assets/lib/labels.js`):
+/// `assets/lib/charts/util/labels.js`):
 /// - a `percentile`/`quantile` label names its series `p99`-style;
 /// - a series with both `id` and `vendor` is `<vendor> <id>`;
 /// - otherwise a series is named by the visible labels whose values differ
