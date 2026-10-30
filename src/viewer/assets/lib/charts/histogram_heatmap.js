@@ -363,8 +363,8 @@ export function configureHistogramHeatmap(chart) {
     const countFormatter = createAxisLabelFormatter('count');
 
     // DOM legend bar: vertical gradient with tick marks/labels to the
-    // right of the chart canvas. Mounted inside chart.domNode so
-    // Mithril owns the legend's lifetime.
+    // right of the chart canvas. Mounted inside chart.domNode, so the
+    // legend is removed with the Chart's element.
     const barCanvas = buildGradientCanvas(infernoColor);
 
     // "Raw count" checkbox lives at the top-left of the grid (same

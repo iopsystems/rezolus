@@ -2,7 +2,8 @@
 // Selection: built interactively by selecting charts (write mode).
 // Report: loaded from JSON import or parquet metadata (read-only mode).
 
-import { ChartsState, Chart } from '../charts/chart.js';
+import { ChartsState } from '../charts/chart.js';
+import { ChartView } from '../ui/chart_view.js';
 import { CompareChartWrapper } from '../viewer_core.js';
 import { compareToggle } from '../ui/chart_controls.js';
 import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, getRangeOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
@@ -506,7 +507,7 @@ export const pinnedChart = (entry, spec, attrs, {
                 // own.
                 categoryMembers: entry.category_members,
             })
-            : m(Chart, { spec, chartsState: attrs.chartsState, interval }),
+            : m(ChartView, { spec, chartsState: attrs.chartsState, interval }),
         toggle: compare && compareToggle(spec, {
             compareMode: attrs.compareMode,
             toggles,

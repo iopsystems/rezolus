@@ -17,7 +17,7 @@ const {
     BADGE_CHIP_LIMIT,
     BASELINE_COLOR,
     EXPERIMENT_COLOR,
-} = await import('../src/viewer/assets/lib/charts/compare.js');
+} = await import('../src/viewer/assets/lib/compare/compare.js');
 const { CAPTURE_BASELINE, CAPTURE_EXPERIMENT } = await import('../src/viewer/assets/lib/data.js');
 
 const line = (id, alias, base) => ({

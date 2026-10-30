@@ -384,17 +384,27 @@
 
 ### Changed
 
-- **The viewer's chart modules import only from inside `charts/`, apart from
-  `chart.js` and `compare.js`.** `labels.js` and `html.js` moved to
-  `charts/util/`. The four data-layer functions a chart calls (the line
-  chart's total query and `applyResultToPlot`, the scatter chart's quantile
-  spectrum, the step override used to find gaps) come from `charts/host.js`,
-  which `data.js` fills when it loads. A page that embeds the charts without
-  `data.js` calls `setChartHost` with its own functions; without them the
-  line chart has no total toggle and the scatter chart no spectrum
-  checkboxes. `tests/charts_boundary.test.mjs` fails when a chart module
-  names a `.js`, `.mjs`, `.css` or `.json` path outside `charts/` other than the
-  imports it lists for those two files.
+- **The viewer's chart modules import nothing from outside `charts/` and do
+  not use Mithril.**
+  - `labels.js` and `html.js` moved to `charts/util/`, and A/B compare
+    (`compare.js`, `compare_math.js`) moved from `charts/` to `compare/`.
+  - What a chart needs from the page comes from `charts/host.js`. `data.js`
+    registers the data functions (the line chart's total query and
+    `applyResultToPlot`, the scatter chart's quantile spectrum, the step
+    override used to find gaps). The new `ui/chart_view.js` registers the
+    theme version, Mithril redraw and event annotations.
+  - Without a host, the line chart has no total toggle and the scatter chart
+    no spectrum checkboxes, a chart shows no events and offers no
+    "+ Add Event", and a chart takes up a theme change only when it next
+    reconfigures or the page rebuilds it.
+  - `charts/chart.js`'s `Chart` is a plain class: the page creates its
+    element and calls `mount(element)`, `update({ spec, interval })` and
+    `destroy()`. The viewer renders it with `m(ChartView, ...)` from
+    `ui/chart_view.js`. `<rezolus-chart>` drives `Chart` directly and no
+    longer needs Mithril on the page.
+  - `tests/charts_boundary.test.mjs` fails when a chart module names a `.js`,
+    `.mjs`, `.css` or `.json` path outside `charts/` or uses the Mithril
+    global.
 - **`task_cpu_usage` leaves out threads younger than one second.** A thread
   gets its series at the first snapshot after it has lived
   `task_min_lifetime` (`[samplers.cpu_usage]` or `[defaults]`, a humantime
