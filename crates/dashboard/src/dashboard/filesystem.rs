@@ -24,7 +24,9 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     capacity.describe(
         "Bytes per locally mounted filesystem. Available is what an unprivileged writer can \
          still use and is the number to alert on; Free also counts the superuser reserve. \
-         Used % is computed as df computes it, so the reserve does not count as used.",
+         Used % is computed as df computes it on Linux, so the reserve does not count as used. \
+         An APFS volume without a quota or reserve reports its container's size and free \
+         space, so its Used % is the container's.",
     );
     capacity.plot_promql(
         PlotOpts::gauge("Available", "available", Unit::Bytes),

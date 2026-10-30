@@ -272,6 +272,8 @@ enabled = false
 # Excludes network filesystems, FUSE, autofs and pseudo-filesystems. tmpfs
 # mounts are read into their own filesystem_tmpfs_* series (bytes and inodes
 # used per mount, at most 64 mounts): where tmpfs files sit, by mount.
+# On macOS it lists local volumes with getfsstat and reads each with statfs,
+# unprivileged.
 [samplers.filesystem]
 # interval = "60s"
 
