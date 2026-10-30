@@ -71,6 +71,19 @@
   undercount by an amount that depends on the workload: the more sleeps end
   with a wakeup during the switch that started them, the larger it is.
   (#1596)
+- **`scheduler` counts a preempted task as an involuntary switch whatever
+  its state.** A task preempted between setting its sleep state and calling
+  `schedule()` stays on the runqueue, and the kernel counts the switch as
+  involuntary. The sampler counted it as voluntary and did not stamp the
+  task's enqueue. Its wait before it next ran was then missing from
+  `scheduler_runqueue_latency`, or measured from the last wakeup to reach it,
+  including one that reached it while it was still running. When a wakeup
+  reached it while queued, the time from the preemption to the wakeup was
+  counted in `scheduler_offcpu` and, for an uninterruptible state, in
+  `scheduler_uninterruptible` and the `*_uninterruptible_wait` counters. The
+  time it ran before the preemption was missing from `scheduler_running`. The
+  switch is now classed from `sched_switch`'s `preempt` argument as well as
+  the task's state, and the wait is measured from the preemption. (#1601)
 - **`memory_writeback` loads on kernels whose `enum wb_reason` has no
   `WB_REASON_LAPTOP_TIMER`, such as 7.0.** The CO-RE relocation
   for it failed, the verifier rejected `writeback_start`, and the sampler

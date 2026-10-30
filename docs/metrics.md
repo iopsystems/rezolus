@@ -1491,6 +1491,10 @@ during the switch may already have replaced it. There
 undercount short uninterruptible sleeps by an amount that depends on the
 workload.
 
+On every kernel, a switch that preempts the task counts as involuntary
+whatever the task's state, as the kernel counts it: a preempted task stays on
+the runqueue, and its runqueue latency is measured from the preemption.
+
 | Metric | Description | Metadata |
 |--------|-------------|----------|
 | `scheduler_runqueue_latency` | Distribution of the amount of time tasks were waiting in the runqueue | |
