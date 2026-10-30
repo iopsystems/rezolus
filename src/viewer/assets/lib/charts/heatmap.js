@@ -367,8 +367,7 @@ export function configureHeatmap(chart) {
 
     // DOM legend bar: vertical gradient with tick marks and labels to
     // the right of the chart canvas. Mounted inside chart.domNode (the
-    // Chart component's own Mithril-managed div) so the legend is
-    // removed with the Chart on unmount/swap.
+    // Chart's own element) so the legend is removed with that element.
     const formatter = createAxisLabelFormatter(unitSystem || 'count');
     const legendColorFn = chart.spec.colormap
         ? buildRampColorFn(chart.spec.colormap)

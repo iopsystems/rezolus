@@ -19,6 +19,7 @@ globalThis.document = {
 globalThis.getComputedStyle = globalThis.getComputedStyle || (() => ({ getPropertyValue: () => '' }));
 const { escapeHtml } = await import('../src/viewer/assets/lib/charts/util/html.js');
 const { getTooltipFormatter, buildFreezeFooterContent } = await import('../src/viewer/assets/lib/charts/base.js');
+const { setChartHost, resetChartHost } = await import('../src/viewer/assets/lib/charts/host.js');
 const { swatchRowHtml } = await import('../src/viewer/assets/lib/charts/swatches.js');
 const { configureLineChart } = await import('../src/viewer/assets/lib/charts/line.js');
 const { configureHeatmap } = await import('../src/viewer/assets/lib/charts/heatmap.js');
@@ -121,13 +122,14 @@ test('a single-series line chart puts the plot title into the tooltip as text', 
 });
 
 test('the freeze footer escapes the chart id', () => {
-    const prev = globalThis.m;
-    globalThis.m = { route: { get: () => '/notebook' } };
+    // The "+ Add Event" link, which carries the chart id, is drawn only
+    // when the host allows adding events.
+    setChartHost({ eventEditingAllowed: () => true, openEventForm: () => {} });
     try {
         const html = buildFreezeFooterContent({ _tooltipFrozen: true, chartId: `"><img src=x onerror=alert(1)>` });
         assertEscaped(html, 'chartId');
     } finally {
-        globalThis.m = prev;
+        resetChartHost();
     }
 });
 

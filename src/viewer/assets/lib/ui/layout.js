@@ -3,7 +3,7 @@ import { notebookStore, reportStore, loadedSelectionStore, importSelection } fro
 import { toggleTheme, currentTheme } from './theme.js';
 import { collectGroupPlots, besideNames } from '../features/group_utils.js';
 import { groupSections } from './section_groups.js';
-import { compareBadgeRows, splitBadgeRows } from '../charts/compare.js';
+import { compareBadgeRows, splitBadgeRows } from '../compare/compare.js';
 import { setAlignmentKind, setFamily } from '../selection/selection.js';
 import { captureContext, resolveAnchor, isKindAnchor } from '../events/capture_events.js';
 

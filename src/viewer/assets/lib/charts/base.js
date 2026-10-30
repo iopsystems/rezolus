@@ -5,6 +5,7 @@ import { formatDateTime } from './util/utils.js';
 import { COLORS, CHART_PALETTE } from './util/colormap.js';
 import { FONTS } from './util/fonts.js';
 import { escapeHtml } from './util/html.js';
+import { chartHost } from './host.js';
 
 export function isDarkTheme() {
     return typeof document !== 'undefined'
@@ -38,31 +39,16 @@ export function applyNoData(chart) {
     chart.domNode.classList.add('no-data');
 }
 
-// Events (hairlines + description bubbles) only render in the curated
-// Notebook / Report views, never in the raw metric sections.
-export function isEventDisplayAllowed() {
-    if (typeof m === 'undefined' || !m.route?.get) return false;
-    const route = m.route.get() || '';
-    return route.startsWith('/notebook') || route.startsWith('/report');
-}
-
-// Event editing (the "+ Add Event" affordance) is narrower still —
-// Notebook only — so casual viewers can't mutate what they inspect.
-export function isEventEditingAllowed() {
-    if (typeof m === 'undefined' || !m.route?.get) return false;
-    const route = m.route.get() || '';
-    return route.startsWith('/notebook');
-}
-
 // Inner HTML for the freeze footer. Two states:
-//   - frozen → FROZEN (+ + Add Event in Notebook)
+//   - frozen → FROZEN (+ + Add Event where the host allows adding events)
 //   - not frozen → click-to-freeze hint
 // Exported so chart.js can reuse the same HTML on freeze toggle without
 // duplicating the branch logic.
 export function buildFreezeFooterContent(chart) {
     const frozen = chart && chart._tooltipFrozen;
     if (frozen) {
-        const addLink = isEventEditingAllowed()
+        const { eventEditingAllowed, openEventForm } = chartHost();
+        const addLink = eventEditingAllowed() && openEventForm
             ? `<a href="#" class="tooltip-add-event" data-chart-id="${escapeHtml(chart.chartId)}" style="display: block; margin-top: 4px; padding-top: 4px; border-top: 1px solid ${COLORS.borderMuted}; color: ${COLORS.accent}; text-decoration: none;">+ Add Event</a>`
             : '';
         return `<span class="tooltip-freeze-state">FROZEN · click to unfreeze</span>${addLink}`;
@@ -166,8 +152,8 @@ export function getTooltipFormatter(valueFormatter, pinnedSet, chart, style) {
     }
 }
 
-// Plot-area top offset (pixels from the top of the Chart component
-// div to the top of the echarts grid). Chart modules that add a
+// Plot-area top offset (pixels from the top of the Chart's element
+// to the top of the echarts grid). Chart modules that add a
 // legend above the plot (scatter, line-overlay, heatmap,
 // histogram_heatmap) push the grid down by this amount.
 //

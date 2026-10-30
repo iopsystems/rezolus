@@ -116,8 +116,8 @@ export function logTicks(min, max, count = 5) {
  * ticks/captions, so callers can swap palettes (e.g. diff-mode diverging
  * palette) or refresh labels without tearing down the container.
  *
- * @param {HTMLElement} wrapper - parent element (Chart component's own
- *     div; owned by Mithril so Mithril removes the legend on unmount)
+ * @param {HTMLElement} wrapper - parent element (the Chart's own element;
+ *     the legend goes when the page removes that element)
  * @param {HTMLCanvasElement} barCanvas - pre-rendered gradient canvas
  * @param {object} [options]
  * @param {Array<{pos:number,label:string}>} [options.ticks] - tick rows.

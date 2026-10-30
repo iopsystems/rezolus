@@ -31,6 +31,10 @@
 //   renderCompareChart({ spec, captures, anchors, toggles,
 //                        chartsState, interval, Chart })
 //
+//   Chart: the page's Mithril chart component. The viewer passes
+//          ui/chart_view.js's ChartView; charts/chart.js's Chart is a
+//          plain class and cannot be given to m() directly.
+//
 //   captures: [
 //     { id: 'baseline',   timeData, valueData, seriesMap?, heatmapData? },
 //     { id: 'experiment', timeData, valueData, seriesMap?, heatmapData? },
@@ -38,15 +42,15 @@
 //   anchors: { baseline: ms, experiment: ms }  — subtracted from each
 //            capture's timestamps to produce a relative (`+Xs`) x-axis.
 
-import { nullDiff, canonicalQuantileLabel, unifyHistogramRange, buildDeltaSpectrum } from './util/compare_math.js';
-import { DIVERGING_BLUE_GREEN, DIVERGING_BLUE_GREEN_DARK, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
-import { ensureHeatmapMatrix } from './util/heatmap_data.js';
-import { resolvedStyle } from './metric_types.js';
-import { visibleLabels } from './util/labels.js';
-import { isDarkTheme } from './base.js';
+import { nullDiff, canonicalQuantileLabel, unifyHistogramRange, buildDeltaSpectrum } from './compare_math.js';
+import { DIVERGING_BLUE_GREEN, DIVERGING_BLUE_GREEN_DARK, nullCellColor, resampleDivergingForRange } from '../charts/util/colormap.js';
+import { ensureHeatmapMatrix } from '../charts/util/heatmap_data.js';
+import { resolvedStyle } from '../charts/metric_types.js';
+import { visibleLabels } from '../charts/util/labels.js';
+import { isDarkTheme } from '../charts/base.js';
 import { CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
 import { captureContext, resolveAnchor } from '../events/capture_events.js';
-import { familyBand, familyBandLabel, FAMILY_COLOR } from './util/family_math.js';
+import { familyBand, familyBandLabel, FAMILY_COLOR } from '../charts/util/family_math.js';
 
 // Colors sourced from --compare-baseline / --compare-experiment in
 // style.css. The getter reads CSS custom properties lazily so a theme

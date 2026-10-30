@@ -1,4 +1,5 @@
-import { ChartsState, Chart } from '../charts/chart.js';
+import { ChartsState } from '../charts/chart.js';
+import { ChartView } from '../ui/chart_view.js';
 import { executePromQLRangeQuery, fetchHeatmapForPlot, getSelectedNode, injectLabel, buildEffectiveQueries } from '../data.js';
 import { runCgroupVariants } from './cgroup_selection.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec } from '../charts/metric_types.js';
@@ -116,7 +117,7 @@ const renderQueryChart = (resultData, query, chartsState, format) => {
 
         const key = `query-chart-multi-${query}`;
         return m('div.query-chart', { key }, [
-            m(Chart, {
+            m(ChartView, {
                 spec: {
                     opts: { id: key, title: 'Query Result', style: 'multi', format },
                     data: multi.allData,
@@ -132,7 +133,7 @@ const renderQueryChart = (resultData, query, chartsState, format) => {
 
     const key = `query-chart-line-${query}`;
     return m('div.query-chart', { key }, [
-        m(Chart, {
+        m(ChartView, {
             spec: {
                 opts: { id: key, title: 'Query Result', style: 'line', format },
                 data,
@@ -509,7 +510,7 @@ export const SingleChartView = {
             ]),
             m('div.single-chart-container', [
                 m('div.chart-wrapper', [
-                    m(Chart, { spec: chartSpec, chartsState: st.singleChartsState, interval: data.interval }),
+                    m(ChartView, { spec: chartSpec, chartsState: st.singleChartsState, interval: data.interval }),
                 ]),
             ]),
             canShowSamples && st.samples && m('p.chart-description',
