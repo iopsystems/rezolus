@@ -37,6 +37,11 @@
 // sleep. `bpf_ktime_get_ns()` is time since boot and does not reach bit 63.
 #define OFFCPU_UNINTERRUPTIBLE (1ULL << 63)
 
+// Set in an `enqueued_at` stamp written when a task was preempted with a
+// nonzero state. Such a task stays queued, and a wakeup that reaches it before
+// it runs only sets it TASK_RUNNING, so trace_enqueue() keeps this stamp.
+#define ENQUEUED_PREEMPTED (1ULL << 63)
+
 // Per-cgroup attribution is the config option `cgroup_attribution`, on by
 // default for this sampler. Written into read-only data before load, so with
 // it off the verifier removes the per-cgroup path (the task-group read, the
@@ -245,7 +250,7 @@ struct {
 // arguments are BTF pointers (see task_group_of() in cgroup.h).
 
 /* record enqueue timestamp */
-static __always_inline int trace_enqueue(u32 pid) {
+static __always_inline int trace_enqueue(u32 pid, bool keep) {
     u64 ts;
 
     if (!runqueue || !pid) {
@@ -253,6 +258,21 @@ static __always_inline int trace_enqueue(u32 pid) {
     }
 
     u32 slot = pid_slot(pid);
+
+    // With `keep`, a stamp marked ENQUEUED_PREEMPTED is left in place: the
+    // task's wait started at the preemption. The mark is cleared when the
+    // task next runs. An unmarked stamp can be left over from a wakeup of a
+    // task that was still running, and is replaced. A wakeup of a queued
+    // task runs under its runqueue's lock, as sched_switch does, so this read
+    // and the write below cannot interleave with the switch that writes or
+    // clears the mark. A task waking itself takes no lock, but it is running,
+    // so its stamp carries no mark.
+    if (keep) {
+        u64* tsp = bpf_map_lookup_elem(&enqueued_at, &slot);
+        if (tsp && (*tsp & ENQUEUED_PREEMPTED)) {
+            return 0;
+        }
+    }
 
     ts = bpf_ktime_get_ns();
     bpf_map_update_elem(&enqueued_at, &slot, &ts, 0);
@@ -265,14 +285,14 @@ static __always_inline int account__sched_wakeup(u64* ctx, bool btf) {
     /* TP_PROTO(struct task_struct *p) */
     struct task_struct* p = (void*)ctx[0];
 
-    return trace_enqueue(BTF_READ(btf, p, pid));
+    return trace_enqueue(BTF_READ(btf, p, pid), true);
 }
 
 static __always_inline int account__sched_wakeup_new(u64* ctx, bool btf) {
     /* TP_PROTO(struct task_struct *p) */
     struct task_struct* p = (void*)ctx[0];
 
-    return trace_enqueue(BTF_READ(btf, p, pid));
+    return trace_enqueue(BTF_READ(btf, p, pid), false);
 }
 
 // The cgroup id of `task`, or MAX_CGROUPS when it has none to count against.
@@ -308,8 +328,8 @@ static __always_inline u32 resolve_cgroup(struct task_struct* task, bool btf) {
 // `btf` is a compile-time constant: true in the tp_btf program, whose task
 // arguments are BTF pointers (see task_group_of() in cgroup.h).
 static __always_inline u32 runqueue_switch(struct task_struct* prev, s64 prev_state,
-                                           struct task_struct* next, u32 next_pid,
-                                           u32 processor_id, bool btf) {
+                                           bool preempted_asleep, struct task_struct* next,
+                                           u32 next_pid, u32 processor_id, bool btf) {
     u32 idx;
     // prev and next can belong to different cgroups; track each separately so
     // runqueue wait and off-cpu time are never charged to prev's cgroup.
@@ -363,7 +383,8 @@ static __always_inline u32 runqueue_switch(struct task_struct* prev, s64 prev_st
                 cgroup_incr(&cgroup_ivcsw, prev_cgroup_id);
             }
 
-            bpf_map_update_elem(&enqueued_at, &prev_slot, &ts, 0);
+            u64 enqueued = preempted_asleep ? ts | ENQUEUED_PREEMPTED : ts;
+            bpf_map_update_elem(&enqueued_at, &prev_slot, &enqueued, 0);
 
             tsp = bpf_map_lookup_elem(&running_at, &prev_slot);
             if (tsp && *tsp) {
@@ -382,12 +403,15 @@ static __always_inline u32 runqueue_switch(struct task_struct* prev, s64 prev_st
         }
     } else {
         // prev left the CPU while not runnable, i.e. it blocked: a voluntary
-        // context switch. This mirrors the kernel's own split, which counts
-        // nvcsw when a task deschedules with a non-zero state and nivcsw when
-        // it is preempted while runnable. Emitting both classes is what lets a
-        // consumer tell a blocking wakeup handoff from a true preemption --
-        // with only one class emitted, "no voluntary switches" and "voluntary
-        // switches not measured" are indistinguishable.
+        // context switch. The kernel counts nvcsw when a task that was not
+        // preempted deschedules with a non-zero state, and nivcsw otherwise.
+        // For tasks other than the idle task (see above), the one difference
+        // is a sleep cancelled by a pending signal: the kernel counts it as
+        // nvcsw, and this counts it as involuntary because the task stays
+        // queued. Emitting both classes is what lets a consumer tell a
+        // blocking wakeup handoff from a true preemption -- with only one
+        // class emitted, "no voluntary switches" and "voluntary switches not
+        // measured" are indistinguishable.
         idx = COUNTER_GROUP_WIDTH * processor_id + VCSW;
         array_incr(&counters, idx);
 
@@ -425,8 +449,9 @@ static __always_inline u32 runqueue_switch(struct task_struct* prev, s64 prev_st
 
         tsp = bpf_map_lookup_elem(&enqueued_at, &next_slot);
         if (tsp && *tsp) {
-            if (ts >= *tsp) {
-                delta_ns = ts - *tsp;
+            u64 enqueued_ts = *tsp & ~ENQUEUED_PREEMPTED;
+            if (ts >= enqueued_ts) {
+                delta_ns = ts - enqueued_ts;
 
                 histogram_incr(&runqlat, HISTOGRAM_POWER, delta_ns);
 
@@ -547,7 +572,16 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
 
     if (runqueue) {
         s64 prev_state;
-        if (sched_switch_prev_state) {
+        bool preempted_asleep = false;
+        // __schedule() blocks prev only when the switch is not a preemption
+        // and the state is nonzero. A preempted task stays queued whatever its
+        // state (a preemption can land between set_current_state() and
+        // schedule()), and the kernel counts the switch as involuntary.
+        if ((u8)ctx[0]) {
+            s64 state = sched_switch_prev_state ? (s64)(u32)ctx[3] : get_task_state_btf(prev, btf);
+            preempted_asleep = state != TASK_RUNNING;
+            prev_state = TASK_RUNNING;
+        } else if (sched_switch_prev_state) {
             prev_state = (u32)ctx[3];
             // A pending signal cancels the sleep: __schedule() sets __state to
             // TASK_RUNNING and leaves the task queued, but before 6.16 still
@@ -559,7 +593,8 @@ static __always_inline int account__sched_switch(u64* ctx, bool btf) {
         } else {
             prev_state = get_task_state_btf(prev, btf);
         }
-        next_cgroup_id = runqueue_switch(prev, prev_state, next, next_pid, processor_id, btf);
+        next_cgroup_id =
+            runqueue_switch(prev, prev_state, preempted_asleep, next, next_pid, processor_id, btf);
     }
 
     if (migrations) {
