@@ -398,9 +398,6 @@
   not use Mithril.**
   - `labels.js` and `html.js` moved to `charts/util/`, and A/B compare
     (`compare.js`, `compare_math.js`) moved from `charts/` to `compare/`.
-  - Display mode's binary decoders, tile cache, bucket-width arithmetic and
-    decoded-to-plot conversion moved from `data.js` to `charts/display.js`.
-    `data.js` still exports them, and still does the fetching.
   - What a chart needs from the page comes from `charts/host.js`. `data.js`
     registers the data functions (the line chart's total query and
     `applyResultToPlot`, the scatter chart's quantile spectrum, the step

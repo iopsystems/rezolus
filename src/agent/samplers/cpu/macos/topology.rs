@@ -100,7 +100,9 @@ pub fn id_of(cores: &[Core], kind: Kind, cluster: usize, core: usize) -> Option<
 
 /// The position named by a performance-state channel: `ECPU010` is the E
 /// cluster 0, core 1; `PCPU150` the P cluster 1, core 5. A one-digit suffix
-/// is a core of cluster 0 and a two-digit one is cluster and core.
+/// is a core of cluster 0, a two-digit one is cluster and core, and a
+/// three-digit one is cluster, core and `0`. A third digit other than `0`
+/// is not mapped, since its meaning is unknown.
 pub fn parse_state_channel(name: &str) -> Option<(Kind, usize, usize)> {
     let kind = Kind::from_letter(name.chars().next()?)?;
     let digits = name.get(1..)?.strip_prefix("CPU")?;
@@ -110,7 +112,7 @@ pub fn parse_state_channel(name: &str) -> Option<(Kind, usize, usize)> {
     let d: Vec<usize> = digits.bytes().map(|b| (b - b'0') as usize).collect();
     match d.as_slice() {
         [core] => Some((kind, 0, *core)),
-        [cluster, core] | [cluster, core, _] => Some((kind, *cluster, *core)),
+        [cluster, core] | [cluster, core, 0] => Some((kind, *cluster, *core)),
         _ => None,
     }
 }
@@ -139,7 +141,7 @@ pub fn state_index(name: &str) -> Option<usize> {
 }
 
 /// A frequency table property's frequencies in Hz: pairs of little-endian
-/// `u32` frequency and voltage, the frequency in kHz on M4 and in Hz before.
+/// `u32` frequency and voltage, the frequency in Hz or kHz.
 pub fn parse_frequency_table(bytes: &[u8]) -> Vec<u64> {
     bytes
         .as_chunks::<8>()
@@ -211,6 +213,7 @@ mod tests {
             Some((Kind::Performance, 0, 3))
         );
         assert_eq!(parse_state_channel("ECPU"), None);
+        assert_eq!(parse_state_channel("PCPU151"), None);
         assert_eq!(parse_state_channel("GPUPH"), None);
         assert_eq!(
             parse_energy_channel("EACC_CPU2"),

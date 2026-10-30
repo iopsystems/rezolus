@@ -4,10 +4,10 @@ use crate::agent::timing::AcquisitionGroup;
 use crate::agent::{MAX_CPUS, MAX_PACKAGES};
 use linkme::distributed_slice;
 
-// Registered here (not in mod.rs) because this file is also `include!`d
-// directly on non-Linux platforms (see `cpu/mod.rs`'s
-// `#[cfg(not(target_os = "linux"))] pub mod stats` fallback) to keep metric
-// identity stable across platforms, same as `cpu_frequency`'s
+// Registered here (not in mod.rs) because this file is also `include!`d by
+// the macOS sampler and, on platforms other than Linux and macOS, directly
+// (see `cpu/mod.rs`'s `#[cfg(not(target_os = "linux"))] pub mod stats`
+// fallback) to keep metric identity stable across platforms, same as `cpu_frequency`'s
 // `CPU_FREQUENCY_ACQ`.
 //
 // Acquisition groups are split PER METRIC, not per entity space or read loop.

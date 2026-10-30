@@ -52,34 +52,41 @@ fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
     }
+    Ok(Some(Box::new(Frequency::new()?)))
+}
 
-    let cores = topology::cores()
-        .ok_or_else(|| Unsupported(format!("{NAME}: no CPU topology in the device tree")))?;
-    let (e, p) = topology::frequency_tables()
-        .ok_or_else(|| Unsupported(format!("{NAME}: no performance-state frequency tables")))?;
-    let subscription = Subscription::new(&[(GROUP, Some(SUBGROUP))])
-        .ok_or_else(|| Unsupported(format!("{NAME}: IOReport has no {SUBGROUP} channels")))?;
-    let channels = subscription
-        .sample()
-        .ok_or_else(|| anyhow::anyhow!("{NAME}: IOReport sample failed"))?;
+impl Frequency {
+    /// Read the topology and tables, subscribe, and set the group's members
+    /// to the cores a first sample maps.
+    fn new() -> Result<Self, anyhow::Error> {
+        let cores = topology::cores()
+            .ok_or_else(|| Unsupported(format!("{NAME}: no CPU topology in the device tree")))?;
+        let (e, p) = topology::frequency_tables()
+            .ok_or_else(|| Unsupported(format!("{NAME}: no performance-state frequency tables")))?;
+        let subscription = Subscription::new(&[(GROUP, Some(SUBGROUP))])
+            .ok_or_else(|| Unsupported(format!("{NAME}: IOReport has no {SUBGROUP} channels")))?;
+        let channels = subscription
+            .sample()
+            .ok_or_else(|| anyhow::anyhow!("{NAME}: IOReport sample failed"))?;
 
-    let tables = HashMap::from([(Kind::Efficiency, e), (Kind::Performance, p)]);
-    let read = read(&channels, system_ticks(), &cores, &tables);
-    if read.is_empty() {
-        return Err(Unsupported(format!(
-            "{NAME}: no core's performance states match its frequency table"
-        ))
-        .into());
+        let tables = HashMap::from([(Kind::Efficiency, e), (Kind::Performance, p)]);
+        let read = read(&channels, system_ticks(), &cores, &tables);
+        if read.is_empty() {
+            return Err(Unsupported(format!(
+                "{NAME}: no core's performance states match its frequency table"
+            ))
+            .into());
+        }
+        let ids: Vec<usize> = read.iter().map(|r| r.id).collect();
+        CPU_FREQUENCY_ACQ.set_member_set(&ids);
+        debug!("{NAME}: {} core(s) of {}", ids.len(), cores.len());
+
+        Ok(Frequency {
+            subscription: Mutex::new(subscription),
+            cores,
+            tables,
+        })
     }
-    let ids: Vec<usize> = read.iter().map(|r| r.id).collect();
-    CPU_FREQUENCY_ACQ.set_member_set(&ids);
-    debug!("{NAME}: {} core(s) of {}", ids.len(), cores.len());
-
-    Ok(Some(Box::new(Frequency {
-        subscription: Mutex::new(subscription),
-        cores,
-        tables,
-    })))
 }
 
 #[distributed_slice(SAMPLERS)]
@@ -273,6 +280,26 @@ mod tests {
                 "cpu {} at {hz} Hz outside {table:?}",
                 a.id
             );
+        }
+    }
+
+    /// This machine, through `new` and `refresh`: every core is a member,
+    /// is set, and the group is stamped.
+    #[tokio::test]
+    async fn new_and_refresh_set_every_core_and_stamp_the_group() {
+        let frequency = Frequency::new().unwrap();
+        frequency.refresh().await;
+
+        let mut ids: Vec<usize> = topology::cores().unwrap().iter().map(|c| c.id).collect();
+        ids.sort_unstable();
+        let mut members = CPU_FREQUENCY_ACQ.member_set().unwrap().to_vec();
+        members.sort_unstable();
+        assert_eq!(members, ids);
+        assert!(CPU_FREQUENCY_ACQ.window().is_some());
+        for id in ids {
+            assert!(CPU_TSC.value(id).is_some(), "cpu {id} tsc unset");
+            assert!(CPU_MPERF.value(id).is_some(), "cpu {id} mperf unset");
+            assert!(CPU_APERF.value(id).is_some(), "cpu {id} aperf unset");
         }
     }
 }

@@ -9,12 +9,12 @@
 //! | `cpu_dram_energy{id="0"}` | `DRAM` |
 //! | `cpu_soc_energy{block}` | every other channel, such as `ANE`, `DISP`, `AMCC`: not a CPU cluster's (`EACC`, `PACC`), and without `CPU` or `GPU` in its name |
 //!
-//! The channels are counted in mJ, uJ or nJ by channel and converted. The
-//! cluster totals (`EACC_CPU`, `PACC<c>_CPU`), the clusters' SRAM and CPM
-//! channels and the `ECPUDTL`/`PCPUDTL` channels are not published; `GPU` (mJ) is not
-//! published beside `GPU Energy` (nJ). macOS has no package or platform
-//! total, so `cpu_package_energy` and `cpu_platform_energy` are not set, nor
-//! are the C-state residencies.
+//! The channels are counted in mJ, uJ or nJ by channel and converted. Not
+//! published: the cluster totals (`EACC_CPU`, `PACC<c>_CPU`), the clusters'
+//! SRAM and CPM channels, the `ECPUDTL`/`PCPUDTL` channels, and `GPU` (mJ)
+//! beside `GPU Energy` (nJ). The `Energy Model` group has no package or
+//! platform channel, so `cpu_package_energy` and `cpu_platform_energy` are
+//! not set, nor are the C-state residencies.
 
 const NAME: &str = "cpu_power";
 
@@ -142,88 +142,97 @@ fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
     }
+    Ok(Some(Box::new(Power::new()?)))
+}
 
-    let cores = topology::cores()
-        .ok_or_else(|| Unsupported(format!("{NAME}: no CPU topology in the device tree")))?;
-    let subscription = Subscription::new(&[(GROUP, None)])
-        .ok_or_else(|| Unsupported(format!("{NAME}: IOReport has no {GROUP} channels")))?;
-    let channels = subscription
-        .sample()
-        .ok_or_else(|| anyhow::anyhow!("{NAME}: IOReport sample failed"))?;
+impl Power {
+    /// Subscribe, and set every group's members and each SoC block's slot
+    /// and label from a first sample.
+    fn new() -> Result<Self, anyhow::Error> {
+        let cores = topology::cores()
+            .ok_or_else(|| Unsupported(format!("{NAME}: no CPU topology in the device tree")))?;
+        let subscription = Subscription::new(&[(GROUP, None)])
+            .ok_or_else(|| Unsupported(format!("{NAME}: IOReport has no {GROUP} channels")))?;
+        let channels = subscription
+            .sample()
+            .ok_or_else(|| anyhow::anyhow!("{NAME}: IOReport sample failed"))?;
 
-    let read = read(&channels, &cores);
-    if read.is_empty() {
-        return Err(Unsupported(format!("{NAME}: no IOReport energy channel to publish")).into());
-    }
-
-    // Each group's members are the slots this machine reports; the groups
-    // this sampler does not set declare none.
-    let has = |t: &Target| read.iter().any(|(r, _)| r == t);
-    let package = |present: bool| if present { vec![0] } else { vec![] };
-    CPU_POWER_CORES_ENERGY_ACQ.set_member_set(&package(has(&Target::Cores)));
-    CPU_POWER_IGPU_ENERGY_ACQ.set_member_set(&package(has(&Target::Gpu)));
-    CPU_POWER_DRAM_ENERGY_ACQ.set_member_set(&package(has(&Target::Dram)));
-    let core_ids: Vec<usize> = read
-        .iter()
-        .filter_map(|(t, _)| match t {
-            Target::Core(id) => Some(*id),
-            _ => None,
-        })
-        .collect();
-    CPU_POWER_CORE_ENERGY_ACQ.set_member_set(&core_ids);
-    for unused in [
-        &CPU_POWER_PACKAGE_ENERGY_ACQ,
-        &CPU_POWER_PLATFORM_ENERGY_ACQ,
-        &CPU_POWER_CORE_C1_ACQ,
-        &CPU_POWER_CORE_C2_ACQ,
-        &CPU_POWER_CORE_C3_ACQ,
-        &CPU_POWER_CORE_C6_ACQ,
-        &CPU_POWER_CORE_C7_ACQ,
-        &CPU_POWER_CORE_C8_ACQ,
-        &CPU_POWER_CORE_C9_ACQ,
-        &CPU_POWER_CORE_C10_ACQ,
-        &CPU_POWER_PACKAGE_C1_ACQ,
-        &CPU_POWER_PACKAGE_C2_ACQ,
-        &CPU_POWER_PACKAGE_C3_ACQ,
-        &CPU_POWER_PACKAGE_C6_ACQ,
-        &CPU_POWER_PACKAGE_C7_ACQ,
-        &CPU_POWER_PACKAGE_C8_ACQ,
-        &CPU_POWER_PACKAGE_C9_ACQ,
-        &CPU_POWER_PACKAGE_C10_ACQ,
-        &CPU_POWER_CORE_CSTATE_ACQ,
-    ] {
-        unused.set_member_set(&[]);
-    }
-
-    // A slot per SoC block, labeled once: the channel list is fixed for the
-    // life of the subscription.
-    let mut blocks = Vec::new();
-    for (t, _) in &read {
-        if let Target::Soc(block) = t {
-            if blocks.len() == MAX_BLOCKS {
-                warn!("{NAME}: more than {MAX_BLOCKS} SoC blocks; {block} is not published");
-                continue;
-            }
-            let slot = blocks.len();
-            SOC_IDENTITY.assign(
-                slot,
-                std::collections::BTreeMap::from([("block".to_string(), block.clone())]),
+        let read = read(&channels, &cores);
+        if read.is_empty() {
+            return Err(
+                Unsupported(format!("{NAME}: no IOReport energy channel to publish")).into(),
             );
-            blocks.push(block.clone());
         }
-    }
-    CPU_POWER_SOC_ENERGY_ACQ.set_member_set(&(0..blocks.len()).collect::<Vec<_>>());
-    debug!(
-        "{NAME}: {} core(s), {} SoC block(s)",
-        core_ids.len(),
-        blocks.len()
-    );
 
-    Ok(Some(Box::new(Power {
-        subscription: Mutex::new(subscription),
-        cores,
-        blocks,
-    })))
+        // Each group's members are the slots this machine reports; the groups
+        // this sampler does not set declare none.
+        let has = |t: &Target| read.iter().any(|(r, _)| r == t);
+        let package = |present: bool| if present { vec![0] } else { vec![] };
+        CPU_POWER_CORES_ENERGY_ACQ.set_member_set(&package(has(&Target::Cores)));
+        CPU_POWER_IGPU_ENERGY_ACQ.set_member_set(&package(has(&Target::Gpu)));
+        CPU_POWER_DRAM_ENERGY_ACQ.set_member_set(&package(has(&Target::Dram)));
+        let core_ids: Vec<usize> = read
+            .iter()
+            .filter_map(|(t, _)| match t {
+                Target::Core(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        CPU_POWER_CORE_ENERGY_ACQ.set_member_set(&core_ids);
+        for unused in [
+            &CPU_POWER_PACKAGE_ENERGY_ACQ,
+            &CPU_POWER_PLATFORM_ENERGY_ACQ,
+            &CPU_POWER_CORE_C1_ACQ,
+            &CPU_POWER_CORE_C2_ACQ,
+            &CPU_POWER_CORE_C3_ACQ,
+            &CPU_POWER_CORE_C6_ACQ,
+            &CPU_POWER_CORE_C7_ACQ,
+            &CPU_POWER_CORE_C8_ACQ,
+            &CPU_POWER_CORE_C9_ACQ,
+            &CPU_POWER_CORE_C10_ACQ,
+            &CPU_POWER_PACKAGE_C1_ACQ,
+            &CPU_POWER_PACKAGE_C2_ACQ,
+            &CPU_POWER_PACKAGE_C3_ACQ,
+            &CPU_POWER_PACKAGE_C6_ACQ,
+            &CPU_POWER_PACKAGE_C7_ACQ,
+            &CPU_POWER_PACKAGE_C8_ACQ,
+            &CPU_POWER_PACKAGE_C9_ACQ,
+            &CPU_POWER_PACKAGE_C10_ACQ,
+            &CPU_POWER_CORE_CSTATE_ACQ,
+        ] {
+            unused.set_member_set(&[]);
+        }
+
+        // A slot per SoC block, labeled once: the channel list is fixed for the
+        // life of the subscription.
+        let mut blocks = Vec::new();
+        for (t, _) in &read {
+            if let Target::Soc(block) = t {
+                if blocks.len() == MAX_BLOCKS {
+                    warn!("{NAME}: more than {MAX_BLOCKS} SoC blocks; {block} is not published");
+                    continue;
+                }
+                let slot = blocks.len();
+                SOC_IDENTITY.assign(
+                    slot,
+                    std::collections::BTreeMap::from([("block".to_string(), block.clone())]),
+                );
+                blocks.push(block.clone());
+            }
+        }
+        CPU_POWER_SOC_ENERGY_ACQ.set_member_set(&(0..blocks.len()).collect::<Vec<_>>());
+        debug!(
+            "{NAME}: {} core(s), {} SoC block(s)",
+            core_ids.len(),
+            blocks.len()
+        );
+
+        Ok(Power {
+            subscription: Mutex::new(subscription),
+            cores,
+            blocks,
+        })
+    }
 }
 
 #[distributed_slice(SAMPLERS)]
@@ -376,5 +385,39 @@ mod tests {
             sum.abs_diff(total) <= slack,
             "cores {sum} uJ vs total {total} uJ"
         );
+    }
+
+    /// This machine, through `new` and `refresh`: every core is a member of
+    /// the per-core group, each group read is stamped, the unused groups
+    /// have no members, and each SoC slot is set and labelled.
+    #[tokio::test]
+    async fn new_and_refresh_set_members_windows_and_blocks() {
+        let power = Power::new().unwrap();
+        power.refresh().await;
+
+        let mut ids: Vec<usize> = topology::cores().unwrap().iter().map(|c| c.id).collect();
+        ids.sort_unstable();
+        let mut members = CPU_POWER_CORE_ENERGY_ACQ.member_set().unwrap().to_vec();
+        members.sort_unstable();
+        assert_eq!(members, ids);
+        for id in &ids {
+            assert!(CPU_CORE_ENERGY.value(*id).is_some(), "core {id} unset");
+        }
+        for group in groups() {
+            assert!(group.window().is_some(), "{} unstamped", group.name);
+        }
+        assert_eq!(CPU_POWER_PACKAGE_ENERGY_ACQ.member_set(), Some(&[][..]));
+        assert_eq!(CPU_POWER_CORE_CSTATE_ACQ.member_set(), Some(&[][..]));
+
+        assert!(!power.blocks.is_empty());
+        let labels: std::collections::HashMap<usize, String> = CPU_SOC_ENERGY
+            .metadata_snapshot()
+            .into_iter()
+            .filter_map(|(slot, m)| Some((slot, m.get("block")?.clone())))
+            .collect();
+        for (slot, block) in power.blocks.iter().enumerate() {
+            assert_eq!(labels.get(&slot), Some(block), "slot {slot}");
+            assert!(CPU_SOC_ENERGY.value(slot).is_some(), "{block} unset");
+        }
     }
 }
