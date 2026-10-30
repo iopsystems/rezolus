@@ -108,18 +108,32 @@
           "description": "Packets dropped at the network layer and TCP-level retransmissions — key health signals.",
           "plots": [
             {
-              "kind": "counter",
-              "title": "Packet Drops",
-              "id": "packet-drops",
-              "unit": "rate",
-              "query": "sum(irate(network_drop[5m]))"
+              "when": {
+                "present": "network_drop"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Packet Drops",
+                  "id": "packet-drops",
+                  "unit": "rate",
+                  "query": "sum(irate(network_drop[5m]))"
+                }
+              ]
             },
             {
-              "kind": "counter",
-              "title": "TCP Retransmits",
-              "id": "tcp-retransmits",
-              "unit": "rate",
-              "query": "sum(irate(tcp_retransmit[5m]))"
+              "when": {
+                "present": "tcp_retransmit"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "TCP Retransmits",
+                  "id": "tcp-retransmits",
+                  "unit": "rate",
+                  "query": "sum(irate(tcp_retransmit[5m]))"
+                }
+              ]
             }
           ]
         }
@@ -134,21 +148,28 @@
           "description": "Time from packet received to being processed by the application.",
           "plots": [
             {
-              "rate_mean": {
-                "title": "TCP Packet",
-                "id": "tcp-packet-latency",
-                "selector": "tcp_packet_latency",
-                "mean_unit": "time"
-              }
-            },
-            {
-              "kind": "latency",
-              "title": "TCP Packet Latency",
-              "id": "tcp-packet-latency",
-              "query": "tcp_packet_latency",
-              "width": "full",
-              "axis_label": "Latency",
-              "unit_system": "time"
+              "when": {
+                "present": "tcp_packet_latency"
+              },
+              "then": [
+                {
+                  "rate_mean": {
+                    "title": "TCP Packet",
+                    "id": "tcp-packet-latency",
+                    "selector": "tcp_packet_latency",
+                    "mean_unit": "time"
+                  }
+                },
+                {
+                  "kind": "latency",
+                  "title": "TCP Packet Latency",
+                  "id": "tcp-packet-latency",
+                  "query": "tcp_packet_latency",
+                  "width": "full",
+                  "axis_label": "Latency",
+                  "unit_system": "time"
+                }
+              ]
             }
           ]
         },

@@ -11,6 +11,86 @@
       "id": "traffic",
       "subgroups": [
         {
+          "name": "Host Bandwidth",
+          "description": "Bits per second crossing the host boundary, counted once at the interface bound to a device driver — the wire on bare metal, the hypervisor boundary in a VM guest. Matches the NIC's own counters. Excludes intra-host traffic between virtual interfaces (container east-west, loopback).",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Host Bandwidth Transmit",
+                "id": "host-bandwidth-tx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_host_bytes{direction=\"transmit\"}[5m])) * 8"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Host Bandwidth Receive",
+                "id": "host-bandwidth-rx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_host_bytes{direction=\"receive\"}[5m])) * 8"
+            }
+          ]
+        },
+        {
+          "name": "Host Packets",
+          "description": "Packet rate crossing the host boundary, counted once per packet rather than once per interface it traverses.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Host Packets Transmit",
+                "id": "host-packets-tx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_host_packets{direction=\"transmit\"}[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Host Packets Receive",
+                "id": "host-packets-rx",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_host_packets{direction=\"receive\"}[5m]))"
+            }
+          ]
+        },
+        {
           "name": "Interface Bandwidth",
           "description": "Bits per second summed over every network interface the traffic traverses. A packet crossing a stacked interface (bond, VLAN, bridge, tunnel) is counted once per layer, so this reads higher than the host bandwidth above — roughly 2x on a bonded host, 3x for VLAN-over-bond. It also includes loopback and intra-host virtual traffic that never reaches a NIC, which on a container or VM host can dominate.",
           "plots": [
@@ -103,23 +183,6 @@
             {
               "data": [],
               "opts": {
-                "title": "Packet Drops",
-                "id": "packet-drops",
-                "type": "delta_counter",
-                "format": {
-                  "x_axis_label": null,
-                  "y_axis_label": null,
-                  "unit_system": "rate",
-                  "precision": 2,
-                  "log_scale": null,
-                  "value_label": null
-                }
-              },
-              "promql_query": "sum(irate(network_drop[5m]))"
-            },
-            {
-              "data": [],
-              "opts": {
                 "title": "TCP Retransmits",
                 "id": "tcp-retransmits",
                 "type": "delta_counter",
@@ -143,14 +206,14 @@
       "id": "tcp",
       "subgroups": [
         {
-          "name": "Packet Latency",
-          "description": "Time from packet received to being processed by the application.",
+          "name": "Retransmission & Loss Recovery",
+          "description": "Retransmission timeouts stall a connection for at least the minimum RTO (200 ms by default); tail loss probes and fast recovery repair loss without waiting for one. D-SACKs received are retransmissions the peer did not need.",
           "plots": [
             {
               "data": [],
               "opts": {
-                "title": "TCP Packet Rate",
-                "id": "tcp-packet-latency-rate",
+                "title": "RTO Expirations",
+                "id": "tcp-rto-expirations",
                 "type": "delta_counter",
                 "format": {
                   "x_axis_label": null,
@@ -161,48 +224,87 @@
                   "value_label": null
                 }
               },
-              "promql_query": "sum(histogram_irate(tcp_packet_latency))"
+              "promql_query": "sum(irate(tcp_rto_expirations[5m]))"
             },
             {
               "data": [],
               "opts": {
-                "title": "TCP Packet Mean/Total",
-                "id": "tcp-packet-latency-mean",
-                "type": "gauge",
+                "title": "Segments Retransmitted",
+                "id": "tcp-segments-retransmitted",
+                "type": "delta_counter",
                 "format": {
                   "x_axis_label": null,
-                  "y_axis_label": "Mean",
-                  "unit_system": "time",
+                  "y_axis_label": null,
+                  "unit_system": "rate",
                   "precision": 2,
                   "log_scale": null,
                   "value_label": null
                 }
               },
-              "promql_query": "histogram_mean(tcp_packet_latency)",
-              "promql_query_total": "histogram_sum(tcp_packet_latency)"
+              "promql_query": "sum(irate(tcp_segments_retransmitted[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Delayed ACKs & Autocorking",
+          "description": "A delayed-ACK firing means this host held an ACK for the delayed-ACK timeout (40 ms minimum) because nothing outgoing carried it; a peer sending with Nagle, or limited by its congestion or receive window, may be waiting for it. Duplicate data segments are usually the peer retransmitting data already received; on each one the kernel sends its next ACKs immediately, up to 16. Autocorking holds back small sends while earlier data is still queued in the qdisc or device.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Delayed ACKs",
+                "id": "tcp-delayed-acks",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_delayed_acks[5m]))"
+            }
+          ]
+        },
+        {
+          "name": "Connections",
+          "description": "Connection state changes, failures and errors in the agent's network namespace.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Input Errors",
+                "id": "tcp-input-errors",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "rate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(tcp_input_errors[5m]))"
             },
             {
               "data": [],
               "opts": {
-                "title": "TCP Packet Latency",
-                "id": "tcp-packet-latency",
-                "type": "histogram",
-                "subtype": "percentiles",
+                "title": "Checksum Errors",
+                "id": "tcp-checksum-errors",
+                "type": "delta_counter",
                 "format": {
                   "x_axis_label": null,
-                  "y_axis_label": "Latency",
-                  "unit_system": "time",
+                  "y_axis_label": null,
+                  "unit_system": "rate",
                   "precision": 2,
-                  "log_scale": true,
-                  "range": {
-                    "min": 0.0,
-                    "max": 100000000000.0
-                  },
+                  "log_scale": null,
                   "value_label": null
                 }
               },
-              "promql_query": "tcp_packet_latency",
-              "width": "full"
+              "promql_query": "sum(irate(tcp_checksum_errors[5m]))"
             }
           ]
         }
