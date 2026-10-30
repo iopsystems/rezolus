@@ -355,6 +355,12 @@
   Limit charts and the NUMA group only when the recording has them.** A
   macOS recording has none of them, and a Linux kernel without `CONFIG_NUMA`
   has no NUMA counters.
+- **The network dashboard draws the Packet Drops, TCP Retransmits and TCP
+  Packet Latency charts only when the recording has them.** A macOS
+  recording has no `network_drop` or `tcp_packet_latency`, and has
+  `tcp_retransmit` only when the agent could read the kernel's TCP
+  statistics (as root, by default). The Errors and TCP
+  groups are left out when none of their charts are drawn.
 - **`cpu_usage` on macOS is per CPU.** It was three host-wide counters; it
   is now one series per CPU in each of `user` and `system`, labelled `id`,
   so the per-CPU charts draw on a Mac. Niced time is counted

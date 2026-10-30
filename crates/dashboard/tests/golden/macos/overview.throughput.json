@@ -65,6 +65,46 @@
       "id": "network",
       "subgroups": [
         {
+          "name": "Host Bandwidth",
+          "description": "Transmit and receive bit rates crossing the host boundary, counted once at the interface bound to a device driver. Matches the NIC's own counters.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Host Transmit Bandwidth",
+                "id": "network-host-transmit-bandwidth",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_host_bytes{direction=\"transmit\"}[5m])) * 8"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Host Receive Bandwidth",
+                "id": "network-host-receive-bandwidth",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bitrate",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(network_host_bytes{direction=\"receive\"}[5m])) * 8"
+            }
+          ]
+        },
+        {
           "name": "Interface Bandwidth",
           "description": "Transmit and receive bit rates summed over every interface traversed. Counts a packet once per stacked layer (bond, VLAN, bridge), and includes intra-host virtual traffic, so this reads higher than the host bandwidth above.",
           "plots": [
@@ -481,7 +521,7 @@
                   "value_label": null
                 }
               },
-              "promql_query": "(sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8) / (sum(irate(requests[5m])))"
+              "promql_query": "(sum(irate(network_host_bytes{direction=\"transmit\"}[5m])) * 8) / (sum(irate(requests[5m])))"
             },
             {
               "data": [],
@@ -498,7 +538,7 @@
                   "value_label": null
                 }
               },
-              "promql_query": "(sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8) / (sum(irate(requests[5m])))"
+              "promql_query": "(sum(irate(network_host_bytes{direction=\"receive\"}[5m])) * 8) / (sum(irate(requests[5m])))"
             }
           ]
         }

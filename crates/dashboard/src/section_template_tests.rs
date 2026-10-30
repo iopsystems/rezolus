@@ -370,9 +370,12 @@ fn legacy(bench: &Catalog) -> Catalog {
     out
 }
 
-/// The memory series a macOS agent publishes: no buffers, LRU lists,
-/// commit accounting or swap cache, and the macOS-only page classes and
-/// compressor.
+/// The memory, network and TCP series a macOS agent publishes when it can
+/// read the TCP statistics. Memory has no buffers, LRU lists, commit
+/// accounting or swap cache, and has the macOS-only page classes and
+/// compressor. Network has bytes and packets but no network_drop. TCP has
+/// the tcp_mib, tcp_retransmit and tcp_bytes counters but no
+/// tcp_packet_latency.
 fn macos() -> Catalog {
     let mut out = Catalog::default();
     for name in [
@@ -399,8 +402,29 @@ fn macos() -> Catalog {
         "memory_decompressions",
         "memory_pageins",
         "memory_pageouts",
+        "tcp_retransmit",
+        "tcp_segments_retransmitted",
+        "tcp_delayed_acks",
+        "tcp_rto_expirations",
+        "tcp_checksum_errors",
+        "tcp_input_errors",
     ] {
         out.counters.insert(name.into(), vec![labels(&[])]);
+    }
+    for name in [
+        "network_bytes",
+        "network_packets",
+        "network_host_bytes",
+        "network_host_packets",
+        "tcp_bytes",
+    ] {
+        out.counters.insert(
+            name.into(),
+            vec![
+                labels(&[("direction", "receive")]),
+                labels(&[("direction", "transmit")]),
+            ],
+        );
     }
     out
 }

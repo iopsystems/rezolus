@@ -83,44 +83,60 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
 
     view.group(traffic);
 
-    let mut errors = Group::new("Errors", "errors");
+    // Each chart is drawn only when the recording has its metric: a macOS
+    // agent records no network_drop or tcp_packet_latency, and records
+    // tcp_retransmit only when it can read net.inet.tcp.stats (as root, by
+    // default).
+    let drops = has_metric(data, "network_drop");
+    let retransmits = has_metric(data, "tcp_retransmit");
+    if drops || retransmits {
+        let mut errors = Group::new("Errors", "errors");
 
-    let health = errors.subgroup("Drops & Retransmits");
-    health.describe(
-        "Packets dropped at the network layer and TCP-level retransmissions — key health signals.",
-    );
-    health.plot_promql(
-        PlotOpts::counter("Packet Drops", "packet-drops", Unit::Rate),
-        "sum(irate(network_drop[5m]))".to_string(),
-    );
-    health.plot_promql(
-        PlotOpts::counter("TCP Retransmits", "tcp-retransmits", Unit::Rate),
-        "sum(irate(tcp_retransmit[5m]))".to_string(),
-    );
+        let health = errors.subgroup("Drops & Retransmits");
+        health.describe(
+            "Packets dropped at the network layer and TCP-level retransmissions — key health signals.",
+        );
+        if drops {
+            health.plot_promql(
+                PlotOpts::counter("Packet Drops", "packet-drops", Unit::Rate),
+                "sum(irate(network_drop[5m]))".to_string(),
+            );
+        }
+        if retransmits {
+            health.plot_promql(
+                PlotOpts::counter("TCP Retransmits", "tcp-retransmits", Unit::Rate),
+                "sum(irate(tcp_retransmit[5m]))".to_string(),
+            );
+        }
 
-    view.group(errors);
+        view.group(errors);
+    }
 
     let mut tcp = Group::new("TCP", "tcp");
 
-    let latency = tcp.subgroup("Packet Latency");
-    latency.describe("Time from packet received to being processed by the application.");
-    latency.histogram_rate_mean(
-        "TCP Packet",
-        "tcp-packet-latency",
-        "tcp_packet_latency",
-        RateSource::FromHistogram,
-        Unit::Time,
-    );
-    latency.plot_promql_full(
-        PlotOpts::histogram_latency("TCP Packet Latency", "tcp-packet-latency")
-            .with_axis_label("Latency")
-            .with_unit_system("time"),
-        "tcp_packet_latency".to_string(),
-    );
+    if has_metric(data, "tcp_packet_latency") {
+        let latency = tcp.subgroup("Packet Latency");
+        latency.describe("Time from packet received to being processed by the application.");
+        latency.histogram_rate_mean(
+            "TCP Packet",
+            "tcp-packet-latency",
+            "tcp_packet_latency",
+            RateSource::FromHistogram,
+            Unit::Time,
+        );
+        latency.plot_promql_full(
+            PlotOpts::histogram_latency("TCP Packet Latency", "tcp-packet-latency")
+                .with_axis_label("Latency")
+                .with_unit_system("time"),
+            "tcp_packet_latency".to_string(),
+        );
+    }
 
     tcp_mib(data, &mut tcp);
 
-    view.group(tcp);
+    if !tcp.is_empty() {
+        view.group(tcp);
+    }
 
     view
 }
@@ -371,12 +387,28 @@ mod tests {
 
     /// Build a store whose counter set is exactly `metrics`.
     fn store_with(metrics: &[&str]) -> MemoryStore {
+        store_with_histograms(metrics, &[])
+    }
+
+    /// Build a store whose counter set is exactly `counters` and whose
+    /// histogram set is exactly `histograms`.
+    fn store_with_histograms(counters: &[&str], histograms: &[&str]) -> MemoryStore {
         use std::collections::HashMap;
         use std::time::{Duration, SystemTime};
         let store = MemoryStore::builder().sampling_interval_ms(1000).build();
-        let counters = metrics
+        let counters = counters
             .iter()
             .map(|name| metriken_exposition::Counter::new(name.to_string(), 1, HashMap::new()))
+            .collect();
+        let histograms = histograms
+            .iter()
+            .map(|name| {
+                metriken_exposition::Histogram::new(
+                    name.to_string(),
+                    histogram::Histogram::new(3, 64).unwrap(),
+                    HashMap::new(),
+                )
+            })
             .collect();
         store.ingest_snapshot(metriken_exposition::Snapshot::V2(
             metriken_exposition::SnapshotV2 {
@@ -385,7 +417,7 @@ mod tests {
                 metadata: HashMap::new(),
                 counters,
                 gauges: vec![],
-                histograms: vec![],
+                histograms,
                 gauge_histograms: Vec::new(),
             },
         ));
@@ -491,11 +523,64 @@ mod tests {
 
     #[test]
     fn tcp_packet_latency_gets_from_histogram_rate_mean() {
-        let view = generate(&MemoryStore::builder().build(), vec![]);
-        let json = serde_json::to_string(&view).unwrap().replace("\\\"", "\"");
+        let view = generate(&store_with_histograms(&[], &["tcp_packet_latency"]), vec![]);
+        let json = json_of(&view);
         assert!(json.contains("sum(histogram_irate(tcp_packet_latency))"));
         assert!(json.contains("histogram_mean(tcp_packet_latency)\""));
         // percentile plot still present
         assert!(json.contains("\"tcp_packet_latency\""));
+    }
+
+    /// A recording without network_drop, tcp_retransmit or
+    /// tcp_packet_latency, as from a macOS agent not running as root, gets
+    /// neither the Errors group nor the Packet Latency charts, and no TCP
+    /// group when no tcp_mib metric is present either.
+    #[test]
+    fn errors_and_latency_are_absent_without_their_metrics() {
+        let json = json_of(&generate(
+            &store_with(&["network_bytes", "network_packets"]),
+            vec![],
+        ));
+        assert!(!json.contains("\"Errors\""), "{json}");
+        assert!(!json.contains("network_drop"), "{json}");
+        assert!(!json.contains("tcp_retransmit"), "{json}");
+        assert!(!json.contains("tcp_packet_latency"), "{json}");
+        assert!(!json.contains("\"TCP\""), "{json}");
+        assert!(json.contains("network_bytes{direction=\"transmit\"}"));
+    }
+
+    /// The counters a macOS agent running as root records: TCP Retransmits
+    /// without Packet Drops, and the tcp_mib charts without Packet Latency.
+    #[test]
+    fn retransmits_and_tcp_mib_are_drawn_without_drops_or_latency() {
+        let json = json_of(&generate(
+            &store_with(&[
+                "network_bytes",
+                "network_packets",
+                "tcp_retransmit",
+                "tcp_rto_expirations",
+                "tcp_delayed_acks",
+            ]),
+            vec![],
+        ));
+        assert!(json.contains("\"Errors\""), "{json}");
+        assert!(json.contains("sum(irate(tcp_retransmit[5m]))"), "{json}");
+        assert!(!json.contains("network_drop"), "{json}");
+        assert!(json.contains("\"TCP\""), "{json}");
+        assert!(!json.contains("\"Packet Latency\""), "{json}");
+        assert!(!json.contains("tcp_packet_latency"), "{json}");
+        assert!(
+            json.contains("sum(irate(tcp_rto_expirations[5m]))"),
+            "{json}"
+        );
+    }
+
+    /// Packet Drops is drawn on its own when the recording has no
+    /// tcp_retransmit.
+    #[test]
+    fn drops_are_drawn_without_retransmits() {
+        let json = json_of(&generate(&store_with(&["network_drop"]), vec![]));
+        assert!(json.contains("sum(irate(network_drop[5m]))"), "{json}");
+        assert!(!json.contains("tcp_retransmit"), "{json}");
     }
 }
