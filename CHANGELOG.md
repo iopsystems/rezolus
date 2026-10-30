@@ -75,6 +75,18 @@
 
 ### Fixed
 
+- **`tcp_connect_latency` is labeled by outcome, and failed connects are
+  counted.** The histogram now carries `outcome`: `established`, `refused`,
+  `timeout`, `error` or `aborted`, read where the socket leaves `SYN_SENT`
+  (the `inet_sock_set_state` tracepoint) from its new state and `sk_err`.
+  Before, the sampler stopped the clock at the first segment received in
+  `SYN_SENT`, so a refused connect was recorded as connect latency, the same
+  as an established one, and a connect that timed out, failed on an ICMP
+  error or was closed before an answer was not counted. A query without an
+  `outcome` matcher merges every outcome, now including timeouts. The
+  exporter's percentiles are per outcome, with no merged series. The network
+  dashboard's new Connect Latency subgroup charts connects per second by
+  outcome and the established, refused and failed distributions. (#1587)
 - **A histogram no sampler has read is no longer published.** The agent
   leaves a histogram out of its snapshots and stream until its acquisition
   group is first stamped. A macOS agent published the Linux BPF histograms

@@ -19,10 +19,42 @@ static LATENCY_ACQ_REG: &'static AcquisitionGroup = &LATENCY_ACQ;
 
 #[metric(
     name = "tcp_connect_latency",
-    description = "Distribution of latency for establishing outbound connections (active open)",
-    metadata = { unit = "nanoseconds", acq_group = "tcp_connect_latency_latency" }
+    description = "Distribution of the time from connect() to the end of the TCP handshake (active open), by outcome",
+    metadata = { unit = "nanoseconds", outcome = "established", acq_group = "tcp_connect_latency_latency" }
 )]
-pub static TCP_CONNECT_LATENCY: RwLockCounterHistogram =
+pub static TCP_CONNECT_LATENCY_ESTABLISHED: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
+    name = "tcp_connect_latency",
+    description = "Distribution of the time from connect() to the end of the TCP handshake (active open), by outcome",
+    metadata = { unit = "nanoseconds", outcome = "refused", acq_group = "tcp_connect_latency_latency" }
+)]
+pub static TCP_CONNECT_LATENCY_REFUSED: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
+    name = "tcp_connect_latency",
+    description = "Distribution of the time from connect() to the end of the TCP handshake (active open), by outcome",
+    metadata = { unit = "nanoseconds", outcome = "timeout", acq_group = "tcp_connect_latency_latency" }
+)]
+pub static TCP_CONNECT_LATENCY_TIMEOUT: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
+    name = "tcp_connect_latency",
+    description = "Distribution of the time from connect() to the end of the TCP handshake (active open), by outcome",
+    metadata = { unit = "nanoseconds", outcome = "error", acq_group = "tcp_connect_latency_latency" }
+)]
+pub static TCP_CONNECT_LATENCY_ERROR: RwLockCounterHistogram =
+    RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
+    name = "tcp_connect_latency",
+    description = "Distribution of the time from connect() to the end of the TCP handshake (active open), by outcome",
+    metadata = { unit = "nanoseconds", outcome = "aborted", acq_group = "tcp_connect_latency_latency" }
+)]
+pub static TCP_CONNECT_LATENCY_ABORTED: RwLockCounterHistogram =
     RwLockCounterHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(

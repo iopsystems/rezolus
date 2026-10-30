@@ -165,8 +165,7 @@ mod batch_by_group_tests {
 
     /// A single group's registrations, even just one, all land in exactly
     /// one batch — the degenerate "family of one" case every
-    /// single-histogram sampler (tcp_packet_latency, tcp_connect_latency)
-    /// hits.
+    /// single-histogram sampler (tcp_packet_latency) hits.
     #[test]
     fn single_group_single_item_is_one_batch_of_one() {
         let items = vec![("only", &GROUP_A)];

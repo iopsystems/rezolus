@@ -890,18 +890,11 @@ caveat in principle 4), so each needs a kprobe twin, selected with
 `kernel_can_fentry`, where the hook matters there (`tlb_finish_mmu` is
 aarch64-only):
 
-- TCP: `tcp_sendmsg`, `tcp_retransmit_skb`, `tcp_rcv_state_process`,
-  `tcp_rcv_established`, `tcp_cleanup_rbuf`.
+- TCP: `tcp_sendmsg`, `tcp_retransmit_skb`, `tcp_rcv_established`,
+  `tcp_cleanup_rbuf`.
 - CFS bandwidth: `throttle_cfs_rq`, `unthrottle_cfs_rq`,
   `tg_set_cfs_bandwidth`.
 - Other: `tlb_finish_mmu`, `cpuacct_account_field`.
-
-### `fexit` collapse (principle 4)
-
-Kprobe + exit-tracepoint pair → single `fexit` program:
-
-- `tcp_v4_connect` / `tcp_v6_connect` paired today with
-  `tracepoint/tcp/tcp_destroy_sock` for connect latency.
 
 ### `Counters` → `CpuCounters` evaluation (principle 9)
 

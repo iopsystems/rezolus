@@ -988,3 +988,33 @@ fn reserved_routes_are_the_frontends_and_deeper_ones() {
     }
     assert!(!is_reserved_route("/aboutx"));
 }
+
+/// `tcp_connect_latency` labeled by `outcome` gets the rate by outcome and
+/// one latency chart per outcome class, in place of the single chart a
+/// recording without the label gets.
+#[test]
+fn section_template_matches_the_generator_with_connect_outcomes() {
+    let t = template();
+    let ctx = build_dashboard_context(None, &[], None, &[]);
+    let data = Catalog::from_json(include_str!("../tests/fixtures/catalogs/bench.json")).histogram(
+        "tcp_connect_latency",
+        &[
+            &[("outcome", "established")],
+            &[("outcome", "refused")],
+            &[("outcome", "timeout")],
+            &[("outcome", "error")],
+            &[("outcome", "aborted")],
+        ],
+    );
+    let json = render_generator(&data, "/network", &ctx);
+    assert_eq!(json, render_template(&t, &data, "/network", &ctx));
+    for query in [
+        "sum by (outcome) (histogram_irate(tcp_connect_latency))",
+        r#"tcp_connect_latency{outcome=\"established\"}"#,
+        r#"tcp_connect_latency{outcome=\"refused\"}"#,
+        r#"tcp_connect_latency{outcome=~\"timeout|error|aborted\"}"#,
+    ] {
+        assert!(json.contains(query), "{query} missing from {json}");
+    }
+    assert!(!json.contains(r#""tcp_connect_latency""#), "{json}");
+}

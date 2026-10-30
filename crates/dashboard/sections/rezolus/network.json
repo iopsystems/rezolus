@@ -203,6 +203,81 @@
           ]
         },
         {
+          "name": "Connect Latency",
+          "description": "Time from connect() to the end of the handshake, by outcome: established, refused (a RST or ICMP port unreachable in reply to the SYN), or failed (the SYN retries ran out, another ICMP error, no free local port, or the socket was closed before an answer). Recordings from agents that do not label the outcome have one distribution, which includes refused connects.",
+          "plots": [
+            {
+              "when": {
+                "all": [
+                  {
+                    "present": "tcp_connect_latency"
+                  },
+                  {
+                    "not": {
+                      "has_label": {
+                        "metric": "tcp_connect_latency",
+                        "label": "outcome"
+                      }
+                    }
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "kind": "latency",
+                  "title": "Connect Latency",
+                  "id": "tcp-connect-latency",
+                  "query": "tcp_connect_latency",
+                  "width": "full",
+                  "axis_label": "Latency",
+                  "unit_system": "time"
+                }
+              ]
+            },
+            {
+              "when": {
+                "has_label": {
+                  "metric": "tcp_connect_latency",
+                  "label": "outcome"
+                }
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Connects",
+                  "id": "tcp-connects",
+                  "unit": "rate",
+                  "query": "sum by (outcome) (histogram_irate(tcp_connect_latency))"
+                },
+                {
+                  "kind": "latency",
+                  "title": "Established Connect Latency",
+                  "id": "tcp-connect-latency-established",
+                  "query": "tcp_connect_latency{outcome=\"established\"}",
+                  "axis_label": "Latency",
+                  "unit_system": "time"
+                },
+                {
+                  "kind": "latency",
+                  "title": "Refused Connect Latency",
+                  "id": "tcp-connect-latency-refused",
+                  "query": "tcp_connect_latency{outcome=\"refused\"}",
+                  "axis_label": "Latency",
+                  "unit_system": "time"
+                },
+                {
+                  "kind": "latency",
+                  "title": "Failed Connect Latency",
+                  "id": "tcp-connect-latency-failed",
+                  "query": "tcp_connect_latency{outcome=~\"timeout|error|aborted\"}",
+                  "axis_label": "Latency",
+                  "unit_system": "time"
+                }
+              ]
+            }
+          ]
+        },
+        {
           "name": "Retransmission & Loss Recovery",
           "description": "Retransmission timeouts stall a connection for at least the minimum RTO (200 ms by default); tail loss probes and fast recovery repair loss without waiting for one. D-SACKs received are retransmissions the peer did not need.",
           "plots": [
