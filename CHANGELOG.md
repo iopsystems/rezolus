@@ -2,6 +2,13 @@
 
 ### Security
 
+- The viewer bundles ECharts 6.1.0, up from 5.4.3, for GHSA-fgmj-fm8m-jvvx
+  (CVE-2026-45249), an XSS in the Lines series tooltip. The viewer draws no
+  Lines series, so it was not exposed. The charts set the drag-to-zoom
+  selection colour and leave out the time axis's right-edge label, which
+  ECharts 6's defaults changed. What still differs: the "OOB" tick on
+  percentile charts takes the other tick labels' font, and a heatmap's first
+  or last column can end a pixel earlier.
 - rustls-webpki 0.103.16 and webpki-root-certs 1.0.10, for RUSTSEC-2026-0382
   and RUSTSEC-2026-0383. (#1510)
 - rustls 0.23.46, for RUSTSEC-2026-0346 through 0349. (#1467)
