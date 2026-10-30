@@ -21,20 +21,34 @@
           "description": "Overall CPU utilization and per-core breakdown.",
           "plots": [
             {
-              "kind": "counter",
-              "title": "Busy %",
-              "id": "cpu-busy",
-              "unit": "percentage",
-              "query": "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000",
-              "percentage_range": true
+              "when": {
+                "has_counter": "cpu_usage"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Busy %",
+                  "id": "cpu-busy",
+                  "unit": "percentage",
+                  "query": "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000",
+                  "percentage_range": true
+                }
+              ]
             },
             {
-              "kind": "counter",
-              "title": "Busy %",
-              "id": "cpu-busy-heatmap",
-              "unit": "percentage",
-              "query": "sum by (id) (irate(cpu_usage[5m])) / 1000000000",
-              "percentage_range": true
+              "when": {
+                "has_counter": "cpu_usage"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Busy %",
+                  "id": "cpu-busy-heatmap",
+                  "unit": "percentage",
+                  "query": "sum by (id) (irate(cpu_usage[5m])) / 1000000000",
+                  "percentage_range": true
+                }
+              ]
             }
           ]
         }
@@ -78,20 +92,34 @@
           "description": "Transmit and receive bit rates summed over every interface traversed. Counts a packet once per stacked layer (bond, VLAN, bridge), and includes intra-host virtual traffic, so this reads higher than the host bandwidth above.",
           "plots": [
             {
-              "kind": "counter",
-              "title": "Transmit Bandwidth",
-              "id": "network-transmit-bandwidth",
-              "unit": "bitrate",
-              "query": "sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8",
-              "unit_system": "bitrate"
+              "when": {
+                "has_counter": "network_bytes"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Transmit Bandwidth",
+                  "id": "network-transmit-bandwidth",
+                  "unit": "bitrate",
+                  "query": "sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8",
+                  "unit_system": "bitrate"
+                }
+              ]
             },
             {
-              "kind": "counter",
-              "title": "Receive Bandwidth",
-              "id": "network-receive-bandwidth",
-              "unit": "bitrate",
-              "query": "sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8",
-              "unit_system": "bitrate"
+              "when": {
+                "has_counter": "network_bytes"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Receive Bandwidth",
+                  "id": "network-receive-bandwidth",
+                  "unit": "bitrate",
+                  "query": "sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8",
+                  "unit_system": "bitrate"
+                }
+              ]
             }
           ]
         },
@@ -100,18 +128,32 @@
           "description": "Transmit and receive packet rates summed over every interface traversed — see the interface bandwidth note above.",
           "plots": [
             {
-              "kind": "counter",
-              "title": "Transmit Packets",
-              "id": "network-transmit-packets",
-              "unit": "rate",
-              "query": "sum(irate(network_packets{direction=\"transmit\"}[5m]))"
+              "when": {
+                "has_counter": "network_packets"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Transmit Packets",
+                  "id": "network-transmit-packets",
+                  "unit": "rate",
+                  "query": "sum(irate(network_packets{direction=\"transmit\"}[5m]))"
+                }
+              ]
             },
             {
-              "kind": "counter",
-              "title": "Receive Packets",
-              "id": "network-receive-packets",
-              "unit": "rate",
-              "query": "sum(irate(network_packets{direction=\"receive\"}[5m]))"
+              "when": {
+                "has_counter": "network_packets"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Receive Packets",
+                  "id": "network-receive-packets",
+                  "unit": "rate",
+                  "query": "sum(irate(network_packets{direction=\"receive\"}[5m]))"
+                }
+              ]
             }
           ]
         },
@@ -120,13 +162,20 @@
           "description": "Time from packet received to being processed by the application.",
           "plots": [
             {
-              "kind": "latency",
-              "title": "TCP Packet Latency",
-              "id": "tcp-packet-latency",
-              "query": "tcp_packet_latency",
-              "width": "full",
-              "axis_label": "Latency",
-              "unit_system": "time"
+              "when": {
+                "present": "tcp_packet_latency"
+              },
+              "then": [
+                {
+                  "kind": "latency",
+                  "title": "TCP Packet Latency",
+                  "id": "tcp-packet-latency",
+                  "query": "tcp_packet_latency",
+                  "width": "full",
+                  "axis_label": "Latency",
+                  "unit_system": "time"
+                }
+              ]
             }
           ]
         }
@@ -141,13 +190,20 @@
           "description": "How long tasks waited on the runqueue before getting CPU time.",
           "plots": [
             {
-              "kind": "latency",
-              "title": "Runqueue Latency",
-              "id": "scheduler-runqueue-latency",
-              "query": "scheduler_runqueue_latency",
-              "width": "full",
-              "axis_label": "Latency",
-              "unit_system": "time"
+              "when": {
+                "present": "scheduler_runqueue_latency"
+              },
+              "then": [
+                {
+                  "kind": "latency",
+                  "title": "Runqueue Latency",
+                  "id": "scheduler-runqueue-latency",
+                  "query": "scheduler_runqueue_latency",
+                  "width": "full",
+                  "axis_label": "Latency",
+                  "unit_system": "time"
+                }
+              ]
             }
           ]
         }
@@ -162,17 +218,31 @@
           "description": "Aggregate syscall rate and latency across all operation categories.",
           "plots": [
             {
-              "kind": "counter",
-              "title": "Total",
-              "id": "syscall-total",
-              "unit": "rate",
-              "query": "sum(irate(syscall[5m]))"
+              "when": {
+                "has_counter": "syscall"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Total",
+                  "id": "syscall-total",
+                  "unit": "rate",
+                  "query": "sum(irate(syscall[5m]))"
+                }
+              ]
             },
             {
-              "kind": "latency",
-              "title": "Total",
-              "id": "syscall-total-latency",
-              "query": "syscall_latency"
+              "when": {
+                "present": "syscall_latency"
+              },
+              "then": [
+                {
+                  "kind": "latency",
+                  "title": "Total",
+                  "id": "syscall-total-latency",
+                  "query": "syscall_latency"
+                }
+              ]
             }
           ]
         }
@@ -187,18 +257,32 @@
           "description": "Softirqs handled per second, aggregate and per-CPU.",
           "plots": [
             {
-              "kind": "counter",
-              "title": "Rate",
-              "id": "softirq-total-rate",
-              "unit": "rate",
-              "query": "sum(irate(softirq[5m]))"
+              "when": {
+                "has_counter": "softirq"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Rate",
+                  "id": "softirq-total-rate",
+                  "unit": "rate",
+                  "query": "sum(irate(softirq[5m]))"
+                }
+              ]
             },
             {
-              "kind": "counter",
-              "title": "Rate",
-              "id": "softirq-total-rate-heatmap",
-              "unit": "rate",
-              "query": "sum by (id) (irate(softirq[5m]))"
+              "when": {
+                "has_counter": "softirq"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Rate",
+                  "id": "softirq-total-rate-heatmap",
+                  "unit": "rate",
+                  "query": "sum by (id) (irate(softirq[5m]))"
+                }
+              ]
             }
           ]
         },
@@ -207,20 +291,34 @@
           "description": "Fraction of CPU time spent servicing softirqs.",
           "plots": [
             {
-              "kind": "counter",
-              "title": "CPU %",
-              "id": "softirq-total-time",
-              "unit": "percentage",
-              "query": "sum(irate(softirq_time[5m])) / cpu_cores / 1000000000",
-              "percentage_range": true
+              "when": {
+                "has_counter": "softirq_time"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "CPU %",
+                  "id": "softirq-total-time",
+                  "unit": "percentage",
+                  "query": "sum(irate(softirq_time[5m])) / cpu_cores / 1000000000",
+                  "percentage_range": true
+                }
+              ]
             },
             {
-              "kind": "counter",
-              "title": "CPU %",
-              "id": "softirq-total-time-heatmap",
-              "unit": "percentage",
-              "query": "sum by (id) (irate(softirq_time[5m])) / 1000000000",
-              "percentage_range": true
+              "when": {
+                "has_counter": "softirq_time"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "CPU %",
+                  "id": "softirq-total-time-heatmap",
+                  "unit": "percentage",
+                  "query": "sum by (id) (irate(softirq_time[5m])) / 1000000000",
+                  "percentage_range": true
+                }
+              ]
             }
           ]
         }
@@ -235,18 +333,32 @@
           "description": "Read throughput and IOPS across all block devices.",
           "plots": [
             {
-              "kind": "counter",
-              "title": "Read Throughput",
-              "id": "blockio-throughput-read",
-              "unit": "datarate",
-              "query": "sum(irate(blockio_bytes{op=\"read\"}[5m]))"
+              "when": {
+                "has_counter": "blockio_bytes"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Read Throughput",
+                  "id": "blockio-throughput-read",
+                  "unit": "datarate",
+                  "query": "sum(irate(blockio_bytes{op=\"read\"}[5m]))"
+                }
+              ]
             },
             {
-              "kind": "counter",
-              "title": "Read IOPS",
-              "id": "blockio-iops-read",
-              "unit": "count",
-              "query": "sum(irate(blockio_operations{op=\"read\"}[5m]))"
+              "when": {
+                "has_counter": "blockio_operations"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Read IOPS",
+                  "id": "blockio-iops-read",
+                  "unit": "count",
+                  "query": "sum(irate(blockio_operations{op=\"read\"}[5m]))"
+                }
+              ]
             }
           ]
         },
@@ -255,18 +367,32 @@
           "description": "Write throughput and IOPS across all block devices.",
           "plots": [
             {
-              "kind": "counter",
-              "title": "Write Throughput",
-              "id": "blockio-throughput-write",
-              "unit": "datarate",
-              "query": "sum(irate(blockio_bytes{op=\"write\"}[5m]))"
+              "when": {
+                "has_counter": "blockio_bytes"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Write Throughput",
+                  "id": "blockio-throughput-write",
+                  "unit": "datarate",
+                  "query": "sum(irate(blockio_bytes{op=\"write\"}[5m]))"
+                }
+              ]
             },
             {
-              "kind": "counter",
-              "title": "Write IOPS",
-              "id": "blockio-iops-write",
-              "unit": "count",
-              "query": "sum(irate(blockio_operations{op=\"write\"}[5m]))"
+              "when": {
+                "has_counter": "blockio_operations"
+              },
+              "then": [
+                {
+                  "kind": "counter",
+                  "title": "Write IOPS",
+                  "id": "blockio-iops-write",
+                  "unit": "count",
+                  "query": "sum(irate(blockio_operations{op=\"write\"}[5m]))"
+                }
+              ]
             }
           ]
         }

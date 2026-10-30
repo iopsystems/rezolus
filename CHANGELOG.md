@@ -377,6 +377,14 @@
   Limit charts and the NUMA group only when the recording has them.** A
   macOS recording has none of them, and a Linux kernel without `CONFIG_NUMA`
   has no NUMA counters.
+- **The overview and exceptions dashboards draw each chart only when the
+  recording has its metric, and leave out a group with no chart.** On a
+  macOS recording the overview shows CPU, network traffic and block IO,
+  without the scheduler, syscall, softirq and TCP latency charts, and the
+  exceptions section shows TCP Retransmits when the agent could read the
+  TCP statistics and nothing otherwise. On Linux the AWS ENA group is left
+  out on a host without ENA counters, and the CPU throttling and block IO
+  error groups when their samplers did not run.
 - **The network dashboard draws the Packet Drops, TCP Retransmits and TCP
   Packet Latency charts only when the recording has them.** A macOS
   recording has no `network_drop` or `tcp_packet_latency`, and has
