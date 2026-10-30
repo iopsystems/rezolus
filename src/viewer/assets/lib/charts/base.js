@@ -191,6 +191,9 @@ export function getBaseOption() {
                 color: COLORS.fgSecondary,
                 ...FONTS.axisLabel,
                 formatter: TIME_AXIS_FORMATTER,
+                // No label at the right edge: it would sit against the plot's
+                // edge whenever the window ends on a tick.
+                showMaxLabel: false,
                 // Drop colliding labels rather than overprinting them. During a
                 // zoom's intermediate merge echarts can briefly lay out every
                 // tick before it recomputes spacing; without this they overlap
@@ -244,6 +247,9 @@ export function getBaseOption() {
             feature: {
                 dataZoom: {
                     yAxisIndex: 'none',
+                    // A faint tint, so the series and the axis pointer show
+                    // through the selection while dragging.
+                    brushStyle: { color: 'rgba(210, 219, 238, 0.2)' },
                     icon: {
                         zoom: 'path://',
                         back: 'path://',
