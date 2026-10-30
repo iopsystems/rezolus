@@ -1,8 +1,9 @@
 import { ViewerApi } from './viewer_api.js';
 import { resolveStyle, buildHistogramQuery, isHistogramPlot } from './charts/metric_types.js';
 import { collectGroupPlots, baseRoute } from './features/group_utils.js';
-import { firstVisibleLabelValue, seriesNamer } from './labels.js';
+import { firstVisibleLabelValue, seriesNamer } from './charts/util/labels.js';
 import { cgroupQueryVariants, runCgroupVariants } from './features/cgroup_selection.js';
+import { setChartHost } from './charts/host.js';
 
 // Capture-id constants. Typos become grep-able; use these in place of
 // raw 'baseline' / 'experiment' string literals.
@@ -1713,6 +1714,17 @@ const {
     buildEffectiveQuery,
     buildEffectiveQueries,
 } = defaultDataApi;
+
+// line.js, scatter.js and charts/util/utils.js call these four through
+// charts/host.js. Registering them when this module loads gives every page
+// that loads data.js (the viewer, the static site, the embed demo) the total
+// toggle, the quantile spectrum and the step override.
+setChartHost({
+    executePromQLRangeQuery,
+    applyResultToPlot,
+    fetchQuantileSpectrumForPlot,
+    getStepOverride,
+});
 
 export {
     executePromQLRangeQuery,

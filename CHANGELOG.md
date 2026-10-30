@@ -236,7 +236,7 @@
   row labels, capture labels and template format labels. Markup in any of
   them was parsed by the browser, and could run script, in both the server
   and the static viewer. They now go through one HTML-escape helper
-  (`src/viewer/assets/lib/html.js`), which the Markdown renderer and, as a
+  (`src/viewer/assets/lib/charts/util/html.js`), which the Markdown renderer and, as a
   precaution, the band-swatch row (whose labels are constants) also use.
 - **An unknown `unit_system` is refused.** The viewer printed an unknown
   unit system's name as the unit, so a section template with one fails to parse,
@@ -384,6 +384,17 @@
 
 ### Changed
 
+- **The viewer's chart modules import only from inside `charts/`, apart from
+  `chart.js` and `compare.js`.** `labels.js` and `html.js` moved to
+  `charts/util/`. The four data-layer functions a chart calls (the line
+  chart's total query and `applyResultToPlot`, the scatter chart's quantile
+  spectrum, the step override used to find gaps) come from `charts/host.js`,
+  which `data.js` fills when it loads. A page that embeds the charts without
+  `data.js` calls `setChartHost` with its own functions; without them the
+  line chart has no total toggle and the scatter chart no spectrum
+  checkboxes. `tests/charts_boundary.test.mjs` fails when a chart module
+  names a `.js`, `.mjs`, `.css` or `.json` path outside `charts/` other than the
+  imports it lists for those two files.
 - **`task_cpu_usage` leaves out threads younger than one second.** A thread
   gets its series at the first snapshot after it has lived
   `task_min_lifetime` (`[samplers.cpu_usage]` or `[defaults]`, a humantime

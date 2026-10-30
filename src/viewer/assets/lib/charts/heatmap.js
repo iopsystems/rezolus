@@ -17,7 +17,7 @@ import {
     COLORS,
     FONTS,
 } from './base.js';
-import { escapeHtml } from '../html.js';
+import { escapeHtml } from './util/html.js';
 import { VIRIDIS_COLORS, viridisColor } from './util/colormap.js';
 import {
     createHeatmapResolutionStore,

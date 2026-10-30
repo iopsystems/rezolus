@@ -103,7 +103,7 @@ One predicate on each side, and every consumer goes through it:
 |---|---|---|
 | metriken-query (0.25.0) | `is_internal_label`, `is_storage_key`, `STORAGE_KEYS` | both loaders (`Labels::from_metadata`), `without`/`ignoring`, default binary-op matching, `__run__` |
 | rezolus, Rust | the same, imported | metric catalog `label_keys` (both viewers), MCP `describe-metrics`, anomaly label help, correlation selectors, TUI legend |
-| rezolus, frontend | `src/viewer/assets/lib/labels.js`: `isInternalLabel`, `isStorageKey`, `visibleLabels`, `firstVisibleLabelValue` | web legends (`data.js`, `viewer_core.js`), boxplot, compare, explorers, quantile labels (`compare_math.js`) |
+| rezolus, frontend | `src/viewer/assets/lib/charts/util/labels.js`: `isInternalLabel`, `isStorageKey`, `visibleLabels`, `firstVisibleLabelValue` | web legends (`data.js`, `viewer_core.js`), boxplot, compare, explorers, quantile labels (`compare_math.js`) |
 
 Two listings deliberately keep internal labels: metriken-query's own
 `counter_labels`/`gauge_labels`/`histogram_labels` return full label sets,

@@ -17,7 +17,7 @@ import {
 import { canonicalQuantileLabel, composeScatterLabel } from './charts/util/compare_math.js';
 import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
 import { heatmapTriplesMinMax } from './charts/util/heatmap_data.js';
-import { pairedSeriesNamer } from './labels.js';
+import { pairedSeriesNamer } from './charts/util/labels.js';
 import { baseRoute, groupCompares, pinCompareMeta } from './features/group_utils.js';
 
 // Normalization helpers for compare-mode captures.

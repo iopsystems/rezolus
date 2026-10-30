@@ -24,7 +24,7 @@ import { buildBoxplotSeries } from './boxplot.js';
 import { buildBandSeries } from './line.js';
 import { DEFAULT_PERCENTILES } from './metric_types.js';
 import { configureQuantileHeatmap } from './quantile_heatmap.js';
-import { fetchQuantileSpectrumForPlot } from '../data.js';
+import { chartHost } from './host.js';
 import { quantilesForKind } from './util/spectrum_quantiles.js';
 
 // ── OOB (out-of-bounds / clamped) handling ───────────────────────────────────
@@ -682,6 +682,10 @@ function positionControlsAtGridLeft(chart, container) {
 
 function ensureSpectrumCheckboxes(chart) {
     let container = chart.domNode.querySelector('.' + SPECTRUM_CONTROLS_CLASS);
+    if (!chartHost().fetchQuantileSpectrumForPlot) {
+        container?.remove();
+        return;
+    }
     let fullEl, tailEl;
     if (!container) {
         container = document.createElement('span');
@@ -743,7 +747,7 @@ function kickOffSpectrumFetch(chart, kind) {
     chart._spectrumPending = kind;
     refreshSpectrumCheckboxes(chart);
 
-    fetchQuantileSpectrumForPlot(plotForFetch, quantilesForKind(kind))
+    chartHost().fetchQuantileSpectrumForPlot(plotForFetch, quantilesForKind(kind))
         .then((res) => {
             if (chart._spectrumPending === kind) chart._spectrumPending = null;
             if (!res) {

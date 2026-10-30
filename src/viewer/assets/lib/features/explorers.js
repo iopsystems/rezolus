@@ -4,7 +4,7 @@ import { runCgroupVariants } from './cgroup_selection.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec } from '../charts/metric_types.js';
 import { collectGroupPlots } from './group_utils.js';
 import { readViewState, writeViewState } from '../ui/url_state.js';
-import { visibleLabels, varyingLabelKeys } from '../labels.js';
+import { visibleLabels, varyingLabelKeys } from '../charts/util/labels.js';
 
 const UNIT_OPTIONS = [
     { value: '', label: 'Auto (none)' },
