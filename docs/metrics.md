@@ -1480,6 +1480,17 @@ how frequently they're switched out. High runqueue latencies can indicate CPU
 contention or scheduling inefficiencies that directly impact application
 performance and responsiveness.
 
+On kernels whose BTF shows `sched_switch` with a `prev_state` argument
+(mainline 5.18 and later, built with BTF), whether a switch was voluntary and
+whether the task went into uninterruptible sleep come from that argument,
+the state `__schedule()` read from the task before deciding whether to block
+it. A sleep cancelled by a pending signal counts as involuntary, since the
+task stays queued. Otherwise the state is read from the task, where a wakeup that lands
+during the switch may already have replaced it. There
+`scheduler_uninterruptible` and the `*_uninterruptible_wait` counters can
+undercount short uninterruptible sleeps by an amount that depends on the
+workload.
+
 | Metric | Description | Metadata |
 |--------|-------------|----------|
 | `scheduler_runqueue_latency` | Distribution of the amount of time tasks were waiting in the runqueue | |
@@ -1768,14 +1779,17 @@ behavior with network activity.
 | `tcp_packets` | The number of packets transferred over TCP | `direction={receive,transmit}` |
 | `tcp_size` | Distribution of the size of TCP packets | `direction={receive,transmit}` |
 
+On macOS, see [TCP on macOS](#tcp-on-macos).
+
 #### TCP on macOS
 
-On macOS, `tcp_mib` and `tcp_retransmit` read the kernel's TCP statistics,
-the `net.inet.tcp.stats` sysctl that `netstat -s -p tcp` prints, once per
-refresh each. The kernel returns zeros to a process not running as root
-while `net.inet.tcp.disable_access_to_stats` is set, which is the default,
-so the agent needs root for them; without it both samplers report
-themselves unsupported. The counters cover IPv4 and IPv6 together.
+On macOS, `tcp_mib`, `tcp_retransmit` and `tcp_traffic` read the kernel's
+TCP statistics, the `net.inet.tcp.stats` sysctl that `netstat -s -p tcp`
+prints, on each refresh and, while `tcp_traffic` runs, every 250 ms. The
+kernel returns zeros to a process not running as root while
+`net.inet.tcp.disable_access_to_stats` is set, which is the default, so the
+agent needs root for them; without it the three samplers report themselves
+unsupported. The counters cover IPv4 and IPv6 together.
 
 | Metric | XNU counter |
 |--------|-------------|
@@ -1784,23 +1798,41 @@ themselves unsupported. The counters cover IPv4 and IPv6 together.
 | `tcp_rto_expirations` | `tcps_rexmttimeo`: retransmission timer expirations |
 | `tcp_checksum_errors` | `tcps_rcvbadsum`: segments received with a bad checksum |
 | `tcp_input_errors` | `tcps_rcvbadsum`, `tcps_rcvbadoff` and `tcps_rcvshort`: a bad checksum, a bad data offset, or a segment shorter than its header or not pulled up for lack of mbufs |
+| `tcp_bytes{direction="transmit"}` | `tcps_sndbyte`: data bytes sent for the first time |
+| `tcp_bytes{direction="receive"}` | `tcps_rcvbyte` and `tcps_rcvoobyte`: data bytes of segments received in order with nothing queued for reassembly, and of segments received out of order |
 
-The other metrics of `tcp_mib` are not set. `tcps_sndrexmitpack` counts a
-retransmission sent with TSO once however many segments it spans, so after
-an RTO it can be lower than the segments sent again, and it counts data
-only, so a retransmitted SYN or SYN-ACK is not included.
+The other metrics of these samplers are not set.
 
-`tcp_traffic` does not run on macOS. The kernel's received-byte counter
-leaves out bytes that pass through reassembly, and a byte counter can
-advance by 2^32 or more between two reads.
+- `tcps_sndrexmitpack` counts a retransmission sent with TSO once however
+  many segments it spans, so after an RTO it can be lower than the segments
+  sent again, and it counts data only, so a retransmitted SYN or SYN-ACK is
+  not included.
+- `tcp_bytes{direction="receive"}` leaves out a segment that starts at the
+  next expected byte while later data is queued for reassembly, mostly a
+  retransmission from the peer or a reordered original, so it undercounts
+  while the connection is losing or reordering packets. An
+  out-of-order segment is counted in full before the kernel trims its
+  overlap with segments already queued after it, so overlapping bytes are
+  counted twice.
+- `tcp_bytes` counts bytes when segments are sent and received; Linux counts
+  them at the socket calls. `tcp_packets` and `tcp_size` count socket calls
+  on Linux, which the macOS kernel does not count, and are not set.
 
-The kernel's counters are 32 bits wide. Each metric starts at zero when its
-sampler starts and adds the increase since the previous read, so it loses
-2^32 for each 2^32 its counter advances between two reads. Reads happen when
-the agent is scraped or streamed; the counters these samplers read count
-events, which stay far below 2^32 between reads at any regular scrape or
-stream interval. An agent left unread for days can lose 2^32 on a busy
-counter.
+The kernel's counters are 32 bits wide, and it updates them without
+atomics, so a read can be higher than the next one. The agent keeps one
+64-bit total per counter, shared by the three samplers, which starts at
+zero at the first read and adds the increase since the previous read. A
+fall of less than 256 MiB (2^28) is taken as a read lower than the previous
+one and adds nothing, so a total is exact while its counter advances by less
+than 2^32 - 2^28 between two reads. A larger advance loses a multiple of
+2^32, and when it ends within 2^28 short of a multiple of 2^32 the total
+holds until the counter advances by up to 256 MiB more. Reads happen when
+the agent is scraped or streamed, and, while `tcp_traffic` runs, every 250
+ms on a thread of the agent's own, which keeps the totals exact below 128
+Gbit/s, less when the thread is delayed. Without `tcp_traffic`, the
+counters `tcp_mib` and `tcp_retransmit` read count events, which stay far
+below 2^32 between reads at any regular scrape or stream interval; an agent
+left unread for days can lose a multiple of 2^32 on a busy counter.
 
 ## Rezolus
 

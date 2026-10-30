@@ -21,13 +21,18 @@
   networking, plus `awdl0`, `llw0` and `ap1` on the wifi radio; not
   loopback, bridges, tunnels or VM interfaces), so the network dashboard's
   traffic charts and the overview's network chart draw on a Mac.
-- **TCP counters on macOS.** `tcp_mib` and `tcp_retransmit` now run on
-  macOS, from the `net.inet.tcp.stats` sysctl, and set `tcp_retransmit`,
-  `tcp_segments_retransmitted`, `tcp_delayed_acks`, `tcp_rto_expirations`,
-  `tcp_checksum_errors` and `tcp_input_errors`. While
+- **TCP counters on macOS.** `tcp_mib`, `tcp_retransmit` and `tcp_traffic`
+  now run on macOS, from the `net.inet.tcp.stats` sysctl, and set
+  `tcp_retransmit`, `tcp_segments_retransmitted`, `tcp_delayed_acks`,
+  `tcp_rto_expirations`, `tcp_checksum_errors`, `tcp_input_errors` and
+  `tcp_bytes`. Received bytes leave out segments that arrive at the next
+  expected byte while later data is queued for reassembly, and count
+  out-of-order overlaps twice. The kernel's counters are 32 bits; while
+  `tcp_traffic` runs the agent reads them every 250 ms, which keeps its
+  64-bit totals exact below 128 Gbit/s. While
   `net.inet.tcp.disable_access_to_stats` is set (the default), the kernel
   returns zeros to a process not running as root, so the agent needs root;
-  without it both samplers report themselves unsupported.
+  without it the samplers report themselves unsupported.
 - **Uninterruptible sleep (D state) from the `scheduler` sampler.**
   `scheduler_uninterruptible` is the distribution of off-CPU intervals spent
   in uninterruptible sleep (disk IO, some locks, page faults on slow
@@ -42,6 +47,21 @@
 
 ### Fixed
 
+- **`memory_pagecache` loads on 6.18 and later kernels.** From 6.18
+  `folio->flags` is a `memdesc_flags_t` struct, so the CO-RE relocation for
+  the integer read of it failed, the verifier rejected the fill and eviction
+  programs, and the sampler failed with `Invalid argument (os error 22)`. The
+  flags word is now read from `flags.f` where the kernel wraps it. (#1590)
+- **`scheduler` reads the outgoing task's state from `sched_switch`'s
+  `prev_state` argument where the kernel has one** (5.18 and later, with
+  BTF). Read from the task, the state could already be `TASK_WAKING` from a
+  concurrent wakeup, and an uninterruptible sleep in that state lost its
+  D-state flag. Where the kernel's BTF shows no such argument (mainline
+  before 5.18, or no BTF) the state is still read from the task, so there
+  `scheduler_uninterruptible` and the `*_uninterruptible_wait` counters can
+  undercount by an amount that depends on the workload: the more sleeps end
+  with a wakeup during the switch that started them, the larger it is.
+  (#1596)
 - **`memory_writeback` loads on kernels whose `enum wb_reason` has no
   `WB_REASON_LAPTOP_TIMER`, such as 7.0.** The CO-RE relocation
   for it failed, the verifier rejected `writeback_start`, and the sampler

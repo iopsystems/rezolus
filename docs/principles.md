@@ -386,6 +386,16 @@ If the agent had to push at a cadence, it would need explicit timing logic.
 - Agent-side timers that flush, decay, or downsample metrics.
 - Coupling between collection cadence and exposition cadence.
 
+**Exception: widening a narrow kernel counter.** A counter the kernel keeps
+in 32 bits can wrap more than once between two consumer reads, and the lost
+wraps cannot be recovered. A sampler over such a counter may read it on its
+own timer, often enough that it cannot advance by the counter's range or
+more between reads (for `tcp::macos`, 2^32 less the 256 MiB it accepts as a
+racing update), to keep a 64-bit total; the timer updates that total and
+sets no metric, and `refresh()` still reads the source itself. macOS
+`tcp_traffic` does this, reading `net.inet.tcp.stats` every 250 ms
+(`tcp::macos`).
+
 ### 11. Prefer to combine samplers to share probes
 
 `kprobe`/`tracepoint` entry+exit overhead per probe is the real tax, not
