@@ -391,6 +391,15 @@
   still running then. A thread that exits before that has no series; its
   CPU is still in `cpu_usage`. Renames before the series first appears add
   no series. With `snapshot_format = "v2"` the minimum is 0. (#1490)
+- **`process_attribution` follows `task_attribution` unless it is set.**
+  Turning on `task_attribution` in `[samplers.cpu_usage]` or `[defaults]`
+  now also turns on `process_cpu_usage`, because the rates of a process's
+  `task_cpu_usage` series sum to at most its CPU, and usually less. That
+  adds two per-pid arrays (64 MiB of kernel memory), a 256 KiB ring, a
+  counter add per accounting event that adds CPU, a metadata event per new
+  process, and one series per process; a process whose threads run on many
+  CPUs contends on its counter. Set `process_attribution = false` in
+  `[samplers.cpu_usage]` to keep the previous behaviour.
 - **The memory dashboard draws the Buffers, Swap Cached, Committed and Commit
   Limit charts and the NUMA group only when the recording has them.** A
   macOS recording has none of them, and a Linux kernel without `CONFIG_NUMA`

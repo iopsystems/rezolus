@@ -231,7 +231,7 @@ enabled = true
 [samplers.cpu_usage]
 # task_attribution = true      # export task_cpu_usage, one series per thread still running at a snapshot after task_min_lifetime, plus one per rename after that
 # task_min_lifetime = "1s"     # a thread's series starts at the first snapshot after it is this old (v3 snapshots only)
-# process_attribution = true   # export process_cpu_usage, one series per process
+# process_attribution = true   # export process_cpu_usage, one series per process; unset, follows task_attribution
 # cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
 
 # Reports per-drive temperature for NVMe and SATA drives via read-only
