@@ -722,6 +722,8 @@ in `[samplers.filesystem]`. Measured cost (release, 87-line mount table, 3
 local filesystems): a 330–570 µs sweep once per interval, most of it the
 kernel generating the mount table; `refresh()` on the scrape path is 0–8 µs.
 
+On macOS, see [Filesystem on macOS](#filesystem-on-macos).
+
 `filesystem_available` is the number `df` reports as available and the one to
 alert on; `filesystem_free` also counts the blocks reserved for the superuser.
 Inode exhaustion is the other way a disk fills, and comes from the same call.
@@ -811,6 +813,40 @@ cap) in <us> us (read <us> us, parse <us> us, statvfs+publish <us> us)`.
 | `filesystem_tmpfs_size` | The mount's size limit in bytes (`size=`); a limit only, not memory held | `mount`, `fstype`, `devnum` |
 | `filesystem_tmpfs_inodes_used` | Files, directories and links on the mount; absent with no inode limit | `mount`, `fstype`, `devnum` |
 | `filesystem_tmpfs_inodes_total` | The mount's inode limit (`nr_inodes=`) | `mount`, `fstype`, `devnum` |
+
+#### Filesystem on macOS
+
+On macOS the sampler lists the mounts with `getfsstat(MNT_NOWAIT)`,
+unprivileged, and samples those that are local (`MNT_LOCAL`), report a
+nonzero size, and are not `devfs`, `autofs` or macFUSE: APFS and HFS+ volumes,
+including the system's hidden volumes under `/System/Volumes`, and mounted
+disk images. Network mounts are left out.
+
+The counters `getfsstat(MNT_NOWAIT)` returns are the ones each mount's last
+refresh left (a `statfs`, or a `getfsstat` without `MNT_NOWAIT`, by any
+process), so on a volume nothing else reads they can be hours old. Each selected volume is therefore read again with `statfs` on its
+mount point, and a reading whose device differs from the listed one, because
+the mount was replaced, is dropped. That `statfs` looks the path up, which
+walks every mount above it, so a volume mounted beneath a network, autofs or
+macFUSE mount is skipped. The sweep runs on a blocking thread at most once per
+`interval` (60s by default); one still running after three intervals is
+logged as a warning. With 11 volumes, `getfsstat` and the `statfs` calls took
+10 µs.
+
+`filesystem_total`, `filesystem_free`, `filesystem_available`,
+`filesystem_inodes_total`, `filesystem_inodes_free` and `filesystem_readonly`
+are set, with the same labels as on Linux: `devnum` is the `major:minor` of the
+volume's device node and `block_device` its BSD name, such as `disk3s5`.
+`filesystem_readonly` is the mount's `MNT_RDONLY` flag, so the sealed system
+volume at `/` reads 1. `filesystem_errors`, `filesystem_written_bytes` and the
+`filesystem_tmpfs_*` series are not set.
+
+The volumes of an APFS container share its space. A volume without a quota or
+reserve reports the container's size as its total and the container's free
+space as its free and available bytes, so total minus free is the space used
+in the whole container, not by the volume. `df` reads per-volume use from
+`getattrlist(ATTR_VOL_SPACEUSED)`, which this sampler does not read. APFS
+reports an inode total that moves with free space.
 
 ## XFS
 

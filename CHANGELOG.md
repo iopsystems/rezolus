@@ -11,6 +11,12 @@
 
 ### Added
 
+- **Filesystem space on macOS.** `filesystem` now runs on macOS,
+  unprivileged, and sets `filesystem_total`, `filesystem_free`,
+  `filesystem_available`, `filesystem_inodes_total`,
+  `filesystem_inodes_free` and `filesystem_readonly` for every local volume
+  with `statfs`, so the filesystem dashboard draws on a Mac. An APFS volume
+  without a quota or reserve reports its container's size and free space.
 - **TCP bandwidth charts in the network dashboard.** The TCP group draws
   `tcp_bytes` as transmit and receive bits per second when the recording
   has it, from the `tcp_traffic` sampler on Linux and on macOS.
