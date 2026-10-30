@@ -2764,6 +2764,19 @@ mod tests {
         let overview: serde_json::Value =
             serde_json::from_str(&reg.get_section("baseline", "overview").unwrap()).unwrap();
         assert!(overview["metadata"].get("template_error").is_none());
-        assert!(!overview["groups"].as_array().unwrap().is_empty());
+        let viewer = reg.slot("baseline").unwrap();
+        let sources = classify_sources(
+            viewer.reader.as_ref(),
+            &viewer.file_metadata,
+            &std::collections::HashSet::new(),
+        );
+        let want_ctx = dashboard::dashboard::build_dashboard_context(None, &[], None, &sources);
+        let mut want =
+            dashboard::dashboard::generate_section(viewer.reader.as_ref(), "/overview", &want_ctx)
+                .unwrap();
+        want.set_filename(viewer.reader.filename_or_default());
+        let mut want = serde_json::to_value(&want).unwrap();
+        strip_sections_from_section_body(&mut want);
+        assert_eq!(overview, want);
     }
 }
