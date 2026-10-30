@@ -11,6 +11,16 @@
 
 ### Added
 
+- **CPU frequency and energy on macOS.** `cpu_frequency` and `cpu_power`
+  now run on Apple silicon, unprivileged, from IOReport, the framework
+  `powermetrics` reads. `cpu_frequency` derives `cpu_tsc`, `cpu_mperf` and
+  `cpu_aperf` per core from performance-state residency and the device
+  tree's frequency tables, so the CPU dashboard's frequency charts draw on
+  a Mac. `cpu_power` sets `cpu_cores_energy`, `cpu_core_energy`,
+  `cpu_igpu_energy` and `cpu_dram_energy`, and the new macOS-only
+  `cpu_soc_energy{block}` for the other SoC blocks, such as the Neural
+  Engine and the display pipelines, which the CPU dashboard draws in a new
+  SoC Power group.
 - **Filesystem space on macOS.** `filesystem` now runs on macOS,
   unprivileged, and sets `filesystem_total`, `filesystem_free`,
   `filesystem_available`, `filesystem_inodes_total`,

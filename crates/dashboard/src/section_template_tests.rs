@@ -372,8 +372,10 @@ fn legacy(bench: &Catalog) -> Catalog {
 
 /// The CPU, memory, block IO, network and TCP series a macOS agent
 /// publishes when it can read the TCP statistics. CPU usage is per CPU in
-/// user and system. Memory has no buffers, LRU lists, commit accounting or
-/// swap cache, and has the macOS-only page classes and compressor. Block IO
+/// user and system; frequency is the aperf/mperf/tsc triple and power the
+/// cores, per-core, GPU, DRAM and SoC-block energy counters. Memory has no
+/// buffers, LRU lists, commit accounting or swap cache, and has the
+/// macOS-only page classes and compressor. Block IO
 /// has the storage driver's counters but no latency or size histograms.
 /// Network has bytes and packets but no network_drop. TCP has the tcp_mib,
 /// tcp_retransmit and tcp_bytes counters but no tcp_packet_latency.
@@ -406,6 +408,20 @@ fn macos() -> Catalog {
                     .map(move |state| labels(&[("id", id), ("state", state)]))
             })
             .collect(),
+    );
+    for name in ["cpu_tsc", "cpu_aperf", "cpu_mperf", "cpu_core_energy"] {
+        out.counters.insert(
+            name.into(),
+            vec![labels(&[("id", "0")]), labels(&[("id", "1")])],
+        );
+    }
+    for name in ["cpu_cores_energy", "cpu_igpu_energy", "cpu_dram_energy"] {
+        out.counters
+            .insert(name.into(), vec![labels(&[("id", "0")])]);
+    }
+    out.counters.insert(
+        "cpu_soc_energy".into(),
+        vec![labels(&[("block", "ANE")]), labels(&[("block", "DISP")])],
     );
     for name in [
         "blockio_bytes",

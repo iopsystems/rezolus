@@ -1,5 +1,6 @@
 //! Minimal IOKit and CoreFoundation bindings for the macOS samplers that read
-//! the I/O registry (`blockio`, `drivehealth`, `network_traffic`).
+//! the I/O registry (`blockio`, `drivehealth`, `network_traffic`,
+//! `cpu_frequency`, `cpu_power`).
 //!
 //! Only what those samplers call is bound. Every owned registry object,
 //! CoreFoundation object and plugin interface is wrapped so it is released on
@@ -60,6 +61,12 @@ extern "C" {
         the_score: *mut i32,
     ) -> KernReturn;
     fn IODestroyPlugInInterface(interface: *mut *const IUnknownVtbl) -> KernReturn;
+    fn IORegistryEntryFromPath(main_port: u32, path: *const c_char) -> IoObject;
+    fn IORegistryEntryGetChildIterator(
+        entry: IoObject,
+        plane: *const c_char,
+        iterator: *mut IoObject,
+    ) -> KernReturn;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -98,6 +105,9 @@ extern "C" {
         b15: u8,
     ) -> CfTypeRef;
     fn CFRelease(cf: CfTypeRef);
+    fn CFDataGetTypeID() -> usize;
+    fn CFDataGetLength(data: CfTypeRef) -> isize;
+    fn CFDataGetBytePtr(data: CfTypeRef) -> *const u8;
 }
 
 /// The text of a CFString, if `v` is one.
@@ -270,6 +280,81 @@ impl Service {
         let v = Owned(v);
         // SAFETY: `v.0` is a live CF object.
         unsafe { string_value(v.0) }
+    }
+
+    /// The registry entry at `path`, such as `IODeviceTree:/cpus`.
+    pub(crate) fn from_path(path: &str) -> Option<Service> {
+        let c = CString::new(path).ok()?;
+        // SAFETY: `c` is NUL-terminated; the result is a +1 reference or 0.
+        let entry = unsafe { IORegistryEntryFromPath(MAIN_PORT_DEFAULT, c.as_ptr()) };
+        (entry != 0).then_some(Service(entry))
+    }
+
+    /// This entry's children in the device tree plane.
+    pub(crate) fn device_tree_children(&self) -> Option<Vec<Service>> {
+        let mut iter: IoObject = 0;
+        // SAFETY: `self.0` is a live entry, the plane name is NUL-terminated,
+        // and on success `iter` is a +1 iterator that `Service` takes over.
+        let kr =
+            unsafe { IORegistryEntryGetChildIterator(self.0, c"IODeviceTree".as_ptr(), &mut iter) };
+        if kr != KERN_SUCCESS || iter == 0 {
+            return None;
+        }
+        let iter = Service(iter);
+        let mut out = Vec::new();
+        loop {
+            // SAFETY: as in `matching`.
+            let s = unsafe { IOIteratorNext(iter.0) };
+            if s == 0 {
+                break;
+            }
+            out.push(Service(s));
+        }
+        Some(out)
+    }
+
+    /// The property `key` of this entry, if it is a CFData.
+    pub(crate) fn data(&self, key: &CfString) -> Option<Vec<u8>> {
+        // SAFETY: as in `dictionary`.
+        let v = unsafe { IORegistryEntryCreateCFProperty(self.0, key.0 .0, std::ptr::null(), 0) };
+        if v.is_null() {
+            return None;
+        }
+        let v = Owned(v);
+        // SAFETY: `v.0` is a live CF object; the bytes are borrowed from it
+        // and copied out while it is alive.
+        unsafe {
+            if CFGetTypeID(v.0) != CFDataGetTypeID() {
+                return None;
+            }
+            let len = usize::try_from(CFDataGetLength(v.0)).ok()?;
+            let ptr = CFDataGetBytePtr(v.0);
+            if ptr.is_null() {
+                return Some(Vec::new());
+            }
+            Some(std::slice::from_raw_parts(ptr, len).to_vec())
+        }
+    }
+
+    /// The property `key` of this entry, if it is a CFNumber.
+    pub(crate) fn number(&self, key: &CfString) -> Option<i64> {
+        // SAFETY: as in `dictionary`.
+        let v = unsafe { IORegistryEntryCreateCFProperty(self.0, key.0 .0, std::ptr::null(), 0) };
+        if v.is_null() {
+            return None;
+        }
+        let v = Owned(v);
+        let mut out: i64 = 0;
+        // SAFETY: `v.0` is a live CF object and `out` a valid out-pointer.
+        unsafe {
+            (CFGetTypeID(v.0) == CFNumberGetTypeID()
+                && CFNumberGetValue(
+                    v.0,
+                    CF_NUMBER_SINT64_TYPE,
+                    &mut out as *mut i64 as *mut c_void,
+                ) != 0)
+                .then_some(out)
+        }
     }
 
     /// This entry's first parent in the service plane, or `None` at the
