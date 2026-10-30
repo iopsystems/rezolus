@@ -244,6 +244,7 @@ mod tests {
     /// each table rises.
     #[test]
     fn the_device_tree_is_read() {
+        crate::agent::samplers::ioreport::skip_in_vm!();
         let cores = cores().expect("cores");
         let mut ids: Vec<usize> = cores.iter().map(|c| c.id).collect();
         ids.sort_unstable();

@@ -269,6 +269,41 @@ impl Subscription {
     }
 }
 
+/// Whether this process runs in a virtual machine, whose guest may have no
+/// IOReport energy or performance-state channels and no device-tree
+/// frequency tables. The tests that read this machine skip there and fail
+/// on bare metal.
+#[cfg(test)]
+pub(crate) fn in_vm() -> bool {
+    let mut v: libc::c_int = 0;
+    let mut len = std::mem::size_of::<libc::c_int>();
+    // SAFETY: the name is NUL-terminated and `v`/`len` are valid
+    // out-pointers of the sysctl's size.
+    let r = unsafe {
+        libc::sysctlbyname(
+            c"kern.hv_vmm_present".as_ptr(),
+            (&mut v as *mut libc::c_int).cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    r == 0 && v == 1
+}
+
+/// Skip a test that reads this machine's hardware when in a VM.
+#[cfg(test)]
+macro_rules! skip_in_vm {
+    () => {
+        if $crate::agent::samplers::ioreport::in_vm() {
+            eprintln!("in a virtual machine; skipping");
+            return;
+        }
+    };
+}
+#[cfg(test)]
+pub(crate) use skip_in_vm;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,6 +311,7 @@ mod tests {
     /// The energy model is readable unprivileged and its counters only grow.
     #[test]
     fn energy_model_totals_are_running_totals() {
+        skip_in_vm!();
         let sub = Subscription::new(&[("Energy Model", None)]).expect("subscribe");
         let total = |channels: &[Channel]| {
             channels
@@ -298,6 +334,7 @@ mod tests {
     /// counter's ticks since boot.
     #[test]
     fn core_residencies_are_running_ticks() {
+        skip_in_vm!();
         let sub = Subscription::new(&[("CPU Stats", Some("CPU Core Performance States"))])
             .expect("subscribe");
         let channels = sub.sample().expect("sample");

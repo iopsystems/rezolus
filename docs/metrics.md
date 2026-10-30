@@ -254,7 +254,7 @@ IOReport is a private framework with no published interface; it is the one
 `powermetrics` reads, and it needs no privileges. A cluster type whose
 frequency table does not have one entry per performance state is not
 published, and the sampler reports itself unsupported when no core can be
-read, as on an Intel Mac, whose device tree has no cluster types.
+read. An Intel Mac, whose CPUs have no `cluster-type`, reports it unsupported.
 
 ### cpu_l3
 

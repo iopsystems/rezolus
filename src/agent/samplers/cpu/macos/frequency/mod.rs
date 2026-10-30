@@ -249,6 +249,7 @@ mod tests {
     /// over a short interval lies within its cluster's table.
     #[test]
     fn every_core_is_read_within_its_table() {
+        crate::agent::samplers::ioreport::skip_in_vm!();
         let cores = topology::cores().unwrap();
         let (e, p) = topology::frequency_tables().unwrap();
         let tables = HashMap::from([(Kind::Efficiency, e), (Kind::Performance, p)]);
@@ -287,6 +288,7 @@ mod tests {
     /// is set, and the group is stamped.
     #[tokio::test]
     async fn new_and_refresh_set_every_core_and_stamp_the_group() {
+        crate::agent::samplers::ioreport::skip_in_vm!();
         let frequency = Frequency::new().unwrap();
         frequency.refresh().await;
 

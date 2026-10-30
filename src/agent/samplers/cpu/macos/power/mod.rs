@@ -357,6 +357,7 @@ mod tests {
     /// channels' rounding.
     #[test]
     fn this_machine_is_read() {
+        crate::agent::samplers::ioreport::skip_in_vm!();
         let cores = topology::cores().unwrap();
         let sub = Subscription::new(&[(GROUP, None)]).unwrap();
         let first = read(&sub.sample().unwrap(), &cores);
@@ -392,6 +393,7 @@ mod tests {
     /// have no members, and each SoC slot is set and labelled.
     #[tokio::test]
     async fn new_and_refresh_set_members_windows_and_blocks() {
+        crate::agent::samplers::ioreport::skip_in_vm!();
         let power = Power::new().unwrap();
         power.refresh().await;
 
