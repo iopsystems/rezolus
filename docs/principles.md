@@ -260,8 +260,10 @@ programs took 306-314 ns per run with the threads in one process and
 195-203 ns with 48 one-thread processes, against 162-177 ns without the
 process counter: about 2 ms of CPU per second across the host. The cost
 grows with the number of CPUs running the process and with HZ; it has
-not been measured on a larger host. Sharding it as `CgroupCounters` are
-sharded would cost 16 copies of a 32 MiB array, so it keeps one copy.
+not been measured on a larger host. It keeps one copy: eight copies
+assigned by L3 remove the contention but cost 256 MiB, and per-CPU write
+combining leaves deltas uncommitted on idle CPUs under nohz
+([journal](journal/2026-10-27-process-cpu-usage-contention.md)).
 
 **How to apply.**
 - New samplers prefer `CpuCounters` over `Counters` (see also principle 9).
