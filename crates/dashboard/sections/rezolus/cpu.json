@@ -636,6 +636,34 @@
               ]
             }
           ]
+        },
+        {
+          "when": {
+            "has_counter": "cpu_soc_energy"
+          },
+          "then": [
+            {
+              "name": "SoC Power",
+              "description": "Power drawn by Apple silicon SoC blocks other than the CPU cores, GPU and DRAM, derived from their cumulative energy counters and named as IOReport names them: ANE is the Neural Engine, DISP and DISPEXT the internal and external display pipelines, AVE the video encoder and ISP the image signal processor.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "SoC Power",
+                  "id": "soc-power",
+                  "unit": "power",
+                  "query": "sum(irate(cpu_soc_energy[5m])) / 1000000"
+                },
+                {
+                  "kind": "counter",
+                  "title": "SoC Power (Per-Block)",
+                  "id": "soc-power-per-block",
+                  "unit": "power",
+                  "query": "sum by (block) (irate(cpu_soc_energy[5m])) / 1000000",
+                  "style": "multi"
+                }
+              ]
+            }
+          ]
         }
       ]
     },

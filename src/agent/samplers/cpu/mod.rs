@@ -14,6 +14,8 @@ pub mod stats {
         include!("./linux/bandwidth/stats.rs");
     }
 
+    // macOS compiles these two in its own samplers.
+    #[cfg(not(target_os = "macos"))]
     mod frequency {
         include!("./linux/frequency/stats.rs");
     }
@@ -26,6 +28,7 @@ pub mod stats {
         include!("./linux/perf/stats.rs");
     }
 
+    #[cfg(not(target_os = "macos"))]
     mod power {
         include!("./linux/power/stats.rs");
     }

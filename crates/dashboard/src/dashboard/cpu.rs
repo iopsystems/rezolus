@@ -421,6 +421,26 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         }
     }
 
+    // Apple silicon's other SoC blocks, one line each by IOReport name.
+    if data.has_counter("cpu_soc_energy") {
+        let soc = power.subgroup("SoC Power");
+        soc.describe(
+            "Power drawn by Apple silicon SoC blocks other than the CPU cores, GPU and DRAM, \
+             derived from their cumulative energy counters and named as IOReport names them: \
+             ANE is the Neural Engine, DISP and DISPEXT the internal and external display \
+             pipelines, AVE the video encoder and ISP the image signal processor.",
+        );
+        soc.plot_promql(
+            PlotOpts::counter("SoC Power", "soc-power", Unit::Power),
+            "sum(irate(cpu_soc_energy[5m])) / 1000000".to_string(),
+        );
+        soc.plot_promql(
+            PlotOpts::counter("SoC Power (Per-Block)", "soc-power-per-block", Unit::Power)
+                .with_style("multi"),
+            "sum by (block) (irate(cpu_soc_energy[5m])) / 1000000".to_string(),
+        );
+    }
+
     if !power.is_empty() {
         view.group(power);
     }
