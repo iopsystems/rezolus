@@ -47,6 +47,15 @@
 
 ### Fixed
 
+- **A histogram no sampler has read is no longer published.** The agent
+  leaves a histogram out of its snapshots and stream until its acquisition
+  group is first stamped. A macOS agent published the Linux BPF histograms
+  (`tcp_packet_latency`, `scheduler_runqueue_latency`, `syscall_latency`,
+  the ext4 and xfs latencies, and others), the `blockio` latency and size
+  histograms and `tcp_size` with no values, so every macOS recording carried
+  them and the dashboards' presence checks drew their charts empty. On Linux
+  a histogram now appears from its sampler's first refresh, and a disabled
+  sampler's histograms are absent.
 - **`memory_pagecache` loads on 6.18 and later kernels.** From 6.18
   `folio->flags` is a `memdesc_flags_t` struct, so the CO-RE relocation for
   the integer read of it failed, the verifier rejected the fill and eviction

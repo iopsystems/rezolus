@@ -1808,6 +1808,100 @@ mod tests {
         );
     }
 
+    // Dedicated group + histogram, touched by no other test.
+    static V3_UNSTAMPED_HISTOGRAM_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new("unattributed", "unstamped_histogram_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_UNSTAMPED_HISTOGRAM_GROUP_ENTRY: &'static AcquisitionGroup =
+        &V3_UNSTAMPED_HISTOGRAM_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_unstamped_histogram_probe",
+        metadata = { acq_group = "unstamped_histogram_probe" }
+    )]
+    static V3_UNSTAMPED_HISTOGRAM_PROBE: metriken::RwLockCounterHistogram =
+        metriken::RwLockCounterHistogram::new(3, 64);
+
+    /// A histogram in a declared group no sampler has stamped is absent from
+    /// the snapshot, and joins it, with a valid schema, once the group is
+    /// stamped; the same builder carries its skeleton cache across the two.
+    #[test]
+    fn histogram_of_a_never_stamped_group_is_absent_until_the_first_stamp() {
+        let name = "unattributed/unstamped_histogram_probe";
+        let mut cache = v3_builder();
+
+        let Snapshot::V3(before) = create_v3(Duration::from_secs(1), vec![], &mut cache, (0, 0))
+        else {
+            panic!("expected V3")
+        };
+        assert!(
+            before.groups.iter().all(|g| g.name != name),
+            "a never-stamped histogram group must be absent"
+        );
+
+        V3_UNSTAMPED_HISTOGRAM_GROUP.acquire().finish();
+
+        let Snapshot::V3(after) = create_v3(Duration::from_secs(1), vec![], &mut cache, (0, 0))
+        else {
+            panic!("expected V3")
+        };
+        let group = after
+            .groups
+            .iter()
+            .find(|g| g.name == name)
+            .expect("the group is present once stamped");
+        assert_eq!(group.validate(), Ok(()));
+        assert!(group.window.is_some());
+        let schema = group.schema.as_ref().expect("schema present");
+        assert!(schema.histograms.iter().any(|d| {
+            d.metadata.get("metric").map(String::as_str)
+                == Some("snapshot_v3_unstamped_histogram_probe")
+        }));
+    }
+
+    /// No declared group holds both a histogram and a counter or gauge.
+    /// `RezolusRouter::route` leaves out a never-stamped group's histograms
+    /// and keeps its other members, so a mixed group would be published
+    /// without its histograms before its first stamp, and a build whose
+    /// identity pass and walk the stamp falls between would drop the whole
+    /// group. Static metrics only: a
+    /// test may register a dynamic mixed group while this one runs.
+    #[test]
+    fn no_declared_group_mixes_histograms_with_other_metrics() {
+        let router = RezolusRouter::new();
+        let mut kinds: HashMap<(String, String), (bool, bool)> = HashMap::new();
+        for metric in metriken::metrics().static_metrics() {
+            let Some(group) = metric
+                .metadata()
+                .get(metriken_exposition::group_builder::GROUP_METADATA_KEY)
+            else {
+                continue;
+            };
+            let histogram = matches!(
+                metric.value(),
+                Some(Value::Histogram(_) | Value::GaugeHistogram(_))
+            );
+            let entry = kinds
+                .entry((router.sampler(metric).to_string(), group.to_string()))
+                .or_default();
+            if histogram {
+                entry.0 = true;
+            } else {
+                entry.1 = true;
+            }
+        }
+        let mixed: Vec<_> = kinds
+            .iter()
+            .filter(|(_, (h, o))| *h && *o)
+            .map(|(k, _)| k)
+            .collect();
+        assert!(
+            mixed.is_empty(),
+            "groups mixing histograms and other metrics: {mixed:?}"
+        );
+    }
+
     // Dedicated group + metric, touched by no other test. `rustc test`
     // threads tests in parallel within one process, sharing the whole
     // metriken registry: a test that instead asserted on the shared
