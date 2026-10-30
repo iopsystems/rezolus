@@ -74,7 +74,7 @@
   `scheduler_uninterruptible` and the `*_uninterruptible_wait` counters. The
   time it ran before the preemption was missing from `scheduler_running`. The
   switch is now classed from `sched_switch`'s `preempt` argument as well as
-  the task's state, and the wait is measured from the preemption. (#1599)
+  the task's state, and the wait is measured from the preemption. (#1601)
 - **`memory_writeback` loads on kernels whose `enum wb_reason` has no
   `WB_REASON_LAPTOP_TIMER`, such as 7.0.** The CO-RE relocation
   for it failed, the verifier rejected `writeback_start`, and the sampler
