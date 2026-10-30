@@ -144,6 +144,35 @@
       "id": "tcp",
       "subgroups": [
         {
+          "when": {
+            "present": "tcp_bytes"
+          },
+          "then": [
+            {
+              "name": "Traffic",
+              "description": "TCP payload bits per second, without headers. On Linux, transmit is the bytes passed to send calls, including sends that failed or were retried, and receive is the bytes read from sockets. On macOS, both are data bytes in segments sent and received, without retransmissions sent; while a connection loses or reorders packets, receive leaves out some segments and counts overlapping out-of-order bytes twice.",
+              "plots": [
+                {
+                  "kind": "counter",
+                  "title": "TCP Bandwidth Transmit",
+                  "id": "tcp-bandwidth-tx",
+                  "unit": "bitrate",
+                  "query": "sum(irate(tcp_bytes{direction=\"transmit\"}[5m])) * 8",
+                  "unit_system": "bitrate"
+                },
+                {
+                  "kind": "counter",
+                  "title": "TCP Bandwidth Receive",
+                  "id": "tcp-bandwidth-rx",
+                  "unit": "bitrate",
+                  "query": "sum(irate(tcp_bytes{direction=\"receive\"}[5m])) * 8",
+                  "unit_system": "bitrate"
+                }
+              ]
+            }
+          ]
+        },
+        {
           "name": "Packet Latency",
           "description": "Time from packet received to being processed by the application.",
           "plots": [
