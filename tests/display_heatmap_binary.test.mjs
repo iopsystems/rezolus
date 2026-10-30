@@ -1,12 +1,13 @@
-// Binary histogram-heatmap wire format (routes.rs encode_heatmap_binary ↔
-// data.js decodeHeatmapBinary). Pins the layout:
+// Binary histogram-heatmap wire format
+// (dashboard::display_wire::encode_heatmap_binary ↔ charts/display.js
+// decodeHeatmapBinary). Pins the layout:
 //   [u32 LE headerLen][JSON header][pad to 8B]
 //   [f64 timestamps][f64 counts][u32 timeIdx][u32 bucketIdx]
 // The decoder reconstructs the [timeIdx,bucketIdx,count] triples so the output
 // shape matches the JSON path exactly.
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { decodeHeatmapBinary } from '../src/viewer/assets/lib/data.js';
+import { decodeHeatmapBinary } from '../src/viewer/assets/lib/charts/display.js';
 
 // Encode the same way the Rust side does.
 function encode({ bucketBounds, minValue, maxValue, timestamps, triples }) {

@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chartSwatches } from '../src/viewer/assets/lib/charts/swatches.js';
 
-// Decoded display series shape (data.js decodeDisplayBinary): parallel columns
-// t/min/lo/median/hi/max, optional uncLo/uncHi, plus the wire header's `band`
-// quantile levels. Plain arrays here — the builder must not require typed arrays.
+// Decoded display series shape (charts/display.js decodeDisplayBinary):
+// parallel columns t/min/lo/median/hi/max, optional uncLo/uncHi, plus the
+// wire header's `band` quantile levels. Plain arrays here — the builder must
+// not require typed arrays.
 const spread = {
     t: [1, 2, 3],
     min: [80, 82, 79],

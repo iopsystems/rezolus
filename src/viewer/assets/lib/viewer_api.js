@@ -173,9 +173,10 @@ const ViewerApi = {
     },
 
     // Display-mode range query: returns the decimated boxplot binary body
-    // (see routes.rs encode_display_binary) as an ArrayBuffer, or, when the
-    // engine returns an error or a non-Series result, the parsed JSON under
-    // `{ json }`. Uses raw fetch since m.request is JSON-oriented.
+    // (see dashboard::display_wire::encode_display_binary) as an
+    // ArrayBuffer, or, when the engine returns an error or a non-Series
+    // result, the parsed JSON under `{ json }`. Uses raw fetch since
+    // m.request is JSON-oriented.
     async queryRangeDisplay(query, start, end, step, { points = 500, band = null, captureId = 'baseline', signal = undefined, rateMode = 'grid' } = {}) {
         const params = new URLSearchParams({
             query,

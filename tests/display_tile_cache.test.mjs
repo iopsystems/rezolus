@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import {
     clipDecoded, tileLookup, tileStore, clearDisplayTiles,
-} from '../src/viewer/assets/lib/data.js';
+} from '../src/viewer/assets/lib/charts/display.js';
 
 // Build a decoded response with one series over [start, end] at `n` evenly
 // spaced points, matching decodeDisplayBinary's shape.

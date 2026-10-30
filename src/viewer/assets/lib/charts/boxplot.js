@@ -1,7 +1,7 @@
 import { visibleLabels } from './util/labels.js';
 import { insertGapNulls } from './util/utils.js';
 
-// Render a decoded display-mode boxplot series (see data.js
+// Render a decoded display-mode boxplot series (see display.js
 // `decodeDisplayBinary`) as echarts series: a robust median line, plus two
 // nested filled bands — the inner `[lo,hi]` typical-spread band and the outer
 // `[min,max]` extremes band. The outer band is what keeps a decimated spike

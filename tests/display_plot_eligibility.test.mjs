@@ -5,7 +5,7 @@
 // averages over `by (id)` use display.
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { plotUsesDisplay } from '../src/viewer/assets/lib/data.js';
+import { plotUsesDisplay } from '../src/viewer/assets/lib/charts/display.js';
 
 const p = (query, opts = {}) => ({ promql_query: query, opts });
 

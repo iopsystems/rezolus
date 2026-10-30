@@ -5,7 +5,7 @@
 // identically. These pin the NaN→gap, out-of-order-swap, and empty-band cases.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { displayIntervals } from '../src/viewer/assets/lib/data.js';
+import { displayIntervals } from '../src/viewer/assets/lib/charts/display.js';
 
 test('builds [lo,hi] pairs parallel to the columns', () => {
     const s = { uncLo: Float64Array.from([1.8, 2.8, 3.8]), uncHi: Float64Array.from([2.2, 3.2, 4.2]) };
