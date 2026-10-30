@@ -370,12 +370,13 @@ fn legacy(bench: &Catalog) -> Catalog {
     out
 }
 
-/// The memory, network and TCP series a macOS agent publishes when it can
-/// read the TCP statistics. Memory has no buffers, LRU lists, commit
-/// accounting or swap cache, and has the macOS-only page classes and
-/// compressor. Network has bytes and packets but no network_drop. TCP has
-/// the tcp_mib, tcp_retransmit and tcp_bytes counters but no
-/// tcp_packet_latency.
+/// The CPU, memory, block IO, network and TCP series a macOS agent
+/// publishes when it can read the TCP statistics. CPU usage is per CPU in
+/// user and system. Memory has no buffers, LRU lists, commit accounting or
+/// swap cache, and has the macOS-only page classes and compressor. Block IO
+/// has the storage driver's counters but no latency or size histograms.
+/// Network has bytes and packets but no network_drop. TCP has the tcp_mib,
+/// tcp_retransmit and tcp_bytes counters but no tcp_packet_latency.
 fn macos() -> Catalog {
     let mut out = Catalog::default();
     for name in [
@@ -391,8 +392,32 @@ fn macos() -> Catalog {
         "memory_compressed",
         "memory_compressed_stored",
         "memory_wired",
+        "cpu_cores",
     ] {
         out.gauges.insert(name.into(), vec![labels(&[])]);
+    }
+    out.counters.insert(
+        "cpu_usage".into(),
+        ["0", "1"]
+            .iter()
+            .flat_map(|id| {
+                ["user", "system"]
+                    .iter()
+                    .map(move |state| labels(&[("id", id), ("state", state)]))
+            })
+            .collect(),
+    );
+    for name in [
+        "blockio_bytes",
+        "blockio_operations",
+        "blockio_driver_errors",
+        "blockio_retries",
+        "blockio_service_time",
+    ] {
+        out.counters.insert(
+            name.into(),
+            vec![labels(&[("op", "read")]), labels(&[("op", "write")])],
+        );
     }
     for name in [
         "memory_page_faults",
@@ -679,6 +704,47 @@ fn section_template_matches_the_generators_with_each_metric_absent() {
         failures.is_empty(),
         "template differs from the generator without: {failures:#?}"
     );
+}
+
+/// The group names of a rendered section.
+fn group_names(json: &str) -> Vec<String> {
+    let v: serde_json::Value = serde_json::from_str(json).unwrap();
+    v["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// On a macOS recording the overview draws CPU, network traffic and block
+/// IO, and none of the Linux-only charts.
+#[test]
+fn overview_on_macos_draws_only_what_a_mac_records() {
+    let ctx = build_dashboard_context(None, &[], None, &[]);
+    let json = render_generator(&macos(), "/overview", &ctx);
+    assert_eq!(group_names(&json), ["CPU", "Network", "BlockIO"]);
+    for query in [
+        "\"tcp_packet_latency\"",
+        "\"scheduler_runqueue_latency\"",
+        "\"syscall_latency\"",
+        "irate(syscall[",
+        "irate(softirq[",
+        "irate(softirq_time[",
+    ] {
+        assert!(!json.contains(query), "{query} in {json}");
+    }
+}
+
+/// On a macOS recording the exceptions section draws only TCP Retransmits,
+/// and nothing when the agent could not read the TCP statistics.
+#[test]
+fn exceptions_on_macos_draw_only_tcp_retransmits() {
+    let ctx = build_dashboard_context(None, &[], None, &[]);
+    let json = render_generator(&macos(), "/exceptions", &ctx);
+    assert_eq!(group_names(&json), ["TCP"]);
+    let json = render_generator(&macos().without("tcp_retransmit"), "/exceptions", &ctx);
+    assert!(group_names(&json).is_empty(), "{json}");
 }
 
 /// A subgroup gated on any of several metrics, rendered with only one of
