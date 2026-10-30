@@ -723,6 +723,8 @@ const reapplyFileMetadata = (fm, experimentFm = null) => {
 // agent or a followed archive, which may still gain rows. Each call replaces
 // the previous call's toasts, so a toast never outlives the recording it
 // names; `singleInstantGen` drops an answer that arrives after a later call.
+// setTimeout's longest delay; a larger one, Infinity included, fires at once.
+const UNTIL_DISMISSED = 2 ** 31 - 1;
 let singleInstantToasts = [];
 let singleInstantGen = 0;
 const warnSingleInstant = () => {
@@ -737,7 +739,7 @@ const warnSingleInstant = () => {
         captureMetadata(id).then((meta) => {
             if (gen !== singleInstantGen) return;
             const message = singleInstantNotice(meta, label && `The ${label} recording`);
-            if (message) singleInstantToasts.push(notify('warn', message, 2147483647));
+            if (message) singleInstantToasts.push(notify('warn', message, UNTIL_DISMISSED));
         }, () => {});
     }
 };
