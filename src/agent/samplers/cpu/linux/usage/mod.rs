@@ -116,13 +116,52 @@ struct Assigned {
 static ASSIGNED_AT: std::sync::Mutex<std::collections::BTreeMap<usize, Assigned>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
 
+/// A drained `task_info` whose task was younger than [`MIN_LIFETIME_NS`]:
+/// the labels it would have assigned, and what [`ASSIGNED_AT`] would have
+/// recorded.
+struct Pending {
+    labels: std::collections::BTreeMap<String, String>,
+    at: Assigned,
+}
+
+/// Labels held back from task slots until the task has lived
+/// [`MIN_LIFETIME_NS`], by slot, with the newest `task_info` for each.
+/// [`sweep_task_slots`] assigns them once the task is old enough, and drops
+/// them, as it releases assigned labels, once the instance is gone. A
+/// `task_exit` drops one no newer than the exit. Locked after
+/// [`ASSIGNED_AT`] and before [`DEAD_GROUPS`] wherever they are held
+/// together.
+static PENDING: std::sync::Mutex<std::collections::BTreeMap<usize, Pending>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// The config option `task_min_lifetime` in nanoseconds, set by `init`, or
+/// 0 with `snapshot_format = "v2"`. A task is old enough when
+/// `CLOCK_MONOTONIC` less its `start_time` (also `CLOCK_MONOTONIC`) is at
+/// least this. The agent's own `CLOCK_MONOTONIC` is taken to be the
+/// kernel's: in a time namespace with a monotonic offset, tasks look older
+/// (positive offset) or younger (negative) by that offset.
+static MIN_LIFETIME_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `CLOCK_MONOTONIC` in nanoseconds, the clock of `task->start_time` and
+/// `bpf_ktime_get_ns()`.
+fn monotonic_ns() -> u64 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // Cannot fail for CLOCK_MONOTONIC with a valid pointer.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
+}
+
 /// Thread groups left with no live thread, from `task_exit.dead_tgid`: the
 /// newest such exit's `ts`, and whether a sweep has already applied it.
 /// Each entry is applied by two sweeps, because a `task_info` sent before
 /// the group's last exit can be drained one drain after it: one drain reads
 /// the `task_info` ring before the `task_exit` ring. [`age_dead_groups`],
 /// the last sweep after each drain, ages the entries. Locked after
-/// [`ASSIGNED_AT`] or [`PROCESS_ASSIGNED`] wherever both are held.
+/// [`ASSIGNED_AT`], [`PENDING`] or [`PROCESS_ASSIGNED`] wherever they are
+/// held together.
 static DEAD_GROUPS: std::sync::Mutex<std::collections::BTreeMap<u32, (u64, bool)>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
 
@@ -149,10 +188,22 @@ const INSTANCE_EXITED: u64 = 1 << 62;
 /// A `task_info` is submitted only after its instance's marker is written
 /// (pending first; see handle_new_task in mod.bpf.c), so a drained
 /// `task_info` never meets an older marker.
+///
+/// Labels held in [`PENDING`] are dropped by the same test, and assigned
+/// once their task has lived [`MIN_LIFETIME_NS`].
 fn sweep_task_slots(markers: &[std::sync::atomic::AtomicU64]) {
+    sweep_task_slots_at(
+        markers,
+        MIN_LIFETIME_NS.load(std::sync::atomic::Ordering::Relaxed),
+        monotonic_ns(),
+    );
+}
+
+fn sweep_task_slots_at(markers: &[std::sync::atomic::AtomicU64], min_lifetime: u64, now: u64) {
     let mut assigned = ASSIGNED_AT.lock().unwrap_or_else(|e| e.into_inner());
+    let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
     let dead_groups = DEAD_GROUPS.lock().unwrap_or_else(|e| e.into_inner());
-    assigned.retain(|&slot, at| {
+    let holds = |slot: usize, at: &Assigned| {
         let marker = markers
             .get(slot)
             .map_or(0, |m| m.load(std::sync::atomic::Ordering::Relaxed));
@@ -160,7 +211,21 @@ fn sweep_task_slots(markers: &[std::sync::atomic::AtomicU64]) {
         let group_gone = dead_groups
             .get(&at.tgid)
             .is_some_and(|&(ts, _)| ts >= at.ts);
-        if !live || group_gone {
+        live && !group_gone
+    };
+    pending.retain(|&slot, p| {
+        if !holds(slot, &p.at) {
+            return false;
+        }
+        if now.saturating_sub(p.at.start_time) < min_lifetime {
+            return true;
+        }
+        TASK_IDENTITY.assign(slot, std::mem::take(&mut p.labels));
+        assigned.insert(slot, p.at);
+        false
+    });
+    assigned.retain(|&slot, at| {
+        if !holds(slot, at) {
             TASK_IDENTITY.release(slot);
             return false;
         }
@@ -287,31 +352,51 @@ fn handle_task_info(data: &[u8]) -> i32 {
     let mut info = bpf::types::task_info::default();
 
     if plain::copy_from_bytes(&mut info, data).is_ok() {
-        let pid = info.pid as usize;
-        let slot = pid_slot(pid);
-        let tgid = info.tgid;
-
-        // Built once and set once. Setting the four labels separately left a
-        // window where a reader could see a slot half-way through changing
-        // hands — the new task's pid beside the old task's comm. See
-        // `agent::identity`.
-        let mut labels = info_labels(&info);
-        labels.insert("pid".to_string(), pid.to_string());
-
-        let mut assigned = ASSIGNED_AT.lock().unwrap_or_else(|e| e.into_inner());
-        TASK_IDENTITY.assign(slot, labels);
-        let this = Assigned {
-            ts: info.ts,
-            start_time: info.start_time,
-            tgid,
-        };
-        let at = assigned.entry(slot).or_insert(this);
-        if info.ts >= at.ts {
-            *at = this;
-        }
+        apply_task_info(
+            &info,
+            MIN_LIFETIME_NS.load(std::sync::atomic::Ordering::Relaxed),
+            monotonic_ns(),
+        );
     }
 
     0
+}
+
+/// Label the task's slot, or, for a task that has not yet lived
+/// `min_lifetime` at `now`, hold the labels in [`PENDING`].
+fn apply_task_info(info: &bpf::types::task_info, min_lifetime: u64, now: u64) {
+    let pid = info.pid as usize;
+    let slot = pid_slot(pid);
+
+    // Built once and set once. Setting the four labels separately left a
+    // window where a reader could see a slot half-way through changing
+    // hands — the new task's pid beside the old task's comm. See
+    // `agent::identity`.
+    let mut labels = info_labels(info);
+    labels.insert("pid".to_string(), pid.to_string());
+
+    let this = Assigned {
+        ts: info.ts,
+        start_time: info.start_time,
+        tgid: info.tgid,
+    };
+
+    let mut assigned = ASSIGNED_AT.lock().unwrap_or_else(|e| e.into_inner());
+    let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    if now.saturating_sub(info.start_time) < min_lifetime {
+        if pending.get(&slot).is_none_or(|p| info.ts >= p.at.ts) {
+            pending.insert(slot, Pending { labels, at: this });
+        }
+        return;
+    }
+    if pending.get(&slot).is_some_and(|p| p.at.ts <= info.ts) {
+        pending.remove(&slot);
+    }
+    TASK_IDENTITY.assign(slot, labels);
+    let at = assigned.entry(slot).or_insert(this);
+    if info.ts >= at.ts {
+        *at = this;
+    }
 }
 
 fn handle_task_exit(data: &[u8]) -> i32 {
@@ -321,6 +406,10 @@ fn handle_task_exit(data: &[u8]) -> i32 {
         let slot = pid_slot(exit.pid as usize);
 
         let mut assigned = ASSIGNED_AT.lock().unwrap_or_else(|e| e.into_inner());
+        let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+        if pending.get(&slot).is_some_and(|p| p.at.ts <= exit.ts) {
+            pending.remove(&slot);
+        }
         if exit.dead_tgid != 0 {
             let mut dead_groups = DEAD_GROUPS.lock().unwrap_or_else(|e| e.into_inner());
             let at = dead_groups
@@ -375,6 +464,16 @@ fn init(config: Arc<Config>) -> SamplerResult {
     ];
 
     let task_attribution = config.task_attribution(NAME);
+    // A V2 snapshot lists every non-zero slot, labelled or not, so a held
+    // task would be exported with only its `id`.
+    let min_lifetime = match config.general().snapshot_format() {
+        crate::agent::config::SnapshotFormat::V2 => std::time::Duration::ZERO,
+        crate::agent::config::SnapshotFormat::V3 => config.task_min_lifetime(NAME),
+    };
+    MIN_LIFETIME_NS.store(
+        u64::try_from(min_lifetime.as_nanos()).unwrap_or(u64::MAX),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let process_attribution = config.process_attribution(NAME);
     let cgroup_attribution = config.cgroup_attribution_or(NAME, true);
 
@@ -626,6 +725,11 @@ mod tests {
     }
 
     fn task_info_in(pid: u32, tgid: u32, comm: &str, ts: u64, start_time: u64) -> Vec<u8> {
+        let info = info_in(pid, tgid, comm, ts, start_time);
+        unsafe { plain::as_bytes(&info) }.to_vec()
+    }
+
+    fn info_in(pid: u32, tgid: u32, comm: &str, ts: u64, start_time: u64) -> bpf::types::task_info {
         let mut info = bpf::types::task_info {
             pid,
             tgid,
@@ -634,7 +738,7 @@ mod tests {
             ..Default::default()
         };
         info.comm[..comm.len()].copy_from_slice(comm.as_bytes());
-        unsafe { plain::as_bytes(&info) }.to_vec()
+        info
     }
 
     fn task_exit(pid: u32, ts: u64) -> Vec<u8> {
@@ -846,5 +950,137 @@ mod tests {
         assert!(labelled(late));
         handle_task_exit(&task_exit(late, 21));
         assert!(!labelled(late));
+    }
+
+    /// A task younger than the minimum lifetime gets no labels when its
+    /// `task_info` is drained. The first sweep at which it has lived the
+    /// minimum assigns them, with any rename since; a sweep before that, or
+    /// an exit older than the held labels, leaves them held. A task older
+    /// than the minimum is labelled at once, and a rename drained once it
+    /// is old enough replaces the held labels.
+    #[test]
+    fn a_task_is_labelled_once_it_has_lived_the_minimum() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        // Pids no other test uses, below the size of `markers`.
+        let _sweeps = SWEEPS.lock().unwrap_or_else(|e| e.into_inner());
+        let (pid, old) = (3301, 3302);
+        let slot = pid_slot(pid as usize);
+        let min = 1_000_000_000;
+        let start = 10_000_000_000;
+        let markers: Vec<AtomicU64> = (0..4096).map(|_| AtomicU64::new(0)).collect();
+        let labels = || TASK_CPU_USAGE.load_metadata(slot);
+        let sweep = |now| {
+            sweep_task_slots_at(&markers, min, now);
+            age_dead_groups(&markers);
+        };
+
+        markers[slot].store(start, Ordering::Relaxed);
+        apply_task_info(
+            &info_in(pid, pid, "worker", start + 1, start),
+            min,
+            start + 1,
+        );
+        assert!(labels().is_none());
+        apply_task_info(
+            &info_in(pid, pid, "pool-1", start + 2, start),
+            min,
+            start + 2,
+        );
+        handle_task_exit(&task_exit(pid, start + 1));
+        sweep(start + min - 1);
+        assert!(labels().is_none());
+        sweep(start + min);
+        assert_eq!(labels().unwrap()["comm"], "pool-1");
+        handle_task_exit(&task_exit(pid, start + min + 1));
+        assert!(labels().is_none());
+
+        // Held, then renamed in the drain in which it reaches the minimum:
+        // the rename is labelled at once and the sweep does not replace it
+        // with the held labels.
+        let start = start + 10 * min;
+        markers[slot].store(start, Ordering::Relaxed);
+        apply_task_info(
+            &info_in(pid, pid, "worker", start + 1, start),
+            min,
+            start + 1,
+        );
+        apply_task_info(
+            &info_in(pid, pid, "pool-2", start + min, start),
+            min,
+            start + min,
+        );
+        sweep(start + min);
+        assert_eq!(labels().unwrap()["comm"], "pool-2");
+        handle_task_exit(&task_exit(pid, start + min + 1));
+        assert!(labels().is_none());
+
+        let old_start = 1_000;
+        let old_slot = pid_slot(old as usize);
+        markers[old_slot].store(old_start, Ordering::Relaxed);
+        apply_task_info(&info_in(old, old, "main", start, old_start), min, start);
+        assert!(TASK_CPU_USAGE.load_metadata(old_slot).is_some());
+        handle_task_exit(&task_exit(old, start + 1));
+    }
+
+    /// Held labels are dropped, never assigned, when their task exits
+    /// before the minimum, when its marker shows it gone (an exit event
+    /// that was dropped), or when its group has had its last exit since.
+    /// The sweep drops them while the task would still be young, so they
+    /// are not kept until the minimum.
+    #[test]
+    fn a_task_that_exits_before_the_minimum_is_never_labelled() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let _sweeps = SWEEPS.lock().unwrap_or_else(|e| e.into_inner());
+        let (exits, dropped) = (3303, 3304);
+        let min = 1_000_000_000;
+        let start = 20_000_000_000;
+        let markers: Vec<AtomicU64> = (0..4096).map(|_| AtomicU64::new(0)).collect();
+        let labelled = |pid: u32| {
+            TASK_CPU_USAGE
+                .load_metadata(pid_slot(pid as usize))
+                .is_some()
+        };
+
+        for pid in [exits, dropped] {
+            markers[pid_slot(pid as usize)].store(start, Ordering::Relaxed);
+            apply_task_info(
+                &info_in(pid, pid, "worker", start + 1, start),
+                min,
+                start + 1,
+            );
+        }
+        let held = |pid: u32| {
+            PENDING
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(&pid_slot(pid as usize))
+        };
+        handle_task_exit(&task_exit(exits, start + 2));
+        assert!(!held(exits));
+        markers[pid_slot(dropped as usize)].store(start | INSTANCE_EXITED, Ordering::Relaxed);
+        sweep_task_slots_at(&markers, min, start + 3);
+        age_dead_groups(&markers);
+        assert!(!held(dropped));
+
+        // Held with a live marker, in a group whose last exit came after
+        // the labels (a thread whose exec failed after de_thread).
+        let (tgid, orphan) = (3305, 3306);
+        markers[pid_slot(orphan as usize)].store(start, Ordering::Relaxed);
+        apply_task_info(
+            &info_in(orphan, tgid, "worker", start + 1, start),
+            min,
+            start + 1,
+        );
+        handle_task_exit(&task_exit_of(tgid, tgid, start + 2));
+        sweep_task_slots_at(&markers, min, start + 3);
+        age_dead_groups(&markers);
+        assert!(!held(orphan));
+        age_dead_groups(&markers);
+        sweep_task_slots_at(&markers, min, start + 2 * min);
+        age_dead_groups(&markers);
+        assert!(!labelled(exits));
+        assert!(!labelled(dropped));
     }
 }

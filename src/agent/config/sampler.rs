@@ -32,11 +32,20 @@ pub struct Sampler {
     /// last, the `task_rename` program unless `process_attribution` is on,
     /// the walk of the per-pid map each time a snapshot is served
     /// (the slots with metadata for V3, every slot for V2), and one series
-    /// per thread plus one per rename in every recording. `None` means the
-    /// default.
+    /// per thread still running at a snapshot after it has lived
+    /// `task_min_lifetime`, plus one per rename after its series appears,
+    /// in every recording. `None` means the default.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     task_attribution: Option<bool>,
+    /// How long a task must have lived before its per-task series is
+    /// exported (`cpu_usage`'s `task_cpu_usage`), as a humantime string.
+    /// A task that exits before then has no series of its own; its CPU is
+    /// still in the host total. With `snapshot_format = "v2"` the minimum
+    /// is 0. `None` means the default, one second.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[serde(default)]
+    task_min_lifetime: Option<String>,
     /// Whether a sampler that keeps per-task accounting also keeps a total
     /// per process (`cpu_usage`'s `process_cpu_usage`). Off by default; on,
     /// it costs two per-pid arrays (64 MiB) and a 256 KiB ring, a
@@ -108,6 +117,11 @@ impl Sampler {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn task_attribution(&self) -> Option<bool> {
         self.task_attribution
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn task_min_lifetime(&self) -> Option<&str> {
+        self.task_min_lifetime.as_deref()
     }
 
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -202,6 +216,12 @@ impl Sampler {
         if let Some(ref interval) = self.interval {
             if let Err(e) = interval.parse::<humantime::Duration>() {
                 eprintln!("sampler '{name}' interval couldn't be parsed: {e}");
+                std::process::exit(1);
+            }
+        }
+        if let Some(ref lifetime) = self.task_min_lifetime {
+            if let Err(e) = lifetime.parse::<humantime::Duration>() {
+                eprintln!("sampler '{name}' task_min_lifetime couldn't be parsed: {e}");
                 std::process::exit(1);
             }
         }
