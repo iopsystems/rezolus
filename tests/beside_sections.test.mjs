@@ -60,7 +60,7 @@ const {
     notebookStore, reportStore, persistNotebook, loadPayloadIntoStore, buildPayload, pinnedChart,
     SELECTION_SCHEMA_VERSION,
 } = await import('../src/viewer/assets/lib/selection/selection.js');
-const { Chart } = await import('../src/viewer/assets/lib/charts/chart.js');
+const { ChartView } = await import('../src/viewer/assets/lib/ui/chart_view.js');
 const app = await import('../src/viewer/assets/lib/app.js');
 const { uploadParquet } = await import('../src/viewer/assets/lib/script.js');
 const { ViewerApi } = await import('../src/viewer/assets/lib/viewer_api.js');
@@ -250,7 +250,7 @@ test('a pinned chart draws one capture when its entry says so, A/B otherwise', (
     const opts = { interval: 1, sectionRoute: '/cpu', captureLabels: {}, anchors: {}, toggles: {}, setChartToggle() {} };
     const attrs = { compareMode: true, chartsState: {} };
     const single = pinnedChart({ single_capture: true }, spec, attrs, opts);
-    assert.equal(single.body.tag, Chart);
+    assert.equal(single.body.tag, ChartView);
     assert.equal(single.toggle, false);
     const both = pinnedChart({}, spec, attrs, opts);
     assert.equal(both.body.tag, CompareChartWrapper);
@@ -258,7 +258,7 @@ test('a pinned chart draws one capture when its entry says so, A/B otherwise', (
     // An entry saved before `single_capture`, whose own query names the
     // recording, though the spec it renders from does not.
     const legacy = pinnedChart({ promql_query: 'irate(x{__capture__="h"}[5m])' }, spec, attrs, opts);
-    assert.equal(legacy.body.tag, Chart);
+    assert.equal(legacy.body.tag, ChartView);
 });
 
 test('single_capture survives the notebook, a loaded report and a saved payload', () => {

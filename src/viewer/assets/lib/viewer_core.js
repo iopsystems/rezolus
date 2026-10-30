@@ -1,10 +1,10 @@
 // Shared viewer components and helpers used by both the server-backed
 // viewer (script.js) and the static site viewer (site script.js).
 
-import { Chart } from './charts/chart.js';
+import { ChartView } from './ui/chart_view.js';
 import { expandLink, selectButton, compareToggle } from './ui/chart_controls.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec, resolvedStyle } from './charts/metric_types.js';
-import { renderCompareChart } from './charts/compare.js';
+import { renderCompareChart } from './compare/compare.js';
 import { captureContext } from './events/capture_events.js';
 import {
     queryRangeForCapture, queryRangeDisplayForCapture, buildEffectiveQuery,
@@ -14,7 +14,7 @@ import {
     listCaptures, captureMetadata, mapLimit,
     fetchEntityHeatmapForCapture, isEntityQuery,
 } from './data.js';
-import { canonicalQuantileLabel, composeScatterLabel } from './charts/util/compare_math.js';
+import { canonicalQuantileLabel, composeScatterLabel } from './compare/compare_math.js';
 import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
 import { heatmapTriplesMinMax } from './charts/util/heatmap_data.js';
 import { pairedSeriesNamer } from './charts/util/labels.js';
@@ -707,13 +707,13 @@ export const CompareChartWrapper = {
             setChartToggle,
             chartsState,
             interval,
-            Chart,
+            Chart: ChartView,
             captureLabels,
         });
 
         switch (result && result.kind) {
             case 'spec':
-                return m(Chart, { spec: result.spec, chartsState, interval });
+                return m(ChartView, { spec: result.spec, chartsState, interval });
             case 'vnode':
                 return result.vnode;
             case 'split': {
@@ -724,12 +724,12 @@ export const CompareChartWrapper = {
                 return m('div.compare-split-subgroup',
                     specs.map((s) => m('div.chart-wrapper', [
                         s._splitLabel && m('div.compare-split-label', s._splitLabel),
-                        m(Chart, { spec: s, chartsState, interval }),
+                        m(ChartView, { spec: s, chartsState, interval }),
                     ])));
             }
             case 'fallback':
             default:
-                return m(Chart, { spec, chartsState, interval });
+                return m(ChartView, { spec, chartsState, interval });
         }
     },
 };
@@ -835,7 +835,7 @@ export function createGroupComponent(getState) {
                     captureLabels,
                     categoryMembers,
                 })
-                : m(Chart, { spec: renderSpec, chartsState, interval });
+                : m(ChartView, { spec: renderSpec, chartsState, interval });
 
             const renderChart = (spec) => {
                 if (spec.pending === 'hidden') return null;

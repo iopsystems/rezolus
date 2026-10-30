@@ -18,12 +18,10 @@ import {
     configureMultiSeriesChart
 } from './multi.js';
 import globalColorMapper, { COLORS } from './util/colormap.js';
-import { themeVersion } from '../ui/theme.js';
 import { resolveStyle, resolvedStyle } from './metric_types.js';
-import { eventsStore } from '../events/events_store.js';
 import { buildMarkLine, buildRangeSpans, formatDuration, isRangeEvent } from './event_markers.js';
-import { openEventForm, openEventInfo } from '../events/event_form.js';
-import { buildFreezeFooterContent, isEventEditingAllowed, isEventDisplayAllowed } from './base.js';
+import { buildFreezeFooterContent } from './base.js';
+import { chartHost } from './host.js';
 
 
 export class ChartsState {
@@ -276,7 +274,7 @@ function zoomEqual(a, b) {
 
 // Cheap same-shape heuristic for detecting "structurally identical"
 // data arrays. Compare-mode strategies rebuild triples/matrix arrays
-// on every Mithril redraw even when the underlying capture data hasn't
+// on every page redraw even when the underlying capture data hasn't
 // changed; comparing array reference alone would force a reconfigure
 // (and wipe the zoom) on every render. Sample length + first/last
 // element; if those match we treat the arrays as equivalent for the
@@ -337,22 +335,25 @@ function familyBandDiffers(a, b) {
     return !shallowSameShape([a.lower], [b.lower]) || !shallowSameShape([a.upper], [b.upper]);
 }
 
-// Chart component - uses echarts to render a chart
+// One chart, drawn with echarts. The page creates the element, then calls
+// mount(element) once, update({ spec, interval }) when the spec changes, and
+// destroy() when the element goes away. ui/chart_view.js wraps this for
+// Mithril.
 export class Chart {
-    constructor(vnode) {
-        this.domNode = null; // not available until oncreate
-        this.chartId = vnode.attrs.spec.opts.id;
-        this.spec = vnode.attrs.spec;
-        this.chartsState = vnode.attrs.chartsState;
-        this.interval = vnode.attrs.interval; // sampling interval in seconds
+    constructor({ spec, chartsState, interval }) {
+        this.domNode = null; // not available until mount
+        this.chartId = spec.opts.id;
+        this.spec = spec;
+        this.chartsState = chartsState;
+        this.interval = interval; // sampling interval in seconds
         this.resizeObserver = null;
         this.observer = null;
         this.echart = null;
-        this._themeVersion = themeVersion;
+        this._themeVersion = chartHost().getThemeVersion();
     }
 
-    oncreate(vnode) {
-        this.domNode = vnode.dom;
+    mount(dom) {
+        this.domNode = dom;
 
         // Set up the Intersection Observer to lazy load the chart
         const observer = new IntersectionObserver((entries) => {
@@ -380,19 +381,20 @@ export class Chart {
         this.observer = observer;
     }
 
-    onupdate(vnode) {
+    update({ spec, interval }) {
         const oldSpec = this.spec;
-        this.spec = vnode.attrs.spec;
-        this.interval = vnode.attrs.interval;
+        this.spec = spec;
+        this.interval = interval;
 
         // Re-render if data changed, format changed, or theme was toggled.
         // A new spec.data *reference* alone isn't enough to justify a
         // full reconfigure — compare-mode strategies rebuild the triples
-        // array on every Mithril redraw, which would otherwise wipe the
+        // array on every page redraw, which would otherwise wipe the
         // echarts zoom/cursor state on the experiment slot after every
         // tooltip / scroll / hover. Treat equal-length arrays with
         // identical head elements as "same data" to skip the reconfigure
         // in the common case. Theme/format changes still force it.
+        const themeVersion = chartHost().getThemeVersion();
         const themeChanged = this._themeVersion !== themeVersion;
         const formatChanged = oldSpec.opts?.format !== this.spec.opts?.format;
         const dataChanged = oldSpec.data !== this.spec.data
@@ -433,7 +435,7 @@ export class Chart {
             this._applyEventMarkers({ reconfigured: true });
 
             // Restore zoom state after re-render (notMerge wipes the
-            // dataZoom range). In compare mode each Mithril redraw
+            // dataZoom range). In compare mode each page redraw
             // hands in a fresh spec object and therefore triggers a
             // full reconfigure, which would otherwise clear the user's
             // zoom on the non-source slot. _applyZoom is the single
@@ -457,7 +459,7 @@ export class Chart {
         }
     }
 
-    onremove() {
+    destroy() {
         if (this.observer) {
             this.observer.disconnect();
         }
@@ -488,10 +490,6 @@ export class Chart {
         }
     }
 
-    view() {
-        return m('div.chart');
-    }
-
     /**
      * Dispatch an action to the echart instance if it is initialized.
      */
@@ -505,7 +503,7 @@ export class Chart {
      * Apply a zoom to THIS chart's echart. The single place that calls
      * dispatchAction({type: 'dataZoom', …}). Called both from the
      * chartsState subscribeZoom callback (when any writer updates the
-     * shared zoom) and from the onupdate reconfigure path (where
+     * shared zoom) and from the update() reconfigure path (where
      * applyChartOption's notMerge wipes the dataZoom component and we
      * need to restore it).
      *
@@ -636,7 +634,7 @@ export class Chart {
 
         this.configureChartByType();
         this._applyEventMarkers({ reconfigured: true });
-        this._eventsUnsub = eventsStore.subscribe(() => {
+        this._eventsUnsub = chartHost().subscribeEvents(() => {
             this._applyEventMarkers();
         });
 
@@ -675,7 +673,7 @@ export class Chart {
             // Toolbox drag-to-zoom sometimes only emits startValue /
             // endValue (absolute axis coords) and omits the percentage
             // pair. Downstream code (TimeRangeBar's Match Selection,
-            // onupdate's zoom restore) relies on the percentage form,
+            // update()'s zoom restore) relies on the percentage form,
             // and in compare mode the absolute-coord fallback is
             // broken because the chart axis is in relative ms but the
             // TimeRangeBar's start_time is wall-clock ms. Derive the
@@ -773,7 +771,7 @@ export class Chart {
                 { start, end, startValue, endValue },
                 { source: 'local', originChart: this },
             );
-            if (changed) m.redraw();
+            if (changed) chartHost().redraw();
         });
 
         // Enable drag-to-zoom
@@ -841,7 +839,7 @@ export class Chart {
         // https://github.com/apache/echarts/issues/18195#issuecomment-1399583619
         this.echart.getZr().on('dblclick', () => {
             this.chartsState.resetAll();
-            m.redraw();
+            chartHost().redraw();
         })
     }
 
@@ -987,9 +985,19 @@ export class Chart {
         return { source: o.source, node: o.node, instance: o.instance };
     }
 
+    // The events the host shows on this chart; none when the page shows no
+    // events here.
+    _visibleEvents() {
+        return chartHost().eventsForChart({
+            chartId: this.chartId,
+            scope: this._chartScope(),
+        });
+    }
+
     // Map an event's absolute timestamp (ns) onto this chart's x axis (ms).
     // Compare-mode specs draw a relative axis and carry the capture anchor
-    // as `eventTimeOriginSec` (compare.js); everything else is absolute.
+    // as `eventTimeOriginSec` (compare/compare.js); everything else is
+    // absolute.
     _eventAxisMs(ns) {
         const originSec = this.spec?.eventTimeOriginSec;
         const ms = ns / 1_000_000;
@@ -1010,15 +1018,10 @@ export class Chart {
             this._chartStyleMarkLineSnapshot = ml ? JSON.parse(JSON.stringify(ml)) : null;
         }
 
-        // Outside Notebook/Report: no event markers at all (the base
-        // chart-style markLine, e.g. scatter's OOB separator, is still
-        // preserved via the empty-eventData merge below).
-        const visible = isEventDisplayAllowed()
-            ? eventsStore.filterForChart({
-                chartId: this.chartId,
-                scope: this._chartScope(),
-            })
-            : [];
+        // With no events to show, the chart-style markLine (e.g. scatter's
+        // OOB separator) is still kept through the empty-eventData merge
+        // below.
+        const visible = this._visibleEvents();
         // Range bands are drawn as HTML by _renderEventBubbles, not here:
         // see event_markers.js::buildRangeSpans for why not a markArea.
         const eventMarkLine = buildMarkLine(visible, (ns) => this._eventAxisMs(ns));
@@ -1048,9 +1051,8 @@ export class Chart {
     _renderEventBubbles() {
         if (!this.echart || !this.domNode) return;
 
-        // Only the curated Notebook/Report views show events. Elsewhere,
-        // tear down any existing layer and bail.
-        if (!isEventDisplayAllowed()) {
+        const visible = this._visibleEvents();
+        if (visible.length === 0) {
             if (this._eventBubbleLayer) {
                 this._eventBubbleLayer.remove();
                 this._eventBubbleLayer = null;
@@ -1066,12 +1068,6 @@ export class Chart {
             this._eventBubbleLayer = layer;
         }
         layer.textContent = '';
-
-        const visible = eventsStore.filterForChart({
-            chartId: this.chartId,
-            scope: this._chartScope(),
-        });
-        if (visible.length === 0) return;
 
         const grid = this.echart.getModel()?.getComponent('grid', 0);
         const rect = grid?.coordinateSystem?.getRect?.();
@@ -1120,26 +1116,26 @@ export class Chart {
             const label = e.description || '(no description)';
             tag.textContent = isRangeEvent(e) ? `${label} (${formatDuration(e.duration_ns)})` : label;
             tag.title = e.description || '';
-            tag.addEventListener('click', (ev) => {
-                ev.stopPropagation();
-                const r = tag.getBoundingClientRect();
-                openEventInfo({
-                    anchorPoint: { x: r.left + r.width / 2, y: r.top },
-                    event: e,
-                    onDelete: isEventEditingAllowed()
-                        ? () => eventsStore.remove({
-                            timestamp: e.timestamp,
-                            description: e.description,
-                        })
-                        : null,
+            const { openEventInfo } = chartHost();
+            if (!openEventInfo) {
+                tag.style.cursor = 'default';
+            } else {
+                tag.addEventListener('click', (ev) => {
+                    ev.stopPropagation();
+                    const r = tag.getBoundingClientRect();
+                    openEventInfo({
+                        anchorPoint: { x: r.left + r.width / 2, y: r.top },
+                        event: e,
+                    });
                 });
-            });
+            }
             layer.appendChild(tag);
         }
     }
 
     _openAddEventForm(anchorEl) {
-        if (!isEventEditingAllowed()) return;
+        const { eventEditingAllowed, openEventForm } = chartHost();
+        if (!eventEditingAllowed() || !openEventForm) return;
         const opts = this.spec?.opts || {};
         openEventForm({
             anchorEl,
@@ -1150,8 +1146,8 @@ export class Chart {
                 instance: opts.instance || '',
                 chart_id: this.chartId || '',
             },
-            onSubmit: (event) => {
-                eventsStore.add(event);
+            // The host stores the event; this only closes the frozen tooltip.
+            onSubmit: () => {
                 this._teardownFreezeAndAxisPointer();
             },
         });

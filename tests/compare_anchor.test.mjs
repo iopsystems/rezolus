@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 
 globalThis.document = globalThis.document || { documentElement: {} };
 globalThis.getComputedStyle = globalThis.getComputedStyle || (() => ({ getPropertyValue: () => '' }));
-const { renderCompareChart, diffTimeShift } = await import('../src/viewer/assets/lib/charts/compare.js');
+const { renderCompareChart, diffTimeShift } = await import('../src/viewer/assets/lib/compare/compare.js');
 const { CaptureContext } = await import('../src/viewer/assets/lib/events/capture_events.js');
 const { CAPTURE_BASELINE, CAPTURE_EXPERIMENT } = await import('../src/viewer/assets/lib/data.js');
 

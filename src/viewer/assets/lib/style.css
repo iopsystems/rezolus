@@ -53,7 +53,7 @@
     --compare-experiment: #00C46A;
     --compare-experiment-bg: rgba(0, 196, 106, 0.08);
     /* N-way overlay: colors for a 3rd-and-beyond capture (baseline/experiment
-       keep the two above). Match charts/compare.js CAPTURE_PALETTE. */
+       keep the two above). Match compare/compare.js CAPTURE_PALETTE. */
     --compare-capture-3: #FF8A00;
     --compare-capture-4: #B45BFF;
     --compare-capture-5: #FF4D6D;

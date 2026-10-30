@@ -1,7 +1,8 @@
 // app.js — Shared dashboard logic for both server and WASM viewers.
 // Exports initDashboard(config) which sets up state and mounts the Mithril router.
 
-import { ChartsState, Chart } from './charts/chart.js';
+import { ChartsState } from './charts/chart.js';
+import { ChartView } from './ui/chart_view.js';
 import { QueryExplorer, SingleChartView } from './features/explorers.js';
 import { CgroupSelector, seedSelectedCgroups, selectedCgroupSelection, loadCgroupGroups, clearCgroupGroups } from './features/cgroup_selector.js';
 import { GpuSelector } from './features/gpu_selector.js';
@@ -1143,7 +1144,7 @@ const SectionContent = {
                     Group,
                     sectionRoute,
                     runQuery,
-                    Chart,
+                    Chart: ChartView,
                     chartsState,
                 }),
             ]);
@@ -1173,7 +1174,7 @@ const SectionContent = {
                 titleText,
                 interval,
                 chartsState,
-                Chart,
+                Chart: ChartView,
                 CgroupSelector,
                 executePromQLRangeQuery: (query, ...args) => {
                     const node = getSelectedNode();
@@ -1712,8 +1713,9 @@ const initDashboard = (config = {}) => {
 
                 // Resolve the route synchronously even on a cache miss so
                 // the old section's DOM unmounts immediately (firing each
-                // chart's onremove → echart.dispose()). cachedView falls
-                // back to a "Loading…" placeholder while data is in flight,
+                // ChartView's onremove → Chart.destroy() →
+                // echart.dispose()). cachedView falls back to a
+                // "Loading…" placeholder while data is in flight,
                 // which gets replaced by the populated view via m.redraw()
                 // once loadSection settles.
                 if (!sectionResponseCache[params.section]) {
