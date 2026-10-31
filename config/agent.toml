@@ -462,6 +462,6 @@ enabled = false
 # docs/metrics.md#tcp-on-macos.
 [samplers.tcp_traffic]
 
-# Samples GPU metrics on Apple Silicon using powermetrics
+# Samples GPU metrics on Apple silicon from IOReport
 [samplers.gpu_apple]
 enabled = true

@@ -57,7 +57,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "6.0.0-alpha.104"
+version = "6.0.0-alpha.105"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true
@@ -222,8 +222,6 @@ libloading = "0.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libloading = "0.8"
-nix = { version = "0.31", features = ["signal", "process"] }
-plist = "1.9"
 
 [target.'cfg(target_os = "linux")'.build-dependencies]
 libbpf-cargo = { version = "0.26.2" }

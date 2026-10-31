@@ -6,7 +6,7 @@ use linkme::distributed_slice;
 use super::MAX_GPUS;
 
 // `gpu_amd_smi`'s `stats.rs` is Linux-only (no cross-platform `include!`
-// fallback for GPU metric identity — `gpu/macos/stats.rs` is a genuinely
+// fallback for GPU metric identity — `gpu/macos/apple/stats.rs` is a genuinely
 // separate metric set), so this group can use `super::NAME` directly rather
 // than a cfg'd `GROUP_SAMPLER` (contrast `memory_meminfo`'s `MEMINFO_ACQ`,
 // whose `stats.rs` IS `include!`d cross-platform).

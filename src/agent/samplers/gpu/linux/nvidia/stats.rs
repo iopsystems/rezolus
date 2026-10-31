@@ -6,7 +6,7 @@ use linkme::distributed_slice;
 const MAX_GPUS: usize = 32;
 
 // `gpu_nvidia`'s `stats.rs` is Linux-only (no cross-platform `include!`
-// fallback — `gpu/macos/stats.rs` is a genuinely separate metric set), so
+// fallback — `gpu/macos/apple/stats.rs` is a genuinely separate metric set), so
 // `super::NAME` is used directly (see the identical note on
 // `gpu_amd_smi`'s `GPU_AMD_SMI_ACQ`).
 //

@@ -112,6 +112,7 @@ per-process counterparts, for `cpu_usage` only, off by default
 - [GPU](#gpu)
   - [gpu_nvidia](#gpu_nvidia)
   - [gpu_intel_pmu](#gpu_intel_pmu)
+  - [gpu_apple](#gpu_apple)
 - [Memory](#memory)
   - [memory_meminfo](#memory_meminfo)
   - [memory_pagecache](#memory_pagecache)
@@ -253,8 +254,8 @@ the frequency over the time counted.
 IOReport is a private framework with no published interface; it is the one
 `powermetrics` reads, and it needs no privileges. Rezolus loads it when the
 sampler starts; on a macOS release without it, or without one of the
-functions Rezolus binds, `cpu_frequency` and `cpu_power` report themselves
-unsupported and the other samplers run. A cluster type whose
+functions Rezolus binds, `cpu_frequency`, `cpu_power` and `gpu_apple` report
+themselves unsupported and the other samplers run. A cluster type whose
 frequency table does not have one entry per performance state is not
 published, and the sampler reports itself unsupported when no core can be
 read. An Intel Mac, whose CPUs have no `cluster-type`, reports it unsupported.
@@ -1154,6 +1155,38 @@ had work queued, which does not mean its execution units were saturated. Pair
 busy time with frequency to distinguish "busy but downclocked" from genuinely
 saturated. EU-level detail requires the separate i915 perf/OA interface, and
 there is no VRAM bandwidth counter in this PMU.
+
+### gpu_apple
+
+Produces the Apple silicon GPU's utilization, clock and power from IOReport,
+the private framework `powermetrics` reads. It needs no privileges. On an
+Intel Mac, or a macOS release without IOReport, it reports itself unsupported.
+Every metric carries `vendor="apple"` and `id="0"`.
+
+| Metric | Type | Description | IOReport source |
+|--------|------|-------------|-----------------|
+| `gpu_utilization` | gauge | Percentage of time in a performance state, rather than `OFF`, since the previous refresh (0-100) | `GPU Stats` / `GPU Performance States` / `GPUPH` |
+| `gpu_clock` | gauge | Average frequency in Hz over the time in a performance state since the previous refresh; 0 when the GPU was off throughout. `clock="graphics"` | the same residencies, with the device tree's `voltage-states9` frequency table |
+| `gpu_power_usage` | gauge | Average power in milliwatts since the previous refresh | `Energy Model` / `GPU Energy` |
+| `gpu_energy_consumption` | counter | Energy in millijoules since boot | `Energy Model` / `GPU Energy` |
+
+`GPUPH` counts the 24 MHz system-counter ticks the GPU has spent in `OFF` and
+in each performance state `P1`, `P2`, ...; state `P<k>` runs at entry `k` of
+`voltage-states9`. A machine whose state count differs from that table's
+length is not supported, and only the first `GPUPH` channel is read.
+`GPU Energy` is the channel `cpu_power` publishes as `cpu_igpu_energy`.
+
+The three gauges average over the time since the last refresh that published
+them, whichever consumer made it. A refresh less than 200 ms after that one,
+or one in which IOReport counted no residency, publishes nothing and stamps no
+window, so the gauges always cover at least 200 ms. `GPU Energy` advances
+about every 15 ms on an M4 Max, which is 7.5% of 200 ms; `rate()` of
+`gpu_energy_consumption` over a longer window reads power more closely.
+
+On an M4 Max, against `powermetrics --samplers gpu_power` over 10-second
+phases of a Metal compute load at 0%, 5%, 20%, 50% and 100% duty, phase means
+excluding each phase's first and last second agreed within 0.35 percentage points
+of utilization, 3.1% of power and 2.1% of clock.
 
 ## Memory
 

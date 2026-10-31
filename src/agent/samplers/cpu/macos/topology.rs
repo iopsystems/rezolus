@@ -1,6 +1,7 @@
 //! Apple silicon CPU topology from the device tree, for mapping IOReport's
-//! per-core channels onto the logical CPU ids `cpu_usage` reports, and each
-//! cluster type's performance-state frequency table.
+//! per-core channels onto the logical CPU ids `cpu_usage` reports, and the
+//! power manager's performance-state frequency tables, which `gpu_apple`
+//! also reads.
 
 use crate::agent::samplers::iokit::{CfString, Service};
 
@@ -160,16 +161,18 @@ pub fn parse_frequency_table(bytes: &[u8]) -> Vec<u64> {
         .collect()
 }
 
+/// The power manager's frequency table `key`, in Hz.
+pub fn frequency_table(key: &str) -> Option<Vec<u64>> {
+    let pmgr = Service::from_path("IODeviceTree:/arm-io/pmgr")?;
+    Some(parse_frequency_table(&pmgr.data(&CfString::new(key)?)?))
+}
+
 /// The E and P clusters' frequency tables, in Hz, from the power manager's
 /// `voltage-states1-sram` and `voltage-states5-sram`.
 pub fn frequency_tables() -> Option<(Vec<u64>, Vec<u64>)> {
-    let pmgr = Service::from_path("IODeviceTree:/arm-io/pmgr")?;
-    let table = |key: &str| -> Option<Vec<u64>> {
-        Some(parse_frequency_table(&pmgr.data(&CfString::new(key)?)?))
-    };
     Some((
-        table("voltage-states1-sram")?,
-        table("voltage-states5-sram")?,
+        frequency_table("voltage-states1-sram")?,
+        frequency_table("voltage-states5-sram")?,
     ))
 }
 

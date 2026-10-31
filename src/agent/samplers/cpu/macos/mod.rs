@@ -1,4 +1,4 @@
 mod frequency;
 mod power;
-mod topology;
+pub(crate) mod topology;
 mod usage;
