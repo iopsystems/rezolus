@@ -897,9 +897,9 @@ mount point, and a reading where either call reports a device other than the
 listed one, because the mount was replaced or unmounted, is dropped. A
 `getattrlist` that fails leaves only `filesystem_volume_used` unset. Each call
 looks the path up, which walks every mount above it, so a volume mounted
-beneath a network, autofs or macFUSE mount is skipped. The sweep runs on a blocking
-thread at most once per `interval` (60s by default); one still running after
-three intervals is logged as a warning. With 10 volumes, `getfsstat` and the
+beneath a network, autofs or macFUSE mount is skipped. The sweep runs on a
+blocking thread at most once per `interval` (60s by default); one still
+running after three intervals is logged as a warning. With 10 volumes, `getfsstat` and the
 `statfs` and `getattrlist` calls took 36 µs in a debug build, 12 µs of it
 `getattrlist`.
 

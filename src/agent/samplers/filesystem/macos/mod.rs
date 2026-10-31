@@ -25,8 +25,8 @@
 //! looks the path up, which walks every mount above it: a volume mounted
 //! beneath a network or autofs mount is skipped, since the lookup could wait
 //! on a server or trigger an automount; a macFUSE mount, and anything beneath
-//! one, is skipped for the same reason. The sweep runs on the blocking pool, and
-//! one still running after three intervals is logged as a warning.
+//! one, is skipped for the same reason. The sweep runs on the blocking pool,
+//! and one still running after three intervals is logged as a warning.
 //!
 //! # APFS
 //!
@@ -36,8 +36,8 @@
 //! free is the space used in the whole container, not by the volume. The
 //! volume's own use is `getattrlist(ATTR_VOL_SPACEUSED)`, which `df` reports
 //! as used, published as `filesystem_volume_used`. HFS+, FAT and exFAT
-//! volumes report it as total minus free. APFS reports an inode count that moves
-//! with free space, as XFS does on Linux.
+//! volumes report it as total minus free. APFS reports an inode count that
+//! moves with free space, as XFS does on Linux.
 //!
 //! # Cadence and publication
 //!
@@ -74,7 +74,7 @@ use stats::*;
 
 #[metric(
     name = "filesystem_volume_used",
-    description = "Bytes a mounted volume itself uses (getattrlist ATTR_VOL_SPACEUSED), the number `df` reports as used. An APFS volume without a quota or reserve reports its container's size and free space, so filesystem_total minus filesystem_free is the container's use and this gauge is the volume's. On HFS+, FAT and exFAT it equals filesystem_total minus filesystem_free. Absent when getattrlist fails. macOS only.",
+    description = "Bytes a mounted volume itself uses (getattrlist ATTR_VOL_SPACEUSED), the number `df` reports as used. An APFS volume without a quota or reserve reports its container's size and free space, so filesystem_total minus filesystem_free is the container's use and this gauge is the volume's. On HFS+, FAT and exFAT it equals filesystem_total minus filesystem_free. Absent when getattrlist fails or the filesystem does not report it. macOS only.",
     metadata = { unit = "bytes", acq_group = "filesystem_sweep" }
 )]
 pub static FILESYSTEM_VOLUME_USED: GaugeGroup = GaugeGroup::new(MAX_SLOTS);
@@ -259,19 +259,29 @@ fn read_fresh(volume: &Volume) -> std::io::Result<Volume> {
     if unsafe { libc::statfs(path.as_ptr(), &mut s) } != 0 {
         return Err(std::io::Error::last_os_error());
     }
-    let mut fresh = Volume::from_statfs(&s);
+    let fresh = Volume::from_statfs(&s);
     if fresh.devnum != volume.devnum {
         return Err(replaced(volume, &fresh.devnum));
     }
-    match space_used(&path) {
+    with_space_used(fresh, space_used(&path))
+}
+
+/// `fresh` with the used bytes from a `getattrlist` `reply`: an error when
+/// the reply names another device, and `fresh` without used bytes when the
+/// call failed.
+fn with_space_used(
+    mut fresh: Volume,
+    reply: std::io::Result<(libc::dev_t, Option<u64>)>,
+) -> std::io::Result<Volume> {
+    match reply {
         Ok((dev, used)) => {
             let devnum = format!("{}:{}", libc::major(dev), libc::minor(dev));
-            if devnum != volume.devnum {
-                return Err(replaced(volume, &devnum));
+            if devnum != fresh.devnum {
+                return Err(replaced(&fresh, &devnum));
             }
             fresh.used_bytes = used;
         }
-        Err(e) => debug!("{NAME}: getattrlist {} failed: {e}", volume.mount_point),
+        Err(e) => debug!("{NAME}: getattrlist {} failed: {e}", fresh.mount_point),
     }
     Ok(fresh)
 }
@@ -311,7 +321,8 @@ fn space_used(path: &CStr) -> std::io::Result<(libc::dev_t, Option<u64>)> {
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
     }
-    parse_space_used(&buf).ok_or_else(|| std::io::Error::other("short getattrlist reply"))
+    parse_space_used(&buf)
+        .ok_or_else(|| std::io::Error::other("getattrlist reply without a device"))
 }
 
 /// A `getattrlist` reply to `ATTR_CMN_RETURNED_ATTRS | ATTR_CMN_DEVID` and
@@ -808,6 +819,25 @@ mod tests {
             parse_space_used(&reply(common, vol, 7, -1)),
             Some((7, None))
         );
+    }
+
+    /// A `getattrlist` reply for the volume sets its used bytes; one for
+    /// another device refuses the reading; a failed call keeps the `statfs`
+    /// reading without used bytes.
+    #[test]
+    fn space_used_is_kept_only_from_the_same_device() {
+        let mut fresh = volume("/Volumes/image", "hfs", "1:40");
+        fresh.used_bytes = None;
+        let dev = libc::makedev(1, 40);
+        let read = with_space_used(fresh.clone(), Ok((dev, Some(4096)))).unwrap();
+        assert_eq!(read.used_bytes, Some(4096));
+
+        let parent = libc::makedev(1, 18);
+        assert!(with_space_used(fresh.clone(), Ok((parent, Some(4096)))).is_err());
+
+        let failed = Err(std::io::Error::from_raw_os_error(libc::ENOTSUP));
+        let read = with_space_used(fresh.clone(), failed).unwrap();
+        assert_eq!(read, fresh);
     }
 
     /// A mount point that now leads to another device is not read.
