@@ -1803,8 +1803,8 @@ Measures the time from `connect()` on a TCP socket to the end of its
 handshake, labeled by how the handshake ended. The start is the entry to
 `tcp_v4_connect` or `tcp_v6_connect`; the end is the socket leaving
 `SYN_SENT` (the `inet_sock_set_state` tracepoint). With
-`TCP_FASTOPEN_CONNECT` and a Fast Open cookie cached for the destination, the
-SYN is sent at the first write, so the time includes the wait before it. The
+`TCP_FASTOPEN_CONNECT`, when the kernel will put data in the SYN, it sends the
+SYN at the first write, so the time includes the wait before that write. The
 `outcome` label is read at that transition:
 
 - `established`: the socket became `ESTABLISHED`. A connect in `TCP_REPAIR`
