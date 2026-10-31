@@ -86,7 +86,7 @@
   `outcome` matcher merges every outcome, now including timeouts. The
   exporter's percentiles are per outcome, with no merged series. The network
   dashboard's new Connect Latency subgroup charts connects per second by
-  outcome and the established, refused and failed distributions. (#1587)
+  outcome and the established, refused and failed distributions. (#1614)
 - **A histogram no sampler has read is no longer published.** The agent
   leaves a histogram out of its snapshots and stream until its acquisition
   group is first stamped. A macOS agent published the Linux BPF histograms
