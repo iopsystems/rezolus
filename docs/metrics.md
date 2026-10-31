@@ -891,14 +891,17 @@ disk images. Network mounts are left out.
 
 The counters `getfsstat(MNT_NOWAIT)` returns are the ones each mount's last
 refresh left (a `statfs`, or a `getfsstat` without `MNT_NOWAIT`, by any
-process), so on a volume nothing else reads they can be hours old. Each selected volume is therefore read again with `statfs` on its
-mount point, and a reading whose device differs from the listed one, because
-the mount was replaced, is dropped. That `statfs` looks the path up, which
-walks every mount above it, so a volume mounted beneath a network, autofs or
-macFUSE mount is skipped. The sweep runs on a blocking thread at most once per
-`interval` (60s by default); one still running after three intervals is
-logged as a warning. With 11 volumes, `getfsstat` and the `statfs` calls took
-10 µs.
+process), so on a volume nothing else reads they can be hours old. Each
+selected volume is therefore read again with `statfs` and `getattrlist` on its
+mount point, and a reading where either call reports a device other than the
+listed one, because the mount was replaced or unmounted, is dropped. A
+`getattrlist` that fails leaves only `filesystem_volume_used` unset. Each call
+looks the path up, which walks every mount above it, so a volume mounted
+beneath a network, autofs or macFUSE mount is skipped. The sweep runs on a
+blocking thread at most once per `interval` (60s by default); one still
+running after three intervals is logged as a warning. With 10 volumes,
+`getfsstat` and the `statfs` and `getattrlist` calls took 36 µs in a debug
+build, 12 µs of it `getattrlist`.
 
 `filesystem_total`, `filesystem_free`, `filesystem_available`,
 `filesystem_inodes_total`, `filesystem_inodes_free` and `filesystem_readonly`
@@ -911,9 +914,14 @@ volume at `/` reads 1. `filesystem_errors`, `filesystem_written_bytes` and the
 The volumes of an APFS container share its space. A volume without a quota or
 reserve reports the container's size as its total and the container's free
 space as its free and available bytes, so total minus free is the space used
-in the whole container, not by the volume. `df` reads per-volume use from
-`getattrlist(ATTR_VOL_SPACEUSED)`, which this sampler does not read. APFS
-reports an inode total that moves with free space.
+in the whole container, not by the volume. The volume's own use is
+`getattrlist(ATTR_VOL_SPACEUSED)`, the number `df` reports as used, published
+as `filesystem_volume_used`. HFS+, FAT and exFAT volumes report it as total
+minus free. APFS reports an inode total that moves with free space.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `filesystem_volume_used` | Bytes the volume itself uses (`ATTR_VOL_SPACEUSED`); macOS only | `mount`, `fstype`, `devnum`, `block_device` |
 
 ## XFS
 
@@ -1819,11 +1827,10 @@ no route, is not counted, nor is a simultaneous open, which leaves
 `SYN_SENT` for `SYN_RECV`. The count of each histogram is the number of
 connects with that outcome while fewer than 10,240 sockets have a connect in
 progress or a failed connect not yet closed; connects beyond that are not
-counted. A query over `tcp_connect_latency`
-without an `outcome` matcher merges every outcome, including timeouts of
-seconds. Agents before 6.0.0-alpha.97 record one unlabeled histogram, which
-also counts refused connects and ends the time at the first segment received
-in `SYN_SENT`.
+counted. A query over `tcp_connect_latency` without an `outcome` matcher
+merges every outcome, including timeouts of seconds. Agents before
+6.0.0-alpha.102 record one unlabeled histogram, which also counts refused
+connects and ends the time at the first segment received in `SYN_SENT`.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|

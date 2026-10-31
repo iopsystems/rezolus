@@ -68,9 +68,10 @@ pub struct HindsightBuffer {
 }
 
 /// Row time the dendro writer lets pass between restatements of a long
-/// table's live occupants: the writer's default, which the buffer uses.
+/// table's live occupants: the default of the writer the buffer records
+/// through (metriken-recorder's).
 fn restate_every_ns() -> u64 {
-    metriken_storage::WriterConfig::default().restate_every_ns
+    metriken_recorder::WriterConfig::default().restate_every_ns
 }
 
 #[cfg(test)]
@@ -526,7 +527,7 @@ mod tests {
         .remove(0)
         .1;
         let (start, end) = reader.time_range().unwrap();
-        let metriken_query::QueryResult::Matrix { result } = reader
+        let metriken_query::QueryResult::Matrix { result, .. } = reader
             .query_range("rate(task_ops{comm=\"nginx\"}[3s])", start, end + 1.0, 1.0)
             .unwrap()
         else {
@@ -760,7 +761,7 @@ mod tests {
         .1;
         assert_eq!(reader.counter_names(), vec!["cpu_usage_ops".to_string()]);
         let (start, end) = reader.time_range().unwrap();
-        let metriken_query::QueryResult::Matrix { result } = reader
+        let metriken_query::QueryResult::Matrix { result, .. } = reader
             .query_range("rate(cpu_usage_ops[5s])", start, end + 1.0, 1.0)
             .expect("the query must resolve")
         else {
@@ -953,7 +954,7 @@ mod tests {
         .1;
         assert!(reader.complete(), "a dump is a finished artifact");
         let (start, end) = reader.time_range().unwrap();
-        let metriken_query::QueryResult::Matrix { result } = reader
+        let metriken_query::QueryResult::Matrix { result, .. } = reader
             .query_range("rate(cpu_usage_ops[3s])", start, end + 1.0, 1.0)
             .unwrap()
         else {
@@ -1046,7 +1047,7 @@ mod tests {
         .remove(0)
         .1;
         let (start, end) = reader.time_range().unwrap();
-        let metriken_query::QueryResult::Matrix { result } = reader
+        let metriken_query::QueryResult::Matrix { result, .. } = reader
             .query_range("rate(task_ops{comm=\"nginx\"}[3s])", start, end + 1.0, 1.0)
             .unwrap()
         else {

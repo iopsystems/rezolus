@@ -71,7 +71,7 @@ pub fn load_chart(data: &dyn MetricsSource, def: &PlotDef, window: TimeWindow) -
         return ChartData::Empty;
     };
     match data.query_range(&query, start, end, step) {
-        Ok(QueryResult::Matrix { result }) => {
+        Ok(QueryResult::Matrix { result, .. }) => {
             let metrics: Vec<&Labels> = result.iter().map(|s| &s.metric).collect();
             let labels = series_labels(&metrics);
             let series: Vec<Series> = result

@@ -123,7 +123,7 @@ export const selectedCgroupSelection = (route) => (persistedSelectedCgroups.size
 
 // Discover the groups of the section at `route` if the selection names one
 // and they are not yet known. `executeQuery` runs a PromQL range query
-// restricted as that section's charts are.
+// within the scope of that section's charts.
 export const loadCgroupGroups = async (route, executeQuery) => {
     if (persistedGroups.has(route) || ![...persistedSelectedCgroups].some(isCgroupGroupKey)) return;
     persistedGroups.set(route, deriveCgroupGroups(await discoverCgroups(executeQuery)));

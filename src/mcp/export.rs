@@ -82,8 +82,8 @@ pub(crate) const MAX_ROWS: usize = 1_000_000;
 /// How many rows `rows_of` would produce, before producing any.
 pub(crate) fn row_count(result: &QueryResult) -> usize {
     match result {
-        QueryResult::Matrix { result } => result.iter().map(|s| s.values.len()).sum(),
-        QueryResult::Vector { result } => result.len(),
+        QueryResult::Matrix { result, .. } => result.iter().map(|s| s.values.len()).sum(),
+        QueryResult::Vector { result, .. } => result.len(),
         QueryResult::Scalar { .. } => 1,
         QueryResult::HistogramHeatmap { .. } => 0,
     }
@@ -113,7 +113,7 @@ pub(crate) fn rows_of(result: &QueryResult) -> Result<Vec<Row>, String> {
         format!("{{{}}}", parts.join(", "))
     };
     match result {
-        QueryResult::Matrix { result } => {
+        QueryResult::Matrix { result, .. } => {
             let mut rows = Vec::new();
             for s in result {
                 let name = series_name(&s.metric);
@@ -130,7 +130,7 @@ pub(crate) fn rows_of(result: &QueryResult) -> Result<Vec<Row>, String> {
             }
             Ok(rows)
         }
-        QueryResult::Vector { result } => Ok(result
+        QueryResult::Vector { result, .. } => Ok(result
             .iter()
             .map(|s| Row {
                 series: series_name(&s.metric),
@@ -140,7 +140,7 @@ pub(crate) fn rows_of(result: &QueryResult) -> Result<Vec<Row>, String> {
                 hi: None,
             })
             .collect()),
-        QueryResult::Scalar { result: (t, v) } => Ok(vec![Row {
+        QueryResult::Scalar { result: (t, v), .. } => Ok(vec![Row {
             series: String::from("{}"),
             timestamp: *t,
             value: *v,
@@ -335,6 +335,7 @@ mod tests {
                     .with_bands(Some(vec![Some((9.0, 11.0)), None])),
                 MatrixSample::new(m("id", "1,x"), vec![(1.0, 20.0)]),
             ],
+            notices: Vec::new(),
         }
     }
 
@@ -348,11 +349,16 @@ mod tests {
         assert_eq!(rows[2].series, "{id=\"1,x\"}");
         let v = rows_of(&QueryResult::Vector {
             result: vec![Sample::new(HashMap::new(), (5.0, 1.5))],
+            notices: Vec::new(),
         })
         .unwrap();
         assert_eq!(v[0].series, "{}");
         assert_eq!(v[0].timestamp, 5.0);
-        let s = rows_of(&QueryResult::Scalar { result: (7.0, 2.0) }).unwrap();
+        let s = rows_of(&QueryResult::Scalar {
+            result: (7.0, 2.0),
+            notices: Vec::new(),
+        })
+        .unwrap();
         assert_eq!(s.len(), 1);
     }
 
@@ -458,6 +464,7 @@ mod tests {
                 m("id", "0"),
                 vec![(0.0, 0.0); MAX_ROWS + 1],
             )],
+            notices: Vec::new(),
         };
         let err = check_row_cap(&big, 0.01).err().unwrap();
         assert!(

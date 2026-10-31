@@ -1,10 +1,10 @@
 //! Occupancy and read-only state of local filesystems on macOS, one series per
-//! mounted volume: total, free and available bytes, total and free inodes,
-//! and the read-only flag.
+//! mounted volume: total, free, available and used bytes, total and free
+//! inodes, and the read-only flag.
 //!
 //! ```text
 //! getfsstat(MNT_NOWAIT) -> select local volumes -> assign slots
-//!                       -> statfs each, verify device -> gauges -> window
+//!   -> statfs and getattrlist each, verify device -> gauges -> window
 //! ```
 //!
 //! # Scope and blocking
@@ -17,24 +17,27 @@
 //! `getfsstat(MNT_NOWAIT)` lists the mounts without calling into any
 //! filesystem, but the counters it returns are the ones the mount's last
 //! refresh left (a `statfs`, or a `getfsstat` without `MNT_NOWAIT`, by any
-//! process), and can be hours old on a volume nothing else reads. So each selected volume is read again with `statfs` on its
-//! mount point, and a reading whose device differs from the listed one (the
-//! mount was replaced) is dropped. That `statfs` looks the path up, which
-//! walks every mount above it: a volume mounted beneath a network or autofs
-//! mount is skipped, since the lookup could wait on a server or trigger an
-//! automount; a macFUSE mount, and anything beneath one, is skipped for the
-//! same reason. The sweep runs on the blocking pool, and one still running after
-//! three intervals is logged as a warning.
+//! process), and can be hours old on a volume nothing else reads. So each
+//! selected volume is read again with `statfs` and `getattrlist` on its
+//! mount point, and a reading where either call reports a device other than
+//! the listed one (the mount was replaced or unmounted) is dropped. A
+//! `getattrlist` that fails leaves only the used bytes unread. Each call
+//! looks the path up, which walks every mount above it: a volume mounted
+//! beneath a network or autofs mount is skipped, since the lookup could wait
+//! on a server or trigger an automount; a macFUSE mount, and anything beneath
+//! one, is skipped for the same reason. The sweep runs on the blocking pool,
+//! and one still running after three intervals is logged as a warning.
 //!
 //! # APFS
 //!
 //! The volumes of an APFS container share its space. A volume without a
 //! quota or reserve reports the container's size as its total and the
 //! container's free space as its free and available bytes, so total minus
-//! free is the space used in the whole container, not by the volume. `df`
-//! reads per-volume use from `getattrlist(ATTR_VOL_SPACEUSED)`, which this
-//! sampler does not read. APFS reports an inode count that moves with free
-//! space, as XFS does on Linux.
+//! free is the space used in the whole container, not by the volume. The
+//! volume's own use is `getattrlist(ATTR_VOL_SPACEUSED)`, which `df` reports
+//! as used, published as `filesystem_volume_used`. HFS+, FAT and exFAT
+//! volumes report it as total minus free. APFS reports an inode count that
+//! moves with free space, as XFS does on Linux.
 //!
 //! # Cadence and publication
 //!
@@ -45,8 +48,9 @@
 //! by `devnum`; a volume mounted at two paths is read once, at the path
 //! `getfsstat` lists first. Slot management, the member bound and the
 //! acquisition window follow the Linux sampler (principle 18's device-sweep
-//! shape). `filesystem_errors`, `filesystem_written_bytes` and the
-//! `filesystem_tmpfs_*` families are not set.
+//! shape). `filesystem_volume_used` is macOS-only. `filesystem_errors`,
+//! `filesystem_written_bytes` and the `filesystem_tmpfs_*` families are not
+//! set.
 
 const NAME: &str = "filesystem";
 
@@ -54,7 +58,7 @@ const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(60);
 
 use crate::agent::samplers::{count_change, CountChange};
 use crate::agent::*;
-use metriken::GaugeGroup;
+use metriken::{metric, GaugeGroup};
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
@@ -68,6 +72,13 @@ mod stats {
 
 use stats::*;
 
+#[metric(
+    name = "filesystem_volume_used",
+    description = "Bytes a mounted volume itself uses (getattrlist ATTR_VOL_SPACEUSED), the number `df` reports as used. An APFS volume without a quota or reserve reports its container's size and free space, so filesystem_total minus filesystem_free is the container's use and this gauge is the volume's. On HFS+, FAT and exFAT it equals filesystem_total minus filesystem_free. Absent when getattrlist fails or the filesystem does not report it. macOS only.",
+    metadata = { unit = "bytes", acq_group = "filesystem_sweep" }
+)]
+pub static FILESYSTEM_VOLUME_USED: GaugeGroup = GaugeGroup::new(MAX_SLOTS);
+
 /// The gauge families this sampler sets; every one is cleared when its
 /// volume goes.
 static GROUPS: &[&GaugeGroup] = &[
@@ -77,6 +88,7 @@ static GROUPS: &[&GaugeGroup] = &[
     &FILESYSTEM_INODES_TOTAL,
     &FILESYSTEM_INODES_FREE,
     &FILESYSTEM_READONLY,
+    &FILESYSTEM_VOLUME_USED,
 ];
 
 /// A slot's labels, which move at runtime as volumes are mounted and
@@ -91,6 +103,7 @@ static MOUNT_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[&[
     &FILESYSTEM_INODES_TOTAL,
     &FILESYSTEM_INODES_FREE,
     &FILESYSTEM_READONLY,
+    &FILESYSTEM_VOLUME_USED,
 ]];
 
 /// Mount types never read: the device filesystem and automounter trigger
@@ -137,6 +150,9 @@ pub struct Volume {
     pub available_bytes: u64,
     pub total_inodes: u64,
     pub free_inodes: u64,
+    /// Bytes the volume itself uses, from `getattrlist`; `None` until read,
+    /// or when the filesystem does not report it.
+    pub used_bytes: Option<u64>,
 }
 
 impl Volume {
@@ -165,6 +181,7 @@ impl Volume {
             available_bytes: bytes(s.f_bavail),
             total_inodes: s.f_files,
             free_inodes: s.f_ffree,
+            used_bytes: None,
         }
     }
 
@@ -232,8 +249,10 @@ pub fn select(volumes: Vec<Volume>) -> Vec<Volume> {
     out
 }
 
-/// `volume` read again with `statfs` on its mount point. An error when the
-/// path now leads to another device, because the mount was replaced.
+/// `volume` read again with `statfs` and `getattrlist` on its mount point.
+/// An error when `statfs` fails, or when either call reports a device other
+/// than the listed one, because the mount was replaced or unmounted. When
+/// `getattrlist` fails, the reading has no used bytes.
 fn read_fresh(volume: &Volume) -> std::io::Result<Volume> {
     let path = CString::new(volume.mount_point.as_bytes())?;
     let mut s: libc::statfs = unsafe { std::mem::zeroed() };
@@ -242,12 +261,90 @@ fn read_fresh(volume: &Volume) -> std::io::Result<Volume> {
     }
     let fresh = Volume::from_statfs(&s);
     if fresh.devnum != volume.devnum {
-        return Err(std::io::Error::other(format!(
-            "{} is now device {}, not {}",
-            volume.mount_point, fresh.devnum, volume.devnum
-        )));
+        return Err(replaced(volume, &fresh.devnum));
+    }
+    with_space_used(fresh, space_used(&path))
+}
+
+/// `fresh` with the used bytes from a `getattrlist` `reply`: an error when
+/// the reply names another device, and `fresh` without used bytes when the
+/// call failed.
+fn with_space_used(
+    mut fresh: Volume,
+    reply: std::io::Result<(libc::dev_t, Option<u64>)>,
+) -> std::io::Result<Volume> {
+    match reply {
+        Ok((dev, used)) => {
+            let devnum = format!("{}:{}", libc::major(dev), libc::minor(dev));
+            if devnum != fresh.devnum {
+                return Err(replaced(&fresh, &devnum));
+            }
+            fresh.used_bytes = used;
+        }
+        Err(e) => debug!("{NAME}: getattrlist {} failed: {e}", fresh.mount_point),
     }
     Ok(fresh)
+}
+
+fn replaced(volume: &Volume, devnum: &str) -> std::io::Error {
+    std::io::Error::other(format!(
+        "{} is now device {devnum}, not {}",
+        volume.mount_point, volume.devnum
+    ))
+}
+
+/// The device of the volume whose root is `path`, and the bytes the volume
+/// uses (`ATTR_VOL_SPACEUSED`), or `None` when its filesystem does not
+/// report them.
+fn space_used(path: &CStr) -> std::io::Result<(libc::dev_t, Option<u64>)> {
+    let mut request = libc::attrlist {
+        bitmapcount: libc::ATTR_BIT_MAP_COUNT,
+        reserved: 0,
+        commonattr: libc::ATTR_CMN_RETURNED_ATTRS | libc::ATTR_CMN_DEVID,
+        volattr: libc::ATTR_VOL_INFO | libc::ATTR_VOL_SPACEUSED,
+        dirattr: 0,
+        fileattr: 0,
+        forkattr: 0,
+    };
+    let mut buf = [0u8; 64];
+    // SAFETY: `request` and `buf` are valid for the call, and `buf.len()` is
+    // the size passed.
+    let rc = unsafe {
+        libc::getattrlist(
+            path.as_ptr(),
+            (&raw mut request).cast(),
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            libc::FSOPT_PACK_INVAL_ATTRS,
+        )
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    parse_space_used(&buf)
+        .ok_or_else(|| std::io::Error::other("getattrlist reply without a device"))
+}
+
+/// A `getattrlist` reply to `ATTR_CMN_RETURNED_ATTRS | ATTR_CMN_DEVID` and
+/// `ATTR_VOL_SPACEUSED`: the length, the returned-attribute set (five
+/// `u32`), the device (`i32`) and the space used (`i64`), each native-endian
+/// and 4-byte aligned.
+pub fn parse_space_used(buf: &[u8]) -> Option<(libc::dev_t, Option<u64>)> {
+    let u32_at = |at: usize| Some(u32::from_ne_bytes(buf.get(at..at + 4)?.try_into().ok()?));
+    if (u32_at(0)? as usize) < 36 {
+        return None;
+    }
+    let commonattr = u32_at(4)?;
+    let volattr = u32_at(8)?;
+    if commonattr & libc::ATTR_CMN_DEVID == 0 {
+        return None;
+    }
+    let dev = i32::from_ne_bytes(buf.get(24..28)?.try_into().ok()?);
+    let used = i64::from_ne_bytes(buf.get(28..36)?.try_into().ok()?);
+    let used = (volattr & libc::ATTR_VOL_SPACEUSED != 0)
+        .then(|| u64::try_from(used).ok())
+        .flatten();
+    Some((dev, used))
 }
 
 /// Slot assignment by device: a volume keeps its slot while it stays mounted,
@@ -433,6 +530,7 @@ fn publish(slot: usize, volume: &Volume) {
     let _ = FILESYSTEM_INODES_TOTAL.set(slot, inode_gauge(total, total));
     let _ = FILESYSTEM_INODES_FREE.set(slot, inode_gauge(total, volume.free_inodes));
     let _ = FILESYSTEM_READONLY.set(slot, i64::from(volume.readonly));
+    let _ = FILESYSTEM_VOLUME_USED.set(slot, volume.used_bytes.map_or(i64::MIN, gauge));
 }
 
 fn report_dropped(last: usize, now: usize) {
@@ -491,7 +589,7 @@ fn sweep(
         }
         let read = read(volume);
         if let Err(e) = &read {
-            debug!("{NAME}: statfs {} failed: {e}", volume.mount_point);
+            debug!("{NAME}: reading {} failed: {e}", volume.mount_point);
         }
         reads.push((slot, read));
     }
@@ -569,6 +667,7 @@ mod tests {
             available_bytes: 1 << 29,
             total_inodes: 100,
             free_inodes: 50,
+            used_bytes: Some(1 << 28),
         }
     }
 
@@ -673,6 +772,72 @@ mod tests {
         let fresh = read_fresh(root).expect("statfs /");
         assert_eq!(fresh.devnum, root.devnum);
         assert!(fresh.readonly, "the sealed system volume is read-only");
+
+        // The system volume's own use is part of its container's, which also
+        // holds the Data volume.
+        let used = fresh.used_bytes.expect("space used on /");
+        assert!(used > 0);
+        assert!(
+            used < fresh.total_bytes - fresh.free_bytes,
+            "{used} {fresh:?}"
+        );
+        let data = volumes
+            .iter()
+            .find(|v| v.mount_point == "/System/Volumes/Data")
+            .unwrap();
+        assert!(read_fresh(data).unwrap().used_bytes.is_some());
+    }
+
+    fn reply(commonattr: u32, volattr: u32, dev: i32, used: i64) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend(36u32.to_ne_bytes());
+        for attr in [commonattr, volattr, 0, 0, 0] {
+            buf.extend(attr.to_ne_bytes());
+        }
+        buf.extend(dev.to_ne_bytes());
+        buf.extend(used.to_ne_bytes());
+        buf
+    }
+
+    #[test]
+    fn a_getattrlist_reply_parses_to_device_and_space_used() {
+        let common = libc::ATTR_CMN_RETURNED_ATTRS | libc::ATTR_CMN_DEVID;
+        let vol = libc::ATTR_VOL_INFO | libc::ATTR_VOL_SPACEUSED;
+        assert_eq!(
+            parse_space_used(&reply(common, vol, 0x0100_0012, 4096)),
+            Some((0x0100_0012, Some(4096)))
+        );
+        // A filesystem that does not return the space used.
+        assert_eq!(
+            parse_space_used(&reply(common, libc::ATTR_VOL_INFO, 7, 0)),
+            Some((7, None))
+        );
+        // No device, a short reply or a negative size is not trusted.
+        assert_eq!(parse_space_used(&reply(0, vol, 7, 1)), None);
+        assert_eq!(parse_space_used(&reply(common, vol, 7, 1)[..30]), None);
+        assert_eq!(
+            parse_space_used(&reply(common, vol, 7, -1)),
+            Some((7, None))
+        );
+    }
+
+    /// A `getattrlist` reply for the volume sets its used bytes; one for
+    /// another device refuses the reading; a failed call keeps the `statfs`
+    /// reading without used bytes.
+    #[test]
+    fn space_used_is_kept_only_from_the_same_device() {
+        let mut fresh = volume("/Volumes/image", "hfs", "1:40");
+        fresh.used_bytes = None;
+        let dev = libc::makedev(1, 40);
+        let read = with_space_used(fresh.clone(), Ok((dev, Some(4096)))).unwrap();
+        assert_eq!(read.used_bytes, Some(4096));
+
+        let parent = libc::makedev(1, 18);
+        assert!(with_space_used(fresh.clone(), Ok((parent, Some(4096)))).is_err());
+
+        let failed = Err(std::io::Error::from_raw_os_error(libc::ENOTSUP));
+        let read = with_space_used(fresh.clone(), failed).unwrap();
+        assert_eq!(read, fresh);
     }
 
     /// A mount point that now leads to another device is not read.
@@ -701,19 +866,24 @@ mod tests {
         let slot = state.slots.slot_of("1:18").unwrap();
         assert_eq!(FILESYSTEM_TOTAL.value(slot), Some(1 << 30));
         assert_eq!(FILESYSTEM_INODES_FREE.value(slot), Some(50));
+        assert_eq!(FILESYSTEM_VOLUME_USED.value(slot), Some(1 << 28));
 
         assert_eq!(sweep(&mut state, Ok(vec![root.clone()]), fresh), 1);
         assert_eq!(FILESYSTEM_TOTAL.value(slot), None);
+        assert_eq!(FILESYSTEM_VOLUME_USED.value(slot), None);
 
         // The sweep publishes what `read` returns, not the listed counters.
         let root_slot = state.slots.slot_of("1:19").unwrap();
         let newer = |v: &Volume| {
             let mut v = v.clone();
             v.available_bytes = 7;
+            v.used_bytes = None;
             Ok(v)
         };
         assert_eq!(sweep(&mut state, Ok(vec![root.clone()]), newer), 1);
         assert_eq!(FILESYSTEM_AVAILABLE.value(root_slot), Some(7));
+        // A volume that does not report its use reads absent.
+        assert_eq!(FILESYSTEM_VOLUME_USED.value(root_slot), None);
 
         // A sweep whose every read failed keeps the values and the window.
         let window = FILESYSTEM_SWEEP_ACQ.window();
@@ -732,5 +902,6 @@ mod tests {
         };
         assert_eq!(sweep(&mut state, Ok(vec![root, data]), root_fails), 1);
         assert_eq!(FILESYSTEM_AVAILABLE.value(root_slot), None);
+        assert_eq!(FILESYSTEM_VOLUME_USED.value(root_slot), None);
     }
 }

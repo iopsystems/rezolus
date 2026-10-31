@@ -10,7 +10,7 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
 import { collectGroupPlots, baseRoute, sectionCompares, defaultLandingRoute } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, applyScope, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, clampRangeToExtent, sameExtent, singleInstantNotice, nativeInterval, stepAtLeast, CAPTURE_BASELINE, CAPTURE_EXPERIMENT, listCaptures, captureMetadata, clearCaptureMemo } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, clampRangeToExtent, sameExtent, singleInstantNotice, nativeInterval, stepAtLeast, CAPTURE_BASELINE, CAPTURE_EXPERIMENT, listCaptures, captureMetadata, clearCaptureMemo } from './data.js';
 
 // Opt line-ish charts into display (boxplot decimation) mode: they fetch the
 // decimated boxplot binary instead of the full native-resolution JSON matrix.
@@ -1178,14 +1178,14 @@ const SectionContent = {
                 chartsState,
                 Chart: ChartView,
                 CgroupSelector,
-                executePromQLRangeQuery: (query, ...args) => {
+                executePromQLRangeQuery: (query) => {
                     const node = getSelectedNode();
                     if (node) query = injectLabel(query, 'node', node);
-                    // The cgroup discovery's own queries, restricted to the
-                    // section's recording as the backend restricted its
-                    // charts' (`metadata.scope`).
-                    query = applyScope(query, attrs.metadata?.scope);
-                    return executePromQLRangeQuery(query, ...args);
+                    // The cgroup discovery's own queries read the section's
+                    // recording's sources, as its charts do
+                    // (`metadata.scope`).
+                    return executePromQLRangeQuery(
+                        query, undefined, undefined, 'grid', attrs.metadata?.scope ?? null);
                 },
                 applyResultToPlot,
                 substituteCgroupPattern,
@@ -1548,7 +1548,8 @@ const initDashboard = (config = {}) => {
                                 await loadCgroupGroups(route, (q) => {
                                     const node = getSelectedNode();
                                     if (node) q = injectLabel(q, 'node', node);
-                                    return executePromQLRangeQuery(applyScope(q, section.metadata?.scope));
+                                    return executePromQLRangeQuery(
+                                        q, undefined, undefined, 'grid', section.metadata?.scope ?? null);
                                 });
                             } catch (e) {
                                 console.warn('[cgroups] group discovery failed:', e);

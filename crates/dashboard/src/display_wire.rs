@@ -6,8 +6,8 @@
 //! wraps the bytes its own way (axum `Response` vs a wasm-bindgen return).
 
 use metriken_query::{
-    DisplayOptions, DisplayResult, DisplaySeries, HistogramHeatmapResult, MetricsSource,
-    QueryError, QueryOptions, RateMode, Reducer,
+    DisplayOptions, DisplayResult, DisplaySeries, HistogramHeatmapResult, MetricsSource, Notice,
+    QueryError, QueryOptions, RateMode, Reducer, Scope, ScopedSource, SourceRef,
 };
 
 /// A display query's result, ready for a backend to ship: either the compact
@@ -36,14 +36,49 @@ pub fn parse_rate_mode(s: Option<&str>) -> RateMode {
     }
 }
 
+/// Parse a scope argument: the uuids of the sources a query reads,
+/// separated by commas (a uuid names a source and its copies; one named
+/// twice is read once). Absent reads every source. Present but naming no
+/// source is an error: read as absent it would read every source, and as an
+/// empty scope it would answer with an empty result. Shared by both
+/// backends.
+pub fn parse_scope(s: Option<&str>) -> Result<Option<std::sync::Arc<Scope>>, String> {
+    let Some(s) = s else {
+        return Ok(None);
+    };
+    let mut uuids: Vec<&str> = s
+        .split(',')
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .collect();
+    if uuids.is_empty() {
+        return Err("the scope names no source".to_string());
+    }
+    uuids.sort_unstable();
+    uuids.dedup();
+    let sources = uuids
+        .into_iter()
+        .map(|u| ScopedSource::new(SourceRef::Uuid(u.to_string()), None))
+        .collect();
+    Scope::new(sources).map(|scope| Some(std::sync::Arc::new(scope)))
+}
+
+/// The options a query request asks for: its rate alignment
+/// ([`parse_rate_mode`]) and its scope ([`parse_scope`]).
+pub fn query_options(rate_mode: Option<&str>, scope: Option<&str>) -> Result<QueryOptions, String> {
+    Ok(QueryOptions::with_rate_mode(parse_rate_mode(rate_mode)).with_scope(parse_scope(scope)?))
+}
+
 /// Run a display-mode range query and encode the result. `points` is the point
-/// budget; `band` the inner-band quantiles; `rate_mode` the rate alignment.
+/// budget; `band` the inner-band quantiles; `qopts` the rate alignment and
+/// scope ([`query_options`]).
 // Eight arguments, and they are the right eight: this is the display-mode
 // query entry point, and every one of them is a distinct axis the caller
 // chooses per request (what to query, over what window, at what resolution,
-// with what band and rate alignment). They are bundled into `DisplayOptions`
-// immediately below; hoisting that struct into the signature would only move
-// the argument list to the call sites, which is where it is least readable.
+// with what band, and with what rate alignment and scope). They are bundled
+// into `DisplayOptions` immediately below; hoisting that struct into the
+// signature would only move the argument list to the call sites, which is
+// where it is least readable.
 #[allow(clippy::too_many_arguments)]
 pub fn display_query(
     source: &dyn MetricsSource,
@@ -53,22 +88,24 @@ pub fn display_query(
     step: f64,
     points: usize,
     band: [f64; 2],
-    rate_mode: RateMode,
+    qopts: &QueryOptions,
 ) -> Result<DisplayWire, QueryError> {
     let opts = DisplayOptions {
         budget: points,
         reducer: Reducer::Boxplot,
         band,
     };
-    let qopts = QueryOptions::with_rate_mode(rate_mode);
     Ok(
-        match source.query_range_display_opts(query, start, end, step, &opts, &qopts)? {
-            DisplayResult::Series { result, budget } => {
-                DisplayWire::Binary(encode_display_binary(&result, budget))
-            }
-            DisplayResult::HistogramHeatmap { result } => {
-                DisplayWire::Binary(encode_heatmap_binary(&result))
-            }
+        match source.query_range_display_opts(query, start, end, step, &opts, qopts)? {
+            DisplayResult::Series {
+                result,
+                budget,
+                notices,
+                ..
+            } => DisplayWire::Binary(encode_display_binary(&result, budget, &notices)),
+            DisplayResult::HistogramHeatmap {
+                result, notices, ..
+            } => DisplayWire::Binary(encode_heatmap_binary(&result, &notices)),
             other => DisplayWire::Json(other),
         },
     )
@@ -80,7 +117,8 @@ pub fn display_query(
 /// [u32 LE headerLen][JSON header][pad to 8B][f64 LE column blobs]
 /// ```
 ///
-/// The JSON header carries per-series labels + provenance + point count `n`;
+/// The JSON header carries per-series labels + provenance + point count `n`,
+/// and the result's `notices` when it has any;
 /// the blob is, per series in order, the six columns `t,min,lo,median,hi,max`
 /// each `n` little-endian f64. A series carrying a measurement-uncertainty band
 /// sets the header `unc` flag and appends two more columns (`uncLo,uncHi`,
@@ -91,7 +129,7 @@ pub fn display_query(
 /// decoder that reads the flags in that order stays aligned whichever
 /// combination a series has. Padding keeps the first f64 8-byte aligned so the
 /// client can view columns as `Float64Array`s with zero copies.
-pub fn encode_display_binary(series: &[DisplaySeries], budget: u32) -> Vec<u8> {
+pub fn encode_display_binary(series: &[DisplaySeries], budget: u32, notices: &[Notice]) -> Vec<u8> {
     // A series carries a band iff any of its points does (a decimated bucket with
     // no intervals yields None). The flag lets the decoder know to read the two
     // extra columns for this series.
@@ -102,7 +140,7 @@ pub fn encode_display_binary(series: &[DisplaySeries], budget: u32) -> Vec<u8> {
     // every other column — one byte per point saved is not worth a second
     // decode path.
     let has_interp = |s: &DisplaySeries| s.points.iter().any(|p| p.interpolated);
-    let header = serde_json::json!({
+    let mut header = serde_json::json!({
         "resultType": "series",
         "budget": budget,
         "series": series
@@ -120,6 +158,7 @@ pub fn encode_display_binary(series: &[DisplaySeries], budget: u32) -> Vec<u8> {
             }))
             .collect::<Vec<_>>(),
     });
+    add_notices(&mut header, notices);
     let header_bytes = serde_json::to_vec(&header).unwrap_or_default();
     let total_floats: usize = series
         .iter()
@@ -173,6 +212,14 @@ pub fn encode_display_binary(series: &[DisplaySeries], budget: u32) -> Vec<u8> {
     buf
 }
 
+/// Set `header`'s `notices` to `notices`, as metriken-query serializes them,
+/// when there are any.
+fn add_notices(header: &mut serde_json::Value, notices: &[Notice]) {
+    if !notices.is_empty() {
+        header["notices"] = serde_json::to_value(notices).unwrap_or_default();
+    }
+}
+
 /// Encode a histogram bucket heatmap as a compact binary body:
 ///
 /// ```text
@@ -180,14 +227,15 @@ pub fn encode_display_binary(series: &[DisplaySeries], budget: u32) -> Vec<u8> {
 /// [f64 timestamps][f64 counts][u32 timeIdx][u32 bucketIdx]
 /// ```
 ///
-/// The JSON header carries `bucketBounds`, `minValue`/`maxValue`, and the two
-/// counts (`nTimestamps`, `nTriples`). Ordering the f64 columns first keeps
+/// The JSON header carries `bucketBounds`, `minValue`/`maxValue`, the two
+/// counts (`nTimestamps`, `nTriples`), and the result's `notices` when it has
+/// any. Ordering the f64 columns first keeps
 /// every column naturally aligned so the client views them as typed arrays with
 /// zero copies — no JSON parse of the (potentially large) triples array.
-pub fn encode_heatmap_binary(hm: &HistogramHeatmapResult) -> Vec<u8> {
+pub fn encode_heatmap_binary(hm: &HistogramHeatmapResult, notices: &[Notice]) -> Vec<u8> {
     let n_ts = hm.timestamps.len();
     let n_tr = hm.data.len();
-    let header = serde_json::json!({
+    let mut header = serde_json::json!({
         "resultType": "histogram_heatmap",
         "bucketBounds": hm.bucket_bounds,
         "minValue": hm.min_value,
@@ -195,6 +243,7 @@ pub fn encode_heatmap_binary(hm: &HistogramHeatmapResult) -> Vec<u8> {
         "nTimestamps": n_ts,
         "nTriples": n_tr,
     });
+    add_notices(&mut header, notices);
     let header_bytes = serde_json::to_vec(&header).unwrap_or_default();
 
     let mut buf = Vec::with_capacity(4 + header_bytes.len() + 8 + n_ts * 8 + n_tr * 16);
@@ -359,7 +408,7 @@ mod tests {
     #[test]
     fn a_series_with_no_interpolated_points_pays_nothing() {
         let s = series("a", vec![pt(1.0, 5.0), pt(2.0, 6.0)]);
-        let (header, cols) = decode(&encode_display_binary(&[s], 500));
+        let (header, cols) = decode(&encode_display_binary(&[s], 500, &[]));
         assert_eq!(header["series"][0]["interp"], serde_json::json!(false));
         assert_eq!(cols.len(), 6, "six columns, no optional ones");
     }
@@ -381,7 +430,7 @@ mod tests {
                     .with_interpolated(false),
             ],
         );
-        let (header, cols) = decode(&encode_display_binary(&[s], 500));
+        let (header, cols) = decode(&encode_display_binary(&[s], 500, &[]));
         assert_eq!(header["series"][0]["unc"], serde_json::json!(true));
         assert_eq!(header["series"][0]["interp"], serde_json::json!(true));
         assert_eq!(cols.len(), 9);
@@ -397,10 +446,58 @@ mod tests {
         // false the interp column moves from index 8 to index 6, which is the
         // whole reason the decoder must branch on both flags in order.
         let s = series("a", vec![pt(1.0, 5.0).with_interpolated(true)]);
-        let (header, cols) = decode(&encode_display_binary(&[s], 500));
+        let (header, cols) = decode(&encode_display_binary(&[s], 500, &[]));
         assert_eq!(header["series"][0]["unc"], serde_json::json!(false));
         assert_eq!(cols.len(), 7);
         assert_eq!(cols[6], vec![1.0]);
+    }
+
+    /// A scope argument is uuids separated by commas, each a source and its
+    /// copies, read once however often named; absent reads every source,
+    /// and present but naming none is refused.
+    #[test]
+    fn a_scope_is_uuids_separated_by_commas() {
+        use metriken_query::SourceRef;
+        assert!(parse_scope(None).unwrap().is_none());
+        for empty in ["", " , "] {
+            assert!(parse_scope(Some(empty)).is_err(), "{empty:?}");
+        }
+        let scope = parse_scope(Some("u2, u1,u2,")).unwrap().unwrap();
+        let refs: Vec<&SourceRef> = scope.sources().iter().map(|s| &s.source).collect();
+        assert_eq!(
+            refs,
+            [
+                &SourceRef::Uuid("u1".to_string()),
+                &SourceRef::Uuid("u2".to_string())
+            ]
+        );
+        assert!(scope.sources().iter().all(|s| s.span.is_none()));
+        let opts = query_options(Some("raw"), Some("u1")).unwrap();
+        assert_eq!(opts.rate_mode, RateMode::Raw);
+        assert_eq!(opts.scope.as_deref().map(|s| s.sources().len()), Some(1));
+    }
+
+    /// A result's notices travel in the header, as metriken-query
+    /// serializes them, and only when there are any.
+    #[test]
+    fn notices_are_in_the_header() {
+        let s = series("a", vec![pt(1.0, 5.0)]);
+        let (header, _) = decode(&encode_display_binary(std::slice::from_ref(&s), 500, &[]));
+        assert!(header.get("notices").is_none());
+        let notice = Notice::conflict(
+            [("__name__".to_string(), "c".to_string())].into(),
+            vec!["u0".to_string(), "u1".to_string()],
+            1.0,
+            2,
+        );
+        let (header, cols) = decode(&encode_display_binary(
+            &[s],
+            500,
+            std::slice::from_ref(&notice),
+        ));
+        assert_eq!(header["notices"], serde_json::to_value([&notice]).unwrap());
+        assert_eq!(header["notices"][0]["kind"], "conflict");
+        assert_eq!(cols.len(), 6);
     }
 
     /// Path to the cross-language golden, relative to this crate.
@@ -425,7 +522,7 @@ mod tests {
     /// start reading the wrong columns.
     #[test]
     fn the_shared_fixture_matches_the_encoder() {
-        let body = encode_display_binary(&fixture::mixed_flags(), fixture::BUDGET);
+        let body = encode_display_binary(&fixture::mixed_flags(), fixture::BUDGET, &[]);
         let (header, cols) = decode(&body);
 
         // The expected decode travels WITH the bytes so a consumer in another
@@ -533,7 +630,7 @@ mod tests {
         let a = series("a", vec![pt(1.0, 1.0).with_interpolated(true)]);
         let b = series("b", vec![pt(1.0, 2.0)]);
         let c = series("c", vec![pt(1.0, 3.0).with_band(Some((7.0, 8.0)))]);
-        let (header, cols) = decode(&encode_display_binary(&[a, b, c], 500));
+        let (header, cols) = decode(&encode_display_binary(&[a, b, c], 500, &[]));
         assert_eq!(header["series"][0]["interp"], serde_json::json!(true));
         assert_eq!(header["series"][1]["interp"], serde_json::json!(false));
         assert_eq!(header["series"][2]["interp"], serde_json::json!(false));

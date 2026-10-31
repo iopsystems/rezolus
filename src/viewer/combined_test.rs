@@ -71,8 +71,8 @@ pub(crate) fn agent_and_service(dir: &Path) -> PathBuf {
                 metadata: &[("source", "svc"), ("service_queries", &template)],
                 cpus: 0,
                 busy_ns: 0,
-                // Named like an agent metric too, so a query that is not
-                // restricted to the agent reads the service's series.
+                // Named like an agent metric too, so a query that does not
+                // carry the agent's scope reads the service's series.
                 counter: Some(("svc_requests", 40)),
             },
         ],
@@ -121,15 +121,69 @@ fn plot_queries(section: &serde_json::Value) -> Vec<(String, String)> {
     out
 }
 
-/// The last value of each series `query` returns over the archive.
-fn last_values(data: &dyn MetricsSource, query: &str) -> Vec<f64> {
+/// Every plot's `scope` in a section (the uuids of the sources its queries
+/// read), by plot id.
+fn plot_scopes(section: &serde_json::Value) -> Vec<(String, Option<Vec<String>>)> {
+    let mut out = Vec::new();
+    for group in section["groups"].as_array().unwrap() {
+        for sg in group["subgroups"].as_array().unwrap() {
+            for plot in sg["plots"].as_array().unwrap() {
+                out.push((
+                    plot["opts"]["id"].as_str().unwrap().to_string(),
+                    serde_json::from_value(plot["scope"].clone()).unwrap(),
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// The last value of each series `query` returns over the archive, reading
+/// the sources `scope` names (every source for `None`), as the page sends a
+/// plot's query with its scope.
+fn last_values(data: &dyn MetricsSource, query: &str, scope: Option<&[String]>) -> Vec<f64> {
     let end = (ANCHOR + (TICKS - 1) * 1_000_000_000) as f64 / 1e9;
-    match data.query_range(query, end - 3.0, end, 1.0).unwrap() {
-        QueryResult::Matrix { result } => {
+    let opts = metriken_query::QueryOptions::default()
+        .with_scope(scope.and_then(dashboard::combined::scope_of));
+    match data
+        .query_range_opts(query, end - 3.0, end, 1.0, &opts)
+        .unwrap()
+    {
+        QueryResult::Matrix { result, .. } => {
             result.iter().map(|s| s.values.last().unwrap().1).collect()
         }
         other => panic!("{query}: {other:?}"),
     }
+}
+
+/// The last values of plot `id` of `section`, its query read with its scope.
+fn plot_values(data: &dyn MetricsSource, section: &serde_json::Value, id: &str) -> Vec<f64> {
+    let query = plot_queries(section)
+        .into_iter()
+        .find(|(p, _)| p == id)
+        .unwrap_or_else(|| panic!("no plot {id}"))
+        .1;
+    let scope = plot_scopes(section)
+        .into_iter()
+        .find(|(p, _)| p == id)
+        .unwrap()
+        .1;
+    last_values(data, &query, scope.as_deref())
+}
+
+/// The uuids of the sources of the recording of the archive at `path` whose
+/// labels include `key=value`.
+fn uuids_of(path: &Path, key: &str, value: &str) -> Vec<String> {
+    let readers = crate::rez_reader::RezReader::open_recordings(
+        path,
+        metriken_storage::BufferPool::new(16 << 20),
+    )
+    .unwrap();
+    readers
+        .iter()
+        .find(|(labels, _)| labels.get(key).map(String::as_str) == Some(value))
+        .map(|(_, r)| r.sources().iter().filter_map(|s| s.uuid.clone()).collect())
+        .unwrap_or_else(|| panic!("no recording with {key}={value}"))
 }
 
 /// Two hosts of one run: one capture, the built-in sections once per host
@@ -141,7 +195,8 @@ fn last_values(data: &dyn MetricsSource, query: &str) -> Vec<f64> {
 #[test]
 fn each_hosts_cpu_section_reads_only_that_host() {
     let dir = tempfile::tempdir().unwrap();
-    let state = view(&two_hosts(dir.path()), &[]);
+    let path = two_hosts(dir.path());
+    let state = view(&path, &[]);
     assert!(state.captures.get_by_id("experiment").is_none());
     // The archive answers each recording's catalog questions.
     assert!(state.combined_catalog.read().is_some());
@@ -185,19 +240,17 @@ fn each_hosts_cpu_section_reads_only_that_host() {
             cpus > 1,
             "{route}: per-CPU chart from its own catalog"
         );
-        assert_eq!(
-            cpu["metadata"]["scope"],
-            serde_json::json!([{"label": "host", "op": "=", "value": host}])
-        );
-        for (id, query) in &plots {
-            assert!(
-                query.contains(&format!("host=\"{host}\"")),
-                "{route} {id}: {query}"
-            );
+        let uuids = uuids_of(&path, "host", host);
+        assert!(!uuids.is_empty());
+        assert_eq!(cpu["metadata"]["scope"], serde_json::json!(uuids));
+        for (id, scope) in plot_scopes(&cpu) {
+            assert_eq!(scope.as_ref(), Some(&uuids), "{route} {id}");
         }
-        let (_, busy_query) = plots.iter().find(|(id, _)| id == "busy-pct").unwrap();
-        let values = last_values(data.as_ref(), busy_query);
-        assert_eq!(values.len(), 1, "{route}: {busy_query} -> {values:?}");
+        for (id, query) in &plots {
+            assert!(!query.contains("host="), "{route} {id}: {query}");
+        }
+        let values = plot_values(data.as_ref(), &cpu, "busy-pct");
+        assert_eq!(values.len(), 1, "{route}: {values:?}");
         assert!((values[0] - busy).abs() < 1e-9, "{route}: {values:?}");
     }
 }
@@ -222,13 +275,14 @@ fn a_selector_opens_the_comparison() {
 }
 
 /// A Rezolus agent and a service of one run: the built-in sections once,
-/// as today, restricted to the agent; the service's section from the
-/// template in its recording's metadata, restricted to the service; the
+/// as today, scoped to the agent; the service's section from the
+/// template in its recording's metadata, scoped to the service; the
 /// Overview's throughput is the service's.
 #[test]
 fn a_service_recording_renders_its_own_template() {
     let dir = tempfile::tempdir().unwrap();
-    let state = view(&agent_and_service(dir.path()), &[]);
+    let path = agent_and_service(dir.path());
+    let state = view(&path, &[]);
     let routes: Vec<(String, Option<String>)> = state
         .sections
         .read()
@@ -240,24 +294,147 @@ fn a_service_recording_renders_its_own_template() {
     assert_eq!(routes[1], ("/service/svc".to_string(), None));
     assert!(routes.iter().all(|(r, i)| !r.contains('@') && i.is_none()));
 
+    let svc_uuids = uuids_of(&path, "source", "svc");
     let svc = section(&state, "/service/svc");
     let plots = plot_queries(&svc);
-    assert_eq!(
-        plots[0].1, "sum(irate(svc_requests{source=\"svc\"}[5m]))",
-        "{plots:?}"
-    );
-    let values = last_values(state.baseline_data().as_ref(), &plots[0].1);
+    assert_eq!(plots[0].1, "sum(irate(svc_requests[5m]))", "{plots:?}");
+    assert_eq!(plot_scopes(&svc)[0].1.as_ref(), Some(&svc_uuids));
+    let values = plot_values(state.baseline_data().as_ref(), &svc, &plots[0].0);
     assert_eq!(values.len(), 1);
     assert!((values[0] - 40.0).abs() < 1e-9, "{values:?}");
 
+    let agent_uuids = uuids_of(&path, "source", "rezolus");
     let cpu = section(&state, "/cpu");
     for (id, query) in plot_queries(&cpu) {
-        assert!(query.contains("source=\"rezolus\""), "{id}: {query}");
+        assert!(!query.contains("source="), "{id}: {query}");
+    }
+    for (id, scope) in plot_scopes(&cpu) {
+        assert_eq!(scope.as_ref(), Some(&agent_uuids), "{id}");
     }
     assert_eq!(
         state.sections.read().context().throughput_query.as_deref(),
-        Some("sum(irate(svc_requests{source=\"svc\"}[5m]))")
+        Some("sum(irate(svc_requests[5m]))")
     );
+}
+
+/// An Overview chart normalized by a service's throughput reads the
+/// service's recording as well as the agent's; every other chart reads the
+/// agent's alone.
+#[test]
+fn a_chart_normalized_by_throughput_reads_the_service_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = agent_and_service(dir.path());
+    let state = view(&path, &[]);
+    let agent = uuids_of(&path, "source", "rezolus");
+    let svc = uuids_of(&path, "source", "svc");
+    let both: Vec<String> = agent.iter().chain(&svc).cloned().collect();
+    let overview = section(&state, "/overview");
+    let throughput = "sum(irate(svc_requests[5m]))";
+    let queries = plot_queries(&overview);
+    let mut normalized = None;
+    for ((id, query), (_, scope)) in queries.iter().zip(plot_scopes(&overview)) {
+        let want = match query.contains(throughput) {
+            true => &both,
+            false => &agent,
+        };
+        assert_eq!(scope.as_ref(), Some(want), "{id}: {query}");
+        if query == &format!("sum(irate(cpu_usage[5m])) / ({throughput})") {
+            normalized = Some(id.clone());
+        }
+    }
+    let normalized = normalized.unwrap_or_else(|| panic!("{queries:?}"));
+    let values = plot_values(state.baseline_data().as_ref(), &overview, &normalized);
+    // 250 ms of CPU, in nanoseconds, per second over 40 requests per
+    // second.
+    assert_eq!(values.len(), 1, "{values:?}");
+    assert!(
+        (values[0] - 250_000_000.0 / 40.0).abs() < 1e-3,
+        "{values:?}"
+    );
+}
+
+/// A recording whose sources have no uuid (an archive written before dendro
+/// stored them) cannot be scoped: its sections' queries carry its labels'
+/// matchers instead, and its Overview has no throughput from another recording.
+#[test]
+fn a_recording_without_source_uuids_is_restricted_by_its_labels() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = view(&two_hosts(dir.path()), &[]);
+    for member in state.members.write().iter_mut() {
+        member.sources.clear();
+    }
+    super::metadata::regenerate_dashboards(&state);
+    let data = state.baseline_data();
+    for (route, host, busy) in [("/cpu", "h1", 0.25), ("/cpu@h2", "h2", 0.75)] {
+        let cpu = section(&state, route);
+        assert!(cpu["metadata"].get("scope").is_none(), "{route}");
+        for (id, scope) in plot_scopes(&cpu) {
+            assert_eq!(scope, None, "{route} {id}");
+        }
+        for (id, query) in plot_queries(&cpu) {
+            assert!(
+                query.contains(&format!("host=\"{host}\"")),
+                "{route} {id}: {query}"
+            );
+        }
+        let values = plot_values(data.as_ref(), &cpu, "busy-pct");
+        assert_eq!(values.len(), 1, "{route}: {values:?}");
+        assert!((values[0] - busy).abs() < 1e-9, "{route}: {values:?}");
+    }
+
+    // A template that selects its own `source`, as the shipped service
+    // templates do: the recording's `source` matcher is not added twice,
+    // which the engine would refuse, so the KPI is drawn.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("pinned.dendro");
+    let template = serde_json::json!({
+        "service_name": "svc",
+        "kpis": [{
+            "role": "throughput",
+            "title": "Requests",
+            "query": "sum(irate(svc_requests{source=\"svc\"}[5m]))",
+            "type": "delta_counter",
+            "denominator": true,
+        }],
+    })
+    .to_string();
+    one_run(
+        &path,
+        &[
+            Recording {
+                labels: &[("source", "rezolus"), ("host", "h1")],
+                metadata: &[("source", "rezolus")],
+                cpus: 1,
+                busy_ns: 250_000_000,
+                counter: None,
+            },
+            Recording {
+                labels: &[("source", "svc"), ("host", "h1")],
+                metadata: &[("source", "svc"), ("service_queries", &template)],
+                cpus: 0,
+                busy_ns: 0,
+                counter: Some(("svc_requests", 40)),
+            },
+        ],
+    );
+    let state = view(&path, &[]);
+    for member in state.members.write().iter_mut() {
+        member.sources.clear();
+    }
+    super::metadata::regenerate_dashboards(&state);
+    let svc = section(&state, "/service/svc");
+    let plots = plot_queries(&svc);
+    assert_eq!(
+        plots.first().map(|(_, q)| q.as_str()),
+        Some("sum(irate(svc_requests{source=\"svc\"}[5m]))"),
+        "{svc}"
+    );
+    let values = plot_values(state.baseline_data().as_ref(), &svc, &plots[0].0);
+    assert_eq!(values.len(), 1, "{values:?}");
+    assert!((values[0] - 40.0).abs() < 1e-9, "{values:?}");
+    // The throughput is another recording's, which cannot be scoped.
+    let sections = state.sections.read();
+    assert_eq!(sections.context().scopes["/overview"].throughput, None);
 }
 
 /// The WASM viewer opens the same archives as one combined capture and
@@ -336,17 +513,17 @@ fn recordings_with_equal_labels_are_kept_apart() {
         "{routes:?}"
     );
     let data = state.baseline_data();
+    let mut scopes = Vec::new();
     for (route, busy) in [("/cpu", 0.25), ("/cpu@recording-2", 0.75)] {
         let cpu = section(&state, route);
-        let (_, query) = plot_queries(&cpu)
-            .into_iter()
-            .find(|(id, _)| id == "busy-pct")
-            .unwrap();
-        assert!(query.contains("__recording__"), "{query}");
-        let values = last_values(data.as_ref(), &query);
-        assert_eq!(values.len(), 1, "{route}: {query} -> {values:?}");
+        let scope = cpu["metadata"]["scope"].clone();
+        assert!(!scope.as_array().unwrap().is_empty(), "{route}");
+        scopes.push(scope);
+        let values = plot_values(data.as_ref(), &cpu, "busy-pct");
+        assert_eq!(values.len(), 1, "{route}: {values:?}");
         assert!((values[0] - busy).abs() < 1e-9, "{route}: {values:?}");
     }
+    assert_ne!(scopes[0], scopes[1]);
 }
 
 /// An instance's catalog is its recording's: a metric only another host
@@ -436,9 +613,14 @@ fn each_instance_has_its_own_throughput_and_systeminfo() {
         let scopes = &sections.context().scopes;
         assert_eq!(
             scopes["/overview"].throughput.as_deref(),
-            Some(r#"sum(irate(svc_requests{host="h1",source="svc"}[5m]))"#)
+            Some("sum(irate(svc_requests[5m]))")
+        );
+        assert_eq!(
+            scopes["/overview"].throughput_sources,
+            uuids_of(&path, "source", "svc")
         );
         assert_eq!(scopes["/overview@h2"].throughput, None);
+        assert!(scopes["/overview@h2"].throughput_sources.is_empty());
     }
     let info: serde_json::Value =
         serde_json::from_str(&state.captures.systeminfo_by_id("baseline").unwrap()).unwrap();
@@ -453,9 +635,8 @@ fn each_instance_has_its_own_throughput_and_systeminfo() {
     assert_eq!(wasm, info);
 }
 
-/// A recording that lacks a label another recording carries is selected
-/// by `role!="x"`, and the engine answers each instance from its own
-/// recording only.
+/// A recording that lacks a label another recording carries gets its own
+/// instance, and each instance's plots read only its own recording.
 #[test]
 fn a_recording_without_the_others_label_reads_only_its_series() {
     let dir = tempfile::tempdir().unwrap();
@@ -496,18 +677,14 @@ fn a_recording_without_the_others_label_reads_only_its_series() {
             per_cpu,
             "{route}: charts from its own catalog"
         );
-        let (_, query) = plots.into_iter().find(|(id, _)| id == "busy-pct").unwrap();
-        let values = last_values(data.as_ref(), &query);
-        assert_eq!(values.len(), 1, "{route}: {query} -> {values:?}");
-        assert!(
-            (values[0] - busy).abs() < 1e-9,
-            "{route}: {query} {values:?}"
-        );
+        let values = plot_values(data.as_ref(), &section(&state, route), "busy-pct");
+        assert_eq!(values.len(), 1, "{route}: {values:?}");
+        assert!((values[0] - busy).abs() < 1e-9, "{route}: {values:?}");
     }
 }
 
-/// With two other values of the label, the recording lacking it is
-/// selected by `role!~"x|y"`.
+/// With two other values of the label, the recording lacking it reads
+/// only its own series.
 #[test]
 fn a_recording_without_a_label_two_others_carry_reads_only_its_series() {
     let dir = tempfile::tempdir().unwrap();
@@ -529,13 +706,8 @@ fn a_recording_without_a_label_two_others_carry_reads_only_its_series() {
     );
     let state = view(&path, &[]);
     let data = state.baseline_data();
-    let (_, query) = plot_queries(&section(&state, "/cpu"))
-        .into_iter()
-        .find(|(id, _)| id == "busy-pct")
-        .unwrap();
-    assert!(query.contains(r#"role!~"x|y""#), "{query}");
-    let values = last_values(data.as_ref(), &query);
-    assert_eq!(values.len(), 1, "{query} -> {values:?}");
+    let values = plot_values(data.as_ref(), &section(&state, "/cpu"), "busy-pct");
+    assert_eq!(values.len(), 1, "{values:?}");
     assert!((values[0] - 0.1).abs() < 1e-9, "{values:?}");
 }
 
@@ -713,13 +885,14 @@ fn a_concurrent_ab_shows_the_unarmed_agent_beside_it() {
         .find(|(id, _)| id == "busy-pct")
         .unwrap();
     assert!(busy.contains(r#"__capture__="h""#), "{busy}");
-    let values = last_values(state.baseline_data().as_ref(), &busy);
+    let values = last_values(state.baseline_data().as_ref(), &busy, None);
     assert_eq!(values.len(), 1, "{busy}: {values:?}");
     assert!((values[0] - 0.5).abs() < 1e-9, "{values:?}");
     // The comparison still compares: the baseline's own query reads svcA.
     let svc = last_values(
         state.baseline_data().as_ref(),
         "sum(irate(svc_requests[5m]))",
+        None,
     );
     assert_eq!(svc.len(), 1);
     assert!((svc[0] - 10.0).abs() < 1e-9, "{svc:?}");
@@ -1138,8 +1311,11 @@ fn an_agent_baseline_without_cpu_usage_keeps_the_usual_landing() {
 
 /// A combined context built with the archive as its scopes' catalog opens
 /// no table, and rendering one recording's section opens only that
-/// recording's tables; built without it, the same context opens every
-/// recording's.
+/// recording's tables. Built without it, the context opens none either
+/// here: the fixture is written by metriken-storage 0.6, whose segments carry
+/// a names index the labels are listed from. An archive `record` writes
+/// (metriken-recorder 0.5.1, over storage 0.5.4) has no such index, and on
+/// that path opens a table of each recording of more than one segment.
 #[test]
 fn a_recordings_catalog_opens_only_its_own_tables() {
     use std::sync::Arc;
@@ -1207,7 +1383,11 @@ fn a_recordings_catalog_opens_only_its_own_tables() {
         None,
         None,
     );
-    assert!(reader.opened_tables().len() > per_recording);
+    assert!(
+        reader.opened_tables().is_empty(),
+        "{:?}",
+        reader.opened_tables()
+    );
 }
 
 /// A source of [`dendro_of`]: its labels, and the snapshot it records at a
@@ -1350,6 +1530,7 @@ fn the_catalog_answers_as_the_filtered_listing_does() {
         .zip(dashboard::combined::scope_matchers(&labels))
     {
         let scope = |catalog| dashboard::combined::Scope {
+            sources: Vec::new(),
             matchers: matchers.clone(),
             header: member.header.clone(),
             metadata: member.metadata.clone(),
@@ -1376,6 +1557,7 @@ fn the_catalog_answers_as_the_filtered_listing_does() {
     let third = &combined.members[2];
     let matchers = dashboard::combined::scope_matchers(&labels)[2].clone();
     let scope = dashboard::combined::Scope {
+        sources: Vec::new(),
         matchers,
         header: third.header.clone(),
         metadata: third.metadata.clone(),
@@ -1408,6 +1590,7 @@ fn the_catalog_answers_as_the_filtered_listing_does() {
         .collect();
     let h2 = &combined.members[1];
     let scope = dashboard::combined::Scope {
+        sources: Vec::new(),
         matchers: dashboard::combined::scope_matchers(&labels)[1].clone(),
         header: h2.header.clone(),
         metadata: h2.metadata.clone(),
@@ -1425,6 +1608,7 @@ fn the_catalog_answers_as_the_filtered_listing_does() {
     assert_eq!(scoped.gauge_names(), ["dual"]);
     let h1 = &combined.members[0];
     let scope = dashboard::combined::Scope {
+        sources: Vec::new(),
         matchers: dashboard::combined::scope_matchers(&labels)[0].clone(),
         header: h1.header.clone(),
         metadata: h1.metadata.clone(),
@@ -1448,6 +1632,7 @@ fn the_catalog_answers_as_the_filtered_listing_does() {
     let h3 = &combined.members[2];
     assert_eq!(h3.series_labels["host"], "h3");
     let scope = dashboard::combined::Scope {
+        sources: Vec::new(),
         matchers: dashboard::combined::scope_matchers(&labels)[2].clone(),
         header: h3.header.clone(),
         metadata: h3.metadata.clone(),

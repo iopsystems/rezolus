@@ -741,6 +741,7 @@ function kickOffSpectrumFetch(chart, kind) {
     const plotForFetch = {
         promql_query: chart.spec.promql_query,
         opts: chart.spec.opts,
+        scope: chart.spec.scope,
     };
     if (!plotForFetch.promql_query) return;
 

@@ -504,7 +504,7 @@ mod tests {
         // The last tick's gauge, which was in the WAL when refreshed:
         // `mem_free` is 1,000 - i.
         let at = (ANCHOR + 12 * SECOND) as f64 / 1e9;
-        let metriken_query::QueryResult::Vector { result } =
+        let metriken_query::QueryResult::Vector { result, .. } =
             live.query("mem_free", Some(at)).unwrap()
         else {
             panic!("an instant query gives a vector");
@@ -516,7 +516,7 @@ mod tests {
     /// A query's answer with each series' labels sorted.
     fn answer(live: &LiveReader, query: &str) -> Vec<String> {
         let (lo, hi) = live.time_range_ns().unwrap();
-        let metriken_query::QueryResult::Matrix { result } = live
+        let metriken_query::QueryResult::Matrix { result, .. } = live
             .query_range(query, lo as f64 / 1e9, hi as f64 / 1e9, 1.0)
             .unwrap()
         else {
@@ -626,7 +626,7 @@ mod tests {
         let (lo, hi) = live.time_range_ns().unwrap();
         let mixed = live.query_range("mem_free", lo as f64 / 1e9, hi as f64 / 1e9, 1.0);
         let values = match mixed {
-            Ok(metriken_query::QueryResult::Matrix { result }) => {
+            Ok(metriken_query::QueryResult::Matrix { result, .. }) => {
                 result.into_iter().flat_map(|m| m.values).collect()
             }
             _ => Vec::new(),

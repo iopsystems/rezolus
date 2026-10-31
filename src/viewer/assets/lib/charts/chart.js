@@ -429,7 +429,11 @@ export class Chart {
         // mean line and the experiment as they were and changes only the
         // band, which none of the terms above see.
         const familyBandChanged = familyBandDiffers(oldSpec.familyBand, this.spec.familyBand);
-        if (this.echart && (dataChanged || timeDataChanged || multiSeriesChanged || formatChanged || themeChanged || seriesNamesChanged || familyBandChanged)) {
+        // The line chart's Total toggle is drawn or removed when the chart is
+        // configured, so a spec that gains or drops its total query
+        // reconfigures even over the same data.
+        const totalChanged = oldSpec.promql_query_total !== this.spec.promql_query_total;
+        if (this.echart && (dataChanged || timeDataChanged || multiSeriesChanged || formatChanged || themeChanged || seriesNamesChanged || familyBandChanged || totalChanged)) {
             this._themeVersion = themeVersion;
             this.configureChartByType();
             this._applyEventMarkers({ reconfigured: true });

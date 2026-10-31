@@ -734,7 +734,7 @@ fn every_dashboard_and_template_query_answers_on_a_dendro_archive() {
             }
             match source.query_range(&query, start, end, 1.0) {
                 Err(e) => failures.push(format!("{}: {query}\n    {e}", u.origin)),
-                Ok(metriken_query::QueryResult::Matrix { result }) if result.is_empty() => {
+                Ok(metriken_query::QueryResult::Matrix { result, .. }) if result.is_empty() => {
                     empty_results.push(format!("{}: {query}", u.origin))
                 }
                 Ok(_) => {}

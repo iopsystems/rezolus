@@ -18,6 +18,22 @@
 
 ### Added
 
+- **An expanded chart shows its scope.** In a combined view, the
+  single-chart view lists the uuids of the sources the chart reads under
+  Scope, below its query. Editing the list reads other sources, Remove
+  reads every recording, and Reset returns to the chart's own scope; a
+  scope whose query fails is not kept. The chart's spectra and heatmap read
+  the scope of the data drawn, and its Total is offered only for its own
+  query and scope. A query that returns no series now shows a message
+  saying so.
+- **A query can read only some of a combined archive's recordings.**
+  `/api/v1/query_range` (also with `format=display`) takes `scope`, the
+  uuids of the sources to read, separated by commas; the static site's
+  WASM viewer takes the same. Without it a query reads every recording; a
+  `scope` naming no source is refused (`bad_data`) rather than read as
+  every recording, and `/api/v1/query` refuses a `scope`, since an instant
+  query reads every source. The viewer sends one with each chart of a
+  combined view.
 - **CPU frequency and energy on macOS.** `cpu_frequency` and `cpu_power`
   now run on Apple silicon, unprivileged, from IOReport, the framework
   `powermetrics` reads. `cpu_frequency` derives `cpu_tsc`, `cpu_mperf` and
@@ -34,6 +50,9 @@
   `filesystem_inodes_free` and `filesystem_readonly` for every local volume
   with `statfs`, so the filesystem dashboard draws on a Mac. An APFS volume
   without a quota or reserve reports its container's size and free space.
+  The macOS-only `filesystem_volume_used` is each volume's own use from
+  `getattrlist(ATTR_VOL_SPACEUSED)`, the number `df` shows as used, and the
+  dashboard draws it as Volume Used.
 - **TCP bandwidth charts in the network dashboard.** The TCP group draws
   `tcp_bytes` as transmit and receive bits per second when the recording
   has it, from the `tcp_traffic` sampler on Linux and on macOS.
@@ -413,6 +432,61 @@
 
 ### Changed
 
+- **A combined view's charts read their recording through a scope rather
+  than through matchers added to their queries.** Each chart of a
+  recording's sections carries `scope`, the uuids of that recording's
+  sources, and the page sends it with every range query of the chart, so
+  the query shown is the template's as written (`sum(irate(cpu_usage[5m]))`
+  rather than `sum(irate(cpu_usage{host="h2"}[5m]))`).
+  - An Overview whose throughput is a service's reads that service's
+    sources as well as the agent's, in each chart whose query includes the
+    throughput query.
+  - A section's `metadata.scope` is the list of uuids, not label matchers;
+    the cgroup discovery reads within it.
+  - A chart added to a selection keeps its scope, and so does a report
+    saved from it. An entry saved before this carries the matchers in its
+    query text and reads as written.
+  - A recording any of whose sources lacks a uuid (an archive written
+    before dendro stored them) has no scope: its queries carry its matchers
+    as before, and its cgroup discovery reads every recording. Its Overview
+    shows the throughput of a service of its own recording, but not one of
+    another recording.
+  - A recording shown beside a comparison still names its capture with
+    `__capture__`.
+  - Where the viewer still adds matchers to a query, a matcher the selector
+    already has is not repeated, and a different one of its own on the same
+    label (`source="vllm"` where the scope's is `source="svc"`) no longer
+    replaces the scope's. Both are kept, and the archive reader refuses the
+    query.
+- **metriken-query 0.43, metriken-storage 0.6, dendro 0.6.1.**
+  metriken-recorder stays at 0.5.1, over metriken-storage 0.5.4, so `record`,
+  the hindsight buffer and the live viewer write what they wrote before.
+  - Segments written by metriken-storage 0.6 carry a new names index.
+    A hindsight dump, the `recording` copies (`combine`, `filter`,
+    `snapshot`) and the copy an edit command writes with `-o` (`annotate`,
+    `events`, `check`) seal their live tail with it, and `recording
+    convert` and the `.rez` conversion write every segment with it.
+    Rezolus builds on metriken-storage 0.5 read such a segment as holding
+    the names of its table's first segment, so a metric that first appears
+    in a later segment is not listed or returned there.
+  - A recording and its copies, or two recorders of one agent, combine
+    their histograms per source: each span reads the finest source that
+    covers it, where it read one source for the whole range. Where a finer
+    source's run sits inside a coarser one's, the group can count less
+    than the coarser source alone.
+  - Where two such sources sample at the same spacing, the one whose
+    first row is earlier answers; it was the one with the lowest uuid.
+  - A query whose sources hold different values for one series at one
+    time returns a `conflict` notice. The MCP `query` and `export_query` tools
+    return it in `notices`, `rezolus mcp query` prints it after the table,
+    and a chart's binary display response carries it in its header, which
+    the viewer does not show yet.
+  - Two recordings whose labels differ only in an internal label other
+    than `__recording__` carry `__recording__`, so `without` and binary
+    operators keep them apart, where `without` merged them.
+  - Where every segment of a table carries the new names index, building
+    the combined view lists its labels without opening the table. Archives
+    `record` writes do not have it yet.
 - **The viewer's chart modules import nothing from outside `charts/` and do
   not use Mithril.**
   - `labels.js` and `html.js` moved to `charts/util/`, and A/B compare

@@ -71,6 +71,7 @@ export function configureLineChart(chart) {
             : []);
 
     if (seriesList.length === 0) {
+        if (!chart.spec.promql_query_total) removeTotalToggle(chart);
         applyNoData(chart);
         return;
     }
@@ -442,6 +443,11 @@ function refreshTotalCheckbox(chart) {
     if (el) renderTotalCheckbox(el, !!chart._showTotal, !!chart._totalPending);
 }
 
+// What a total is computed over: the total query and the scope it reads.
+// A cached total, or one still in flight, belongs to the key it was fetched
+// with.
+const totalKey = (spec) => JSON.stringify([spec?.promql_query_total ?? null, spec?.scope ?? null]);
+
 async function toggleTotal(chart) {
     if (chart._totalPending) return;
     const totalQuery = chart.spec.promql_query_total;
@@ -456,6 +462,9 @@ async function toggleTotal(chart) {
     }
 
     chart._meanDataCache = chart.spec.data;
+    const key = totalKey(chart.spec);
+    if (chart._totalKey !== key) chart._totalDataCache = null;
+    chart._totalKey = key;
     if (chart._totalDataCache) {
         chart.spec.data = chart._totalDataCache;
         chart._showTotal = true;
@@ -467,8 +476,15 @@ async function toggleTotal(chart) {
     chart._totalPending = true;
     refreshTotalCheckbox(chart);
     try {
-        const result = await chartHost().executePromQLRangeQuery(totalQuery);
+        const result = await chartHost().executePromQLRangeQuery(
+            totalQuery, undefined, undefined, 'grid', chart.spec.scope ?? null);
         chart._totalPending = false;
+        // The chart's total query or scope changed while the total was
+        // fetched: the total was fetched for the old one, and is dropped.
+        if (totalKey(chart.spec) !== key) {
+            refreshTotalCheckbox(chart);
+            return;
+        }
         const ok = result?.status === 'success'
             && (result.data?.result?.length ?? 0) > 0;
         if (!ok) {
@@ -482,6 +498,10 @@ async function toggleTotal(chart) {
     } catch (e) {
         console.warn('[total-toggle] fetch failed:', e);
         chart._totalPending = false;
+        if (totalKey(chart.spec) !== key) {
+            refreshTotalCheckbox(chart);
+            return;
+        }
         chart.spec.data = chart._meanDataCache;
         chart._meanDataCache = null;
     }
@@ -504,10 +524,17 @@ function positionTotalToggle(chart, container) {
     }
 }
 
+// Remove the Total toggle. With no toggle the chart draws its data as the
+// mean, so a toggle drawn again later starts unticked.
+function removeTotalToggle(chart) {
+    chart.domNode?.querySelector('.' + TOTAL_TOGGLE_CLASS)?.remove();
+    chart._showTotal = false;
+}
+
 function ensureTotalToggle(chart) {
     const { executePromQLRangeQuery, applyResultToPlot } = chartHost();
     if (!chart.spec.promql_query_total || !executePromQLRangeQuery || !applyResultToPlot) {
-        chart.domNode?.querySelector('.' + TOTAL_TOGGLE_CLASS)?.remove();
+        removeTotalToggle(chart);
         return;
     }
     if (!chart.domNode) return;

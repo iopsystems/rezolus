@@ -116,7 +116,7 @@ fn a_display_query_is_reduced_as_it_is_computed() {
             .unwrap()
     });
     let (full, full_peak) = peak_of(|| {
-        let QueryResult::Matrix { result } = reader
+        let QueryResult::Matrix { result, .. } = reader
             .query_range_opts(query, start, end, 1.0, &qopts)
             .unwrap()
         else {
