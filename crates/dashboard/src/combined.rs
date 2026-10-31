@@ -10,9 +10,13 @@
 //!
 //! - [`layout`] decides whether an archive opens combined or as an A/B
 //!   comparison.
-//! - [`restrict_query`] adds a recording's label matchers to every selector
-//!   of a PromQL query, and [`Scoped`] is a source that answers for one
-//!   recording only: its catalog, its header, and its queries restricted.
+//! - [`Scoped`] is a source that answers for one recording only: its
+//!   catalog, its header, and its queries. A range query reads only the
+//!   recording's sources; an instant query is restricted by its matchers.
+//! - [`restrict_query`] adds label matchers to every selector of a PromQL
+//!   query: for an instant query or `columns`, which take no scope, for a
+//!   recording without source uuids, and for the `__capture__` matcher of a
+//!   recording beside a comparison.
 //! - [`Member`] describes one recording of a combined source, which
 //!   [`crate::dashboard::build_combined_context`] turns into one instance of
 //!   each template the recording renders.
@@ -32,9 +36,9 @@ pub const ARM_LABEL: &str = "arm";
 /// equal (metriken-storage's `labeled::RECORDING_LABEL`).
 pub const RECORDING_LABEL: &str = "__recording__";
 
-/// The View metadata key a restricted section carries its matchers under,
-/// so the page can restrict the queries it builds itself (the cgroup
-/// discovery) the same way.
+/// The View metadata key a section of one recording carries the uuids of
+/// that recording's sources under, so the page can read the queries it
+/// builds itself (the cgroup discovery) within the same scope.
 pub const SCOPE_KEY: &str = "scope";
 
 /// The label a query of a section shown beside a comparison carries to name
@@ -598,14 +602,12 @@ const AGGREGATORS: &[&str] = &[
 /// `query` with `matchers` added to every series selector: a bare metric
 /// name gains `{k="v",...}`, and each `or` branch of a selector's braces
 /// (`x{a="b"}`, `{__name__="x"}`, `{a="1" or b="2"}`) gains each matcher.
-/// A branch with its own `k="v"` (an `=` with a value) on a matcher's label
-/// keeps it in place of the matcher, so a query written for a source
-/// (`{source="vllm"}`) or restricted before (a service's throughput query
-/// placed into another source's Overview) is left as it asks. Any other
-/// matcher of its own on the label (`host!=""`, `host=~".+"`) is kept and
-/// the scope's is added too; the engine refuses a selector that matches a
-/// label twice, so such a query errors rather than reading every
-/// recording.
+/// A branch that already has a matcher, written with [`Matcher`]'s quoting
+/// (`source="vllm"`; whitespace around the operator does not matter), does
+/// not gain it again. Any other matcher of the branch's own on a matcher's
+/// label (`host="h9"`, `host!=""`) is kept and the matcher added too; the
+/// archive reader refuses a selector that matches a label twice, so such a
+/// query errors rather than reading every recording.
 ///
 /// The query is read by its tokens rather than parsed, so it works for the
 /// histogram functions PromQL does not have (`histogram_quantiles([0.5],
@@ -736,14 +738,17 @@ fn restrict_braces(inner: &str, matchers: &[Matcher]) -> String {
     out
 }
 
-/// One `or` branch of a selector's braces with each matcher added whose
-/// label the branch does not match with `=` and a value. Whitespace around
-/// the branch is kept.
+/// One `or` branch of a selector's braces with each matcher added that
+/// it does not have already. Whitespace around the branch is kept.
 fn restrict_branch(branch: &str, matchers: &[Matcher]) -> String {
-    let pinned = pinned_labels(branch);
+    let own = branch_matchers(branch);
     let missing: Vec<&Matcher> = matchers
         .iter()
-        .filter(|m| !pinned.contains(m.label.as_str()))
+        .filter(|m| {
+            let mut written = String::new();
+            m.push(&mut written);
+            !own.contains(&written)
+        })
         .collect();
     if missing.is_empty() {
         return branch.to_string();
@@ -757,6 +762,46 @@ fn restrict_branch(branch: &str, matchers: &[Matcher]) -> String {
     }
     push_matchers(&mut out, missing.into_iter());
     out.push_str(tail);
+    out
+}
+
+/// Each `label op "value"` matcher of a branch of a selector's braces, as
+/// [`Matcher`] writes one: without whitespace, the value's double-quoted
+/// string as written. A value in single quotes or backticks is left out.
+fn branch_matchers(branch: &str) -> Vec<String> {
+    let bytes = branch.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'"' || c == b'\'' || c == b'`' {
+            i = skip_string(bytes, i);
+        } else if c == b'#' {
+            i = skip_comment(bytes, i);
+        } else if is_ident_start(c) {
+            let end = skip_ident(bytes, i);
+            let label = &branch[i..end];
+            i = end;
+            let j = skip_ws(bytes, end);
+            let op_len = match (bytes.get(j), bytes.get(j + 1)) {
+                (Some(b'!' | b'='), Some(b'=' | b'~')) => 2,
+                (Some(b'='), _) => 1,
+                _ => continue,
+            };
+            let k = skip_ws(bytes, j + op_len);
+            if bytes.get(k) == Some(&b'"') {
+                let close = skip_string(bytes, k);
+                out.push(format!(
+                    "{label}{}{}",
+                    &branch[j..j + op_len],
+                    &branch[k..close]
+                ));
+                i = close;
+            }
+        } else {
+            i += 1;
+        }
+    }
     out
 }
 
@@ -785,42 +830,6 @@ fn or_separators(inner: &str) -> Vec<(usize, usize)> {
         }
     }
     spans
-}
-
-/// The labels a branch of a selector's braces matches with `=` and a
-/// non-empty value.
-fn pinned_labels(branch: &str) -> HashSet<&str> {
-    let bytes = branch.as_bytes();
-    let mut pinned = HashSet::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if c == b'"' || c == b'\'' || c == b'`' {
-            i = skip_string(bytes, i);
-        } else if c == b'#' {
-            i = skip_comment(bytes, i);
-        } else if is_ident_start(c) {
-            let end = skip_ident(bytes, i);
-            let name = &branch[i..end];
-            let j = skip_ws(bytes, end);
-            // `=` alone: not `=~`, `!=` or `!~`.
-            let eq = bytes.get(j) == Some(&b'=') && bytes.get(j + 1) != Some(&b'~');
-            i = end;
-            if eq {
-                let k = skip_ws(bytes, j + 1);
-                if matches!(bytes.get(k), Some(b'"' | b'\'' | b'`')) {
-                    let close = skip_string(bytes, k);
-                    if close > k + 2 {
-                        pinned.insert(name);
-                    }
-                    i = close;
-                }
-            }
-        } else {
-            i += 1;
-        }
-    }
-    pinned
 }
 
 fn push_matchers<'a>(out: &mut String, matchers: impl Iterator<Item = &'a Matcher>) {
@@ -943,15 +952,21 @@ pub struct Member {
     pub metadata: HashMap<String, String>,
     /// The recording's own header.
     pub header: Header,
+    /// The uuids of the recording's sources: what a query's scope names to
+    /// read only this recording (metriken-query's engine scope). Empty when
+    /// a source has none ([`source_uuids`]).
+    pub sources: Vec<String>,
 }
 
 /// One recording for [`assemble_members`]: its labels, the labels its
-/// series carry in the joined reader, its header and its metadata.
+/// series carry in the joined reader, its header, its metadata and its
+/// sources' uuids.
 pub type RecordingParts = (
     BTreeMap<String, String>,
     Option<BTreeMap<String, String>>,
     Header,
     HashMap<String, String>,
+    Vec<String>,
 );
 
 /// The [`Member`]s of a combined source, from each recording's labels (as
@@ -965,10 +980,11 @@ pub type RecordingParts = (
 pub fn assemble_members(recordings: Vec<RecordingParts>) -> (Vec<Member>, Option<String>) {
     let members: Vec<Member> = recordings
         .into_iter()
-        .map(|(labels, series, header, metadata)| Member {
+        .map(|(labels, series, header, metadata, sources)| Member {
             series_labels: series.unwrap_or(labels),
             metadata,
             header,
+            sources,
         })
         .collect();
     let with_info: Vec<&Member> = members
@@ -995,11 +1011,15 @@ pub fn assemble_members(recordings: Vec<RecordingParts>) -> (Vec<Member>, Option
     (members, systeminfo)
 }
 
-/// One recording's part of a combined source: its matchers, header and
-/// metadata.
+/// One recording's part of a combined source: its sources, matchers,
+/// header and metadata.
 #[derive(Clone, Default)]
 pub struct Scope {
-    /// What selects the recording's series; see [`scope_matchers`].
+    /// The uuids of the recording's sources ([`Member::sources`]): a range
+    /// query reads only them.
+    pub sources: Vec<String>,
+    /// What selects the recording's series in a listing; see
+    /// [`scope_matchers`].
     pub matchers: Vec<Matcher>,
     pub header: Header,
     pub metadata: HashMap<String, String>,
@@ -1015,6 +1035,7 @@ pub struct Scope {
 impl std::fmt::Debug for Scope {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Scope")
+            .field("sources", &self.sources)
             .field("matchers", &self.matchers)
             .field("header", &self.header)
             .field("metadata", &self.metadata)
@@ -1161,9 +1182,42 @@ fn scoped_labels(
         .collect()
 }
 
+/// The engine scope reading the sources with `uuids` (each with its copies),
+/// or `None` for none: a scope naming no source would read nothing.
+pub fn scope_of(uuids: &[String]) -> Option<Arc<metriken_query::Scope>> {
+    let mut uuids: Vec<&String> = uuids.iter().collect();
+    uuids.sort_unstable();
+    uuids.dedup();
+    if uuids.is_empty() {
+        return None;
+    }
+    let sources = uuids
+        .into_iter()
+        .map(|u| {
+            metriken_query::ScopedSource::new(metriken_query::SourceRef::Uuid(u.clone()), None)
+        })
+        .collect();
+    metriken_query::Scope::new(sources).ok().map(Arc::new)
+}
+
+/// The uuids of a recording's sources, or none when any source lacks one
+/// (an archive written before dendro stored them): a scope naming only
+/// some of the sources would leave the others out, so such a recording is
+/// restricted by its matchers instead.
+pub fn source_uuids(uuids: impl IntoIterator<Item = Option<String>>) -> Vec<String> {
+    uuids
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_default()
+}
+
 /// A combined source read as one recording of it: the catalog lists only
 /// series whose labels include every matcher, the header and metadata are
-/// the recording's, and every query is restricted by [`restrict_query`].
+/// the recording's, a range query reads only the recording's sources (its
+/// [`Scope::sources`], as the query's engine scope), and an instant query
+/// or a `columns` call, which take no scope, is restricted by
+/// [`restrict_query`]. A recording without source uuids has its range
+/// queries restricted by [`restrict_query`] too.
 pub struct Scoped<'a> {
     inner: &'a dyn MetricsSource,
     scope: &'a Scope,
@@ -1176,6 +1230,24 @@ impl<'a> Scoped<'a> {
 
     fn restrict(&self, query: &str) -> String {
         restrict_query(query, &self.scope.matchers)
+    }
+
+    /// `expr` as a range query sends it: restricted by the matchers when
+    /// the recording has no source uuids to scope it by.
+    fn range_expr(&self, expr: &str) -> String {
+        match self.scope.sources.is_empty() {
+            true => self.restrict(expr),
+            false => expr.to_string(),
+        }
+    }
+
+    /// `opts` reading only the recording's sources; as given when the
+    /// recording has none or `opts` names a scope already.
+    fn options(&self, opts: &QueryOptions) -> QueryOptions {
+        match scope_of(&self.scope.sources) {
+            Some(scope) if opts.scope.is_none() => opts.clone().with_scope(Some(scope)),
+            _ => opts.clone(),
+        }
     }
 
     fn keep(&self, labels: Vec<BTreeMap<String, String>>) -> Vec<BTreeMap<String, String>> {
@@ -1233,8 +1305,13 @@ impl MetricsSource for Scoped<'_> {
         step_s: f64,
         opts: &QueryOptions,
     ) -> Result<QueryResult, QueryError> {
-        self.inner
-            .query_range_opts(&self.restrict(expr), start_s, end_s, step_s, opts)
+        self.inner.query_range_opts(
+            &self.range_expr(expr),
+            start_s,
+            end_s,
+            step_s,
+            &self.options(opts),
+        )
     }
     fn query_range_display_opts(
         &self,
@@ -1246,12 +1323,12 @@ impl MetricsSource for Scoped<'_> {
         qopts: &QueryOptions,
     ) -> Result<DisplayResult, QueryError> {
         self.inner.query_range_display_opts(
-            &self.restrict(expr),
+            &self.range_expr(expr),
             start_s,
             end_s,
             step_s,
             opts,
-            qopts,
+            &self.options(qopts),
         )
     }
     fn query(&self, expr: &str, time: Option<f64>) -> Result<QueryResult, QueryError> {
@@ -1398,6 +1475,7 @@ mod tests {
 
         let matchers = scope_matchers(&[host("a"), host("b")]);
         let scope = Scope {
+            sources: Vec::new(),
             matchers: matchers[0].clone(),
             header: Header::of(&*store),
             metadata: HashMap::new(),
@@ -1737,21 +1815,20 @@ mod tests {
     }
 
     #[test]
-    fn a_selector_keeps_its_own_matcher_on_a_key() {
+    fn a_selector_keeps_its_own_matcher_on_a_key_and_gains_the_scopes() {
         let both = eqs(&[("host", "h1"), ("source", "svc")]);
         assert_eq!(
             restrict_query(r#"up{source="vllm"} + down"#, &both),
-            r#"up{source="vllm",host="h1"} + down{host="h1",source="svc"}"#
+            r#"up{source="vllm",host="h1",source="svc"} + down{host="h1",source="svc"}"#
         );
+        // A matcher the selector has already is not repeated, so restricting
+        // twice changes nothing.
         assert_eq!(
-            restrict_query(r#"up{source="svc",host="h1"}"#, &both),
-            r#"up{source="svc",host="h1"}"#
+            restrict_query(r#"up{source = "svc", host!~"h.*"}"#, &both),
+            r#"up{source = "svc", host!~"h.*",host="h1"}"#
         );
-        // Restricting twice changes nothing.
         let once = restrict_query("sum(irate(x[5m])) / y", &both);
         assert_eq!(restrict_query(&once, &both), once);
-        // Only `=` with a value stands in for the scope's matcher; any other
-        // matcher on the label is kept and the scope's added too.
         assert_eq!(
             restrict_query(r#"x{host!=""} + y{host=~".+"} + z{host=""}"#, &h1()),
             r#"x{host!="",host="h1"} + y{host=~".+",host="h1"} + z{host="",host="h1"}"#
@@ -1768,7 +1845,7 @@ mod tests {
         );
         assert_eq!(
             restrict_query(r#"x{host="h9" or b="2"}"#, &h1()),
-            r#"x{host="h9" or b="2",host="h1"}"#
+            r#"x{host="h9",host="h1" or b="2",host="h1"}"#
         );
         // `or` as a label value or name part is not a separator.
         assert_eq!(
@@ -1779,6 +1856,16 @@ mod tests {
             restrict_query("sum(x) # don't {count} y\n/ z", &h1()),
             "sum(x{host=\"h1\"}) # don't {count} y\n/ z{host=\"h1\"}"
         );
+    }
+
+    /// A recording any of whose sources lacks a uuid has none to be scoped
+    /// by, rather than a scope that leaves that source out.
+    #[test]
+    fn a_recording_with_a_source_without_a_uuid_has_no_uuids() {
+        let some = |s: &str| Some(s.to_string());
+        assert_eq!(source_uuids([some("a"), some("b")]), ["a", "b"]);
+        assert!(source_uuids([some("a"), None]).is_empty());
+        assert!(source_uuids([]).is_empty());
     }
 
     #[test]

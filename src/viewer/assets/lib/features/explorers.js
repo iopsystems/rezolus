@@ -404,7 +404,7 @@ export const SingleChartView = {
                     st.error = 'This chart needs a cgroup selection';
                 } else {
                     const response = await runCgroupVariants(queries, (q) => executePromQLRangeQuery(
-                        q, undefined, undefined, st.samples ? 'raw' : 'grid'));
+                        q, undefined, undefined, st.samples ? 'raw' : 'grid', plot.scope ?? null));
                     if (st.removed) return false;
                     if (response.status === 'success' && response.data && response.data.result) {
                         applyResultToPlot(plot, response);

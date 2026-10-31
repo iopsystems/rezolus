@@ -467,7 +467,8 @@ async function toggleTotal(chart) {
     chart._totalPending = true;
     refreshTotalCheckbox(chart);
     try {
-        const result = await chartHost().executePromQLRangeQuery(totalQuery);
+        const result = await chartHost().executePromQLRangeQuery(
+            totalQuery, undefined, undefined, 'grid', chart.spec.scope ?? null);
         chart._totalPending = false;
         const ok = result?.status === 'success'
             && (result.data?.result?.length ?? 0) > 0;
