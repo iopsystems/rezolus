@@ -420,6 +420,13 @@
 
 ### Changed
 
+- **The CPU dashboard draws a chart only when the recording has every
+  counter it reads.** The IPC, IPNS, L3 hit rate, branch prediction and
+  DTLB charts read PMU counters, which a VM without a virtual PMU does not
+  record. macOS records the frequency counters but none of the PMU
+  counters, nor the eBPF counters the migrations and TLB flush charts
+  read, so on a Mac the section was mostly empty charts. A group left with
+  no charts is not shown.
 - **A combined view's charts read their recording through a scope rather
   than through matchers added to their queries.** Each chart of a
   recording's sections carries `scope`, the uuids of that recording's

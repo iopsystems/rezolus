@@ -115,120 +115,188 @@
       "id": "performance",
       "subgroups": [
         {
-          "name": "Instructions per Cycle",
-          "description": "How efficiently the CPU retires instructions per clock cycle.",
-          "plots": [
-            {
-              "split": {
-                "when": {
-                  "var": "multi_cpu"
-                },
-                "plots": [
-                  {
-                    "kind": "counter",
-                    "title": "IPC",
-                    "id": "ipc",
-                    "unit": "count",
-                    "query": "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m]))"
-                  },
-                  {
-                    "kind": "counter",
-                    "title": "IPC (Per-CPU)",
-                    "id": "ipc-per-cpu",
-                    "unit": "count",
-                    "query": "sum by (id) (irate(cpu_instructions[5m])) / sum by (id) (irate(cpu_cycles[5m]))"
-                  }
-                ]
+          "when": {
+            "all": [
+              {
+                "has_counter": "cpu_instructions"
+              },
+              {
+                "has_counter": "cpu_cycles"
               }
+            ]
+          },
+          "then": [
+            {
+              "name": "Instructions per Cycle",
+              "description": "How efficiently the CPU retires instructions per clock cycle.",
+              "plots": [
+                {
+                  "split": {
+                    "when": {
+                      "var": "multi_cpu"
+                    },
+                    "plots": [
+                      {
+                        "kind": "counter",
+                        "title": "IPC",
+                        "id": "ipc",
+                        "unit": "count",
+                        "query": "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m]))"
+                      },
+                      {
+                        "kind": "counter",
+                        "title": "IPC (Per-CPU)",
+                        "id": "ipc-per-cpu",
+                        "unit": "count",
+                        "query": "sum by (id) (irate(cpu_instructions[5m])) / sum by (id) (irate(cpu_cycles[5m]))"
+                      }
+                    ]
+                  }
+                }
+              ]
             }
           ]
         },
         {
-          "name": "Instructions per Nanosecond",
-          "description": "Wall-clock-normalized instruction throughput — accounts for frequency scaling.",
-          "plots": [
-            {
-              "split": {
-                "when": {
-                  "var": "multi_cpu"
-                },
-                "plots": [
-                  {
-                    "kind": "counter",
-                    "title": "IPNS",
-                    "id": "ipns",
-                    "unit": "count",
-                    "query": "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m])) * sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / 1000000000 / cpu_cores"
-                  },
-                  {
-                    "kind": "counter",
-                    "title": "IPNS (Per-CPU)",
-                    "id": "ipns-per-cpu",
-                    "unit": "count",
-                    "query": "sum by (id) (irate(cpu_instructions[5m])) / sum by (id) (irate(cpu_cycles[5m])) * sum by (id) (irate(cpu_tsc[5m])) * sum by (id) (irate(cpu_aperf[5m])) / sum by (id) (irate(cpu_mperf[5m])) / 1000000000"
-                  }
-                ]
+          "when": {
+            "all": [
+              {
+                "has_counter": "cpu_instructions"
+              },
+              {
+                "has_counter": "cpu_cycles"
+              },
+              {
+                "has_counter": "cpu_tsc"
+              },
+              {
+                "has_counter": "cpu_aperf"
+              },
+              {
+                "has_counter": "cpu_mperf"
               }
+            ]
+          },
+          "then": [
+            {
+              "name": "Instructions per Nanosecond",
+              "description": "Wall-clock-normalized instruction throughput — accounts for frequency scaling.",
+              "plots": [
+                {
+                  "split": {
+                    "when": {
+                      "var": "multi_cpu"
+                    },
+                    "plots": [
+                      {
+                        "kind": "counter",
+                        "title": "IPNS",
+                        "id": "ipns",
+                        "unit": "count",
+                        "query": "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m])) * sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / 1000000000 / cpu_cores"
+                      },
+                      {
+                        "kind": "counter",
+                        "title": "IPNS (Per-CPU)",
+                        "id": "ipns-per-cpu",
+                        "unit": "count",
+                        "query": "sum by (id) (irate(cpu_instructions[5m])) / sum by (id) (irate(cpu_cycles[5m])) * sum by (id) (irate(cpu_tsc[5m])) * sum by (id) (irate(cpu_aperf[5m])) / sum by (id) (irate(cpu_mperf[5m])) / 1000000000"
+                      }
+                    ]
+                  }
+                }
+              ]
             }
           ]
         },
         {
-          "name": "L3 Cache Hit Rate",
-          "description": "Fraction of L3 cache accesses that hit, indicating last-level cache efficiency.",
-          "plots": [
-            {
-              "split": {
-                "when": {
-                  "var": "multi_cpu"
-                },
-                "plots": [
-                  {
-                    "kind": "counter",
-                    "title": "L3 Hit %",
-                    "id": "l3-hit",
-                    "unit": "percentage",
-                    "query": "1 - sum(irate(cpu_l3_miss[5m])) / sum(irate(cpu_l3_access[5m]))",
-                    "percentage_range": true
-                  },
-                  {
-                    "kind": "counter",
-                    "title": "L3 Hit % (Per-CPU)",
-                    "id": "l3-hit-per-cpu",
-                    "unit": "percentage",
-                    "query": "1 - sum by (id) (irate(cpu_l3_miss[5m])) / sum by (id) (irate(cpu_l3_access[5m]))",
-                    "percentage_range": true
-                  }
-                ]
+          "when": {
+            "all": [
+              {
+                "has_counter": "cpu_l3_access"
+              },
+              {
+                "has_counter": "cpu_l3_miss"
               }
+            ]
+          },
+          "then": [
+            {
+              "name": "L3 Cache Hit Rate",
+              "description": "Fraction of L3 cache accesses that hit, indicating last-level cache efficiency.",
+              "plots": [
+                {
+                  "split": {
+                    "when": {
+                      "var": "multi_cpu"
+                    },
+                    "plots": [
+                      {
+                        "kind": "counter",
+                        "title": "L3 Hit %",
+                        "id": "l3-hit",
+                        "unit": "percentage",
+                        "query": "1 - sum(irate(cpu_l3_miss[5m])) / sum(irate(cpu_l3_access[5m]))",
+                        "percentage_range": true
+                      },
+                      {
+                        "kind": "counter",
+                        "title": "L3 Hit % (Per-CPU)",
+                        "id": "l3-hit-per-cpu",
+                        "unit": "percentage",
+                        "query": "1 - sum by (id) (irate(cpu_l3_miss[5m])) / sum by (id) (irate(cpu_l3_access[5m]))",
+                        "percentage_range": true
+                      }
+                    ]
+                  }
+                }
+              ]
             }
           ]
         },
         {
-          "name": "Frequency",
-          "description": "Effective CPU clock speed, averaged and per-core.",
-          "plots": [
-            {
-              "split": {
-                "when": {
-                  "var": "multi_cpu"
-                },
-                "plots": [
-                  {
-                    "kind": "counter",
-                    "title": "Frequency",
-                    "id": "frequency",
-                    "unit": "frequency",
-                    "query": "sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / cpu_cores"
-                  },
-                  {
-                    "kind": "counter",
-                    "title": "Frequency (Per-CPU)",
-                    "id": "frequency-per-cpu",
-                    "unit": "frequency",
-                    "query": "sum by (id) (irate(cpu_tsc[5m])) * sum by (id) (irate(cpu_aperf[5m])) / sum by (id) (irate(cpu_mperf[5m]))"
-                  }
-                ]
+          "when": {
+            "all": [
+              {
+                "has_counter": "cpu_tsc"
+              },
+              {
+                "has_counter": "cpu_aperf"
+              },
+              {
+                "has_counter": "cpu_mperf"
               }
+            ]
+          },
+          "then": [
+            {
+              "name": "Frequency",
+              "description": "Effective CPU clock speed, averaged and per-core.",
+              "plots": [
+                {
+                  "split": {
+                    "when": {
+                      "var": "multi_cpu"
+                    },
+                    "plots": [
+                      {
+                        "kind": "counter",
+                        "title": "Frequency",
+                        "id": "frequency",
+                        "unit": "frequency",
+                        "query": "sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / cpu_cores"
+                      },
+                      {
+                        "kind": "counter",
+                        "title": "Frequency (Per-CPU)",
+                        "id": "frequency-per-cpu",
+                        "unit": "frequency",
+                        "query": "sum by (id) (irate(cpu_tsc[5m])) * sum by (id) (irate(cpu_aperf[5m])) / sum by (id) (irate(cpu_mperf[5m]))"
+                      }
+                    ]
+                  }
+                }
+              ]
             }
           ]
         }
@@ -239,79 +307,107 @@
       "id": "branch-prediction",
       "subgroups": [
         {
-          "name": "Misprediction Rate",
-          "description": "Fraction of branches that the predictor got wrong.",
-          "plots": [
-            {
-              "split": {
-                "when": {
-                  "var": "multi_cpu"
-                },
-                "plots": [
-                  {
-                    "kind": "counter",
-                    "title": "Misprediction Rate %",
-                    "id": "branch-miss-rate",
-                    "unit": "percentage",
-                    "query": "sum(irate(cpu_branch_misses[5m])) / sum(irate(cpu_branch_instructions[5m]))",
-                    "percentage_range": true
-                  },
-                  {
-                    "kind": "counter",
-                    "title": "Misprediction Rate % (Per-CPU)",
-                    "id": "branch-miss-rate-per-cpu",
-                    "unit": "percentage",
-                    "query": "sum by (id) (irate(cpu_branch_misses[5m])) / sum by (id) (irate(cpu_branch_instructions[5m]))",
-                    "percentage_range": true
-                  }
-                ]
+          "when": {
+            "all": [
+              {
+                "has_counter": "cpu_branch_instructions"
+              },
+              {
+                "has_counter": "cpu_branch_misses"
               }
+            ]
+          },
+          "then": [
+            {
+              "name": "Misprediction Rate",
+              "description": "Fraction of branches that the predictor got wrong.",
+              "plots": [
+                {
+                  "split": {
+                    "when": {
+                      "var": "multi_cpu"
+                    },
+                    "plots": [
+                      {
+                        "kind": "counter",
+                        "title": "Misprediction Rate %",
+                        "id": "branch-miss-rate",
+                        "unit": "percentage",
+                        "query": "sum(irate(cpu_branch_misses[5m])) / sum(irate(cpu_branch_instructions[5m]))",
+                        "percentage_range": true
+                      },
+                      {
+                        "kind": "counter",
+                        "title": "Misprediction Rate % (Per-CPU)",
+                        "id": "branch-miss-rate-per-cpu",
+                        "unit": "percentage",
+                        "query": "sum by (id) (irate(cpu_branch_misses[5m])) / sum by (id) (irate(cpu_branch_instructions[5m]))",
+                        "percentage_range": true
+                      }
+                    ]
+                  }
+                }
+              ]
             }
           ]
         },
         {
-          "name": "Branch Activity",
-          "description": "Absolute branch instruction and miss rates.",
-          "plots": [
-            {
-              "kind": "counter",
-              "title": "Instructions",
-              "id": "branch-instructions",
-              "unit": "rate",
-              "query": "sum(irate(cpu_branch_instructions[5m]))"
-            },
-            {
-              "when": {
-                "var": "multi_cpu"
+          "when": {
+            "all": [
+              {
+                "has_counter": "cpu_branch_instructions"
               },
-              "then": [
+              {
+                "has_counter": "cpu_branch_misses"
+              }
+            ]
+          },
+          "then": [
+            {
+              "name": "Branch Activity",
+              "description": "Absolute branch instruction and miss rates.",
+              "plots": [
                 {
                   "kind": "counter",
-                  "title": "Instructions (Per-CPU)",
-                  "id": "branch-instructions-per-cpu",
+                  "title": "Instructions",
+                  "id": "branch-instructions",
                   "unit": "rate",
-                  "query": "sum by (id) (irate(cpu_branch_instructions[5m]))"
-                }
-              ]
-            },
-            {
-              "kind": "counter",
-              "title": "Misses",
-              "id": "branch-misses",
-              "unit": "rate",
-              "query": "sum(irate(cpu_branch_misses[5m]))"
-            },
-            {
-              "when": {
-                "var": "multi_cpu"
-              },
-              "then": [
+                  "query": "sum(irate(cpu_branch_instructions[5m]))"
+                },
+                {
+                  "when": {
+                    "var": "multi_cpu"
+                  },
+                  "then": [
+                    {
+                      "kind": "counter",
+                      "title": "Instructions (Per-CPU)",
+                      "id": "branch-instructions-per-cpu",
+                      "unit": "rate",
+                      "query": "sum by (id) (irate(cpu_branch_instructions[5m]))"
+                    }
+                  ]
+                },
                 {
                   "kind": "counter",
-                  "title": "Misses (Per-CPU)",
-                  "id": "branch-misses-per-cpu",
+                  "title": "Misses",
+                  "id": "branch-misses",
                   "unit": "rate",
-                  "query": "sum by (id) (irate(cpu_branch_misses[5m]))"
+                  "query": "sum(irate(cpu_branch_misses[5m]))"
+                },
+                {
+                  "when": {
+                    "var": "multi_cpu"
+                  },
+                  "then": [
+                    {
+                      "kind": "counter",
+                      "title": "Misses (Per-CPU)",
+                      "id": "branch-misses-per-cpu",
+                      "unit": "rate",
+                      "query": "sum by (id) (irate(cpu_branch_misses[5m]))"
+                    }
+                  ]
                 }
               ]
             }
@@ -324,193 +420,13 @@
       "id": "dtlb",
       "subgroups": [
         {
-          "name": "DTLB Misses",
-          "description": "Raw data-TLB miss rate, aggregated and per-core.",
-          "plots": [
-            {
-              "split": {
-                "when": {
-                  "var": "multi_cpu"
-                },
-                "plots": [
-                  {
-                    "kind": "counter",
-                    "title": "Misses",
-                    "id": "dtlb-misses",
-                    "unit": "rate",
-                    "query": "sum(irate(cpu_dtlb_miss[5m]))"
-                  },
-                  {
-                    "kind": "counter",
-                    "title": "Misses (Per-CPU)",
-                    "id": "dtlb-misses-per-cpu",
-                    "unit": "rate",
-                    "query": "sum by (id) (irate(cpu_dtlb_miss[5m]))"
-                  }
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "DTLB MPKI",
-          "description": "Misses per thousand instructions, normalized so workload differences don't distort the rate.",
-          "plots": [
-            {
-              "split": {
-                "when": {
-                  "var": "multi_cpu"
-                },
-                "plots": [
-                  {
-                    "kind": "counter",
-                    "title": "MPKI",
-                    "id": "dtlb-mpki",
-                    "unit": "count",
-                    "query": "sum(irate(cpu_dtlb_miss[5m])) / sum(irate(cpu_instructions[5m])) * 1000"
-                  },
-                  {
-                    "kind": "counter",
-                    "title": "MPKI (Per-CPU)",
-                    "id": "dtlb-mpki-per-cpu",
-                    "unit": "count",
-                    "query": "sum by (id) (irate(cpu_dtlb_miss[5m])) / sum by (id) (irate(cpu_instructions[5m])) * 1000"
-                  }
-                ]
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "Migrations",
-      "id": "migrations",
-      "subgroups": [
-        {
-          "name": "Incoming Migrations",
-          "description": "Tasks migrated onto a CPU, per second.",
-          "plots": [
-            {
-              "split": {
-                "when": {
-                  "var": "multi_cpu"
-                },
-                "plots": [
-                  {
-                    "kind": "counter",
-                    "title": "To",
-                    "id": "cpu-migrations-to",
-                    "unit": "rate",
-                    "query": "sum(irate(cpu_migrations{direction=\"to\"}[5m]))"
-                  },
-                  {
-                    "kind": "counter",
-                    "title": "To (Per-CPU)",
-                    "id": "cpu-migrations-to-per-cpu",
-                    "unit": "rate",
-                    "query": "sum by (id) (irate(cpu_migrations{direction=\"to\"}[5m]))"
-                  }
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Outgoing Migrations",
-          "description": "Tasks migrated off a CPU, per second.",
-          "plots": [
-            {
-              "split": {
-                "when": {
-                  "var": "multi_cpu"
-                },
-                "plots": [
-                  {
-                    "kind": "counter",
-                    "title": "From",
-                    "id": "cpu-migrations-from",
-                    "unit": "rate",
-                    "query": "sum(irate(cpu_migrations{direction=\"from\"}[5m]))"
-                  },
-                  {
-                    "kind": "counter",
-                    "title": "From (Per-CPU)",
-                    "id": "cpu-migrations-from-per-cpu",
-                    "unit": "rate",
-                    "query": "sum by (id) (irate(cpu_migrations{direction=\"from\"}[5m]))"
-                  }
-                ]
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "TLB Flush",
-      "id": "tlb-flush",
-      "subgroups": [
-        {
-          "name": "Total TLB Flushes",
-          "description": "Aggregate TLB invalidation rate across all reasons.",
-          "plots": [
-            {
-              "split": {
-                "when": {
-                  "var": "multi_cpu"
-                },
-                "plots": [
-                  {
-                    "kind": "counter",
-                    "title": "Total",
-                    "id": "tlb-total",
-                    "unit": "rate",
-                    "query": "sum(irate(cpu_tlb_flush[5m]))"
-                  },
-                  {
-                    "kind": "counter",
-                    "title": "Total (Per-CPU)",
-                    "id": "tlb-total-per-cpu",
-                    "unit": "rate",
-                    "query": "sum by (id) (irate(cpu_tlb_flush[5m]))"
-                  }
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "repeat": {
-            "var": "r",
-            "in": {
-              "values": [
-                {
-                  "reason": "local_mm_shootdown",
-                  "id": "local-mm-shootdown",
-                  "label": "Local MM Shootdown"
-                },
-                {
-                  "reason": "remote_send_ipi",
-                  "id": "remote-send-ipi",
-                  "label": "Remote Send IPI"
-                },
-                {
-                  "reason": "remote_shootdown",
-                  "id": "remote-shootdown",
-                  "label": "Remote Shootdown"
-                },
-                {
-                  "reason": "task_switch",
-                  "id": "task-switch",
-                  "label": "Task Switch"
-                }
-              ]
-            }
+          "when": {
+            "has_counter": "cpu_dtlb_miss"
           },
-          "body": [
+          "then": [
             {
-              "name": "${r.label}",
+              "name": "DTLB Misses",
+              "description": "Raw data-TLB miss rate, aggregated and per-core.",
               "plots": [
                 {
                   "split": {
@@ -520,20 +436,235 @@
                     "plots": [
                       {
                         "kind": "counter",
-                        "title": "${r.label}",
-                        "id": "tlb-${r.id}",
+                        "title": "Misses",
+                        "id": "dtlb-misses",
                         "unit": "rate",
-                        "query": "sum(irate(cpu_tlb_flush{reason=\"${r.reason}\"}[5m]))"
+                        "query": "sum(irate(cpu_dtlb_miss[5m]))"
                       },
                       {
                         "kind": "counter",
-                        "title": "${r.label} (Per-CPU)",
-                        "id": "tlb-${r.id}-per-cpu",
+                        "title": "Misses (Per-CPU)",
+                        "id": "dtlb-misses-per-cpu",
                         "unit": "rate",
-                        "query": "sum by (id) (irate(cpu_tlb_flush{reason=\"${r.reason}\"}[5m]))"
+                        "query": "sum by (id) (irate(cpu_dtlb_miss[5m]))"
                       }
                     ]
                   }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "when": {
+            "all": [
+              {
+                "has_counter": "cpu_dtlb_miss"
+              },
+              {
+                "has_counter": "cpu_instructions"
+              }
+            ]
+          },
+          "then": [
+            {
+              "name": "DTLB MPKI",
+              "description": "Misses per thousand instructions, normalized so workload differences don't distort the rate.",
+              "plots": [
+                {
+                  "split": {
+                    "when": {
+                      "var": "multi_cpu"
+                    },
+                    "plots": [
+                      {
+                        "kind": "counter",
+                        "title": "MPKI",
+                        "id": "dtlb-mpki",
+                        "unit": "count",
+                        "query": "sum(irate(cpu_dtlb_miss[5m])) / sum(irate(cpu_instructions[5m])) * 1000"
+                      },
+                      {
+                        "kind": "counter",
+                        "title": "MPKI (Per-CPU)",
+                        "id": "dtlb-mpki-per-cpu",
+                        "unit": "count",
+                        "query": "sum by (id) (irate(cpu_dtlb_miss[5m])) / sum by (id) (irate(cpu_instructions[5m])) * 1000"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "when": {
+        "has_counter": "cpu_migrations"
+      },
+      "then": [
+        {
+          "name": "Migrations",
+          "id": "migrations",
+          "subgroups": [
+            {
+              "name": "Incoming Migrations",
+              "description": "Tasks migrated onto a CPU, per second.",
+              "plots": [
+                {
+                  "split": {
+                    "when": {
+                      "var": "multi_cpu"
+                    },
+                    "plots": [
+                      {
+                        "kind": "counter",
+                        "title": "To",
+                        "id": "cpu-migrations-to",
+                        "unit": "rate",
+                        "query": "sum(irate(cpu_migrations{direction=\"to\"}[5m]))"
+                      },
+                      {
+                        "kind": "counter",
+                        "title": "To (Per-CPU)",
+                        "id": "cpu-migrations-to-per-cpu",
+                        "unit": "rate",
+                        "query": "sum by (id) (irate(cpu_migrations{direction=\"to\"}[5m]))"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Outgoing Migrations",
+              "description": "Tasks migrated off a CPU, per second.",
+              "plots": [
+                {
+                  "split": {
+                    "when": {
+                      "var": "multi_cpu"
+                    },
+                    "plots": [
+                      {
+                        "kind": "counter",
+                        "title": "From",
+                        "id": "cpu-migrations-from",
+                        "unit": "rate",
+                        "query": "sum(irate(cpu_migrations{direction=\"from\"}[5m]))"
+                      },
+                      {
+                        "kind": "counter",
+                        "title": "From (Per-CPU)",
+                        "id": "cpu-migrations-from-per-cpu",
+                        "unit": "rate",
+                        "query": "sum by (id) (irate(cpu_migrations{direction=\"from\"}[5m]))"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "when": {
+        "has_counter": "cpu_tlb_flush"
+      },
+      "then": [
+        {
+          "name": "TLB Flush",
+          "id": "tlb-flush",
+          "subgroups": [
+            {
+              "name": "Total TLB Flushes",
+              "description": "Aggregate TLB invalidation rate across all reasons.",
+              "plots": [
+                {
+                  "split": {
+                    "when": {
+                      "var": "multi_cpu"
+                    },
+                    "plots": [
+                      {
+                        "kind": "counter",
+                        "title": "Total",
+                        "id": "tlb-total",
+                        "unit": "rate",
+                        "query": "sum(irate(cpu_tlb_flush[5m]))"
+                      },
+                      {
+                        "kind": "counter",
+                        "title": "Total (Per-CPU)",
+                        "id": "tlb-total-per-cpu",
+                        "unit": "rate",
+                        "query": "sum by (id) (irate(cpu_tlb_flush[5m]))"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "repeat": {
+                "var": "r",
+                "in": {
+                  "values": [
+                    {
+                      "reason": "local_mm_shootdown",
+                      "id": "local-mm-shootdown",
+                      "label": "Local MM Shootdown"
+                    },
+                    {
+                      "reason": "remote_send_ipi",
+                      "id": "remote-send-ipi",
+                      "label": "Remote Send IPI"
+                    },
+                    {
+                      "reason": "remote_shootdown",
+                      "id": "remote-shootdown",
+                      "label": "Remote Shootdown"
+                    },
+                    {
+                      "reason": "task_switch",
+                      "id": "task-switch",
+                      "label": "Task Switch"
+                    }
+                  ]
+                }
+              },
+              "body": [
+                {
+                  "name": "${r.label}",
+                  "plots": [
+                    {
+                      "split": {
+                        "when": {
+                          "var": "multi_cpu"
+                        },
+                        "plots": [
+                          {
+                            "kind": "counter",
+                            "title": "${r.label}",
+                            "id": "tlb-${r.id}",
+                            "unit": "rate",
+                            "query": "sum(irate(cpu_tlb_flush{reason=\"${r.reason}\"}[5m]))"
+                          },
+                          {
+                            "kind": "counter",
+                            "title": "${r.label} (Per-CPU)",
+                            "id": "tlb-${r.id}-per-cpu",
+                            "unit": "rate",
+                            "query": "sum by (id) (irate(cpu_tlb_flush{reason=\"${r.reason}\"}[5m]))"
+                          }
+                        ]
+                      }
+                    }
+                  ]
                 }
               ]
             }
