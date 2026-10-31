@@ -2,7 +2,7 @@
 mod linux;
 
 #[cfg(target_os = "macos")]
-mod macos;
+pub(crate) mod macos;
 
 #[cfg(not(target_os = "linux"))]
 pub mod stats {

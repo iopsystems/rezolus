@@ -38,9 +38,8 @@ fn has_multiple_gpus(data: &dyn MetricsSource) -> bool {
 /// distinct GPUs both labelled `id="0"`. Selecting on `id` alone matches both.
 struct GpuEntry {
     id: i64,
-    /// The `vendor` label, absent on samplers that do not set one (the Apple
-    /// GPU sampler declares no vendor). `None` means "match on id alone",
-    /// which is the pre-existing behaviour and correct when nothing else
+    /// The `vendor` label, absent on a series that does not carry one.
+    /// `None` means "match on id alone", which is correct when nothing else
     /// disambiguates.
     vendor: Option<String>,
 }

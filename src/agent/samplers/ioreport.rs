@@ -1,10 +1,10 @@
 //! Bindings for IOReport, the macOS framework `powermetrics` reads its
-//! energy and CPU performance-state counters from, for the `cpu_power` and
-//! `cpu_frequency` samplers.
+//! energy and performance-state counters from, for the `cpu_power`,
+//! `cpu_frequency` and `gpu_apple` samplers.
 //!
 //! IOReport is private: it ships in the shared cache as `libIOReport.dylib`
 //! with no header, and Apple documents none of it. The signatures here are
-//! the ones open-source tools that read it use, and only what the two
+//! the ones open-source tools that read it use, and only what the three
 //! samplers call is bound. It needs no privileges. A subscription's samples
 //! are cumulative since boot: a simple channel's value is a running total,
 //! and a state channel's residencies are running totals of 24 MHz system
@@ -31,7 +31,7 @@ const LIBRARY: &str = "/usr/lib/libIOReport.dylib";
 
 /// The IOReport functions the samplers call, resolved from the library
 /// loaded at runtime. IOReport is loaded rather than linked so that a macOS
-/// release without it, or without one of these functions, leaves the two
+/// release without it, or without one of these functions, leaves the three
 /// samplers unsupported instead of stopping the binary from starting.
 pub(crate) struct Api {
     copy_channels_in_group: unsafe extern "C" fn(CfTypeRef, CfTypeRef, u64, u64, u64) -> CfTypeRef,
@@ -114,8 +114,19 @@ extern "C" {
     ) -> CfTypeRef;
     fn CFArrayGetCount(array: CfTypeRef) -> isize;
     fn CFArrayGetValueAtIndex(array: CfTypeRef, index: isize) -> CfTypeRef;
+    fn CFArrayCreateMutable(
+        alloc: CfTypeRef,
+        capacity: isize,
+        callbacks: *const c_void,
+    ) -> CfTypeRef;
+    fn CFArrayAppendValue(array: CfTypeRef, value: CfTypeRef);
+    fn CFDictionarySetValue(dict: CfTypeRef, key: CfTypeRef, value: CfTypeRef);
     fn CFRelease(cf: CfTypeRef);
+    static kCFTypeArrayCallBacks: c_void;
 }
+
+/// The key of a channel dictionary's, or a sample's, array of channels.
+const CHANNELS_KEY: &str = "IOReportChannels";
 
 /// An owned CoreFoundation object, released on drop.
 struct Owned(CfTypeRef);
@@ -195,6 +206,18 @@ impl Subscription {
     /// subgroup takes the whole group. `None` when a group has no channels
     /// on this machine or the subscription fails.
     pub(crate) fn new(api: &'static Api, groups: &[(&str, Option<&str>)]) -> Option<Self> {
+        Self::filtered(api, groups, |_| true)
+    }
+
+    /// Subscribe to the channels of each `(group, subgroup)` whose name
+    /// `keep` accepts. A sample's cost grows with the channels subscribed:
+    /// the 328 channels of `Energy Model` take about 3.7 ms on an M4 Max.
+    /// `None` when no channel is kept or the subscription fails.
+    pub(crate) fn filtered(
+        api: &'static Api,
+        groups: &[(&str, Option<&str>)],
+        keep: impl Fn(&str) -> bool,
+    ) -> Option<Self> {
         let mut merged: Option<Owned> = None;
         for (group, subgroup) in groups {
             let group = cf_string(group)?;
@@ -216,28 +239,24 @@ impl Subscription {
             if channels.is_null() {
                 return None;
             }
-            let channels = Owned(channels);
+            let channels = filter(api, &Owned(channels), &keep)?;
             match &merged {
                 // SAFETY: both are live channel dictionaries; the first is
                 // a mutable copy, which the merge adds to.
                 Some(m) => unsafe { (api.merge_channels)(m.0, channels.0, std::ptr::null()) },
-                None => {
-                    // SAFETY: `channels.0` is a live dictionary; the copy is +1.
-                    let copy = unsafe {
-                        CFDictionaryCreateMutableCopy(
-                            std::ptr::null(),
-                            CFDictionaryGetCount(channels.0),
-                            channels.0,
-                        )
-                    };
-                    if copy.is_null() {
-                        return None;
-                    }
-                    merged = Some(Owned(copy));
-                }
+                None => merged = Some(channels),
             }
         }
         let desired = merged?;
+        // SAFETY: `desired` is a live dictionary.
+        let empty = unsafe {
+            let key = cf_string(CHANNELS_KEY)?;
+            let array = CFDictionaryGetValue(desired.0, key.0);
+            array.is_null() || CFArrayGetCount(array) == 0
+        };
+        if empty {
+            return None;
+        }
         let mut subscribed: CfTypeRef = std::ptr::null();
         // SAFETY: `desired` is a live mutable channel dictionary and
         // `subscribed` a valid out-pointer; both results are +1 or null.
@@ -278,7 +297,7 @@ impl Subscription {
             return None;
         }
         let samples = Owned(samples);
-        let key = cf_string("IOReportChannels")?;
+        let key = cf_string(CHANNELS_KEY)?;
         let mut out = Vec::new();
         // SAFETY: `samples` is a live dictionary; the array and its items are
         // borrowed from it (Get rule) and only read while it is alive.
@@ -315,6 +334,43 @@ impl Subscription {
             }
         }
         Some(out)
+    }
+}
+
+/// A mutable copy of the channel dictionary `channels` holding only the
+/// channels whose name `keep` accepts.
+fn filter(api: &Api, channels: &Owned, keep: &impl Fn(&str) -> bool) -> Option<Owned> {
+    let key = cf_string(CHANNELS_KEY)?;
+    // SAFETY: `channels` is a live dictionary; the copy and the new array
+    // are +1, and the items appended are borrowed from the original array,
+    // which the new array retains through `kCFTypeArrayCallBacks`.
+    unsafe {
+        let copy = CFDictionaryCreateMutableCopy(
+            std::ptr::null(),
+            CFDictionaryGetCount(channels.0),
+            channels.0,
+        );
+        if copy.is_null() {
+            return None;
+        }
+        let copy = Owned(copy);
+        let array = CFDictionaryGetValue(channels.0, key.0);
+        if array.is_null() {
+            return None;
+        }
+        let kept = CFArrayCreateMutable(std::ptr::null(), 0, &kCFTypeArrayCallBacks);
+        if kept.is_null() {
+            return None;
+        }
+        let kept = Owned(kept);
+        for i in 0..CFArrayGetCount(array) {
+            let item = CFArrayGetValueAtIndex(array, i);
+            if keep(&text((api.channel_get_channel_name)(item))) {
+                CFArrayAppendValue(kept.0, item);
+            }
+        }
+        CFDictionarySetValue(copy.0, key.0, kept.0);
+        Some(copy)
     }
 }
 

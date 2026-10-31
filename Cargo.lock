@@ -3250,19 +3250,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
-name = "plist"
-version = "1.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2896bade328c13f7042a297ea5ac5b0951f6cf989dea5f32c2fd98da398195cb"
-dependencies = [
- "base64 0.23.1",
- "indexmap",
- "quick-xml",
- "serde",
- "time",
-]
-
-[[package]]
 name = "portable-atomic"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3344,15 +3331,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "200b9ff220857e53e184257720a14553b2f4aa02577d2ed9842d45d4b9654810"
 dependencies = [
  "cc",
-]
-
-[[package]]
-name = "quick-xml"
-version = "0.42.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
-dependencies = [
- "memchr",
 ]
 
 [[package]]
@@ -3626,7 +3604,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "6.0.0-alpha.104"
+version = "6.0.0-alpha.105"
 dependencies = [
  "allan",
  "anyhow",
@@ -3664,7 +3642,6 @@ dependencies = [
  "metriken-query",
  "metriken-recorder",
  "metriken-storage 0.6.0",
- "nix 0.31.3",
  "notify",
  "nvml-wrapper",
  "open",
@@ -3674,7 +3651,6 @@ dependencies = [
  "perf-event-open-sys2",
  "perf-event2",
  "plain",
- "plist",
  "ratatui",
  "rayon",
  "regex",

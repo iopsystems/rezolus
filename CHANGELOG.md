@@ -435,6 +435,19 @@
 
 ### Changed
 
+- **The Apple GPU sampler no longer needs root.** `gpu_apple` reads the GPU's
+  performance-state residency and energy from IOReport, as `cpu_frequency`
+  and `cpu_power` do, rather than running `powermetrics`, which needs root.
+  The metric names and labels are unchanged. `gpu_utilization`, `gpu_clock`
+  and `gpu_power_usage` are averages since the last refresh that published
+  them, over at least 200 ms, rather than over the time since `powermetrics`'
+  previous sample, which each refresh cut short. `gpu_energy_consumption`,
+  which the sampler declared but never set, now counts the GPU's energy in
+  millijoules. On an M4 Max, phase means over a stepped Metal load agreed
+  with `powermetrics` within 0.35 percentage points of utilization, 3.1% of
+  power and 2.1% of clock. An Intel Mac, or one whose GPU performance states
+  do not match the device tree's `voltage-states9` table, gets no metrics
+  from `gpu_apple`.
 - **The CPU dashboard draws a chart only when the recording has every
   counter it reads.** The IPC, IPNS, L3 hit rate, branch prediction and
   DTLB charts read PMU counters, which a VM without a virtual PMU does not

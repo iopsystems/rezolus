@@ -342,14 +342,7 @@ mod attribution_tests {
     ///   samplers, etc). Passing on one platform does not certify the table
     ///   rows that platform never registers.
     /// - It cannot check metrics the agent's OWN `attribute_sampler` calls
-    ///   `unattributed` — there is no ground truth to compare against. On
-    ///   macOS today this silently excludes `gpu_apple`'s own metrics:
-    ///   `gpu/macos/stats.rs` is a sibling module of `gpu/macos/apple.rs`,
-    ///   not a descendant of the `apple` sampler's registered module, so
-    ///   `attribute_sampler`'s module-prefix rule misses it. That's a
-    ///   pre-existing quirk in `attribute_sampler` itself, unrelated to this
-    ///   guard or to `METRIC_SAMPLERS`/`AMBIGUOUS_METRICS` — not something
-    ///   this commit fixes.
+    ///   `unattributed` — there is no ground truth to compare against.
     ///
     /// What IS tight: every metric the registry has an opinion on (agent
     /// attributes it to a real sampler, not `unattributed`) and whose name
