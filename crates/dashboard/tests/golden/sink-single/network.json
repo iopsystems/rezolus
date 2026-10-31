@@ -327,6 +327,35 @@
           ]
         },
         {
+          "name": "Connect Latency",
+          "description": "Time from connect() to the end of the handshake, by outcome: established, refused (a RST or ICMP port unreachable in reply to the SYN), or failed (the SYN retries ran out, another ICMP error, no free local port, or the socket was closed before an answer). Recordings from agents that do not label the outcome have one distribution, which includes refused connects.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Connect Latency",
+                "id": "tcp-connect-latency",
+                "type": "histogram",
+                "subtype": "percentiles",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": "Latency",
+                  "unit_system": "time",
+                  "precision": 2,
+                  "log_scale": true,
+                  "range": {
+                    "min": 0.0,
+                    "max": 100000000000.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "tcp_connect_latency",
+              "width": "full"
+            }
+          ]
+        },
+        {
           "name": "Retransmission & Loss Recovery",
           "description": "Retransmission timeouts stall a connection for at least the minimum RTO (200 ms by default); tail loss probes and fast recovery repair loss without waiting for one. D-SACKs received are retransmissions the peer did not need.",
           "plots": [

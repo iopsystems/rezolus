@@ -1799,14 +1799,47 @@ Metrics related to TCP connections and performance.
 
 ### tcp_connect_latency
 
-Measures the latency for establishing TCP connections. High connect latencies
-may indicate network congestion, DNS resolution problems, or overloaded servers.
-These metrics are particularly valuable for monitoring client-side connection
-performance.
+Measures the time from `connect()` on a TCP socket to the end of its
+handshake, labeled by how the handshake ended. The start is the entry to
+`tcp_v4_connect` or `tcp_v6_connect`; the end is the socket leaving
+`SYN_SENT` (the `inet_sock_set_state` tracepoint). With
+`TCP_FASTOPEN_CONNECT`, when the kernel will put data in the SYN, it sends the
+SYN at the first write, so the time includes the wait before that write. The
+`outcome` label is read at that transition:
+
+- `established`: the socket became `ESTABLISHED`. A connect in `TCP_REPAIR`
+  mode, as in a checkpoint restore, becomes `ESTABLISHED` with no handshake
+  and is counted here.
+- `refused`: the connect failed with `ECONNREFUSED`: a RST in reply to the
+  SYN, or an ICMP port unreachable, which an iptables `REJECT` rule sends by
+  default.
+- `timeout`: the SYN retries ran out (`ETIMEDOUT`; `net.ipv4.tcp_syn_retries`,
+  or the socket's `TCP_SYNCNT` or `TCP_USER_TIMEOUT`).
+- `error`: the socket closed with another error, such as an ICMP host or
+  network unreachable.
+- `aborted`: the socket closed with no error: the caller closed it before an
+  answer, or `connect()` failed after the socket entered `SYN_SENT`, such as
+  with `EADDRNOTAVAIL` when no local port is free.
+
+An ICMP error that arrives while a system call holds the socket lock, as
+during `connect()`, does not close the socket. The kernel keeps its errno, as
+it does for a route lookup that fails when a SYN is retransmitted. If the SYN
+retries then run out, the connect is counted under the kept errno (`refused`
+for a port unreachable, `error` otherwise), not `timeout`.
+
+A `connect()` that fails before the socket enters `SYN_SENT`, such as one with
+no route, is not counted, nor is a simultaneous open, which leaves `SYN_SENT`
+for `SYN_RECV`. The count of each histogram is the number of connects with
+that outcome while fewer than 10,240 sockets have a connect in progress, a
+failed connect or a simultaneous open not yet closed; connects beyond that are
+not counted. A query over `tcp_connect_latency` without an `outcome` matcher
+merges every outcome, including timeouts of seconds. Agents before
+6.0.0-alpha.103 record one unlabeled histogram, which also counts refused
+connects and ends the time at the first segment received in `SYN_SENT`.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `tcp_connect_latency` | Distribution of latency for establishing outbound connections (active open) | |
+| `tcp_connect_latency` | Distribution of the time from `connect()` to the end of the handshake, in nanoseconds | `outcome`: `established`, `refused`, `timeout`, `error`, `aborted` |
 
 ### tcp_mib
 

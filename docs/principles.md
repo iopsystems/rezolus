@@ -30,20 +30,21 @@ majority of workloads. Every other principle in this section is *how we hold
 to that target*.
 
 *Caveat:* "light enough" is bounded by the rate of the kernel events being
-instrumented and the per-probe entry cost. Workloads that drive any one hot
-path at extreme rates — millions of packets per second, millions of context
-switches per second, millions of syscalls per second, or millions of block
-I/Os per second — can see measurable impact, both from the cumulative
-entry/exit tax across all enabled probes and, at extreme connection rates,
-from the hashmap in `tcp_connect_latency` (an insert, a lookup and a
-delete per connect, and a delete per destroyed socket). Less common patterns
-can trip the same threshold for individual samplers (heavy mmap churn for
-`cpu/tlb_flush`, throttle storms for `cpu/bandwidth`, PMU contention with
-other consumers for `cpu/perf`) — the shape is always the same: one hot
-path firing at an extreme rate. On those workloads the right answer is to
-run Rezolus on a representative subset of machines, or to disable the
-specific samplers driving the cost — not to treat it as a failure of the
-design.
+instrumented and the per-probe entry cost. Workloads that drive any one
+hot path at extreme rates — millions of packets per second, millions of
+context switches per second, millions of syscalls per second, or millions
+of block I/Os per second — can see measurable impact, both from the
+cumulative entry/exit tax across all enabled probes and, at extreme
+connection rates, from `tcp_connect_latency`, which runs a program on
+every inet socket state change (TCP, and SCTP, DCCP or MPTCP where
+present) and does an insert, a lookup and a delete per connect, and a
+delete per destroyed socket. Less common patterns can trip the same
+threshold for individual samplers (heavy mmap churn for `cpu/tlb_flush`,
+throttle storms for `cpu/bandwidth`, PMU contention with other consumers
+for `cpu/perf`) — the shape is always the same: one hot path firing at an
+extreme rate. On those workloads the right answer is to run Rezolus on a
+representative subset of machines, or to disable the specific samplers
+driving the cost — not to treat it as a failure of the design.
 
 **How to apply.**
 - Treat any change that increases per-event work in a hot path as an overhead
@@ -890,18 +891,11 @@ caveat in principle 4), so each needs a kprobe twin, selected with
 `kernel_can_fentry`, where the hook matters there (`tlb_finish_mmu` is
 aarch64-only):
 
-- TCP: `tcp_sendmsg`, `tcp_retransmit_skb`, `tcp_rcv_state_process`,
-  `tcp_rcv_established`, `tcp_cleanup_rbuf`.
+- TCP: `tcp_sendmsg`, `tcp_retransmit_skb`, `tcp_rcv_established`,
+  `tcp_cleanup_rbuf`.
 - CFS bandwidth: `throttle_cfs_rq`, `unthrottle_cfs_rq`,
   `tg_set_cfs_bandwidth`.
 - Other: `tlb_finish_mmu`, `cpuacct_account_field`.
-
-### `fexit` collapse (principle 4)
-
-Kprobe + exit-tracepoint pair → single `fexit` program:
-
-- `tcp_v4_connect` / `tcp_v6_connect` paired today with
-  `tracepoint/tcp/tcp_destroy_sock` for connect latency.
 
 ### `Counters` → `CpuCounters` evaluation (principle 9)
 

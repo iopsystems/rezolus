@@ -153,6 +153,57 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
     }
 
+    if has_metric(data, "tcp_connect_latency") {
+        let connect = tcp.subgroup("Connect Latency");
+        connect.describe(
+            "Time from connect() to the end of the handshake, by outcome: established, refused \
+             (a RST or ICMP port unreachable in reply to the SYN), or failed (the SYN retries \
+             ran out, another ICMP error, no free local port, or the socket was closed before \
+             an answer). Recordings from agents that do not label the outcome have one \
+             distribution, which includes refused connects.",
+        );
+        if data
+            .label_values("tcp_connect_latency", "outcome")
+            .is_empty()
+        {
+            connect.plot_promql_full(
+                PlotOpts::histogram_latency("Connect Latency", "tcp-connect-latency")
+                    .with_axis_label("Latency")
+                    .with_unit_system("time"),
+                "tcp_connect_latency".to_string(),
+            );
+        } else {
+            connect.plot_promql(
+                PlotOpts::counter("Connects", "tcp-connects", Unit::Rate),
+                "sum by (outcome) (histogram_irate(tcp_connect_latency))".to_string(),
+            );
+            for (title, id, matcher) in [
+                (
+                    "Established Connect Latency",
+                    "tcp-connect-latency-established",
+                    "outcome=\"established\"",
+                ),
+                (
+                    "Refused Connect Latency",
+                    "tcp-connect-latency-refused",
+                    "outcome=\"refused\"",
+                ),
+                (
+                    "Failed Connect Latency",
+                    "tcp-connect-latency-failed",
+                    "outcome=~\"timeout|error|aborted\"",
+                ),
+            ] {
+                connect.plot_promql(
+                    PlotOpts::histogram_latency(title, id)
+                        .with_axis_label("Latency")
+                        .with_unit_system("time"),
+                    format!("tcp_connect_latency{{{matcher}}}"),
+                );
+            }
+        }
+    }
+
     tcp_mib(data, &mut tcp);
 
     if !tcp.is_empty() {

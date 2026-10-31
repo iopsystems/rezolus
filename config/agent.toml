@@ -431,8 +431,9 @@ enabled = false
 # latency = false              # drop the latency histograms and the sys_exit program
 # cgroup_attribution = false   # drop the per-cgroup series and their per-event cost
 
-# BPF sampler that probes TCP connect (active open) to measure latency when
-# establishing connections.
+# BPF sampler that probes TCP connect (active open) to measure the time to the
+# end of the handshake, by outcome (established, refused, timeout, error,
+# aborted).
 [samplers.tcp_connect_latency]
 
 # TCP counters from the kernel's SNMP MIBs in /proc/net/netstat (TcpExt) and
