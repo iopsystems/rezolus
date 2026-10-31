@@ -18,6 +18,13 @@
 
 ### Added
 
+- **A query can read only some of a combined archive's recordings.**
+  `/api/v1/query_range` (also with `format=display`) takes `scope`, the
+  uuids of the sources to read, separated by commas; the static site's
+  WASM viewer takes the same. Without it a query reads every recording; a
+  `scope` naming no source is refused (`bad_data`) rather than read as
+  every recording, and `/api/v1/query` refuses a `scope`, since an instant
+  query reads every source. Nothing in the viewer sends one yet.
 - **CPU frequency and energy on macOS.** `cpu_frequency` and `cpu_power`
   now run on Apple silicon, unprivileged, from IOReport, the framework
   `powermetrics` reads. `cpu_frequency` derives `cpu_tsc`, `cpu_mperf` and

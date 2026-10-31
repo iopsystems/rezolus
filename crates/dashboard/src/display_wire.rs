@@ -7,7 +7,7 @@
 
 use metriken_query::{
     DisplayOptions, DisplayResult, DisplaySeries, HistogramHeatmapResult, MetricsSource, Notice,
-    QueryError, QueryOptions, RateMode, Reducer,
+    QueryError, QueryOptions, RateMode, Reducer, Scope, ScopedSource, SourceRef,
 };
 
 /// A display query's result, ready for a backend to ship: either the compact
@@ -36,14 +36,49 @@ pub fn parse_rate_mode(s: Option<&str>) -> RateMode {
     }
 }
 
+/// Parse a scope argument: the uuids of the sources a query reads,
+/// separated by commas (a uuid names a source and its copies; one named
+/// twice is read once). Absent reads every source. Present but naming no
+/// source is an error: read as absent it would read every source, and as an
+/// empty scope it would answer with an empty result. Shared by both
+/// backends.
+pub fn parse_scope(s: Option<&str>) -> Result<Option<std::sync::Arc<Scope>>, String> {
+    let Some(s) = s else {
+        return Ok(None);
+    };
+    let mut uuids: Vec<&str> = s
+        .split(',')
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .collect();
+    if uuids.is_empty() {
+        return Err("the scope names no source".to_string());
+    }
+    uuids.sort_unstable();
+    uuids.dedup();
+    let sources = uuids
+        .into_iter()
+        .map(|u| ScopedSource::new(SourceRef::Uuid(u.to_string()), None))
+        .collect();
+    Scope::new(sources).map(|scope| Some(std::sync::Arc::new(scope)))
+}
+
+/// The options a query request asks for: its rate alignment
+/// ([`parse_rate_mode`]) and its scope ([`parse_scope`]).
+pub fn query_options(rate_mode: Option<&str>, scope: Option<&str>) -> Result<QueryOptions, String> {
+    Ok(QueryOptions::with_rate_mode(parse_rate_mode(rate_mode)).with_scope(parse_scope(scope)?))
+}
+
 /// Run a display-mode range query and encode the result. `points` is the point
-/// budget; `band` the inner-band quantiles; `rate_mode` the rate alignment.
+/// budget; `band` the inner-band quantiles; `qopts` the rate alignment and
+/// scope ([`query_options`]).
 // Eight arguments, and they are the right eight: this is the display-mode
 // query entry point, and every one of them is a distinct axis the caller
 // chooses per request (what to query, over what window, at what resolution,
-// with what band and rate alignment). They are bundled into `DisplayOptions`
-// immediately below; hoisting that struct into the signature would only move
-// the argument list to the call sites, which is where it is least readable.
+// with what band, and with what rate alignment and scope). They are bundled
+// into `DisplayOptions` immediately below; hoisting that struct into the
+// signature would only move the argument list to the call sites, which is
+// where it is least readable.
 #[allow(clippy::too_many_arguments)]
 pub fn display_query(
     source: &dyn MetricsSource,
@@ -53,16 +88,15 @@ pub fn display_query(
     step: f64,
     points: usize,
     band: [f64; 2],
-    rate_mode: RateMode,
+    qopts: &QueryOptions,
 ) -> Result<DisplayWire, QueryError> {
     let opts = DisplayOptions {
         budget: points,
         reducer: Reducer::Boxplot,
         band,
     };
-    let qopts = QueryOptions::with_rate_mode(rate_mode);
     Ok(
-        match source.query_range_display_opts(query, start, end, step, &opts, &qopts)? {
+        match source.query_range_display_opts(query, start, end, step, &opts, qopts)? {
             DisplayResult::Series {
                 result,
                 budget,
@@ -416,6 +450,31 @@ mod tests {
         assert_eq!(header["series"][0]["unc"], serde_json::json!(false));
         assert_eq!(cols.len(), 7);
         assert_eq!(cols[6], vec![1.0]);
+    }
+
+    /// A scope argument is uuids separated by commas, each a source and its
+    /// copies, read once however often named; absent reads every source,
+    /// and present but naming none is refused.
+    #[test]
+    fn a_scope_is_uuids_separated_by_commas() {
+        use metriken_query::SourceRef;
+        assert!(parse_scope(None).unwrap().is_none());
+        for empty in ["", " , "] {
+            assert!(parse_scope(Some(empty)).is_err(), "{empty:?}");
+        }
+        let scope = parse_scope(Some("u2, u1,u2,")).unwrap().unwrap();
+        let refs: Vec<&SourceRef> = scope.sources().iter().map(|s| &s.source).collect();
+        assert_eq!(
+            refs,
+            [
+                &SourceRef::Uuid("u1".to_string()),
+                &SourceRef::Uuid("u2".to_string())
+            ]
+        );
+        assert!(scope.sources().iter().all(|s| s.span.is_none()));
+        let opts = query_options(Some("raw"), Some("u1")).unwrap();
+        assert_eq!(opts.rate_mode, RateMode::Raw);
+        assert_eq!(opts.scope.as_deref().map(|s| s.sources().len()), Some(1));
     }
 
     /// A result's notices travel in the header, as metriken-query
