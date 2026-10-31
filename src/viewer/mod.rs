@@ -869,6 +869,7 @@ pub(super) fn combine_recordings(
             l.clone(),
             ::dashboard::combined::Header::of(reader),
             reader.file_metadata(),
+            ::dashboard::combined::source_uuids(reader.sources().iter().map(|s| s.uuid.clone())),
         ));
     }
     let markers = ::dashboard::combined::report_markers(
@@ -883,7 +884,7 @@ pub(super) fn combine_recordings(
         parts
             .into_iter()
             .zip(series)
-            .map(|((l, header, metadata), series)| (l, series, header, metadata))
+            .map(|((l, header, metadata, sources), series)| (l, series, header, metadata, sources))
             .collect(),
     );
     CombinedRecordings {

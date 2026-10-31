@@ -24,7 +24,8 @@
   WASM viewer takes the same. Without it a query reads every recording; a
   `scope` naming no source is refused (`bad_data`) rather than read as
   every recording, and `/api/v1/query` refuses a `scope`, since an instant
-  query reads every source. Nothing in the viewer sends one yet.
+  query reads every source. The viewer sends one with each chart of a
+  combined view.
 - **CPU frequency and energy on macOS.** `cpu_frequency` and `cpu_power`
   now run on Apple silicon, unprivileged, from IOReport, the framework
   `powermetrics` reads. `cpu_frequency` derives `cpu_tsc`, `cpu_mperf` and
@@ -411,6 +412,32 @@
 
 ### Changed
 
+- **A combined view's charts read their recording through a scope rather
+  than through matchers added to their queries.** Each chart of a
+  recording's sections carries `scope`, the uuids of that recording's
+  sources, and the page sends it with every range query of the chart, so
+  the query shown is the template's as written (`sum(irate(cpu_usage[5m]))`
+  rather than `sum(irate(cpu_usage{host="h2"}[5m]))`).
+  - An Overview whose throughput is a service's reads that service's
+    sources as well as the agent's, in each chart whose query includes the
+    throughput query.
+  - A section's `metadata.scope` is the list of uuids, not label matchers;
+    the cgroup discovery reads within it.
+  - A chart added to a selection keeps its scope, and so does a report
+    saved from it. An entry saved before this carries the matchers in its
+    query text and reads as written.
+  - A recording any of whose sources lacks a uuid (an archive written
+    before dendro stored them) has no scope: its queries carry its matchers
+    as before, and its cgroup discovery reads every recording. Its Overview
+    shows the throughput of a service of its own recording, but not one of
+    another recording.
+  - A recording shown beside a comparison still names its capture with
+    `__capture__`.
+  - Where the viewer still adds matchers to a query, a matcher the selector
+    already has is not repeated, and a different one of its own on the same
+    label (`source="vllm"` where the scope's is `source="svc"`) no longer
+    replaces the scope's. Both are kept, and the archive reader refuses the
+    query.
 - **metriken-query 0.43, metriken-storage 0.6, dendro 0.6.1.**
   metriken-recorder stays at 0.5.1, over metriken-storage 0.5.4, so `record`,
   the hindsight buffer and the live viewer write what they wrote before.

@@ -192,8 +192,8 @@ export const defaultRangeFor = (meta) => {
 // buildHistogramQuery / histogram_heatmap); gauges are sampled at step points.
 
 const defaultGetMetadata = () => ViewerApi.getMetadata();
-const defaultQueryRange = (query, start, end, step, captureId = 'baseline', signal = undefined, rateMode = 'grid') =>
-    ViewerApi.queryRange(query, start, end, step, captureId, signal, rateMode);
+const defaultQueryRange = (query, start, end, step, captureId = 'baseline', signal = undefined, rateMode = 'grid', scope = null) =>
+    ViewerApi.queryRange(query, start, end, step, captureId, signal, rateMode, scope);
 
 // Per-capture queries drive A/B compare, which is only meaningful on a shared
 // grid.
@@ -333,19 +333,27 @@ export const fetchEntityHeatmapForCapture = async (
 };
 
 
+// The display tile cache's key for `query` read within `scope`: the same
+// query text reads different series in different scopes.
+const tileKey = (query, scope) =>
+    (Array.isArray(scope) && scope.length > 0 ? `${scope.join(',')}\u0000${query}` : query);
+
 // Fetch + decode the display-mode boxplot response. Uses defaultRangeFor so
 // it honors the zoom range override (drill-down) with the same point budget.
-const fetchDisplaySeries = async (query, meta, signal) => {
+// `scope`, the uuids of the sources to read (a plot's `scope`), reads every
+// source when null.
+const fetchDisplaySeries = async (query, meta, signal, scope = null) => {
     const { start, end, step } = defaultRangeFor(meta);
     const budget = displayBudget();
-    const cached = tileLookup(query, start, end, step, budget);
+    const key = tileKey(query, scope);
+    const cached = tileLookup(key, start, end, step, budget);
     if (cached) return cached; // covered at sufficient resolution — no network
-    const res = await ViewerApi.queryRangeDisplay(query, start, end, step, { points: budget, signal });
+    const res = await ViewerApi.queryRangeDisplay(query, start, end, step, { points: budget, signal, scope });
     if (!res.buffer) {
         throw new Error(res.json?.error || 'display query returned a non-series result');
     }
     const decoded = decodeDisplayBinary(res.buffer);
-    tileStore(query, start, end, displayBucketWidth(start, end, step, budget), decoded);
+    tileStore(key, start, end, displayBucketWidth(start, end, step, budget), decoded);
     return decoded;
 };
 
@@ -497,18 +505,6 @@ const injectLabel = (query, labelName, labelValue, op = '=') => {
 
         return `${name}{${selector}}`;
     });
-};
-
-// A query restricted to one recording of a combined archive: each matcher of
-// a section's `metadata.scope` (`[{ label, op, value }]`, op `=`, `!=` or
-// `!~`) injected into every metric reference. Unchanged without a scope.
-const applyScope = (query, scope) => {
-    if (!Array.isArray(scope)) return query;
-    let q = query;
-    for (const m of scope) {
-        if (m && m.label && m.value) q = injectLabel(q, m.label, m.value, m.op || '=');
-    }
-    return q;
 };
 
 // Inject a regex label selector (label=~"a|b"). Used for selecting a subset of
@@ -913,14 +909,16 @@ const createDataApi = ({
 
     // `rateMode` 'raw' places each point at a sample's own timestamp (the
     // single-chart view's samples toggle); the default is the step grid.
-    const executePromQLRangeQuery = async (query, metadata, signal, rateMode = 'grid') => {
+    // `scope`, the uuids of the sources to read (a plot's `scope`, a
+    // section's `metadata.scope`), reads every source when null.
+    const executePromQLRangeQuery = async (query, metadata, signal, rateMode = 'grid', scope = null) => {
         const meta = metadata || cachedMetadata || await fetchMetadata();
 
         // Whole recording at native step; echarts LTTB decimates for
         // display. See defaultRangeFor for why we don't decimate via step.
         const { start, end, step } = defaultRangeFor(meta);
 
-        return queryRange(query, start, end, step, 'baseline', signal, rateMode);
+        return queryRange(query, start, end, step, 'baseline', signal, rateMode, scope);
     };
 
     // A per-entity heatmap over the current range, as a matrix result with
@@ -930,23 +928,23 @@ const createDataApi = ({
     // not cover in full is left out. Anything else is fetched in display
     // mode, each column a bucket's median, falling back to the full matrix if
     // that fails.
-    const fetchEntityHeatmap = async (query, metadata, signal) => {
+    const fetchEntityHeatmap = async (query, metadata, signal, scope = null) => {
         const meta = metadata || cachedMetadata || await fetchMetadata();
         const { start, end } = defaultRangeFor(meta);
         if (isRateQuery(query)) {
             const step = heatmapStep(meta, start, end);
             return restampRateColumns(
-                await queryRange(query, start, end, step, 'baseline', signal, 'grid'),
+                await queryRange(query, start, end, step, 'baseline', signal, 'grid', scope),
                 step,
             );
         }
         try {
-            const decoded = await fetchDisplaySeries(query, meta, signal);
+            const decoded = await fetchDisplaySeries(query, meta, signal, scope);
             const width = displayBucketWidth(start, end, displayStep(meta), displayBudget());
             return displayAsMatrix(decoded.series, width);
         } catch (_) {
             if (signal && signal.aborted) throw _;
-            return executePromQLRangeQuery(query, meta, signal);
+            return executePromQLRangeQuery(query, meta, signal, 'grid', scope);
         }
     };
 
@@ -1108,6 +1106,7 @@ const createDataApi = ({
         }
         const run = async ({ plot, queries }) => {
             const matrix = (fetch) => runCgroupVariants(queries, fetch);
+            const scope = plot.scope ?? null;
             // A chart of several cgroup queries is fetched as matrices: each
             // display query is bucketed on its own and may be served from a
             // cached tile of another width, so their timestamps can differ.
@@ -1123,22 +1122,22 @@ const createDataApi = ({
                 // hiccup never blanks a chart.
                 if (display && plotUsesDisplay(plot)) {
                     try {
-                        const decoded = await fetchDisplaySeries(queries[0].query, metadata, signal);
+                        const decoded = await fetchDisplaySeries(queries[0].query, metadata, signal, scope);
                         if (superseded()) return;
                         applyDisplayToPlot(plot, decoded);
                     } catch (_) {
                         if (superseded()) return;
-                        const res = await matrix((q) => executePromQLRangeQuery(q, metadata, signal));
+                        const res = await matrix((q) => executePromQLRangeQuery(q, metadata, signal, 'grid', scope));
                         if (superseded()) return;
                         applyResultToPlot(plot, res);
                     }
                 } else if (display && isEntityQuery(plot.promql_query)
                     && plot.opts?.type !== 'histogram') {
-                    const res = await matrix((q) => fetchEntityHeatmap(q, metadata, signal));
+                    const res = await matrix((q) => fetchEntityHeatmap(q, metadata, signal, scope));
                     if (superseded()) return;
                     applyResultToPlot(plot, res);
                 } else {
-                    const res = await matrix((q) => executePromQLRangeQuery(q, metadata, signal));
+                    const res = await matrix((q) => executePromQLRangeQuery(q, metadata, signal, 'grid', scope));
                     if (superseded()) return;
                     applyResultToPlot(plot, res);
                 }
@@ -1200,6 +1199,7 @@ const createDataApi = ({
     const fetchHeatmapForPlot = async (plot) => {
         const query = plot.promql_query;
         if (!query) return null;
+        const scope = plot.scope ?? null;
 
         // For typed histogram specs, promql_query is already the base metric selector
         let metricSelector;
@@ -1235,13 +1235,13 @@ const createDataApi = ({
         // triples). queryRangeDisplay returns { buffer } for the octet-stream
         // response; { json } (older server / error) falls through to JSON.
         try {
-            const res = await ViewerApi.queryRangeDisplay(q, start, end, defaultRangeFor(meta).step, {});
+            const res = await ViewerApi.queryRangeDisplay(q, start, end, defaultRangeFor(meta).step, { scope });
             if (res.buffer) return decodeHeatmapBinary(res.buffer);
             const r = res.json;
             if (r?.data?.resultType === 'histogram_heatmap') return heatmapFromJson(r.data.result);
         } catch (_) { /* fall through to the plain JSON query */ }
 
-        const result = await executePromQLRangeQuery(q);
+        const result = await executePromQLRangeQuery(q, meta, undefined, 'grid', scope);
         if (result.status === 'success' && result.data && result.data.resultType === 'histogram_heatmap') {
             return heatmapFromJson(result.data.result);
         }
@@ -1260,16 +1260,16 @@ const createDataApi = ({
         return `p${trimmed}`;
     };
 
-    const fetchSpectrumViaCapture = async (wrappedQuery, captureId, range) => {
+    const fetchSpectrumViaCapture = async (wrappedQuery, captureId, range, scope = null) => {
         if (captureId === CAPTURE_BASELINE && !range) {
-            return executePromQLRangeQuery(wrappedQuery);
+            return executePromQLRangeQuery(wrappedQuery, undefined, undefined, 'grid', scope);
         }
         let r = range;
         if (!r) {
             const meta = cachedMetadata || await fetchMetadata();
             r = defaultRangeFor(meta);
         }
-        return queryRange(wrappedQuery, r.start, r.end, r.step, captureId);
+        return queryRange(wrappedQuery, r.start, r.end, r.step, captureId, undefined, 'grid', scope);
     };
 
     const fetchQuantileSpectrumForPlot = async (
@@ -1327,7 +1327,7 @@ const createDataApi = ({
             : stepAtLeast(native, span / pixelBudget());
         const strideSuffix = stride > native ? `, ${stride}` : '';
         const wrapped = `histogram_quantiles([${queryQuantiles.join(', ')}], ${metricSelector}${strideSuffix})`;
-        const result = await fetchSpectrumViaCapture(wrapped, captureId, range);
+        const result = await fetchSpectrumViaCapture(wrapped, captureId, range, plot.scope ?? null);
 
         if (result.status !== 'success' || !result.data?.result?.length) return null;
 
@@ -1459,7 +1459,6 @@ export {
     setSelectedInstance,
     getSelectedInstance,
     injectLabel,
-    applyScope,
     injectLabelRegex,
     buildEffectiveQuery,
     buildEffectiveQueries,

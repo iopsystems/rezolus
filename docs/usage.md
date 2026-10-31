@@ -267,8 +267,9 @@ An archive of several recordings from one run opens in the viewer as one
 combined view: every series carries its recording's labels (`source`, `host`,
 `--label`s), a template renders once per recording that carries it (two agents
 show the built-in sections once per host, the second host's at routes ending
-in `@<host>`), and every query in a recording's sections is restricted to that
-recording's series by those labels. `rezolus view fleet.dendro --baseline
+in `@<host>`), and every chart in a recording's sections reads only that
+recording's sources (an Overview chart normalized by a service's throughput
+also reads that service's recording). `rezolus view fleet.dendro --baseline
 host=web-01 --experiment host=web-02` opens the same archive as an A/B
 comparison. A/B is opt-in, never inferred from when recordings were taken:
 recordings that carry an `arm` label open as a comparison, so a concurrent

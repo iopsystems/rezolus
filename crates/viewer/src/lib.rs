@@ -363,6 +363,9 @@ impl Viewer {
                     labels.clone(),
                     dashboard::combined::Header::of(reader),
                     reader.file_metadata(),
+                    dashboard::combined::source_uuids(
+                        reader.sources().iter().map(|s| s.uuid.clone()),
+                    ),
                 )
             })
             .collect();
@@ -381,7 +384,9 @@ impl Viewer {
             parts
                 .into_iter()
                 .zip(series)
-                .map(|((l, header, metadata), series)| (l, series, header, metadata))
+                .map(|((l, header, metadata, sources), series)| {
+                    (l, series, header, metadata, sources)
+                })
                 .collect(),
         );
         let reader = Arc::new(reader);
@@ -2237,8 +2242,8 @@ mod tests {
 
     /// An archive of two hosts of one run, from either entry point, is one
     /// combined capture: the built-in sections once per host, the second
-    /// host's routes keyed `@h2`, each section's queries restricted to its
-    /// host. `set_compare_requested` attaches it as a comparison instead.
+    /// host's routes keyed `@h2`, each section's plots scoped to its host's
+    /// sources. `set_compare_requested` attaches it as a comparison instead.
     #[test]
     fn a_one_run_archive_is_one_combined_capture() {
         use rez::fixtures::{Recording, one_run};
@@ -2362,11 +2367,10 @@ mod tests {
 
         let cpu: serde_json::Value =
             serde_json::from_str(&reg.get_section("baseline", "cpu@h2").unwrap()).unwrap();
-        assert_eq!(cpu["metadata"]["scope"][0]["value"], "h2");
-        assert!(
-            cpu.to_string().contains(r#"cpu_usage{host=\"h2\"}"#),
-            "{cpu}"
-        );
+        assert_eq!(cpu["metadata"]["scope"], serde_json::json!(h2));
+        let plot = &cpu["groups"][0]["subgroups"][0]["plots"][0];
+        assert_eq!(plot["scope"], serde_json::json!(h2), "{plot}");
+        assert!(!cpu.to_string().contains("host="), "{cpu}");
 
         let mut compare = WasmCaptureRegistry::new();
         compare.set_compare_requested(true);

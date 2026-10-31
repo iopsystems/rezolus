@@ -160,6 +160,27 @@ impl View {
         }
     }
 
+    /// Set each plot's scope to `f` of its queries (`promql_query` and its
+    /// experiment and total alternatives).
+    pub fn scope_plots(&mut self, mut f: impl FnMut(&[&str]) -> Vec<String>) {
+        for plot in self
+            .groups
+            .iter_mut()
+            .flat_map(|g| g.subgroups.iter_mut())
+            .flat_map(|sg| sg.plots.iter_mut())
+        {
+            let queries: Vec<&str> = [
+                plot.promql_query.as_deref(),
+                plot.promql_query_experiment.as_deref(),
+                plot.promql_query_total.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            plot.scope = Some(f(&queries));
+        }
+    }
+
     /// Every query of every plot, in order: what [`map_queries`] visits.
     ///
     /// [`map_queries`]: Self::map_queries
@@ -356,6 +377,7 @@ impl SubGroup {
             promql_query: Some(promql_query),
             promql_query_experiment: None,
             promql_query_total: None,
+            scope: None,
             width: PlotWidth::default(),
         });
     }
@@ -461,6 +483,12 @@ pub struct Plot {
     /// Alt query the viewer's Mean/Total toggle swaps to (= `histogram_sum`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub promql_query_total: Option<String>,
+    /// The uuids of the sources every query of the plot reads: in a combined
+    /// view, its recording's, and the throughput service's for a chart that
+    /// includes the throughput query ([`View::scope_plots`]). Absent reads
+    /// every source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Vec<String>>,
     #[serde(skip_serializing_if = "plot_width_is_half", default)]
     pub width: PlotWidth,
 }
@@ -822,6 +850,7 @@ mod tests {
             promql_query: Some("up".into()),
             promql_query_experiment: None,
             promql_query_total: None,
+            scope: None,
             width,
         }
     }

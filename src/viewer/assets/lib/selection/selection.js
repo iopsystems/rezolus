@@ -151,6 +151,10 @@ const entriesFromPayload = (entries) => (entries || []).map(e => ({
     promql_query_experiment: e.promql_query_experiment || null,
     // An individual cgroup chart's queries when it draws cgroup groups.
     cgroup_queries: e.cgroup_queries || null,
+    // The uuids of the sources the queries read; absent from entries saved
+    // before plots carried a scope, which carry the recording's matchers in
+    // their query text instead.
+    scope: Array.isArray(e.scope) ? e.scope : null,
     category_members: e.category_members || null,
     single_capture: e.single_capture === true || undefined,
     note: e.note || '',
@@ -281,6 +285,7 @@ const persistStore = (key, store) => {
                 promql_query: e.promql_query,
                 promql_query_experiment: e.promql_query_experiment || undefined,
                 cgroup_queries: e.cgroup_queries || undefined,
+                scope: e.scope || undefined,
                 category_members: e.category_members || undefined,
                 single_capture: e.single_capture || undefined,
                 note: e.note,
@@ -538,6 +543,8 @@ const toggleSelection = (spec, sectionKey, sectionName, groupName, compareMeta =
         promql_query_experiment: spec.promql_query_experiment || null,
         // An individual cgroup chart's group queries (cgroup_selector.js).
         cgroup_queries: spec.cgroup_queries || null,
+        // The sources the chart's queries read in a combined archive.
+        scope: spec.scope || null,
         category_members: compareMeta?.categoryMembers || null,
         // Pinned from a recording shown beside a comparison: draws as one
         // capture wherever the entry is rendered.
@@ -707,6 +714,7 @@ const buildPayload = (store, attrs, { includeNotes = true } = {}) => ({
         promql_query: e.promql_query,
         promql_query_experiment: e.promql_query_experiment || undefined,
         cgroup_queries: e.cgroup_queries || undefined,
+        scope: e.scope || undefined,
         category_members: e.category_members || undefined,
         single_capture: e.single_capture || undefined,
         note: includeNotes ? e.note : '',
@@ -939,6 +947,7 @@ const chartLoaderMixin = (store, component) => ({
                 promql_query: entry.promql_query,
                 // Bridge: per-side experiment query for category KPIs.
                 promql_query_experiment: entry.promql_query_experiment || undefined,
+                scope: entry.scope || undefined,
                 data: [],
             };
             if (!entry.promql_query) {
@@ -955,7 +964,8 @@ const chartLoaderMixin = (store, component) => ({
                 const queries = entry.cgroup_queries
                     || [{ query: entry.promql_query, label: null }];
                 const result = await runCgroupVariants(queries, (q) => executePromQLRangeQuery(
-                    buildEffectiveQuery({ ...spec, promql_query: q }) || q));
+                    buildEffectiveQuery({ ...spec, promql_query: q }) || q,
+                    undefined, undefined, 'grid', entry.scope || null));
                 if (result) {
                     applyResultToPlot(spec, result);
                 }
