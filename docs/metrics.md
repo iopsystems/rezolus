@@ -894,9 +894,10 @@ refresh left (a `statfs`, or a `getfsstat` without `MNT_NOWAIT`, by any
 process), so on a volume nothing else reads they can be hours old. Each
 selected volume is therefore read again with `statfs` and `getattrlist` on its
 mount point, and a reading where either call reports a device other than the
-listed one, because the mount was replaced, is dropped. Each call looks the
-path up, which walks every mount above it, so a volume mounted beneath a
-network, autofs or macFUSE mount is skipped. The sweep runs on a blocking
+listed one, because the mount was replaced or unmounted, is dropped. A
+`getattrlist` that fails leaves only `filesystem_volume_used` unset. Each call
+looks the path up, which walks every mount above it, so a volume mounted
+beneath a network, autofs or macFUSE mount is skipped. The sweep runs on a blocking
 thread at most once per `interval` (60s by default); one still running after
 three intervals is logged as a warning. With 10 volumes, `getfsstat` and the
 `statfs` and `getattrlist` calls took 36 µs in a debug build, 12 µs of it
@@ -915,8 +916,8 @@ reserve reports the container's size as its total and the container's free
 space as its free and available bytes, so total minus free is the space used
 in the whole container, not by the volume. The volume's own use is
 `getattrlist(ATTR_VOL_SPACEUSED)`, the number `df` reports as used, published
-as `filesystem_volume_used`. HFS+ and FAT volumes report it as total minus
-free. APFS reports an inode total that moves with free space.
+as `filesystem_volume_used`. HFS+, FAT and exFAT volumes report it as total
+minus free. APFS reports an inode total that moves with free space.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|

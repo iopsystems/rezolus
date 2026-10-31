@@ -20,11 +20,12 @@
 //! process), and can be hours old on a volume nothing else reads. So each
 //! selected volume is read again with `statfs` and `getattrlist` on its
 //! mount point, and a reading where either call reports a device other than
-//! the listed one (the mount was replaced) is dropped. Each call looks the
-//! path up, which walks every mount above it: a volume mounted beneath a
-//! network or autofs mount is skipped, since the lookup could wait on a
-//! server or trigger an automount; a macFUSE mount, and anything beneath one,
-//! is skipped for the same reason. The sweep runs on the blocking pool, and
+//! the listed one (the mount was replaced or unmounted) is dropped. A
+//! `getattrlist` that fails leaves only the used bytes unread. Each call
+//! looks the path up, which walks every mount above it: a volume mounted
+//! beneath a network or autofs mount is skipped, since the lookup could wait
+//! on a server or trigger an automount; a macFUSE mount, and anything beneath
+//! one, is skipped for the same reason. The sweep runs on the blocking pool, and
 //! one still running after three intervals is logged as a warning.
 //!
 //! # APFS
@@ -34,8 +35,8 @@
 //! container's free space as its free and available bytes, so total minus
 //! free is the space used in the whole container, not by the volume. The
 //! volume's own use is `getattrlist(ATTR_VOL_SPACEUSED)`, which `df` reports
-//! as used, published as `filesystem_volume_used`. HFS+ and FAT volumes
-//! report it as total minus free. APFS reports an inode count that moves
+//! as used, published as `filesystem_volume_used`. HFS+, FAT and exFAT
+//! volumes report it as total minus free. APFS reports an inode count that moves
 //! with free space, as XFS does on Linux.
 //!
 //! # Cadence and publication
@@ -73,7 +74,7 @@ use stats::*;
 
 #[metric(
     name = "filesystem_volume_used",
-    description = "Bytes a mounted volume itself uses (getattrlist ATTR_VOL_SPACEUSED), the number `df` reports as used. On APFS this is the volume's share of its container, which filesystem_total minus filesystem_free does not give, since every volume reports the container's size and free space; on other filesystems it equals filesystem_total minus filesystem_free. macOS only.",
+    description = "Bytes a mounted volume itself uses (getattrlist ATTR_VOL_SPACEUSED), the number `df` reports as used. An APFS volume without a quota or reserve reports its container's size and free space, so filesystem_total minus filesystem_free is the container's use and this gauge is the volume's. On HFS+, FAT and exFAT it equals filesystem_total minus filesystem_free. Absent when getattrlist fails. macOS only.",
     metadata = { unit = "bytes", acq_group = "filesystem_sweep" }
 )]
 pub static FILESYSTEM_VOLUME_USED: GaugeGroup = GaugeGroup::new(MAX_SLOTS);
@@ -248,8 +249,10 @@ pub fn select(volumes: Vec<Volume>) -> Vec<Volume> {
     out
 }
 
-/// `volume` read again with `statfs` on its mount point. An error when the
-/// path now leads to another device, because the mount was replaced.
+/// `volume` read again with `statfs` and `getattrlist` on its mount point.
+/// An error when `statfs` fails, or when either call reports a device other
+/// than the listed one, because the mount was replaced or unmounted. When
+/// `getattrlist` fails, the reading has no used bytes.
 fn read_fresh(volume: &Volume) -> std::io::Result<Volume> {
     let path = CString::new(volume.mount_point.as_bytes())?;
     let mut s: libc::statfs = unsafe { std::mem::zeroed() };
@@ -260,12 +263,16 @@ fn read_fresh(volume: &Volume) -> std::io::Result<Volume> {
     if fresh.devnum != volume.devnum {
         return Err(replaced(volume, &fresh.devnum));
     }
-    let (dev, used) = space_used(&path)?;
-    let devnum = format!("{}:{}", libc::major(dev), libc::minor(dev));
-    if devnum != volume.devnum {
-        return Err(replaced(volume, &devnum));
+    match space_used(&path) {
+        Ok((dev, used)) => {
+            let devnum = format!("{}:{}", libc::major(dev), libc::minor(dev));
+            if devnum != volume.devnum {
+                return Err(replaced(volume, &devnum));
+            }
+            fresh.used_bytes = used;
+        }
+        Err(e) => debug!("{NAME}: getattrlist {} failed: {e}", volume.mount_point),
     }
-    fresh.used_bytes = used;
     Ok(fresh)
 }
 
@@ -571,7 +578,7 @@ fn sweep(
         }
         let read = read(volume);
         if let Err(e) = &read {
-            debug!("{NAME}: statfs {} failed: {e}", volume.mount_point);
+            debug!("{NAME}: reading {} failed: {e}", volume.mount_point);
         }
         reads.push((slot, read));
     }

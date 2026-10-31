@@ -33,10 +33,10 @@
   `filesystem_available`, `filesystem_inodes_total`,
   `filesystem_inodes_free` and `filesystem_readonly` for every local volume
   with `statfs`, so the filesystem dashboard draws on a Mac. An APFS volume
-  without a quota or reserve reports its container's size and free space, so
-  the new macOS-only `filesystem_volume_used` reports each volume's own use
-  from `getattrlist`, the number `df` shows as used, and the dashboard draws
-  it as Volume Used.
+  without a quota or reserve reports its container's size and free space.
+  The macOS-only `filesystem_volume_used` is each volume's own use from
+  `getattrlist(ATTR_VOL_SPACEUSED)`, the number `df` shows as used, and the
+  dashboard draws it as Volume Used.
 - **TCP bandwidth charts in the network dashboard.** The TCP group draws
   `tcp_bytes` as transmit and receive bits per second when the recording
   has it, from the `tcp_traffic` sampler on Linux and on macOS.
