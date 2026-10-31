@@ -276,7 +276,7 @@ mod tests {
             .to_string();
         let result = store.query(&query, Some(1_700_000_000.0)).unwrap();
         let n = match result {
-            metriken_query::QueryResult::Vector { result } => result.len(),
+            metriken_query::QueryResult::Vector { result, .. } => result.len(),
             other => panic!("expected vector, got {other:?}"),
         };
         assert_eq!(n, 3);
@@ -299,7 +299,7 @@ mod tests {
             .to_string();
         let result = store.query(&query, Some(1_700_000_000.0)).unwrap();
         let mut series: Vec<(String, f64)> = match result {
-            metriken_query::QueryResult::Vector { result } => result
+            metriken_query::QueryResult::Vector { result, .. } => result
                 .into_iter()
                 .map(|sample| (sample.metric["name"].clone(), sample.value.1))
                 .collect(),

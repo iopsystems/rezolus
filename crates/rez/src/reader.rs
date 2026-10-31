@@ -1085,7 +1085,7 @@ mod tests {
             let reader = legacy::open_with_pool(out, pool).unwrap();
             let (start, end) = reader.time_range().unwrap();
 
-            let QueryResult::Matrix { result } = reader
+            let QueryResult::Matrix { result, .. } = reader
                 .query_range(
                     &format!("sum by (arm) (irate({counter}[2s]))"),
                     start,
@@ -1112,7 +1112,7 @@ mod tests {
 
             // A single-recording archive of the same data gives that series.
             let single = legacy::open_with_pool(single, BufferPool::new(64 * 1024 * 1024)).unwrap();
-            let QueryResult::Matrix { result } = single
+            let QueryResult::Matrix { result, .. } = single
                 .query_range(&format!("sum(irate({counter}[2s]))"), start, end, 1.0)
                 .unwrap()
             else {
@@ -1592,7 +1592,7 @@ mod tests {
             let out = reader
                 .query_range("rate(cpu_cycles[3s])", 1.0, 7.0, 1.0)
                 .expect("the untouched table must still answer");
-            let QueryResult::Matrix { result } = out else {
+            let QueryResult::Matrix { result, .. } = out else {
                 panic!("a range query over a counter is a matrix");
             };
             assert!(
@@ -3027,7 +3027,7 @@ mod tests {
         let reader = RezReader::open_with_pool(&path, Arc::clone(&pool)).unwrap();
 
         let times = |r: QueryResult| -> Vec<f64> {
-            let QueryResult::Matrix { result } = r else {
+            let QueryResult::Matrix { result, .. } = r else {
                 panic!("expected a matrix");
             };
             result
@@ -3096,7 +3096,7 @@ mod tests {
         let result = reader
             .query_range("rate(cpu_cycles[2s]) + rate(reads[4s])", 0.0, 14.0, 1.0)
             .expect("a cross-cadence query must answer");
-        let QueryResult::Matrix { result } = result else {
+        let QueryResult::Matrix { result, .. } = result else {
             panic!("expected a matrix, got {result:?}");
         };
         let times: Vec<f64> = result
@@ -3179,7 +3179,7 @@ mod tests {
         let result = reader
             .query_range("rate(cpu_cycles[2s])", 0.0, 14.0, 1.0)
             .expect("a single-sampler query must answer");
-        let QueryResult::Matrix { result } = result else {
+        let QueryResult::Matrix { result, .. } = result else {
             panic!("expected a matrix, got {result:?}");
         };
         let times: Vec<f64> = result
@@ -3270,7 +3270,7 @@ mod tests {
         assert!(opened(&reader).is_empty());
 
         let (start, end) = composed.time_range().unwrap();
-        let QueryResult::Matrix { result } = composed
+        let QueryResult::Matrix { result, .. } = composed
             .query_range("rate(cpu_cycles[1s])", start, end + 1.0, 1.0)
             .unwrap()
         else {
@@ -3445,7 +3445,7 @@ mod tests {
             let r = reader
                 .query_range("rate(fake_ops[2s])", start, end, 1.0)
                 .expect("the query must resolve");
-            let QueryResult::Matrix { result } = r else {
+            let QueryResult::Matrix { result, .. } = r else {
                 panic!("a range query over a counter is a matrix");
             };
             let mut out: Vec<_> = result

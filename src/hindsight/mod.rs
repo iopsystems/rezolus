@@ -205,9 +205,9 @@ pub fn run(config: Config) {
         policy.max_rows = rows.max(1);
     }
     let mut recorder_cfg = mr::RecorderConfig::new(buffer_path.clone(), interval_dur);
-    recorder_cfg.writer = metriken_storage::WriterConfig {
+    recorder_cfg.writer = mr::WriterConfig {
         seal: policy,
-        ..metriken_storage::WriterConfig::default()
+        ..mr::WriterConfig::default()
     };
     recorder_cfg.timeout = timeout;
     recorder_cfg.wire_names = crate::recorder::stream::ACCEPTED_WIRE_NAMES.to_vec();

@@ -578,7 +578,7 @@ fn extract_time_series(
     query: &str,
 ) -> Result<(Vec<f64>, Vec<f64>), Box<dyn std::error::Error>> {
     match result {
-        QueryResult::Vector { result } => {
+        QueryResult::Vector { result, .. } => {
             // Vector results from query_range indicate something is wrong:
             // shouldn't happen with properly formed rate() queries
             let has_range_vector = query.contains("[") && query.contains("]");
@@ -632,7 +632,7 @@ fn extract_time_series(
                 example_query
             ).into())
         }
-        QueryResult::Matrix { result } => {
+        QueryResult::Matrix { result, .. } => {
             if result.is_empty() {
                 return Ok((vec![], vec![]));
             }
@@ -659,7 +659,7 @@ fn extract_time_series(
                 Ok((timestamps, values))
             }
         }
-        QueryResult::Scalar { result } => {
+        QueryResult::Scalar { result, .. } => {
             // Single scalar value - not enough for anomaly detection
             Err(format!(
                 "Scalar query returned a single value ({:.4}). \

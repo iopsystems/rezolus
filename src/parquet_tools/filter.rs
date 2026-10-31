@@ -424,7 +424,7 @@ mod tests {
         let q = "sum by (comm) (rate(task_ops[3s]))";
         let (start, end) = a.time_range().unwrap();
         let answer = |r: &::rez::reader::RezReader| {
-            let metriken_query::QueryResult::Matrix { result } =
+            let metriken_query::QueryResult::Matrix { result, .. } =
                 r.query_range(q, start, end + 1.0, 1.0).unwrap()
             else {
                 panic!("a matrix");

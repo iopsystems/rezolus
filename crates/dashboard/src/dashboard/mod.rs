@@ -297,10 +297,10 @@ pub fn validate_service_extensions(
         for kpi in &mut ext.kpis {
             let query = kpi.effective_query();
             kpi.available = match data.query_range(&query, start, end, 1.0) {
-                Ok(QueryResult::Vector { result }) => !result.is_empty(),
-                Ok(QueryResult::Matrix { result }) => !result.is_empty(),
+                Ok(QueryResult::Vector { result, .. }) => !result.is_empty(),
+                Ok(QueryResult::Matrix { result, .. }) => !result.is_empty(),
                 Ok(QueryResult::Scalar { .. }) => true,
-                Ok(QueryResult::HistogramHeatmap { result }) => !result.data.is_empty(),
+                Ok(QueryResult::HistogramHeatmap { result, .. }) => !result.data.is_empty(),
                 Err(_) => false,
             };
         }

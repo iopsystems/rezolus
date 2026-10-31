@@ -296,7 +296,7 @@ fn evaluate(reader: &dyn MetricsSource, kpi: &Kpi, check: &Check) -> Result<Wind
         .query_range(&query, start, end, step)
         .map_err(|e| format!("query failed: {e}"))?;
     let series = match result {
-        QueryResult::Matrix { result } => result,
+        QueryResult::Matrix { result, .. } => result,
         QueryResult::Vector { .. } | QueryResult::Scalar { .. } => {
             return Err("query did not produce a time series".into());
         }

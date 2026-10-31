@@ -1380,7 +1380,7 @@ impl Server {
         crate::mcp::export::check_row_cap(&result, step)?;
         let rows = crate::mcp::export::rows_of(&result)?;
         let exported = crate::mcp::export::write(dir, &name, format, &rows)?;
-        Ok(serde_json::to_string_pretty(&json!({
+        let mut response = json!({
             "path": exported.path,
             "format": exported.format,
             "rows": exported.rows,
@@ -1389,7 +1389,13 @@ impl Server {
             "query": query,
             "range": {"start": start, "end": end, "step": step},
             "file": parquet_file,
-        }))?)
+        });
+        // The result's notices, as the `query` tool returns them; the
+        // exported file holds only the rows.
+        if !result.notices().is_empty() {
+            response["notices"] = serde_json::to_value(result.notices())?;
+        }
+        Ok(serde_json::to_string_pretty(&response)?)
     }
 
     /// `viewer_link`: pure formatting; no recording is opened.
@@ -1529,6 +1535,7 @@ mod tests {
     fn test_query_result_scalar_json_format() {
         let result = QueryResult::Scalar {
             result: (1704067200.0, 42.0),
+            notices: Vec::new(),
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"resultType\":\"scalar\""));
@@ -1545,6 +1552,7 @@ mod tests {
 
         let result = QueryResult::Vector {
             result: vec![Sample::new(metric, (1704067200.0, 4.0))],
+            notices: Vec::new(),
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"resultType\":\"vector\""));
@@ -1566,6 +1574,7 @@ mod tests {
                 metric,
                 vec![(1704067200.0, 2.5e9), (1704067201.0, 2.6e9)],
             )],
+            notices: Vec::new(),
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"resultType\":\"matrix\""));

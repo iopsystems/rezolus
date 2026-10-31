@@ -17,8 +17,8 @@ libloading = "0.8"
 log = "0.4.29"
 metriken = "0.11.4"
 metriken-exposition = "0.25.0"
-metriken-query = { version = "0.42.2", default-features = false }
-metriken-storage = { version = "0.5.4", default-features = false }
+metriken-query = { version = "0.43.0", default-features = false }
+metriken-storage = { version = "0.6.0", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
@@ -46,8 +46,9 @@ dashboard = { path = "crates/dashboard" }
 # `last_caller_row_at_or_before`, which the reader for dendro archives uses
 # to find the identity index's `Full` to replay from. 0.6.0 creates schema 5
 # archives (a `documents` table, segment indexes in their own table), which
-# dendro 0.5.1 and earlier refuse; it still reads and resumes schema 4.
-dendro = { version = "0.6.0", default-features = false }
+# dendro 0.5.1 and earlier refuse; it still reads and resumes schema 4. 0.6.1
+# adds `SourceWriter::set_identity`, which metriken-storage 0.6's writer uses.
+dendro = { version = "0.6.1", default-features = false }
 rez = { path = "crates/rez" }
 report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
@@ -110,11 +111,14 @@ metriken-query = { workspace = true, features = ["ingest"] }
 # Detection, the stream and scrape transports, restart metadata, and the
 # tick that commits every source into one `.dendro`: `record`, hindsight and
 # the live viewer over the library (metriken's
-# docs/journal/2026-10-12-metriken-recorder.md).
+# docs/journal/2026-10-12-metriken-recorder.md). Held at 0.5.1, over
+# metriken-storage 0.5.4: 0.6 writes no `source` of its own (none from the
+# URL or the probe hook), which the templates and the combined view read.
 metriken-recorder = "0.5.1"
-# The archive writer `record -o out.dendro` writes through (`write`), the
+# The archive writer behind the `recording` copies (`write`), the
 # raw-msgpack-to-dendro conversion behind `recording convert` (`convert`), and
-# the `.rez` and parquet to dendro converters (`to_dendro`, `rez`).
+# the `.rez` and parquet to dendro converters (`to_dendro`, `rez`). `record`,
+# hindsight and the live viewer write through metriken-recorder's.
 metriken-storage = { workspace = true, features = ["write", "convert", "rez"] }
 notify = "8.2.0"
 open = "5.3.4"

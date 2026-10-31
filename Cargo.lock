@@ -1140,7 +1140,7 @@ dependencies = [
  "include_dir",
  "metriken-exposition",
  "metriken-query",
- "metriken-storage",
+ "metriken-storage 0.6.0",
  "serde",
  "serde_json",
  "tempfile",
@@ -1154,9 +1154,9 @@ checksum = "5729f5117e208430e437df2f4843f5e5952997175992d1414f94c57d61e270b4"
 
 [[package]]
 name = "dendro"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc41a9db544dd17270120f0dbfe06c434caa56c12c09655dd4949333b73aebd7"
+checksum = "87ecf8f347ec07a27d66904822ceceddd7ee14c9e1d5d2085be13d18f4e8d8a9"
 dependencies = [
  "arrow",
  "bytes",
@@ -2538,9 +2538,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-model"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09e0897bdf56b87108becfc9bc847eec6f501cf7e7ce92d333f8bba30f8d9474"
+checksum = "b4ae107ff864dddc55619588bc2234451dd6f6e08c468a40255a7740e84d7795"
 dependencies = [
  "histogram",
  "metriken-types",
@@ -2551,16 +2551,16 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.42.2"
+version = "0.43.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdcfaadf3be51a287b520257b29f7d9121fd58ac1b2a84d7f3c5ed6beef638c5"
+checksum = "11df4f4511ad59d26cccef0d8268680d81967e96a9c0994e8701800404e25b34"
 dependencies = [
  "arrow",
  "bytes",
  "foldhash",
  "histogram",
  "metriken-model",
- "metriken-storage",
+ "metriken-storage 0.6.0",
  "parquet",
  "promql-parser",
  "serde",
@@ -2582,7 +2582,7 @@ dependencies = [
  "histogram",
  "humantime",
  "metriken-model",
- "metriken-storage",
+ "metriken-storage 0.5.4",
  "metriken-types",
  "reqwest",
  "serde_json",
@@ -2604,6 +2604,29 @@ dependencies = [
  "foldhash",
  "histogram",
  "lru",
+ "metriken-model",
+ "metriken-types",
+ "parquet",
+ "rmp",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "tracing",
+ "twox-hash",
+]
+
+[[package]]
+name = "metriken-storage"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5d4360e8b4665efcb95814df1f113220454f7b6a43d63f3453d726149792db0"
+dependencies = [
+ "arrow",
+ "bytes",
+ "dendro",
+ "foldhash",
+ "histogram",
+ "lru",
  "metriken-exposition",
  "metriken-model",
  "metriken-types",
@@ -2616,6 +2639,7 @@ dependencies = [
  "tar",
  "tracing",
  "twox-hash",
+ "zstd",
 ]
 
 [[package]]
@@ -3535,7 +3559,7 @@ dependencies = [
  "dashboard",
  "dendro",
  "metriken-query",
- "metriken-storage",
+ "metriken-storage 0.6.0",
  "parquet",
  "rez",
  "serde",
@@ -3590,7 +3614,7 @@ dependencies = [
  "metriken",
  "metriken-exposition",
  "metriken-query",
- "metriken-storage",
+ "metriken-storage 0.6.0",
  "parquet",
  "rusqlite",
  "serde",
@@ -3639,7 +3663,7 @@ dependencies = [
  "metriken-exposition",
  "metriken-query",
  "metriken-recorder",
- "metriken-storage",
+ "metriken-storage 0.6.0",
  "nix 0.31.3",
  "notify",
  "nvml-wrapper",
@@ -4917,7 +4941,7 @@ dependencies = [
  "console_error_panic_hook",
  "dashboard",
  "metriken-query",
- "metriken-storage",
+ "metriken-storage 0.6.0",
  "report-save",
  "rez",
  "serde",
