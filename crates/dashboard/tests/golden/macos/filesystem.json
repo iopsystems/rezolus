@@ -5,7 +5,188 @@
   "filename": "",
   "start_time": 1700000000000.0,
   "end_time": 1700000060000.0,
-  "groups": [],
+  "groups": [
+    {
+      "name": "Space",
+      "id": "space",
+      "subgroups": [
+        {
+          "name": "Capacity",
+          "description": "Bytes per locally mounted filesystem. Available is what an unprivileged writer can still use and is the number to alert on; Free also counts the superuser reserve. Used % is computed as df computes it on Linux, so the reserve does not count as used. An APFS volume without a quota or reserve reports its container's size and free space, so its Used % is the container's. Volume Used, recorded on macOS, is the bytes each volume itself uses, the number df reports as used.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Available",
+                "id": "available",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (filesystem_available)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Free",
+                "id": "free",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (filesystem_free)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Total",
+                "id": "total",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (filesystem_total)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Used %",
+                "id": "used-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "(sum by (mount) (filesystem_total) - sum by (mount) (filesystem_free)) / (sum by (mount) (filesystem_total) - sum by (mount) (filesystem_free) + sum by (mount) (filesystem_available))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Volume Used",
+                "id": "volume-used",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "bytes",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (filesystem_volume_used)"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Inodes",
+      "id": "inodes",
+      "subgroups": [
+        {
+          "name": "Usage",
+          "description": "Inodes per filesystem. A filesystem full of small files runs out of these before it runs out of bytes. ext4 fixes the count at mkfs time; XFS and ZFS report an estimate that moves with free space; btrfs and vfat report no limit and are not shown.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Free Inodes",
+                "id": "inodes-free",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (filesystem_inodes_free)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Inodes Free %",
+                "id": "inodes-free-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (filesystem_inodes_free) / sum by (mount) (filesystem_inodes_total)"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "State",
+      "id": "state",
+      "subgroups": [
+        {
+          "name": "Read-only",
+          "description": "1 while a filesystem is read-only as a whole: mounted that way, or after an error (ext4 emergency_ro, btrfs forced read-only). 0 does not prove it is writable: an XFS shutdown does not show here, and a full filesystem stays writable while its writes fail.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Read-only",
+                "id": "readonly",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (filesystem_readonly)"
+            }
+          ]
+        }
+      ]
+    }
+  ],
   "sections": [
     {
       "name": "Overview",

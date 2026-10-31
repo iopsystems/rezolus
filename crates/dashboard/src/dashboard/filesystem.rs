@@ -26,7 +26,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
          still use and is the number to alert on; Free also counts the superuser reserve. \
          Used % is computed as df computes it on Linux, so the reserve does not count as used. \
          An APFS volume without a quota or reserve reports its container's size and free \
-         space, so its Used % is the container's.",
+         space, so its Used % is the container's. Volume Used, recorded on macOS, is the bytes \
+         each volume itself uses, the number df reports as used.",
     );
     capacity.plot_promql(
         PlotOpts::gauge("Available", "available", Unit::Bytes),
@@ -51,6 +52,12 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             available = by_mount("filesystem_available"),
         ),
     );
+    if has_metric(data, "filesystem_volume_used") {
+        capacity.plot_promql(
+            PlotOpts::gauge("Volume Used", "volume-used", Unit::Bytes),
+            by_mount("filesystem_volume_used"),
+        );
+    }
 
     view.group(space);
 
@@ -192,6 +199,18 @@ mod tests {
              (sum by (mount) (filesystem_total) - sum by (mount) (filesystem_free) + \
              sum by (mount) (filesystem_available))"
         ));
+    }
+
+    #[test]
+    fn volume_used_appears_only_when_the_recording_has_the_metric() {
+        let without = generate(&store_with(&["filesystem_total"]), vec![]);
+        assert!(!json(&without).contains("filesystem_volume_used"));
+
+        let with = generate(
+            &store_with(&["filesystem_total", "filesystem_volume_used"]),
+            vec![],
+        );
+        assert!(json(&with).contains("sum by (mount) (filesystem_volume_used)"));
     }
 
     #[test]

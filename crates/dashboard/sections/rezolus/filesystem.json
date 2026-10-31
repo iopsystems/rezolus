@@ -13,7 +13,7 @@
           "subgroups": [
             {
               "name": "Capacity",
-              "description": "Bytes per locally mounted filesystem. Available is what an unprivileged writer can still use and is the number to alert on; Free also counts the superuser reserve. Used % is computed as df computes it on Linux, so the reserve does not count as used. An APFS volume without a quota or reserve reports its container's size and free space, so its Used % is the container's.",
+              "description": "Bytes per locally mounted filesystem. Available is what an unprivileged writer can still use and is the number to alert on; Free also counts the superuser reserve. Used % is computed as df computes it on Linux, so the reserve does not count as used. An APFS volume without a quota or reserve reports its container's size and free space, so its Used % is the container's. Volume Used, recorded on macOS, is the bytes each volume itself uses, the number df reports as used.",
               "plots": [
                 {
                   "kind": "gauge",
@@ -43,6 +43,20 @@
                   "unit": "percentage",
                   "query": "(sum by (mount) (filesystem_total) - sum by (mount) (filesystem_free)) / (sum by (mount) (filesystem_total) - sum by (mount) (filesystem_free) + sum by (mount) (filesystem_available))",
                   "percentage_range": true
+                },
+                {
+                  "when": {
+                    "present": "filesystem_volume_used"
+                  },
+                  "then": [
+                    {
+                      "kind": "gauge",
+                      "title": "Volume Used",
+                      "id": "volume-used",
+                      "unit": "bytes",
+                      "query": "sum by (mount) (filesystem_volume_used)"
+                    }
+                  ]
                 }
               ]
             }
