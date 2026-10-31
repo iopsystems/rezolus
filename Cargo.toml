@@ -221,6 +221,7 @@ nvml-wrapper = "0.12.1"
 libloading = "0.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+libloading = "0.8"
 nix = { version = "0.31", features = ["signal", "process"] }
 plist = "1.9"
 

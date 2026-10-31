@@ -28,7 +28,7 @@
 const NAME: &str = "cpu_frequency";
 
 use crate::agent::sampler_status::Unsupported;
-use crate::agent::samplers::ioreport::{Channel, Subscription, Value};
+use crate::agent::samplers::ioreport::{self, Channel, Subscription, Value};
 use crate::agent::*;
 
 use super::topology::{self, Core, Kind};
@@ -63,7 +63,8 @@ impl Frequency {
             .ok_or_else(|| Unsupported(format!("{NAME}: no CPU topology in the device tree")))?;
         let (e, p) = topology::frequency_tables()
             .ok_or_else(|| Unsupported(format!("{NAME}: no performance-state frequency tables")))?;
-        let subscription = Subscription::new(&[(GROUP, Some(SUBGROUP))])
+        let api = ioreport::api().map_err(|e| Unsupported(format!("{NAME}: {e}")))?;
+        let subscription = Subscription::new(api, &[(GROUP, Some(SUBGROUP))])
             .ok_or_else(|| Unsupported(format!("{NAME}: IOReport has no {SUBGROUP} channels")))?;
         let channels = subscription
             .sample()
@@ -253,7 +254,7 @@ mod tests {
         let cores = topology::cores().unwrap();
         let (e, p) = topology::frequency_tables().unwrap();
         let tables = HashMap::from([(Kind::Efficiency, e), (Kind::Performance, p)]);
-        let sub = Subscription::new(&[(GROUP, Some(SUBGROUP))]).unwrap();
+        let sub = Subscription::new(ioreport::api().unwrap(), &[(GROUP, Some(SUBGROUP))]).unwrap();
         let first = read(&sub.sample().unwrap(), system_ticks(), &cores, &tables);
         assert_eq!(first.len(), cores.len());
         std::thread::sleep(std::time::Duration::from_millis(200));

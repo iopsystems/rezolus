@@ -11,6 +11,9 @@
 //! counter ticks.
 
 use std::ffi::{c_char, c_void, CString};
+use std::sync::OnceLock;
+
+use libloading::Library;
 
 type CfTypeRef = *const c_void;
 
@@ -22,37 +25,80 @@ const FORMAT_SIMPLE: i32 = 1;
 /// state.
 const FORMAT_STATE: i32 = 2;
 
-#[link(name = "IOReport")]
-extern "C" {
-    fn IOReportCopyChannelsInGroup(
-        group: CfTypeRef,
-        subgroup: CfTypeRef,
-        a: u64,
-        b: u64,
-        c: u64,
-    ) -> CfTypeRef;
-    fn IOReportMergeChannels(a: CfTypeRef, b: CfTypeRef, null: CfTypeRef);
-    fn IOReportCreateSubscription(
-        a: *const c_void,
-        desired: CfTypeRef,
-        subscribed: *mut CfTypeRef,
-        channel_id: u64,
-        b: CfTypeRef,
-    ) -> CfTypeRef;
-    fn IOReportCreateSamples(
-        subscription: CfTypeRef,
-        subscribed: CfTypeRef,
-        null: CfTypeRef,
-    ) -> CfTypeRef;
-    fn IOReportChannelGetGroup(item: CfTypeRef) -> CfTypeRef;
-    fn IOReportChannelGetSubGroup(item: CfTypeRef) -> CfTypeRef;
-    fn IOReportChannelGetChannelName(item: CfTypeRef) -> CfTypeRef;
-    fn IOReportChannelGetUnitLabel(item: CfTypeRef) -> CfTypeRef;
-    fn IOReportChannelGetFormat(item: CfTypeRef) -> i32;
-    fn IOReportSimpleGetIntegerValue(item: CfTypeRef, index: *mut i32) -> i64;
-    fn IOReportStateGetCount(item: CfTypeRef) -> i32;
-    fn IOReportStateGetNameForIndex(item: CfTypeRef, index: i32) -> CfTypeRef;
-    fn IOReportStateGetResidency(item: CfTypeRef, index: i32) -> i64;
+/// Where IOReport lives. The file is in the dyld shared cache, not on
+/// disk, and `dlopen` finds it there.
+const LIBRARY: &str = "/usr/lib/libIOReport.dylib";
+
+/// The IOReport functions the samplers call, resolved from the library
+/// loaded at runtime. IOReport is loaded rather than linked so that a macOS
+/// release without it, or without one of these functions, leaves the two
+/// samplers unsupported instead of stopping the binary from starting.
+pub(crate) struct Api {
+    copy_channels_in_group: unsafe extern "C" fn(CfTypeRef, CfTypeRef, u64, u64, u64) -> CfTypeRef,
+    merge_channels: unsafe extern "C" fn(CfTypeRef, CfTypeRef, CfTypeRef),
+    create_subscription:
+        unsafe extern "C" fn(*const c_void, CfTypeRef, *mut CfTypeRef, u64, CfTypeRef) -> CfTypeRef,
+    create_samples: unsafe extern "C" fn(CfTypeRef, CfTypeRef, CfTypeRef) -> CfTypeRef,
+    channel_get_group: unsafe extern "C" fn(CfTypeRef) -> CfTypeRef,
+    channel_get_subgroup: unsafe extern "C" fn(CfTypeRef) -> CfTypeRef,
+    channel_get_channel_name: unsafe extern "C" fn(CfTypeRef) -> CfTypeRef,
+    channel_get_unit_label: unsafe extern "C" fn(CfTypeRef) -> CfTypeRef,
+    channel_get_format: unsafe extern "C" fn(CfTypeRef) -> i32,
+    simple_get_integer_value: unsafe extern "C" fn(CfTypeRef, *mut i32) -> i64,
+    state_get_count: unsafe extern "C" fn(CfTypeRef) -> i32,
+    state_get_name_for_index: unsafe extern "C" fn(CfTypeRef, i32) -> CfTypeRef,
+    state_get_residency: unsafe extern "C" fn(CfTypeRef, i32) -> i64,
+    // The function pointers above are valid while the library is loaded.
+    // An `Api` is only kept in the `API` static, which is never dropped.
+    _library: Library,
+}
+
+impl Api {
+    fn load(path: &str) -> Result<Self, String> {
+        // SAFETY: loading a system library runs its initializers, which is
+        // what linking it did.
+        let library =
+            unsafe { Library::new(path) }.map_err(|e| format!("could not load {path}: {e}"))?;
+        // SAFETY: each type is the signature the function is called with
+        // (see the module docs on where the signatures come from). The
+        // pointer is copied out of the `Symbol`, and the library it points
+        // into is kept in the returned `Api`.
+        unsafe fn get<T: Copy>(library: &Library, name: &str) -> Result<T, String> {
+            library
+                .get::<T>(name.as_bytes())
+                .map(|f| *f)
+                .map_err(|e| format!("{name}: {e}"))
+        }
+        // SAFETY: as for `get`.
+        unsafe {
+            Ok(Api {
+                copy_channels_in_group: get(&library, "IOReportCopyChannelsInGroup")?,
+                merge_channels: get(&library, "IOReportMergeChannels")?,
+                create_subscription: get(&library, "IOReportCreateSubscription")?,
+                create_samples: get(&library, "IOReportCreateSamples")?,
+                channel_get_group: get(&library, "IOReportChannelGetGroup")?,
+                channel_get_subgroup: get(&library, "IOReportChannelGetSubGroup")?,
+                channel_get_channel_name: get(&library, "IOReportChannelGetChannelName")?,
+                channel_get_unit_label: get(&library, "IOReportChannelGetUnitLabel")?,
+                channel_get_format: get(&library, "IOReportChannelGetFormat")?,
+                simple_get_integer_value: get(&library, "IOReportSimpleGetIntegerValue")?,
+                state_get_count: get(&library, "IOReportStateGetCount")?,
+                state_get_name_for_index: get(&library, "IOReportStateGetNameForIndex")?,
+                state_get_residency: get(&library, "IOReportStateGetResidency")?,
+                _library: library,
+            })
+        }
+    }
+}
+
+static API: OnceLock<Result<Api, String>> = OnceLock::new();
+
+/// IOReport, loaded on first use. The error says which file could not be
+/// loaded or which function it lacks.
+pub(crate) fn api() -> Result<&'static Api, &'static str> {
+    API.get_or_init(|| Api::load(LIBRARY))
+        .as_ref()
+        .map_err(String::as_str)
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -134,6 +180,7 @@ pub(crate) enum Value {
 
 /// A subscription to some IOReport channel groups.
 pub(crate) struct Subscription {
+    api: &'static Api,
     subscription: Owned,
     subscribed: Owned,
 }
@@ -147,7 +194,7 @@ impl Subscription {
     /// Subscribe to every channel of each `(group, subgroup)`; a `None`
     /// subgroup takes the whole group. `None` when a group has no channels
     /// on this machine or the subscription fails.
-    pub(crate) fn new(groups: &[(&str, Option<&str>)]) -> Option<Self> {
+    pub(crate) fn new(api: &'static Api, groups: &[(&str, Option<&str>)]) -> Option<Self> {
         let mut merged: Option<Owned> = None;
         for (group, subgroup) in groups {
             let group = cf_string(group)?;
@@ -158,7 +205,7 @@ impl Subscription {
             // SAFETY: the strings are live; a null subgroup selects every
             // subgroup. The result is a +1 dictionary or null.
             let channels = unsafe {
-                IOReportCopyChannelsInGroup(
+                (api.copy_channels_in_group)(
                     group.0,
                     subgroup.as_ref().map_or(std::ptr::null(), |s| s.0),
                     0,
@@ -173,7 +220,7 @@ impl Subscription {
             match &merged {
                 // SAFETY: both are live channel dictionaries; the first is
                 // a mutable copy, which the merge adds to.
-                Some(m) => unsafe { IOReportMergeChannels(m.0, channels.0, std::ptr::null()) },
+                Some(m) => unsafe { (api.merge_channels)(m.0, channels.0, std::ptr::null()) },
                 None => {
                     // SAFETY: `channels.0` is a live dictionary; the copy is +1.
                     let copy = unsafe {
@@ -195,7 +242,7 @@ impl Subscription {
         // SAFETY: `desired` is a live mutable channel dictionary and
         // `subscribed` a valid out-pointer; both results are +1 or null.
         let subscription = unsafe {
-            IOReportCreateSubscription(
+            (api.create_subscription)(
                 std::ptr::null(),
                 desired.0,
                 &mut subscribed,
@@ -213,6 +260,7 @@ impl Subscription {
             return None;
         }
         Some(Subscription {
+            api,
             subscription: Owned(subscription),
             subscribed: Owned(subscribed),
         })
@@ -222,8 +270,9 @@ impl Subscription {
     /// are returned; other formats are left out.
     pub(crate) fn sample(&self) -> Option<Vec<Channel>> {
         // SAFETY: both objects are live; the result is +1 or null.
+        let api = self.api;
         let samples = unsafe {
-            IOReportCreateSamples(self.subscription.0, self.subscribed.0, std::ptr::null())
+            (api.create_samples)(self.subscription.0, self.subscribed.0, std::ptr::null())
         };
         if samples.is_null() {
             return None;
@@ -240,16 +289,16 @@ impl Subscription {
             }
             for i in 0..CFArrayGetCount(array) {
                 let item = CFArrayGetValueAtIndex(array, i);
-                let value = match IOReportChannelGetFormat(item) {
+                let value = match (api.channel_get_format)(item) {
                     FORMAT_SIMPLE => {
-                        Value::Simple(IOReportSimpleGetIntegerValue(item, std::ptr::null_mut()))
+                        Value::Simple((api.simple_get_integer_value)(item, std::ptr::null_mut()))
                     }
                     FORMAT_STATE => Value::State(
-                        (0..IOReportStateGetCount(item))
+                        (0..(api.state_get_count)(item))
                             .map(|s| {
                                 (
-                                    text(IOReportStateGetNameForIndex(item, s)),
-                                    IOReportStateGetResidency(item, s),
+                                    text((api.state_get_name_for_index)(item, s)),
+                                    (api.state_get_residency)(item, s),
                                 )
                             })
                             .collect(),
@@ -257,10 +306,10 @@ impl Subscription {
                     _ => continue,
                 };
                 out.push(Channel {
-                    group: text(IOReportChannelGetGroup(item)),
-                    subgroup: text(IOReportChannelGetSubGroup(item)),
-                    name: text(IOReportChannelGetChannelName(item)),
-                    unit: text(IOReportChannelGetUnitLabel(item)),
+                    group: text((api.channel_get_group)(item)),
+                    subgroup: text((api.channel_get_subgroup)(item)),
+                    name: text((api.channel_get_channel_name)(item)),
+                    unit: text((api.channel_get_unit_label)(item)),
                     value,
                 });
             }
@@ -308,11 +357,38 @@ pub(crate) use skip_in_vm;
 mod tests {
     use super::*;
 
+    /// IOReport loads from the shared cache, with every function the
+    /// samplers call.
+    #[test]
+    fn the_library_loads() {
+        api().unwrap();
+    }
+
+    /// A missing library is an error naming the file, not a failure to
+    /// start.
+    #[test]
+    fn a_missing_library_is_an_error() {
+        let Err(e) = Api::load("/usr/lib/libDoesNotExist.dylib") else {
+            panic!("loaded a missing library");
+        };
+        assert!(e.contains("/usr/lib/libDoesNotExist.dylib"), "{e}");
+    }
+
+    /// A library without the functions is an error naming the first one
+    /// missing.
+    #[test]
+    fn a_missing_function_is_an_error() {
+        let Err(e) = Api::load("/usr/lib/libSystem.B.dylib") else {
+            panic!("libSystem has IOReport's functions");
+        };
+        assert!(e.starts_with("IOReportCopyChannelsInGroup:"), "{e}");
+    }
+
     /// The energy model is readable unprivileged and its counters only grow.
     #[test]
     fn energy_model_totals_are_running_totals() {
         skip_in_vm!();
-        let sub = Subscription::new(&[("Energy Model", None)]).expect("subscribe");
+        let sub = Subscription::new(api().unwrap(), &[("Energy Model", None)]).expect("subscribe");
         let total = |channels: &[Channel]| {
             channels
                 .iter()
@@ -335,8 +411,11 @@ mod tests {
     #[test]
     fn core_residencies_are_running_ticks() {
         skip_in_vm!();
-        let sub = Subscription::new(&[("CPU Stats", Some("CPU Core Performance States"))])
-            .expect("subscribe");
+        let sub = Subscription::new(
+            api().unwrap(),
+            &[("CPU Stats", Some("CPU Core Performance States"))],
+        )
+        .expect("subscribe");
         let channels = sub.sample().expect("sample");
         let core = channels
             .iter()
