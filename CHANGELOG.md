@@ -18,6 +18,14 @@
 
 ### Added
 
+- **An expanded chart shows its scope.** In a combined view, the
+  single-chart view lists the uuids of the sources the chart reads under
+  Scope, below its query. Editing the list reads other sources, Remove
+  reads every recording, and Reset returns to the chart's own scope; a
+  scope whose query fails is not kept. The chart's spectra and heatmap read
+  the scope of the data drawn, and its Total is offered only for its own
+  query and scope. A query that returns no series now shows a message
+  saying so.
 - **A query can read only some of a combined archive's recordings.**
   `/api/v1/query_range` (also with `format=display`) takes `scope`, the
   uuids of the sources to read, separated by commas; the static site's

@@ -130,3 +130,138 @@ test('with a spectrum fetch the scatter chart draws its spectrum checkboxes', ()
         resetChartHost();
     }
 });
+
+// A line chart that redraws itself when the toggle asks it to.
+function toggleableChart(spec) {
+    const chart = fakeChart(spec);
+    chart.configureChartByType = () => configureLineChart(chart);
+    return chart;
+}
+
+test('a total that fails after the scope changed leaves the chart its data', async () => {
+    let fail;
+    const answer = new Promise((_, r) => { fail = r; });
+    setChartHost({ executePromQLRangeQuery: () => answer, applyResultToPlot: () => {} });
+    try {
+        const chart = toggleableChart({ ...lineSpec(), scope: ['u1'] });
+        configureLineChart(chart);
+        const toggling = chart.domNode.querySelector('.total-toggle').onclick();
+        const rerun = [[1, 2, 3], [7, 8, 9]];
+        chart.spec = { ...chart.spec, scope: ['u2'], data: rerun };
+        fail(new Error('down'));
+        await toggling;
+        assert.equal(chart.spec.data, rerun);
+        assert.equal(!!chart._showTotal, false);
+    } finally {
+        resetChartHost();
+    }
+});
+
+test('a total cached for another scope is fetched again', async () => {
+    const scopes = [];
+    setChartHost({
+        executePromQLRangeQuery: async (q, a, b, mode, scope) => {
+            scopes.push(scope);
+            return { status: 'success', data: { result: [{}] } };
+        },
+        applyResultToPlot: (spec) => { spec.data = [[1, 2, 3], [scopes.length, 0, 0]]; },
+    });
+    try {
+        const chart = toggleableChart({ ...lineSpec(), scope: ['u1'] });
+        configureLineChart(chart);
+        const toggle = () => chart.domNode.querySelector('.total-toggle').onclick();
+        await toggle(); // Total, fetched for u1
+        await toggle(); // Mean
+        chart.spec = { ...chart.spec, scope: ['u2'] };
+        await toggle(); // Total again, under u2
+        assert.deepEqual(scopes, [['u1'], ['u2']]);
+    } finally {
+        resetChartHost();
+    }
+});
+
+test('a total that lands after the scope changed is dropped', async () => {
+    let release;
+    const answer = new Promise((r) => { release = r; });
+    const total = [[1, 2, 3], [40, 50, 60]];
+    setChartHost({
+        executePromQLRangeQuery: () => answer,
+        applyResultToPlot: (spec) => { spec.data = total; },
+    });
+    try {
+        const chart = toggleableChart({ ...lineSpec(), scope: ['u1'] });
+        configureLineChart(chart);
+        const toggling = chart.domNode.querySelector('.total-toggle').onclick();
+        // The view reruns under another scope while the total is in flight.
+        const rerun = [[1, 2, 3], [7, 8, 9]];
+        chart.spec = { ...chart.spec, scope: ['u2'], data: rerun };
+        configureLineChart(chart);
+        release({ status: 'success', data: { result: [{ metric: {}, values: [[1, '40']] }] } });
+        await toggling;
+        assert.equal(chart.spec.data, rerun);
+        assert.equal(!!chart._showTotal, false);
+        assert.equal(chart._totalDataCache ?? null, null);
+    } finally {
+        resetChartHost();
+    }
+});
+
+test('a chart whose spec gains or drops its total query is configured again over the same data', async () => {
+    globalThis.window = globalThis.window || { addEventListener() {}, removeEventListener() {} };
+    const { Chart } = await import('../src/viewer/assets/lib/charts/chart.js');
+    const { chartHost } = await import('../src/viewer/assets/lib/charts/host.js');
+    const chart = Object.create(Chart.prototype);
+    let configured = 0;
+    chart.configureChartByType = () => { configured++; };
+    chart._applyEventMarkers = () => {};
+    chart.chartsState = { zoomLevel: null };
+    chart.echart = { dispatchAction() {} };
+    chart._themeVersion = chartHost().getThemeVersion();
+    const opts = { title: 'cpu', format: {} };
+    const data = () => [[1, 2, 3], [4, 5, 6]];
+    chart.spec = { opts, data: data(), promql_query_total: 'sum(cpu)' };
+    chart.update({ spec: { opts, data: data(), promql_query_total: 'sum(cpu)' }, interval: 1 });
+    assert.equal(configured, 0, 'the same spec is not configured again');
+    chart.update({ spec: { opts, data: data() }, interval: 1 });
+    assert.equal(configured, 1);
+    chart.update({ spec: { opts, data: data(), promql_query_total: 'sum(cpu)' }, interval: 1 });
+    assert.equal(configured, 2);
+});
+
+test('a line chart that loses its total toggle draws its data unticked', () => {
+    setChartHost({ executePromQLRangeQuery: async () => null, applyResultToPlot: () => {} });
+    try {
+        const chart = toggleableChart(lineSpec());
+        configureLineChart(chart);
+        chart._showTotal = true;
+        chart.spec = { ...chart.spec, promql_query_total: undefined };
+        configureLineChart(chart);
+        // (The fake element's remove() keeps it; the toggle's state is what
+        // is checked.)
+        assert.equal(chart._showTotal, false);
+    } finally {
+        resetChartHost();
+    }
+});
+
+test('a chart that loses its total query with its data is unticked, and comes back as the mean', () => {
+    setChartHost({ executePromQLRangeQuery: async () => null, applyResultToPlot: () => {} });
+    try {
+        const chart = toggleableChart(lineSpec());
+        chart.echart.clear = () => {};
+        configureLineChart(chart);
+        chart._showTotal = true;
+        // A run that returned no series, of a query without the chart's
+        // total: no data and no total query.
+        chart.spec = { ...chart.spec, data: [], promql_query_total: undefined };
+        configureLineChart(chart);
+        assert.equal(chart._showTotal, false);
+        // Reset to the chart's own query: the toggle is back, unticked, and
+        // the series is the mean.
+        chart.spec = lineSpec();
+        configureLineChart(chart);
+        assert.equal(chart._showTotal, false);
+    } finally {
+        resetChartHost();
+    }
+});

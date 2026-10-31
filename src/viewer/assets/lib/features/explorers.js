@@ -5,6 +5,7 @@ import { runCgroupVariants } from './cgroup_selection.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec } from '../charts/metric_types.js';
 import { collectGroupPlots } from './group_utils.js';
 import { readViewState, writeViewState } from '../ui/url_state.js';
+import { scopeText, parseScopeText } from './scope_text.js';
 import { visibleLabels, varyingLabelKeys } from '../charts/util/labels.js';
 
 const UNIT_OPTIONS = [
@@ -328,6 +329,14 @@ export const SingleChartView = {
         vnode.state.heatmapLoading = false;
         vnode.state.samples = readViewState().time === 'raw';
         vnode.state.samplesLoaded = false;
+        // The scope the view's queries read (see scope_text.js), and the
+        // text of its field.
+        vnode.state.scope = null;
+        vnode.state.scopeText = '';
+        // The query and scope of the data the chart draws: those of the
+        // last query that succeeded.
+        vnode.state.ranQuery = null;
+        vnode.state.ranScope = null;
     },
 
     onremove(vnode) {
@@ -355,6 +364,10 @@ export const SingleChartView = {
                         vnode.state.title = plot.opts.title || '';
                         vnode.state.description = plot.opts.description || '';
                         vnode.state.unitOverride = (plot.opts.format && plot.opts.format.unit_system) || '';
+                        vnode.state.scope = plot.scope ?? null;
+                        vnode.state.scopeText = scopeText(vnode.state.scope);
+                        vnode.state.ranQuery = vnode.state.query;
+                        vnode.state.ranScope = vnode.state.scope;
                         break;
                     }
                 }
@@ -368,8 +381,16 @@ export const SingleChartView = {
         const st = vnode.state;
 
         const formatOverride = buildFormatOverride(st.unitOverride);
+        // The spec describes the data the chart draws: the scope of the last
+        // query that succeeded, which the chart's own fetches (the Total
+        // toggle, spectra) read. The Total toggle sums the chart's own total
+        // query over the chart's own scope, so it is offered only while the
+        // drawn data is the chart's own query over that scope.
+        const own = st.ranQuery === plot.promql_query && sameScope(st.ranScope, plot.scope ?? null);
         const spec = {
             ...plot,
+            scope: st.ranScope ?? undefined,
+            promql_query_total: own ? plot.promql_query_total : undefined,
             opts: { ...plot.opts, title: st.title, description: st.description, format: formatOverride || plot.opts.format },
         };
 
@@ -393,7 +414,7 @@ export const SingleChartView = {
 
         // Resolves to whether the query ran and its result was drawn.
         const executeQuery = async () => {
-            if (!st.query.trim()) return false;
+            if (!st.query.trim() || st.loading) return false;
             st.loading = true;
             st.error = null;
             let ok = false;
@@ -404,12 +425,22 @@ export const SingleChartView = {
                     st.error = 'This chart needs a cgroup selection';
                 } else {
                     const response = await runCgroupVariants(queries, (q) => executePromQLRangeQuery(
-                        q, undefined, undefined, st.samples ? 'raw' : 'grid', plot.scope ?? null));
+                        q, undefined, undefined, st.samples ? 'raw' : 'grid', st.scope));
                     if (st.removed) return false;
                     if (response.status === 'success' && response.data && response.data.result) {
                         applyResultToPlot(plot, response);
                         st.singleChartsState.clear();
                         ok = true;
+                        st.ranQuery = st.query;
+                        st.ranScope = st.scope;
+                        // An empty result draws nothing; say so, and mention
+                        // the scope when there is one, since an edit may have
+                        // pointed it elsewhere.
+                        if (response.data.result.length === 0) {
+                            st.error = st.scope != null
+                                ? 'The query returned no series from the sources in its scope.'
+                                : 'The query returned no series.';
+                        }
                     } else {
                         st.error = response.error || 'Query returned no data';
                     }
@@ -459,7 +490,44 @@ export const SingleChartView = {
 
         const toggleSamples = () => setSamples(!st.samples);
 
+        // Take the scope field's text as the scope and run the query with
+        // it; if the query fails, the scope stays as it was. A heatmap
+        // fetched under the old scope is discarded; in heatmap mode it is
+        // fetched again under the new one. Ignored while a query or a
+        // heatmap is loading, so one answer cannot replace another's.
+        const busy = () => st.loading || st.heatmapLoading;
+        const applyScope = async () => {
+            if (busy()) return;
+            const scope = parseScopeText(st.scopeText);
+            st.scopeText = scopeText(scope);
+            if (sameScope(scope, st.scope)) return;
+            // With no query to run, the chart would keep the old scope's
+            // data while its spec named the new one.
+            if (!st.query.trim()) {
+                st.error = 'Enter a query to read with the new scope.';
+                st.scopeText = scopeText(st.scope);
+                return;
+            }
+            const previous = st.scope;
+            st.scope = scope;
+            const heatmap = st.heatmapMode;
+            if (heatmap) {
+                st.heatmapMode = false;
+                st.singleChartsState.resetAll();
+            }
+            const ok = await executeQuery();
+            if (st.removed) return;
+            if (!ok) {
+                st.scope = previous;
+                st.scopeText = scopeText(previous);
+            } else {
+                st.heatmapData = null;
+            }
+            if (heatmap) await toggleHeatmap();
+        };
+
         const toggleHeatmap = async () => {
+            if (busy()) return;
             if (st.heatmapMode) {
                 st.heatmapMode = false;
                 st.singleChartsState.resetAll();
@@ -470,7 +538,7 @@ export const SingleChartView = {
             if (!st.heatmapData) {
                 st.heatmapLoading = true;
                 m.redraw();
-                st.heatmapData = await fetchHeatmapForPlot(plot);
+                st.heatmapData = await fetchHeatmapForPlot({ ...plot, scope: st.ranScope });
                 st.heatmapLoading = false;
             }
             if (st.heatmapData) {
@@ -504,7 +572,7 @@ export const SingleChartView = {
                     }, st.samples ? 'SHOW ALIGNED' : 'SHOW SAMPLES'),
                     isHistogram && m('button.section-action-btn', {
                         onclick: toggleHeatmap,
-                        disabled: st.heatmapLoading,
+                        disabled: busy(),
                     }, st.heatmapLoading ? 'LOADING...' : (st.heatmapMode ? 'SHOW PERCENTILES' : 'SHOW HEATMAP')),
                 ]),
             ]),
@@ -547,8 +615,39 @@ export const SingleChartView = {
                         }),
                     ]),
                 ]),
+                // A chart of a combined view reads its recording's sources;
+                // the field lists their uuids. Apply, Remove and Reset set
+                // the view's scope and run the query again.
+                (plot.scope != null || st.scope != null) && m('div.single-chart-field.scope-field', [
+                    m('label', 'Scope'),
+                    m('div.field-input-row', [
+                        m('input.field-input', {
+                            type: 'text',
+                            value: st.scopeText,
+                            placeholder: 'every recording',
+                            title: 'The uuids of the sources the query reads, separated by commas. '
+                                + 'Empty reads every recording.',
+                            oninput: (e) => { st.scopeText = e.target.value; },
+                            onkeydown: (e) => { if (e.key === 'Enter') applyScope(); },
+                        }),
+                        m('button.field-apply-btn', { onclick: applyScope, disabled: busy() }, 'Apply'),
+                        st.scope != null && m('button.field-apply-btn', {
+                            disabled: busy(),
+                            onclick: () => { st.scopeText = ''; return applyScope(); },
+                            title: 'Read every recording',
+                        }, 'Remove'),
+                        !sameScope(st.scope, plot.scope ?? null) && m('button.field-apply-btn', {
+                            disabled: busy(),
+                            onclick: () => { st.scopeText = scopeText(plot.scope); return applyScope(); },
+                            title: 'The chart\'s own scope',
+                        }, 'Reset'),
+                    ]),
+                ]),
                 st.error && m('div.error-message', st.error),
             ]),
         ]);
     },
 };
+
+// Two scopes are the same when they list the same uuids, in any order.
+const sameScope = (a, b) => scopeText(a && [...a].sort()) === scopeText(b && [...b].sort());
