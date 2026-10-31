@@ -47,6 +47,18 @@ const logSectionTemplateError = (view) => {
 const captureQS = (captureId) =>
     (captureId && captureId !== 'baseline') ? `?capture=${captureId}` : '';
 
+// A query's scope as the backend reads it: the uuids of the sources it
+// reads, separated by commas (`display_wire::parse_scope`), or null to read
+// every source. `scope` is an array of uuids, a string of them, or
+// null/undefined. An empty array is refused rather than read as every
+// source, which would read every recording of a combined archive.
+const scopeArg = (scope) => {
+    if (scope === null || scope === undefined) return null;
+    if (typeof scope === 'string') return scope;
+    if (Array.isArray(scope) && scope.length > 0) return scope.join(',');
+    throw new TypeError(`a query scope is a non-empty array of uuids: ${JSON.stringify(scope)}`);
+};
+
 const ViewerApi = {
     async getMode() {
         return backendRequest({ method: 'GET', url: '/api/v1/mode' });
@@ -153,7 +165,7 @@ const ViewerApi = {
         return view;
     },
 
-    async queryRange(query, start, end, step, captureId = 'baseline', signal = undefined, rateMode = 'grid') {
+    async queryRange(query, start, end, step, captureId = 'baseline', signal = undefined, rateMode = 'grid', scope = null) {
         const params = new URLSearchParams({
             query,
             start: String(start),
@@ -164,6 +176,8 @@ const ViewerApi = {
             params.set('capture', captureId);
         }
         if (rateMode && rateMode !== 'grid') params.set('rate_mode', rateMode);
+        const scopeParam = scopeArg(scope);
+        if (scopeParam !== null) params.set('scope', scopeParam);
         return backendRequest({
             method: 'GET',
             url: `/api/v1/query_range?${params.toString()}`,
@@ -177,7 +191,7 @@ const ViewerApi = {
     // ArrayBuffer, or, when the engine returns an error or a non-Series
     // result, the parsed JSON under `{ json }`. Uses raw fetch since
     // m.request is JSON-oriented.
-    async queryRangeDisplay(query, start, end, step, { points = 500, band = null, captureId = 'baseline', signal = undefined, rateMode = 'grid' } = {}) {
+    async queryRangeDisplay(query, start, end, step, { points = 500, band = null, captureId = 'baseline', signal = undefined, rateMode = 'grid', scope = null } = {}) {
         const params = new URLSearchParams({
             query,
             start: String(start),
@@ -189,6 +203,8 @@ const ViewerApi = {
         if (band) params.set('band', band);
         if (captureId && captureId !== 'baseline') params.set('capture', captureId);
         if (rateMode && rateMode !== 'grid') params.set('rate_mode', rateMode);
+        const scopeParam = scopeArg(scope);
+        if (scopeParam !== null) params.set('scope', scopeParam);
         const resp = await fetch(`/api/v1/query_range?${params.toString()}`, {
             credentials: 'include',
             cache: 'no-store',

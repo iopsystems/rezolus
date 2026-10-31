@@ -392,6 +392,10 @@ struct QueryParams {
     time: Option<f64>,
     #[serde(default)]
     capture: Option<String>,
+    /// Refused when present: an instant query reads every source
+    /// (metriken-query's `MetricsSource::query` takes no options).
+    #[serde(default)]
+    scope: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -416,6 +420,23 @@ struct RangeQueryParams {
     /// anything else is the default grid-aligned mode.
     #[serde(default)]
     rate_mode: Option<String>,
+    /// The sources the query reads, as uuids separated by commas
+    /// (`display_wire::parse_scope`); absent reads every source.
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+impl RangeQueryParams {
+    /// The query's options ([`display_wire::query_options`]); a scope that
+    /// does not parse is a `bad_data` error.
+    fn options(&self) -> Result<metriken_query::QueryOptions, Box<Response>> {
+        display_wire::query_options(self.rate_mode.as_deref(), self.scope.as_deref()).map_err(|e| {
+            Box::new(
+                ApiResponse::<serde_json::Value>::err(format!("invalid scope: {e}"), "bad_data")
+                    .into_response(),
+            )
+        })
+    }
 }
 
 /// Run `f`, which reads the recording, on tokio's blocking pool once one of
@@ -465,6 +486,13 @@ async fn instant_query(
     Query(params): Query<QueryParams>,
     State(state): State<Arc<AppState>>,
 ) -> Response {
+    if params.scope.is_some() {
+        return ApiResponse::<serde_json::Value>::err(
+            "an instant query takes no scope; use /api/v1/query_range".to_string(),
+            "bad_data",
+        )
+        .into_response();
+    }
     on_query_slot(&state, move |state| {
         run_query(state, params.capture.as_deref(), |data| {
             data.query(&params.query, params.time)
@@ -482,9 +510,10 @@ async fn range_query(
         if params.format.as_deref() == Some("display") {
             return range_query_display(state, &params);
         }
-        let qopts = metriken_query::QueryOptions::with_rate_mode(display_wire::parse_rate_mode(
-            params.rate_mode.as_deref(),
-        ));
+        let qopts = match params.options() {
+            Ok(qopts) => qopts,
+            Err(response) => return *response,
+        };
         run_query(state, params.capture.as_deref(), |data| {
             data.query_range_opts(&params.query, params.start, params.end, params.step, &qopts)
         })
@@ -498,6 +527,10 @@ async fn range_query(
 /// `dashboard::display_wire` so the WASM viewer produces byte-identical bodies.
 /// Non-`Series` results (scalar/vector) fall back to JSON.
 fn range_query_display(state: &AppState, params: &RangeQueryParams) -> Response {
+    let qopts = match params.options() {
+        Ok(qopts) => qopts,
+        Err(response) => return *response,
+    };
     let capture = params
         .capture
         .as_deref()
@@ -517,7 +550,7 @@ fn range_query_display(state: &AppState, params: &RangeQueryParams) -> Response 
         params.step,
         params.points.unwrap_or(500),
         display_wire::parse_band(params.band.as_deref()),
-        display_wire::parse_rate_mode(params.rate_mode.as_deref()),
+        &qopts,
     ) {
         Ok(display_wire::DisplayWire::Binary(buf)) => {
             ([(header::CONTENT_TYPE, "application/octet-stream")], buf).into_response()
@@ -757,6 +790,110 @@ mod follow_tests {
         ))
     }
 
+    /// A range query's `scope` (its sources' uuids) reads only those
+    /// sources, on the JSON and the display path; without one it reads every
+    /// recording of the combined archive.
+    #[tokio::test]
+    async fn a_range_query_reads_its_scope() {
+        use rez::fixtures::{one_run, Recording};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.dendro");
+        let host = |labels| Recording {
+            labels,
+            metadata: &[("source", "rezolus")],
+            cpus: 2,
+            busy_ns: 500_000_000,
+            counter: None,
+        };
+        one_run(
+            &path,
+            &[
+                host(&[("source", "rezolus"), ("host", "h1")]),
+                host(&[("source", "rezolus"), ("host", "h2")]),
+            ],
+        );
+        let recordings = rez::reader::RezReader::open_recordings(
+            &path,
+            metriken_storage::BufferPool::new(16 << 20),
+        )
+        .unwrap();
+        let h2: Vec<String> = recordings
+            .iter()
+            .find(|(labels, _)| labels.get("host").map(String::as_str) == Some("h2"))
+            .map(|(_, r)| r.sources().iter().filter_map(|s| s.uuid.clone()).collect())
+            .unwrap();
+        let (start, end) = metriken_query::MetricsSource::time_range(&recordings[0].1).unwrap();
+        let state = view(&path);
+        let params = |scope: Option<&str>, format: Option<&str>| RangeQueryParams {
+            query: "cpu_cores".to_string(),
+            start,
+            end,
+            step: 1.0,
+            capture: None,
+            format: format.map(str::to_string),
+            points: Some(100),
+            band: None,
+            rate_mode: None,
+            scope: scope.map(str::to_string),
+        };
+        let run = |scope: Option<&str>, format: Option<&str>| {
+            let request = Query(params(scope, format));
+            let state = State(Arc::clone(&state));
+            async move {
+                let response = range_query(request, state).await;
+                let binary = response
+                    .headers()
+                    .get(header::CONTENT_TYPE)
+                    .is_some_and(|t| t == "application/octet-stream");
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                (binary, body)
+            }
+        };
+        let hosts = |series: &serde_json::Value| -> Vec<String> {
+            let mut hosts: Vec<String> = series
+                .as_array()
+                .unwrap_or_else(|| panic!("{series}"))
+                .iter()
+                .map(|s| s["metric"]["host"].as_str().unwrap().to_string())
+                .collect();
+            hosts.sort();
+            hosts
+        };
+        let json = |bytes: &[u8]| -> serde_json::Value { serde_json::from_slice(bytes).unwrap() };
+        let h2 = h2.join(",");
+        for (scope, want) in [(None, vec!["h1", "h2"]), (Some(h2.as_str()), vec!["h2"])] {
+            let (_, body) = run(scope, None).await;
+            assert_eq!(hosts(&json(&body)["data"]["result"]), want, "{scope:?}");
+            // The display body's header lists its series.
+            let (binary, body) = run(scope, Some("display")).await;
+            assert!(binary, "{}", String::from_utf8_lossy(&body));
+            let len = u32::from_le_bytes(body[..4].try_into().unwrap()) as usize;
+            assert_eq!(hosts(&json(&body[4..4 + len])["series"]), want, "{scope:?}");
+        }
+        // A scope naming no source is refused, not read as every source, on
+        // both paths; an instant query refuses any scope.
+        for format in [None, Some("display")] {
+            let (_, body) = run(Some(""), format).await;
+            assert_eq!(json(&body)["errorType"], "bad_data", "{format:?}");
+        }
+        let instant = instant_query(
+            Query(QueryParams {
+                query: "cpu_cores".to_string(),
+                time: None,
+                capture: None,
+                scope: Some(h2.clone()),
+            }),
+            State(Arc::clone(&state)),
+        )
+        .await;
+        let body = axum::body::to_bytes(instant.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(json(&body)["errorType"], "bad_data");
+    }
+
     async fn mode_and_metadata(state: Arc<AppState>) -> (serde_json::Value, serde_json::Value) {
         let Json(mode) = mode(State(Arc::clone(&state))).await;
         let Json(meta) = metadata(State(state), Query(CaptureParam { capture: None })).await;
@@ -946,6 +1083,7 @@ mod query_slot_tests {
             points: None,
             band: None,
             rate_mode: None,
+            scope: None,
         })
     }
 
@@ -964,6 +1102,7 @@ mod query_slot_tests {
                     query: "up".to_string(),
                     time: None,
                     capture: None,
+                    scope: None,
                 }),
                 state,
             )),
