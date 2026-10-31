@@ -35,8 +35,9 @@ path at extreme rates — millions of packets per second, millions of context
 switches per second, millions of syscalls per second, or millions of block
 I/Os per second — can see measurable impact, both from the cumulative
 entry/exit tax across all enabled probes and, at extreme connection rates,
-from the hashmap in `tcp_connect_latency` (an insert, a lookup and a
-delete per connect, and a delete per destroyed socket). Less common patterns
+from `tcp_connect_latency`, which runs a program on every TCP state change
+and does an insert, a lookup and a delete per connect, and a delete per
+destroyed socket. Less common patterns
 can trip the same threshold for individual samplers (heavy mmap churn for
 `cpu/tlb_flush`, throttle storms for `cpu/bandwidth`, PMU contention with
 other consumers for `cpu/perf`) — the shape is always the same: one hot
