@@ -350,7 +350,9 @@ fn analyze_entry(
         // The engine result carries no acquisition intervals; one extra
         // query reads them. Aggregations that strip intervals -> None.
         if let (Some((start, end)), step) = (data.time_range(), guarded_step(data)) {
-            if let Ok(QueryResult::Matrix { result }) = data.query_range(&query, start, end, step) {
+            if let Ok(QueryResult::Matrix { result, .. }) =
+                data.query_range(&query, start, end, step)
+            {
                 if result.len() == 1 {
                     let sample = &result[0];
                     let values: Vec<f64> = sample.values.iter().map(|(_, v)| *v).collect();

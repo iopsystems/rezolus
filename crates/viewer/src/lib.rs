@@ -1734,10 +1734,10 @@ fn validate_service_extensions_inline(
             let query = kpi.effective_query();
             let has_data = match data.query_range(&query, start, end, 1.0) {
                 Ok(result) => match &result {
-                    QueryResult::Vector { result } => !result.is_empty(),
-                    QueryResult::Matrix { result } => !result.is_empty(),
+                    QueryResult::Vector { result, .. } => !result.is_empty(),
+                    QueryResult::Matrix { result, .. } => !result.is_empty(),
                     QueryResult::Scalar { .. } => true,
-                    QueryResult::HistogramHeatmap { result } => !result.data.is_empty(),
+                    QueryResult::HistogramHeatmap { result, .. } => !result.data.is_empty(),
                 },
                 Err(_) => false,
             };

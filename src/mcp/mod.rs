@@ -1094,7 +1094,7 @@ fn format_query_result(result: &QueryResult) -> String {
     let mut output = String::new();
 
     match result {
-        QueryResult::Vector { result } => {
+        QueryResult::Vector { result, .. } => {
             writeln!(&mut output, "Instant Vector Result:").unwrap();
             writeln!(&mut output, "======================").unwrap();
             if result.is_empty() {
@@ -1115,7 +1115,7 @@ fn format_query_result(result: &QueryResult) -> String {
                 .unwrap();
             }
         }
-        QueryResult::Matrix { result } => {
+        QueryResult::Matrix { result, .. } => {
             writeln!(&mut output, "Range Vector Result:").unwrap();
             writeln!(&mut output, "====================").unwrap();
             if result.is_empty() {
@@ -1173,12 +1173,12 @@ fn format_query_result(result: &QueryResult) -> String {
                 writeln!(&mut output).unwrap();
             }
         }
-        QueryResult::Scalar { result } => {
+        QueryResult::Scalar { result, .. } => {
             writeln!(&mut output, "Scalar Result:").unwrap();
             writeln!(&mut output, "==============").unwrap();
             writeln!(&mut output, "{} = {}", result.0, result.1).unwrap();
         }
-        QueryResult::HistogramHeatmap { result } => {
+        QueryResult::HistogramHeatmap { result, .. } => {
             writeln!(&mut output, "Histogram Heatmap Result:").unwrap();
             writeln!(&mut output, "=========================").unwrap();
             writeln!(
@@ -1195,6 +1195,16 @@ fn format_query_result(result: &QueryResult) -> String {
                 result.min_value, result.max_value
             )
             .unwrap();
+        }
+    }
+    // What the query's result says about itself (a conflict between two
+    // sources of one process, say), one JSON object a line as the MCP
+    // `query` tool returns them.
+    if !result.notices().is_empty() {
+        writeln!(&mut output, "Notices:").unwrap();
+        for notice in result.notices() {
+            let line = serde_json::to_string(notice).unwrap_or_default();
+            writeln!(&mut output, "  {line}").unwrap();
         }
     }
 
@@ -1787,6 +1797,7 @@ pub(crate) mod tests {
                 MatrixSample::new(metric.clone(), vec![(1.0, 300.0), (2.0, 310.0)])
                     .with_intervals(Some(vec![(291.26, 306.12), (300.0, 320.0)])),
             ],
+            notices: Vec::new(),
         };
         let s = format_query_result(&with);
         assert!(s.contains("[291.26"), "expected bound in output: {s}");
@@ -1795,9 +1806,35 @@ pub(crate) mod tests {
         // No intervals → no bound text.
         let without = QueryResult::Matrix {
             result: vec![MatrixSample::new(metric, vec![(1.0, 300.0)])],
+            notices: Vec::new(),
         };
         let s2 = format_query_result(&without);
         assert!(!s2.contains('['), "no bounds expected: {s2}");
+    }
+
+    /// A result's notices follow the table, one JSON object a line; a
+    /// result without any prints no notices heading.
+    #[test]
+    fn format_query_result_shows_notices() {
+        use metriken_query::{MatrixSample, Notice, QueryResult};
+        let notice = Notice::conflict(
+            [("__name__".to_string(), "c".to_string())].into(),
+            vec!["u0".to_string(), "u1".to_string()],
+            1.0,
+            2,
+        );
+        let with = QueryResult::Matrix {
+            result: vec![MatrixSample::new(HashMap::new(), vec![(1.0, 300.0)])],
+            notices: vec![notice.clone()],
+        };
+        let s = format_query_result(&with);
+        let line = serde_json::to_string(&notice).unwrap();
+        assert!(s.contains(&format!("Notices:\n  {line}\n")), "{s}");
+        let without = QueryResult::Matrix {
+            result: vec![MatrixSample::new(HashMap::new(), vec![(1.0, 300.0)])],
+            notices: Vec::new(),
+        };
+        assert!(!format_query_result(&without).contains("Notices"));
     }
 
     fn counter(name: &str, sampler: &str, v: u64, w: Option<Window>) -> Counter {
@@ -2085,7 +2122,7 @@ pub(crate) mod tests {
         // What the CHANGELOG points a single-host query at.
         let (start, end) = reader.time_range().unwrap();
         let per_host = |q: &str| match reader.query_range(q, start, end, 1.0).unwrap() {
-            metriken_query::QueryResult::Matrix { result } => result.len(),
+            metriken_query::QueryResult::Matrix { result, .. } => result.len(),
             other => panic!("{q}: {other:?}"),
         };
         assert_eq!(

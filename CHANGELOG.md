@@ -401,6 +401,35 @@
 
 ### Changed
 
+- **metriken-query 0.43, metriken-storage 0.6, dendro 0.6.1.**
+  metriken-recorder stays at 0.5.1, over metriken-storage 0.5.4, so `record`,
+  the hindsight buffer and the live viewer write what they wrote before.
+  - Segments written by metriken-storage 0.6 carry a new names index.
+    A hindsight dump, the `recording` copies (`combine`, `filter`,
+    `snapshot`) and the copy an edit command writes with `-o` (`annotate`,
+    `events`, `check`) seal their live tail with it, and `recording
+    convert` and the `.rez` conversion write every segment with it.
+    Rezolus builds on metriken-storage 0.5 read such a segment as holding
+    the names of its table's first segment, so a metric that first appears
+    in a later segment is not listed or returned there.
+  - A recording and its copies, or two recorders of one agent, combine
+    their histograms per source: each span reads the finest source that
+    covers it, where it read one source for the whole range. Where a finer
+    source's run sits inside a coarser one's, the group can count less
+    than the coarser source alone.
+  - Where two such sources sample at the same spacing, the one whose
+    first row is earlier answers; it was the one with the lowest uuid.
+  - A query whose sources hold different values for one series at one
+    time returns a `conflict` notice. The MCP `query` and `export_query` tools
+    return it in `notices`, `rezolus mcp query` prints it after the table,
+    and a chart's binary display response carries it in its header, which
+    the viewer does not show yet.
+  - Two recordings whose labels differ only in an internal label other
+    than `__recording__` carry `__recording__`, so `without` and binary
+    operators keep them apart, where `without` merged them.
+  - Where every segment of a table carries the new names index, building
+    the combined view lists its labels without opening the table. Archives
+    `record` writes do not have it yet.
 - **The viewer's chart modules import nothing from outside `charts/` and do
   not use Mithril.**
   - `labels.js` and `html.js` moved to `charts/util/`, and A/B compare

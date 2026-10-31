@@ -125,7 +125,7 @@ fn plot_queries(section: &serde_json::Value) -> Vec<(String, String)> {
 fn last_values(data: &dyn MetricsSource, query: &str) -> Vec<f64> {
     let end = (ANCHOR + (TICKS - 1) * 1_000_000_000) as f64 / 1e9;
     match data.query_range(query, end - 3.0, end, 1.0).unwrap() {
-        QueryResult::Matrix { result } => {
+        QueryResult::Matrix { result, .. } => {
             result.iter().map(|s| s.values.last().unwrap().1).collect()
         }
         other => panic!("{query}: {other:?}"),
@@ -1138,8 +1138,11 @@ fn an_agent_baseline_without_cpu_usage_keeps_the_usual_landing() {
 
 /// A combined context built with the archive as its scopes' catalog opens
 /// no table, and rendering one recording's section opens only that
-/// recording's tables; built without it, the same context opens every
-/// recording's.
+/// recording's tables. Built without it, the context opens none either
+/// here: the fixture is written by metriken-storage 0.6, whose segments carry
+/// a names index the labels are listed from. An archive `record` writes
+/// (metriken-recorder 0.5.1, over storage 0.5.4) has no such index, and on
+/// that path opens a table of each recording of more than one segment.
 #[test]
 fn a_recordings_catalog_opens_only_its_own_tables() {
     use std::sync::Arc;
@@ -1207,7 +1210,11 @@ fn a_recordings_catalog_opens_only_its_own_tables() {
         None,
         None,
     );
-    assert!(reader.opened_tables().len() > per_recording);
+    assert!(
+        reader.opened_tables().is_empty(),
+        "{:?}",
+        reader.opened_tables()
+    );
 }
 
 /// A source of [`dendro_of`]: its labels, and the snapshot it records at a

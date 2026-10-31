@@ -540,10 +540,10 @@ fn validate_kpis_source(reader: &dyn MetricsSource, ext: &mut ServiceExtension) 
 fn query_result_is_empty(result: &metriken_query::QueryResult) -> bool {
     use metriken_query::QueryResult;
     match result {
-        QueryResult::Vector { result } => result.is_empty(),
-        QueryResult::Matrix { result } => result.is_empty(),
+        QueryResult::Vector { result, .. } => result.is_empty(),
+        QueryResult::Matrix { result, .. } => result.is_empty(),
         QueryResult::Scalar { .. } => false,
-        QueryResult::HistogramHeatmap { result } => result.data.is_empty(),
+        QueryResult::HistogramHeatmap { result, .. } => result.data.is_empty(),
     }
 }
 
