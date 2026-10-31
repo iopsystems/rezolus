@@ -276,9 +276,13 @@ mod tests {
                 continue;
             }
             let hz = TICK_HZ * u128::from(b.aperf - a.aperf) / u128::from(mperf);
+            // Each aperf is rounded down to a whole cycle, so the difference
+            // can be one cycle off, which is TICK_HZ / mperf Hz over mperf
+            // ticks, plus 1 Hz for the division above.
+            let slack = (TICK_HZ / u128::from(mperf)) as u64 + 1;
             assert!(
-                hz as u64 >= table[0] - 1 && hz as u64 <= *table.last().unwrap(),
-                "cpu {} at {hz} Hz outside {table:?}",
+                hz as u64 + slack >= table[0] && hz as u64 <= *table.last().unwrap() + slack,
+                "cpu {} at {hz} Hz outside {table:?} by more than {slack} Hz",
                 a.id
             );
         }
