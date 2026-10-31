@@ -27,7 +27,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
          Used % is computed as df computes it on Linux, so the reserve does not count as used. \
          An APFS volume without a quota or reserve reports its container's size and free \
          space, so its Used % is the container's. Volume Used, recorded on macOS, is the bytes \
-         each volume itself uses, the number df reports as used.",
+         each volume itself uses, the number df reports as used, and Volume Used % is that \
+         over itself plus Available, which df rounds up to a whole percent as Capacity.",
     );
     capacity.plot_promql(
         PlotOpts::gauge("Available", "available", Unit::Bytes),
@@ -56,6 +57,17 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         capacity.plot_promql(
             PlotOpts::gauge("Volume Used", "volume-used", Unit::Bytes),
             by_mount("filesystem_volume_used"),
+        );
+        capacity.plot_promql(
+            PlotOpts::gauge("Volume Used %", "volume-used-pct", Unit::Percentage)
+                .percentage_range(),
+            // As df computes Capacity on macOS: the volume's own use over that
+            // plus available.
+            format!(
+                "{used} / ({used} + {available})",
+                used = by_mount("filesystem_volume_used"),
+                available = by_mount("filesystem_available"),
+            ),
         );
     }
 
@@ -211,6 +223,7 @@ mod tests {
             vec![],
         );
         assert!(json(&with).contains("sum by (mount) (filesystem_volume_used)"));
+        assert!(json(&with).contains("volume-used-pct"));
     }
 
     #[test]
