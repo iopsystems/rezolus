@@ -12,7 +12,7 @@
       "subgroups": [
         {
           "name": "Capacity",
-          "description": "Bytes per locally mounted filesystem. Available is what an unprivileged writer can still use and is the number to alert on; Free also counts the superuser reserve. Used % is computed as df computes it on Linux, so the reserve does not count as used. An APFS volume without a quota or reserve reports its container's size and free space, so its Used % is the container's. Volume Used, recorded on macOS, is the bytes each volume itself uses, the number df reports as used.",
+          "description": "Bytes per locally mounted filesystem. Available is what an unprivileged writer can still use and is the number to alert on; Free also counts the superuser reserve. Used % is computed as df computes it on Linux, so the reserve does not count as used. An APFS volume without a quota or reserve reports its container's size and free space, so its Used % is the container's. Volume Used, recorded on macOS, is the bytes each volume itself uses, the number df reports as used, and Volume Used % is that over itself plus Available, which df rounds up to a whole percent as Capacity.",
           "plots": [
             {
               "data": [],
@@ -102,6 +102,27 @@
                 }
               },
               "promql_query": "sum by (mount) (filesystem_volume_used)"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Volume Used %",
+                "id": "volume-used-pct",
+                "type": "gauge",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "percentage",
+                  "precision": 2,
+                  "log_scale": null,
+                  "range": {
+                    "min": 0.0,
+                    "max": 1.0
+                  },
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum by (mount) (filesystem_volume_used) / (sum by (mount) (filesystem_volume_used) + sum by (mount) (filesystem_available))"
             }
           ]
         }
