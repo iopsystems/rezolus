@@ -18,13 +18,17 @@
 const DEFAULTS = Object.freeze({
     // Data (line.js, scatter.js, util/utils.js).
     //
-    // (query) -> Promise<PromQL range result>. With applyResultToPlot, draws
-    // the line chart's total toggle.
+    // (query, metadata, signal, rateMode, scope) -> Promise<PromQL range
+    // result>. scope is the uuids of the sources to read, or null for every
+    // source. With applyResultToPlot, draws the line chart's total toggle,
+    // which calls it as (promql_query_total, undefined, undefined, 'grid',
+    // spec.scope ?? null).
     executePromQLRangeQuery: null,
     // (plot, result) -> void; writes the result into plot.data
     applyResultToPlot: null,
-    // (plot, quantiles) -> Promise<spectrum | null>. Draws the scatter
-    // chart's spectrum checkboxes.
+    // (plot, quantiles) -> Promise<spectrum | null>, where plot is
+    // { promql_query, opts, scope } and scope is undefined when the chart has
+    // none. Draws the scatter chart's spectrum checkboxes.
     fetchQuantileSpectrumForPlot: null,
     // () -> seconds | null
     getStepOverride: () => null,

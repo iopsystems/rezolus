@@ -3626,7 +3626,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "6.0.0-alpha.103"
+version = "6.0.0-alpha.104"
 dependencies = [
  "allan",
  "anyhow",
