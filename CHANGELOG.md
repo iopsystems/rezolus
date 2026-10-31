@@ -43,7 +43,9 @@
   `cpu_igpu_energy` and `cpu_dram_energy`, and the new macOS-only
   `cpu_soc_energy{block}` for the other SoC blocks, such as the Neural
   Engine and the display pipelines, which the CPU dashboard draws in a new
-  SoC Power group.
+  SoC Power group. IOReport is loaded at runtime, not linked, so a macOS
+  release without it leaves these two samplers unsupported and the rest of
+  rezolus runs.
 - **Filesystem space on macOS.** `filesystem` now runs on macOS,
   unprivileged, and sets `filesystem_total`, `filesystem_free`,
   `filesystem_available`, `filesystem_inodes_total`,

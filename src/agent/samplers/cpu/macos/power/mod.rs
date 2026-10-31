@@ -19,7 +19,7 @@
 const NAME: &str = "cpu_power";
 
 use crate::agent::sampler_status::Unsupported;
-use crate::agent::samplers::ioreport::{Channel, Subscription, Value};
+use crate::agent::samplers::ioreport::{self, Channel, Subscription, Value};
 use crate::agent::*;
 
 use super::topology::{self, Core};
@@ -151,7 +151,8 @@ impl Power {
     fn new() -> Result<Self, anyhow::Error> {
         let cores = topology::cores()
             .ok_or_else(|| Unsupported(format!("{NAME}: no CPU topology in the device tree")))?;
-        let subscription = Subscription::new(&[(GROUP, None)])
+        let api = ioreport::api().map_err(|e| Unsupported(format!("{NAME}: {e}")))?;
+        let subscription = Subscription::new(api, &[(GROUP, None)])
             .ok_or_else(|| Unsupported(format!("{NAME}: IOReport has no {GROUP} channels")))?;
         let channels = subscription
             .sample()
@@ -359,7 +360,7 @@ mod tests {
     fn this_machine_is_read() {
         crate::agent::samplers::ioreport::skip_in_vm!();
         let cores = topology::cores().unwrap();
-        let sub = Subscription::new(&[(GROUP, None)]).unwrap();
+        let sub = Subscription::new(ioreport::api().unwrap(), &[(GROUP, None)]).unwrap();
         let first = read(&sub.sample().unwrap(), &cores);
         std::thread::sleep(std::time::Duration::from_millis(500));
         let second = read(&sub.sample().unwrap(), &cores);

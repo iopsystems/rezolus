@@ -251,7 +251,10 @@ by up to a second on a P core. `cpu_aperf` lags with it, so their ratio is
 the frequency over the time counted.
 
 IOReport is a private framework with no published interface; it is the one
-`powermetrics` reads, and it needs no privileges. A cluster type whose
+`powermetrics` reads, and it needs no privileges. Rezolus loads it when the
+sampler starts; on a macOS release without it, or without one of the
+functions Rezolus binds, `cpu_frequency` and `cpu_power` report themselves
+unsupported and the other samplers run. A cluster type whose
 frequency table does not have one entry per performance state is not
 published, and the sampler reports itself unsupported when no core can be
 read. An Intel Mac, whose CPUs have no `cluster-type`, reports it unsupported.
