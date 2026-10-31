@@ -899,9 +899,9 @@ listed one, because the mount was replaced or unmounted, is dropped. A
 looks the path up, which walks every mount above it, so a volume mounted
 beneath a network, autofs or macFUSE mount is skipped. The sweep runs on a
 blocking thread at most once per `interval` (60s by default); one still
-running after three intervals is logged as a warning. With 10 volumes, `getfsstat` and the
-`statfs` and `getattrlist` calls took 36 µs in a debug build, 12 µs of it
-`getattrlist`.
+running after three intervals is logged as a warning. With 10 volumes,
+`getfsstat` and the `statfs` and `getattrlist` calls took 36 µs in a debug
+build, 12 µs of it `getattrlist`.
 
 `filesystem_total`, `filesystem_free`, `filesystem_available`,
 `filesystem_inodes_total`, `filesystem_inodes_free` and `filesystem_readonly`
