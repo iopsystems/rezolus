@@ -131,6 +131,23 @@ test('with a spectrum fetch the scatter chart draws its spectrum checkboxes', ()
     }
 });
 
+test('the scatter chart passes its spec\'s scope to the spectrum fetch', () => {
+    const plots = [];
+    setChartHost({
+        fetchQuantileSpectrumForPlot: async (plot) => { plots.push(plot); return null; },
+    });
+    try {
+        const chart = fakeChart({ ...scatterSpec(), promql_query: 'lat', scope: ['u1'] });
+        chart.spectrumKind = 'full';
+        configureScatterChart(chart);
+        assert.equal(plots.length, 1);
+        assert.equal(plots[0].promql_query, 'lat');
+        assert.deepEqual(plots[0].scope, ['u1']);
+    } finally {
+        resetChartHost();
+    }
+});
+
 // A line chart that redraws itself when the toggle asks it to.
 function toggleableChart(spec) {
     const chart = fakeChart(spec);
