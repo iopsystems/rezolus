@@ -379,6 +379,8 @@ fn legacy(bench: &Catalog) -> Catalog {
 /// has the storage driver's counters but no latency or size histograms.
 /// Network has bytes and packets but no network_drop. TCP has the tcp_mib,
 /// tcp_retransmit and tcp_bytes counters but no tcp_packet_latency.
+/// Filesystem has the space, inode and read-only gauges, and the macOS-only
+/// per-volume use.
 fn macos() -> Catalog {
     let mut out = Catalog::default();
     for name in [
@@ -451,6 +453,23 @@ fn macos() -> Catalog {
         "tcp_input_errors",
     ] {
         out.counters.insert(name.into(), vec![labels(&[])]);
+    }
+    for name in [
+        "filesystem_total",
+        "filesystem_free",
+        "filesystem_available",
+        "filesystem_inodes_total",
+        "filesystem_inodes_free",
+        "filesystem_readonly",
+        "filesystem_volume_used",
+    ] {
+        out.gauges.insert(
+            name.into(),
+            vec![
+                labels(&[("mount", "/"), ("fstype", "apfs")]),
+                labels(&[("mount", "/System/Volumes/Data"), ("fstype", "apfs")]),
+            ],
+        );
     }
     for name in [
         "network_bytes",
