@@ -618,6 +618,16 @@ fn non_canonical_ids() -> Catalog {
     out
 }
 
+/// `bench`, which has no `cpu_instructions`, with DTLB misses added: the
+/// dtlb and perf samplers are configured separately, so DTLB MPKI is hidden
+/// while DTLB Misses is drawn.
+fn dtlb_without_instructions(bench: &Catalog) -> Catalog {
+    let mut out = bench.clone();
+    out.counters
+        .insert("cpu_dtlb_miss".into(), vec![labels(&[("id", "0")])]);
+    out
+}
+
 fn named_catalogs() -> Vec<(&'static str, Catalog)> {
     let bench = Catalog::from_json(include_str!("../tests/fixtures/catalogs/bench.json"));
     let sink = sink(&bench);
@@ -638,6 +648,10 @@ fn named_catalogs() -> Vec<(&'static str, Catalog)> {
         ("intel-all-engines", intel_all_engines()),
         ("non-canonical-ids", non_canonical_ids()),
         ("macos", macos()),
+        (
+            "dtlb-without-instructions",
+            dtlb_without_instructions(&bench),
+        ),
         ("empty", Catalog::default()),
     ]
 }
