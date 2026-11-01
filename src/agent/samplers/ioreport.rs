@@ -210,8 +210,11 @@ impl Subscription {
     }
 
     /// Subscribe to the channels of each `(group, subgroup)` whose name
-    /// `keep` accepts. A sample's cost grows with the channels subscribed:
-    /// the 328 channels of `Energy Model` take about 3.7 ms on an M4 Max.
+    /// `keep` accepts. A sample's cost depends on which channels are
+    /// subscribed more than on how many. On an M4 Max, any one `Energy Model`
+    /// channel other than `GPU Energy` and the PCIe ones costs about 2.7 ms
+    /// of CPU per sample alone; `GPU Energy` or a PCIe channel alone costs
+    /// about 0.1 ms; all 328 channels cost about 3.6 ms.
     /// `None` when no channel is kept or the subscription fails.
     pub(crate) fn filtered(
         api: &'static Api,

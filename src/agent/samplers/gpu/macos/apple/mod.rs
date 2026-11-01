@@ -36,7 +36,7 @@
 //!
 //! The subscription holds the two channels read. A sample of them took
 //! about 0.1 ms in a release build on an M4 Max; the whole `Energy Model`
-//! group's 328 channels take about 3.7 ms.
+//! group's 328 channels take about 3.6 ms.
 
 const NAME: &str = "gpu_apple";
 

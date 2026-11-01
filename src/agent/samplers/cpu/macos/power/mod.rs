@@ -127,6 +127,13 @@ fn read(channels: &[Channel], cores: &[Core]) -> Vec<(Target, u64)> {
         .collect()
 }
 
+/// A subscription to the `Energy Model` channels that `target` publishes:
+/// 33 of the group's 328 on an M4 Max, where a sample of them costs about
+/// 3.2 ms of CPU against 3.6 ms for the whole group.
+fn subscribe(api: &'static ioreport::Api, cores: &[Core]) -> Option<Subscription> {
+    Subscription::filtered(api, &[(GROUP, None)], |name| target(name, cores).is_some())
+}
+
 /// The groups this sampler stamps.
 fn groups() -> [&'static crate::agent::timing::AcquisitionGroup; 5] {
     [
@@ -152,8 +159,11 @@ impl Power {
         let cores = topology::cores()
             .ok_or_else(|| Unsupported(format!("{NAME}: no CPU topology in the device tree")))?;
         let api = ioreport::api().map_err(|e| Unsupported(format!("{NAME}: {e}")))?;
-        let subscription = Subscription::new(api, &[(GROUP, None)])
-            .ok_or_else(|| Unsupported(format!("{NAME}: IOReport has no {GROUP} channels")))?;
+        let subscription = subscribe(api, &cores).ok_or_else(|| {
+            Unsupported(format!(
+                "{NAME}: IOReport has no {GROUP} channel to publish, or the subscription failed"
+            ))
+        })?;
         let channels = subscription
             .sample()
             .ok_or_else(|| anyhow::anyhow!("{NAME}: IOReport sample failed"))?;
@@ -360,7 +370,7 @@ mod tests {
     fn this_machine_is_read() {
         crate::agent::samplers::ioreport::skip_in_vm!();
         let cores = topology::cores().unwrap();
-        let sub = Subscription::new(ioreport::api().unwrap(), &[(GROUP, None)]).unwrap();
+        let sub = subscribe(ioreport::api().unwrap(), &cores).unwrap();
         let first = read(&sub.sample().unwrap(), &cores);
         std::thread::sleep(std::time::Duration::from_millis(500));
         let second = read(&sub.sample().unwrap(), &cores);
@@ -387,6 +397,27 @@ mod tests {
             sum.abs_diff(total) <= slack,
             "cores {sum} uJ vs total {total} uJ"
         );
+    }
+
+    /// This machine: the filtered subscription reads the same channels to
+    /// publish as one to the whole group.
+    #[test]
+    fn the_filter_keeps_every_published_channel() {
+        crate::agent::samplers::ioreport::skip_in_vm!();
+        let cores = topology::cores().unwrap();
+        let api = ioreport::api().unwrap();
+        let targets = |sub: Subscription| {
+            let mut t: Vec<String> = read(&sub.sample().unwrap(), &cores)
+                .into_iter()
+                .map(|(t, _)| format!("{t:?}"))
+                .collect();
+            t.sort();
+            t
+        };
+        let all = targets(Subscription::new(api, &[(GROUP, None)]).unwrap());
+        let kept = targets(subscribe(api, &cores).unwrap());
+        assert!(!all.is_empty());
+        assert_eq!(kept, all);
     }
 
     /// This machine, through `new` and `refresh`: every core is a member of

@@ -446,6 +446,11 @@
 
 ### Changed
 
+- **`cpu_power` on macOS subscribes only to the channels it publishes.**
+  It reads 33 of `Energy Model`'s 328 IOReport channels on an M4 Max, and a
+  sample's CPU cost drops from about 3.6 ms to 3.2 ms. A subscription that
+  includes any channel other than `GPU Energy` and the PCIe ones costs about
+  2.7 ms per sample, so removing channels saves little.
 - **The Apple GPU sampler no longer needs root.** `gpu_apple` reads the GPU's
   performance-state residency and energy from IOReport, as `cpu_frequency`
   and `cpu_power` do, rather than running `powermetrics`, which needs root.
