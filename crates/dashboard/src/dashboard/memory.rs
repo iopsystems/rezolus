@@ -395,6 +395,32 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         }
     }
 
+    if has_metric(data, "memory_pageins") {
+        let paging = usage.subgroup("Paging");
+        paging.describe(
+            "Page faults count every call into the fault handler, including zero-fill and \
+             copy-on-write faults that need no I/O and faults made to wire memory. Page-ins are \
+             file pages read from disk on a fault or by read-ahead; pages a read() call fetches \
+             directly are not counted. Page-outs are dirty file pages the pageout daemon wrote \
+             back to free memory; write(), fsync and msync writeback are not counted. Anonymous \
+             memory is not counted here: it is compressed (Compressions, Decompressions), and the \
+             compressor writes it to swap (Swap In, Swap Out, in pages of compressed data). All \
+             three charts are pages per second.",
+        );
+        paging.plot_promql(
+            PlotOpts::counter("Page Faults", "page-faults", Unit::Count),
+            "sum(irate(memory_page_faults[5m]))".to_string(),
+        );
+        paging.plot_promql(
+            PlotOpts::counter("Page Ins", "pageins", Unit::Count),
+            "sum(irate(memory_pageins[5m]))".to_string(),
+        );
+        paging.plot_promql(
+            PlotOpts::counter("Page Outs", "pageouts", Unit::Count),
+            "sum(irate(memory_pageouts[5m]))".to_string(),
+        );
+    }
+
     if has_metric(data, "memory_reclaim_scanned") {
         let reclaim = usage.subgroup("Reclaim");
         reclaim.describe(
