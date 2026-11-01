@@ -1437,14 +1437,17 @@
   their own, so a process's total no longer depends on how many threads it
   created. Its series ends within one snapshot interval of the process's
   last thread exiting. It costs 64 MiB of kernel memory (two per-pid
-  arrays) and a 256 KiB ring, a metadata event per new process and per
-  leader rename, an exit event per process when `task_attribution` is off,
-  the `task_rename` program (one run per thread rename), and two marker
-  reads and a counter add per accounting event that adds CPU. A process whose threads
-  run on many CPUs contends on its counter: with 48 threads of one process
-  on a 56-vCPU host at HZ=250, each run of the `cpu_usage` BPF programs
-  took about 310 ns, against about 200 ns with 48 one-thread processes and
-  170 ns without the counter. (#1490)
+  arrays), a 256 KiB ring, a 256 KiB table of busy processes, a metadata
+  event per new process and per leader rename, an exit event per process
+  when `task_attribution` is off, the `task_rename` program (one run per
+  thread rename), and per accounting event that adds CPU a marker read, a
+  table lookup and a counter add, plus a second marker read when the process
+  holds no table entry. A labelled process using at least half a CPU is
+  counted in a table with 16 copies assigned from the L3 topology, so the
+  CPUs running its threads do not all write one counter: with 48 threads of
+  one process on a 56-vCPU host at HZ=250, each run of the `cpu_usage` BPF
+  programs took about 210 ns, against about 320 ns with one counter and
+  about 190 ns without `process_cpu_usage`. (#1490)
 
 - **`drive_temperature_sensor`: NVMe Temperature Sensors 1 to 8.**
   `drivehealth` decodes them from the SMART/Health log it already reads

@@ -949,15 +949,16 @@ Also found on these runs, separate from the sampler:
 ## Agent — `process_cpu_usage` contention
 
 Source: [Contention on `process_cpu_usage`](journal/2026-10-27-process-cpu-usage-contention.md).
-NO-GO, measured 2026-10-27/28 in a 56-vCPU guest: `main` keeps one copy.
+GO, measured 2026-10-31 in a 56-vCPU guest: a sharded table of busy processes
+(`process_table`), assigned by the agent.
 
-- **Measure 1 × N on a two-socket or 100+ CPU host** — Open. The cost on
-  `main` is about 140 ns per run of the `cpu_usage` programs in one 7-L3
-  guest. If it is several µs, reopen the stripes item below, and write
-  combining once it has the flush and exit path its item names.
-- **L3-assigned stripes of `process_cpu_usage`** — NO-GO on memory (32 MiB
-  per copy). Reopen when per-process slots have a dense index, or the
-  measurement above shows the cost justifies 256 MiB.
+- **Measure 1 × N on a two-socket or 100+ CPU host** — Open. The table was
+  measured in one 7-L3 guest; check that it removes the contention where the
+  cost on one copy would be larger.
+- **Two entries per bucket in `process_table`** — Open, not needed yet. Two
+  busy processes whose tgids hash to one bucket leave one of them on the
+  contended slot. Reopen if that is seen.
+- **L3-assigned stripes of `process_cpu_usage`** — Superseded by the table.
 - **Per-CPU write combining** — NO-GO on correctness: up to K − 1 ticks per
   CPU stay uncommitted on nohz-idle CPUs and are dropped at exit. Reopen only
   with a flush that does not depend on ticks and an exit path that keeps
