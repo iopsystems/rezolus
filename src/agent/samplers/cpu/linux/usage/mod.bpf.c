@@ -189,8 +189,7 @@ struct {
 // group, exported), at pid_slot(tgid); userspace assigns each process's
 // series to that index. Only with process_attribution; see process_start_times.
 // Every CPU running one of the process's threads writes its slot, at most about
-// once per tick each; docs/principles.md, principle 7, has the measured cost of
-// keeping one copy.
+// once per tick each, unless the process holds an entry in process_table.
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(map_flags, BPF_F_MMAPABLE);
@@ -211,6 +210,72 @@ struct {
     __type(value, u64);
     __uint(max_entries, MAX_PID);
 } process_start_times SEC(".maps");
+
+/*
+ * Per-process counts kept per CPU copy (cgroup_copy; where sysfs reports the
+ * L3 topology, no copy is shared by two L3 caches unless there are more L3
+ * caches than copies), for the
+ * processes userspace picks. Each copy is a direct-mapped table of
+ * PROCESS_TABLE_SLOTS entries at the tgid's bucket, one cache line each: the
+ * process's start time (0 when free), its tgid, and its count.
+ *
+ * Userspace (process_table.rs) is the only writer of the start time and
+ * tgid: it gives an entry to a process that used at least half a CPU over a
+ * refresh, writing the tgid before the start time, and frees it by zeroing
+ * the start time. Each refresh it moves every count into the process's
+ * process_cpu_usage slot, so the exported value is that slot alone. A delta
+ * goes to this CPU's copy when the entry holds the process's start time and
+ * tgid, and to process_cpu_usage otherwise.
+ *
+ * PROCESS_TABLE 0 compiles out the adds to the table; the map is still
+ * created, userspace still gives out entries, and the acquisition window
+ * of cpu_usage_process still begins no later than the move.
+ */
+#define PROCESS_TABLE 1
+#define PROCESS_TABLE_BITS 8
+#define PROCESS_TABLE_SLOTS (1 << PROCESS_TABLE_BITS)
+#define PROCESS_ENTRY_WIDTH 8
+#define PROCESS_ENTRY_KEY 0
+#define PROCESS_ENTRY_TGID 1
+#define PROCESS_ENTRY_COUNT 2
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, CGROUP_SHARDS * PROCESS_TABLE_SLOTS * PROCESS_ENTRY_WIDTH);
+} process_table SEC(".maps");
+
+/*
+ * Add `delta` to the process's entry in this CPU's copy. Returns 1 when
+ * added, 0 when the caller must add to process_cpu_usage.
+ *
+ * Reading the new start time with the previous holder's tgid fails the tgid
+ * test, so the delta goes to process_cpu_usage.
+ */
+static __always_inline int process_table_add(u32 tgid, u64 key, u64 delta) {
+    u32 copy = cgroup_copy();
+    u32 bucket = (tgid * 0x9E3779B1U) >> (32 - PROCESS_TABLE_BITS);
+
+    u32 idx = (copy * PROCESS_TABLE_SLOTS + bucket) * PROCESS_ENTRY_WIDTH;
+    u64* k = bpf_map_lookup_elem(&process_table, &idx);
+    if (!k || *k != key)
+        return 0;
+
+    u32 tidx = idx + PROCESS_ENTRY_TGID;
+    u64* t = bpf_map_lookup_elem(&process_table, &tidx);
+    if (!t || *t != tgid)
+        return 0;
+
+    u32 cidx = idx + PROCESS_ENTRY_COUNT;
+    u64* c = bpf_map_lookup_elem(&process_table, &cidx);
+    if (!c)
+        return 0;
+
+    __atomic_fetch_add(c, delta, __ATOMIC_RELAXED);
+    return 1;
+}
 
 // process metadata: a task_info describing the thread group's leader, sent
 // when the group is first seen and when the leader is renamed
@@ -400,7 +465,8 @@ static __always_inline void start_process(struct task_struct* task) {
  * retry the group's metadata if it is owed
  *
  * Every delta credited to the per-CPU totals while the group is tracked
- * (from its start_process until its last exit) is added, including CPU an
+ * (from its start_process until its last exit) is added, to the group's
+ * process_table entry when it holds one, including CPU an
  * exited thread uses in the rest of do_exit before that last exit, so the
  * per-process total includes every thread of the group, exported or not,
  * live or exited.
@@ -433,6 +499,9 @@ static __always_inline void account_process(struct task_struct* task, bool btf, 
     if (m == 0 || (m & INSTANCE_EXITED))
         return;
 
+    if (PROCESS_TABLE && process_table_add(tgid, m & ~METADATA_PENDING, delta))
+        goto metadata;
+
     array_add(&process_cpu_usage, slot, delta);
 
     if (*marker & INSTANCE_EXITED) {
@@ -441,6 +510,7 @@ static __always_inline void account_process(struct task_struct* task, bool btf, 
         return;
     }
 
+metadata:
     if (!(m & METADATA_PENDING) || exiting)
         return;
 
