@@ -147,8 +147,8 @@ pub fn command() -> Command {
              (exit 2) and writes nothing. On a streamed\n\
              endpoint template= replaces the producer\'s own template, as any user\n\
              metadata outranks the handshake\'s, and it also replaces a --metadata\n\
-             service_queries=. The template\'s queries select by source (e.g.\n\
-             {{source=\"vllm\"}}), so give the endpoint the source= its template names.\n\n\
+             service_queries=. The template\'s queries are evaluated against this\n\
+             endpoint\'s recording only, so they need not select by source.\n\n\
              --label applies to EVERY recording the run produces, so it names the run, not\n\
              one endpoint in it: --label arm=redis is how you tag a whole single-endpoint\n\
              capture as one arm, to be compared against another run. Within ONE invocation,\n\

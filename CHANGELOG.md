@@ -459,6 +459,21 @@
   power and 2.1% of clock. An Intel Mac, or one whose GPU performance states
   do not match the device tree's `voltage-states9` table, gets no metrics
   from `gpu_apple`.
+- **The KPI templates rezolus ships no longer match on `source`.** The 215
+  `source="<name>"` matchers are gone from the cachecannon, llm-perf,
+  SGLang, vLLM and Valkey templates in `crates/dashboard/templates/`. The
+  viewer (browser and `--tui`), `recording check` and MCP's `run_checks`
+  evaluate a recording's templates against that recording's series only.
+  One of these files given to an endpoint with another `source` name
+  (`--endpoint URL,source=vllm-a,template=vllm.json`) now shows its KPIs,
+  where its queries matched no series before. `recording annotate --queries`
+  writes the template into every recording of the archive, and each
+  recording's copy is evaluated against that recording's series.
+- **`view --tui` reads each section of a combined archive through its
+  recording's scope**, as the browser viewer does. It read every
+  recording's series: a vLLM section of an archive with two vLLM
+  recordings drew both recordings' series, and a CPU busy chart of an
+  archive with two hosts drew none.
 - **`recording upgrade` splits a 5.x combined parquet into its inputs.** A
   combined file (written by 5.x `recording combine`, or by the 5.x recorder
   given several endpoints: its `source` a JSON array and each column
@@ -1902,7 +1917,7 @@
 
 - The valkey template's five KPIs never drew: PromQL read
   `redis/total_commands_processed` as a division. They name their metrics
-  as `{__name__="redis/total_commands_processed", source="valkey"}`, which
+  as `{__name__="redis/total_commands_processed"}`, which
   metriken-query reads from 0.37.1, and the viewer's instance picker adds
   its matcher to that form.
 

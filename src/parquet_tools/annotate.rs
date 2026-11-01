@@ -643,6 +643,42 @@ mod tests {
         ::rez::fixtures::write_dendro(path, &[source], Some(2), ::rez::fixtures::Finish::Finalized);
     }
 
+    /// The vLLM template rezolus ships, given to a recording whose `source`
+    /// is not `vllm`, finds that recording's series: its queries select by
+    /// metric name, and annotate evaluates them against this recording's
+    /// series only.
+    #[test]
+    fn a_shipped_template_reads_a_recording_of_another_source_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.dendro");
+        let rows = (0..3u64)
+            .map(|i| {
+                let ts = 1_000_000_000 * (i + 1);
+                let w = Some(::rez::window::Window::new(ts - 50_000_000, ts));
+                let running = ::rez::fixtures::gauge("vllm_num_requests_running", "vllm", 4, w);
+                (::rez::fixtures::snap(ts, Vec::new(), vec![running]), ts)
+            })
+            .collect();
+        let source = ::rez::fixtures::Source {
+            labels: ::rez::fixtures::map(&[("source", "vllm-a")]),
+            metadata: ::rez::fixtures::map(&[("sampling_interval_ms", "1000")]),
+            rows,
+        };
+        ::rez::fixtures::write_dendro(&path, &[source], None, ::rez::fixtures::Finish::Finalized);
+
+        let template = include_str!("../../crates/dashboard/templates/vllm.json");
+        annotate_archive(&path, &kpi_annotation(template)).unwrap();
+
+        let ext: ServiceExtension =
+            serde_json::from_str(&source_metadata(&path)[0][KEY_SERVICE_QUERIES]).unwrap();
+        let running = ext
+            .kpis
+            .iter()
+            .find(|k| k.title == "Requests Running")
+            .expect("the template's running-requests KPI");
+        assert!(running.available, "{running:?}");
+    }
+
     /// Annotating writes the KPI set into each recording's metadata, in
     /// place, without disturbing the segments, and the KPI is validated
     /// against the recording's rows.

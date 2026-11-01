@@ -238,8 +238,9 @@ checked before the recording starts: one that cannot be read, is larger than
 know refuses the run (exit 2) and writes nothing, as `recording annotate
 --queries` refuses it. The file is stored as written.
 
-A template's queries select by `source` (`{source="vllm"}`), so give the
-endpoint the `source=` its template names. On a streamed endpoint `template=`
+The viewer and `recording check` evaluate a template's queries against its
+endpoint's recording only, so a query need not select by `source`; the
+templates rezolus ships do not. On a streamed endpoint `template=`
 replaces the template the producer sends, since the user's metadata outranks
 the handshake's, and the recorder logs a line saying so when it sees that
 handshake at startup. It also replaces a `--metadata service_queries=` value,

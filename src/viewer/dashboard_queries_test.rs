@@ -541,8 +541,8 @@ fn archive(fixture: &Fixture) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dashboards.dendro");
     let seed = Seed {
-        // No recording labels: a template's selectors name their own
-        // `source`, which the series carry.
+        // No recording labels: the series carry only the labels the
+        // queries' selectors match on.
         labels: BTreeMap::new(),
         metadata: [("sampling_interval_ms".to_string(), "1000".to_string())]
             .into_iter()
@@ -741,7 +741,7 @@ fn every_dashboard_and_template_query_answers_on_a_dendro_archive() {
             }
         }
     }
-    assert!(seen.len() > 850, "{} queries", seen.len());
+    assert!(seen.len() > 720, "{} queries", seen.len());
     assert!(
         failures.is_empty(),
         "{} of {} queries failed:\n{}",
