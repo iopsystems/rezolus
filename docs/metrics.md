@@ -490,14 +490,22 @@ runs. The series ends within one snapshot interval of the process's last
 thread exiting. As with `task_cpu_usage`, a process that exits between a
 drain and the snapshot that follows it has a last sample of 0, so read it
 with `rate()` or `increase()`. It costs two per-pid arrays (64 MiB of
-kernel memory), a 256 KiB ring, a metadata event per new process and per
-leader rename, an exit event per process when `task_attribution` is off,
-the `task_rename` program (one run per thread rename), and two marker
-reads and a counter add per accounting event that adds CPU. A process's counter is written by every CPU running one of
-its threads: with 48 threads of one process spinning on a 56-vCPU host
-at HZ=250, each run of the `cpu_usage` BPF programs took about 310 ns,
-against about 200 ns with 48 one-thread processes and 170 ns without
-`process_cpu_usage`.
+kernel memory), a 256 KiB ring, a 256 KiB table of busy processes, a
+metadata event per new process and per leader rename, an exit event per
+process when `task_attribution` is off, the `task_rename` program (one run
+per thread rename), and per accounting event that adds CPU a marker read,
+a table lookup and a counter add, plus a second marker read when the
+process holds no table entry.
+
+A labelled process using at least half a CPU over a refresh is given an
+entry in the table when its bucket is free. The table has 16 copies,
+assigned from the L3 topology where sysfs reports it, so the CPUs
+running its threads do not all write one counter. The agent adds the table's counts to
+`process_cpu_usage` at each refresh, before it builds the snapshot. With 48
+threads of one process spinning on a 56-vCPU host at HZ=250, each run of
+the `cpu_usage` BPF programs took about 210 ns, against about 320 ns with
+one counter and about 190 ns without `process_cpu_usage`. Two busy processes
+whose tgids share a table bucket leave one of them on the shared counter.
 
 `comm` follows renames. A thread whose name changes (`pthread_setname_np`,
 `prctl(PR_SET_NAME)`, a write to `/proc/<pid>/task/<tid>/comm`, or exec) is

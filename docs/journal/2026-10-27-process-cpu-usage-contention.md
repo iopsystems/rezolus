@@ -1,8 +1,9 @@
 # Contention on `process_cpu_usage`: stripes, write combining, a ring buffer
 
 - **Opened:** 2026-10-27
-- **Status:** NO-GO — measured 2026-10-27/28, nothing merged. `main` keeps
-  one copy of the counter. Reopen conditions under "Deferred / reopen".
+- **Status:** GO — a sharded table of busy processes, assigned by the agent
+  (measured 2026-10-31). Stripes, write combining and the ring buffer are
+  NO-GO; reopen conditions under "Deferred / reopen".
 
 ## Problem
 
@@ -13,7 +14,7 @@ adds to the same slot from `cpuacct_account_field`, about once per tick, and
 ticks fire together on every CPU unless the kernel is booted with
 `skew_tick=1`. A process with many busy threads therefore puts every busy CPU
 on one cache line once per tick. Principle 7 in `docs/principles.md` records
-the cost on `main`.
+the cost with one copy.
 
 ## Setup
 
@@ -42,7 +43,7 @@ was 1.000.
 | Copies | 1 × 48 | 48 × 1 | Map memory |
 |---|---|---|---|
 | none (feature off) | 182 178 / 183 189 | 179 179 / 187 182 | 0 |
-| 1 (`main`) | 311 303 / 314 307 | 194 202 / 201 194 | 32 MiB |
+| 1 (one copy) | 311 303 / 314 307 | 194 202 / 201 194 | 32 MiB |
 | 4, `cpu % 4` | 278 265 / 296 300 | 209 210 / 226 227 | 128 MiB |
 | 4, by L3 | 249 241 / 219 215 | 197 208 / 184 179 | 128 MiB |
 | 8, `cpu % 8` | 259 270 / 261 257 | 191 198 / 177 183 | 256 MiB |
@@ -71,12 +72,12 @@ process instance (start time), the summed delta and a tick count. A CPU adds
 its delta there and commits it to the shared slot after K ticks, when the CPU
 accounts a different process, or when a task exits on that CPU. A commit is
 skipped when the slot's start-time marker no longer matches the pending
-instance. `PROCESS_COMBINE_TICKS` = 0 is `main`.
+instance. `PROCESS_COMBINE_TICKS` = 0 is one copy without combining.
 
 | K | 1 × 48 | 48 × 1 | Rate against `/proc` |
 |---|---|---|---|
 | feature off | 182 187 / 169 171 | 164 183 / 191 180 | |
-| 0 (`main`) | 325 325 / 317 324 | 207 198 / 222 223 | 0.9996-1.0000 |
+| 0 (one copy) | 325 325 / 317 324 | 207 198 / 222 223 | 0.9996-1.0000 |
 | 4 | 214 215 / 228 223 | 196 194 / 184 201 | 0.9992-1.0001 |
 | 8 | 201 203 / 226 231 | 194 195 / 214 211 | 0.9982-1.0002 |
 
@@ -111,7 +112,7 @@ It was rejected for what it leaves uncounted:
   shorter burst.
 - **Loss at exit.** The exit hook commits only the exiting CPU's entry. When a
   process's last thread exits, its deltas pending on other CPUs fail the
-  marker check and are dropped. `main` also zeroes the counter at the last
+  marker check and are dropped. One copy also zeroes the counter at the last
   exit, so it loses what accrued since the agent's last read; combining also
   drops deltas accounted before that read and still pending. This follows from
   the code and was not measured: the churn ratio above is taken while the
@@ -153,25 +154,120 @@ contended workload runs. The IPI adds an interrupt on every CPU, including
 by vtime rather than the tick, and how often the `cpu_usage` program runs
 there was not measured.
 
+## Sharded table of busy processes
+
+A map `process_table` beside `process_cpu_usage` holds counts for the
+processes that run on many CPUs at once. It has `CGROUP_SHARDS` (16) copies,
+and each CPU writes the copy `cgroup_shard_of_cpu` assigns it from the L3
+topology, as `CgroupCounters` does. Each copy is direct-mapped: a bucket per
+hash of the tgid, one cache line each, holding the process's start time, its
+tgid and its count. `account_process` adds a delta to the CPU's copy when the
+bucket holds the task's start time and tgid, and to `process_cpu_usage`
+otherwise. A process that holds no entry, or shares its bucket with one that
+does, is counted in `process_cpu_usage` as before the table. Nothing is left pending on a CPU, so an idle
+CPU has nothing to flush.
+
+### Claimed in BPF
+
+The first version claimed a free bucket in BPF with a compare-and-swap on the
+start time, at the process's first add, and freed it at the group's last
+exit. Each copy had 4,096 buckets, 4 MiB in all. The harness mapped the table
+and added each copy's count to `process_cpu_usage` for the ratio; the agent
+did not export it.
+
+| Arm | 1 × 48 | 48 × 1 | Exported against `/proc` |
+|---|---|---|---|
+| feature off | 174 175 / 197 199 | 168 160 / 188 183 | |
+| one copy | 336 357 / 317 313 | 235 250 / 208 177 | 0.9998-1.0003 |
+| table | 177 195 / 176 182 | 173 195 / 170 182 | 0.9997-1.0001 |
+
+The table is within noise of the feature off. The churn ratio was 1.000 with
+the table and 1.002 with one copy. It was not kept, for three reasons:
+
+- The compare-and-swap is a BPF atomic that kernels before 5.12 reject, and
+  rezolus supports 5.8.
+- Any process that runs claims a bucket, so idle daemons can hold the bucket
+  a busy process hashes to.
+- A claim can race a release, and an add can race the last exit; on arm64
+  the claim needs acquire and release ordering.
+
+### Assigned by the agent
+
+The agent assigns the buckets (`process_table.rs`). BPF only compares the
+start time and tgid and adds, with no new instruction. Each refresh, the
+agent:
+
+1. moves every held entry's count into the holder's `process_cpu_usage` slot,
+   adding to the slot before subtracting from the entry, and discards it if
+   the holder has exited;
+2. frees the bucket of a holder that exited, lost its labels, or used less
+   than an eighth of a CPU since the last refresh, by zeroing the start time;
+3. gives a free bucket to a labelled process that used at least half a CPU
+   since the last refresh, writing the tgid in every copy before the start
+   time.
+
+A freed bucket is not given out again in the same refresh, so an add that
+read the old start time lands before the last move. Refreshes are at least
+three quarters of the TTL apart. Only busy processes take buckets, so each
+copy has 256, 256 KiB in all; that was measured with one busy process, and
+two busy processes in one bucket leave one of them on the contended slot. The export still reads only
+`process_cpu_usage`, so a held process's CPU since the last move is exported
+after the next refresh, which runs just before the snapshot is built. The
+sweep records when the move ran, and the window of the `cpu_usage_process`
+group begins no later than that (principle 18).
+
+The agent writes a BPF map while it runs, through a writable mmap. A process
+gets its entry one refresh after it becomes busy, so its first refresh of
+load goes to the contended slot.
+
+Measured against the version claimed in BPF in one job, three passes in
+different orders, two repeats each:
+
+| Arm | 1 × 48 | 48 × 1 |
+|---|---|---|
+| feature off | 188 185 / 201 216 / 207 210 | 189 167 / 204 208 / 208 205 |
+| one copy | 333 342 / 311 309 / 325 334 | 207 219 / 202 180 / 202 217 |
+| claimed in BPF | 197 194 / 236 209 / 218 229 | 199 196 / 212 219 / 206 228 |
+| assigned | 219 210 / 225 230 / 278 269 | 218 212 / 240 246 / 273 279 |
+
+The assigned arm was higher than the feature off and the claimed version in
+every pass of that job, including 48 × 1, where no slot is shared. A second job ran four interleaved rounds of
+the claimed version (4,096 buckets) and the assigned version at 256 and
+4,096 buckets. The means were 225, 213 and 209 ns for 1 × 48 and 223, 215
+and 210 for 48 × 1, against 186 and 189 with the feature off, so the excess
+in the first job was variation between passes and the table size does not
+matter. Both tables remove the contention. The assigned table leaves 21-27 ns
+per run over the feature off and the claimed one 34-39, the same in 48 × 1,
+where nothing is shared.
+
+The exported total matched `/proc` at 0.9998-1.0001 over each 1 × 48
+window. The churn ratio was 1.006-1.009 in four runs over three jobs, against
+1.008 with one copy in one run.
+In a 24-vCPU guest on kernel 5.10, one pass, 1 × 16 and 16 × 1 took 218 214
+and 216 215 ns per run, and the churn ratio was 0.977. That job ran no
+single-copy arm, so whether the table changes the ratio on 5.10 was not
+measured.
+
 ## Decision
 
-Keep one copy. On this guest the contention adds about 140 ns to each run
-of the `cpu_usage` programs; at the 15.3k runs per second principle 7
-quotes, that is about 2 ms of CPU per second across 48 busy CPUs, or about
-45 µs per CPU-second at HZ=250. Runs scale with HZ, so HZ=1000 would be
-about four times that. It applies only while many threads of one process run
-at once, and only with `process_attribution` on. Every alternative costs
-memory, exactness, or an extra interrupt.
+Ship the table assigned by the agent. Before it, `process_cpu_usage` was one copy: on
+this guest the contention added about 140 ns to each run of the `cpu_usage`
+programs, about 2 ms of CPU per second across 48 busy CPUs at the 15.3k runs
+per second principle 7 quotes, or about 45 µs per CPU-second at HZ=250. Runs
+scale with HZ, so HZ=1000 would be about four times that. Stripes cost
+32 MiB per copy, write combining leaves deltas pending on idle CPUs, and the
+table costs 256 KiB and leaves nothing pending.
 
 ## Deferred / reopen
 
-- **Measure 1 × N on a two-socket or 100+ CPU host.** If the extra cost per
-  run is several µs rather than about 140 ns, reopen L3-assigned stripes
-  (exact) or combining with a read-time flush.
+- **Measure 1 × N on a two-socket or 100+ CPU host** with the table, to
+  confirm it holds where the cost with one copy would be larger.
+- **Two entries per bucket** — reopen if busy processes are seen sharing a
+  bucket. Each copy's 256 buckets are indexed by a hash of the tgid, so two
+  busy processes in one bucket leave one of them on the contended slot.
 - **Write combining** — reopen only with a flush that does not depend on
   ticks and an exit path that keeps pending deltas.
-- **Stripes** — reopen if per-process slots get a dense index (an allocator
-  in BPF), which makes each copy small.
+- **Stripes** — superseded by the table.
 - **Ring buffer** — reopen if the 64 MiB of `process_attribution` maps
   (`process_cpu_usage` and `process_start_times`) becomes the problem, with a
   read-time flush (`BPF_PROG_RUN` with `BPF_F_TEST_RUN_ON_CPU`, 5.10).
