@@ -26,6 +26,7 @@ fn line(query: &str, unit: Option<&str>) -> PlotDef {
         kind: PlotKind::Line,
         percentiles: vec![],
         unit_system: unit.map(|s| s.to_string()),
+        scope: None,
     }
 }
 
@@ -36,6 +37,7 @@ fn pct(query: &str) -> PlotDef {
         kind: PlotKind::Percentiles,
         percentiles: DEFAULT_PERCENTILES.to_vec(),
         unit_system: Some("time".into()),
+        scope: None,
     }
 }
 

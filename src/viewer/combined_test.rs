@@ -382,9 +382,9 @@ fn a_recording_without_source_uuids_is_restricted_by_its_labels() {
         assert!((values[0] - busy).abs() < 1e-9, "{route}: {values:?}");
     }
 
-    // A template that selects its own `source`, as the shipped service
-    // templates do: the recording's `source` matcher is not added twice,
-    // which the engine would refuse, so the KPI is drawn.
+    // A template that selects its own `source` (a user's template may):
+    // the recording's `source` matcher is not added twice, which the engine
+    // would refuse, so the KPI is drawn.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("pinned.dendro");
     let template = serde_json::json!({

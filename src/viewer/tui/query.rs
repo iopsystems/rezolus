@@ -70,7 +70,9 @@ pub fn load_chart(data: &dyn MetricsSource, def: &PlotDef, window: TimeWindow) -
     let Some((start, end, step)) = window.resolve(data.time_range(), data.interval()) else {
         return ChartData::Empty;
     };
-    match data.query_range(&query, start, end, step) {
+    let opts = metriken_query::QueryOptions::default()
+        .with_scope(def.scope.as_deref().and_then(dashboard::combined::scope_of));
+    match data.query_range_opts(&query, start, end, step, &opts) {
         Ok(QueryResult::Matrix { result, .. }) => {
             let metrics: Vec<&Labels> = result.iter().map(|s| &s.metric).collect();
             let labels = series_labels(&metrics);
@@ -236,7 +238,43 @@ mod tests {
             kind,
             percentiles: pcts,
             unit_system: None,
+            scope: None,
         }
+    }
+
+    /// Each host's CPU section of a combined archive charts only that
+    /// host's series in the TUI: the plot's scope goes with its query, as
+    /// the browser sends it.
+    #[test]
+    fn a_combined_archives_section_charts_only_its_recording() {
+        use crate::viewer::combined_test::{section, two_hosts, view};
+
+        let dir = tempfile::tempdir().unwrap();
+        let state = view(&two_hosts(dir.path()), &[]);
+        let data = state.baseline_data();
+        let mut busy = Vec::new();
+        for route in ["/cpu", "/cpu@h2"] {
+            let cpu = section(&state, route);
+            let query = cpu["groups"][0]["subgroups"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|sg| sg["plots"].as_array().unwrap())
+                .find(|p| p["opts"]["id"] == "busy-pct")
+                .unwrap_or_else(|| panic!("{route}: no busy-pct plot"))
+                .clone();
+            let def = super::super::model::parse_plot(&query).unwrap();
+            assert!(def.scope.is_some(), "{route}");
+            match load_chart(data.as_ref(), &def, TimeWindow::All) {
+                ChartData::Lines(series) => {
+                    assert_eq!(series.len(), 1, "{route}: {series:?}");
+                    busy.push(series[0].points.last().unwrap().1);
+                }
+                other => panic!("{route}: {other:?}"),
+            }
+        }
+        assert!((busy[0] - 0.25).abs() < 1e-9, "{busy:?}");
+        assert!((busy[1] - 0.75).abs() < 1e-9, "{busy:?}");
     }
 
     #[test]

@@ -20,6 +20,10 @@ pub struct PlotDef {
     pub kind: PlotKind,
     pub percentiles: Vec<f64>,
     pub unit_system: Option<String>,
+    /// The uuids of the sources the plot reads (the plot's `scope` in the
+    /// section View), as the browser sends them with each query; `None`
+    /// reads every source.
+    pub scope: Option<Vec<String>>,
 }
 
 /// A named group of plots within a section.
@@ -77,12 +81,20 @@ pub fn parse_plot(plot: &serde_json::Value) -> Option<PlotDef> {
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| DEFAULT_PERCENTILES.to_vec());
 
+    let scope = plot.get("scope").and_then(|s| s.as_array()).map(|uuids| {
+        uuids
+            .iter()
+            .filter_map(|u| u.as_str().map(str::to_string))
+            .collect()
+    });
+
     Some(PlotDef {
         title,
         base_query,
         kind,
         percentiles,
         unit_system,
+        scope,
     })
 }
 
