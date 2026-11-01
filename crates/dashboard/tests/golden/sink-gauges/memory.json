@@ -1018,6 +1018,63 @@
           ]
         },
         {
+          "name": "Paging",
+          "description": "Page faults count every call into the fault handler, including zero-fill and copy-on-write faults that need no I/O and faults made to wire memory. Page-ins are file pages read from disk on a fault or by read-ahead; pages a read() call fetches directly are not counted. Page-outs are dirty file pages the pageout daemon wrote back to free memory; write(), fsync and msync writeback are not counted. Anonymous memory is not counted here: it is compressed (Compressions, Decompressions), and the compressor writes it to swap (Swap In, Swap Out, in pages of compressed data). All three charts are pages per second.",
+          "plots": [
+            {
+              "data": [],
+              "opts": {
+                "title": "Page Faults",
+                "id": "page-faults",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_page_faults[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Page Ins",
+                "id": "pageins",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_pageins[5m]))"
+            },
+            {
+              "data": [],
+              "opts": {
+                "title": "Page Outs",
+                "id": "pageouts",
+                "type": "delta_counter",
+                "format": {
+                  "x_axis_label": null,
+                  "y_axis_label": null,
+                  "unit_system": "count",
+                  "precision": 2,
+                  "log_scale": null,
+                  "value_label": null
+                }
+              },
+              "promql_query": "sum(irate(memory_pageouts[5m]))"
+            }
+          ]
+        },
+        {
           "name": "Reclaim",
           "description": "kswapd reclaims in the background; direct reclaim and allocation stalls run on the allocating thread and are a latency source on the request path. Major faults are synchronous reads from storage.",
           "plots": [

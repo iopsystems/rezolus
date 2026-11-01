@@ -46,6 +46,9 @@
   SoC Power group. IOReport is loaded at runtime, not linked, so a macOS
   release without it leaves these two samplers unsupported and the rest of
   rezolus runs.
+- **Paging charts on macOS.** The Memory section draws page faults,
+  page-ins and page-outs per second, in a Paging group shown when
+  `memory_pageins` is recorded.
 - **Filesystem space on macOS.** `filesystem` now runs on macOS,
   unprivileged, and sets `filesystem_total`, `filesystem_free`,
   `filesystem_available`, `filesystem_inodes_total`,
