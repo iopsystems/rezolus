@@ -38,7 +38,7 @@ PromQL pattern:
 
 ```
 # Per-CPU softirq distribution — heatmap shape, look for hotspots
-sum by (id) (irate(cpu_usage{state="softirq"}[5m]))
+sum by (id) (irate(softirq_time[5m]))
 
 # Block-specific
 sum by (id) (irate(softirq{kind="block"}[5m]))
@@ -49,9 +49,9 @@ sum by (id) (irate(cpu_tlb_flush{reason="remote_send_ipi"}[5m]))
 
 ## Cloud VM contention vs self-induced overload
 
-Two metrics decompose "my workload is queueing":
+Two signals decompose "my workload is queueing":
 
-- `cpu_usage{state="steal"}` — vCPU was descheduled by the hypervisor (host-side cause).
+- Steal time — vCPU was descheduled by the hypervisor (host-side cause). Rezolus does not record steal time; read it from the `steal` column of `/proc/stat` or from the cloud provider's metrics.
 - `scheduler_runqueue_wait` — your task wanted to run; something on your runqueue ran instead.
 
 | Pattern | Interpretation |
@@ -99,7 +99,7 @@ Bursty bandwidth usage typically rides on burst credits without surfacing here; 
 
 ## Live-migration window detection (cloud)
 
-A burst of `cpu_usage{state="steal"}` lasting tens of seconds, with `scheduler_offcpu` rising for *all* tasks at once and IO latency spiking briefly, usually corresponds to a hypervisor-driven live migration. Distinct from sustained noisy-neighbor steal because it ends abruptly. Worth correlating with cloud-provider maintenance windows / instance lifecycle events.
+A burst of steal time (not recorded by Rezolus; see above) lasting tens of seconds, with `scheduler_offcpu` rising for *all* tasks at once and IO latency spiking briefly, usually corresponds to a hypervisor-driven live migration. Distinct from sustained noisy-neighbor steal because it ends abruptly. Worth correlating with cloud-provider maintenance windows / instance lifecycle events.
 
 ## Off-CPU time as a workload health signal
 

@@ -210,6 +210,9 @@ normalizing other CPU metrics.
 |--------|-------------|----------|
 | `cpu_cores` | The total number of logical cores that are currently online | |
 
+On macOS there is no `cpu_cores` sampler; the `cpu_usage` sampler sets
+`cpu_cores`.
+
 ### cpu_frequency
 
 Gets CPU frequency data from special CPU registers (MSRs). This lets you check
@@ -426,14 +429,22 @@ optimizing workloads.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `cpu_usage` | The amount of CPU time spent in different CPU states | `state={user,nice,system,softirq,irq,steal,guest,guest_nice}` |
-| `cgroup_cpu_usage` | The amount of CPU time spent in different CPU states on a per-cgroup basis | `state={user,nice,system,softirq,irq,steal,guest,guest_nice}`, `name`: the name of the cgroup |
+| `cpu_usage` | The amount of CPU time spent in different CPU states | `state={user,system}`, `id`: the CPU |
+| `cgroup_cpu_usage` | The amount of CPU time spent in different CPU states on a per-cgroup basis | `state={user,system}`, `name`: the name of the cgroup |
 | `softirq` | The count of softirqs | `kind={hi,timer,net_tx,net_rx,block,irq_poll,tasklet,sched,hrtimer,rcu}` |
 | `softirq_time` | The time spent in softirq handlers | `kind={hi,timer,net_tx,net_rx,block,irq_poll,tasklet,sched,hrtimer,rcu}` |
 | `cpu_usage_exited_tasks` | CPU time of tasks that have exited, per CPU the exit ran on; includes the CPU a thread used under its own thread id before it exec'd from outside the group leader | `id` |
 | `cgroup_cpu_usage_exited_tasks` | CPU time of a cgroup's tasks that have exited | `name` |
 | `task_cpu_usage` | CPU time (user and system) per thread; only with `task_attribution = true` | `pid`, `tgid`, `comm`, `cgroup` |
 | `process_cpu_usage` | CPU time (user and system) per process, by every thread of the process including exited ones; only with `process_attribution = true`, or with `task_attribution = true` and `process_attribution` unset | `tgid`, `comm`, `cgroup` |
+
+On Linux, `user` is each task's `utime`, which includes niced and guest
+time, and `system` is its `stime`. Idle and steal time are not recorded.
+Interrupt and softirq time are in `system` only when the kernel does not
+account interrupt time separately (`CONFIG_IRQ_TIME_ACCOUNTING`, which the
+kernel can still disable at boot). Softirqs run by `ksoftirqd` are in that
+thread's `system` time either way. `softirq_time` measures softirq handlers
+directly.
 
 The sampler accounts CPU per task in every configuration: the per-CPU and
 per-cgroup deltas are computed from each thread's `utime`/`stime` whether
@@ -513,6 +524,14 @@ a thread that returns to an earlier name (A, then B, then A) with the same
 cgroup continues the first A series after a gap. `rate()` or `increase()` over a range that
 spans the gap counts the CPU used under B in the A series as well. Rezolus
 recordings keep the two A series apart.
+
+On macOS the sampler reads `host_processor_info`, unprivileged, once per
+refresh. It sets `cpu_usage` per CPU with `state={user,system}`, and
+`cpu_cores`; the other metrics in this section are absent. Niced time is
+counted as `user`, as on Linux. The kernel counts each state in ticks of
+10 ms (`CLK_TCK` is 100), so the counters move in steps of 10 ms. Each tick
+count is 32 bits and wraps after about 497 days in one state; a wrap reads
+as a counter reset.
 
 ## Drive
 
@@ -1458,8 +1477,8 @@ cannot be detected; it is from the current one-second window.
 | `memory_wired` | Memory wired down: it cannot be paged out or compressed (`wire_count`, which on macOS also counts throttled pages and free low-memory pages); a gauge, in bytes | |
 | `memory_compressions` | Pages compressed into the compressor | |
 | `memory_decompressions` | Pages decompressed out of the compressor | |
-| `memory_pageins` | Pages read in from files by the pager | |
-| `memory_pageouts` | Pages written out to files by the pager | |
+| `memory_pageins` | File pages read from disk on a fault or by read-ahead; pages a `read()` call fetches directly are not counted | |
+| `memory_pageouts` | Dirty file pages the pageout daemon wrote back to free memory; `write()`, `fsync` and `msync` writeback are not counted | |
 
 ### memory_writeback
 

@@ -100,6 +100,14 @@
 
 ### Fixed
 
+- **The `cpu_usage` and macOS paging docs state what is recorded.**
+  `docs/metrics.md` listed eight `cpu_usage` states; Linux and macOS record
+  `user` and `system`. `docs/metrics.md` now also describes the macOS
+  source, and `docs/patterns.md` no longer queries the `softirq` and `steal`
+  states, which are not recorded. The `memory_pageins` and `memory_pageouts`
+  descriptions now say that page-ins include read-ahead but not pages a
+  `read()` call fetches directly, and that page-outs are the pageout
+  daemon's writeback, not `write()`, `fsync` or `msync`.
 - **`tcp_connect_latency` is labeled by outcome, and failed connects are
   counted.** The histogram now carries `outcome`: `established`, `refused`,
   `timeout`, `error` or `aborted`, read where the socket leaves `SYN_SENT`

@@ -27,14 +27,14 @@ pub static MEMORY_DECOMPRESSIONS: LazyCounter = LazyCounter::new(Counter::defaul
 
 #[metric(
     name = "memory_pageins",
-    description = "Pages read in from files by the pager",
+    description = "File pages read from disk on a fault or by read-ahead; pages a read() call fetches directly are not counted",
     metadata = { unit = "pages", acq_group = "memory_vmstat_read" }
 )]
 pub static MEMORY_PAGEINS: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "memory_pageouts",
-    description = "Pages written out to files by the pager",
+    description = "Dirty file pages the pageout daemon wrote back to free memory; write(), fsync and msync writeback are not counted",
     metadata = { unit = "pages", acq_group = "memory_vmstat_read" }
 )]
 pub static MEMORY_PAGEOUTS: LazyCounter = LazyCounter::new(Counter::default);
