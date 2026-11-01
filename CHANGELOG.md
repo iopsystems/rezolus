@@ -459,6 +459,16 @@
   power and 2.1% of clock. An Intel Mac, or one whose GPU performance states
   do not match the device tree's `voltage-states9` table, gets no metrics
   from `gpu_apple`.
+- **`recording upgrade` splits a 5.x combined parquet into its inputs.** A
+  combined file (written by 5.x `recording combine`, or by the 5.x recorder
+  given several endpoints: its `source` a JSON array and each column
+  labelled with its input's `source`) becomes one recording per input file,
+  labelled with its `source` and its `node` (rezolus) or `instance`, with
+  its `per_source_metadata` entries as its metadata, and opens in the viewer
+  as a combined view. A column carrying an exporter's own `source` forms a
+  recording of that name (`docs/parquet_metadata.md` lists the cases). It
+  was one recording, so a KPI template that selects by metric name alone
+  read every input's series of that name.
 - **The CPU dashboard draws a chart only when the recording has every
   counter it reads.** The IPC, IPNS, L3 hit rate, branch prediction and
   DTLB charts read PMU counters, which a VM without a virtual PMU does not
@@ -709,8 +719,8 @@
   `rezolus recording upgrade run.parquet` labels the recording with the
   file's `source`, so a KPI template carried in the parquet (llm-perf's)
   whose queries select `{source="llm-perf"}` matches its series. A combined
-  parquet, whose columns carry their own `source`, and a parquet any of
-  whose series already carry a `source` label are converted unlabelled.
+  parquet becomes one labelled recording per input (above); a parquet any
+  of whose series already carry a `source` label is converted unlabelled.
 - **`rezolus mcp` reads an archive of one run combined.** Without
   `--recording` (or the stdio server's `recording` object), `query`,
   `describe-metrics`, `detect-anomalies` and `analyze-correlation` read every

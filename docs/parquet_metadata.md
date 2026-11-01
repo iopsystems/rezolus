@@ -149,7 +149,9 @@ picks a built-in KPI template by it.
 a label of the recording, set when it is recorded (`record --endpoint
 URL,source=NAME`), and 6.x does not relabel a recording: `annotate --source`
 is refused. A parquet file's `source` becomes its recording's `source` label
-when it is converted (`recording upgrade`, or any edit given `-o`).
+when `recording upgrade` converts it. A combined file becomes one recording
+per input file, each labelled with that input's `source` and its `node` or
+`instance`.
 
 **In a `.rez`** the source appears both as a recording label and in the
 recording's `metadata` map; it is always `rezolus` (the format required a
@@ -535,6 +537,71 @@ Top-level key only used in combined files. Value is a nested JSON object:
 The recorder writes a partial `per_source_metadata` even for single-source
 files so it can stash per-source `first_sample_ns`, `last_sample_ns`, and
 `role` without polluting the top level.
+
+`recording upgrade` converts a combined file (written by 5.x `recording
+combine`, or by the 5.x recorder given several endpoints) into one recording
+per input.
+
+- An input is the columns labelled with one `source` and one `node`
+  (rezolus, and a column with no `instance` whose name starts with
+  `<node>::`) or `instance` (any other source), and each recording also
+  holds the timestamp and duration columns.
+- A column whose `source` is an exporter's own label (5.x combine kept it
+  in place of the input's) forms a recording of that name: the file does
+  not say which input it came from.
+- Columns that share a `source` and `node` or `instance` can come from
+  several inputs (two exporters' columns with one foreign `source`, or a
+  re-combined file's inputs). 5.x combine wrote each input's columns
+  together, and one input's columns have distinct names after the last
+  `::` in each (combine's `<node|instance>::` prefixes come before it).
+  When the latest recording with those labels already holds a column with
+  the same name after its last `::` and the same field metadata (apart
+  from `source` and the `node` or `instance`), the column starts another
+  recording with the same labels.
+- A recording is labelled with its `source` and its `node` or `instance`,
+  and its series do not repeat those labels. The first rezolus recording
+  is written first, and the others follow in the file's column order.
+- A recording's top-level metadata is its `source`; the keys written under
+  `per_source_metadata.<source>` itself (the recorder's `first_sample_ns`,
+  `last_sample_ns`, `role` and `sampler_status`, and `version`, which
+  combine builds before 5.10 wrote there; when several inputs share a
+  source, these are the first input's), then the keys of its entry;
+  its source's `descriptions`, else the file's; a top-level
+  `service_queries` whose `service_name` is its source; and the file's other
+  top-level keys (`sampling_interval_ms`, `events` and the rest).
+- The first rezolus recording (else the first) also takes the file's
+  `systeminfo` when its entry has none, its `selection`, and a top-level
+  `service_queries` that names no input or has no `service_name`. That
+  template reads only that recording's series, so its KPIs on other inputs'
+  metrics have no data.
+- A file whose `source` is an array but whose columns carry no `source`
+  label (the 5.x recorder, 5.21 and later, given an array `source` for one
+  endpoint) converts to one recording.
+
+Three cases are not split as their inputs were:
+
+- An input that was itself a combined file: its rezolus columns keep their
+  `node` and form a recording per node, and their series keep the outer
+  `instance` 5.x combine gave them as a label. Its other columns, which 5.x
+  combine gave the outer `instance`, are grouped with the other columns of
+  that `source` and `instance` as above.
+- An input all of whose columns carry an exporter's own `source` (an
+  exporter that labels every series, or a 5.x recorder before 5.21, which
+  labelled an endpoint's columns with the endpoint's name, a rezolus
+  agent's included) forms a recording of that name, without the input's
+  `per_source_metadata`. Two such inputs with one name are told apart by
+  `instance`, or by `node` when their columns carry no `instance` and their
+  names start with `<node>::`. When those labels are also equal, the second
+  input's columns join the first input's recording until one repeats a
+  series the first input holds (as above), and from that column on they
+  form a recording of their own with the same labels.
+- An A/B tarball's arm that is a combined file converts to one recording,
+  as every arm does.
+
+The `recording upgrade` summary names each `per_source_metadata` entry no
+recording uses (as `<source>/<entry>`), and each source of the file's
+`source` array with neither a recording nor an entry, since their metadata
+is not carried.
 
 ### Nested keys
 

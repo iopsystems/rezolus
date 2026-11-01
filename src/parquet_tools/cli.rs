@@ -962,7 +962,12 @@ mod help {
                          WAL and caller-row bytes are copied unchanged. A tar `.rez`'s recordings\n\
                          become sources with their labels, metadata, clock anchor and `complete`\n\
                          flag. A parquet file becomes one source, labelled with the file's\n\
-                         `source` when that names one source and no series carries its own.\n\
+                         `source` when that names one source and no series carries its own;\n\
+                         a combined parquet (5.x `recording combine`, or the 5.x recorder given\n\
+                         several endpoints) becomes one source per input file, labelled with\n\
+                         its `source` and its `node` or `instance`, which the viewer opens as\n\
+                         one combined view; a column carrying an exporter's own `source` forms\n\
+                         a source of that name.\n\
                          An A/B tarball becomes two sources, its baseline labelled arm=baseline\n\
                          and its experiment arm=experiment, which the viewer opens as a\n\
                          comparison. Tar and parquet tables are re-encoded.\n\n\

@@ -43,6 +43,9 @@ pub(crate) fn convert_quiet(
     use metriken_storage::to_dendro::{convert_path, ConvertedFrom};
     let container = Container::of_path(input);
     let summary = match container {
+        Container::Parquet if super::combined_parquet::is_combined(input) => {
+            super::combined_parquet::convert(input, output)?
+        }
         Container::Parquet => {
             let w = parquet_converter(input)
                 .convert_file_path(input, output)
