@@ -482,9 +482,10 @@ fn discriminating_keys(labels: &[BTreeMap<String, String>]) -> Vec<&str> {
         .collect()
 }
 
-/// A display name for each of `labels` that tells them apart: the `host`
-/// value when every one has a host and no two share it, else the differing
-/// values joined by `/`, else `recording N` (1-based).
+/// A display name for each of `labels` that tells them apart: the `alias`
+/// value when every one has an alias and no two share it, else the `host`
+/// value on the same terms, else the differing values joined by `/`, else
+/// `recording N` (1-based).
 pub fn instance_names(labels: &[BTreeMap<String, String>]) -> Vec<String> {
     names_or(labels, |i, _| format!("recording {}", i + 1))
 }
@@ -496,15 +497,20 @@ pub fn names_or(
     fallback: impl Fn(usize, &BTreeMap<String, String>) -> String,
 ) -> Vec<String> {
     let keys = discriminating_keys(labels);
-    let hosts: Vec<Option<&String>> = labels.iter().map(|l| l.get("host")).collect();
-    let unique_hosts = hosts.iter().all(Option::is_some)
-        && hosts.iter().collect::<HashSet<_>>().len() == hosts.len();
+    let unique = |key: &str| {
+        let values: Vec<Option<&String>> = labels.iter().map(|l| l.get(key)).collect();
+        values.iter().all(Option::is_some)
+            && values.iter().collect::<HashSet<_>>().len() == values.len()
+    };
+    let naming_key = [crate::identity::ALIAS_LABEL, "host"]
+        .into_iter()
+        .find(|k| unique(k));
     labels
         .iter()
         .enumerate()
         .map(|(i, l)| {
-            if unique_hosts && let Some(host) = l.get("host") {
-                return host.clone();
+            if let Some(name) = naming_key.and_then(|k| l.get(k)) {
+                return name.clone();
             }
             let values: Vec<&str> = keys
                 .iter()
@@ -1953,6 +1959,11 @@ mod tests {
         assert_eq!(instance_keys(&names), ["web-01", "web-01-2"]);
         let names = instance_names(&[m(&[("source", "a")]), m(&[("source", "b")])]);
         assert_eq!(names, ["a", "b"]);
+        let names = instance_names(&[
+            m(&[("alias", "web"), ("host", "h1")]),
+            m(&[("alias", "db"), ("host", "h2")]),
+        ]);
+        assert_eq!(names, ["web", "db"]);
         let names = instance_names(&[
             m(&[("source", "a"), (RECORDING_LABEL, "0")]),
             m(&[("source", "a"), (RECORDING_LABEL, "3")]),

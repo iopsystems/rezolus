@@ -467,6 +467,26 @@
   tests run with `node --import ./tests/support/charts.mjs --test
   tests/*.mjs`, which resolves imports of `charts/` to the crate; the 26
   test files that tested only the chart modules are in metriken-charts.
+- **A recording with identity layers is read by its producer.** The
+  dashboard's new `identity` module reads, from a recording's metadata,
+  the producer its layers name (`__producer__`), its `service_kind` and
+  `alias` labels, and a `source` it carries. A recording without layers
+  (every recording rezolus writes today, and every 5.x one) is read by its
+  `source` as before. For a recording with layers:
+  - the viewers show the built-in sections, and analysis infers samplers
+    from metric names, when the producer is `rezolus`; not from a `source`
+    of `rezolus` alone, nor from the agent's self-metric names;
+  - a recording without a `source` finds its registry template by its
+    producer and `service_kind` (`vllm` with `prefill` finds
+    `vllm-prefill`, else `vllm`), and by a `source` or `alias` that names a
+    template;
+  - a template the recording carries without a producer takes the
+    recording's.
+
+  A recording's `alias` label, with or without layers, is now the first
+  choice for its name beside a comparison, for instance names in the
+  combined view, and for a capture's alias, ahead of `host` and `source`.
+
 - **The dashboard's plot specs are built with metriken-charts.** The
   `dashboard` crate's `Plot`, `Unit` and plot options come from
   `metriken_charts::plot` 0.1.0, and the section JSON the viewer receives

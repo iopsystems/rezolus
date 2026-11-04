@@ -713,14 +713,16 @@ pub struct Beside {
 /// The keys and names of recordings shown beside a comparison, from their
 /// labels, told apart among themselves as instances are
 /// ([`combined::instance_names`]). One that no label tells apart (a lone
-/// beside recording, or twins) is named by its `host`, else its `source`,
-/// else `recording N` from its archive position (`positions`, 0-based).
+/// beside recording, or twins) is named by its `alias`, else its `host`,
+/// else its `source`, else `recording N` from its archive position
+/// (`positions`, 0-based).
 pub fn beside_names(
     labels: &[BTreeMap<String, String>],
     positions: &[usize],
 ) -> Vec<(String, String)> {
     let names = combined::names_or(labels, |i, l| {
-        l.get("host")
+        l.get(crate::identity::ALIAS_LABEL)
+            .or_else(|| l.get("host"))
             .or_else(|| l.get("source"))
             .cloned()
             .unwrap_or_else(|| format!("recording {}", positions.get(i).copied().unwrap_or(i) + 1))
@@ -815,12 +817,16 @@ pub fn add_beside_sections(
     notices
 }
 
-/// Whether the built-in sections can show `data`: it is a Rezolus agent's
-/// recording (its `source` is `rezolus`), whichever samplers it ran, or it
-/// carries the agent's `cpu_usage` under another source (a combined
+/// Whether `data` has the agent's system metrics, which decides the landing
+/// section of a comparison: it is a Rezolus agent's recording (its `source`
+/// is `rezolus`, or its identity layers name the agent,
+/// [`crate::identity::Identity::is_rezolus`]), whichever samplers it ran, or
+/// it carries the agent's `cpu_usage` under another source (a combined
 /// recording). A service's recording is neither.
 pub fn has_system_metrics(data: &dyn MetricsSource) -> bool {
-    data.source() == "rezolus" || data.counter_names().iter().any(|n| n == "cpu_usage")
+    data.source() == crate::identity::REZOLUS
+        || crate::identity::Identity::read(&data.file_metadata()).is_rezolus()
+        || data.counter_names().iter().any(|n| n == "cpu_usage")
 }
 
 /// The file-metadata key under which a comparison's baseline lists the
@@ -1004,6 +1010,26 @@ mod tests {
             )
             .unwrap();
         assert!(has_system_metrics(&joined));
+
+        // A recording with identity layers is the agent's by its producer,
+        // whatever `source` it was given.
+        let layered = metriken_query::MemoryStore::builder().build();
+        let agent_metadata = crate::identity::tests::layered(&[
+            (
+                metriken_storage::layers::Layer::Recorder,
+                &[],
+                &[("producer_name", "rezolus")],
+            ),
+            (
+                metriken_storage::layers::Layer::User,
+                &[("source", "web-01")],
+                &[],
+            ),
+        ]);
+        for (k, v) in agent_metadata {
+            layered.set_metadata(k, v);
+        }
+        assert!(has_system_metrics(&layered));
     }
 
     /// The baseline's systeminfo is one node unless every value is a node's
@@ -1049,6 +1075,13 @@ mod tests {
         assert_eq!(
             name(&[l(&[("source", "rezolus")])], &[0]),
             [("rezolus".to_string(), "rezolus".to_string())]
+        );
+        assert_eq!(
+            name(
+                &[l(&[("alias", "web"), ("host", "h"), ("source", "rezolus")])],
+                &[0]
+            ),
+            [("web".to_string(), "web".to_string())]
         );
         assert_eq!(
             name(&[l(&[])], &[2]),

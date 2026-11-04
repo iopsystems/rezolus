@@ -3,6 +3,7 @@ pub mod combined;
 pub mod dashboard;
 pub mod display_wire;
 pub mod events;
+pub mod identity;
 pub mod keys;
 pub mod metric_catalog;
 mod plot;
