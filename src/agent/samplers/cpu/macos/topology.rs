@@ -5,6 +5,8 @@
 
 use crate::agent::samplers::iokit::{CfString, Service};
 
+use std::collections::HashMap;
+
 /// A core's cluster type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
@@ -167,13 +169,106 @@ pub fn frequency_table(key: &str) -> Option<Vec<u64>> {
     Some(parse_frequency_table(&pmgr.data(&CfString::new(key)?)?))
 }
 
-/// The E and P clusters' frequency tables, in Hz, from the power manager's
-/// `voltage-states1-sram` and `voltage-states5-sram`.
-pub fn frequency_tables() -> Option<(Vec<u64>, Vec<u64>)> {
-    Some((
-        frequency_table("voltage-states1-sram")?,
-        frequency_table("voltage-states5-sram")?,
-    ))
+/// The size of a `perf-domains` entry.
+const PERF_DOMAIN_LEN: usize = 28;
+
+/// The CPU clusters in the power manager's `perf-domains`, each with the
+/// index `n` of its `voltage-states<n>` tables. An entry is 28 bytes: the
+/// index in byte 0 and a NUL-padded name in the last 16, `ECPU`, `PCPU`,
+/// `PCPU1`, ... for the CPU clusters (cluster 0 has no number). Entries with
+/// other names (`SOC`, `ANE`, `DISP`, ...) are skipped, and a property whose
+/// length is not a multiple of 28 gives none.
+pub fn parse_perf_domains(bytes: &[u8]) -> Vec<((Kind, usize), u8)> {
+    if !bytes.len().is_multiple_of(PERF_DOMAIN_LEN) {
+        return Vec::new();
+    }
+    bytes
+        .as_chunks::<PERF_DOMAIN_LEN>()
+        .0
+        .iter()
+        .filter_map(|entry| {
+            let name = &entry[PERF_DOMAIN_LEN - 16..];
+            let name = std::str::from_utf8(name.split(|b| *b == 0).next()?).ok()?;
+            let kind = Kind::from_letter(name.chars().next()?)?;
+            let digits = name.get(1..)?.strip_prefix("CPU")?;
+            let cluster = if digits.is_empty() {
+                0
+            } else {
+                digits.parse().ok()?
+            };
+            Some(((kind, cluster), entry[0]))
+        })
+        .collect()
+}
+
+/// Each CPU cluster's performance-state frequencies, in Hz, keyed by kind
+/// and the cluster's index among the clusters of its kind, and the clusters
+/// `perf-domains` lists.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FrequencyTables {
+    pub tables: HashMap<(Kind, usize), Vec<u64>>,
+    pub listed: Vec<(Kind, usize)>,
+}
+
+impl FrequencyTables {
+    /// The table of cluster `cluster` of `kind`. A cluster `perf-domains`
+    /// does not list reads cluster 0's table of its kind; a listed cluster
+    /// reads only its own.
+    pub fn get(&self, kind: Kind, cluster: usize) -> Option<&[u64]> {
+        let own = self.tables.get(&(kind, cluster));
+        if self.listed.contains(&(kind, cluster)) {
+            return own.map(Vec::as_slice);
+        }
+        own.or_else(|| self.tables.get(&(kind, 0)))
+            .map(Vec::as_slice)
+    }
+}
+
+/// The tables `table` finds for the CPU clusters `domains` lists:
+/// `voltage-states<n>-sram` for each listed cluster, and for cluster 0 of a
+/// kind `domains` does not list, `voltage-states1-sram` (E) or
+/// `voltage-states5-sram` (P). A listed cluster whose table is missing gets
+/// none, and [`FrequencyTables::get`] gives it none.
+pub fn tables_from(
+    domains: &[((Kind, usize), u8)],
+    table: impl Fn(&str) -> Option<Vec<u64>>,
+) -> FrequencyTables {
+    let mut tables = HashMap::new();
+    for (cluster, n) in domains {
+        if let Some(t) = table(&format!("voltage-states{n}-sram")) {
+            tables.insert(*cluster, t);
+        }
+    }
+    for (kind, key) in [
+        (Kind::Efficiency, "voltage-states1-sram"),
+        (Kind::Performance, "voltage-states5-sram"),
+    ] {
+        if domains.iter().any(|((k, _), _)| *k == kind) {
+            continue;
+        }
+        if let Some(t) = table(key) {
+            tables.insert((kind, 0), t);
+        }
+    }
+    FrequencyTables {
+        tables,
+        listed: domains.iter().map(|(cluster, _)| *cluster).collect(),
+    }
+}
+
+/// The CPU clusters' frequency tables from the power manager's
+/// `perf-domains` and `voltage-states` properties (see [`tables_from`]).
+/// `None` when no table is found.
+pub fn frequency_tables() -> Option<FrequencyTables> {
+    let pmgr = Service::from_path("IODeviceTree:/arm-io/pmgr")?;
+    let domains = CfString::new("perf-domains")
+        .and_then(|key| pmgr.data(&key))
+        .map(|bytes| parse_perf_domains(&bytes))
+        .unwrap_or_default();
+    let tables = tables_from(&domains, |key| {
+        Some(parse_frequency_table(&pmgr.data(&CfString::new(key)?)?))
+    });
+    (!tables.tables.is_empty()).then_some(tables)
 }
 
 #[cfg(test)]
@@ -243,6 +338,86 @@ mod tests {
         assert_eq!(parse_frequency_table(&hz), [600_000_000, 2_064_000_000]);
     }
 
+    /// This M4 Max's `perf-domains`: SOC, ECPU, DCS, PCPU, ANE, SOC_AFC,
+    /// SOC_AFI, DISP and PCPU1.
+    const M4_MAX_PERF_DOMAINS: &str = "00040001000000002c010000534f43000000000000000000000000000101010200000000000000004543505500000000000000000000000002040003000000002c0100004443530000000000000000000000000005010105000000000000000050435055000000000000000000000000080000080000000000000000414e45000000000000000000000000001c00000f0000000000000000534f435f4146430000000000000000001d0000100000000000000000534f435f4146490000000000000000000b04000b000000002c010000444953500000000000000000000000000d01010d000000000000000050435055310000000000000000000000";
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn perf_domains_name_the_cpu_clusters_tables() {
+        let bytes = unhex(M4_MAX_PERF_DOMAINS);
+        assert_eq!(
+            parse_perf_domains(&bytes),
+            [
+                ((Kind::Efficiency, 0), 1),
+                ((Kind::Performance, 0), 5),
+                ((Kind::Performance, 1), 13),
+            ]
+        );
+        assert_eq!(parse_perf_domains(&bytes[1..]), []);
+    }
+
+    #[test]
+    fn listed_clusters_read_their_tables_and_unlisted_kinds_the_defaults() {
+        let present = |keys: &'static [(&'static str, u64)]| {
+            move |key: &str| keys.iter().find(|(k, _)| *k == key).map(|(_, f)| vec![*f])
+        };
+        let e = (Kind::Efficiency, 0);
+        let p0 = (Kind::Performance, 0);
+        let p1 = (Kind::Performance, 1);
+        let defaults: &[(&str, u64)] = &[
+            ("voltage-states1-sram", 1),
+            ("voltage-states5-sram", 5),
+            ("voltage-states13-sram", 13),
+        ];
+
+        // Every cluster listed: each its own table.
+        let tables = tables_from(&[(e, 1), (p0, 5), (p1, 13)], present(defaults));
+        assert_eq!(
+            tables.tables,
+            HashMap::from([(e, vec![1]), (p0, vec![5]), (p1, vec![13])])
+        );
+
+        // No perf-domains: cluster 0 of each kind reads the default.
+        let tables = tables_from(&[], present(defaults));
+        assert_eq!(tables.tables, HashMap::from([(e, vec![1]), (p0, vec![5])]));
+
+        // P listed, E not: E reads the default, P only its listed table.
+        let tables = tables_from(
+            &[(p0, 9)],
+            present(&[("voltage-states1-sram", 1), ("voltage-states9-sram", 9)]),
+        );
+        assert_eq!(tables.tables, HashMap::from([(e, vec![1]), (p0, vec![9])]));
+
+        // A listed kind whose table is missing does not read the default.
+        let tables = tables_from(&[(e, 1), (p0, 9)], present(defaults));
+        assert_eq!(tables.tables, HashMap::from([(e, vec![1])]));
+    }
+
+    #[test]
+    fn an_unlisted_cluster_reads_cluster_0s_table() {
+        let mut tables = FrequencyTables {
+            tables: HashMap::from([
+                ((Kind::Performance, 0), vec![1]),
+                ((Kind::Performance, 1), vec![2]),
+            ]),
+            listed: Vec::new(),
+        };
+        assert_eq!(tables.get(Kind::Performance, 1), Some(&[2][..]));
+        assert_eq!(tables.get(Kind::Performance, 2), Some(&[1][..]));
+        assert_eq!(tables.get(Kind::Efficiency, 0), None);
+        // A listed cluster without a table reads none.
+        tables.listed.push((Kind::Performance, 2));
+        assert_eq!(tables.get(Kind::Performance, 2), None);
+        assert_eq!(tables.get(Kind::Performance, 3), Some(&[1][..]));
+    }
+
     /// This machine's device tree: every core is mapped, ids are unique, and
     /// each table rises.
     #[test]
@@ -257,8 +432,21 @@ mod tests {
             ids.len(),
             std::thread::available_parallelism().unwrap().get()
         );
-        let (e, p) = frequency_tables().expect("tables");
-        for table in [&e, &p] {
+        let tables = frequency_tables().expect("tables");
+        // Every core has a table, and every cluster perf-domains lists has
+        // its own.
+        let pmgr = Service::from_path("IODeviceTree:/arm-io/pmgr").unwrap();
+        let domains = CfString::new("perf-domains")
+            .and_then(|key| pmgr.data(&key))
+            .map(|bytes| parse_perf_domains(&bytes))
+            .unwrap_or_default();
+        for c in &cores {
+            assert!(tables.get(c.kind, c.cluster).is_some(), "{c:?}");
+            if domains.iter().any(|(d, _)| *d == (c.kind, c.cluster)) {
+                assert!(tables.tables.contains_key(&(c.kind, c.cluster)), "{c:?}");
+            }
+        }
+        for table in tables.tables.values() {
             assert!(!table.is_empty());
             assert!(table.windows(2).all(|w| w[0] < w[1]), "{table:?}");
             assert!(table[0] >= 100_000_000 && *table.last().unwrap() < 10_000_000_000);

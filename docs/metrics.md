@@ -236,9 +236,15 @@ On macOS, see [cpu_frequency on macOS](#cpu_frequency-on-macos).
 Apple silicon has no APERF or MPERF, so there the sampler reads IOReport's
 `CPU Core Performance States` channels, which count, per core, the ticks of
 the 24 MHz system counter spent in each performance state, idle and powered
-down. The device tree lists each cluster type's state frequencies
-(`voltage-states1-sram` for the E cores, `voltage-states5-sram` for the P
-cores). The sampler publishes the same three counters as on Linux, per
+down. The device tree's power manager lists each cluster's state
+frequencies in a `voltage-states<n>-sram` table, and its `perf-domains`
+property gives each cluster's `n` (on an M4 Max, 1 for the E cluster and 5
+and 13 for the two P clusters). Cluster 0 of a kind `perf-domains` does not
+list reads `voltage-states1-sram` (E) or `voltage-states5-sram` (P). A cluster
+`perf-domains` does not list reads cluster 0's table of its kind. A cluster
+left with no table, or whose state count differs from its table's length, is
+not published.
+The sampler publishes the same three counters as on Linux, per
 logical CPU, so the formula above gives each core's average frequency while
 running:
 
