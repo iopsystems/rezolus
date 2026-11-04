@@ -148,6 +148,9 @@ pub(crate) struct AcquisitionGroup {
     // Members are the slots with metadata, as for a reader-stamped group,
     // while the sampler stamps the window. See `new_slotted`.
     slotted: bool,
+    // When some members' values were fixed before the read that brackets
+    // them, on the source's timeline; 0 when none were. See `values_fixed_at`.
+    values_fixed_ns: AtomicU64,
 }
 
 impl AcquisitionGroup {
@@ -163,6 +166,7 @@ impl AcquisitionGroup {
             member_set: OnceLock::new(),
             reader_stamped: AtomicBool::new(false),
             slotted: false,
+            values_fixed_ns: AtomicU64::new(0),
         }
     }
 
@@ -207,6 +211,7 @@ impl AcquisitionGroup {
             member_set: OnceLock::new(),
             reader_stamped: AtomicBool::new(true),
             slotted: false,
+            values_fixed_ns: AtomicU64::new(0),
         }
     }
 
@@ -225,6 +230,7 @@ impl AcquisitionGroup {
             member_set: OnceLock::new(),
             reader_stamped: AtomicBool::new(false),
             slotted: true,
+            values_fixed_ns: AtomicU64::new(0),
         }
     }
 
@@ -352,7 +358,28 @@ impl AcquisitionGroup {
     /// task own the group and call `acquire()`/`finish()`, not `refresh()`
     /// as well.
     pub(crate) fn acquire(&self) -> AcquisitionGuard<'_> {
-        AcquisitionGuard::begin(&self.slot)
+        let mut guard = AcquisitionGuard::begin(&self.slot);
+        let fixed = self.values_fixed_ns.load(Ordering::Acquire);
+        if fixed != 0 {
+            guard.fixed_ns = Some(fixed);
+        }
+        guard
+    }
+
+    /// For a reader-stamped group: some members' values were fixed at `ns`
+    /// (on the source's timeline, as `anchored_ts` gives it) by a step that
+    /// runs before the read, and stay so until the next such step. Every
+    /// window published after this begins no later than `ns`. `None` says
+    /// no member's value is fixed early.
+    ///
+    /// `cpu_usage` calls it from the sweep that moves `process_table`'s
+    /// counts into `process_cpu_usage`: a process holding an entry has the
+    /// value of that move until the next one.
+    // Only called from the Linux `cpu_usage` sampler.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn values_fixed_at(&self, ns: Option<u64>) {
+        self.values_fixed_ns
+            .store(ns.unwrap_or(0), Ordering::Release);
     }
 
     /// Read the group's current window, if it has ever been stamped. Used
@@ -390,6 +417,9 @@ pub(crate) struct AcquisitionGuard<'a> {
     // instead of re-deriving it from elapsed-at-publish-time. See
     // `mark_end`'s doc comment for why the two can differ.
     marked_end_ns: Option<u64>,
+    // The group's `values_fixed_at`, when set: the published begin is no
+    // later than this.
+    fixed_ns: Option<u64>,
 }
 
 impl<'a> AcquisitionGuard<'a> {
@@ -408,6 +438,7 @@ impl<'a> AcquisitionGuard<'a> {
             begin_ns: crate::agent::epoch::anchored_ts(begin_mono).max(0) as u64,
             begin_mono,
             marked_end_ns: None,
+            fixed_ns: None,
         }
     }
 
@@ -456,7 +487,10 @@ impl<'a> AcquisitionGuard<'a> {
         let end_ns = self
             .marked_end_ns
             .unwrap_or_else(|| self.begin_ns + self.begin_mono.elapsed().as_nanos() as u64);
-        self.slot.store(Window::new(self.begin_ns, end_ns));
+        let begin_ns = self
+            .fixed_ns
+            .map_or(self.begin_ns, |f| f.min(self.begin_ns));
+        self.slot.store(Window::new(begin_ns, end_ns));
     }
 
     /// Consume the guard without stamping. Use on an error path to make the
@@ -509,6 +543,28 @@ mod tests {
             w.end_ns >= w.begin_ns,
             "a window does not end before it starts"
         );
+    }
+
+    /// A window opened after `values_fixed_at(Some(t))` begins no later than
+    /// `t` and ends where it would have; `None` stops that.
+    #[test]
+    fn a_window_begins_no_later_than_the_values_were_fixed() {
+        static GROUP: AcquisitionGroup =
+            AcquisitionGroup::new_reader_stamped("test_sampler", "values_fixed_probe");
+        let fixed = crate::agent::epoch::anchored_ts(Instant::now()) as u64;
+        std::thread::sleep(std::time::Duration::from_millis(2));
+
+        GROUP.values_fixed_at(Some(fixed));
+        let before = crate::agent::epoch::anchored_ts(Instant::now()) as u64;
+        GROUP.acquire().finish();
+        let w = GROUP.window().expect("the guard stamped it");
+        assert_eq!(w.begin_ns, fixed);
+        assert!(w.end_ns >= before, "the end is the read's");
+
+        GROUP.values_fixed_at(None);
+        GROUP.acquire().finish();
+        let w = GROUP.window().expect("the guard stamped it");
+        assert!(w.begin_ns >= before, "the begin is the read's again");
     }
 
     #[test]

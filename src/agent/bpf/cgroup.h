@@ -25,12 +25,17 @@
 #define CGROUP_SHARD_TABLE 1024
 const volatile u8 cgroup_shard_of_cpu[CGROUP_SHARD_TABLE] = {};
 
-// The index of `cgroup_id`'s counter in this CPU's copy.
-static __always_inline u32 cgroup_index(u32 cgroup_id) {
+// The copy this CPU adds to.
+static __always_inline u32 cgroup_copy(void) {
     u32 cpu = bpf_get_smp_processor_id();
     u32 shard = cgroup_shard_of_cpu[cpu & (CGROUP_SHARD_TABLE - 1)];
 
-    return ((shard ? shard - 1 : cpu) % CGROUP_SHARDS) * MAX_CGROUPS + cgroup_id;
+    return (shard ? shard - 1 : cpu) % CGROUP_SHARDS;
+}
+
+// The index of `cgroup_id`'s counter in this CPU's copy.
+static __always_inline u32 cgroup_index(u32 cgroup_id) {
+    return cgroup_copy() * MAX_CGROUPS + cgroup_id;
 }
 
 // An id at or above MAX_CGROUPS would land in another copy, so it is dropped.

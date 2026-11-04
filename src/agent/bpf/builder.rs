@@ -487,6 +487,46 @@ impl PerfEvent {
 /// drain, over an atomic view of a map's values.
 type MapSweep = fn(&[std::sync::atomic::AtomicU64]);
 
+/// A sampler callback run by [`Builder::maps_sweep_mut`] after every
+/// ringbuf drain, over writable atomic views of several maps' values, in the
+/// order they were named.
+type MapsSweep = fn(&[&[std::sync::atomic::AtomicU64]]);
+
+/// A registered sweep: one map read-only, or several maps writable.
+enum Sweep {
+    One(&'static str, MapSweep),
+    Many(&'static [&'static str], MapsSweep),
+}
+
+/// A sweep with its maps mapped.
+enum MappedSweep {
+    One(memmap2::Mmap, MapSweep),
+    Many(Vec<memmap2::MmapRaw>, MapsSweep),
+}
+
+/// An atomic view of a mapped BPF map's values.
+fn atomic_values(bytes: &[u8]) -> &[std::sync::atomic::AtomicU64] {
+    // SAFETY: AtomicU64 has u64's size and layout, and a mapping is page
+    // aligned.
+    let (_, values, _) = unsafe { bytes.align_to::<std::sync::atomic::AtomicU64>() };
+    values
+}
+
+/// An atomic view of a writable mapped BPF map's values, made from the
+/// mapping's pointer so that stores through it are not made through a
+/// shared byte slice.
+fn atomic_values_mut(mmap: &memmap2::MmapRaw) -> &[std::sync::atomic::AtomicU64] {
+    let len = mmap.len() / std::mem::size_of::<u64>();
+    // SAFETY: as for `atomic_values`; the mapping is readable and writable
+    // for `len` words and lives as long as `mmap`.
+    unsafe {
+        std::slice::from_raw_parts(
+            mmap.as_mut_ptr() as *const std::sync::atomic::AtomicU64,
+            len,
+        )
+    }
+}
+
 pub struct Builder<T: 'static + SkelBuilder<'static>> {
     name: &'static str,
     skel: fn() -> T,
@@ -538,7 +578,7 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     )>,
     #[allow(clippy::type_complexity)]
     ringbuf_handler: Vec<(&'static str, fn(&[u8]) -> i32)>,
-    map_sweeps: Vec<(&'static str, MapSweep)>,
+    map_sweeps: Vec<Sweep>,
     btf_path: Option<String>,
     /// Optional list of program names to enable. If None, all programs are
     /// enabled (default behavior). If Some, only the listed programs will have
@@ -1148,29 +1188,52 @@ where
 
             // Mapped through the map's borrowed fd, so nothing here closes
             // the fd libbpf owns.
-            let map_sweeps: Vec<(memmap2::Mmap, MapSweep)> = self
+            let map_len = |name: &str| {
+                let map = skel.map(name);
+                assert_eq!(
+                    map.value_size() as usize,
+                    std::mem::size_of::<u64>(),
+                    "{name}: a map sweep needs 8-byte values"
+                );
+                map.max_entries() as usize
+            };
+            let map_sweeps: Vec<MappedSweep> = self
                 .map_sweeps
                 .into_iter()
-                .map(|(name, sweep)| {
-                    let map = skel.map(name);
-                    assert_eq!(
-                        map.value_size() as usize,
-                        std::mem::size_of::<u64>(),
-                        "{name}: map_sweep needs 8-byte values"
-                    );
-                    let len = map.max_entries() as usize * std::mem::size_of::<u64>();
-                    // SAFETY: the map is BPF_F_MMAPABLE and lives as long as
-                    // the skeleton, which outlives this thread's loop.
-                    let mmap = unsafe { memmap2::MmapOptions::new().len(len).map(&map.as_fd()) }
+                .map(|sweep| match sweep {
+                    Sweep::One(name, sweep) => {
+                        let entries = map_len(name);
+                        // SAFETY: the map is BPF_F_MMAPABLE and lives as long
+                        // as the skeleton, which outlives this thread's loop.
+                        let mmap = unsafe {
+                            memmap2::MmapOptions::new()
+                                .len(entries * std::mem::size_of::<u64>())
+                                .map(&skel.map(name).as_fd())
+                        }
                         .expect("failed to mmap() bpf map");
-                    // SAFETY: as in the loop below.
-                    let (_, values, _) = unsafe { mmap.align_to::<std::sync::atomic::AtomicU64>() };
-                    assert_eq!(
-                        values.len(),
-                        map.max_entries() as usize,
-                        "{name}: mmap width"
-                    );
-                    (mmap, sweep)
+                        assert_eq!(atomic_values(&mmap).len(), entries, "{name}: mmap width");
+                        MappedSweep::One(mmap, sweep)
+                    }
+                    Sweep::Many(names, sweep) => {
+                        let mmaps = names
+                            .iter()
+                            .map(|name| {
+                                let entries = map_len(name);
+                                // The map lives as long as the skeleton, as above.
+                                let mmap = memmap2::MmapOptions::new()
+                                    .len(entries * std::mem::size_of::<u64>())
+                                    .map_raw(&skel.map(name).as_fd())
+                                    .expect("failed to mmap() bpf map");
+                                assert_eq!(
+                                    atomic_values_mut(&mmap).len(),
+                                    entries,
+                                    "{name}: mmap width"
+                                );
+                                mmap
+                            })
+                            .collect();
+                        MappedSweep::Many(mmaps, sweep)
+                    }
                 })
                 .collect();
 
@@ -1239,11 +1302,14 @@ where
                     let _ = rb.consume();
                 }
 
-                for (mmap, sweep) in &map_sweeps {
-                    // SAFETY: AtomicU64 has u64's size and layout, and a
-                    // mapping is page aligned.
-                    let (_, values, _) = unsafe { mmap.align_to::<std::sync::atomic::AtomicU64>() };
-                    sweep(values);
+                for sweep in &map_sweeps {
+                    match sweep {
+                        MappedSweep::One(mmap, sweep) => sweep(atomic_values(mmap)),
+                        MappedSweep::Many(mmaps, sweep) => {
+                            let views: Vec<_> = mmaps.iter().map(atomic_values_mut).collect();
+                            sweep(&views);
+                        }
+                    }
                 }
 
                 for v in &mut counters {
@@ -1538,7 +1604,18 @@ where
     /// 8-byte values; the BPF side keeps writing it, so `sweep` reads each
     /// value with an atomic load.
     pub fn map_sweep(mut self, name: &'static str, sweep: MapSweep) -> Self {
-        self.map_sweeps.push((name, sweep));
+        self.map_sweeps.push(Sweep::One(name, sweep));
+        self
+    }
+
+    /// Run `sweep` after every ringbuf drain with writable views of the named
+    /// maps' values, in the order named, for a sampler that moves values
+    /// between maps the BPF side is writing. Each map must be
+    /// `BPF_F_MMAPABLE` with 8-byte values; `sweep` reads and writes each
+    /// value with atomic operations. Runs in registration order with the
+    /// `map_sweep` callbacks.
+    pub fn maps_sweep_mut(mut self, names: &'static [&'static str], sweep: MapsSweep) -> Self {
+        self.map_sweeps.push(Sweep::Many(names, sweep));
         self
     }
 
