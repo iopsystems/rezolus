@@ -34,12 +34,13 @@ The landing and docs pages have no build step. `/viewer/` does:
 The script writes `site/viewer/pkg/` and copies the metriken-charts crate's
 `charts/` and `charts.css` into `site/viewer/lib/`; git ignores both. Until
 you run it, `/viewer/pkg/wasm_viewer.js` and `/viewer/lib/charts/` 404 and the
-viewer will not load; after a `Cargo.lock` change to metriken-charts, run it
-again to update the copies; the landing and docs pages are unaffected. The build needs `wasm-pack`
-and a clang that can target wasm32 (Apple's cannot; Homebrew LLVM can, and the
-script finds it automatically).
+viewer will not load; the landing and docs pages are unaffected. Run it again
+after a `Cargo.lock` change to metriken-charts to update the copies. The build
+needs `wasm-pack` and a clang that can target wasm32 (Apple's cannot; Homebrew
+LLVM can, and the script finds it automatically).
 
 The rest of `viewer/lib/`, and `viewer/templates/`, are symlinks into
-`src/viewer/assets/lib/` and `crates/dashboard/templates/` — edit the real files there, never the links. A missing
-link 404s silently in the deployed viewer, which is what the
-`sync-viewer-symlinks` skill and its CI check exist to catch.
+`src/viewer/assets/lib/` and `crates/dashboard/templates/` — edit the real
+files there, never the links. A missing link 404s silently in the deployed
+viewer, which is what the `sync-viewer-symlinks` skill and its CI check exist
+to catch.
