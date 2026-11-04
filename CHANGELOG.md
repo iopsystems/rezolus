@@ -18,6 +18,10 @@
 
 ### Added
 
+- **The Memory section draws page faults on Linux.** The Reclaim group has a
+  Page Faults chart, the rate of `memory_page_faults` (pgfault, every fault),
+  beside Major Faults.
+
 - **An expanded chart shows its scope.** In a combined view, the
   single-chart view lists the uuids of the sources the chart reads under
   Scope, below its query. Editing the list reads other sources, Remove
