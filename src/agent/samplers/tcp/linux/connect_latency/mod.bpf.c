@@ -81,11 +81,13 @@ static __always_inline __u64 get_sock_ident(struct sock* sk) {
     return (__u64)sk;
 }
 
-// connect() reaches tcp_v4_connect or tcp_v6_connect only for a socket in
-// CLOSE (__inet_stream_connect), so a start time already in the map is from
-// an attempt that failed before SYN_SENT, such as one with no route, and is
-// replaced. tcp_v6_connect calls tcp_v4_connect for a v4-mapped address, which
-// replaces the start time with one taken inside tcp_v6_connect.
+// tcp_v4_connect and tcp_v6_connect are called only for a socket in CLOSE
+// (__inet_stream_connect, or mptcp_connect for an MPTCP subflow). A start time
+// already in the map is stale and is replaced: it is from an attempt that
+// failed before SYN_SENT, such as one with no route, or from a simultaneous
+// open on a socket since disconnected. tcp_v6_connect calls tcp_v4_connect for
+// a v4-mapped address; where that call is probed, the start time is replaced
+// with one taken later inside tcp_v6_connect.
 static int trace_connect(struct sock* sk) {
     u64 sock_ident, ts;
 
