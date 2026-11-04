@@ -1,5 +1,7 @@
 {
   "service_name": "sglang-decode",
+  "producer": "sglang",
+  "service_kind": "decode",
   "service_metadata": {},
   "kpis": [
     {

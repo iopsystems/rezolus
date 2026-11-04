@@ -1,5 +1,7 @@
 {
   "service_name": "sglang-prefill",
+  "producer": "sglang",
+  "service_kind": "prefill",
   "service_metadata": {},
   "kpis": [
     {

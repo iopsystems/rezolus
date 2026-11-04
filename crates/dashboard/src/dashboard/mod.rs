@@ -1297,12 +1297,16 @@ mod tests {
         };
         let vllm = ServiceExtension {
             service_name: "vllm".to_string(),
+            producer: None,
+            service_kind: None,
             aliases: vec![],
             service_metadata: HashMap::new(),
             kpis: vec![kpi("throughput", "Generation Token Rate", "vllm_q")],
         };
         let sglang = ServiceExtension {
             service_name: "sglang".to_string(),
+            producer: None,
+            service_kind: None,
             aliases: vec![],
             service_metadata: HashMap::new(),
             kpis: vec![kpi("throughput", "Generation Token Rate", "sglang_q")],
@@ -1375,12 +1379,16 @@ mod tests {
         };
         let vllm = ServiceExtension {
             service_name: "vllm".to_string(),
+            producer: None,
+            service_kind: None,
             aliases: vec![],
             service_metadata: HashMap::new(),
             kpis: vec![kpi("throughput", "Generation Token Rate", "vllm_q")],
         };
         let sglang = ServiceExtension {
             service_name: "sglang".to_string(),
+            producer: None,
+            service_kind: None,
             aliases: vec![],
             service_metadata: HashMap::new(),
             kpis: vec![kpi("throughput", "Generation Token Rate", "sglang_q")],
@@ -1448,6 +1456,8 @@ mod tests {
         };
         let vllm_a = ServiceExtension {
             service_name: "vllm".to_string(),
+            producer: None,
+            service_kind: None,
             aliases: vec![],
             service_metadata: HashMap::new(),
             kpis: vec![kpi.clone()],
