@@ -722,6 +722,229 @@ pub fn restrict_query(query: &str, matchers: &[Matcher]) -> String {
     out
 }
 
+/// What [`drop_matchers`] did to a query.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Dropped {
+    /// Matchers removed.
+    pub removed: usize,
+    /// Matchers kept: in a selector with no metric name and no other `=`
+    /// matcher with a non-empty value (`{source="a"}`,
+    /// `{source="a", host!="h"}`), a check stricter than PromQL's, which
+    /// refuses a nameless selector only when every matcher matches the
+    /// empty string; and in a branch with a quoted name (`{"x.y", ...}`).
+    pub kept: usize,
+}
+
+/// `query` with every `label="value"` matcher (the `=` operator, any
+/// quoting) removed from its selectors' braces. A selector left with no
+/// matcher loses its braces when it has a metric name (`x{label="a"}`
+/// becomes `x`), as does a selector with an `or` branch left with none. A
+/// selector with no metric name keeps the matcher when no other matcher of
+/// its branch is `=` with a non-empty value, and a branch with a quoted
+/// name keeps it too; both are counted in [`Dropped::kept`].
+/// Other matchers are kept as written; in a branch that lost a matcher
+/// they are joined with `,`, and the branch's comments and inner
+/// whitespace are not kept. The query is read by its tokens as
+/// [`restrict_query`] reads it.
+pub fn drop_matchers(query: &str, label: &str) -> (String, Dropped) {
+    let bytes = query.as_bytes();
+    let len = bytes.len();
+    let mut out = String::with_capacity(query.len());
+    let mut dropped = Dropped::default();
+    // Whether the braces next are a metric name's (`x{...}`).
+    let mut named = false;
+    let mut i = 0;
+    while i < len {
+        let c = bytes[i];
+        match c {
+            b'"' | b'\'' | b'`' => {
+                let end = skip_string(bytes, i);
+                out.push_str(&query[i..end]);
+                i = end;
+            }
+            b'#' => {
+                let end = skip_comment(bytes, i);
+                out.push_str(&query[i..end]);
+                i = end;
+            }
+            b'[' => {
+                let end = skip_until(bytes, i + 1, b']');
+                out.push_str(&query[i..end]);
+                i = end;
+            }
+            b'{' => {
+                let end = skip_until(bytes, i + 1, b'}');
+                let closed = end <= len && bytes[end - 1] == b'}';
+                let inner = if closed {
+                    &query[i + 1..end - 1]
+                } else {
+                    &query[i + 1..end]
+                };
+                let braces = drop_from_braces(inner, label, named, &mut dropped);
+                // A metric name's braces left empty are removed, whitespace
+                // between the name and the brace included.
+                if braces.is_empty() {
+                    let trimmed = out.trim_end().len();
+                    out.truncate(trimmed);
+                    // Keep the name apart from a word that followed the
+                    // braces (`x{...}offset 5m`).
+                    if bytes
+                        .get(end)
+                        .is_some_and(|b| is_ident_start(*b) || b.is_ascii_digit())
+                    {
+                        out.push(' ');
+                    }
+                } else {
+                    out.push('{');
+                    out.push_str(&braces);
+                    if closed {
+                        out.push('}');
+                    }
+                }
+                named = false;
+                i = end;
+            }
+            c if is_ident_start(c) => {
+                let end = skip_ident(bytes, i);
+                let ident = &query[i..end];
+                out.push_str(ident);
+                i = end;
+                let lower = ident.to_ascii_lowercase();
+                let next = skip_ws(bytes, i);
+                if LABEL_LIST_KEYWORDS.contains(&lower.as_str()) && bytes.get(next) == Some(&b'(') {
+                    let close = skip_until(bytes, next + 1, b')');
+                    out.push_str(&query[i..close]);
+                    i = close;
+                    named = false;
+                    continue;
+                }
+                named = bytes.get(next) == Some(&b'{') && !KEYWORDS.contains(&lower.as_str());
+            }
+            _ => {
+                let ch = query[i..].chars().next().expect("i is a char boundary");
+                if !ch.is_whitespace() {
+                    named = false;
+                }
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+    }
+    (out, dropped)
+}
+
+/// The braces' contents `inner` with `label`'s `=` matchers removed from
+/// each `or` branch, or empty when the selector has a metric name (`named`)
+/// and a branch was left with no matcher: that branch selects every series
+/// of the name, so the selector does too.
+fn drop_from_braces(inner: &str, label: &str, named: bool, dropped: &mut Dropped) -> String {
+    let mut branches = Vec::new();
+    let mut separators = Vec::new();
+    let mut start = 0;
+    for (or_start, or_end) in or_separators(inner) {
+        branches.push(&inner[start..or_start]);
+        separators.push(&inner[or_start..or_end]);
+        start = or_end;
+    }
+    branches.push(&inner[start..]);
+
+    let mut kept_branches = Vec::with_capacity(branches.len());
+    let mut emptied = false;
+    for branch in &branches {
+        let (spans, bare_string) = matcher_spans(branch);
+        let (removed, rest): (Vec<_>, Vec<_>) =
+            spans.iter().partition(|m| m.label == label && m.op == "=");
+        if removed.is_empty() {
+            kept_branches.push(branch.to_string());
+            continue;
+        }
+        // PromQL needs a selector without a metric name to keep a matcher
+        // that does not match the empty string; `=` with a non-empty value
+        // is the one this reads, which is stricter than PromQL. A branch
+        // with a quoted name is kept whole, since rebuilding it from its
+        // matchers would lose the name.
+        if bare_string || (!named && !rest.iter().any(|m| m.op == "=" && m.non_empty)) {
+            dropped.kept += removed.len();
+            kept_branches.push(branch.to_string());
+            continue;
+        }
+        dropped.removed += removed.len();
+        let lead = &branch[..branch.len() - branch.trim_start().len()];
+        let tail = &branch[branch.trim_end().len()..];
+        if rest.is_empty() {
+            emptied = true;
+            continue;
+        }
+        let body: Vec<&str> = rest.iter().map(|m| &branch[m.span.clone()]).collect();
+        kept_branches.push(format!("{lead}{}{tail}", body.join(",")));
+    }
+    if emptied {
+        return String::new();
+    }
+    let mut out = String::with_capacity(inner.len());
+    for (n, branch) in kept_branches.iter().enumerate() {
+        if n > 0 {
+            out.push_str(separators[n - 1]);
+        }
+        out.push_str(branch);
+    }
+    out
+}
+
+/// One `label op value` matcher of a branch of a selector's braces.
+struct MatcherSpan {
+    label: String,
+    op: String,
+    /// The bytes of the whole matcher within the branch.
+    span: std::ops::Range<usize>,
+    /// Whether the value is not the empty string.
+    non_empty: bool,
+}
+
+/// Each `label op value` matcher of a branch of a selector's braces (a
+/// value in any quoting is read), and whether the branch also holds a
+/// string outside a matcher (a quoted metric or label name, `{"x.y"}`).
+fn matcher_spans(branch: &str) -> (Vec<MatcherSpan>, bool) {
+    let bytes = branch.as_bytes();
+    let mut out = Vec::new();
+    let mut bare_string = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'"' || c == b'\'' || c == b'`' {
+            bare_string = true;
+            i = skip_string(bytes, i);
+        } else if c == b'#' {
+            i = skip_comment(bytes, i);
+        } else if is_ident_start(c) {
+            let start = i;
+            let end = skip_ident(bytes, i);
+            let label = &branch[i..end];
+            i = end;
+            let j = skip_ws(bytes, end);
+            let op_len = match (bytes.get(j), bytes.get(j + 1)) {
+                (Some(b'!' | b'='), Some(b'=' | b'~')) => 2,
+                (Some(b'='), _) => 1,
+                _ => continue,
+            };
+            let k = skip_ws(bytes, j + op_len);
+            if matches!(bytes.get(k), Some(b'"' | b'\'' | b'`')) {
+                let close = skip_string(bytes, k);
+                out.push(MatcherSpan {
+                    label: label.to_string(),
+                    op: branch[j..j + op_len].to_string(),
+                    span: start..close,
+                    non_empty: close - k > 2,
+                });
+                i = close;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    (out, bare_string)
+}
+
 /// The braces of a selector, `inner` being what is between them, with
 /// each `or` branch restricted by [`restrict_branch`].
 fn restrict_braces(inner: &str, matchers: &[Matcher]) -> String {
@@ -1752,6 +1975,83 @@ mod tests {
 
     fn h1() -> Vec<Matcher> {
         eqs(&[("host", "h1")])
+    }
+
+    /// `drop_matchers` removes `label="..."` in any quoting and in every
+    /// selector form, keeps every other matcher, and keeps the `source`
+    /// matcher of a nameless selector with no other `=` matcher with a
+    /// non-empty value, or of a branch with a quoted name.
+    #[test]
+    fn source_matchers_are_dropped_from_every_selector() {
+        let d = |removed, kept| Dropped { removed, kept };
+        for (query, want, dropped) in [
+            (
+                r#"sum(irate(x{source="vllm",a="b"}[5s]))"#,
+                r#"sum(irate(x{a="b"}[5s]))"#,
+                d(1, 0),
+            ),
+            (r#"x{a="b", source="vllm"}"#, r#"x{a="b"}"#, d(1, 0)),
+            (r#"x{source="vllm"}"#, "x", d(1, 0)),
+            ("x {source='vllm'} + y", "x + y", d(1, 0)),
+            (
+                r#"{__name__="x", source="vllm"}"#,
+                r#"{__name__="x"}"#,
+                d(1, 0),
+            ),
+            (r#"{source="vllm"}"#, r#"{source="vllm"}"#, d(0, 1)),
+            (r#"x{a="1" or source="vllm"}"#, "x", d(1, 0)),
+            (
+                r#"x{a="1",source="v" or b="2"}"#,
+                r#"x{a="1" or b="2"}"#,
+                d(1, 0),
+            ),
+            (r#"x{source!="vllm"}"#, r#"x{source!="vllm"}"#, d(0, 0)),
+            (r#"x{source=~"vllm"}"#, r#"x{source=~"vllm"}"#, d(0, 0)),
+            (
+                r#"histogram_quantiles([0.5, 0.99], x{source="vllm"})"#,
+                "histogram_quantiles([0.5, 0.99], x)",
+                d(1, 0),
+            ),
+            (
+                r#"sum by (source) (x{source="vllm"})"#,
+                "sum by (source) (x)",
+                d(1, 0),
+            ),
+            (
+                r#"x{a="source=\"vllm\""}"#,
+                r#"x{a="source=\"vllm\""}"#,
+                d(0, 0),
+            ),
+            (
+                r#"x{source="a"} / on (host) y{source="b"}"#,
+                "x / on (host) y",
+                d(2, 0),
+            ),
+            (r#"x{source="a"}offset 5m"#, "x offset 5m", d(1, 0)),
+            (r#"x{source="a"}and y"#, "x and y", d(1, 0)),
+            (r#"{source="a", host="h"}"#, r#"{host="h"}"#, d(1, 0)),
+            (
+                r#"{source="a", host!="h"}"#,
+                r#"{source="a", host!="h"}"#,
+                d(0, 1),
+            ),
+            (
+                r#"{source="a", host=""}"#,
+                r#"{source="a", host=""}"#,
+                d(0, 1),
+            ),
+            (
+                r#"{"x.y", source="a", host="h"}"#,
+                r#"{"x.y", source="a", host="h"}"#,
+                d(0, 1),
+            ),
+        ] {
+            assert_eq!(
+                drop_matchers(query, "source"),
+                (want.to_string(), dropped),
+                "{query}"
+            );
+        }
     }
 
     #[test]

@@ -374,14 +374,12 @@ fn an_agent_and_a_service_of_one_run_open_as_one_view() {
     let mode = get(&viewer, "/api/v1/captures");
     assert_eq!(mode.to_string().matches("\"id\"").count(), 1, "{mode}");
 
-    // Each section's queries are its template's, and each plot names the
-    // sources of its recording as its scope.
+    // Each section's queries are its template's, without the `source`
+    // matchers of a template a recording without identity layers carries,
+    // and each plot names the sources of its recording as its scope.
     let svc = get(&viewer, "/data/service/svc.json");
     let queries = plot_queries(&svc);
-    assert_eq!(
-        queries[0].1,
-        "sum(irate(svc_requests_total{source=\"svc\"}[1s]))"
-    );
+    assert_eq!(queries[0].1, "sum(irate(svc_requests_total[1s]))");
     for (id, scope) in plot_scopes(&svc) {
         assert_eq!(scope, serde_json::json!([svc_uuid]), "{id}");
     }
@@ -432,9 +430,9 @@ fn an_agent_and_a_service_of_one_run_open_as_one_view() {
 
 /// A single-source parquet upgraded to a `.dendro` (the demo recording) is a
 /// recording of one member: its series carry its `source`, and so do they in
-/// the copy it is annotated into, so a KPI template whose queries select
-/// `source=` (as an archive's do) renders, and `mcp query` with the matcher
-/// reads the series of either.
+/// the copy it is annotated into, so `mcp query` with a `source=` matcher
+/// reads the series of either, and a KPI template whose queries select
+/// `source=` renders, read without the matcher.
 #[test]
 fn an_upgraded_parquets_template_selecting_its_source_renders() {
     let dir = tempfile::tempdir().unwrap();
@@ -498,10 +496,7 @@ fn an_upgraded_parquets_template_selecting_its_source_renders() {
     let viewer = spawn_viewer(&archive);
     let svc = get(&viewer, "/data/service/rezolus.json");
     assert!(svc["metadata"].get("unavailable_kpis").is_none(), "{svc}");
-    assert_eq!(
-        plot_queries(&svc)[0].1,
-        "sum(cpu_cores{source=\"rezolus\"})"
-    );
+    assert_eq!(plot_queries(&svc)[0].1, "sum(cpu_cores)");
 }
 
 /// Record two endpoints in one run; `arms` gives each an `arm=`.
