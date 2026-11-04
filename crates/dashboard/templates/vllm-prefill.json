@@ -1,5 +1,7 @@
 {
   "service_name": "vllm-prefill",
+  "producer": "vllm",
+  "service_kind": "prefill",
   "service_metadata": {},
   "kpis": [
     {

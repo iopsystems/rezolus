@@ -702,9 +702,8 @@ mod cgroup_shard_tests {
         let header = include_str!("cgroup.h");
         assert!(header.contains(&format!("#define CGROUP_SHARDS {CGROUP_SHARDS}\n")));
         assert!(header.contains(&format!("#define MAX_CGROUPS {MAX_CGROUPS}\n")));
-        assert!(header.contains(
-            "return ((shard ? shard - 1 : cpu) % CGROUP_SHARDS) * MAX_CGROUPS + cgroup_id;"
-        ));
+        assert!(header.contains("return (shard ? shard - 1 : cpu) % CGROUP_SHARDS;"));
+        assert!(header.contains("return cgroup_copy() * MAX_CGROUPS + cgroup_id;"));
         assert!(header.contains("u32 idx = shard * MAX_CGROUPS + cgroup_id;"));
     }
 }

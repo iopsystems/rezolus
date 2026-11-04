@@ -25,9 +25,9 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         Unit::Time,
     );
     queueing.plot_promql_full(
-        PlotOpts::histogram_latency("Runqueue Latency", "scheduler-runqueue-latency")
+        Plot::histogram_latency("Runqueue Latency", "scheduler-runqueue-latency")
             .with_axis_label("Latency")
-            .with_unit_system("time"),
+            .with_unit_system(Unit::Time),
         "scheduler_runqueue_latency".to_string(),
     );
 
@@ -39,23 +39,23 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     );
     if multi_cpu {
         wait.plot_promql(
-            PlotOpts::counter("Wait", "scheduler-runqueue-wait", Unit::Time)
-                .with_unit_system("time"),
+            Plot::counter("Wait", "scheduler-runqueue-wait", Unit::Time)
+                .with_unit_system(Unit::Time),
             "sum(irate(scheduler_runqueue_wait[5m])) / cpu_cores".to_string(),
         );
         wait.plot_promql(
-            PlotOpts::counter(
+            Plot::counter(
                 "Wait (Per-CPU)",
                 "scheduler-runqueue-wait-per-cpu",
                 Unit::Time,
             )
-            .with_unit_system("time"),
+            .with_unit_system(Unit::Time),
             "sum by (id) (irate(scheduler_runqueue_wait[5m]))".to_string(),
         );
     } else {
         wait.plot_promql_full(
-            PlotOpts::counter("Wait", "scheduler-runqueue-wait", Unit::Time)
-                .with_unit_system("time"),
+            Plot::counter("Wait", "scheduler-runqueue-wait", Unit::Time)
+                .with_unit_system(Unit::Time),
             "sum(irate(scheduler_runqueue_wait[5m])) / cpu_cores".to_string(),
         );
     }
@@ -70,9 +70,9 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         Unit::Time,
     );
     timing.plot_promql(
-        PlotOpts::histogram_latency("Off CPU Time", "off-cpu-time")
+        Plot::histogram_latency("Off CPU Time", "off-cpu-time")
             .with_axis_label("Time")
-            .with_unit_system("time"),
+            .with_unit_system(Unit::Time),
         "scheduler_offcpu".to_string(),
     );
     timing.histogram_rate_mean(
@@ -83,9 +83,9 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         Unit::Time,
     );
     timing.plot_promql(
-        PlotOpts::histogram_latency("Running Time", "running-time")
+        Plot::histogram_latency("Running Time", "running-time")
             .with_axis_label("Time")
-            .with_unit_system("time"),
+            .with_unit_system(Unit::Time),
         "scheduler_running".to_string(),
     );
 
@@ -105,13 +105,13 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         Unit::Time,
     );
     uninterruptible.plot_promql(
-        PlotOpts::histogram_latency("Uninterruptible Time", "uninterruptible-time")
+        Plot::histogram_latency("Uninterruptible Time", "uninterruptible-time")
             .with_axis_label("Time")
-            .with_unit_system("time"),
+            .with_unit_system(Unit::Time),
         "scheduler_uninterruptible".to_string(),
     );
     uninterruptible.plot_promql(
-        PlotOpts::counter("Tasks", "uninterruptible-tasks", Unit::Count),
+        Plot::counter("Tasks", "uninterruptible-tasks", Unit::Count),
         "sum(irate(scheduler_uninterruptible_wait[5m])) / 1000000000".to_string(),
     );
 
@@ -119,16 +119,16 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     switches.describe("Involuntary context-switch rate, aggregate and per-core.");
     if multi_cpu {
         switches.plot_promql(
-            PlotOpts::counter("Context Switch", "cswitch", Unit::Rate),
+            Plot::counter("Context Switch", "cswitch", Unit::Rate),
             "sum(irate(scheduler_context_switch[5m]))".to_string(),
         );
         switches.plot_promql(
-            PlotOpts::counter("Context Switch (Per-CPU)", "cswitch-per-cpu", Unit::Rate),
+            Plot::counter("Context Switch (Per-CPU)", "cswitch-per-cpu", Unit::Rate),
             "sum by (id) (irate(scheduler_context_switch[5m]))".to_string(),
         );
     } else {
         switches.plot_promql_full(
-            PlotOpts::counter("Context Switch", "cswitch", Unit::Rate),
+            Plot::counter("Context Switch", "cswitch", Unit::Rate),
             "sum(irate(scheduler_context_switch[5m]))".to_string(),
         );
     }

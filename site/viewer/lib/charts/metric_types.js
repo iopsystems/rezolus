@@ -1,1 +1,0 @@
-../../../../src/viewer/assets/lib/charts/metric_types.js

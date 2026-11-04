@@ -213,8 +213,8 @@ a constant; over-allocates on small machines, silently under-counts past
 
 ### 7. Counter map layout matches the writer-concurrency pattern
 
-Five counter strategies coexist in `src/agent/bpf/counters.rs`, and the
-choice is principled:
+Five counter strategies coexist in `src/agent/bpf/counters.rs`, and a
+sixth, `process_table`, in `cpu_usage` (below). The choice is principled:
 
 - **`Counters`** (per-CPU bank, cacheline-padded, summed at userspace) — for
   hot-path totals where many CPUs increment the same logical counter and
@@ -255,15 +255,27 @@ advanced, which the kernel does about once per scheduler tick per busy
 CPU, so a process's slot takes at most about one write per CPU per tick.
 With tick-based accounting, ticks fire at the same time on every CPU
 unless the kernel is booted with `skew_tick=1`, so those writes arrive
-together. In the same 56-vCPU guest
+together. With that copy alone, in the same 56-vCPU guest
 (HZ=250, 15.3k runs per second) with 48 spinning threads, the `cpu_usage`
 programs took 306-314 ns per run with the threads in one process and
 195-203 ns with 48 one-thread processes, against 162-177 ns without the
 process counter: about 2 ms of CPU per second across the host. The cost
-grows with the number of CPUs running the process and with HZ; it has
-not been measured on a larger host. It keeps one copy: eight copies
-assigned by L3 remove the contention but cost 256 MiB, and per-CPU write
-combining leaves deltas uncommitted on idle CPUs under nohz
+grows with the number of CPUs running the process and with HZ.
+
+None of the five fits that slot. The array is indexed by pid, so the
+`CgroupCounters` layout costs 32 MiB per copy, 512 MiB for `CGROUP_SHARDS`
+copies, and the per-CPU layouts cost more. So `cpu_usage` has a sixth
+layout, `process_table`: `CGROUP_SHARDS` copies assigned from the L3
+topology as for `CgroupCounters`, each a direct-mapped table of 256
+cache-line entries keyed by tgid and start time, 256 KiB in all. The agent
+(`src/agent/samplers/cpu/linux/usage/process_table.rs`) gives an entry to a labelled process that used at least
+half a CPU over a refresh, and frees it below an eighth. BPF adds to the
+CPU's copy when the entry matches the task, and to `process_cpu_usage`
+otherwise. Each refresh the agent moves the entries' counts into
+`process_cpu_usage`, which stays the only exported map. In the same guest
+the 1 × 48 case took 213 ns per run with the table (mean of four
+interleaved rounds; 209 with 4,096 buckets), against 186 without the
+process counter
 ([journal](journal/2026-10-27-process-cpu-usage-contention.md)).
 
 **How to apply.**
@@ -278,6 +290,8 @@ combining leaves deltas uncommitted on idle CPUs under nohz
 
 **What we refuse.**
 - Hand-rolling another counter strategy when one of the five fits.
+  `process_table` exists because none did; a new layout records why in
+  this principle.
 - Padding `PackedCounters`-style keyed slots where each slot has one
   natural writer.
 
@@ -690,7 +704,13 @@ enforces, and that reviewers must protect:
   the value is exposed, not a staleness claim. It is still an honest,
   deliberate upper bound (marking the end immediately after that group's
   member reads, not at eventual publish, keeps the width to the group's
-  own read span rather than whole-walk time). One exception on magnitude:
+  own read span rather than whole-walk time). When a step before the read
+  fixes some members' values, the window begins no later than that step
+  (`AcquisitionGroup::values_fixed_at`): `cpu_usage` moves `process_table`'s
+  counts into `process_cpu_usage` before the read, so while any table entry
+  is in use, and for the refresh that drains the last one, the
+  `cpu_usage_process` window begins no later than the move. One
+  exception on magnitude:
   V2's `task_cpu_usage` and `process_cpu_usage` spans include their full
   capacity walks — kept deliberately for ringbuf-loss robustness (see the
   comment at the V2 reader-stamped arm in `snapshot.rs`) — so those two

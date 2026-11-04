@@ -18,6 +18,10 @@
 
 ### Added
 
+- **The Memory section draws page faults on Linux.** The Reclaim group has a
+  Page Faults chart, the rate of `memory_page_faults` (pgfault, every fault),
+  beside Major Faults.
+
 - **An expanded chart shows its scope.** In a combined view, the
   single-chart view lists the uuids of the sources the chart reads under
   Scope, below its query. Editing the list reads other sources, Remove
@@ -99,6 +103,15 @@
   The scheduler and cgroups dashboards plot them. (#1589)
 
 ### Fixed
+
+- **`cpu_frequency` on macOS reads each CPU cluster's own frequency table.**
+  The power manager's `perf-domains` property names the `voltage-states`
+  table of each cluster; the sampler used `voltage-states5-sram` for every
+  P cluster. On an M4 Max the second P cluster's table,
+  `voltage-states13-sram`, holds the same frequencies, so its readings do not
+  change. A machine without `perf-domains` reads the old tables, and one
+  missing a table now publishes the clusters that have one instead of
+  nothing.
 
 - **The `cpu_usage` and macOS paging docs state what is recorded.**
   `docs/metrics.md` listed eight `cpu_usage` states; Linux and macOS record
@@ -450,6 +463,52 @@
 
 ### Changed
 
+- **The viewer serves its chart modules from metriken-charts.** `/lib/charts/`
+  and `/lib/charts.css` are the metriken-charts crate's `assets/charts/` and
+  `assets/charts.css`, at the version `Cargo.lock` names, and rezolus no
+  longer carries its own copy. `crates/viewer/build.sh` copies them into
+  `site/viewer/lib/` for the static viewer and the release bundle. The JS
+  tests run with `node --import ./tests/support/charts.mjs --test
+  tests/*.mjs`, which resolves imports of `charts/` to the crate; the 26
+  test files that tested only the chart modules are in metriken-charts.
+- **The dashboard's plot specs are built with metriken-charts.** The
+  `dashboard` crate's `Plot`, `Unit` and plot options come from
+  `metriken_charts::plot` 0.1.0, and the section JSON the viewer receives
+  is unchanged apart from key order, except that a histogram KPI whose
+  `subtype` is not `percentiles`, `buckets` or `quantile_heatmap` now
+  carries `percentiles`. A section template's `style` is one of
+  `line`, `multi`, `heatmap`, `scatter`, `histogram_heatmap` and
+  `quantile_heatmap`, and another value is a parse error; before, the
+  template loaded and the chart failed to draw. `style` no longer takes
+  `${name}` substitution.
+- **A KPI template names its producer and `service_kind`.** A template
+  can declare `producer` (the program whose recordings it reads;
+  `service_name` when absent) and `service_kind` (the role it is for).
+  The built-in `vllm-prefill`, `vllm-decode`, `sglang-prefill` and
+  `sglang-decode` templates declare `vllm` or `sglang` and their role. A
+  recording's own template that declares no producer takes the producer of
+  the registry template its `source` names. A category's `members` can name
+  producers as well as registry templates and aliases, so `view --category
+  inference-library` now accepts a `vllm-prefill` or `sglang-decode`
+  capture as the `vllm` or `sglang` member, which it refused before; a
+  capture matches a member naming its source or template before one naming
+  its producer, and `member_titles` is keyed by the member matched.
+  `--category` now also refuses at startup, and the viewer does not
+  activate the category after an attach or detach, when a capture has
+  other than one service template; before, it activated and then showed one
+  section per template, or paired two templates of one capture.
+- **A KPI template a recording carries is read without its `source="..."`
+  matchers** when the recording has no identity layers: every 5.x
+  recording, and every recording rezolus writes today (it records with
+  metriken-recorder 0.5.1, which writes none). Each reader evaluates such
+  a template against its own recording, so the matchers narrowed nothing;
+  they did empty the KPIs of a recording whose endpoint was given another
+  name, such as a cachecannon (through v0.0.34) or llm-perf (through
+  v0.1.21) recording made with `--endpoint URL,source=cc-a`. A selector
+  with no metric name keeps its `source` matcher unless another matcher is
+  `=` with a non-empty value, which is stricter than PromQL's own rule; a
+  branch holding a quoted name (`{"x.y", ...}`) also keeps it. The viewer,
+  and MCP's `run_checks`, log what was removed or kept as a notice.
 - **`cpu_power` on macOS subscribes only to the channels it publishes.**
   It reads 33 of `Energy Model`'s 328 IOReport channels on an M4 Max, and a
   sample's CPU cost drops from about 3.6 ms to 3.2 ms. A subscription that
@@ -1479,14 +1538,17 @@
   their own, so a process's total no longer depends on how many threads it
   created. Its series ends within one snapshot interval of the process's
   last thread exiting. It costs 64 MiB of kernel memory (two per-pid
-  arrays) and a 256 KiB ring, a metadata event per new process and per
-  leader rename, an exit event per process when `task_attribution` is off,
-  the `task_rename` program (one run per thread rename), and two marker
-  reads and a counter add per accounting event that adds CPU. A process whose threads
-  run on many CPUs contends on its counter: with 48 threads of one process
-  on a 56-vCPU host at HZ=250, each run of the `cpu_usage` BPF programs
-  took about 310 ns, against about 200 ns with 48 one-thread processes and
-  170 ns without the counter. (#1490)
+  arrays), a 256 KiB ring, a 256 KiB table of busy processes, a metadata
+  event per new process and per leader rename, an exit event per process
+  when `task_attribution` is off, the `task_rename` program (one run per
+  thread rename), and per accounting event that adds CPU a marker read, a
+  table lookup and a counter add, plus a second marker read when the process
+  holds no table entry. A labelled process using at least half a CPU is
+  counted in a table with 16 copies assigned from the L3 topology, so the
+  CPUs running its threads do not all write one counter: with 48 threads of
+  one process on a 56-vCPU host at HZ=250, each run of the `cpu_usage` BPF
+  programs took about 210 ns, against about 320 ns with one counter and
+  about 190 ns without `process_cpu_usage`. (#1490)
 
 - **`drive_temperature_sensor`: NVMe Temperature Sensors 1 to 8.**
   `drivehealth` decodes them from the SMART/Health log it already reads

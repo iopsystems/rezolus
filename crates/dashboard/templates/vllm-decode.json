@@ -1,5 +1,7 @@
 {
   "service_name": "vllm-decode",
+  "producer": "vllm",
+  "service_kind": "decode",
   "service_metadata": {},
   "kpis": [
     {

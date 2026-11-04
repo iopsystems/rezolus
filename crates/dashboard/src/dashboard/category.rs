@@ -28,9 +28,19 @@ pub fn generate(
     let mut groups: Vec<(String, Group)> = Vec::new();
     let mut unavailable: Vec<serde_json::Value> = Vec::new();
 
+    // `member_titles` is keyed by the member a capture matches
+    // (`CategoryExtension::member`), which can differ from its source name:
+    // a `vllm-prefill` capture under `inference-library` takes the `vllm`
+    // entry's titles.
+    let baseline_key = category
+        .member(baseline_member, baseline_ext)
+        .unwrap_or(baseline_member);
+    let experiment_key = category
+        .member(experiment_member, experiment_ext)
+        .unwrap_or(experiment_member);
     for kpi in &category.kpis {
-        let baseline_title = kpi.member_title(baseline_member);
-        let experiment_title = kpi.member_title(experiment_member);
+        let baseline_title = kpi.member_title(baseline_key);
+        let experiment_title = kpi.member_title(experiment_key);
         let baseline_kpi = baseline_ext.kpis.iter().find(|k| k.title == baseline_title);
         let experiment_kpi = experiment_ext
             .kpis
@@ -95,14 +105,14 @@ pub fn generate(
         };
 
         let opts = match kpi.metric_type.as_str() {
-            "gauge" => PlotOpts::gauge(&kpi.title, &plot_id, Unit::Count),
-            "histogram" => PlotOpts::histogram(
+            "gauge" => Plot::gauge(&kpi.title, &plot_id, Unit::Count),
+            "histogram" => Plot::histogram(
                 &kpi.title,
                 &plot_id,
                 Unit::Count,
-                kpi.subtype.as_deref().unwrap_or("percentiles"),
+                crate::service_extension::kpi_histogram_view(kpi.subtype.as_deref()),
             ),
-            _ => PlotOpts::counter(&kpi.title, &plot_id, Unit::Count),
+            _ => Plot::counter(&kpi.title, &plot_id, Unit::Count),
         };
         let opts = opts.maybe_unit_system(kpi.unit_system.as_deref());
         let opts = match &kpi.percentiles {
@@ -182,6 +192,8 @@ mod tests {
     fn ext(name: &str, kpis: Vec<Kpi>) -> ServiceExtension {
         ServiceExtension {
             service_name: name.to_string(),
+            producer: None,
+            service_kind: None,
             aliases: vec![],
             service_metadata: HashMap::new(),
             kpis,
@@ -249,6 +261,58 @@ mod tests {
         assert_eq!(
             plot["opts"]["title"].as_str(),
             Some("Generation Token Rate")
+        );
+    }
+
+    #[test]
+    fn a_refined_capture_takes_its_producers_member_title() {
+        let category = CategoryExtension {
+            service_name: "inference-library".to_string(),
+            category: true,
+            members: vec!["vllm".to_string(), "sglang".to_string()],
+            kpis: vec![CategoryKpi {
+                role: "throughput".to_string(),
+                title: "Token Rate".to_string(),
+                metric_type: "delta_counter".to_string(),
+                subtype: None,
+                unit_system: Some("rate".to_string()),
+                percentiles: None,
+                denominator: false,
+                subgroup: None,
+                subgroup_description: None,
+                full_width: false,
+                member_titles: HashMap::from([(
+                    "vllm".to_string(),
+                    "Generation Token Rate".to_string(),
+                )]),
+            }],
+        };
+        let mut prefill = ext(
+            "vllm-prefill",
+            vec![kpi("throughput", "Generation Token Rate", "vllm_q")],
+        );
+        prefill.producer = Some("vllm".to_string());
+        let sglang = ext("sglang", vec![kpi("throughput", "Token Rate", "sglang_q")]);
+
+        let data = metriken_query::MemoryStore::builder().build();
+        let view = generate(
+            &data,
+            vec![],
+            &category,
+            "vllm-prefill",
+            &prefill,
+            "sglang",
+            &sglang,
+        );
+
+        let json = serde_json::to_value(&view).unwrap();
+        let plot = &json["groups"][0]["subgroups"][0]["plots"][0];
+        assert_eq!(plot["promql_query"].as_str(), Some("vllm_q"));
+        assert_eq!(plot["promql_query_experiment"].as_str(), Some("sglang_q"));
+        // The header names the captures, not the members.
+        assert_eq!(
+            json["metadata"]["category_members"],
+            serde_json::json!(["vllm-prefill", "sglang"])
         );
     }
 

@@ -32,6 +32,7 @@ use crate::agent::*;
 
 use std::sync::Arc;
 
+mod process_table;
 mod stats;
 
 use stats::*;
@@ -86,6 +87,11 @@ struct ProcessAssigned {
 
 static PROCESS_ASSIGNED: std::sync::Mutex<std::collections::BTreeMap<usize, ProcessAssigned>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// Which process holds each bucket of `process_table`; see
+/// [`process_table`].
+static PROCESS_TABLE: std::sync::LazyLock<std::sync::Mutex<process_table::Table>> =
+    std::sync::LazyLock::new(Default::default);
 
 fn handle_cgroup_info(data: &[u8]) -> i32 {
     process_cgroup_info::<bpf::types::cgroup_info>(data, &CGROUP_IDENTITY)
@@ -277,6 +283,32 @@ fn sweep_process_slots(markers: &[std::sync::atomic::AtomicU64]) {
         }
         true
     });
+}
+
+/// Move `process_table`'s counts into `process_cpu_usage`, and give out and
+/// free its buckets; see [`process_table`]. `maps` are `process_table`,
+/// `process_cpu_usage` and `process_start_times`. Runs after
+/// [`sweep_process_slots`], so the labelled processes are the ones it kept.
+fn sweep_process_table(maps: &[&[std::sync::atomic::AtomicU64]]) {
+    let [table, usage, markers] = maps else {
+        unreachable!("registered with three maps");
+    };
+    let processes: Vec<_> = PROCESS_ASSIGNED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .map(|(&slot, at)| process_table::Process {
+            slot,
+            tgid: at.tgid,
+            start_time: at.start_time,
+        })
+        .collect();
+    let moved_at = crate::agent::epoch::anchored_ts(std::time::Instant::now()).max(0) as u64;
+    let in_use = PROCESS_TABLE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .refresh(table, usage, markers, &processes, monotonic_ns());
+    PROCESS_USAGE_ACQ.values_fixed_at(in_use.then_some(moved_at));
 }
 
 /// The labels a `task_info` record carries: `tgid`, `comm` (when not empty)
@@ -564,12 +596,14 @@ fn init(config: Arc<Config>) -> SamplerResult {
                 }
             }
         }
-        // 64 MiB of per-pid arrays only the per-process series use.
+        // 64 MiB of per-pid arrays, and the process table, only the
+        // per-process series use.
         if !process_attribution {
             let maps = &mut open.maps;
             for map in [
                 &mut maps.process_cpu_usage,
                 &mut maps.process_start_times,
+                &mut maps.process_table,
                 &mut maps.process_info,
             ] {
                 if let Err(e) = map.set_autocreate(false) {
@@ -619,7 +653,11 @@ fn init(config: Arc<Config>) -> SamplerResult {
         builder = builder
             .sparse_packed_counters("process_cpu_usage", &PROCESS_CPU_USAGE, &PROCESS_USAGE_ACQ)
             .ringbuf_handler("process_info", handle_process_info)
-            .map_sweep("process_start_times", sweep_process_slots);
+            .map_sweep("process_start_times", sweep_process_slots)
+            .maps_sweep_mut(
+                &["process_table", "process_cpu_usage", "process_start_times"],
+                sweep_process_table,
+            );
     }
     if task_attribution {
         builder = builder.map_sweep("task_start_times", sweep_task_slots);
@@ -657,6 +695,7 @@ impl SkelExt for ModSkel<'_> {
             "process_cpu_usage" => &self.maps.process_cpu_usage,
             "process_start_times" => &self.maps.process_start_times,
             "process_info" => &self.maps.process_info,
+            "process_table" => &self.maps.process_table,
             _ => unimplemented!(),
         }
     }

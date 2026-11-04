@@ -26,17 +26,17 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     busy.describe("Overall CPU busy time across all cores, with per-core breakdown.");
     if multi_cpu {
         busy.plot_promql(
-            PlotOpts::counter("Busy %", "busy-pct", Unit::Percentage).percentage_range(),
+            Plot::counter("Busy %", "busy-pct", Unit::Percentage).percentage_range(),
             "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000".to_string(),
         );
         busy.plot_promql(
-            PlotOpts::counter("Busy % (Per-CPU)", "busy-pct-per-cpu", Unit::Percentage)
+            Plot::counter("Busy % (Per-CPU)", "busy-pct-per-cpu", Unit::Percentage)
                 .percentage_range(),
             "sum by (id) (irate(cpu_usage[5m])) / 1000000000".to_string(),
         );
     } else {
         busy.plot_promql_full(
-            PlotOpts::counter("Busy %", "busy-pct", Unit::Percentage).percentage_range(),
+            Plot::counter("Busy %", "busy-pct", Unit::Percentage).percentage_range(),
             "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000".to_string(),
         );
     }
@@ -47,7 +47,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         let capitalized = if *state == "user" { "User" } else { "System" };
         if multi_cpu {
             by_state.plot_promql(
-                PlotOpts::counter(
+                Plot::counter(
                     format!("{capitalized} %"),
                     format!("{state}-pct"),
                     Unit::Percentage,
@@ -56,7 +56,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 format!("sum(irate(cpu_usage{{state=\"{state}\"}}[5m])) / cpu_cores / 1000000000"),
             );
             by_state.plot_promql(
-                PlotOpts::counter(
+                Plot::counter(
                     format!("{capitalized} % (Per-CPU)"),
                     format!("{state}-pct-per-cpu"),
                     Unit::Percentage,
@@ -66,7 +66,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             );
         } else {
             by_state.plot_promql_full(
-                PlotOpts::counter(
+                Plot::counter(
                     format!("{capitalized} %"),
                     format!("{state}-pct"),
                     Unit::Percentage,
@@ -94,17 +94,17 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         ipc.describe("How efficiently the CPU retires instructions per clock cycle.");
         if multi_cpu {
             ipc.plot_promql(
-                PlotOpts::counter("IPC", "ipc", Unit::Count),
+                Plot::counter("IPC", "ipc", Unit::Count),
                 "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m]))".to_string(),
             );
             ipc.plot_promql(
-                PlotOpts::counter("IPC (Per-CPU)", "ipc-per-cpu", Unit::Count),
+                Plot::counter("IPC (Per-CPU)", "ipc-per-cpu", Unit::Count),
                 "sum by (id) (irate(cpu_instructions[5m])) / sum by (id) (irate(cpu_cycles[5m]))"
                     .to_string(),
             );
         } else {
             ipc.plot_promql_full(
-                PlotOpts::counter("IPC", "ipc", Unit::Count),
+                Plot::counter("IPC", "ipc", Unit::Count),
                 "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m]))".to_string(),
             );
         }
@@ -123,16 +123,16 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
         if multi_cpu {
             ipns.plot_promql(
-            PlotOpts::counter("IPNS", "ipns", Unit::Count),
+            Plot::counter("IPNS", "ipns", Unit::Count),
             "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m])) * sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / 1000000000 / cpu_cores".to_string(),
         );
             ipns.plot_promql(
-            PlotOpts::counter("IPNS (Per-CPU)", "ipns-per-cpu", Unit::Count),
+            Plot::counter("IPNS (Per-CPU)", "ipns-per-cpu", Unit::Count),
             "sum by (id) (irate(cpu_instructions[5m])) / sum by (id) (irate(cpu_cycles[5m])) * sum by (id) (irate(cpu_tsc[5m])) * sum by (id) (irate(cpu_aperf[5m])) / sum by (id) (irate(cpu_mperf[5m])) / 1000000000".to_string(),
         );
         } else {
             ipns.plot_promql_full(
-            PlotOpts::counter("IPNS", "ipns", Unit::Count),
+            Plot::counter("IPNS", "ipns", Unit::Count),
             "sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m])) * sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / 1000000000 / cpu_cores".to_string(),
         );
         }
@@ -145,18 +145,18 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
         if multi_cpu {
             l3.plot_promql(
-                PlotOpts::counter("L3 Hit %", "l3-hit", Unit::Percentage).percentage_range(),
+                Plot::counter("L3 Hit %", "l3-hit", Unit::Percentage).percentage_range(),
                 "1 - sum(irate(cpu_l3_miss[5m])) / sum(irate(cpu_l3_access[5m]))".to_string(),
             );
             l3.plot_promql(
-                PlotOpts::counter("L3 Hit % (Per-CPU)", "l3-hit-per-cpu", Unit::Percentage)
+                Plot::counter("L3 Hit % (Per-CPU)", "l3-hit-per-cpu", Unit::Percentage)
                     .percentage_range(),
                 "1 - sum by (id) (irate(cpu_l3_miss[5m])) / sum by (id) (irate(cpu_l3_access[5m]))"
                     .to_string(),
             );
         } else {
             l3.plot_promql_full(
-                PlotOpts::counter("L3 Hit %", "l3-hit", Unit::Percentage).percentage_range(),
+                Plot::counter("L3 Hit %", "l3-hit", Unit::Percentage).percentage_range(),
                 "1 - sum(irate(cpu_l3_miss[5m])) / sum(irate(cpu_l3_access[5m]))".to_string(),
             );
         }
@@ -167,16 +167,16 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         freq.describe("Effective CPU clock speed, averaged and per-core.");
         if multi_cpu {
             freq.plot_promql(
-            PlotOpts::counter("Frequency", "frequency", Unit::Frequency),
+            Plot::counter("Frequency", "frequency", Unit::Frequency),
             "sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / cpu_cores".to_string(),
         );
             freq.plot_promql(
-            PlotOpts::counter("Frequency (Per-CPU)", "frequency-per-cpu", Unit::Frequency),
+            Plot::counter("Frequency (Per-CPU)", "frequency-per-cpu", Unit::Frequency),
             "sum by (id) (irate(cpu_tsc[5m])) * sum by (id) (irate(cpu_aperf[5m])) / sum by (id) (irate(cpu_mperf[5m]))".to_string(),
         );
         } else {
             freq.plot_promql_full(
-            PlotOpts::counter("Frequency", "frequency", Unit::Frequency),
+            Plot::counter("Frequency", "frequency", Unit::Frequency),
             "sum(irate(cpu_tsc[5m])) * sum(irate(cpu_aperf[5m])) / sum(irate(cpu_mperf[5m])) / cpu_cores".to_string(),
         );
         }
@@ -193,13 +193,13 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         miss.describe("Fraction of branches that the predictor got wrong.");
         if multi_cpu {
             miss.plot_promql(
-                PlotOpts::counter("Misprediction Rate %", "branch-miss-rate", Unit::Percentage)
+                Plot::counter("Misprediction Rate %", "branch-miss-rate", Unit::Percentage)
                     .percentage_range(),
                 "sum(irate(cpu_branch_misses[5m])) / sum(irate(cpu_branch_instructions[5m]))"
                     .to_string(),
             );
             miss.plot_promql(
-            PlotOpts::counter(
+            Plot::counter(
                 "Misprediction Rate % (Per-CPU)",
                 "branch-miss-rate-per-cpu",
                 Unit::Percentage,
@@ -210,7 +210,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
         } else {
             miss.plot_promql_full(
-                PlotOpts::counter("Misprediction Rate %", "branch-miss-rate", Unit::Percentage)
+                Plot::counter("Misprediction Rate %", "branch-miss-rate", Unit::Percentage)
                     .percentage_range(),
                 "sum(irate(cpu_branch_misses[5m])) / sum(irate(cpu_branch_instructions[5m]))"
                     .to_string(),
@@ -222,12 +222,12 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         let activity = branch.subgroup("Branch Activity");
         activity.describe("Absolute branch instruction and miss rates.");
         activity.plot_promql(
-            PlotOpts::counter("Instructions", "branch-instructions", Unit::Rate),
+            Plot::counter("Instructions", "branch-instructions", Unit::Rate),
             "sum(irate(cpu_branch_instructions[5m]))".to_string(),
         );
         if multi_cpu {
             activity.plot_promql(
-                PlotOpts::counter(
+                Plot::counter(
                     "Instructions (Per-CPU)",
                     "branch-instructions-per-cpu",
                     Unit::Rate,
@@ -236,12 +236,12 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             );
         }
         activity.plot_promql(
-            PlotOpts::counter("Misses", "branch-misses", Unit::Rate),
+            Plot::counter("Misses", "branch-misses", Unit::Rate),
             "sum(irate(cpu_branch_misses[5m]))".to_string(),
         );
         if multi_cpu {
             activity.plot_promql(
-                PlotOpts::counter("Misses (Per-CPU)", "branch-misses-per-cpu", Unit::Rate),
+                Plot::counter("Misses (Per-CPU)", "branch-misses-per-cpu", Unit::Rate),
                 "sum by (id) (irate(cpu_branch_misses[5m]))".to_string(),
             );
         }
@@ -260,16 +260,16 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         misses.describe("Raw data-TLB miss rate, aggregated and per-core.");
         if multi_cpu {
             misses.plot_promql(
-                PlotOpts::counter("Misses", "dtlb-misses", Unit::Rate),
+                Plot::counter("Misses", "dtlb-misses", Unit::Rate),
                 "sum(irate(cpu_dtlb_miss[5m]))".to_string(),
             );
             misses.plot_promql(
-                PlotOpts::counter("Misses (Per-CPU)", "dtlb-misses-per-cpu", Unit::Rate),
+                Plot::counter("Misses (Per-CPU)", "dtlb-misses-per-cpu", Unit::Rate),
                 "sum by (id) (irate(cpu_dtlb_miss[5m]))".to_string(),
             );
         } else {
             misses.plot_promql_full(
-                PlotOpts::counter("Misses", "dtlb-misses", Unit::Rate),
+                Plot::counter("Misses", "dtlb-misses", Unit::Rate),
                 "sum(irate(cpu_dtlb_miss[5m]))".to_string(),
             );
         }
@@ -280,18 +280,18 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         mpki.describe("Misses per thousand instructions, normalized so workload differences don't distort the rate.");
         if multi_cpu {
             mpki.plot_promql(
-                PlotOpts::counter("MPKI", "dtlb-mpki", Unit::Count),
+                Plot::counter("MPKI", "dtlb-mpki", Unit::Count),
                 "sum(irate(cpu_dtlb_miss[5m])) / sum(irate(cpu_instructions[5m])) * 1000"
                     .to_string(),
             );
             mpki.plot_promql(
-            PlotOpts::counter("MPKI (Per-CPU)", "dtlb-mpki-per-cpu", Unit::Count),
+            Plot::counter("MPKI (Per-CPU)", "dtlb-mpki-per-cpu", Unit::Count),
             "sum by (id) (irate(cpu_dtlb_miss[5m])) / sum by (id) (irate(cpu_instructions[5m])) * 1000"
                 .to_string(),
         );
         } else {
             mpki.plot_promql_full(
-                PlotOpts::counter("MPKI", "dtlb-mpki", Unit::Count),
+                Plot::counter("MPKI", "dtlb-mpki", Unit::Count),
                 "sum(irate(cpu_dtlb_miss[5m])) / sum(irate(cpu_instructions[5m])) * 1000"
                     .to_string(),
             );
@@ -309,16 +309,16 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         to.describe("Tasks migrated onto a CPU, per second.");
         if multi_cpu {
             to.plot_promql(
-                PlotOpts::counter("To", "cpu-migrations-to", Unit::Rate),
+                Plot::counter("To", "cpu-migrations-to", Unit::Rate),
                 "sum(irate(cpu_migrations{direction=\"to\"}[5m]))".to_string(),
             );
             to.plot_promql(
-                PlotOpts::counter("To (Per-CPU)", "cpu-migrations-to-per-cpu", Unit::Rate),
+                Plot::counter("To (Per-CPU)", "cpu-migrations-to-per-cpu", Unit::Rate),
                 "sum by (id) (irate(cpu_migrations{direction=\"to\"}[5m]))".to_string(),
             );
         } else {
             to.plot_promql_full(
-                PlotOpts::counter("To", "cpu-migrations-to", Unit::Rate),
+                Plot::counter("To", "cpu-migrations-to", Unit::Rate),
                 "sum(irate(cpu_migrations{direction=\"to\"}[5m]))".to_string(),
             );
         }
@@ -327,16 +327,16 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         from.describe("Tasks migrated off a CPU, per second.");
         if multi_cpu {
             from.plot_promql(
-                PlotOpts::counter("From", "cpu-migrations-from", Unit::Rate),
+                Plot::counter("From", "cpu-migrations-from", Unit::Rate),
                 "sum(irate(cpu_migrations{direction=\"from\"}[5m]))".to_string(),
             );
             from.plot_promql(
-                PlotOpts::counter("From (Per-CPU)", "cpu-migrations-from-per-cpu", Unit::Rate),
+                Plot::counter("From (Per-CPU)", "cpu-migrations-from-per-cpu", Unit::Rate),
                 "sum by (id) (irate(cpu_migrations{direction=\"from\"}[5m]))".to_string(),
             );
         } else {
             from.plot_promql_full(
-                PlotOpts::counter("From", "cpu-migrations-from", Unit::Rate),
+                Plot::counter("From", "cpu-migrations-from", Unit::Rate),
                 "sum(irate(cpu_migrations{direction=\"from\"}[5m]))".to_string(),
             );
         }
@@ -351,16 +351,16 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         total.describe("Aggregate TLB invalidation rate across all reasons.");
         if multi_cpu {
             total.plot_promql(
-                PlotOpts::counter("Total", "tlb-total", Unit::Rate),
+                Plot::counter("Total", "tlb-total", Unit::Rate),
                 "sum(irate(cpu_tlb_flush[5m]))".to_string(),
             );
             total.plot_promql(
-                PlotOpts::counter("Total (Per-CPU)", "tlb-total-per-cpu", Unit::Rate),
+                Plot::counter("Total (Per-CPU)", "tlb-total-per-cpu", Unit::Rate),
                 "sum by (id) (irate(cpu_tlb_flush[5m]))".to_string(),
             );
         } else {
             total.plot_promql_full(
-                PlotOpts::counter("Total", "tlb-total", Unit::Rate),
+                Plot::counter("Total", "tlb-total", Unit::Rate),
                 "sum(irate(cpu_tlb_flush[5m]))".to_string(),
             );
         }
@@ -376,11 +376,11 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             let sg = tlb.subgroup(*label);
             if multi_cpu {
                 sg.plot_promql(
-                    PlotOpts::counter(*label, &id, Unit::Rate),
+                    Plot::counter(*label, &id, Unit::Rate),
                     format!("sum(irate(cpu_tlb_flush{{reason=\"{reason_value}\"}}[5m]))"),
                 );
                 sg.plot_promql(
-                    PlotOpts::counter(
+                    Plot::counter(
                         format!("{label} (Per-CPU)"),
                         format!("{id}-per-cpu"),
                         Unit::Rate,
@@ -389,7 +389,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 );
             } else {
                 sg.plot_promql_full(
-                    PlotOpts::counter(*label, &id, Unit::Rate),
+                    Plot::counter(*label, &id, Unit::Rate),
                     format!("sum(irate(cpu_tlb_flush{{reason=\"{reason_value}\"}}[5m]))"),
                 );
             }
@@ -446,7 +446,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
 
         let per_id = metric_unique_label_count(data, metric, "id") > 1;
 
-        let opts = PlotOpts::counter(format!("{label} Power"), format!("{id}-power"), Unit::Power);
+        let opts = Plot::counter(format!("{label} Power"), format!("{id}-power"), Unit::Power);
         let query = format!("sum(irate({metric}[5m])) / 1000000");
 
         // Full width when this plot is alone on its row; half when the per-id
@@ -455,7 +455,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         if per_id {
             sg.plot_promql(opts, query);
             sg.plot_promql(
-                PlotOpts::counter(
+                Plot::counter(
                     format!("{label} Power (Per-ID)"),
                     format!("{id}-power-heatmap"),
                     Unit::Power,
@@ -477,12 +477,12 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
              pipelines, AVE the video encoder and ISP the image signal processor.",
         );
         soc.plot_promql(
-            PlotOpts::counter("SoC Power", "soc-power", Unit::Power),
+            Plot::counter("SoC Power", "soc-power", Unit::Power),
             "sum(irate(cpu_soc_energy[5m])) / 1000000".to_string(),
         );
         soc.plot_promql(
-            PlotOpts::counter("SoC Power (Per-Block)", "soc-power-per-block", Unit::Power)
-                .with_style("multi"),
+            Plot::counter("SoC Power (Per-Block)", "soc-power-per-block", Unit::Power)
+                .with_style(ChartStyle::Multi),
             "sum by (block) (irate(cpu_soc_energy[5m])) / 1000000".to_string(),
         );
     }
@@ -501,7 +501,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         total.describe(
             "Fraction of time cores spent in any idle C-state, summed across every level the hardware exposes.",
         );
-        let opts = PlotOpts::counter("Idle %", "cstate-total", Unit::Percentage).percentage_range();
+        let opts = Plot::counter("Idle %", "cstate-total", Unit::Percentage).percentage_range();
         let query =
             "avg(sum by (id) (irate(core_cstate_residency[5m])) / sum by (id) (irate(cpu_tsc[5m])))"
                 .to_string();
@@ -509,7 +509,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         if metric_unique_label_count(data, "core_cstate_residency", "id") > 1 {
             total.plot_promql(opts, query);
             total.plot_promql(
-                PlotOpts::counter(
+                Plot::counter(
                     "Idle % (Per-Core)",
                     "cstate-total-per-core",
                     Unit::Percentage,
@@ -532,7 +532,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         sg.describe(format!(
             "Fraction of time cores spent in the C{level} idle state."
         ));
-        let opts = PlotOpts::counter(
+        let opts = Plot::counter(
             format!("C{level} %"),
             format!("cstate-core-c{level}"),
             Unit::Percentage,
@@ -544,7 +544,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         if metric_unique_label_count(data, &metric, "id") > 1 {
             sg.plot_promql(opts, query);
             sg.plot_promql(
-                PlotOpts::counter(
+                Plot::counter(
                     format!("C{level} % (Per-Core)"),
                     format!("cstate-core-c{level}-per-core"),
                     Unit::Percentage,
@@ -577,7 +577,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         // companion is gated on there actually being more than one package:
         // resolveStyle() only draws a heatmap for a multi-series result, so on
         // a single-socket host it would just repeat this line beside itself.
-        let opts = PlotOpts::counter(
+        let opts = Plot::counter(
             format!("Package C{level} %"),
             format!("cstate-pkg-c{level}"),
             Unit::Percentage,
@@ -588,7 +588,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         if metric_unique_label_count(data, &metric, "id") > 1 {
             sg.plot_promql(opts, query);
             sg.plot_promql(
-                PlotOpts::counter(
+                Plot::counter(
                     format!("Package C{level} % (Per-Package)"),
                     format!("cstate-pkg-c{level}-heatmap"),
                     Unit::Percentage,

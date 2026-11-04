@@ -234,8 +234,10 @@ jobs:
           TAG="${{ github.ref_name }}"
           STAGE="target/viewer-static/rezolus-viewer-${TAG}"
           mkdir -p "$STAGE"
-          # Dereference symlinks (site/viewer/lib/* points back into
-          # src/viewer/assets/lib) so the tarball is self-contained.
+          # Dereference symlinks (site/viewer/lib/ points back into
+          # src/viewer/assets/lib, apart from lib/charts/ and lib/charts.css,
+          # which build.sh copied from the metriken-charts crate) so the
+          # tarball is self-contained.
           # Skip data/ — demo parquets aren't part of the package.
           rsync -aL --exclude='data' site/viewer/ "$STAGE/"
           cp LICENSE-MIT LICENSE-APACHE "$STAGE/" 2>/dev/null || true
@@ -276,6 +278,8 @@ jobs:
           - Service-extension templates live under `templates/`.
           - Frontend overrides go in `lib/` — the layout mirrors the
             in-tree `src/viewer/assets/lib/` so existing patches apply.
+            `lib/charts/` and `lib/charts.css` are the metriken-charts
+            crate's `assets/charts/` and `assets/charts.css`.
           EOF
 
       - name: tarball viewer bundle

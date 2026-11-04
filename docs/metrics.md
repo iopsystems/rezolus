@@ -236,9 +236,15 @@ On macOS, see [cpu_frequency on macOS](#cpu_frequency-on-macos).
 Apple silicon has no APERF or MPERF, so there the sampler reads IOReport's
 `CPU Core Performance States` channels, which count, per core, the ticks of
 the 24 MHz system counter spent in each performance state, idle and powered
-down. The device tree lists each cluster type's state frequencies
-(`voltage-states1-sram` for the E cores, `voltage-states5-sram` for the P
-cores). The sampler publishes the same three counters as on Linux, per
+down. The device tree's power manager lists each cluster's state
+frequencies in a `voltage-states<n>-sram` table, and its `perf-domains`
+property gives each cluster's `n` (on an M4 Max, 1 for the E cluster and 5
+and 13 for the two P clusters). Cluster 0 of a kind `perf-domains` does not
+list reads `voltage-states1-sram` (E) or `voltage-states5-sram` (P). A cluster
+`perf-domains` does not list reads cluster 0's table of its kind. A cluster
+left with no table, or whose state count differs from its table's length, is
+not published.
+The sampler publishes the same three counters as on Linux, per
 logical CPU, so the formula above gives each core's average frequency while
 running:
 
@@ -501,14 +507,22 @@ runs. The series ends within one snapshot interval of the process's last
 thread exiting. As with `task_cpu_usage`, a process that exits between a
 drain and the snapshot that follows it has a last sample of 0, so read it
 with `rate()` or `increase()`. It costs two per-pid arrays (64 MiB of
-kernel memory), a 256 KiB ring, a metadata event per new process and per
-leader rename, an exit event per process when `task_attribution` is off,
-the `task_rename` program (one run per thread rename), and two marker
-reads and a counter add per accounting event that adds CPU. A process's counter is written by every CPU running one of
-its threads: with 48 threads of one process spinning on a 56-vCPU host
-at HZ=250, each run of the `cpu_usage` BPF programs took about 310 ns,
-against about 200 ns with 48 one-thread processes and 170 ns without
-`process_cpu_usage`.
+kernel memory), a 256 KiB ring, a 256 KiB table of busy processes, a
+metadata event per new process and per leader rename, an exit event per
+process when `task_attribution` is off, the `task_rename` program (one run
+per thread rename), and per accounting event that adds CPU a marker read,
+a table lookup and a counter add, plus a second marker read when the
+process holds no table entry.
+
+A labelled process using at least half a CPU over a refresh is given an
+entry in the table when its bucket is free. The table has 16 copies,
+assigned from the L3 topology where sysfs reports it, so the CPUs
+running its threads do not all write one counter. The agent adds the table's counts to
+`process_cpu_usage` at each refresh, before it builds the snapshot. With 48
+threads of one process spinning on a 56-vCPU host at HZ=250, each run of
+the `cpu_usage` BPF programs took about 210 ns, against about 320 ns with
+one counter and about 190 ns without `process_cpu_usage`. Two busy processes
+whose tgids share a table bucket leave one of them on the shared counter.
 
 `comm` follows renames. A thread whose name changes (`pthread_setname_np`,
 `prctl(PR_SET_NAME)`, a write to `/proc/<pid>/task/<tid>/comm`, or exec) is
@@ -1885,7 +1899,7 @@ for a port unreachable, `error` otherwise), not `timeout`.
 A `connect()` that fails before the socket enters `SYN_SENT`, such as one with
 no route, is not counted, nor is a simultaneous open, which leaves `SYN_SENT`
 for `SYN_RECV`. A later `connect()` on the same socket is timed from that later
-call; agents before 6.0.0-alpha.111 time it from the failed call, or from the
+call; agents before 6.0.0-alpha.118 time it from the failed call, or from the
 first connect of a simultaneous open on a socket since disconnected. The count
 of each histogram is the number of connects with that outcome while fewer than
 10,240 sockets have a connect in progress, a failed connect or a simultaneous

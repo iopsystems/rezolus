@@ -166,7 +166,7 @@ pub fn command() -> Command {
              rezolus view http://host:4241 --listen 127.0.0.1:8080\n\n    \
              # Upload-only mode: start with no file, then upload from the browser\n    \
              rezolus view\n\n    \
-             # A/B compare using a category bridge view (both sources must be category members)\n    \
+             # A/B compare using a category bridge view (each capture's template must be a member)\n    \
              rezolus view a.dendro b.dendro --category inference-library",
         )
         .arg(
@@ -240,9 +240,10 @@ pub fn command() -> Command {
                     "Activate the A/B 'category bridge' view using the named category \
                      template (e.g. `inference-library`). NAME must match a category \
                      template known to the viewer (built-in, or from --templates). Each \
-                     capture's detected source (from its metadata) must appear in \
-                     that template's `members` list. Only meaningful when comparing two \
-                     captures.",
+                     capture must match that template's `members` list, by \
+                     source name, template name, alias or producer (a `vllm-prefill` \
+                     capture matches `vllm`). Each of the two captures must have one \
+                     service template.",
                 )
                 .action(clap::ArgAction::Set),
         )
@@ -1279,9 +1280,10 @@ fn init_file_mode_rez(
     state
 }
 
-/// Validate `--category`: the named category must exist, and the sources of
-/// both captures' templates must appear in its `members`. Refuses to launch
-/// on misconfiguration; silent fall-back hides user intent.
+/// Validate `--category`: the named category must exist, and each capture
+/// must have one service template matching a member, of two different
+/// sources ([`dashboard::CategoryExtension::admits`]). Refuses to launch on
+/// misconfiguration; silent fall-back hides user intent.
 fn validate_category_at_startup(state: &AppState, registry: &TemplateRegistry, cat_name: &str) {
     let category = registry.get_category(cat_name).unwrap_or_else(|| {
         eprintln!("no category template named {cat_name:?} found in the registry");
@@ -1291,23 +1293,20 @@ fn validate_category_at_startup(state: &AppState, registry: &TemplateRegistry, c
         eprintln!("--category {cat_name:?} requires both a baseline and an experiment capture");
         std::process::exit(1);
     };
-    let sources_of = |data: &dyn metriken_query::MetricsSource| -> Vec<String> {
+    let templates_of = |data: &dyn metriken_query::MetricsSource| {
         metadata::capture_service_extensions(data, registry, state.template_preference)
-            .into_iter()
-            .map(|(s, _)| s)
-            .collect()
     };
-    let baseline_sources = sources_of(state.baseline_data().as_ref());
-    let experiment_sources = sources_of(experiment.as_ref());
-    for source in baseline_sources.iter().chain(experiment_sources.iter()) {
-        if !category.members.iter().any(|m| m == source) {
-            eprintln!(
-                "source {source:?} is not a member of category {cat_name:?} (members: {:?})",
-                category.members
-            );
-            std::process::exit(1);
-        }
+    let baseline_templates = templates_of(state.baseline_data().as_ref());
+    let experiment_templates = templates_of(experiment.as_ref());
+    if let Err(message) = category.admits(&baseline_templates, &experiment_templates) {
+        eprintln!("--category {cat_name:?}: {message}");
+        std::process::exit(1);
     }
+    let sources = |templates: &[(String, ServiceExtension)]| -> Vec<String> {
+        templates.iter().map(|(s, _)| s.clone()).collect()
+    };
+    let (baseline_sources, experiment_sources) =
+        (sources(&baseline_templates), sources(&experiment_templates));
     info!(
         "Activated category {:?} (members: {:?}) — baseline sources {:?}, experiment sources {:?}",
         cat_name, category.members, baseline_sources, experiment_sources,
@@ -1401,6 +1400,40 @@ mod tests {
     use super::state::{build_sections_metadata_payload, LazySectionStore};
     use ::dashboard::dashboard::DashboardContext;
     use ::dashboard::Section;
+
+    /// `--category` at startup takes one template from each capture, each
+    /// matching a member, a refined template included, and refuses a
+    /// non-member or a capture with another number of templates.
+    #[test]
+    fn category_admits_two_member_templates() {
+        let registry = ::dashboard::embedded_templates().unwrap();
+        let category = registry.get_category("inference-library").unwrap();
+        let named = |name: &str| (name.to_string(), registry.get(name).unwrap().clone());
+        let (prefill, sglang, decode, valkey) = (
+            named("vllm-prefill"),
+            named("sglang"),
+            named("vllm-decode"),
+            named("valkey"),
+        );
+        let admits = |baseline: &[_], experiment: &[_]| category.admits(baseline, experiment);
+
+        let one = std::slice::from_ref;
+        assert_eq!(admits(one(&prefill), one(&sglang)), Ok(()));
+        let err = admits(one(&prefill), &[valkey]).unwrap_err();
+        assert!(err.contains("\"valkey\""), "{err}");
+        let err = admits(one(&prefill), one(&prefill)).unwrap_err();
+        assert!(err.contains("both captures are source"), "{err}");
+        let err = admits(&[prefill.clone(), decode], one(&sglang)).unwrap_err();
+        assert!(
+            err.contains("the baseline has 2 service templates"),
+            "{err}"
+        );
+        let err = admits(&[prefill], &[]).unwrap_err();
+        assert!(
+            err.contains("the experiment has 0 service templates"),
+            "{err}"
+        );
+    }
 
     /// `init_file_mode` opens a v3 `.rez` upgraded to `.dendro`.
     #[test]

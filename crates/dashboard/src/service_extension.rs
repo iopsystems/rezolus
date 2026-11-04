@@ -9,6 +9,17 @@ use std::time::Duration;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceExtension {
     pub service_name: String,
+    /// The producer whose recordings this template reads (`vllm` for
+    /// `vllm-prefill`); [`producer`](Self::producer) is `service_name` when
+    /// this is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub producer: Option<String>,
+    /// The role of that producer this template is for (`prefill`), when the
+    /// producer runs in more than one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_kind: Option<String>,
+    /// Other names of the producer (`redis` for `valkey`), each a registry
+    /// key beside `service_name`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
     #[serde(default)]
@@ -343,6 +354,15 @@ impl Kpi {
     }
 }
 
+/// How a histogram KPI is drawn, from its `subtype`. A missing or unknown
+/// subtype is drawn as percentiles, as `resolveStyle` in the viewer's
+/// `metric_types.js` draws an unknown one.
+pub(crate) fn kpi_histogram_view(subtype: Option<&str>) -> crate::plot::HistogramView {
+    subtype
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(crate::plot::HistogramView::Percentiles)
+}
+
 /// `Err` naming the KPI when a `unit_system` is not a [`crate::plot::Unit`].
 fn check_unit_system(title: &str, unit_system: Option<&str>) -> Result<(), String> {
     match unit_system.map(str::parse::<crate::plot::Unit>) {
@@ -352,12 +372,20 @@ fn check_unit_system(title: &str, unit_system: Option<&str>) -> Result<(), Strin
 }
 
 impl ServiceExtension {
+    /// The producer this template is for: `producer`, else `service_name`.
+    pub fn producer(&self) -> &str {
+        self.producer.as_deref().unwrap_or(&self.service_name)
+    }
+
     /// Refuse a KPI whose `unit_system` the viewer does not know. The viewer
     /// shows an unknown system's name as the unit, inside tooltip HTML, so
     /// `recording annotate` and the template loader reject one rather than
     /// write or register it. A recording that already carries one renders
     /// that KPI with its default `count` scaling
-    /// ([`crate::plot::PlotOpts::maybe_unit_system`]).
+    /// ([`crate::plot::PlotBuilder::maybe_unit_system`]). That drop is
+    /// silent because it runs on every dashboard render, and the terminal UI
+    /// renders every tick; the viewer warns once when it loads the KPIs
+    /// (`source_templates::service_extensions_from_metadata`).
     pub fn check_unit_systems(&self) -> Result<(), String> {
         match self.unknown_unit_systems().into_iter().next() {
             Some(e) => Err(e),
@@ -395,13 +423,64 @@ pub struct CategoryExtension {
     /// to route the parsed JSON into the category map instead of services.
     #[serde(default)]
     pub category: bool,
-    /// Member service names declared by this category. The runtime
-    /// requires ≥2; today's bridge generator pairs exactly two captures,
-    /// but extra members in the list are tolerated for forward-compat.
-    /// At dashboard-gen time, every attached capture's CLI alias must
-    /// appear in this list — that's the verification gate.
+    /// What this category compares, at least two: producers (`vllm`,
+    /// `sglang`), or registry templates by name or alias (`vllm-prefill`,
+    /// `redis`). The registry keeps a category whose members are each a
+    /// registry key or some template's producer. Each of the two captures
+    /// must match one of them ([`member`](Self::member), which matches the
+    /// capture's source too); the comparison pairs exactly two.
     pub members: Vec<String>,
     pub kpis: Vec<CategoryKpi>,
+}
+
+impl CategoryExtension {
+    /// The member a capture matches, given its source name and its KPI
+    /// template: one naming the source, the template's `service_name` or
+    /// one of its aliases, else one naming the template's producer. A
+    /// `vllm-prefill` capture is the `vllm-prefill` member when there is
+    /// one and the `vllm` member otherwise.
+    pub fn member(&self, source: &str, ext: &ServiceExtension) -> Option<&str> {
+        let members = || self.members.iter().map(String::as_str);
+        members()
+            .find(|m| *m == source || *m == ext.service_name || ext.aliases.iter().any(|a| a == m))
+            .or_else(|| members().find(|m| *m == ext.producer()))
+    }
+
+    /// Whether this category can compare a baseline and an experiment whose
+    /// KPI templates are `baseline` and `experiment`: one from each, each
+    /// matching a member ([`member`](Self::member)), of two different
+    /// sources (the dashboard lists a source once, so two captures of one
+    /// source have no pair to compare).
+    pub fn admits(
+        &self,
+        baseline: &[(String, ServiceExtension)],
+        experiment: &[(String, ServiceExtension)],
+    ) -> Result<(), String> {
+        for (capture, templates) in [("baseline", baseline), ("experiment", experiment)] {
+            let [(source, ext)] = templates else {
+                return Err(format!(
+                    "the {capture} has {} service templates ({:?}); a category compares one \
+                     from each capture",
+                    templates.len(),
+                    templates.iter().map(|(s, _)| s).collect::<Vec<_>>()
+                ));
+            };
+            if self.member(source, ext).is_none() {
+                return Err(format!(
+                    "source {source:?} (producer {:?}) is not a member (members: {:?})",
+                    ext.producer(),
+                    self.members
+                ));
+            }
+        }
+        if baseline[0].0 == experiment[0].0 {
+            return Err(format!(
+                "both captures are source {:?}; a category compares two different sources",
+                baseline[0].0
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -543,11 +622,14 @@ fn finalize_categories(
         let missing: Vec<&String> = category
             .members
             .iter()
-            .filter(|m| !services.contains_key(m.as_str()))
+            .filter(|m| {
+                !services.contains_key(m.as_str())
+                    && !services.values().any(|ext| ext.producer() == m.as_str())
+            })
             .collect();
         if !missing.is_empty() {
             eprintln!(
-                "warning: dropping category '{}' — unknown member template(s): {:?}",
+                "warning: dropping category '{}' — no template or producer named {:?}",
                 category.service_name, missing
             );
             continue;
@@ -824,6 +906,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn kpi_histogram_view_falls_back_to_percentiles() {
+        use crate::plot::HistogramView::*;
+        for (subtype, view) in [
+            (None, Percentiles),
+            (Some("heat"), Percentiles),
+            (Some("Buckets"), Percentiles),
+            (Some("percentiles"), Percentiles),
+            (Some("buckets"), Buckets),
+            (Some("quantile_heatmap"), QuantileHeatmap),
+        ] {
+            assert_eq!(kpi_histogram_view(subtype), view, "{subtype:?}");
+        }
+    }
+
+    #[test]
     fn check_unit_systems_refuses_an_unknown_system() {
         let ext = |unit: Option<&str>| -> ServiceExtension {
             serde_json::from_value(serde_json::json!({
@@ -1077,6 +1174,108 @@ mod tests {
         assert!(registry.get_category("orphan-category").is_none());
     }
 
+    /// A member is a producer, so a template refined by `service_kind`
+    /// declares one: a category over `vllm` is kept when the only vllm
+    /// template is `vllm-prefill`.
+    #[test]
+    fn a_category_member_can_be_declared_by_a_refined_template() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, body) in [
+            (
+                "vllm-prefill.json",
+                r#"{"service_name": "vllm-prefill", "producer": "vllm",
+                    "service_kind": "prefill", "kpis": []}"#,
+            ),
+            ("sglang.json", r#"{"service_name": "sglang", "kpis": []}"#),
+            (
+                "pair.json",
+                r#"{"service_name": "pair", "category": true,
+                    "members": ["vllm", "sglang"], "kpis": []}"#,
+            ),
+        ] {
+            write_template(&dir, name, body).unwrap();
+        }
+
+        let registry = TemplateRegistry::load(dir.path()).unwrap();
+
+        let category = registry.get_category("pair").expect("kept");
+        let prefill = registry.get("vllm-prefill").unwrap();
+        assert_eq!(prefill.producer(), "vllm");
+        assert_eq!(category.member("vllm-prefill", prefill), Some("vllm"));
+    }
+
+    /// A member can also name a template, by `service_name` or alias, or a
+    /// capture's source: a category over `redis` (valkey's alias) and
+    /// `vllm-prefill` is kept, and a capture matches the member naming it
+    /// before the member naming its producer.
+    #[test]
+    fn a_category_member_can_name_a_template_or_an_alias() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, body) in [
+            (
+                "valkey.json",
+                r#"{"service_name": "valkey", "aliases": ["redis"], "kpis": []}"#,
+            ),
+            (
+                "vllm-prefill.json",
+                r#"{"service_name": "vllm-prefill", "producer": "vllm",
+                    "service_kind": "prefill", "kpis": []}"#,
+            ),
+            (
+                "vllm-decode.json",
+                r#"{"service_name": "vllm-decode", "producer": "vllm",
+                    "service_kind": "decode", "kpis": []}"#,
+            ),
+            (
+                "pair.json",
+                r#"{"service_name": "pair", "category": true,
+                    "members": ["redis", "vllm", "vllm-prefill"], "kpis": []}"#,
+            ),
+        ] {
+            write_template(&dir, name, body).unwrap();
+        }
+
+        let registry = TemplateRegistry::load(dir.path()).unwrap();
+
+        let category = registry.get_category("pair").expect("kept");
+        let member = |name: &str| category.member(name, registry.get(name).unwrap());
+        assert_eq!(member("valkey"), Some("redis"));
+        assert_eq!(member("vllm-prefill"), Some("vllm-prefill"));
+        assert_eq!(member("vllm-decode"), Some("vllm"));
+
+        // A capture's source name is matched too: a vllm-prefill recording
+        // whose own template is named otherwise.
+        let mine: ServiceExtension = serde_json::from_value(serde_json::json!({
+            "service_name": "mine", "producer": "vllm", "kpis": [],
+        }))
+        .unwrap();
+        assert_eq!(category.member("vllm-prefill", &mine), Some("vllm-prefill"));
+        assert_eq!(category.member("other", &mine), Some("vllm"));
+    }
+
+    /// Of the embedded templates, the vLLM and SGLang ones, refined or not,
+    /// are members of `inference-library`; the SGLang router, a program of
+    /// its own, and the other producers are not.
+    #[test]
+    fn the_inference_library_members_are_producers() {
+        let registry = embedded_templates().unwrap();
+        let category = registry.get_category("inference-library").unwrap();
+        for (name, member) in [
+            ("vllm", Some("vllm")),
+            ("vllm-prefill", Some("vllm")),
+            ("vllm-decode", Some("vllm")),
+            ("sglang", Some("sglang")),
+            ("sglang-prefill", Some("sglang")),
+            ("sglang-decode", Some("sglang")),
+            ("sglang-router", None),
+            ("valkey", None),
+            ("llm-perf", None),
+        ] {
+            let ext = registry.get(name).unwrap();
+            assert_eq!(category.member(name, ext), member, "{name}");
+        }
+    }
+
     #[test]
     fn registry_rejects_category_with_unknown_member_titles_key() {
         let dir = tempfile::tempdir().unwrap();
@@ -1183,6 +1382,8 @@ mod tests {
 
         let displaced = registry.insert_template(ServiceExtension {
             service_name: "rpc-perf".to_string(),
+            producer: None,
+            service_kind: None,
             aliases: vec!["rpcperf".to_string()],
             service_metadata: HashMap::new(),
             kpis: Vec::new(),
@@ -1208,6 +1409,8 @@ mod tests {
 
         let displaced = registry.insert_template(ServiceExtension {
             service_name: "valkey".to_string(),
+            producer: None,
+            service_kind: None,
             aliases: vec!["cachecannon".to_string()],
             service_metadata: HashMap::new(),
             kpis: Vec::new(),

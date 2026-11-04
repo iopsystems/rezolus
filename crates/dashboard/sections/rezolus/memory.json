@@ -701,7 +701,7 @@
           "then": [
             {
               "name": "Reclaim",
-              "description": "kswapd reclaims in the background; direct reclaim and allocation stalls run on the allocating thread and are a latency source on the request path. Major faults are synchronous reads from storage.",
+              "description": "kswapd reclaims in the background; direct reclaim and allocation stalls run on the allocating thread and are a latency source on the request path. Page Faults counts every fault, minor and major; Major Faults are the ones that read from storage, each a synchronous read on the faulting thread.",
               "plots": [
                 {
                   "kind": "counter",
@@ -723,6 +723,29 @@
                   "id": "allocation-stalls",
                   "unit": "count",
                   "query": "sum(irate(memory_allocation_stalls[5m]))"
+                },
+                {
+                  "when": {
+                    "all": [
+                      {
+                        "present": "memory_page_faults"
+                      },
+                      {
+                        "not": {
+                          "present": "memory_pageins"
+                        }
+                      }
+                    ]
+                  },
+                  "then": [
+                    {
+                      "kind": "counter",
+                      "title": "Page Faults",
+                      "id": "page-faults",
+                      "unit": "count",
+                      "query": "sum(irate(memory_page_faults[5m]))"
+                    }
+                  ]
                 },
                 {
                   "kind": "counter",

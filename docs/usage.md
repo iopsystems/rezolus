@@ -717,8 +717,17 @@ embeds, so the recording carries what it is judged against. A complete file:
 }
 ```
 
-The file: `service_name` is required; `aliases` (other `source` names this
-template matches) and `service_metadata` are optional. Each KPI needs `role`
+The file: `service_name` is required; `producer`, `service_kind`, `aliases`
+(other `source` names this template matches) and `service_metadata` are
+optional. `producer` names the program whose recordings the template reads
+(`service_name` when absent), and `service_kind` the role it is for when
+that program runs in several: the built-in `vllm-prefill` template has
+`"producer": "vllm"` and `"service_kind": "prefill"`. `view --category NAME`
+compares two recordings through a category template (`"category": true`),
+whose `members` name producers or registry templates (by name or alias),
+and which takes one recording from each side; the built-in
+`inference-library` has `vllm` and `sglang`, so it takes a `vllm-prefill`
+recording as the `vllm` member. Each KPI needs `role`
 (any word; it groups charts on the dashboard), `title` (keep it unique within
 the file, since it names the check in the output and in events), `query`
 (PromQL) and `type`, one of `gauge`, `histogram` or a counter kind

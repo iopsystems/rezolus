@@ -28,9 +28,12 @@ and the native `rezolus view` binary stay in sync.
 The script invokes `wasm-pack build --profile wasm-release` and writes
 `wasm_viewer.js`, `wasm_viewer_bg.wasm`, and the accompanying `.d.ts` files
 into `site/viewer/pkg/`, where `site/viewer/lib/script.js` imports them as
-`../pkg/wasm_viewer.js`.
+`../pkg/wasm_viewer.js`. It also copies the metriken-charts crate's
+`assets/charts/` and `assets/charts.css`, at the version `Cargo.lock` names,
+into `site/viewer/lib/`.
 
-The generated `site/viewer/pkg/` files are intentionally ignored by git.
+The generated `site/viewer/pkg/` files and the copied chart assets are
+ignored by git.
 GitHub Pages rebuilds them in CI before publishing the static viewer.
 
 The `wasm-release` profile is defined in the root `Cargo.toml`. It inherits

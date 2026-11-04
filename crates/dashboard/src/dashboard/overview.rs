@@ -17,11 +17,11 @@ pub fn generate(
         let busy = cpu.subgroup("CPU Busy");
         busy.describe("Overall CPU utilization and per-core breakdown.");
         busy.plot_promql(
-            PlotOpts::counter("Busy %", "cpu-busy", Unit::Percentage).percentage_range(),
+            Plot::counter("Busy %", "cpu-busy", Unit::Percentage).percentage_range(),
             "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000".to_string(),
         );
         busy.plot_promql(
-            PlotOpts::counter("Busy %", "cpu-busy-heatmap", Unit::Percentage).percentage_range(),
+            Plot::counter("Busy %", "cpu-busy-heatmap", Unit::Percentage).percentage_range(),
             "sum by (id) (irate(cpu_usage[5m])) / 1000000000".to_string(),
         );
 
@@ -38,21 +38,21 @@ pub fn generate(
              interface bound to a device driver. Matches the NIC's own counters.",
         );
         host.plot_promql(
-            PlotOpts::counter(
+            Plot::counter(
                 "Host Transmit Bandwidth",
                 "network-host-transmit-bandwidth",
                 Unit::Bitrate,
             )
-            .with_unit_system("bitrate"),
+            .with_unit_system(Unit::Bitrate),
             "sum(irate(network_host_bytes{direction=\"transmit\"}[5m])) * 8".to_string(),
         );
         host.plot_promql(
-            PlotOpts::counter(
+            Plot::counter(
                 "Host Receive Bandwidth",
                 "network-host-receive-bandwidth",
                 Unit::Bitrate,
             )
-            .with_unit_system("bitrate"),
+            .with_unit_system(Unit::Bitrate),
             "sum(irate(network_host_bytes{direction=\"receive\"}[5m])) * 8".to_string(),
         );
     }
@@ -65,21 +65,21 @@ pub fn generate(
              traffic, so this reads higher than the host bandwidth above.",
         );
         bandwidth.plot_promql(
-            PlotOpts::counter(
+            Plot::counter(
                 "Transmit Bandwidth",
                 "network-transmit-bandwidth",
                 Unit::Bitrate,
             )
-            .with_unit_system("bitrate"),
+            .with_unit_system(Unit::Bitrate),
             "sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8".to_string(),
         );
         bandwidth.plot_promql(
-            PlotOpts::counter(
+            Plot::counter(
                 "Receive Bandwidth",
                 "network-receive-bandwidth",
                 Unit::Bitrate,
             )
-            .with_unit_system("bitrate"),
+            .with_unit_system(Unit::Bitrate),
             "sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8".to_string(),
         );
     }
@@ -91,11 +91,11 @@ pub fn generate(
              interface bandwidth note above.",
         );
         packets.plot_promql(
-            PlotOpts::counter("Transmit Packets", "network-transmit-packets", Unit::Rate),
+            Plot::counter("Transmit Packets", "network-transmit-packets", Unit::Rate),
             "sum(irate(network_packets{direction=\"transmit\"}[5m]))".to_string(),
         );
         packets.plot_promql(
-            PlotOpts::counter("Receive Packets", "network-receive-packets", Unit::Rate),
+            Plot::counter("Receive Packets", "network-receive-packets", Unit::Rate),
             "sum(irate(network_packets{direction=\"receive\"}[5m]))".to_string(),
         );
     }
@@ -104,9 +104,9 @@ pub fn generate(
         let tcp = network.subgroup("TCP Latency");
         tcp.describe("Time from packet received to being processed by the application.");
         tcp.plot_promql_full(
-            PlotOpts::histogram_latency("TCP Packet Latency", "tcp-packet-latency")
+            Plot::histogram_latency("TCP Packet Latency", "tcp-packet-latency")
                 .with_axis_label("Latency")
-                .with_unit_system("time"),
+                .with_unit_system(Unit::Time),
             "tcp_packet_latency".to_string(),
         );
     }
@@ -121,9 +121,9 @@ pub fn generate(
         let queueing = scheduler.subgroup("Runqueue Latency");
         queueing.describe("How long tasks waited on the runqueue before getting CPU time.");
         queueing.plot_promql_full(
-            PlotOpts::histogram_latency("Runqueue Latency", "scheduler-runqueue-latency")
+            Plot::histogram_latency("Runqueue Latency", "scheduler-runqueue-latency")
                 .with_axis_label("Latency")
-                .with_unit_system("time"),
+                .with_unit_system(Unit::Time),
             "scheduler_runqueue_latency".to_string(),
         );
 
@@ -139,13 +139,13 @@ pub fn generate(
         total.describe("Aggregate syscall rate and latency across all operation categories.");
         if syscalls {
             total.plot_promql(
-                PlotOpts::counter("Total", "syscall-total", Unit::Rate),
+                Plot::counter("Total", "syscall-total", Unit::Rate),
                 "sum(irate(syscall[5m]))".to_string(),
             );
         }
         if syscall_latency {
             total.plot_promql(
-                PlotOpts::histogram_latency("Total", "syscall-total-latency"),
+                Plot::histogram_latency("Total", "syscall-total-latency"),
                 "syscall_latency".to_string(),
             );
         }
@@ -159,11 +159,11 @@ pub fn generate(
         let rate = softirq.subgroup("Rate");
         rate.describe("Softirqs handled per second, aggregate and per-CPU.");
         rate.plot_promql(
-            PlotOpts::counter("Rate", "softirq-total-rate", Unit::Rate),
+            Plot::counter("Rate", "softirq-total-rate", Unit::Rate),
             "sum(irate(softirq[5m]))".to_string(),
         );
         rate.plot_promql(
-            PlotOpts::counter("Rate", "softirq-total-rate-heatmap", Unit::Rate),
+            Plot::counter("Rate", "softirq-total-rate-heatmap", Unit::Rate),
             "sum by (id) (irate(softirq[5m]))".to_string(),
         );
     }
@@ -172,11 +172,11 @@ pub fn generate(
         let time = softirq.subgroup("CPU Time");
         time.describe("Fraction of CPU time spent servicing softirqs.");
         time.plot_promql(
-            PlotOpts::counter("CPU %", "softirq-total-time", Unit::Percentage).percentage_range(),
+            Plot::counter("CPU %", "softirq-total-time", Unit::Percentage).percentage_range(),
             "sum(irate(softirq_time[5m])) / cpu_cores / 1000000000".to_string(),
         );
         time.plot_promql(
-            PlotOpts::counter("CPU %", "softirq-total-time-heatmap", Unit::Percentage)
+            Plot::counter("CPU %", "softirq-total-time-heatmap", Unit::Percentage)
                 .percentage_range(),
             "sum by (id) (irate(softirq_time[5m])) / 1000000000".to_string(),
         );
@@ -195,13 +195,13 @@ pub fn generate(
         read.describe("Read throughput and IOPS across all block devices.");
         if bytes {
             read.plot_promql(
-                PlotOpts::counter("Read Throughput", "blockio-throughput-read", Unit::Datarate),
+                Plot::counter("Read Throughput", "blockio-throughput-read", Unit::Datarate),
                 "sum(irate(blockio_bytes{op=\"read\"}[5m]))".to_string(),
             );
         }
         if operations {
             read.plot_promql(
-                PlotOpts::counter("Read IOPS", "blockio-iops-read", Unit::Count),
+                Plot::counter("Read IOPS", "blockio-iops-read", Unit::Count),
                 "sum(irate(blockio_operations{op=\"read\"}[5m]))".to_string(),
             );
         }
@@ -210,7 +210,7 @@ pub fn generate(
         write.describe("Write throughput and IOPS across all block devices.");
         if bytes {
             write.plot_promql(
-                PlotOpts::counter(
+                Plot::counter(
                     "Write Throughput",
                     "blockio-throughput-write",
                     Unit::Datarate,
@@ -220,7 +220,7 @@ pub fn generate(
         }
         if operations {
             write.plot_promql(
-                PlotOpts::counter("Write IOPS", "blockio-iops-write", Unit::Count),
+                Plot::counter("Write IOPS", "blockio-iops-write", Unit::Count),
                 "sum(irate(blockio_operations{op=\"write\"}[5m]))".to_string(),
             );
         }
@@ -245,7 +245,7 @@ pub fn generate(
         // core on multi-core workloads, unlike the old utilization-
         // fraction formulation.
         efficiency.plot_promql(
-            PlotOpts::counter("CPU Time / Throughput", "normalized-cpu-busy", Unit::Time),
+            Plot::counter("CPU Time / Throughput", "normalized-cpu-busy", Unit::Time),
             format!("sum(irate(cpu_usage[5m])) / ({tq})"),
         );
         // Bits per unit of work is a wire-efficiency question, so it uses the
@@ -258,7 +258,7 @@ pub fn generate(
             "network_bytes"
         };
         efficiency.plot_promql(
-            PlotOpts::counter(
+            Plot::counter(
                 "Network TX / Throughput",
                 "normalized-network-tx",
                 Unit::Count,
@@ -266,7 +266,7 @@ pub fn generate(
             format!("(sum(irate({net}{{direction=\"transmit\"}}[5m])) * 8) / ({tq})"),
         );
         efficiency.plot_promql(
-            PlotOpts::counter(
+            Plot::counter(
                 "Network RX / Throughput",
                 "normalized-network-rx",
                 Unit::Count,

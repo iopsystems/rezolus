@@ -25,8 +25,9 @@ cargo test test_name
 cargo test -p package_name
 
 # Run pure-JS viewer tests (compare-math, selection-migration) — no
-# bundler, no jsdom, just node's built-in test runner
-node --test tests/*.mjs
+# bundler, no jsdom, just node's built-in test runner. The --import hook
+# resolves imports of charts/ to the metriken-charts crate's assets.
+node --import ./tests/support/charts.mjs --test tests/*.mjs
 
 # Format code (runs rustfmt and clang-format on .c/.h files)
 cargo xtask fmt
@@ -38,12 +39,31 @@ cargo clippy
 cargo run -p dashboard                  # print to stdout
 cargo run -p dashboard -- output_dir/   # write files to directory
 
-# Developer mode build (serves viewer assets from disk for hot reload)
+# Developer mode build (serves viewer assets from disk; reload the page by hand)
 cargo build --features developer-mode
 
-# Build the WASM viewer for the static site (outputs to site/viewer/pkg/)
+# Build the WASM viewer for the static site (outputs to site/viewer/pkg/,
+# and copies the metriken-charts chart assets into site/viewer/lib/)
 ./crates/viewer/build.sh
 ```
+
+### Chart modules
+
+The chart modules (`/lib/charts/`, `/lib/charts.css`) are the metriken-charts
+crate's `assets/`, in iopsystems/metriken; rezolus has no copy. To change one,
+edit it in a metriken checkout and add an uncommitted
+`[patch.crates-io] metriken-charts = { path = "<metriken>/metriken-charts" }`
+to `Cargo.toml`; the checkout's version must satisfy the workspace's
+`metriken-charts` requirement, or cargo ignores the patch with a warning. The patch also rewrites `Cargo.lock`'s
+metriken-charts entry, and `build.sh` and `tests/support/charts.mjs` read
+`cargo metadata --locked`, so run `cargo build` once after adding it; commit
+neither file. `cargo run --features developer-mode -- view …` then serves
+the edited files from disk; reload the page by hand.
+`node --import ./tests/support/charts.mjs --test tests/<file>.test.mjs` tests
+against them; without `--import`, an import of `charts/` fails with
+`ERR_MODULE_NOT_FOUND`. `./crates/viewer/build.sh` copies them into
+`site/viewer/lib/` for the static viewer. The change lands in metriken first,
+and rezolus takes it by updating `Cargo.lock`.
 
 ## Running Modes
 

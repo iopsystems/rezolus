@@ -7,8 +7,9 @@
 //! Apple silicon has no APERF/MPERF. IOReport counts, per core, the 24 MHz
 //! system-counter ticks spent in each performance state (`V<k>P<n>`), idle
 //! (`IDLE`) and powered down (`DOWN`). The device tree's power manager lists
-//! each cluster type's state frequencies (`voltage-states1-sram` for E,
-//! `voltage-states5-sram` for P), with state `V<k>` at entry `k`. Per core:
+//! each cluster's state frequencies in a `voltage-states<n>-sram` table,
+//! with state `V<k>` at entry `k`; its `perf-domains` gives each cluster's
+//! `n` (see [`topology::frequency_tables`]). Per core:
 //!
 //! - `cpu_tsc`: the system counter (`CLOCK_UPTIME_RAW` in 24 MHz ticks), the
 //!   same for every core, so its rate is 24 MHz;
@@ -22,8 +23,8 @@
 //! state, so between two reads `mperf` can advance by more or less than the
 //! running time, by up to a second on a P core; `aperf` lags with it, and
 //! their ratio is the frequency over the time counted. `cpu_tsc` is not a sum
-//! of residencies for that reason. A cluster type whose table length does
-//! not match its state count is not published.
+//! of residencies for that reason. A cluster whose table length does not
+//! match its state count is not published.
 
 const NAME: &str = "cpu_frequency";
 
@@ -31,9 +32,8 @@ use crate::agent::sampler_status::Unsupported;
 use crate::agent::samplers::ioreport::{self, Channel, Subscription, Value};
 use crate::agent::*;
 
-use super::topology::{self, Core, Kind};
+use super::topology::{self, Core, FrequencyTables};
 
-use std::collections::HashMap;
 use std::sync::Mutex;
 
 mod stats {
@@ -61,7 +61,7 @@ impl Frequency {
     fn new() -> Result<Self, anyhow::Error> {
         let cores = topology::cores()
             .ok_or_else(|| Unsupported(format!("{NAME}: no CPU topology in the device tree")))?;
-        let (e, p) = topology::frequency_tables()
+        let tables = topology::frequency_tables()
             .ok_or_else(|| Unsupported(format!("{NAME}: no performance-state frequency tables")))?;
         let api = ioreport::api().map_err(|e| Unsupported(format!("{NAME}: {e}")))?;
         let subscription = Subscription::new(api, &[(GROUP, Some(SUBGROUP))])
@@ -70,7 +70,6 @@ impl Frequency {
             .sample()
             .ok_or_else(|| anyhow::anyhow!("{NAME}: IOReport sample failed"))?;
 
-        let tables = HashMap::from([(Kind::Efficiency, e), (Kind::Performance, p)]);
         let read = read(&channels, system_ticks(), &cores, &tables);
         if read.is_empty() {
             return Err(Unsupported(format!(
@@ -80,7 +79,15 @@ impl Frequency {
         }
         let ids: Vec<usize> = read.iter().map(|r| r.id).collect();
         CPU_FREQUENCY_ACQ.set_member_set(&ids);
-        debug!("{NAME}: {} core(s) of {}", ids.len(), cores.len());
+        if ids.len() < cores.len() {
+            warn!(
+                "{NAME}: {} of {} cores are not published: no IOReport channel maps to them, or their states do not match a frequency table",
+                cores.len() - ids.len(),
+                cores.len()
+            );
+        } else {
+            debug!("{NAME}: {} core(s) of {}", ids.len(), cores.len());
+        }
 
         Ok(Frequency {
             subscription: Mutex::new(subscription),
@@ -100,7 +107,7 @@ static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::sampl
 struct Frequency {
     subscription: Mutex<Subscription>,
     cores: Vec<Core>,
-    tables: HashMap<Kind, Vec<u64>>,
+    tables: FrequencyTables,
 }
 
 /// One core's counters.
@@ -150,12 +157,7 @@ pub fn reading(id: usize, tsc: u64, states: &[(String, i64)], table: &[u64]) -> 
 }
 
 /// Every mapped core's counters in `channels`, read at system counter `tsc`.
-fn read(
-    channels: &[Channel],
-    tsc: u64,
-    cores: &[Core],
-    tables: &HashMap<Kind, Vec<u64>>,
-) -> Vec<Reading> {
+fn read(channels: &[Channel], tsc: u64, cores: &[Core], tables: &FrequencyTables) -> Vec<Reading> {
     channels
         .iter()
         .filter(|c| c.group == GROUP && c.subgroup == SUBGROUP)
@@ -165,7 +167,7 @@ fn read(
             };
             let (kind, cluster, core) = topology::parse_state_channel(&c.name)?;
             let id = topology::id_of(cores, kind, cluster, core)?;
-            reading(id, tsc, states, tables.get(&kind)?)
+            reading(id, tsc, states, tables.get(kind, cluster)?)
         })
         .collect()
 }
@@ -252,8 +254,7 @@ mod tests {
     fn every_core_is_read_within_its_table() {
         crate::agent::samplers::ioreport::skip_in_vm!();
         let cores = topology::cores().unwrap();
-        let (e, p) = topology::frequency_tables().unwrap();
-        let tables = HashMap::from([(Kind::Efficiency, e), (Kind::Performance, p)]);
+        let tables = topology::frequency_tables().unwrap();
         let sub = Subscription::new(ioreport::api().unwrap(), &[(GROUP, Some(SUBGROUP))]).unwrap();
         let first = read(&sub.sample().unwrap(), system_ticks(), &cores, &tables);
         assert_eq!(first.len(), cores.len());
@@ -270,8 +271,8 @@ mod tests {
         );
         for (a, b) in first.iter().zip(&second) {
             assert_eq!(a.id, b.id);
-            let kind = cores.iter().find(|c| c.id == a.id).unwrap().kind;
-            let table = &tables[&kind];
+            let core = cores.iter().find(|c| c.id == a.id).unwrap();
+            let table = tables.get(core.kind, core.cluster).unwrap();
             let mperf = b.mperf - a.mperf;
             if mperf == 0 {
                 continue;

@@ -1,5 +1,6 @@
+pub use metriken_charts::plot::{ChartStyle, HistogramView, Plot, PlotBuilder, Unit};
 use metriken_query::MetricsSource;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Count distinct values of `key` across `labels`. Series missing the
@@ -147,14 +148,7 @@ impl View {
             .flat_map(|g| g.subgroups.iter_mut())
             .flat_map(|sg| sg.plots.iter_mut())
         {
-            for query in [
-                &mut plot.promql_query,
-                &mut plot.promql_query_experiment,
-                &mut plot.promql_query_total,
-            ]
-            .into_iter()
-            .flatten()
-            {
+            for query in plot.queries_mut() {
                 *query = f(query);
             }
         }
@@ -169,15 +163,8 @@ impl View {
             .flat_map(|g| g.subgroups.iter_mut())
             .flat_map(|sg| sg.plots.iter_mut())
         {
-            let queries: Vec<&str> = [
-                plot.promql_query.as_deref(),
-                plot.promql_query_experiment.as_deref(),
-                plot.promql_query_total.as_deref(),
-            ]
-            .into_iter()
-            .flatten()
-            .collect();
-            plot.scope = Some(f(&queries));
+            let scope = f(&plot.queries());
+            plot.plot.set_scope(Some(scope));
         }
     }
 
@@ -189,14 +176,7 @@ impl View {
             .iter()
             .flat_map(|g| g.subgroups.iter())
             .flat_map(|sg| sg.plots.iter())
-            .flat_map(|p| {
-                [
-                    p.promql_query.as_deref(),
-                    p.promql_query_experiment.as_deref(),
-                    p.promql_query_total.as_deref(),
-                ]
-            })
-            .flatten()
+            .flat_map(PagePlot::queries)
             .collect()
     }
 }
@@ -223,7 +203,7 @@ pub struct SubGroup {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    pub plots: Vec<Plot>,
+    pub plots: Vec<PagePlot>,
 }
 
 #[derive(Serialize)]
@@ -296,19 +276,19 @@ impl Group {
     }
 
     /// Legacy: append a plot to the current (or default) subgroup.
-    pub fn plot_promql(&mut self, opts: PlotOpts, promql_query: String) {
-        self.tail_subgroup_mut().plot_promql(opts, promql_query);
+    pub fn plot_promql(&mut self, plot: PlotBuilder, promql_query: String) {
+        self.tail_subgroup_mut().plot_promql(plot, promql_query);
     }
 
     /// Legacy: append a plot with description-autofill support.
     pub fn plot_promql_with_descriptions(
         &mut self,
-        opts: PlotOpts,
+        plot: PlotBuilder,
         promql_query: String,
         descriptions: Option<&HashMap<String, String>>,
     ) {
         self.tail_subgroup_mut()
-            .plot_promql_with_descriptions(opts, promql_query, descriptions);
+            .plot_promql_with_descriptions(plot, promql_query, descriptions);
     }
 
     /// Find an existing named subgroup by exact name match.
@@ -327,24 +307,24 @@ impl Group {
 }
 
 impl SubGroup {
-    pub fn plot_promql(&mut self, opts: PlotOpts, promql_query: String) {
-        self.plot_promql_with_descriptions(opts, promql_query, None);
+    pub fn plot_promql(&mut self, plot: PlotBuilder, promql_query: String) {
+        self.plot_promql_with_descriptions(plot, promql_query, None);
     }
 
     /// Mutable access to the most recently pushed plot. Used by callers
-    /// that mutate per-plot fields (e.g. `promql_query_experiment` on the
-    /// category generator) right after `plot_promql*`.
-    pub fn plots_mut_last(&mut self) -> Option<&mut Plot> {
+    /// that set `promql_query_experiment` (the category generator) right
+    /// after `plot_promql*`.
+    pub fn plots_mut_last(&mut self) -> Option<&mut PagePlot> {
         self.plots.last_mut()
     }
 
     pub fn plot_promql_with_descriptions(
         &mut self,
-        mut opts: PlotOpts,
+        mut plot: PlotBuilder,
         promql_query: String,
         descriptions: Option<&HashMap<String, String>>,
     ) {
-        if opts.description.is_none()
+        if plot.description().is_none()
             && let Some(descriptions) = descriptions
         {
             let mut best_match: Option<(usize, &str, &str)> = None;
@@ -362,22 +342,13 @@ impl SubGroup {
                 }
             }
             if let Some((_, _, desc)) = best_match {
-                opts.description = Some(desc.to_string());
+                plot = plot.with_description(desc);
             }
         }
 
-        self.plots.push(Plot {
-            opts,
-            data: Vec::new(),
-            min_value: None,
-            max_value: None,
-            time_data: None,
-            formatted_time_data: None,
-            series_names: None,
-            promql_query: Some(promql_query),
+        self.plots.push(PagePlot {
+            plot: plot.build(promql_query),
             promql_query_experiment: None,
-            promql_query_total: None,
-            scope: None,
             width: PlotWidth::default(),
         });
     }
@@ -389,18 +360,18 @@ impl SubGroup {
     }
 
     /// Append a plot that spans the full width of the group's grid.
-    pub fn plot_promql_full(&mut self, opts: PlotOpts, promql_query: String) {
-        self.plot_promql_full_with_descriptions(opts, promql_query, None);
+    pub fn plot_promql_full(&mut self, plot: PlotBuilder, promql_query: String) {
+        self.plot_promql_full_with_descriptions(plot, promql_query, None);
     }
 
     /// Full-width variant with description autofill.
     pub fn plot_promql_full_with_descriptions(
         &mut self,
-        opts: PlotOpts,
+        plot: PlotBuilder,
         promql_query: String,
         descriptions: Option<&HashMap<String, String>>,
     ) {
-        self.plot_promql_with_descriptions(opts, promql_query, descriptions);
+        self.plot_promql_with_descriptions(plot, promql_query, descriptions);
         if let Some(plot) = self.plots.last_mut() {
             plot.width = PlotWidth::Full;
         }
@@ -424,8 +395,8 @@ impl SubGroup {
         mean_unit: Unit,
     ) {
         let unit_system = match mean_unit {
-            Unit::Time => "time",
-            Unit::Bytes => "bytes",
+            Unit::Time => Unit::Time,
+            Unit::Bytes => Unit::Bytes,
             // This helper is only used for latency/size means; guard
             // anything else loudly rather than mis-format silently.
             other => {
@@ -439,7 +410,7 @@ impl SubGroup {
             }
         };
         self.plot_promql(
-            PlotOpts::counter(
+            Plot::counter(
                 format!("{title_stem} Rate"),
                 format!("{id_stem}-rate"),
                 Unit::Rate,
@@ -447,60 +418,56 @@ impl SubGroup {
             rate_query,
         );
         self.plot_promql(
-            PlotOpts::gauge(
+            Plot::gauge(
                 format!("{title_stem} Mean/Total"),
                 format!("{id_stem}-mean"),
                 mean_unit,
             )
             .with_unit_system(unit_system)
-            .with_axis_label("Mean"),
+            .with_axis_label("Mean")
+            .with_total_query(format!("histogram_sum({selector})")),
             format!("histogram_mean({selector})"),
         );
-        if let Some(mean_plot) = self.plots.last_mut() {
-            mean_plot.promql_query_total = Some(format!("histogram_sum({selector})"));
-        }
     }
 }
 
+/// A plot as a page places it: the [`Plot`], and the fields the viewer's
+/// page layout and A/B compare page read, which no chart module does.
 #[derive(Serialize, Clone)]
-pub struct Plot {
-    data: Vec<Vec<f64>>,
-    opts: PlotOpts,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    min_value: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_value: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    time_data: Option<Vec<f64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    formatted_time_data: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    series_names: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    promql_query: Option<String>,
+pub struct PagePlot {
+    #[serde(flatten)]
+    pub plot: Plot,
+    /// The query the A/B compare page draws for the experiment recording,
+    /// when it differs from the baseline's.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub promql_query_experiment: Option<String>,
-    /// Alt query the viewer's Mean/Total toggle swaps to (= `histogram_sum`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub promql_query_total: Option<String>,
-    /// The uuids of the sources every query of the plot reads: in a combined
-    /// view, its recording's, and the throughput service's for a chart that
-    /// includes the throughput query ([`View::scope_plots`]). Absent reads
-    /// every source.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scope: Option<Vec<String>>,
     #[serde(skip_serializing_if = "plot_width_is_half", default)]
     pub width: PlotWidth,
 }
 
-impl Plot {}
+impl PagePlot {
+    /// The query, the experiment query, then the total query.
+    fn queries(&self) -> Vec<&str> {
+        [
+            Some(self.plot.query()),
+            self.promql_query_experiment.as_deref(),
+            self.plot.total_query(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
 
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "snake_case")]
-pub enum MetricType {
-    Gauge,
-    DeltaCounter,
-    Histogram,
+    /// Mutable references to what [`queries`](Self::queries) returns, in
+    /// the same order.
+    fn queries_mut(&mut self) -> impl Iterator<Item = &mut String> {
+        let mut plot = self.plot.queries_mut();
+        let query = plot.next();
+        query
+            .into_iter()
+            .chain(self.promql_query_experiment.as_mut())
+            .chain(plot)
+    }
 }
 
 /// Where the "rate" half of a histogram's rate|mean card pair gets its
@@ -531,304 +498,18 @@ fn plot_width_is_half(w: &PlotWidth) -> bool {
     matches!(w, PlotWidth::Half)
 }
 
-#[derive(Serialize, Clone)]
-pub struct PlotOpts {
-    title: String,
-    id: String,
-    #[serde(rename = "type")]
-    metric_type: MetricType,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    subtype: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    percentiles: Option<Vec<f64>>,
-    format: FormatConfig,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-    /// Force a chart style instead of inferring one from the result shape.
-    ///
-    /// The frontend's `resolveStyle` picks a style from how many series come
-    /// back, which makes a chart's type depend on how many entities the host
-    /// happens to have — a per-entity chart drawn as a heatmap on a two-device
-    /// host becomes a line chart on a one-device host. A plot that is
-    /// per-entity by construction says so here, and `data.js` honours it ahead
-    /// of the inference.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    style: Option<String>,
-}
-
-#[derive(Default, Clone, Serialize)]
-pub struct Range {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub min: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max: Option<f64>,
-}
-
-#[derive(Serialize, Clone)]
-pub struct FormatConfig {
-    x_axis_label: Option<String>,
-    y_axis_label: Option<String>,
-
-    unit_system: Option<String>, // e.g., "percentage", "time", "bitrate"
-    precision: Option<u8>,       // decimal places
-
-    log_scale: Option<bool>,
-
-    // Values outside are clamped at render time.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    range: Option<Range>,
-
-    value_label: Option<String>, // label used in tooltips for the value
-
-    // Entity each heatmap row represents in tooltips (e.g. "CPU", "GPU").
-    // Defaults to "CPU" in the viewer when unset.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    row_label: Option<String>,
-}
-
-impl PlotOpts {
-    /// A gauge metric represents a point-in-time value (e.g., memory usage, temperature).
-    pub fn gauge<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
-        Self {
-            title: title.into(),
-            id: id.into(),
-            metric_type: MetricType::Gauge,
-            subtype: None,
-            percentiles: None,
-            format: FormatConfig::new(unit),
-            description: None,
-            style: None,
-        }
-    }
-
-    /// A delta counter metric represents the rate of change of a cumulative counter
-    /// (e.g., CPU usage rate, packet rate).
-    pub fn counter<T: Into<String>, U: Into<String>>(title: T, id: U, unit: Unit) -> Self {
-        Self {
-            title: title.into(),
-            id: id.into(),
-            metric_type: MetricType::DeltaCounter,
-            subtype: None,
-            percentiles: None,
-            format: FormatConfig::new(unit),
-            description: None,
-            style: None,
-        }
-    }
-
-    /// A histogram metric represents a distribution (e.g., latency, IO size).
-    /// The subtype determines the visualization and query wrapping:
-    /// - "percentiles": shows percentile scatter plot, wraps query with histogram_quantiles()
-    /// - "buckets": shows bucket heatmap, wraps query with histogram_heatmap()
-    pub fn histogram<T: Into<String>, U: Into<String>>(
-        title: T,
-        id: U,
-        unit: Unit,
-        subtype: &str,
-    ) -> Self {
-        Self {
-            title: title.into(),
-            id: id.into(),
-            metric_type: MetricType::Histogram,
-            subtype: Some(subtype.to_string()),
-            percentiles: None,
-            format: FormatConfig::new(unit),
-            description: None,
-            style: None,
-        }
-    }
-
-    /// Convenience: a histogram metric for latency distributions with standard
-    /// defaults (log scale, 100s range).
-    pub fn histogram_latency<T: Into<String>, U: Into<String>>(title: T, id: U) -> Self {
-        Self::histogram(title, id, Unit::Time, "percentiles")
-            .with_log_scale(true)
-            .range(0.0, 100_000_000_000.0)
-    }
-
-    /// Convenience: sets the standard 0..1 range used for percentage metrics.
-    pub fn percentage_range(self) -> Self {
-        self.range(0.0, 1.0)
-    }
-
-    pub fn with_unit_system<T: Into<String>>(mut self, unit_system: T) -> Self {
-        self.format.unit_system = Some(unit_system.into());
-        self
-    }
-
-    /// Per-chart subtitle rendered below the chart title. Use when the
-    /// description is specific to one chart in a subgroup; for shared
-    /// context, prefer `Subgroup::describe`.
-    pub fn with_description<T: Into<String>>(mut self, text: T) -> Self {
-        self.description = Some(text.into());
-        self
-    }
-
-    /// A KPI's `unit_system`, which comes from a template or a recording's
-    /// metadata as free text. One that is not a [`Unit`] is dropped (the plot
-    /// renders with the KPI's default `count` scaling) rather than refusing
-    /// the dashboard: `recording annotate` refuses it when the KPIs are
-    /// written, so only a file written some other way carries one. This is
-    /// silent because it runs on every dashboard render, and the terminal UI
-    /// renders every tick; the viewer warns once when it loads the KPIs
-    /// (`source_templates::service_extensions_from_metadata`).
-    pub fn maybe_unit_system(self, unit: Option<&str>) -> Self {
-        match unit.map(str::parse::<Unit>) {
-            Some(Ok(u)) => self.with_unit_system(u.to_string()),
-            Some(Err(_)) | None => self,
-        }
-    }
-
-    pub fn with_percentiles(mut self, percentiles: Vec<f64>) -> Self {
-        self.percentiles = Some(percentiles);
-        self
-    }
-
-    pub fn with_axis_label<T: Into<String>>(mut self, y_label: T) -> Self {
-        self.format.y_axis_label = Some(y_label.into());
-        self
-    }
-
-    /// Set the entity each heatmap row represents in tooltips (e.g. "GPU").
-    pub fn with_row_label<T: Into<String>>(mut self, row_label: T) -> Self {
-        self.format.row_label = Some(row_label.into());
-        self
-    }
-
-    /// Force this plot's chart style, overriding the frontend's inference from
-    /// the result shape. See [`PlotOpts::style`].
-    pub fn with_style<T: Into<String>>(mut self, style: T) -> Self {
-        self.style = Some(style.into());
-        self
-    }
-
-    pub fn with_log_scale(mut self, log_scale: bool) -> Self {
-        self.format.log_scale = Some(log_scale);
-        self
-    }
-
-    pub fn range(mut self, min: f64, max: f64) -> Self {
-        self.format.range = Some(Range {
-            min: Some(min),
-            max: Some(max),
-        });
-        self
-    }
-}
-
-impl FormatConfig {
-    pub fn new(unit: Unit) -> Self {
-        Self {
-            x_axis_label: None,
-            y_axis_label: None,
-            unit_system: Some(unit.to_string()),
-            precision: Some(2),
-            log_scale: None,
-            range: None,
-            value_label: None,
-            row_label: None,
-        }
-    }
-}
-
-/// A unit system the viewer can scale and label: the keys of `UNIT_SYSTEMS`
-/// in `src/viewer/assets/lib/charts/util/units.js`. The viewer shows an
-/// unknown system's name verbatim as the unit, so a plot's `unit_system` is
-/// one of these or absent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Unit {
-    Count,
-    Rate,
-    Time,
-    Bytes,
-    Datarate,
-    Bitrate,
-    Percentage,
-    Frequency,
-    Power,
-}
-
-impl std::fmt::Display for Unit {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        let s = match self {
-            Self::Count => "count",
-            Self::Rate => "rate",
-            Self::Time => "time",
-            Self::Bytes => "bytes",
-            Self::Datarate => "datarate",
-            Self::Bitrate => "bitrate",
-            Self::Percentage => "percentage",
-            Self::Frequency => "frequency",
-            Self::Power => "power",
-        };
-
-        write!(f, "{s}")
-    }
-}
-
-impl Unit {
-    /// Every variant, in the order `units.js` lists them.
-    pub const ALL: [Unit; 9] = [
-        Self::Time,
-        Self::Bytes,
-        Self::Bitrate,
-        Self::Datarate,
-        Self::Percentage,
-        Self::Frequency,
-        Self::Power,
-        Self::Count,
-        Self::Rate,
-    ];
-}
-
-impl std::str::FromStr for Unit {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::ALL
-            .into_iter()
-            .find(|u| u.to_string() == s)
-            .ok_or_else(|| {
-                let known: Vec<String> = Self::ALL.iter().map(Unit::to_string).collect();
-                format!(
-                    "unknown unit_system {s:?}; expected one of {}",
-                    known.join(", ")
-                )
-            })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// `Unit` names exactly the systems `units.js` scales; a system added to
-    /// one and not the other would be refused, or shown verbatim, by the viewer.
-    #[test]
-    fn units_match_the_viewer() {
-        let js = include_str!("../../../src/viewer/assets/lib/charts/util/units.js");
-        let block = &js[js.find("const UNIT_SYSTEMS = {").unwrap()..];
-        let block = &block[..block.find("\n};").unwrap()];
-        let viewer: Vec<&str> = block
-            .lines()
-            .filter_map(|l| l.strip_prefix("    ")?.strip_suffix(": {"))
-            .filter(|k| k.chars().all(|c| c.is_ascii_lowercase()))
-            .collect();
-        let ours: Vec<String> = Unit::ALL.iter().map(Unit::to_string).collect();
-        assert_eq!(viewer, ours);
-        for name in &ours {
-            assert_eq!(name.parse::<Unit>().unwrap().to_string(), *name);
-        }
-    }
-
     #[test]
     fn maybe_unit_system_drops_an_unknown_system() {
-        let unit =
-            |opts: PlotOpts| serde_json::to_value(&opts).unwrap()["format"]["unit_system"].clone();
-        let known = PlotOpts::counter("t", "id", Unit::Count).maybe_unit_system(Some("bytes"));
+        let unit = |plot: PlotBuilder| {
+            serde_json::to_value(plot.build("q")).unwrap()["opts"]["format"]["unit_system"].clone()
+        };
+        let known = Plot::counter("t", "id", Unit::Count).maybe_unit_system(Some("bytes"));
         assert_eq!(unit(known), "bytes");
-        let unknown = PlotOpts::counter("t", "id", Unit::Count)
+        let unknown = Plot::counter("t", "id", Unit::Count)
             .maybe_unit_system(Some("<img src=x onerror=alert(1)>"));
         assert_eq!(unit(unknown), "count", "the unknown system is not applied");
         let err = "watts".parse::<Unit>().unwrap_err();
@@ -838,19 +519,10 @@ mod tests {
         );
     }
 
-    fn make_plot(width: PlotWidth) -> Plot {
-        Plot {
-            data: Vec::new(),
-            opts: PlotOpts::counter("t", "id", Unit::Count),
-            min_value: None,
-            max_value: None,
-            time_data: None,
-            formatted_time_data: None,
-            series_names: None,
-            promql_query: Some("up".into()),
+    fn make_plot(width: PlotWidth) -> PagePlot {
+        PagePlot {
+            plot: Plot::counter("t", "id", Unit::Count).build("up"),
             promql_query_experiment: None,
-            promql_query_total: None,
-            scope: None,
             width,
         }
     }
@@ -900,8 +572,8 @@ mod tests {
     #[test]
     fn legacy_plot_promql_creates_single_unnamed_subgroup() {
         let mut g = Group::new("G", "g");
-        g.plot_promql(PlotOpts::counter("t1", "id1", Unit::Count), "up".into());
-        g.plot_promql(PlotOpts::counter("t2", "id2", Unit::Count), "up".into());
+        g.plot_promql(Plot::counter("t1", "id1", Unit::Count), "up".into());
+        g.plot_promql(Plot::counter("t2", "id2", Unit::Count), "up".into());
         let json = serde_json::to_value(&g).unwrap();
         let subs = json["subgroups"].as_array().expect("subgroups present");
         assert_eq!(subs.len(), 1, "legacy calls collapse to one subgroup");
@@ -927,10 +599,7 @@ mod tests {
     fn plot_promql_full_marks_plot_as_full_width() {
         let mut g = Group::new("G", "g");
         let sg = g.subgroup("Ops");
-        sg.plot_promql_full(
-            PlotOpts::counter("Summary", "sum", Unit::Count),
-            "up".into(),
-        );
+        sg.plot_promql_full(Plot::counter("Summary", "sum", Unit::Count), "up".into());
         let json = serde_json::to_value(&g).unwrap();
         assert_eq!(
             json["subgroups"][0]["plots"][0]["width"],
@@ -1022,6 +691,36 @@ mod tests {
         );
     }
 
+    /// `map_queries` rewrites the query, the experiment query and the total
+    /// query once each, and `queries` lists them in that order.
+    #[test]
+    fn map_queries_visits_every_query_once() {
+        let mut g = Group::new("G", "g");
+        g.plot_promql(
+            Plot::gauge("t", "id", Unit::Count).with_total_query("t"),
+            "q".into(),
+        );
+        g.subgroups[0]
+            .plots_mut_last()
+            .unwrap()
+            .promql_query_experiment = Some("e".into());
+        let mut view = View::default();
+        view.group(g);
+        assert_eq!(view.queries(), ["q", "e", "t"]);
+        view.map_queries(|q| format!("f({q})"));
+        let json = serde_json::to_value(&view).unwrap();
+        let plot = &json["groups"][0]["subgroups"][0]["plots"][0];
+        assert_eq!(plot["promql_query"], "f(q)");
+        assert_eq!(plot["promql_query_experiment"], "f(e)");
+        assert_eq!(plot["promql_query_total"], "f(t)");
+        let mut seen = Vec::new();
+        view.scope_plots(|qs| {
+            seen.extend(qs.iter().map(|q| q.to_string()));
+            vec!["u".into()]
+        });
+        assert_eq!(seen, ["f(q)", "f(e)", "f(t)"]);
+    }
+
     #[test]
     fn histogram_rate_mean_from_histogram_derives_rate_from_count() {
         let mut g = Group::new("G", "g");
@@ -1060,7 +759,7 @@ mod plot_serialize_tests {
     fn plot_promql_query_experiment_round_trips() {
         let mut sg = SubGroup::default();
         sg.plot_promql(
-            PlotOpts::counter("X", "kpi-x", Unit::Count),
+            Plot::counter("X", "kpi-x", Unit::Count),
             "metric_a".to_string(),
         );
         // Mutate the just-pushed plot to set the experiment query, then

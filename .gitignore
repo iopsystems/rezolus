@@ -9,6 +9,9 @@ docs/superpowers/
 target
 site/viewer/pkg/
 site/viewer/templates/manifest.json
+# copied from the metriken-charts crate by crates/viewer/build.sh
+site/viewer/lib/charts/
+site/viewer/lib/charts.css
 **/*.rs.bk
 .worktrees/
 results/

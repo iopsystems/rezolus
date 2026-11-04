@@ -43,6 +43,7 @@
 //! streamed, or an agent older than this change) renders the embedded
 //! template, silently.
 
+use crate::combined;
 use crate::section_template::SectionTemplate;
 use crate::{ServiceExtension, TemplateRegistry};
 use std::collections::{HashMap, HashSet};
@@ -91,6 +92,9 @@ pub fn resolve_source_templates(
         dashboard: metadata.get(KEY_DASHBOARD).cloned(),
         ..Default::default()
     };
+    let legacy = is_legacy(metadata);
+    // Sources whose carried template had `source` matchers removed or kept.
+    let mut adjusted: Vec<(String, combined::Dropped)> = Vec::new();
     let top_source = metadata
         .get(KEY_SOURCE)
         .map(String::as_str)
@@ -121,9 +125,11 @@ pub fn resolve_source_templates(
         match serde_json::from_str::<ServiceExtension>(json) {
             Ok(ext) => {
                 let source = top_source.unwrap_or(&ext.service_name).to_string();
-                let (ext, registry_won) = choose(&source, ext);
+                let (mut ext, registry_won) = choose(&source, ext);
                 if registry_won {
                     from_registry.insert(source.clone());
+                } else if legacy {
+                    adjusted.push((source.clone(), drop_source_matchers(&mut ext)));
                 }
                 out.service_exts.push((source, ext));
             }
@@ -151,9 +157,11 @@ pub fn resolve_source_templates(
                 };
                 match serde_json::from_value::<ServiceExtension>(sq.clone()) {
                     Ok(ext) => {
-                        let (ext, registry_won) = choose(source, ext);
+                        let (mut ext, registry_won) = choose(source, ext);
                         if registry_won {
                             from_registry.insert(source.clone());
+                        } else if legacy {
+                            adjusted.push((source.clone(), drop_source_matchers(&mut ext)));
                         }
                         out.service_exts.push((source.clone(), ext));
                         parsed = true;
@@ -188,6 +196,42 @@ pub fn resolve_source_templates(
     {
         from_registry.insert(source.to_string());
         out.service_exts.push((source.to_string(), ext.clone()));
+    }
+
+    // A template that declares no producer takes the producer and
+    // `service_kind` of the registry entry its source names, so a
+    // `vllm-prefill` recording's own template is a `vllm` template.
+    for (source, ext) in &mut out.service_exts {
+        if ext.producer.is_none()
+            && let Some(entry) = registry.get(source)
+        {
+            ext.producer = Some(entry.producer().to_string());
+            if ext.service_kind.is_none() {
+                ext.service_kind = entry.service_kind.clone();
+            }
+        }
+    }
+
+    for (source, dropped) in adjusted {
+        let plural =
+            |n: usize, one: &'static str, many: &'static str| if n == 1 { one } else { many };
+        if dropped.removed > 0 {
+            out.notices.push(format!(
+                "source {source}: removed {} `source` {} from the template it carries; the \
+                 template is read against this recording only",
+                dropped.removed,
+                plural(dropped.removed, "matcher", "matchers"),
+            ));
+        }
+        if dropped.kept > 0 {
+            out.notices.push(format!(
+                "source {source}: kept {} `source` {} in the template it carries, in a \
+                 selector with no metric name and no other `=` matcher with a non-empty \
+                 value, or with a quoted name",
+                dropped.kept,
+                plural(dropped.kept, "matcher", "matchers"),
+            ));
+        }
     }
 
     for (source, err) in malformed {
@@ -227,6 +271,32 @@ pub fn resolve_source_templates(
     }
 
     out
+}
+
+/// Whether `metadata` is a recording without identity layers: it carries
+/// none of metriken-storage's layer keys (`metriken.layer.*`).
+fn is_legacy(metadata: &HashMap<String, String>) -> bool {
+    use metriken_storage::layers::{PRODUCER_KEY, RECORDER_KEY, USER_KEY};
+    ![PRODUCER_KEY, RECORDER_KEY, USER_KEY]
+        .iter()
+        .any(|k| metadata.contains_key(*k))
+}
+
+/// Remove the `source="..."` matchers from each KPI query of `ext`, a
+/// template a recording without identity layers carries. Every reader
+/// evaluates such a template against its own recording only, so the
+/// matchers narrow nothing, and a recording whose `source` differs from
+/// the one the template names (an endpoint given another `source=`) still
+/// gets its KPIs.
+fn drop_source_matchers(ext: &mut ServiceExtension) -> combined::Dropped {
+    let mut total = combined::Dropped::default();
+    for kpi in &mut ext.kpis {
+        let (query, dropped) = combined::drop_matchers(&kpi.query, "source");
+        kpi.query = query;
+        total.removed += dropped.removed;
+        total.kept += dropped.kept;
+    }
+    total
 }
 
 /// The KPI templates for one source's metadata map: a parquet footer's
@@ -506,6 +576,140 @@ mod tests {
 
     fn registry() -> TemplateRegistry {
         TemplateRegistry::from_templates(vec![ext("known", "registry")])
+    }
+
+    /// A recording's own template that declares no producer is read as the
+    /// registry entry its source names: a `vllm-prefill` recording's carried
+    /// template is a `vllm` template refined by `prefill`, so it is the
+    /// `vllm` member of `inference-library`. One that declares a producer
+    /// or a `service_kind` keeps it, and a source the registry does not
+    /// know gets no producer.
+    #[test]
+    fn a_carried_template_takes_the_producer_its_source_names() {
+        let registry = crate::embedded_templates().unwrap();
+        let category = registry.get_category("inference-library").unwrap();
+        let carried = |source: &str, ext: serde_json::Value| {
+            let m = md(&[
+                ("source", source.into()),
+                ("service_queries", ext.to_string()),
+            ]);
+            resolve_source_templates(&m, &registry, TemplatePreference::Archive)
+                .service_exts
+                .remove(0)
+                .1
+        };
+        let kpis = serde_json::json!([]);
+
+        let prefill = carried(
+            "vllm-prefill",
+            serde_json::json!({"service_name": "vllm-prefill", "kpis": kpis}),
+        );
+        assert_eq!(prefill.producer(), "vllm");
+        assert_eq!(prefill.service_kind.as_deref(), Some("prefill"));
+        assert_eq!(category.member("vllm-prefill", &prefill), Some("vllm"));
+
+        let declared = carried(
+            "vllm-prefill",
+            serde_json::json!({"service_name": "mine", "producer": "acme", "kpis": kpis}),
+        );
+        assert_eq!(declared.producer(), "acme");
+        assert_eq!(category.member("acme", &declared), None);
+
+        let kind_only = carried(
+            "vllm",
+            serde_json::json!({"service_name": "vllm-prefill", "service_kind": "prefill",
+                               "kpis": kpis}),
+        );
+        assert_eq!(kind_only.producer(), "vllm");
+        assert_eq!(kind_only.service_kind.as_deref(), Some("prefill"));
+
+        let unknown = carried(
+            "acme",
+            serde_json::json!({"service_name": "acme", "kpis": kpis}),
+        );
+        assert_eq!(unknown.producer, None);
+    }
+
+    /// A template carried by a recording without identity layers loses
+    /// its `source` matchers, with a notice: a cachecannon template naming
+    /// `source="cachecannon"` reads a recording whose endpoint was given
+    /// `source=cc-a`. A recording with layers, and the registry's template,
+    /// are read as written.
+    #[test]
+    fn a_legacy_recordings_template_loses_its_source_matchers() {
+        let template = serde_json::json!({
+            "service_name": "cachecannon",
+            "kpis": [
+                {"role": "throughput", "title": "Rate", "type": "gauge",
+                 "query": "sum(irate(responses{source=\"cachecannon\"}[5s]))"},
+                {"role": "throughput", "title": "Any", "type": "gauge",
+                 "query": "{source=\"cachecannon\"}"},
+            ],
+        })
+        .to_string();
+        let resolve = |extra: &[(&str, String)]| {
+            let mut pairs = vec![
+                ("source", "cc-a".to_string()),
+                ("service_queries", template.clone()),
+            ];
+            pairs.extend(extra.iter().cloned());
+            resolve_source_templates(&md(&pairs), &registry(), TemplatePreference::Archive)
+        };
+        let queries = |t: &SourceTemplates| -> Vec<String> {
+            t.service_exts[0]
+                .1
+                .kpis
+                .iter()
+                .map(|k| k.query.clone())
+                .collect()
+        };
+
+        let legacy = resolve(&[]);
+        assert_eq!(
+            queries(&legacy),
+            ["sum(irate(responses[5s]))", "{source=\"cachecannon\"}"]
+        );
+        assert_eq!(legacy.notices.len(), 2, "{:?}", legacy.notices);
+        assert!(
+            legacy.notices[0].contains("removed 1 `source` matcher "),
+            "{:?}",
+            legacy.notices
+        );
+        assert!(
+            legacy.notices[1].contains("kept 1 `source` matcher "),
+            "{:?}",
+            legacy.notices
+        );
+
+        let layered = resolve(&[("metriken.layer.user", "{}".to_string())]);
+        assert_eq!(
+            queries(&layered),
+            [
+                "sum(irate(responses{source=\"cachecannon\"}[5s]))",
+                "{source=\"cachecannon\"}"
+            ]
+        );
+        assert!(layered.notices.is_empty(), "{:?}", layered.notices);
+
+        // A template nested under `per_source_metadata` is read the same way.
+        let nested = serde_json::json!({
+            "svc": {"0": {"service_queries": {
+                "service_name": "svc",
+                "kpis": [{"role": "throughput", "title": "Rate", "type": "gauge",
+                          "query": "up{source=\"svc\"}"}],
+            }}},
+        })
+        .to_string();
+        let resolved = resolve_source_templates(
+            &md(&[
+                ("source", r#"["svc","other"]"#.into()),
+                ("per_source_metadata", nested),
+            ]),
+            &registry(),
+            TemplatePreference::Archive,
+        );
+        assert_eq!(queries(&resolved), ["up"]);
+        assert_eq!(resolved.notices.len(), 1, "{:?}", resolved.notices);
     }
 
     #[test]
