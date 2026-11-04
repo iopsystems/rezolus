@@ -459,6 +459,14 @@
 
 ### Changed
 
+- **The viewer serves its chart modules from metriken-charts.** `/lib/charts/`
+  and `/lib/charts.css` are the metriken-charts crate's `assets/charts/` and
+  `assets/charts.css`, at the version `Cargo.lock` names, and rezolus no
+  longer carries its own copy. `crates/viewer/build.sh` copies them into
+  `site/viewer/lib/` for the static viewer and the release bundle. The JS
+  tests run with `node --import ./tests/support/charts.mjs --test
+  tests/*.mjs`, which resolves imports of `charts/` to the crate; the 26
+  test files that tested only the chart modules are in metriken-charts.
 - **The dashboard's plot specs are built with metriken-charts.** The
   `dashboard` crate's `Plot`, `Unit` and plot options come from
   `metriken_charts::plot` 0.1.0, and the section JSON the viewer receives

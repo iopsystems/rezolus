@@ -3615,7 +3615,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "6.0.0-alpha.116"
+version = "6.0.0-alpha.117"
 dependencies = [
  "allan",
  "anyhow",
@@ -3649,6 +3649,7 @@ dependencies = [
  "linkme",
  "memmap2",
  "metriken",
+ "metriken-charts",
  "metriken-exposition",
  "metriken-query",
  "metriken-recorder",

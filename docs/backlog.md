@@ -119,7 +119,7 @@ Source: [viewer chart & heatmap UX](journal/2026-04-19-viewer-chart-ux.md).
   hard-codes `splitNumber: 5`) and across file vs live mode. The live-mode tick
   *overlap* observed 2026-06-21 is one visible symptom. Proper fix: a span-aware
   `minInterval` + width-bounded `splitNumber` cap + matching formatter, shared via
-  `src/viewer/assets/lib/charts/util/`. *Reopen:* when fixing visible tick overlap
+  metriken-charts' `assets/charts/util/`. *Reopen:* when fixing visible tick overlap
   or starting a chart-rendering quality pass.
 - **Single `quantiles()` call for count/mean/percentiles** — Open. Count, mean and
   percentiles are all derivable from one `metriken quantiles()` call on one
@@ -1673,7 +1673,7 @@ Related ideas with no entry yet:
 
 - **Section-wide shared crosshair** — Idea. Hover cursor sync exists only
   within a compare group (`ChartsState._compareCursorSubs`,
-  `src/viewer/assets/lib/charts/chart.js`); zoom is already global. A
+  metriken-charts' `assets/charts/chart.js`); zoom is already global. A
   section-wide crosshair behind a toggle is a different thing from the
   pin-sync fan-out rejected in #828 and does not reopen that decision.
 - **One reference page for time semantics** — Idea. Null propagation in

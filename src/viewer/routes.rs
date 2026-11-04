@@ -97,6 +97,14 @@ pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
         warn!("running in developer mode. Rezolus Viewer must be run from within project folder");
         router
             .route_service("/", ServeFile::new("src/viewer/assets/index.html"))
+            .nest_service(
+                "/lib/charts",
+                ServeDir::new(Path::new(metriken_charts::ASSETS_PATH).join("charts")),
+            )
+            .route_service(
+                "/lib/charts.css",
+                ServeFile::new(Path::new(metriken_charts::ASSETS_PATH).join("charts.css")),
+            )
             .nest_service("/lib", ServeDir::new(Path::new("src/viewer/assets/lib")))
             .fallback_service(ServeFile::new("src/viewer/assets/index.html"))
     };
@@ -714,10 +722,19 @@ async fn index(headers: HeaderMap) -> Response {
     asset_response(asset.contents(), "text/html", &headers)
 }
 
+/// `/lib/charts/` and `/lib/charts.css` are the metriken-charts crate's
+/// `assets/charts/` and `assets/charts.css`; the rest of `/lib` is
+/// `src/viewer/assets/lib`.
 #[cfg(not(feature = "developer-mode"))]
 async fn lib(uri: Uri, headers: HeaderMap) -> Response {
     let path = uri.path();
-    let Some(asset) = ASSETS.get_file(format!("lib{path}")) else {
+    let rel = path.trim_start_matches('/');
+    let asset = if rel == "charts.css" || rel.starts_with("charts/") {
+        metriken_charts::ASSETS.get_file(rel)
+    } else {
+        ASSETS.get_file(format!("lib{path}"))
+    };
+    let Some(asset) = asset else {
         tracing::error!("path: {path} does not map to a static resource");
         return (
             StatusCode::NOT_FOUND,
@@ -734,6 +751,61 @@ async fn lib(uri: Uri, headers: HeaderMap) -> Response {
         _ => "text/plain",
     };
     asset_response(asset.contents(), content_type, &headers)
+}
+
+#[cfg(all(test, not(feature = "developer-mode")))]
+mod lib_tests {
+    use super::*;
+
+    async fn get(path: &str) -> (StatusCode, Option<String>, Vec<u8>) {
+        let resp = lib(path.parse().unwrap(), HeaderMap::new()).await;
+        let status = resp.status();
+        let content_type = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .map(|v| v.to_str().unwrap().to_string());
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, content_type, body.to_vec())
+    }
+
+    #[tokio::test]
+    async fn charts_are_served_from_metriken_charts() {
+        for (path, file, content_type) in [
+            ("/charts/chart.js", "charts/chart.js", "text/javascript"),
+            (
+                "/charts/util/units.js",
+                "charts/util/units.js",
+                "text/javascript",
+            ),
+            ("/charts.css", "charts.css", "text/css"),
+        ] {
+            let (status, ct, body) = get(path).await;
+            assert_eq!(status, StatusCode::OK, "{path}");
+            assert_eq!(ct.as_deref(), Some(content_type), "{path}");
+            assert_eq!(
+                body,
+                metriken_charts::ASSETS.get_file(file).unwrap().contents(),
+                "{path}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_rest_of_lib_is_served_from_the_viewer_assets() {
+        let (status, _, body) = get("/data.js").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, ASSETS.get_file("lib/data.js").unwrap().contents());
+        assert!(ASSETS.get_dir("lib/charts").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_missing_file_is_not_found() {
+        for path in ["/charts/missing.js", "/missing.js", "/chartsx.css"] {
+            assert_eq!(get(path).await.0, StatusCode::NOT_FOUND, "{path}");
+        }
+    }
 }
 
 #[cfg(test)]

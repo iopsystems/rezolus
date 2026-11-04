@@ -201,7 +201,7 @@ jobs:
         with:
           node-version: 24
       - name: Run the viewer JS tests
-        run: node --test tests/*.mjs
+        run: node --import ./tests/support/charts.mjs --test tests/*.mjs
       - name: Check template symlinks are committed
         # build.sh self-heals missing symlinks under site/viewer/templates/
         # so the deploy doesn't break, but the symlinks must also be in

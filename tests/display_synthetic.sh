@@ -52,7 +52,7 @@ if [[ -z "$ready" ]]; then
 fi
 
 echo "==> running backend-data assertions"
-if VIEWER_URL="http://127.0.0.1:$PORT" COMPARE=1 node --test tests/display_synthetic.test.mjs; then
+if VIEWER_URL="http://127.0.0.1:$PORT" COMPARE=1 node --import ./tests/support/charts.mjs --test tests/display_synthetic.test.mjs; then
     echo "==> PASS"
 else
     echo "!! assertions failed; viewer log:" >&2

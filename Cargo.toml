@@ -16,9 +16,7 @@ libc = "0.2.186"
 libloading = "0.8"
 log = "0.4.29"
 metriken = "0.11.4"
-# Exact until the viewer serves the crate's chart modules: a 0.1.x that adds
-# a ChartStyle would let a template name a style rezolus's chart.js cannot draw.
-metriken-charts = "=0.1.0"
+metriken-charts = "0.1.0"
 metriken-exposition = "0.25.0"
 metriken-query = { version = "0.43.0", default-features = false }
 metriken-storage = { version = "0.6.0", default-features = false }
@@ -60,7 +58,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "6.0.0-alpha.116"
+version = "6.0.0-alpha.117"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true
@@ -107,6 +105,7 @@ libc.workspace = true
 linkme = "0.3.36"
 memmap2 = "0.9.10"
 metriken.workspace = true
+metriken-charts.workspace = true
 # `stream-tokio`: the `/metrics/stream` route (`StreamSubscription`) and its
 # body stream on tokio.
 metriken-exposition = { workspace = true, features = ["stream-tokio"] }
