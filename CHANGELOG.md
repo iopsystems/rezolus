@@ -493,6 +493,18 @@
   activate the category after an attach or detach, when a capture has
   other than one service template; before, it activated and then showed one
   section per template, or paired two templates of one capture.
+- **A KPI template a recording carries is read without its `source="..."`
+  matchers** when the recording has no identity layers: every 5.x
+  recording, and every recording rezolus writes today (it records with
+  metriken-recorder 0.5.1, which writes none). Each reader evaluates such
+  a template against its own recording, so the matchers narrowed nothing;
+  they did empty the KPIs of a recording whose endpoint was given another
+  name, such as a cachecannon (through v0.0.34) or llm-perf (through
+  v0.1.21) recording made with `--endpoint URL,source=cc-a`. A selector
+  with no metric name keeps its `source` matcher unless another matcher is
+  `=` with a non-empty value, which is stricter than PromQL's own rule; a
+  branch holding a quoted name (`{"x.y", ...}`) also keeps it. The viewer,
+  and MCP's `run_checks`, log what was removed or kept as a notice.
 - **`cpu_power` on macOS subscribes only to the channels it publishes.**
   It reads 33 of `Energy Model`'s 328 IOReport channels on an M4 Max, and a
   sample's CPU cost drops from about 3.6 ms to 3.2 ms. A subscription that
