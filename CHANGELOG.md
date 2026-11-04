@@ -136,7 +136,7 @@
 - **A `connect()` retried after a failure before `SYN_SENT` is timed from the
   retry.** `tcp_connect_latency` kept the start time of a connect that failed
   before `SYN_SENT`, such as one with no route, and timed the next
-  `connect()` on the same socket from it.
+  `connect()` on the same socket from it (#1645).
 - **A histogram no sampler has read is no longer published.** The agent
   leaves a histogram out of its snapshots and stream until its acquisition
   group is first stamped. A macOS agent published the Linux BPF histograms
