@@ -116,7 +116,7 @@ Before this was one predicate, every consumer hid labels by literal name
 catalog), and the frontend named a series by "the first label that is not
 `__name__`". `BTreeMap` sorts `__` before every letter, so the first `__`
 label a reader emitted would have become the legend text of every series
-carrying it. `tests/labels.test.mjs` and
+carrying it. metriken-charts' `tests/labels.test.mjs` and
 `internal_labels_and_storage_keys_are_not_listed_as_filter_keys` pin the
 consumers; metriken-query pins the engine.
 

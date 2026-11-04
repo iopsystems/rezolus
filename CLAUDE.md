@@ -42,9 +42,24 @@ cargo run -p dashboard -- output_dir/   # write files to directory
 # Developer mode build (serves viewer assets from disk for hot reload)
 cargo build --features developer-mode
 
-# Build the WASM viewer for the static site (outputs to site/viewer/pkg/)
+# Build the WASM viewer for the static site (outputs to site/viewer/pkg/,
+# and copies the metriken-charts chart assets into site/viewer/lib/)
 ./crates/viewer/build.sh
 ```
+
+### Chart modules
+
+The chart modules (`/lib/charts/`, `/lib/charts.css`) are the metriken-charts
+crate's `assets/`, in iopsystems/metriken; rezolus has no copy. To change one,
+edit it in a metriken checkout and add an uncommitted
+`[patch.crates-io] metriken-charts = { path = "<metriken>/metriken-charts" }`
+to `Cargo.toml`. `cargo run --features developer-mode -- view …` then serves
+the edited files from disk; reload the page by hand.
+`node --import ./tests/support/charts.mjs --test tests/<file>.test.mjs` tests
+against them; without `--import`, an import of `charts/` fails with
+`ERR_MODULE_NOT_FOUND`. `./crates/viewer/build.sh` copies them into
+`site/viewer/lib/` for the static viewer. The change lands in metriken first,
+and rezolus takes it by updating `Cargo.lock`.
 
 ## Running Modes
 

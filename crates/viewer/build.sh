@@ -1,6 +1,7 @@
 #!/bin/bash
 # Build the WASM viewer and place the output in site/viewer/pkg/ so it can be
-# loaded by the static site frontend (imports `../pkg/wasm_viewer.js`).
+# loaded by the static site frontend (imports `../pkg/wasm_viewer.js`), and
+# copy the metriken-charts crate's chart assets into site/viewer/lib/.
 #
 # Requires `wasm-pack` and (on macOS) Homebrew LLVM for compiling zstd to wasm32.
 #
@@ -45,7 +46,7 @@ done
 # into site/viewer/lib/ (ignored by git) at the version Cargo.lock names, so
 # the static site and the release bundle serve the same files.
 CHARTS_MANIFEST=$(cargo metadata --format-version 1 --locked --manifest-path "$SCRIPT_DIR/../../Cargo.toml" \
-    | grep -oE '"manifest_path":"[^"]*/metriken-charts(-[0-9][^"/]*)?/Cargo.toml"' \
+    | { grep -oE '"manifest_path":"[^"]*/metriken-charts(-[0-9][^"/]*)?/Cargo.toml"' || true; } \
     | head -n 1 | sed -E 's/^"manifest_path":"(.*)"$/\1/')
 if [ -z "$CHARTS_MANIFEST" ]; then
     echo "build.sh: cargo metadata lists no metriken-charts package" >&2

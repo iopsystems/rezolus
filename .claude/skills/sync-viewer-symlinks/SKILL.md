@@ -29,7 +29,9 @@ files (site keeps its own copy):
   `.dendro` file
 
 Everything else — **including `data.js`** — is a same-name symlink into
-`src/viewer/assets/lib/`. (There is no `data_base.js`; that was an older
+`src/viewer/assets/lib/`, except `charts/` and `charts.css`, which
+`crates/viewer/build.sh` copies from the metriken-charts crate and git
+ignores. (There is no `data_base.js`; that was an older
 architecture. `dashboards.js` no longer exists.)
 
 ## Coverage can be per-file OR a directory symlink

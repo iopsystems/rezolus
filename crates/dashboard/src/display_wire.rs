@@ -417,7 +417,7 @@ mod tests {
     fn the_interp_column_is_written_after_the_unc_pair() {
         // Both optional column sets present. Distinct values throughout so a
         // wrong ORDER shows up as wrong data rather than as plausible numbers —
-        // this is the property the hand-written JS mirror in
+        // this is the property the hand-written JS mirror in metriken-charts'
         // tests/display_binary_decode.test.mjs depends on.
         let s = series(
             "a",
