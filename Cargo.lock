@@ -1138,6 +1138,7 @@ version = "0.1.0"
 dependencies = [
  "histogram",
  "include_dir",
+ "metriken-charts",
  "metriken-exposition",
  "metriken-query",
  "metriken-storage 0.6.0",
@@ -2489,6 +2490,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "metriken-charts"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8eaf7d461977a51518d4dfef889edf11ddb1d094a78bca74c26aabe25f76b9bb"
+dependencies = [
+ "include_dir",
+ "serde",
+]
+
+[[package]]
 name = "metriken-core"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3604,7 +3615,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "6.0.0-alpha.113"
+version = "6.0.0-alpha.114"
 dependencies = [
  "allan",
  "anyhow",

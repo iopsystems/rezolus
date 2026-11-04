@@ -26,13 +26,13 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
         if drops {
             errors.plot_promql(
-                PlotOpts::counter("Packet Drops", "packet-drops", Unit::Rate),
+                Plot::counter("Packet Drops", "packet-drops", Unit::Rate),
                 "sum(irate(network_drop[5m]))".to_string(),
             );
         }
         if timeouts {
             errors.plot_promql(
-                PlotOpts::counter("Transmit Timeouts", "tx-timeouts", Unit::Rate),
+                Plot::counter("Transmit Timeouts", "tx-timeouts", Unit::Rate),
                 "sum(irate(network_transmit_timeout[5m]))".to_string(),
             );
         }
@@ -49,7 +49,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
              indicates loss or congestion on the path.",
         );
         retransmits.plot_promql_full(
-            PlotOpts::counter("TCP Retransmits", "tcp-retransmits", Unit::Rate),
+            Plot::counter("TCP Retransmits", "tcp-retransmits", Unit::Rate),
             "sum(irate(tcp_retransmit[5m]))".to_string(),
         );
 
@@ -64,12 +64,12 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         let bw = ena.subgroup("Bandwidth");
         bw.describe("Packets queued or dropped because the instance hit its bandwidth allowance.");
         bw.plot_promql(
-            PlotOpts::counter("Inbound", "ena-bw-rx", Unit::Rate),
+            Plot::counter("Inbound", "ena-bw-rx", Unit::Rate),
             "sum(irate(network_ena_bandwidth_allowance_exceeded{direction=\"receive\"}[5m]))"
                 .to_string(),
         );
         bw.plot_promql(
-            PlotOpts::counter("Outbound", "ena-bw-tx", Unit::Rate),
+            Plot::counter("Outbound", "ena-bw-tx", Unit::Rate),
             "sum(irate(network_ena_bandwidth_allowance_exceeded{direction=\"transmit\"}[5m]))"
                 .to_string(),
         );
@@ -101,7 +101,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         for (title, id, metric) in limits {
             if data.has_counter(metric) {
                 subgroup.plot_promql(
-                    PlotOpts::counter(title, id, Unit::Rate),
+                    Plot::counter(title, id, Unit::Rate),
                     format!("sum(irate({metric}[5m]))"),
                 );
             }
@@ -124,13 +124,13 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
         if throttled {
             events.plot_promql(
-                PlotOpts::counter("Throttle Events", "cgroup-throttle-events", Unit::Rate),
+                Plot::counter("Throttle Events", "cgroup-throttle-events", Unit::Rate),
                 "sum(irate(cgroup_cpu_throttled[5m]))".to_string(),
             );
         }
         if periods {
             events.plot_promql(
-                PlotOpts::counter("Throttled Periods", "cgroup-throttled-periods", Unit::Rate),
+                Plot::counter("Throttled Periods", "cgroup-throttled-periods", Unit::Rate),
                 "sum(irate(cgroup_cpu_bandwidth_throttled_periods[5m]))".to_string(),
             );
         }
@@ -146,19 +146,19 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
         if throttled_time {
             time.plot_promql(
-                PlotOpts::counter("Throttled Time", "cgroup-throttled-time", Unit::Percentage)
-                    .with_unit_system("percentage"),
+                Plot::counter("Throttled Time", "cgroup-throttled-time", Unit::Percentage)
+                    .with_unit_system(Unit::Percentage),
                 "sum(irate(cgroup_cpu_throttled_time[5m])) / 1000000000".to_string(),
             );
         }
         if bandwidth_time {
             time.plot_promql(
-                PlotOpts::counter(
+                Plot::counter(
                     "Bandwidth Throttled Time",
                     "cgroup-bw-throttled-time",
                     Unit::Percentage,
                 )
-                .with_unit_system("percentage"),
+                .with_unit_system(Unit::Percentage),
                 "sum(irate(cgroup_cpu_bandwidth_throttled_time[5m])) / 1000000000".to_string(),
             );
         }
@@ -181,7 +181,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         let errors = blockio.subgroup("Errors");
         errors.describe("Terminal block IO failures.");
         errors.plot_promql_full(
-            PlotOpts::counter("By Class", "blockio-err-by-class", Unit::Rate).with_description(
+            Plot::counter("By Class", "blockio-err-by-class", Unit::Rate).with_description(
                 "Fault mode: timeout-heavy = controller / transport hang; \
                      nospc = thin pool out of room; protection = data-integrity \
                      check failed.",
@@ -189,7 +189,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             "sum by (error) (irate(blockio_errors[5m]))".to_string(),
         );
         errors.plot_promql_full(
-            PlotOpts::counter("By Op", "blockio-err-by-op", Unit::Rate).with_description(
+            Plot::counter("By Op", "blockio-err-by-op", Unit::Rate).with_description(
                 "Fault source: a read-only spike points at the media; a \
                      write-only spike points at the controller / target.",
             ),
@@ -206,7 +206,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
              transport blip the kernel absorbed cleanly.",
         );
         requeues.plot_promql_full(
-            PlotOpts::counter("By Op", "blockio-requeue-by-op", Unit::Rate),
+            Plot::counter("By Op", "blockio-requeue-by-op", Unit::Rate),
             "sum by (op) (irate(blockio_requeues[5m]))".to_string(),
         );
     }

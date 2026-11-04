@@ -19,17 +19,17 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
              interfaces (container east-west, loopback).",
         );
         host.plot_promql(
-            PlotOpts::counter(
+            Plot::counter(
                 "Host Bandwidth Transmit",
                 "host-bandwidth-tx",
                 Unit::Bitrate,
             )
-            .with_unit_system("bitrate"),
+            .with_unit_system(Unit::Bitrate),
             "sum(irate(network_host_bytes{direction=\"transmit\"}[5m])) * 8".to_string(),
         );
         host.plot_promql(
-            PlotOpts::counter("Host Bandwidth Receive", "host-bandwidth-rx", Unit::Bitrate)
-                .with_unit_system("bitrate"),
+            Plot::counter("Host Bandwidth Receive", "host-bandwidth-rx", Unit::Bitrate)
+                .with_unit_system(Unit::Bitrate),
             "sum(irate(network_host_bytes{direction=\"receive\"}[5m])) * 8".to_string(),
         );
 
@@ -39,11 +39,11 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
              per interface it traverses.",
         );
         host_packets.plot_promql(
-            PlotOpts::counter("Host Packets Transmit", "host-packets-tx", Unit::Rate),
+            Plot::counter("Host Packets Transmit", "host-packets-tx", Unit::Rate),
             "sum(irate(network_host_packets{direction=\"transmit\"}[5m]))".to_string(),
         );
         host_packets.plot_promql(
-            PlotOpts::counter("Host Packets Receive", "host-packets-rx", Unit::Rate),
+            Plot::counter("Host Packets Receive", "host-packets-rx", Unit::Rate),
             "sum(irate(network_host_packets{direction=\"receive\"}[5m]))".to_string(),
         );
     }
@@ -57,13 +57,13 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
          reaches a NIC, which on a container or VM host can dominate.",
     );
     bandwidth.plot_promql(
-        PlotOpts::counter("Bandwidth Transmit", "bandwidth-tx", Unit::Bitrate)
-            .with_unit_system("bitrate"),
+        Plot::counter("Bandwidth Transmit", "bandwidth-tx", Unit::Bitrate)
+            .with_unit_system(Unit::Bitrate),
         "sum(irate(network_bytes{direction=\"transmit\"}[5m])) * 8".to_string(),
     );
     bandwidth.plot_promql(
-        PlotOpts::counter("Bandwidth Receive", "bandwidth-rx", Unit::Bitrate)
-            .with_unit_system("bitrate"),
+        Plot::counter("Bandwidth Receive", "bandwidth-rx", Unit::Bitrate)
+            .with_unit_system(Unit::Bitrate),
         "sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8".to_string(),
     );
 
@@ -73,11 +73,11 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
          interface bandwidth note above.",
     );
     packets.plot_promql(
-        PlotOpts::counter("Packets Transmit", "packets-tx", Unit::Rate),
+        Plot::counter("Packets Transmit", "packets-tx", Unit::Rate),
         "sum(irate(network_packets{direction=\"transmit\"}[5m]))".to_string(),
     );
     packets.plot_promql(
-        PlotOpts::counter("Packets Receive", "packets-rx", Unit::Rate),
+        Plot::counter("Packets Receive", "packets-rx", Unit::Rate),
         "sum(irate(network_packets{direction=\"receive\"}[5m]))".to_string(),
     );
 
@@ -98,13 +98,13 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
         if drops {
             health.plot_promql(
-                PlotOpts::counter("Packet Drops", "packet-drops", Unit::Rate),
+                Plot::counter("Packet Drops", "packet-drops", Unit::Rate),
                 "sum(irate(network_drop[5m]))".to_string(),
             );
         }
         if retransmits {
             health.plot_promql(
-                PlotOpts::counter("TCP Retransmits", "tcp-retransmits", Unit::Rate),
+                Plot::counter("TCP Retransmits", "tcp-retransmits", Unit::Rate),
                 "sum(irate(tcp_retransmit[5m]))".to_string(),
             );
         }
@@ -124,13 +124,13 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
              leaves out some segments and counts overlapping out-of-order bytes twice.",
         );
         traffic.plot_promql(
-            PlotOpts::counter("TCP Bandwidth Transmit", "tcp-bandwidth-tx", Unit::Bitrate)
-                .with_unit_system("bitrate"),
+            Plot::counter("TCP Bandwidth Transmit", "tcp-bandwidth-tx", Unit::Bitrate)
+                .with_unit_system(Unit::Bitrate),
             "sum(irate(tcp_bytes{direction=\"transmit\"}[5m])) * 8".to_string(),
         );
         traffic.plot_promql(
-            PlotOpts::counter("TCP Bandwidth Receive", "tcp-bandwidth-rx", Unit::Bitrate)
-                .with_unit_system("bitrate"),
+            Plot::counter("TCP Bandwidth Receive", "tcp-bandwidth-rx", Unit::Bitrate)
+                .with_unit_system(Unit::Bitrate),
             "sum(irate(tcp_bytes{direction=\"receive\"}[5m])) * 8".to_string(),
         );
     }
@@ -146,9 +146,9 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             Unit::Time,
         );
         latency.plot_promql_full(
-            PlotOpts::histogram_latency("TCP Packet Latency", "tcp-packet-latency")
+            Plot::histogram_latency("TCP Packet Latency", "tcp-packet-latency")
                 .with_axis_label("Latency")
-                .with_unit_system("time"),
+                .with_unit_system(Unit::Time),
             "tcp_packet_latency".to_string(),
         );
     }
@@ -167,14 +167,14 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             .is_empty()
         {
             connect.plot_promql_full(
-                PlotOpts::histogram_latency("Connect Latency", "tcp-connect-latency")
+                Plot::histogram_latency("Connect Latency", "tcp-connect-latency")
                     .with_axis_label("Latency")
-                    .with_unit_system("time"),
+                    .with_unit_system(Unit::Time),
                 "tcp_connect_latency".to_string(),
             );
         } else {
             connect.plot_promql(
-                PlotOpts::counter("Connects", "tcp-connects", Unit::Rate),
+                Plot::counter("Connects", "tcp-connects", Unit::Rate),
                 "sum by (outcome) (histogram_irate(tcp_connect_latency))".to_string(),
             );
             for (title, id, matcher) in [
@@ -195,9 +195,9 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 ),
             ] {
                 connect.plot_promql(
-                    PlotOpts::histogram_latency(title, id)
+                    Plot::histogram_latency(title, id)
                         .with_axis_label("Latency")
-                        .with_unit_system("time"),
+                        .with_unit_system(Unit::Time),
                     format!("tcp_connect_latency{{{matcher}}}"),
                 );
             }
@@ -438,7 +438,7 @@ fn tcp_mib(data: &dyn MetricsSource, tcp: &mut Group) {
         for c in present {
             if c.gauge {
                 subgroup.plot_promql(
-                    PlotOpts::gauge(c.title, c.id, Unit::Count),
+                    Plot::gauge(c.title, c.id, Unit::Count),
                     format!("sum({})", c.metric),
                 );
             } else {
@@ -446,7 +446,7 @@ fn tcp_mib(data: &dyn MetricsSource, tcp: &mut Group) {
                     Some(label) => format!("sum by ({label}) (irate({}[5m]))", c.metric),
                     None => format!("sum(irate({}[5m]))", c.metric),
                 };
-                subgroup.plot_promql(PlotOpts::counter(c.title, c.id, Unit::Rate), query);
+                subgroup.plot_promql(Plot::counter(c.title, c.id, Unit::Rate), query);
             }
         }
     }

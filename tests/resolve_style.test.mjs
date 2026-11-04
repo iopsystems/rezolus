@@ -7,7 +7,8 @@
 //
 // These pin the inference so a change aimed at one subsystem cannot quietly
 // reshape the others. A plot that wants a specific style declares it via
-// PlotOpts::style, which data.js honours ahead of this function.
+// opts.style (PlotBuilder::with_style in metriken-charts), which data.js
+// honours ahead of this function.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveStyle } from '../src/viewer/assets/lib/charts/metric_types.js';

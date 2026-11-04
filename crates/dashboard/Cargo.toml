@@ -10,6 +10,7 @@ publish = false
 build = "build.rs"
 
 [dependencies]
+metriken-charts.workspace = true
 metriken-query.workspace = true
 metriken-storage = { workspace = true, features = ["archive"] }
 serde = { workspace = true, features = ["derive"] }

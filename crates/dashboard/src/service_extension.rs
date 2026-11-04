@@ -343,6 +343,15 @@ impl Kpi {
     }
 }
 
+/// How a histogram KPI is drawn, from its `subtype`. A missing or unknown
+/// subtype is drawn as percentiles, as `resolveStyle` in the viewer's
+/// `metric_types.js` draws an unknown one.
+pub(crate) fn kpi_histogram_view(subtype: Option<&str>) -> crate::plot::HistogramView {
+    subtype
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(crate::plot::HistogramView::Percentiles)
+}
+
 /// `Err` naming the KPI when a `unit_system` is not a [`crate::plot::Unit`].
 fn check_unit_system(title: &str, unit_system: Option<&str>) -> Result<(), String> {
     match unit_system.map(str::parse::<crate::plot::Unit>) {
@@ -357,7 +366,10 @@ impl ServiceExtension {
     /// `recording annotate` and the template loader reject one rather than
     /// write or register it. A recording that already carries one renders
     /// that KPI with its default `count` scaling
-    /// ([`crate::plot::PlotOpts::maybe_unit_system`]).
+    /// ([`crate::plot::PlotBuilder::maybe_unit_system`]). That drop is
+    /// silent because it runs on every dashboard render, and the terminal UI
+    /// renders every tick; the viewer warns once when it loads the KPIs
+    /// (`source_templates::service_extensions_from_metadata`).
     pub fn check_unit_systems(&self) -> Result<(), String> {
         match self.unknown_unit_systems().into_iter().next() {
             Some(e) => Err(e),
@@ -822,6 +834,21 @@ fn insert_template_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kpi_histogram_view_falls_back_to_percentiles() {
+        use crate::plot::HistogramView::*;
+        for (subtype, view) in [
+            (None, Percentiles),
+            (Some("heat"), Percentiles),
+            (Some("Buckets"), Percentiles),
+            (Some("percentiles"), Percentiles),
+            (Some("buckets"), Buckets),
+            (Some("quantile_heatmap"), QuantileHeatmap),
+        ] {
+            assert_eq!(kpi_histogram_view(subtype), view, "{subtype:?}");
+        }
+    }
 
     #[test]
     fn check_unit_systems_refuses_an_unknown_system() {

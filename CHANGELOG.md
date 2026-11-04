@@ -459,6 +459,16 @@
 
 ### Changed
 
+- **The dashboard's plot specs are built with metriken-charts.** The
+  `dashboard` crate's `Plot`, `Unit` and plot options come from
+  `metriken_charts::plot` 0.1.0, and the section JSON the viewer receives
+  is unchanged apart from key order, except that a histogram KPI whose
+  `subtype` is not `percentiles`, `buckets` or `quantile_heatmap` now
+  carries `percentiles`. A section template's `style` is one of
+  `line`, `multi`, `heatmap`, `scatter`, `histogram_heatmap` and
+  `quantile_heatmap`, and another value is a parse error; before, the
+  template loaded and the chart failed to draw. `style` no longer takes
+  `${name}` substitution.
 - **`cpu_power` on macOS subscribes only to the channels it publishes.**
   It reads 33 of `Energy Model`'s 328 IOReport channels on an M4 Max, and a
   sample's CPU cost drops from about 3.6 ms to 3.2 ms. A subscription that
