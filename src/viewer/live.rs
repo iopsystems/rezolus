@@ -437,6 +437,24 @@ mod tests {
             Some(format!("rezolus {}", env!("CARGO_PKG_VERSION")))
         );
         assert_eq!(routes, embedded_routes());
+        // The recording of the agent's real stream names its producer, from
+        // the identity the handshake declares.
+        let metadata = state.baseline_data().file_metadata();
+        let identity = ::dashboard::identity::Identity::read(&metadata);
+        assert!(identity.layered, "{metadata:?}");
+        assert!(identity.is_rezolus(), "{identity:?}");
+        let sorted = metadata.into_iter().collect();
+        let layers = metriken_storage::layers::Layers::read(&sorted)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            layers
+                .producer
+                .metadata
+                .get("producer_name")
+                .map(String::as_str),
+            Some("rezolus")
+        );
         drop(state);
     }
 

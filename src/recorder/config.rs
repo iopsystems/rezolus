@@ -35,7 +35,7 @@ pub struct RecordingConfig {
     /// [`check_output`].
     pub output: PathBuf,
     pub metadata: Vec<(String, String)>,
-    /// Recording labels (`--label k=v`); `source`/`host` auto-added.
+    /// Recording labels (`--label k=v`); `host` and `endpoint` are added.
     pub labels: Vec<(String, String)>,
     pub endpoints: Vec<EndpointConfig>,
     /// When set, record only while this command runs (perf-record style).
@@ -207,18 +207,18 @@ impl RecordingConfig {
                     .map(|(k, v)| (k.to_string(), v.to_string()))
             })
             .collect();
-        // The recorder writes these from the producer's handshake and
-        // rewrites them on every restart; a user's value would be kept only
-        // until then, and would seed the restart history with an epoch no
-        // process had.
+        // A recording keeps its producer epochs as entries in its recorder
+        // layer; these keys belong to recordings written before
+        // metriken-recorder 0.7, and the layer function refuses them in any
+        // entry.
         if let Some((key, _)) = metadata.iter().find(|(k, _)| {
             k == crate::parquet_metadata::KEY_PRODUCER_EPOCH
                 || k == crate::parquet_metadata::KEY_PRODUCER_EPOCHS
         }) {
             return Err(format!(
-                "--metadata {key}=: {key} is written by the recorder from the producer's \
-                 stream handshake and rewritten when the producer restarts, so it cannot be \
-                 set; use another key"
+                "--metadata {key}=: a recording keeps its producer epochs as entries in its \
+                 recorder layer, and {key} is reserved for recordings written before \
+                 metriken-recorder 0.7, so it cannot be set; use another key"
             ));
         }
         let labels: Vec<(String, String)> = args
@@ -748,9 +748,9 @@ mod tests {
         );
     }
 
-    /// `producer_epoch` and `producer_epochs` are the recorder's: setting
-    /// either with `--metadata` is refused rather than kept until a restart
-    /// overwrites it.
+    /// `producer_epoch` and `producer_epochs` are reserved for recordings
+    /// written before metriken-recorder 0.7: setting either with `--metadata`
+    /// is refused.
     #[test]
     fn metadata_naming_the_producer_epoch_is_refused() {
         for key in ["producer_epoch", "producer_epochs"] {
@@ -758,7 +758,10 @@ mod tests {
             let err = parse(&["--url", "http://localhost:4241", "--metadata", &arg])
                 .err()
                 .unwrap_or_else(|| panic!("--metadata {arg} must be refused"));
-            assert!(err.contains("written by the recorder"), "{err}");
+            assert!(
+                err.contains("reserved for recordings written before"),
+                "{err}"
+            );
         }
         assert!(parse(&["--url", "http://localhost:4241", "--metadata", "epoch=x"]).is_ok());
     }
@@ -825,7 +828,7 @@ mod tests {
     #[test]
     fn test_parse_endpoint_str_url_only() {
         let ep = parse_endpoint_str("http://localhost:9090/metrics").unwrap();
-        assert!(ep.source.is_none()); // probe resolves it
+        assert!(ep.source.is_none()); // the recording has none unless its producer gives one
         assert!(ep.role.is_none());
     }
 

@@ -513,7 +513,7 @@ pub fn format_recording_info(file_path: &str, data: &dyn MetricsSource) -> Strin
          End Time: {} (epoch: {:.0}){}",
         file_path,
         version,
-        data.source(),
+        ::dashboard::identity::display_source(data),
         duration_str,
         duration_seconds,
         start_datetime,
@@ -1869,8 +1869,8 @@ pub(crate) mod tests {
             .enumerate()
             .map(|(i, labels)| ::rez::fixtures::Source {
                 labels: labels.clone(),
-                // Mirrors what `record` puts in each recording's metadata:
-                // the same `source` as in the labels. Tests identify which
+                // A `source` metadata key equal to the label, as a recorder
+                // before metriken-recorder 0.6 wrote it. Tests identify which
                 // arm came back by reading it, so a helper that left it
                 // empty would make that check vacuous.
                 metadata: labels

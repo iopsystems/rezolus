@@ -166,13 +166,13 @@ may not want in a file you share.
 
 ### Tagging a recording
 
-`-m/--metadata k=v` writes metadata on every recording in the archive. A key
-set this way outranks the value the producer reports, including a Prometheus
-endpoint's HELP text as `descriptions`, and is kept when an agent restarts.
-`producer_epoch` and `producer_epochs` are written by the recorder and are
-refused (exit 2).
-`-l/--label k=v` tags the recordings inside the archive (`source` and `host` are
-filled in for you), every recording of the run alike:
+`-m/--metadata k=v` writes metadata on every recording in the archive. A
+metadata key set this way outranks the value the producer reports, including
+a Prometheus endpoint's HELP text as `descriptions`, and is kept when an agent
+restarts. `producer_epoch`, `producer_epochs`, keys under `metriken.`,
+`encoder` and `writer_sessions` are refused (exit 2).
+`-l/--label k=v` tags the recordings inside the archive (`host` and `endpoint`
+are added for you), every recording of the run alike:
 
 ```bash
 rezolus record --url http://localhost:4241 -o out.dendro --label run=42
@@ -194,26 +194,32 @@ as a single capture.
 run it cannot tell two endpoints apart — see below. An endpoint's `role=`
 modifier is kept as the `role` key of that endpoint's recording metadata.
 
-A recording's `source` is the first of: `source=` on its `--endpoint` (or
-`--metadata source=` with `--url`); the `source` label in its stream
-handshake; `rezolus` for a Rezolus agent; a name made from the URL's host,
-port and path, with a warning. The rest of its labels are `--label`, over
-`host` from a Rezolus agent's `/systeminfo`, over the handshake's labels. Its
-metadata is its `--endpoint`'s `role=` and `template=` (as `role` and
-`service_queries`), over `--metadata`, over the keys the recorder writes
-(`sampling_interval_ms`, `producer_epoch`), over a Rezolus agent's `version`,
-`systeminfo` and `descriptions`, over the handshake's metadata; a
-per-endpoint key beats the run-wide `--metadata`. A
-producer that names itself and its version in its handshake is therefore
-recorded under that name, with that version, and needs no `source=`:
+A recording's labels are the user's (`--label`, and `source=`, `arm=` and
+`host=` on its `--endpoint`; with `--url`, `--metadata source=` too), over
+the labels in its producer's stream handshake, over what the recorder
+observed: `endpoint`, the URL it recorded from, and `host` from a Rezolus
+agent's `/systeminfo`. A recording has a `source` label only when the user or
+its producer gives one; the recorder infers none, and warns about an endpoint
+that ends up without one. A producer that declares its identity in its
+handshake (a Rezolus agent does) also gives the recording `host` and
+`__producer__`, which the viewer reads to show the built-in sections or find
+a KPI template. Its metadata is its `--endpoint`'s `role=` and `template=` (as
+`role` and `service_queries`), over `--metadata`, over the handshake's
+metadata, over what the recorder observed (`sampling_interval_ms`,
+`transport`, and a Rezolus agent's `version`, `systeminfo` and
+`descriptions`); a per-endpoint key beats the run-wide `--metadata`. Each
+recording keeps these as identity layers, which `recording metadata` and the
+viewer's information panel read; the producer's epochs are entries in its
+recorder layer. A producer that sends its `source` and version in its
+handshake is therefore recorded under that name, with that version:
 
 ```bash
 rezolus record --url http://loadgen:9090 -o run.dendro   # source and version from its handshake
 ```
 
 When a Rezolus agent's metadata routes do not answer within the timeout, its
-recording is added with its handshake's labels and metadata only (no `host`
-label), and a warning says so.
+recording is added without what they give (`systeminfo`, `descriptions`, and
+the `host` from `/systeminfo`), and a warning says so.
 
 ### KPI templates
 
@@ -292,12 +298,12 @@ recording's overview.
 Concurrent captures share the same time period; captures taken sequentially
 can also differ in background load, not just the experimental change.
 
-Each recording is identified by its label set. For a Rezolus endpoint, `host`
-is filled in from the
-agent's system info and `source` from the endpoint's `source=` modifier, so two
-agents on *different* hosts are already distinguishable. Two on the **same**
-host are not — and `--label` cannot separate them, because it applies to every
-recording alike. Give each endpoint its own `source=`:
+Each recording is identified by its label set. Every recording carries the
+`endpoint` it was recorded from, and a Rezolus agent's carries its `host`, so
+two endpoints of one run are already distinguishable; `--label` applies to
+every recording alike and cannot name one. `source=` on each endpoint names
+it (see the CHANGELOG for an older cachecannon or llm-perf, whose KPIs need
+the `source` it declares):
 
 ```bash
 rezolus record \

@@ -139,6 +139,20 @@ impl Identity {
     }
 }
 
+/// The source name to show for `data`: its `source` metadata key, which a
+/// recording made before identity layers carries, else its identity's
+/// [`Identity::name`], else empty.
+pub fn display_source(data: &dyn crate::MetricsSource) -> String {
+    let source = data.source();
+    if !source.is_empty() {
+        return source;
+    }
+    Identity::read(&data.file_metadata())
+        .name()
+        .unwrap_or_default()
+        .to_string()
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -183,6 +197,25 @@ pub(crate) mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    /// The name shown for a recording: its `source` key, else its identity's
+    /// name (here its `alias`), else empty.
+    #[test]
+    fn a_recording_is_shown_by_its_source_else_its_identity() {
+        let named = metriken_query::MemoryStore::builder()
+            .source("redis")
+            .build();
+        assert_eq!(display_source(&named), "redis");
+
+        let layered_store = metriken_query::MemoryStore::builder().build();
+        for (k, v) in layered(&[(Layer::User, &[("alias", "cache-a")], &[])]) {
+            layered_store.set_metadata(k, v);
+        }
+        assert_eq!(display_source(&layered_store), "cache-a");
+
+        let bare = metriken_query::MemoryStore::builder().build();
+        assert_eq!(display_source(&bare), "");
     }
 
     /// Without layers, the `source` key is the identity, a combined file's

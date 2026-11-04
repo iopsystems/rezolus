@@ -1141,7 +1141,7 @@ dependencies = [
  "metriken-charts",
  "metriken-exposition",
  "metriken-query",
- "metriken-storage 0.6.0",
+ "metriken-storage",
  "serde",
  "serde_json",
  "tempfile",
@@ -1647,12 +1647,23 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "histogram"
-version = "1.6.0"
+version = "1.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d2c4b52471a0871a0899332ff0028b3fb0f217a3232fe3fd61b1ba6930607d9"
+checksum = "f91d403226c8d40a2aa7d6ab8518dda3cc10e5a0327a695a21b3196c8cc06883"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "hostname"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "617aaa3557aef3810a6369d0a99fac8a080891b68bd9f9812a1eeda0c0730cbd"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "windows-link",
 ]
 
 [[package]]
@@ -2526,9 +2537,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-exposition"
-version = "0.25.0"
+version = "0.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5658fa2df4b15e35d44a0b77974c56d8fc86c2662c8228014539d2b912ac82a5"
+checksum = "d51e7cb89cb0140baa5bc76df6b5e4e33d5fd6696d3614ab34cd583678900aea"
 dependencies = [
  "bytes",
  "chrono",
@@ -2537,6 +2548,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "histogram",
+ "hostname",
  "humantime",
  "metriken",
  "metriken-model",
@@ -2571,7 +2583,7 @@ dependencies = [
  "foldhash",
  "histogram",
  "metriken-model",
- "metriken-storage 0.6.0",
+ "metriken-storage",
  "parquet",
  "promql-parser",
  "serde",
@@ -2583,9 +2595,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-recorder"
-version = "0.5.1"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0db41cfadb93210a6cc3d39791901a18853d56864e0a8cb77f51358f8577b886"
+checksum = "fb7cbc3e1ef0653a8ed3d8979135c02868bcf740beceb592d7c6fd97eff7e6a7"
 dependencies = [
  "async-trait",
  "dendro",
@@ -2593,7 +2605,7 @@ dependencies = [
  "histogram",
  "humantime",
  "metriken-model",
- "metriken-storage 0.5.4",
+ "metriken-storage",
  "metriken-types",
  "reqwest",
  "serde_json",
@@ -2601,29 +2613,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
-]
-
-[[package]]
-name = "metriken-storage"
-version = "0.5.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c04c768da4739346ed5dc2a9df730012d241579540bc28603da7487521ff44d"
-dependencies = [
- "arrow",
- "bytes",
- "dendro",
- "foldhash",
- "histogram",
- "lru",
- "metriken-model",
- "metriken-types",
- "parquet",
- "rmp",
- "rmp-serde",
- "serde",
- "serde_json",
- "tracing",
- "twox-hash",
 ]
 
 [[package]]
@@ -3548,7 +3537,7 @@ dependencies = [
  "dashboard",
  "dendro",
  "metriken-query",
- "metriken-storage 0.6.0",
+ "metriken-storage",
  "parquet",
  "rez",
  "serde",
@@ -3603,7 +3592,7 @@ dependencies = [
  "metriken",
  "metriken-exposition",
  "metriken-query",
- "metriken-storage 0.6.0",
+ "metriken-storage",
  "parquet",
  "rusqlite",
  "serde",
@@ -3615,7 +3604,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "6.0.0-alpha.118"
+version = "6.0.0-alpha.119"
 dependencies = [
  "allan",
  "anyhow",
@@ -3653,7 +3642,7 @@ dependencies = [
  "metriken-exposition",
  "metriken-query",
  "metriken-recorder",
- "metriken-storage 0.6.0",
+ "metriken-storage",
  "notify",
  "nvml-wrapper",
  "open",
@@ -4929,7 +4918,7 @@ dependencies = [
  "console_error_panic_hook",
  "dashboard",
  "metriken-query",
- "metriken-storage 0.6.0",
+ "metriken-storage",
  "report-save",
  "rez",
  "serde",

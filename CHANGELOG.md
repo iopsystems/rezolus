@@ -459,6 +459,35 @@
 
 ### Changed
 
+- **`record`, hindsight and the live viewer record with metriken-recorder
+  0.7.** Each recording carries its identity layers (metriken-storage
+  `layers`), and its labels are their merged result:
+  - the URL it was recorded from is the label `endpoint`;
+  - the recorder infers no `source` from the URL: a recording has a
+    `source` label only when the endpoint was given one
+    (`--endpoint URL,source=NAME`) or its producer declares one, and a
+    `source` metadata key only when `--metadata source=` gave one or its
+    producer's handshake metadata carries one;
+  - a Rezolus agent's recording carries `__producer__=rezolus`, from the
+    producer identity its stream handshake now declares
+    (`metriken.producer.*`: name, version and hostname) and from the probe
+    hook, which reports `producer_name=rezolus` and
+    `producer_component=agent` in place of a `source=rezolus` label;
+  - the producer epochs are the recorder layer's entries, in place of the
+    flat `producer_epoch` and `producer_epochs` keys.
+
+  `record`'s warning for an endpoint given no `source` now says that its
+  recording has none. The viewer's section header, a saved selection and
+  MCP `describe-recording` show a recording without a `source` key by its
+  `alias`, `source` label or producer. `record --help`, `docs/usage.md` and
+  `docs/parquet_metadata.md` describe the new precedence.
+
+  Known gap until `--endpoint` takes `alias=`: a KPI template that selects
+  its producer's `source` (cachecannon through v0.0.34, llm-perf through
+  v0.1.21) shows empty KPIs for an endpoint given another `source=`, since a
+  recording with layers is not read as a legacy one. Leave `source=` unset
+  on such an endpoint; its recording is told apart by its `endpoint` label.
+
 - **The viewer serves its chart modules from metriken-charts.** `/lib/charts/`
   and `/lib/charts.css` are the metriken-charts crate's `assets/charts/` and
   `assets/charts.css`, at the version `Cargo.lock` names, and rezolus no

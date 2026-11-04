@@ -38,10 +38,9 @@ where
 pub struct EndpointConfig {
     #[serde(deserialize_with = "deserialize_url")]
     pub url: Url,
-    /// The user's `source`. When `None`, the recording's `source` is resolved
-    /// on activation: the stream handshake's, `rezolus` for a recognised
-    /// agent, or a name inferred from the URL (`metriken-recorder`'s source
-    /// identity).
+    /// The user's `source`, a label on the endpoint's recording. When `None`
+    /// the recording has a `source` only when `--label source=` or its
+    /// producer's handshake gives one; the recorder infers none.
     #[serde(default)]
     pub source: Option<String>,
     #[serde(default)]

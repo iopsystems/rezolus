@@ -13,7 +13,13 @@ use reqwest::{Client, Url};
 
 use super::RELEASE_5X;
 use crate::parquet_metadata::{KEY_DESCRIPTIONS, KEY_SYSTEMINFO, KEY_VERSION};
+use ::dashboard::identity::REZOLUS;
 use metriken_recorder::{At, Enrich, Probe, StreamAnswer, Verdict};
+use metriken_storage::layers::PRODUCER_NAME;
+
+/// The recorder-layer metadata key naming which of a producer's programs
+/// answered (`agent`, `exporter`), beside `producer_name`.
+const PRODUCER_COMPONENT: &str = "producer_component";
 
 /// The first Rezolus release whose agent serves `/metrics/stream`.
 pub(crate) const STREAM_SINCE: &str = "5.21.0";
@@ -161,9 +167,12 @@ impl Probe for RezolusProbe {
         }
     }
 
-    /// For a recognised agent: `source=rezolus` and `host` (from
-    /// `/systeminfo`'s hostname); metadata `version`, and `systeminfo` and
-    /// `descriptions` where the agent served them as JSON objects. Nothing
+    /// For a recognised agent: `host` (from `/systeminfo`'s hostname);
+    /// metadata `producer_name` (`rezolus`), `producer_component` (`agent`)
+    /// and `version`, and `systeminfo` and `descriptions` where the agent
+    /// served them as JSON objects. The recorder gives the recording
+    /// `__producer__` from `producer_name`, so an agent whose handshake
+    /// declares no producer identity is still read as the agent's. Nothing
     /// for an endpoint that `/status` or `/` answered without naming an
     /// agent. `Retry` when neither `/status` nor `/` answered, whatever the
     /// other routes did: whether their bodies are an agent's is not known.
@@ -188,7 +197,8 @@ impl Probe for RezolusProbe {
             }
             Identified::Unanswered => return Enrich::Retry,
         };
-        labels.insert("source".to_string(), "rezolus".to_string());
+        metadata.insert(PRODUCER_NAME.to_string(), REZOLUS.to_string());
+        metadata.insert(PRODUCER_COMPONENT.to_string(), "agent".to_string());
         if let Some(version) = version {
             metadata.insert(KEY_VERSION.to_string(), version);
         }
@@ -688,8 +698,9 @@ mod tests {
         }
     }
 
-    /// A current agent's `enrich`: `source=rezolus`, `host` from its
-    /// systeminfo, and its version, and a reply about another process is
+    /// A current agent's `enrich`: `producer_name=rezolus` and
+    /// `producer_component=agent`, `host` from its systeminfo, and its
+    /// version, and no `source` label; a reply about another process is
     /// discarded.
     #[tokio::test]
     async fn an_agents_enrich_names_it_and_its_host() {
@@ -699,7 +710,9 @@ mod tests {
             detect::enrich_within(&probe, &url, Some("epoch-1"), Duration::from_secs(2))
                 .await
                 .unwrap();
-        assert_eq!(labels["source"], "rezolus");
+        assert!(!labels.contains_key("source"), "{labels:?}");
+        assert_eq!(metadata[PRODUCER_NAME], "rezolus");
+        assert_eq!(metadata[PRODUCER_COMPONENT], "agent");
         assert_eq!(labels["host"], "web-01");
         assert_eq!(metadata[KEY_VERSION], "6.0.0");
         assert!(
@@ -780,7 +793,7 @@ mod tests {
         let (labels, metadata) = detect::enrich_within(&probe, &url, None, Duration::from_secs(2))
             .await
             .expect("the agent answered");
-        assert_eq!(labels.get("source").map(String::as_str), Some("rezolus"));
+        assert_eq!(metadata[PRODUCER_NAME], "rezolus");
         assert!(!labels.contains_key("host"), "{labels:?}");
         assert!(!metadata.contains_key(KEY_SYSTEMINFO), "{metadata:?}");
         assert!(!metadata.contains_key(KEY_DESCRIPTIONS), "{metadata:?}");

@@ -116,22 +116,24 @@ pub fn command() -> Command {
              #   url = \"http://svc:9090/metrics\"\n    \
              #   source = \"svc\"           # optional, as are role =, protocol = and template =\n\n\
              TAGGING: -m/--metadata k=v writes metadata on every recording in the archive.\n\
-             -l/--label k=v tags the recordings inside the archive; source and host are\n\
-             auto-populated. Recordings that carry an `arm` label (--endpoint url,arm=NAME)\n\
+             -l/--label k=v tags the recordings inside the archive; host and endpoint are\n\
+             added for you. Recordings that carry an `arm` label (--endpoint url,arm=NAME)\n\
              open in the viewer as an A/B comparison, aliased by those labels, with the\n\
              recordings without one shown beside it in their own sections; an archive without\n\
              arms opens as one combined view.\n\n\
-             A recording\'s source is, first found: source= on its --endpoint (or\n\
-             --metadata source= with --url), the source label in its stream handshake,\n\
-             rezolus for a Rezolus agent, or a name made from the URL\'s host, port and\n\
-             path (with a warning). Its other labels are the user\'s --label, over host from\n\
-             a Rezolus agent\'s /systeminfo, over the handshake\'s labels. Its metadata is\n\
-             its --endpoint\'s role= and template= (as role and service_queries), over the\n\
-             user\'s --metadata, over the keys the recorder writes (sampling_interval_ms,\n\
-             producer_epoch), over a Rezolus agent\'s version, systeminfo and\n\
-             descriptions, over the handshake\'s metadata: a per-endpoint key beats the\n\
-             run-wide --metadata. So a producer that names itself\n\
-             and its version in its handshake is recorded under that name with no source=.\n\n\
+             A recording\'s labels are the user\'s (--label, and source=, arm= and host=\n\
+             on its --endpoint; with --url, --metadata source= too), over the labels in\n\
+             its producer\'s stream handshake, over what the recorder observed: endpoint\n\
+             (the URL it recorded from), and host from a Rezolus agent\'s /systeminfo. It\n\
+             has a source label only when the user or its producer gives one; the recorder\n\
+             infers none. A producer that declares its identity in its handshake (a Rezolus\n\
+             agent does) also gives it host and __producer__, which the viewer reads to\n\
+             show the built-in sections or find a KPI template. Its metadata is its\n\
+             --endpoint\'s role= and template= (as role and service_queries), over the\n\
+             user\'s --metadata, over the handshake\'s metadata, over what the recorder\n\
+             observed (sampling_interval_ms, transport, and a Rezolus agent\'s version,\n\
+             systeminfo and descriptions): a per-endpoint key beats the run-wide\n\
+             --metadata.\n\n\
              KPI TEMPLATES: the viewer shows a service\'s KPI section from the template\n\
              in its recording\'s metadata (service_queries). A producer that sends one in\n\
              its stream handshake needs nothing here. For a scraped endpoint,\n\
@@ -152,11 +154,10 @@ pub fn command() -> Command {
              --label applies to EVERY recording the run produces, so it names the run, not\n\
              one endpoint in it: --label arm=redis is how you tag a whole single-endpoint\n\
              capture as one arm, to be compared against another run. Within ONE invocation,\n\
-             what distinguishes the recordings is source= on each --endpoint (plus host,\n\
-             taken from each agent\'s system info) — so two agents on different hosts are\n\
-             already distinct, while two on the same host need a source= each. Recordings\n\
-             that end up with identical labels are warned about at startup: nothing\n\
-             downstream can tell them apart.\n\n\
+             each recording carries the endpoint it was recorded from, so two endpoints are\n\
+             already distinct; source= on each --endpoint names them. Recordings that end\n\
+             up with identical labels are warned about at startup: nothing downstream can\n\
+             tell them apart.\n\n\
              To label a recording for a multi-node or multi-instance `rezolus recording\n\
              combine`, set the metadata keys it reads: --metadata node=web-01 and\n\
              --metadata instance=0. (`record --node` / `--instance` were removed: they were\n\
@@ -286,14 +287,14 @@ pub fn command() -> Command {
             clap::Arg::new("METADATA")
                 .long("metadata")
                 .short('m')
-                .help("Add a metadata tag as key=value (e.g. source=llm-perf) to every recording in the archive; it outranks the value the producer reports and is kept through a restart; producer_epoch and producer_epochs are the recorder's and are refused; repeat for multiple tags")
+                .help("Add a metadata tag as key=value (e.g. source=llm-perf) to every recording in the archive; it outranks the value the producer reports and is kept through a restart; producer_epoch, producer_epochs, keys under metriken., encoder and writer_sessions are refused; repeat for multiple tags")
                 .action(clap::ArgAction::Append),
         )
         .arg(
             clap::Arg::new("LABEL")
                 .long("label")
                 .short('l')
-                .help("Tag the recording with a label as key=value (e.g. run=42, role=server); repeat for multiple. A value without `=` is ignored. `source` and `host` are auto-populated. Applies to EVERY recording in the run, so it cannot tell two endpoints apart — use --endpoint url,source=name for that, and --endpoint url,arm=name for the arms of an A/B")
+                .help("Tag the recording with a label as key=value (e.g. run=42, role=server); repeat for multiple. A value without `=` is ignored. `host` and `endpoint` are added for you. Applies to EVERY recording in the run, so it cannot tell two endpoints apart — use --endpoint url,source=name for that, and --endpoint url,arm=name for the arms of an A/B")
                 .action(clap::ArgAction::Append),
         )
         .arg(
@@ -643,8 +644,9 @@ impl Watch {
                 let i = source.0 as usize;
                 if inferred {
                     eprintln!(
-                        "warn: no source name specified for {}, using \"{name}\" \
-                         (pass --endpoint URL,source=NAME or --metadata source=NAME to override)",
+                        "warn: {} was given no source and its producer declares none, so its \
+                         recording has no `source` label (pass --endpoint URL,source=NAME to \
+                         name it; this run's messages call it \"{name}\")",
                         self.urls.get(i).map(String::as_str).unwrap_or("?")
                     );
                 }
@@ -664,7 +666,7 @@ impl Watch {
                 source, version, ..
             } => info!(
                 "{}: the recording's metadata now records the agent restart \
-                 (producer_epochs; version {})",
+                 (an epoch entry in its recorder layer; version {})",
                 self.label(source),
                 version.as_deref().unwrap_or("not reported")
             ),

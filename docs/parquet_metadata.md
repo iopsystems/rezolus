@@ -139,10 +139,14 @@ Identifies the recording's source(s).
 - Combined file: a JSON array of source names, e.g. `["rezolus","vllm"]`
   (deduplicated and sorted).
 
-**Set at record time:** Inferred automatically from the endpoint type; can
-also be overridden via `--metadata source=<name>`. For non-rezolus endpoints
-the source is what you tell it (or what's inferred from labels); the viewer
-picks a built-in KPI template by it.
+**Set at record time** in a parquet written by a 5.x recorder, inferred from
+the endpoint type unless `--metadata source=<name>` gave it; the viewer picks
+a built-in KPI template by it. In a `.dendro` written by 6.x `record` the
+`source` is a label, given by `source=` on `--endpoint` (or `--metadata
+source=` with `--url`) or by the producer's handshake, and the recorder
+infers none; the recording has a `source` metadata key only when
+`--metadata source=` gave one or its producer's handshake metadata carries
+one.
 
 **Not set after recording in 6.x.** A 5.x `recording annotate --source NAME`
 (`--overwrite` to replace one) rewrote this key. In a `.dendro` the source is
@@ -170,14 +174,21 @@ numbers?") is about the agent. The recorder reads it from the agent's `/status`
 endpoint, falling back to the `Rezolus <version> Agent` banner on `/` for
 agents older than `/status` (5.16.0). `record --metadata version=...`
 overrides it. When the agent restarts mid-recording, an archive's `version`
-becomes the new process's (see [`producer_epochs`](#producer_epochs)), unless
-it was set with `--metadata`.
+becomes the new process's (the restart's epoch entry in the recorder layer
+carries it; see [`producer_epoch`](#producer_epoch)), unless it was set with
+`--metadata`.
 
 **Absent, rather than empty, when there is nothing to record**: a Prometheus
 source has no agent, and recorders that predate the capture wrote no version
 at all. `mcp describe-recording` renders those as `unknown`.
 
 ### `producer_epoch`
+
+Written by recorders before rezolus 6.0.0-alpha.119 (metriken-recorder 0.5),
+and read from archives they wrote. A recording made since keeps each producer
+epoch as an entry in its recorder layer (`metriken.layer.recorder`), with its
+`from_ts` and the `version` the process reported, in place of this key and
+[`producer_epochs`](#producer_epochs).
 
 An opaque id — a v4 UUID — minted once per agent **process**. It changes when,
 and only when, every cumulative counter in the recording restarted from zero
@@ -208,17 +219,20 @@ restart boundary nobody observed).
 Name and semantics follow dendro's `keys::PRODUCER_EPOCH`, so an archive written
 here reads the same to any consumer of that format.
 
-**When the agent restarts mid-recording**, an archive (`.dendro` or `.rez`,
-written by `record` or by `hindsight`) is amended once the first row from the
-new process is staged: `producer_epoch` becomes the new epoch,
-[`producer_epochs`](#producer_epochs) gains an entry, and `version`,
-`systeminfo` and `descriptions` are read again from the new process. A parquet
+**When the agent restarted mid-recording**, an archive (`.dendro` or `.rez`,
+written by `record` or by `hindsight`) was amended by such a recorder once
+the first row from the new process was staged: `producer_epoch` became the new
+epoch, [`producer_epochs`](#producer_epochs) gained an entry, and `version`,
+`systeminfo` and `descriptions` were read again from the new process. A parquet
 recording writes its metadata once, when it closes: `producer_epoch` is the
 last epoch seen, `version`, `systeminfo` and `descriptions` are what the agent
 reported when the recording opened, and there is no history; the recorder's
 warning naming both epochs is the record of the restart.
 
 ### `producer_epochs`
+
+Written by recorders before rezolus 6.0.0-alpha.119, as
+[`producer_epoch`](#producer_epoch) is.
 
 Every producer epoch an archive observed, in order, as a JSON array:
 
