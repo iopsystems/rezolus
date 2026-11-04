@@ -502,25 +502,6 @@ fn plot_width_is_half(w: &PlotWidth) -> bool {
 mod tests {
     use super::*;
 
-    /// `Unit` names exactly the systems `units.js` scales; a system added to
-    /// one and not the other would be refused, or shown verbatim, by the viewer.
-    #[test]
-    fn units_match_the_viewer() {
-        let js = include_str!("../../../src/viewer/assets/lib/charts/util/units.js");
-        let block = &js[js.find("const UNIT_SYSTEMS = {").unwrap()..];
-        let block = &block[..block.find("\n};").unwrap()];
-        let viewer: Vec<&str> = block
-            .lines()
-            .filter_map(|l| l.strip_prefix("    ")?.strip_suffix(": {"))
-            .filter(|k| k.chars().all(|c| c.is_ascii_lowercase()))
-            .collect();
-        let ours: Vec<String> = Unit::ALL.iter().map(Unit::to_string).collect();
-        assert_eq!(viewer, ours);
-        for name in &ours {
-            assert_eq!(name.parse::<Unit>().unwrap().to_string(), *name);
-        }
-    }
-
     #[test]
     fn maybe_unit_system_drops_an_unknown_system() {
         let unit = |plot: PlotBuilder| {

@@ -1,1 +1,0 @@
-../../../../../src/viewer/assets/lib/charts/util/heatmap_data.js

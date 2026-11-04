@@ -3649,6 +3649,7 @@ dependencies = [
  "linkme",
  "memmap2",
  "metriken",
+ "metriken-charts",
  "metriken-exposition",
  "metriken-query",
  "metriken-recorder",

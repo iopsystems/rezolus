@@ -1,6 +1,7 @@
 //! Value formatting for TUI chart axes. Mirrors the web viewer's
-//! `assets/lib/charts/util/units.js` so the terminal shows the same scaled
-//! units (e.g. `100.5%`, `503.32ms`, `9.29GB`, `10.34Gbps`, `47.9K/s`).
+//! `assets/charts/util/units.js` (in metriken-charts) so the terminal shows
+//! the same scaled units (e.g. `100.5%`, `503.32ms`, `9.29GB`, `10.34Gbps`,
+//! `47.9K/s`).
 //!
 //! Each entry is `(threshold, suffix, divisor, multiplier)`: pick the
 //! largest scale whose `threshold` the absolute value reaches, then render

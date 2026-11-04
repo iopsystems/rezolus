@@ -64,8 +64,8 @@ before pushing a viewer change: `bash scripts/check-viewer-symlinks.sh`.
 
 3. **Check** whether the expected symlink exists and points to the correct
    target. Compute the relative path from the symlink location back to the
-   source file (e.g., `../../../src/viewer/assets/lib/charts/chart.js` for a
-   file in `site/viewer/lib/charts/`).
+   source file (e.g., `../../../src/viewer/assets/lib/ui/controls.js` for a
+   file in `site/viewer/lib/ui/`).
 
 4. **Create** any missing symlinks. Create parent directories if needed.
    Report each symlink created.

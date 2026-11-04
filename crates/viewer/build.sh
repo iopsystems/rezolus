@@ -40,6 +40,23 @@ done
     printf ']\n'
 ) > "$MANIFEST_PATH"
 
+# The chart modules and charts.css come from the metriken-charts crate, which
+# the native viewer serves from its embedded copy. Copy the crate's assets
+# into site/viewer/lib/ (ignored by git) at the version Cargo.lock names, so
+# the static site and the release bundle serve the same files.
+CHARTS_MANIFEST=$(cargo metadata --format-version 1 --locked --manifest-path "$SCRIPT_DIR/../../Cargo.toml" \
+    | grep -oE '"manifest_path":"[^"]*/metriken-charts(-[0-9][^"/]*)?/Cargo.toml"' \
+    | head -n 1 | sed -E 's/^"manifest_path":"(.*)"$/\1/')
+if [ -z "$CHARTS_MANIFEST" ]; then
+    echo "build.sh: cargo metadata lists no metriken-charts package" >&2
+    exit 1
+fi
+CHARTS_ASSETS="$(dirname "$CHARTS_MANIFEST")/assets"
+SITE_LIB="$SCRIPT_DIR/../../site/viewer/lib"
+rm -rf "$SITE_LIB/charts" "$SITE_LIB/charts.css"
+cp -R "$CHARTS_ASSETS/charts" "$SITE_LIB/charts"
+cp "$CHARTS_ASSETS/charts.css" "$SITE_LIB/charts.css"
+
 # On macOS, Apple's system clang can't target wasm32 — use Homebrew's LLVM
 # for compiling zstd to wasm32. Resolve the prefix via brew so this works on
 # both Apple Silicon (/opt/homebrew) and Intel (/usr/local).

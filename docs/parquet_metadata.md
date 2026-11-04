@@ -272,7 +272,7 @@ interval, since a real target can't be slower than the cadence you actually
 achieve. A declared value well above the average (more than 2×) is treated as a
 bogus default and the baseline falls back to the average of the real intervals.
 Same fallback when the field is absent. See `nominalMsFor` in
-`src/viewer/assets/lib/charts/jitter.js`.
+metriken-charts' `assets/charts/jitter.js`.
 
 **Raw vs. grid-snapped timestamps.** Jitter is only observable on the raw
 `timestamp` column. The viewer's charts are evaluated on a step grid
