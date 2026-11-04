@@ -469,6 +469,22 @@
   `quantile_heatmap`, and another value is a parse error; before, the
   template loaded and the chart failed to draw. `style` no longer takes
   `${name}` substitution.
+- **A KPI template names its producer and `service_kind`.** A template
+  can declare `producer` (the program whose recordings it reads;
+  `service_name` when absent) and `service_kind` (the role it is for).
+  The built-in `vllm-prefill`, `vllm-decode`, `sglang-prefill` and
+  `sglang-decode` templates declare `vllm` or `sglang` and their role. A
+  recording's own template that declares no producer takes the producer of
+  the registry template its `source` names. A category's `members` can name
+  producers as well as registry templates and aliases, so `view --category
+  inference-library` now accepts a `vllm-prefill` or `sglang-decode`
+  capture as the `vllm` or `sglang` member, which it refused before; a
+  capture matches a member naming its source or template before one naming
+  its producer, and `member_titles` is keyed by the member matched.
+  `--category` now also refuses at startup, and the viewer does not
+  activate the category after an attach or detach, when a capture has
+  other than one service template; before, it activated and then showed one
+  section per template, or paired two templates of one capture.
 - **`cpu_power` on macOS subscribes only to the channels it publishes.**
   It reads 33 of `Energy Model`'s 328 IOReport channels on an M4 Max, and a
   sample's CPU cost drops from about 3.6 ms to 3.2 ms. A subscription that

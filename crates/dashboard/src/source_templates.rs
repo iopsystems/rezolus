@@ -190,6 +190,20 @@ pub fn resolve_source_templates(
         out.service_exts.push((source.to_string(), ext.clone()));
     }
 
+    // A template that declares no producer takes the producer and
+    // `service_kind` of the registry entry its source names, so a
+    // `vllm-prefill` recording's own template is a `vllm` template.
+    for (source, ext) in &mut out.service_exts {
+        if ext.producer.is_none()
+            && let Some(entry) = registry.get(source)
+        {
+            ext.producer = Some(entry.producer().to_string());
+            if ext.service_kind.is_none() {
+                ext.service_kind = entry.service_kind.clone();
+            }
+        }
+    }
+
     for (source, err) in malformed {
         // What renders for the source instead: the registry's template, one
         // carried elsewhere in the metadata, or nothing.
@@ -506,6 +520,58 @@ mod tests {
 
     fn registry() -> TemplateRegistry {
         TemplateRegistry::from_templates(vec![ext("known", "registry")])
+    }
+
+    /// A recording's own template that declares no producer is read as the
+    /// registry entry its source names: a `vllm-prefill` recording's carried
+    /// template is a `vllm` template refined by `prefill`, so it is the
+    /// `vllm` member of `inference-library`. One that declares a producer
+    /// or a `service_kind` keeps it, and a source the registry does not
+    /// know gets no producer.
+    #[test]
+    fn a_carried_template_takes_the_producer_its_source_names() {
+        let registry = crate::embedded_templates().unwrap();
+        let category = registry.get_category("inference-library").unwrap();
+        let carried = |source: &str, ext: serde_json::Value| {
+            let m = md(&[
+                ("source", source.into()),
+                ("service_queries", ext.to_string()),
+            ]);
+            resolve_source_templates(&m, &registry, TemplatePreference::Archive)
+                .service_exts
+                .remove(0)
+                .1
+        };
+        let kpis = serde_json::json!([]);
+
+        let prefill = carried(
+            "vllm-prefill",
+            serde_json::json!({"service_name": "vllm-prefill", "kpis": kpis}),
+        );
+        assert_eq!(prefill.producer(), "vllm");
+        assert_eq!(prefill.service_kind.as_deref(), Some("prefill"));
+        assert_eq!(category.member("vllm-prefill", &prefill), Some("vllm"));
+
+        let declared = carried(
+            "vllm-prefill",
+            serde_json::json!({"service_name": "mine", "producer": "acme", "kpis": kpis}),
+        );
+        assert_eq!(declared.producer(), "acme");
+        assert_eq!(category.member("acme", &declared), None);
+
+        let kind_only = carried(
+            "vllm",
+            serde_json::json!({"service_name": "vllm-prefill", "service_kind": "prefill",
+                               "kpis": kpis}),
+        );
+        assert_eq!(kind_only.producer(), "vllm");
+        assert_eq!(kind_only.service_kind.as_deref(), Some("prefill"));
+
+        let unknown = carried(
+            "acme",
+            serde_json::json!({"service_name": "acme", "kpis": kpis}),
+        );
+        assert_eq!(unknown.producer, None);
     }
 
     #[test]

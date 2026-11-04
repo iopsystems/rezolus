@@ -833,10 +833,10 @@ impl Viewer {
     /// the `source` key), through the lookup the server viewer uses (`dashboard::source_templates::resolve_source_templates`).
     /// Returns the extensions and the lookup's notices.
     ///
-    /// Category membership for compare-mode follows from the detected source
-    /// names (e.g. a parquet whose `per_source_metadata` contains `vllm` is
-    /// what makes a capture the vllm member of the inference-library
-    /// category). The user-facing legend / display alias is plumbed
+    /// Category membership follows from each capture's source and template
+    /// (`CategoryExtension::member`): a capture whose template is for `vllm`,
+    /// `vllm-prefill` included, is the `vllm` member of the
+    /// inference-library category. The user-facing legend / display alias is plumbed
     /// separately via `Viewer::set_alias` and never influences which template
     /// a capture binds to.
     fn detect_and_validate_service_exts(
@@ -1392,10 +1392,10 @@ impl WasmCaptureRegistry {
     /// in the experiment slot too — otherwise the experiment fetch
     /// 404s and the chart surfaces "Error: null".
     ///
-    /// `category_name` activates category mode when each detected
-    /// source appears in the category template's `members` list. When
-    /// the membership check fails (or the category template isn't
-    /// found), category mode is silently skipped and the captures
+    /// `category_name` activates category mode when the category admits
+    /// the two captures' templates (`CategoryExtension::admits`: one from
+    /// each, each matching a member). When the check fails (or the
+    /// category template isn't found), category mode is silently skipped and the captures
     /// render as per-member sections — same fall-back shape the server
     /// runtime uses. A None category is treated as plain per-member
     /// compare mode (no bridging).
@@ -1436,6 +1436,17 @@ impl WasmCaptureRegistry {
             .map(|v| v.detect_and_validate_service_exts(&registry, preference))
             .unwrap_or_default();
 
+        // Fall back to per-member rendering when the requested category
+        // doesn't activate cleanly — same shape as the server runtime's
+        // `lookup_category`. The user perceives this as "two per-member
+        // sections instead of one combined section," which is a less
+        // surprising failure mode than a hard error from the bootstrap.
+        let category = category_name
+            .as_deref()
+            .and_then(|name| registry.get_category(name))
+            .filter(|cat| cat.admits(&baseline_exts, &experiment_exts).is_ok())
+            .map(|cat| (cat.service_name.as_str(), cat));
+
         let mut service_exts: Vec<(String, dashboard::ServiceExtension)> = Vec::new();
         service_exts.extend(baseline_exts);
         service_exts.extend(experiment_exts);
@@ -1454,26 +1465,6 @@ impl WasmCaptureRegistry {
             .as_ref()
             .map(|b| classify_sources(b.reader.as_ref(), &b.file_metadata, &service_names))
             .unwrap_or_default();
-
-        // Fall back to per-member rendering when the requested category
-        // doesn't activate cleanly — same shape as the server runtime's
-        // `lookup_category`. The user perceives this as "two per-member
-        // sections instead of one combined section," which is a less
-        // surprising failure mode than a hard error from the bootstrap.
-        let category = match category_name.as_deref() {
-            Some(name) => match registry.get_category(name) {
-                Some(cat)
-                    if service_refs.len() == 2
-                        && service_refs
-                            .iter()
-                            .all(|(source, _)| cat.members.iter().any(|m| m == source)) =>
-                {
-                    Some((cat.service_name.as_str(), cat))
-                }
-                _ => None,
-            },
-            None => None,
-        };
 
         // Trimmed reports — if either slot carries the marker — collapse
         // both contexts to empty so the frontend lands on /report.
