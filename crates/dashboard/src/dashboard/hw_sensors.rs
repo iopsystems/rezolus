@@ -26,7 +26,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             "Temperatures, one series per channel. Missing or unreadable sensors are absent.",
         );
         temperatures.plot_promql_full(
-            PlotOpts::gauge("Temperature", "sensor-temperature", Unit::Count).with_axis_label("°C"),
+            Plot::gauge("Temperature", "sensor-temperature", Unit::Count).with_axis_label("°C"),
             format!(
                 "sum by ({}) (sensor_temperature) / 1000",
                 by(data, "sensor_temperature")
@@ -42,7 +42,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
              across rails because rails can overlap.",
         );
         power.plot_promql_full(
-            PlotOpts::gauge("Power", "sensor-power", Unit::Power).with_axis_label("Watts"),
+            Plot::gauge("Power", "sensor-power", Unit::Power).with_axis_label("Watts"),
             format!(
                 "sum by ({}) (sensor_power) / 1000000",
                 by(data, "sensor_power")
@@ -54,7 +54,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         let voltage = sensors.subgroup("Voltage");
         voltage.describe("Bus voltage, one series per channel.");
         voltage.plot_promql_full(
-            PlotOpts::gauge("Voltage", "sensor-voltage", Unit::Count).with_axis_label("Volts"),
+            Plot::gauge("Voltage", "sensor-voltage", Unit::Count).with_axis_label("Volts"),
             format!(
                 "sum by ({}) (sensor_voltage) / 1000",
                 by(data, "sensor_voltage")
@@ -66,7 +66,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         let current = sensors.subgroup("Current");
         current.describe("Current, one series per channel.");
         current.plot_promql_full(
-            PlotOpts::gauge("Current", "sensor-current", Unit::Count).with_axis_label("Amps"),
+            Plot::gauge("Current", "sensor-current", Unit::Count).with_axis_label("Amps"),
             format!(
                 "sum by ({}) (sensor_current) / 1000",
                 by(data, "sensor_current")
@@ -78,7 +78,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         let speed = sensors.subgroup("Fan Speed");
         speed.describe("Measured fan speed in revolutions per minute, separate from PWM demand.");
         speed.plot_promql_full(
-            PlotOpts::gauge("Fan Speed", "sensor-fan-speed", Unit::Count).with_axis_label("RPM"),
+            Plot::gauge("Fan Speed", "sensor-fan-speed", Unit::Count).with_axis_label("RPM"),
             format!(
                 "sum by ({}) (sensor_fan_speed)",
                 by(data, "sensor_fan_speed")
@@ -92,7 +92,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             "Fan PWM demand converted from the native 0–255 value to a percentage; it is not fan speed.",
         );
         pwm.plot_promql_full(
-            PlotOpts::gauge("Fan PWM", "sensor-fan-pwm", Unit::Percentage)
+            Plot::gauge("Fan PWM", "sensor-fan-pwm", Unit::Percentage)
                 .with_axis_label("Percent")
                 .percentage_range(),
             format!(
@@ -108,7 +108,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             "The driver-defined state index. This is an ordinal device state, not a throttling percentage.",
         );
         state.plot_promql_full(
-            PlotOpts::gauge("Cooling State", "sensor-cooling-state", Unit::Count)
+            Plot::gauge("Cooling State", "sensor-cooling-state", Unit::Count)
                 .with_axis_label("State"),
             format!(
                 "sum by ({}) (sensor_cooling_state)",

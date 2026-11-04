@@ -53,14 +53,14 @@ pub fn generate(
         };
 
         let opts = match kpi.metric_type.as_str() {
-            "gauge" => PlotOpts::gauge(&kpi.title, &plot_id, Unit::Count),
-            "histogram" => PlotOpts::histogram(
+            "gauge" => Plot::gauge(&kpi.title, &plot_id, Unit::Count),
+            "histogram" => Plot::histogram(
                 &kpi.title,
                 &plot_id,
                 Unit::Count,
-                kpi.subtype.as_deref().unwrap_or("percentiles"),
+                crate::service_extension::kpi_histogram_view(kpi.subtype.as_deref()),
             ),
-            _ => PlotOpts::counter(&kpi.title, &plot_id, Unit::Count),
+            _ => Plot::counter(&kpi.title, &plot_id, Unit::Count),
         };
         let opts = opts.maybe_unit_system(kpi.unit_system.as_deref());
         let opts = match &kpi.percentiles {

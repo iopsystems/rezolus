@@ -61,7 +61,8 @@ export function resolveStyle(type_, subtype, result) {
     // line it would replace — and this function governs every gauge plot, not
     // just GPU ones, so a 1-vCPU VM or a single-NIC host would lose its line
     // charts too. A plot that wants a heatmap regardless declares it via
-    // `PlotOpts::style`, which `data.js` honours ahead of this inference.
+    // `opts.style` (`PlotBuilder::with_style` in metriken-charts), which
+    // `data.js` honours ahead of this inference.
     if (result?.data?.result?.length > 1) {
         const first = result.data.result[0];
         if (first.metric && first.metric.id != null) {

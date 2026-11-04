@@ -19,7 +19,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         Unit::Time,
     );
     overall.plot_promql(
-        PlotOpts::histogram_latency("Overall Latency", "syscall-total-latency"),
+        Plot::histogram_latency("Overall Latency", "syscall-total-latency"),
         "syscall_latency".to_string(),
     );
 
@@ -52,7 +52,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             Unit::Time,
         );
         sg.plot_promql(
-            PlotOpts::histogram_latency(format!("{op} Latency"), format!("syscall-{op}-latency")),
+            Plot::histogram_latency(format!("{op} Latency"), format!("syscall-{op}-latency")),
             format!("syscall_latency{{op=\"{op_lower}\"}}"),
         );
     }
