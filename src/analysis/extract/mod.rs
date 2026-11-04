@@ -422,7 +422,10 @@ pub fn extract(
     let source = data.source();
     let infer = match provenance {
         Provenance::RezolusAgent => true,
-        Provenance::FromMetadata => source == "rezolus",
+        Provenance::FromMetadata => {
+            source == ::dashboard::identity::REZOLUS
+                || ::dashboard::identity::Identity::read(&data.file_metadata()).is_rezolus()
+        }
     };
 
     // --- enumerate entries (exhaustive: every metric appears) ---
@@ -584,6 +587,53 @@ mod tests {
     use crate::analysis::record::*;
     use std::collections::BTreeSet;
 
+    /// A recording with identity layers that name the Rezolus agent is
+    /// trusted for name inference whatever `source` it was given; the same
+    /// recording without layers, named `redis`, is not.
+    #[test]
+    fn a_layered_agent_recording_infers_samplers_by_its_producer() {
+        let store = metriken_query::MemoryStore::builder()
+            .source("redis")
+            .build();
+        store
+            .insert_counter_series(
+                "cpu_cycles",
+                BTreeMap::<String, String>::new(),
+                (0..=20).map(|s| s * 1_000_000_000).collect(),
+                (0..=20).collect(),
+                None,
+            )
+            .unwrap();
+        let sampler = |store: &metriken_query::MemoryStore| {
+            extract(store, Provenance::FromMetadata)
+                .expect("extract")
+                .metrics[0]
+                .labels
+                .get("sampler")
+                .cloned()
+        };
+        assert_eq!(sampler(&store).as_deref(), Some("unattributed"));
+
+        // The agent named by the recorder layer's `producer_name`, as
+        // metriken-recorder 0.6 and later write it.
+        let mut labels = BTreeMap::new();
+        let mut metadata = BTreeMap::from([("source".to_string(), "redis".to_string())]);
+        let mut entry = metriken_storage::layers::Entry::new("e0", "recorder");
+        entry.metadata = BTreeMap::from([("producer_name".to_string(), "rezolus".to_string())]);
+        metriken_storage::layers::append(
+            &mut labels,
+            &mut metadata,
+            None,
+            &metriken_storage::layers::LegacyEvidence::default(),
+            metriken_storage::layers::Layer::Recorder,
+            entry,
+        )
+        .unwrap();
+        for (k, v) in metadata {
+            store.set_metadata(k, v);
+        }
+        assert_ne!(sampler(&store).as_deref(), Some("unattributed"));
+    }
     #[test]
     fn subsystem_of_prefers_the_sampler_label() {
         let labels = vec![BTreeMap::from([(

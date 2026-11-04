@@ -833,6 +833,31 @@ impl TemplateRegistry {
         self.templates.get(source)
     }
 
+    /// The template for `producer` refined by `service_kind`: the one
+    /// declaring both, else the producer's template with no `service_kind`
+    /// (`vllm` with kind `prefill` finds `vllm-prefill`; with kind `other`,
+    /// or none, `vllm`). Of several that qualify, the first by
+    /// `service_name`.
+    pub fn find(&self, producer: &str, service_kind: Option<&str>) -> Option<&ServiceExtension> {
+        // Each template once, by the key that is its own name: an alias key
+        // can still point at a template another has since replaced.
+        let mut candidates: Vec<&ServiceExtension> = self
+            .templates
+            .iter()
+            .filter(|(key, ext)| **key == ext.service_name && ext.producer() == producer)
+            .map(|(_, ext)| ext)
+            .collect();
+        candidates.sort_by(|a, b| a.service_name.cmp(&b.service_name));
+        let refined = service_kind.and_then(|kind| {
+            candidates
+                .iter()
+                .find(|e| e.service_kind.as_deref() == Some(kind))
+        });
+        refined
+            .or_else(|| candidates.iter().find(|e| e.service_kind.is_none()))
+            .copied()
+    }
+
     /// Insert a service template, under its `service_name` and every alias.
     ///
     /// Lets a consumer layer templates of its own over [`embedded`] without
@@ -1251,6 +1276,33 @@ mod tests {
         .unwrap();
         assert_eq!(category.member("vllm-prefill", &mine), Some("vllm-prefill"));
         assert_eq!(category.member("other", &mine), Some("vllm"));
+    }
+
+    /// `find` takes the template declaring the producer and kind, else the
+    /// producer's unrefined one; the SGLang router is its own producer.
+    #[test]
+    fn find_takes_the_refined_template_else_the_producers() {
+        let registry = embedded_templates().unwrap();
+        let found = |p: &str, k: Option<&str>| registry.find(p, k).map(|e| e.service_name.as_str());
+        assert_eq!(found("vllm", Some("prefill")), Some("vllm-prefill"));
+        assert_eq!(found("vllm", Some("decode")), Some("vllm-decode"));
+        assert_eq!(found("vllm", Some("other")), Some("vllm"));
+        assert_eq!(found("vllm", None), Some("vllm"));
+        assert_eq!(found("sglang", Some("prefill")), Some("sglang-prefill"));
+        assert_eq!(found("sglang-router", None), Some("sglang-router"));
+        assert_eq!(found("acme", None), None);
+
+        // A template replaced without its alias leaves the alias key on the
+        // old one; `find` reads each template by its own name only.
+        // Each registry is a new map, with its own iteration order.
+        for _ in 0..20 {
+            let mut layered = embedded_templates().unwrap();
+            let mut valkey = layered.get("valkey").unwrap().clone();
+            valkey.aliases.clear();
+            valkey.kpis.clear();
+            let _ = layered.insert_template(valkey);
+            assert!(layered.find("valkey", None).unwrap().kpis.is_empty());
+        }
     }
 
     /// Of the embedded templates, the vLLM and SGLang ones, refined or not,

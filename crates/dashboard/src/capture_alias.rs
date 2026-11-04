@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, HashSet};
 /// the other way too — two hosts recorded without `--label` share
 /// `source=rezolus`, so keying on `source` alone would collapse those.
 ///
-/// So prefer `arm` when it discriminates, then `host`, then `source`, then any
+/// So prefer `arm` when it discriminates, then `alias` (the user's name for
+/// an endpoint), then `host`, then `source`, then any
 /// other label that does; `None` means nothing distinguishes them and the
 /// caller falls back to positional names. `--label` cannot help here: it
 /// applies to every recording in a run, which is why the recorder warns when
@@ -37,7 +38,7 @@ pub fn discriminating_alias_key(recordings: &[BTreeMap<String, String>]) -> Opti
             .iter()
             .all(|labels| labels.get(k).is_some_and(|v| seen.insert(v.clone())))
     };
-    const PREFERRED: [&str; 3] = ["arm", "host", "source"];
+    const PREFERRED: [&str; 4] = ["arm", "alias", "host", "source"];
     PREFERRED
         .into_iter()
         .find(|k| discriminates(k))
@@ -160,6 +161,23 @@ mod tests {
             .into_iter()
             .map(|c| (c.id, c.alias))
             .collect()
+    }
+
+    /// `alias`, the user's name for an endpoint, is preferred over `host`
+    /// and `source` when it tells the recordings apart.
+    #[test]
+    fn alias_is_preferred_over_host_and_source() {
+        let order = recs(&[
+            &[("alias", "web"), ("host", "a"), ("source", "x")],
+            &[("alias", "db"), ("host", "b"), ("source", "y")],
+        ]);
+        assert_eq!(
+            ids(&order),
+            vec![
+                ("baseline".into(), "web".into()),
+                ("experiment".into(), "db".into()),
+            ],
+        );
     }
 
     /// The first two keep the wire-stable slot ids; extras are named from the
