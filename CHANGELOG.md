@@ -120,6 +120,10 @@
   exporter's percentiles are per outcome, with no merged series. The network
   dashboard's new Connect Latency subgroup charts connects per second by
   outcome and the established, refused and failed distributions. (#1614)
+- **A `connect()` retried after a failure before `SYN_SENT` is timed from the
+  retry.** `tcp_connect_latency` kept the start time of a connect that failed
+  before `SYN_SENT`, such as one with no route, and timed the next
+  `connect()` on the same socket from it.
 - **A histogram no sampler has read is no longer published.** The agent
   leaves a histogram out of its snapshots and stream until its acquisition
   group is first stamped. A macOS agent published the Linux BPF histograms
