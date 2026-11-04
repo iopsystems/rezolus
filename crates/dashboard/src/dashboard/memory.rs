@@ -424,8 +424,9 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         let reclaim = usage.subgroup("Reclaim");
         reclaim.describe(
             "kswapd reclaims in the background; direct reclaim and allocation stalls run on the \
-             allocating thread and are a latency source on the request path. Major faults are \
-             synchronous reads from storage.",
+             allocating thread and are a latency source on the request path. Page Faults counts \
+             every fault, minor and major; Major Faults are the ones that read from storage, \
+             each a synchronous read on the faulting thread.",
         );
         reclaim.plot_promql(
             Plot::counter("Scanned", "reclaim-scanned", Unit::Count),
@@ -439,6 +440,13 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             Plot::counter("Allocation Stalls", "allocation-stalls", Unit::Count),
             "sum(irate(memory_allocation_stalls[5m]))".to_string(),
         );
+        // macOS draws its page faults under Paging.
+        if has_metric(data, "memory_page_faults") && !has_metric(data, "memory_pageins") {
+            reclaim.plot_promql(
+                Plot::counter("Page Faults", "page-faults", Unit::Count),
+                "sum(irate(memory_page_faults[5m]))".to_string(),
+            );
+        }
         reclaim.plot_promql(
             Plot::counter("Major Faults", "major-faults", Unit::Count),
             "sum(irate(memory_major_page_faults[5m]))".to_string(),

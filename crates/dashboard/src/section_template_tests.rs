@@ -8,8 +8,10 @@
 //! host with three GPUs from two vendors, two vendors' GPUs sharing
 //! `id="0"`, GPUs with no `vendor` label or a non-integer `id`, an Intel GPU
 //! with every engine class and an unknown one, devices with ids `"01"` and
-//! `"1"`, an empty recording, and `sink` with each named metric removed in
-//! turn, so every presence predicate is seen both ways.
+//! `"1"`, a macOS recording, `bench` with the Linux filesystem, meminfo and
+//! vmstat metrics it lacks (`linux`), an empty recording, and `sink` with
+//! each named metric removed in turn, so every presence predicate is seen
+//! both ways.
 //!
 //! Golden files under `tests/golden/` hold the generators' output for the
 //! named catalogs, so the template stays checked once a generator is
@@ -489,6 +491,79 @@ fn macos() -> Catalog {
     out
 }
 
+/// The `bench` recording with the Linux filesystem sampler's metrics for an
+/// ext4 root and an XFS data volume, a tmpfs, and the meminfo and vmstat
+/// metrics that gate the tmpfs and page fault charts. The sections read only
+/// whether each metric is present, so the labels and types follow the agent
+/// but no test asserts them.
+fn linux(bench: &Catalog) -> Catalog {
+    let mut out = bench.clone();
+    let ext4 = [
+        ("mount", "/"),
+        ("fstype", "ext4"),
+        ("devnum", "259:2"),
+        ("block_device", "nvme0n1p2"),
+    ];
+    let xfs = [
+        ("mount", "/data"),
+        ("fstype", "xfs"),
+        ("devnum", "259:5"),
+        ("block_device", "nvme1n1"),
+    ];
+    for name in [
+        "filesystem_total",
+        "filesystem_free",
+        "filesystem_available",
+        "filesystem_inodes_total",
+        "filesystem_inodes_free",
+        "filesystem_readonly",
+    ] {
+        out.gauges
+            .insert(name.into(), vec![labels(&ext4), labels(&xfs)]);
+    }
+    out.gauges
+        .insert("filesystem_errors".into(), vec![labels(&ext4)]);
+    out.counters
+        .insert("filesystem_written_bytes".into(), vec![labels(&ext4)]);
+    let tmpfs = [
+        ("mount", "/dev/shm"),
+        ("fstype", "tmpfs"),
+        ("devnum", "0:25"),
+    ];
+    for name in [
+        "filesystem_tmpfs_used",
+        "filesystem_tmpfs_size",
+        "filesystem_tmpfs_inodes_used",
+        "filesystem_tmpfs_inodes_total",
+    ] {
+        out.gauges.insert(name.into(), vec![labels(&tmpfs)]);
+    }
+    for name in ["memory_active", "memory_inactive"] {
+        out.gauges.insert(
+            name.into(),
+            vec![labels(&[("kind", "anon")]), labels(&[("kind", "file")])],
+        );
+    }
+    for name in ["memory_shmem", "memory_mapped"] {
+        out.gauges.insert(name.into(), vec![labels(&[])]);
+    }
+    for name in ["memory_reclaim_scanned", "memory_reclaim_reclaimed"] {
+        out.counters.insert(
+            name.into(),
+            vec![labels(&[("kind", "kswapd")]), labels(&[("kind", "direct")])],
+        );
+    }
+    for name in [
+        "memory_allocation_stalls",
+        "memory_page_faults",
+        "memory_major_page_faults",
+        "memory_oom_kills",
+    ] {
+        out.counters.insert(name.into(), vec![labels(&[])]);
+    }
+    out
+}
+
 /// Two NVIDIA GPUs and an Intel iGPU that shares id 0 with one of them.
 fn gpus() -> Catalog {
     let mut out = Catalog::default();
@@ -648,6 +723,7 @@ fn named_catalogs() -> Vec<(&'static str, Catalog)> {
         ("intel-all-engines", intel_all_engines()),
         ("non-canonical-ids", non_canonical_ids()),
         ("macos", macos()),
+        ("linux", linux(&bench)),
         (
             "dtlb-without-instructions",
             dtlb_without_instructions(&bench),

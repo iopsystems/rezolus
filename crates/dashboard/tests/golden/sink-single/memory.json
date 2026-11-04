@@ -1076,7 +1076,7 @@
         },
         {
           "name": "Reclaim",
-          "description": "kswapd reclaims in the background; direct reclaim and allocation stalls run on the allocating thread and are a latency source on the request path. Major faults are synchronous reads from storage.",
+          "description": "kswapd reclaims in the background; direct reclaim and allocation stalls run on the allocating thread and are a latency source on the request path. Page Faults counts every fault, minor and major; Major Faults are the ones that read from storage, each a synchronous read on the faulting thread.",
           "plots": [
             {
               "data": [],
