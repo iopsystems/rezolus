@@ -100,6 +100,15 @@
 
 ### Fixed
 
+- **`cpu_frequency` on macOS reads each CPU cluster's own frequency table.**
+  The power manager's `perf-domains` property names the `voltage-states`
+  table of each cluster; the sampler used `voltage-states5-sram` for every
+  P cluster. On an M4 Max the second P cluster's table,
+  `voltage-states13-sram`, holds the same frequencies, so its readings do not
+  change. A machine without `perf-domains` reads the old tables, and one
+  missing a table now publishes the clusters that have one instead of
+  nothing.
+
 - **The `cpu_usage` and macOS paging docs state what is recorded.**
   `docs/metrics.md` listed eight `cpu_usage` states; Linux and macOS record
   `user` and `system`. `docs/metrics.md` now also describes the macOS
