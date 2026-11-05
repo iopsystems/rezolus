@@ -377,7 +377,8 @@ carry its own KPI definitions.
 # Embed a KPI file into every recording of an archive
 target/release/rezolus recording annotate run.dendro --queries my_kpis.json
 
-# Remove the KPIs
+# Remove the KPIs annotate embedded (on a recording with identity layers,
+# the template its producer sent, or record's, is used again)
 target/release/rezolus recording annotate run.dendro --undo
 
 # A parquet file or .rez is not changed: the result is a new .dendro

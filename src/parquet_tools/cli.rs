@@ -347,13 +347,14 @@ pub struct AnnotateArgs {
     pub output: Option<PathBuf>,
     #[arg(
         long = "queries",
+        visible_alias = "template",
         value_name = "PATH",
-        help = "Custom service extension JSON file (overrides built-in template)"
+        help = "A KPI template (service extension JSON file) for each recording; on a recording with identity layers it is a user-layer entry, used over the template its producer sent"
     )]
     pub queries: Option<PathBuf>,
     #[arg(
         long = "undo",
-        help = "Remove the KPIs (service extension) from each recording",
+        help = "Remove the KPIs (service extension) from each recording; on a recording with identity layers, remove the templates annotate set, so record's template_override=true template, else the producer's, else record's template= default, is used again",
         conflicts_with = "queries"
     )]
     pub undo: bool,

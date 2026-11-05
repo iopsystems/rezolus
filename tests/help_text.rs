@@ -70,10 +70,23 @@ fn subcommands_of(path: &[String]) -> Vec<String> {
 }
 
 /// Flags clap registered, read back off its own `Options:`/`Arguments:` layout:
-/// a definition starts a line, indented, as `--flag` or `-f, --flag`.
+/// a definition starts a line, indented, as `--flag` or `-f, --flag`, and a
+/// visible alias is listed as `[alias: --flag]` or `[aliases: --a, --b]`.
 fn defined_flags(help: &str) -> BTreeSet<String> {
     let mut flags = BTreeSet::new();
     for line in help.lines() {
+        for tag in ["[alias: ", "[aliases: "] {
+            if let Some(rest) = line.split(tag).nth(1) {
+                let names = rest.split(']').next().unwrap_or("");
+                flags.extend(
+                    names
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|n| n.starts_with('-'))
+                        .map(str::to_string),
+                );
+            }
+        }
         let indent = line.len() - line.trim_start().len();
         if !(2..=6).contains(&indent) {
             continue;
