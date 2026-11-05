@@ -667,6 +667,20 @@ tarballs 5.x wrote, which every other subcommand refuses with that command.
   including committed data in SQLite's sidecar, into a `.dendro`. Prefer this
   over copying an active file with `cp`.
 
+On a recording with identity layers, `annotate --queries` (also spelled
+`--template`) and `--systeminfo` append one user-layer entry by `annotate`:
+the template is used over the one the recording's producer sent, which stays
+in the producer layer. `--undo` removes the templates annotate set: the
+template `record` wrote with `template_override=true`, if any, is used
+again, else the producer's, else the recorder's `template=` default. A
+producer's template cannot be removed from a layered recording; annotate a
+template whose `kpis` is `[]` in its place, or open the recording with
+`rezolus view --registry-templates`, which renders the registry's template
+for a source the registry knows. On a recording without layers they set
+and remove the metadata keys themselves.
+`--add-events` and `--event` write the `events` key, which is outside the
+layers, either way.
+
 `annotate`, `filter` and `check --annotate` edit a `.dendro` in place (or a
 copy, given `-o`). A recording read from several sources (a recording and its snapshot,
 combined) takes each metadata key from the first source holding it, so

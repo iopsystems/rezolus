@@ -463,6 +463,17 @@
 
 ### Changed
 
+- **`recording annotate --queries` (now also `--template`) and
+  `--systeminfo` write a user-layer entry on a recording with identity
+  layers.** The template is used over the one the producer sent, which
+  stays in the producer layer. `--undo` removes the templates annotate
+  set, so `record`'s `template_override=true` template, else the
+  producer's, else a `record --endpoint ...,template=` default, is used
+  again. Before, `--undo` removed every template the recording carried. A
+  producer's template now cannot be removed (annotate one whose `kpis` is
+  `[]` in its place). A recording without layers is annotated
+  as before.
+
 - **`template=FILE` is a default, beneath the template a producer sends;
   `template_override=true` uses the file.** On `--endpoint` (and as
   `template_override = true` in a `--config` file's `[[endpoints]]`),

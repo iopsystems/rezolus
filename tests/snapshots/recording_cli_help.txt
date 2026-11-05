@@ -156,8 +156,8 @@ Arguments:
 
 Options:
   -o, --output <PATH>      Write the annotated recording to this new .dendro instead of in place
-      --queries <PATH>     Custom service extension JSON file (overrides built-in template)
-      --undo               Remove the KPIs (service extension) from each recording
+      --queries <PATH>     A KPI template (service extension JSON file) for each recording; on a recording with identity layers it is a user-layer entry, used over the template its producer sent [alias: --template]
+      --undo               Remove the KPIs (service extension) from each recording; on a recording with identity layers, remove the templates annotate set, so record's template_override=true template, else the producer's, else record's template= default, is used again
       --filter             Refused: filtered a parquet file's columns; use `rezolus recording filter`
       --templates <DIR>    Accepted and unused: annotate reads no template (a DIR that does not load is warned about)
       --node <NAME>        Refused: set a parquet footer key; a recording's labels are set when it is recorded
@@ -205,10 +205,12 @@ Options:
           Write the annotated recording to this new .dendro instead of in place
 
       --queries <PATH>
-          Custom service extension JSON file (overrides built-in template)
+          A KPI template (service extension JSON file) for each recording; on a recording with identity layers it is a user-layer entry, used over the template its producer sent
+          
+          [alias: --template]
 
       --undo
-          Remove the KPIs (service extension) from each recording
+          Remove the KPIs (service extension) from each recording; on a recording with identity layers, remove the templates annotate set, so record's template_override=true template, else the producer's, else record's template= default, is used again
 
       --filter
           Refused: filtered a parquet file's columns; use `rezolus recording filter`

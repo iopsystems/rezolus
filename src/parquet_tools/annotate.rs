@@ -349,6 +349,17 @@ pub(crate) fn annotate_archive_as(
     // in for the report.
     let mut events_report: Option<(usize, bool)> = None;
     let mut per_recording_report: Option<CheckEventTally> = None;
+    // Each source's identity layers, read before any write, so a source
+    // whose layer key does not parse refuses the run with nothing changed.
+    let layers: Vec<Option<metriken_storage::layers::Layers>> = sources
+        .iter()
+        .map(|s| {
+            metriken_storage::layers::Layers::read(&s.meta.metadata)
+                .map_err(|e| format!("source {}: {e}", s.id))
+        })
+        .collect::<Result<_, _>>()?;
+    // Whether `--undo` left a layered recording with a template beneath.
+    let mut undone_layered = false;
     for (idx, ext_json) in ext_jsons.iter().enumerate() {
         let mut touched = false;
         let mut kept_per_source: Vec<Events> = Vec::new();
@@ -356,20 +367,40 @@ pub(crate) fn annotate_archive_as(
             let source = &sources[position];
             let mut metadata = source.meta.metadata.clone();
 
+            // The KPI template and systeminfo: a user-layer entry on a source
+            // with identity layers, the flat keys on one without.
+            let mut set: std::collections::BTreeMap<String, String> = Default::default();
+            let mut unset: Vec<String> = Vec::new();
             if let Some(ext_json) = &ext_json {
-                metadata.insert(
+                set.insert(
                     ::dashboard::keys::KEY_SERVICE_QUERIES.to_string(),
                     ext_json.clone(),
                 );
             }
+            // `--undo` on a layered source restores the template `record`'s
+            // user entries set (`template_override=true`), or unsets it when
+            // they set none (`user_template_beneath`).
             if annotation.undo_kpis {
-                metadata.remove(::dashboard::keys::KEY_SERVICE_QUERIES);
+                let key = ::dashboard::keys::KEY_SERVICE_QUERIES;
+                match layers[position].as_ref().and_then(user_template_beneath) {
+                    Some(value) => {
+                        set.insert(key.to_string(), value);
+                    }
+                    None => unset.push(key.to_string()),
+                }
             }
             if let Some(systeminfo) = annotation.systeminfo {
-                metadata.insert(
+                set.insert(
                     ::dashboard::keys::KEY_SYSTEMINFO.to_string(),
                     systeminfo.to_string(),
                 );
+            }
+            let layered = layers[position].is_some();
+            if !layered {
+                for key in &unset {
+                    metadata.remove(key);
+                }
+                metadata.extend(set.clone());
             }
 
             if let Some(ops) = &annotation.events {
@@ -455,6 +486,37 @@ pub(crate) fn annotate_archive_as(
                 }
             }
 
+            if layered && (!set.is_empty() || !unset.is_empty()) {
+                let mut labels = source.meta.labels.clone();
+                let mut entry = metriken_storage::layers::Entry::new(entry_id()?, "annotate");
+                entry.ts = Some(wall_now_ns());
+                entry.metadata = set;
+                entry.unset_metadata = unset;
+                metriken_storage::layers::append(
+                    &mut labels,
+                    &mut metadata,
+                    None,
+                    &metriken_storage::layers::LegacyEvidence::default(),
+                    metriken_storage::layers::Layer::User,
+                    entry,
+                )
+                .map_err(|e| format!("source {}: {e}", source.id))?;
+                let merged = metriken_storage::layers::Layers::read(&metadata)
+                    .map_err(|e| format!("source {}: {e}", source.id))?
+                    .map(|l| l.merged().metadata)
+                    .unwrap_or_default();
+                let key = ::dashboard::keys::KEY_SERVICE_QUERIES;
+                if annotation.undo_kpis {
+                    // A flat template no layer set (an earlier release's
+                    // annotate wrote it) is removed with the rest.
+                    if !merged.contains_key(key) {
+                        metadata.remove(key);
+                    }
+                    undone_layered |= merged.contains_key(key);
+                }
+                db.set_source_identity(source.id, &labels, &metadata)?;
+                continue;
+            }
             db.update_source_metadata(source.id, &metadata)?;
         }
         if touched {
@@ -520,13 +582,47 @@ pub(crate) fn annotate_archive_as(
     };
     let mut done: Vec<String> = Vec::new();
     if annotation.undo_kpis {
-        done.push(format!("removed the KPIs of {scope}"));
+        done.push(if undone_layered {
+            format!(
+                "removed the KPIs of {scope}; a recording with identity layers uses the \
+                 template record wrote or its producer sent, where there is one"
+            )
+        } else {
+            format!("removed the KPIs of {scope}")
+        });
     }
     if !parts.is_empty() {
         done.push(format!("embedded {} into {scope}", parts.join(" and ")));
     }
     annotation.report(format!("Annotated {:?}: {}", shown, done.join("; ")));
     Ok(())
+}
+
+/// The `service_queries` the user layer holds without annotate's entries
+/// or an `external` entry (an older annotate's flat write, captured by a
+/// later append): `record`'s entries folded as the layer folds them.
+fn user_template_beneath(layers: &metriken_storage::layers::Layers) -> Option<String> {
+    let mut user = layers.user.clone();
+    user.entries
+        .retain(|e| e.by != "annotate" && e.by != "external");
+    user.fold(metriken_storage::layers::Layer::User)
+        .metadata
+        .remove(::dashboard::keys::KEY_SERVICE_QUERIES)
+}
+
+/// A new user-layer entry's id: 128 random bits as hex.
+fn entry_id() -> Result<String, String> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|e| format!("no random entry id: {e}"))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// The wall clock now, in nanoseconds since the Unix epoch.
+fn wall_now_ns() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
 }
 
 /// Set each KPI's `available` flag by probing a `MetricsSource`.
@@ -681,6 +777,237 @@ mod tests {
             .find(|k| k.title == "Requests Running")
             .expect("the template's running-requests KPI");
         assert!(running.available, "{running:?}");
+    }
+
+    /// On a recording with identity layers, the KPI template and systeminfo
+    /// are a user-layer entry by `annotate`: the template is used over the
+    /// producer's, which stays in the producer layer, and `--undo` unsets
+    /// the entry's template, so the producer's is used again.
+    #[test]
+    fn annotate_writes_a_layered_recordings_template_as_a_user_entry() {
+        use metriken_storage::layers::{self, Entry, Layer, Layers, LegacyEvidence};
+        const PRODUCER: &str = r#"{"service_name":"producer","kpis":[]}"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.dendro");
+        let rows = (0..3u64)
+            .map(|i| {
+                let ts = 1_000_000_000 * (i + 1);
+                let w = Some(::rez::window::Window::new(ts - 50_000_000, ts));
+                (
+                    ::rez::fixtures::snap_counters(
+                        ts,
+                        vec![::rez::fixtures::counter("cpu_cycles", "cpu_usage", i, w)],
+                    ),
+                    ts,
+                )
+            })
+            .collect();
+        let mut labels = std::collections::BTreeMap::new();
+        let mut metadata = ::rez::fixtures::map(&[("sampling_interval_ms", "1000")]);
+        let mut producer = Entry::new("p", "producer");
+        producer.metadata = ::rez::fixtures::map(&[(KEY_SERVICE_QUERIES, PRODUCER)]);
+        layers::append(
+            &mut labels,
+            &mut metadata,
+            None,
+            &LegacyEvidence::default(),
+            Layer::Producer,
+            producer,
+        )
+        .unwrap();
+        let source = ::rez::fixtures::Source {
+            labels,
+            metadata,
+            rows,
+        };
+        ::rez::fixtures::write_dendro(&path, &[source], None, ::rez::fixtures::Finish::Finalized);
+
+        let ext_json = r#"{"service_name":"mine","kpis":[]}"#;
+        let mut annotation = kpi_annotation(ext_json);
+        annotation.systeminfo = Some(r#"{"os":"linux"}"#);
+        annotate_archive(&path, &annotation).unwrap();
+        let metadata = &source_metadata(&path)[0];
+        let used: ServiceExtension = serde_json::from_str(&metadata[KEY_SERVICE_QUERIES]).unwrap();
+        assert_eq!(used.service_name, "mine");
+        let read = Layers::read(metadata).unwrap().unwrap();
+        assert_eq!(read.producer.metadata[KEY_SERVICE_QUERIES], PRODUCER);
+        let entry = read.user.entries.last().unwrap();
+        assert_eq!(entry.by, "annotate");
+        assert!(
+            entry.metadata.contains_key(KEY_SERVICE_QUERIES),
+            "{entry:?}"
+        );
+        assert_eq!(entry.metadata["systeminfo"], r#"{"os":"linux"}"#);
+
+        let mut undo = kpi_annotation(ext_json);
+        undo.ext_json = None;
+        undo.undo_kpis = true;
+        annotate_archive(&path, &undo).unwrap();
+        let metadata = &source_metadata(&path)[0];
+        assert_eq!(metadata[KEY_SERVICE_QUERIES], PRODUCER);
+        assert_eq!(metadata["systeminfo"], r#"{"os":"linux"}"#);
+    }
+
+    /// A one-source archive with identity layers: a producer entry and a
+    /// user entry by `record`, each with the given `service_queries`, and
+    /// optionally a damaged user layer.
+    fn layered_recording(path: &Path, producer: &str, record: Option<&str>, damaged: bool) {
+        use metriken_storage::layers::{self, Entry, Layer, LegacyEvidence};
+        let rows: Vec<_> = (0..3u64)
+            .map(|i| {
+                let ts = 1_000_000_000 * (i + 1);
+                let w = Some(::rez::window::Window::new(ts - 50_000_000, ts));
+                (
+                    ::rez::fixtures::snap_counters(
+                        ts,
+                        vec![::rez::fixtures::counter("cpu_cycles", "cpu_usage", i, w)],
+                    ),
+                    ts,
+                )
+            })
+            .collect();
+        let mut labels = std::collections::BTreeMap::new();
+        let mut metadata = ::rez::fixtures::map(&[("sampling_interval_ms", "1000")]);
+        let mut entries = vec![(Layer::Producer, "p", "producer", producer)];
+        if let Some(record) = record {
+            entries.push((Layer::User, "r", "record", record));
+        }
+        for (layer, id, by, value) in entries {
+            let mut entry = Entry::new(id, by);
+            entry.metadata = ::rez::fixtures::map(&[(KEY_SERVICE_QUERIES, value)]);
+            layers::append(
+                &mut labels,
+                &mut metadata,
+                None,
+                &LegacyEvidence::default(),
+                layer,
+                entry,
+            )
+            .unwrap();
+        }
+        if damaged {
+            metadata.insert("metriken.layer.user".to_string(), "{not json".to_string());
+        }
+        let mut sources = Vec::new();
+        if damaged {
+            // A healthy source the loop reaches first.
+            sources.push(::rez::fixtures::Source {
+                labels: ::rez::fixtures::map(&[("alias", "first")]),
+                metadata: ::rez::fixtures::map(&[("sampling_interval_ms", "1000")]),
+                rows: rows.clone(),
+            });
+            labels.insert("alias".to_string(), "second".to_string());
+        }
+        sources.push(::rez::fixtures::Source {
+            labels,
+            metadata,
+            rows,
+        });
+        ::rez::fixtures::write_dendro(path, &sources, None, ::rez::fixtures::Finish::Finalized);
+    }
+
+    /// `--undo` after `record`'s `template_override=true` restores that
+    /// template, not the producer's, and says a template is still used.
+    #[test]
+    fn undo_restores_records_override_template() {
+        const PRODUCER: &str = r#"{"service_name":"producer","kpis":[]}"#;
+        const RECORD: &str = r#"{"service_name":"record","kpis":[]}"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.dendro");
+        layered_recording(&path, PRODUCER, Some(RECORD), false);
+        let ext_json = r#"{"service_name":"mine","kpis":[]}"#;
+        annotate_archive(&path, &kpi_annotation(ext_json)).unwrap();
+        annotate_archive(&path, &kpi_annotation(ext_json)).unwrap();
+        let mut undo = kpi_annotation(ext_json);
+        undo.ext_json = None;
+        undo.undo_kpis = true;
+        annotate_archive(&path, &undo).unwrap();
+        assert_eq!(source_metadata(&path)[0][KEY_SERVICE_QUERIES], RECORD);
+        let said = undo.report.captured().unwrap();
+        assert!(said.contains("uses the template record wrote"), "{said}");
+    }
+
+    /// `--undo` removes a flat `service_queries` that no layer set (an
+    /// earlier release's annotate wrote it), and a later write does not
+    /// record that removal as an outside change.
+    #[test]
+    fn undo_removes_a_flat_template_no_layer_set() {
+        use metriken_storage::layers::Layers;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.dendro");
+        layered_recording(&path, "", None, false);
+        {
+            let mut db = dendro::archive::ArchiveMut::open(&path).unwrap();
+            let source = db.read_sources().unwrap().remove(0);
+            let mut metadata = source.meta.metadata.clone();
+            metadata.insert(KEY_SERVICE_QUERIES.to_string(), "flat".to_string());
+            db.update_source_metadata(source.id, &metadata).unwrap();
+        }
+        let mut undo = kpi_annotation("{}");
+        undo.ext_json = None;
+        undo.undo_kpis = true;
+        annotate_archive(&path, &undo).unwrap();
+        assert!(!source_metadata(&path)[0].contains_key(KEY_SERVICE_QUERIES));
+
+        let mut systeminfo = kpi_annotation("{}");
+        systeminfo.ext_json = None;
+        systeminfo.systeminfo = Some(r#"{"os":"linux"}"#);
+        annotate_archive(&path, &systeminfo).unwrap();
+        let metadata = &source_metadata(&path)[0];
+        assert!(!metadata.contains_key(KEY_SERVICE_QUERIES), "{metadata:?}");
+        let read = Layers::read(metadata).unwrap().unwrap();
+        assert!(
+            read.user.entries.iter().all(|e| e.by != "external"),
+            "{:?}",
+            read.user.entries
+        );
+    }
+
+    /// An earlier release's flat template, recorded as an `external` user
+    /// entry by a later write, is not restored by `--undo`: the producer's
+    /// template is used.
+    #[test]
+    fn undo_does_not_restore_an_external_template() {
+        const PRODUCER: &str = r#"{"service_name":"producer","kpis":[]}"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.dendro");
+        layered_recording(&path, PRODUCER, None, false);
+        {
+            let mut db = dendro::archive::ArchiveMut::open(&path).unwrap();
+            let source = db.read_sources().unwrap().remove(0);
+            let mut metadata = source.meta.metadata.clone();
+            metadata.insert(KEY_SERVICE_QUERIES.to_string(), "old".to_string());
+            db.update_source_metadata(source.id, &metadata).unwrap();
+        }
+        let mut systeminfo = kpi_annotation("{}");
+        systeminfo.ext_json = None;
+        systeminfo.systeminfo = Some(r#"{"os":"linux"}"#);
+        annotate_archive(&path, &systeminfo).unwrap();
+        let read = metriken_storage::layers::Layers::read(&source_metadata(&path)[0])
+            .unwrap()
+            .unwrap();
+        assert!(read.user.entries.iter().any(|e| e.by == "external"));
+
+        let mut undo = kpi_annotation("{}");
+        undo.ext_json = None;
+        undo.undo_kpis = true;
+        annotate_archive(&path, &undo).unwrap();
+        assert_eq!(source_metadata(&path)[0][KEY_SERVICE_QUERIES], PRODUCER);
+    }
+
+    /// A source whose layer key does not parse refuses the run before any
+    /// source is written, including a healthy one the loop reaches first.
+    #[test]
+    fn a_damaged_layer_refuses_before_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.dendro");
+        layered_recording(&path, r#"{"service_name":"p","kpis":[]}"#, None, true);
+        let before = std::fs::read(&path).unwrap();
+        let err = annotate_archive(&path, &kpi_annotation(r#"{"service_name":"m","kpis":[]}"#))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("metriken.layer.user"), "{err}");
+        assert_eq!(std::fs::read(&path).unwrap(), before);
     }
 
     /// Annotating writes the KPI set into each recording's metadata, in
