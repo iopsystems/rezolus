@@ -488,6 +488,7 @@ impl RecordingConfig {
             role: None,
             protocol: None,
             template: None,
+            template_override: false,
             template_json: None,
             arm: None,
             host: None,
@@ -524,6 +525,7 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
     let mut role: Option<String> = None;
     let mut protocol: Option<Protocol> = None;
     let mut template: Option<PathBuf> = None;
+    let mut template_override = false;
     let mut arm: Option<String> = None;
     let mut host: Option<String> = None;
     let mut alias: Option<String> = None;
@@ -547,6 +549,17 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
                         return Err("template= needs a file path".to_string());
                     }
                     template = Some(PathBuf::from(value));
+                }
+                "template_override" => {
+                    template_override = match value {
+                        "true" => true,
+                        "false" => false,
+                        other => {
+                            return Err(format!(
+                                "template_override={other:?} is not true or false"
+                            ));
+                        }
+                    };
                 }
                 "arm" if value.is_empty() => return Err("arm= needs a value".to_string()),
                 "arm" if value.trim() != value => {
@@ -588,6 +601,7 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
         role,
         protocol,
         template,
+        template_override,
         template_json: None,
         arm,
         host,
@@ -1175,6 +1189,68 @@ mod tests {
             .err()
             .unwrap();
         assert!(err.contains("failed to read good.json"), "{err}");
+    }
+
+    /// `template_override=` takes `true` or `false`, from `--endpoint` and as
+    /// a config file's `template_override = true`, and is refused without
+    /// `template=`.
+    #[test]
+    fn template_override_needs_a_template_and_a_boolean() {
+        let ep = parse_endpoint_str("http://h:9090/metrics,template=k.json,template_override=true")
+            .unwrap();
+        assert!(ep.template_override);
+        let ep =
+            parse_endpoint_str("http://h:9090/metrics,template=k.json,template_override=false")
+                .unwrap();
+        assert!(!ep.template_override);
+        let err = parse_endpoint_str("http://h:9090/metrics,template=k.json,template_override=yes")
+            .unwrap_err();
+        assert_eq!(err, r#"template_override="yes" is not true or false"#);
+
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("good.json");
+        std::fs::write(&good, r#"{"service_name":"vllm","kpis":[]}"#).unwrap();
+        let parse = |args: &[&str]| {
+            let mut argv = vec!["record"];
+            argv.extend_from_slice(args);
+            crate::recorder::command()
+                .try_get_matches_from(argv)
+                .map_err(|e| e.to_string())
+                .and_then(|m| RecordingConfig::from_args(&m))
+        };
+        let err = parse(&["--endpoint", "http://h:9090/metrics,template_override=true"])
+            .err()
+            .unwrap();
+        assert_eq!(
+            err,
+            "endpoint http://h:9090/metrics: template_override=true needs template=FILE"
+        );
+        let toml = |name: &str, body: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(
+                &path,
+                format!(
+                    "[recording]\noutput = \"run.dendro\"\n\n[[endpoints]]\n\
+                     url = \"http://h:9090/metrics\"\n{body}"
+                ),
+            )
+            .unwrap();
+            path.to_str().unwrap().to_string()
+        };
+        let with = toml(
+            "with.toml",
+            &format!(
+                "template = {:?}\ntemplate_override = true\n",
+                good.display().to_string()
+            ),
+        );
+        assert!(parse(&["--config", &with]).unwrap().endpoints[0].template_override);
+        let without = toml("without.toml", "template_override = true\n");
+        let err = parse(&["--config", &without]).err().unwrap();
+        assert!(
+            err.ends_with("template_override=true needs template=FILE"),
+            "{err}"
+        );
     }
 
     #[test]
