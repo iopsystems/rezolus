@@ -463,6 +463,18 @@
 
 ### Changed
 
+- **`template=FILE` is a default, beneath the template a producer sends;
+  `template_override=true` uses the file.** On `--endpoint` (and as
+  `template_override = true` in a `--config` file's `[[endpoints]]`),
+  `template_override=true` writes the file in the recording's user layer,
+  so it is used over a producer's own template, as `template=` alone was.
+  Without the switch, `template=` is written in the recording's recorder
+  layer, so a streamed producer that sends its own KPI template has that
+  template used, and `record` warns at startup and names the switch. An
+  endpoint that sends none, such as a scraped one, is unaffected. The switch
+  is refused without `template=`, and a value other than `true` or `false`
+  is refused (exit 2). rezolus takes metriken-recorder 0.8.1.
+
 - **`=~` and `!~` in a query are anchored regular expressions, as in
   Prometheus** (metriken-query 0.44, metriken-storage 0.7). Each was a list
   of literal alternatives separated by `|`, so `{name=~"/system.slice/.*"}`
@@ -1673,8 +1685,10 @@
   config file's directory. The file is read and checked before recording:
   an unreadable file, one over 1 MiB, JSON that is not a `ServiceExtension`,
   or an unknown `unit_system` refuses the run (exit 2) and writes nothing.
-  `recording annotate --queries` refuses a file over 1 MiB too. On a streamed producer, `template=` replaces the
-  template its handshake sends, and the recorder logs that at startup.
+  `recording annotate --queries` refuses a file over 1 MiB too. On a streamed
+  producer whose handshake sends a template, the producer's is used and the
+  recorder warns at startup; `template_override=true` uses the file (see
+  Changed).
   cachecannon and llm-perf send their own from their next releases; the files in
   `crates/dashboard/templates/` stay as the fallback for recordings that
   carry none (docs/usage.md, "KPI templates").

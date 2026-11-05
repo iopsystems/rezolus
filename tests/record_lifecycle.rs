@@ -2739,10 +2739,12 @@ fn a_bad_template_refuses_the_run_before_recording() {
 }
 
 /// On a streamed producer whose handshake sends its own `service_queries`,
-/// that template is what the recording keeps, unless `template=` names a
-/// file: then the file replaces it, and the recorder says so at startup.
+/// that template is the one the recording uses. `template=FILE` is written
+/// beneath it, in the recorder layer, and the recorder says at startup that
+/// the producer's is used and names `template_override=true`; with that
+/// switch the file is written in the user layer and used.
 #[test]
-fn a_template_replaces_the_one_a_producers_handshake_sends() {
+fn a_producers_template_is_used_over_template_unless_overridden() {
     const PRODUCER_TEMPLATE: &str = r#"{"service_name":"cachecannon","kpis":[]}"#;
     let port = spawn_fixture(
         Streams::Always,
@@ -2775,18 +2777,50 @@ fn a_template_replaces_the_one_a_producers_handshake_sends() {
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
         assert!(out.status.success(), "{stderr}");
         let (_, metadata, _) = the_recording(&output, "fake/ops");
-        (metadata.get("service_queries").cloned(), stderr)
+        let layers = metriken_storage::layers::Layers::read(&metadata)
+            .expect("the layers parse")
+            .expect("the recording has identity layers");
+        let in_layer =
+            |m: &std::collections::BTreeMap<String, String>| m.get("service_queries").cloned();
+        (
+            metadata.get("service_queries").cloned(),
+            in_layer(&layers.recorder.metadata),
+            in_layer(&layers.user.metadata),
+            stderr,
+        )
     };
 
-    let (kept, stderr) = record("producer.dendro", "");
-    assert_eq!(kept.as_deref(), Some(PRODUCER_TEMPLATE));
-    assert!(!stderr.contains("replaces the KPI template"), "{stderr}");
+    let (used, recorder, user, stderr) = record("producer.dendro", "");
+    assert_eq!(used.as_deref(), Some(PRODUCER_TEMPLATE));
+    assert_eq!((recorder, user), (None, None));
+    assert!(
+        !stderr.contains("KPI template its handshake sent"),
+        "{stderr}"
+    );
 
-    let (replaced, stderr) = record("mine.dendro", &format!(",template={}", template.display()));
-    assert_eq!(replaced.as_deref(), Some(SVC_TEMPLATE));
+    let option = format!(",template={}", template.display());
+    let (used, recorder, user, stderr) = record("default.dendro", &option);
+    assert_eq!(used.as_deref(), Some(PRODUCER_TEMPLATE));
+    assert_eq!(recorder.as_deref(), Some(SVC_TEMPLATE));
+    assert_eq!(user, None);
     assert!(
         stderr.contains(&format!(
-            "template={} replaces the KPI template its handshake sent",
+            "the KPI template its handshake sent is used over template={}; add \
+             template_override=true to use the file",
+            template.display()
+        )),
+        "{stderr}"
+    );
+
+    let option = format!(",template={},template_override=true", template.display());
+    let (used, recorder, user, stderr) = record("override.dendro", &option);
+    assert_eq!(used.as_deref(), Some(SVC_TEMPLATE));
+    assert_eq!(recorder, None);
+    assert_eq!(user.as_deref(), Some(SVC_TEMPLATE));
+    assert!(
+        stderr.contains(&format!(
+            "template={} is used over the KPI template its handshake sent \
+             (template_override=true)",
             template.display()
         )),
         "{stderr}"
@@ -2826,5 +2860,8 @@ fn a_template_replaces_the_one_a_producers_handshake_sends() {
         metadata.get("service_queries").map(String::as_str),
         Some(SVC_TEMPLATE)
     );
-    assert!(!stderr.contains("replaces the KPI template"), "{stderr}");
+    assert!(
+        !stderr.contains("KPI template its handshake sent"),
+        "{stderr}"
+    );
 }

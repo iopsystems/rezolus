@@ -208,11 +208,12 @@ producer declares one; the recorder infers none, and warns about an endpoint
 that has neither an alias nor a `source`. A producer that declares its
 identity in its handshake (a Rezolus agent does) also gives the recording `host` and
 `__producer__`, which the viewer reads to show the built-in sections or find
-a KPI template. Its metadata is its `--endpoint`'s `role=` and `template=` (as
-`role` and `service_queries`), over `--metadata`, over the handshake's
-metadata, over what the recorder observed (`sampling_interval_ms`,
-`transport`, and a Rezolus agent's `version`, `systeminfo` and
-`descriptions`); a per-endpoint key beats the run-wide `--metadata`. Each
+a KPI template. Its metadata is its `--endpoint`'s `role=` (and `template=`
+with `template_override=true`), over `--metadata`, over the handshake's
+metadata, over what the recorder wrote: `template=` (as `service_queries`),
+`sampling_interval_ms`, `transport`, and a Rezolus agent's `version`,
+`systeminfo` and `descriptions`. A per-endpoint key beats the run-wide
+`--metadata`. Each
 recording keeps these as identity layers, which `recording metadata` and the
 viewer's information panel read; the producer's epochs are entries in its
 recorder layer. A producer that sends its `source` and version in its
@@ -251,11 +252,21 @@ know refuses the run (exit 2) and writes nothing, as `recording annotate
 
 The viewer and `recording check` evaluate a template's queries against its
 endpoint's recording only, so a query need not select by `source`; the
-templates rezolus ships do not. On a streamed endpoint `template=`
-replaces the template the producer sends, since the user's metadata outranks
-the handshake's, and the recorder logs a line saying so when it sees that
-handshake at startup. It also replaces a `--metadata service_queries=` value,
-which applies to every recording.
+templates rezolus ships do not. On a streamed endpoint whose producer sends
+its own template, the producer's is used: `template=` is a default, written
+in the recording's recorder layer, beneath the producer's. The recorder logs
+a warning saying so when it sees that handshake at startup. To use the file
+over the producer's template, add `template_override=true`:
+
+```bash
+rezolus record --endpoint http://loadgen:9090,template=mine.json,template_override=true -o run.dendro
+```
+
+In a config file the key is `template_override = true`. The switch writes the
+file in the recording's user layer. It is refused without `template=`, and
+any value other than `true` or `false` is refused. Either way, `template=`
+replaces a `--metadata service_queries=` value, which applies to every
+recording, for that endpoint.
 
 The templates rezolus ships in `crates/dashboard/templates/` (cachecannon,
 llm-perf, vLLM, SGLang, Valkey and others) are a fallback: the viewer uses one

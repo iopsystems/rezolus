@@ -63,11 +63,18 @@ pub struct EndpointConfig {
     #[serde(default)]
     pub protocol: Option<Protocol>,
     /// `template=FILE`: a KPI template (a `ServiceExtension` JSON file)
-    /// written into this endpoint's recording as `service_queries`. Relative
-    /// to the working directory on `--endpoint`, and to the config file's
-    /// directory in a `--config` file (resolved by `from_args`).
+    /// written into this endpoint's recording as `service_queries`, in its
+    /// recorder layer: a default that a template the producer sends is used
+    /// over. Relative to the working directory on `--endpoint`, and to the
+    /// config file's directory in a `--config` file (resolved by
+    /// `from_args`).
     #[serde(default)]
     pub template: Option<PathBuf>,
+    /// `template_override=true`: `template` is written in the recording's
+    /// user layer instead, so it is used over a template the producer sends.
+    /// Refused without `template`.
+    #[serde(default)]
+    pub template_override: bool,
     /// The template's text, read and checked by
     /// [`EndpointConfig::load_template`] before anything is recorded.
     #[serde(skip)]
@@ -93,6 +100,12 @@ impl EndpointConfig {
     /// into `template_json`. An error names the endpoint, and the file
     /// through `load_queries`.
     pub fn load_template(&mut self) -> Result<(), String> {
+        if self.template_override && self.template.is_none() {
+            return Err(format!(
+                "endpoint {}: template_override=true needs template=FILE",
+                self.url
+            ));
+        }
         if let Some(path) = &self.template {
             let json = crate::parquet_tools::annotate::load_queries(path)
                 .map_err(|e| format!("endpoint {}: template: {e}", self.url))?;

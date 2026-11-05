@@ -84,7 +84,8 @@ target/release/rezolus record --endpoint http://agent:4241 --endpoint http://svc
 target/release/rezolus record --endpoint http://gpu:8000/metrics,alias=vllm,template=vllm.json -o run.dendro  # KPI template into that recording's service_queries
 #   template= (TOML: template = "FILE") is read and checked in RecordingConfig::from_args (EndpointConfig::load_template ->
 #   parquet_tools::annotate::load_queries: ServiceExtension + check_unit_systems), refused with exit 2 before recording;
-#   endpoint_spec puts it in the spec's metadata, which outranks a streamed producer's handshake service_queries.
+#   endpoint_spec puts it in the spec's default_metadata (recorder layer), beneath a streamed producer's handshake
+#   service_queries; with template_override=true it goes in the spec's metadata (user layer), over it.
 #   A producer can send its own template in the handshake (cachecannon and llm-perf do from their next releases);
 #   crates/dashboard/templates is the fallback for recordings without one and the source of template= files for
 #   vLLM/SGLang/Valkey. A config file's relative template = is read from the config file's directory; load_queries
@@ -100,12 +101,13 @@ target/release/rezolus record -o bench.dendro -- ./bench.sh   # record for the c
 # /metrics answers 2xx (Pending until then). Late detection and enrich run on spawned tasks. Any
 # other path is scraped at its URL. protocol=stream (also rezolus, msgpack) streams only,
 # protocol=prometheus scrapes only. /metrics/binary is not read. Identity (metriken-recorder's):
-# layers (metriken-recorder 0.7): labels user (--label, alias=, tier=, service_kind=, arm=, host=;
+# layers (metriken-recorder 0.8): labels user (--label, alias=, tier=, service_kind=, arm=, host=;
 # source= read as alias=) > handshake labels >
 # recorder (endpoint = the URL; the hook's host from /systeminfo); no source is inferred; a handshake
 # producer identity or the hook's producer_name gives __producer__; metadata endpoint
-# role=/template= > user --metadata > handshake metadata > recorder (sampling_interval_ms, transport,
-# the hook's version, systeminfo, descriptions); epochs are recorder-layer entries; --metadata
+# role= (template= with template_override=true) > user --metadata > handshake metadata > recorder
+# (template= as service_queries, sampling_interval_ms, transport, the hook's version, systeminfo,
+# descriptions); epochs are recorder-layer entries; --metadata
 # producer_epoch(s)= and metriken.* keys are refused, and a pinned key survives a restart and a
 # scrape's HELP text. The startup enrich runs concurrently
 # per streamed endpoint, bounded by the scrape timeout (warning on fallback); a late activation's
