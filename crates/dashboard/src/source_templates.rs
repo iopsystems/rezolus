@@ -44,6 +44,7 @@
 //! template, silently.
 
 use crate::combined;
+use crate::identity::Identity;
 use crate::section_template::SectionTemplate;
 use crate::{ServiceExtension, TemplateRegistry};
 use std::collections::{HashMap, HashSet};
@@ -93,6 +94,10 @@ pub fn resolve_source_templates(
         ..Default::default()
     };
     let legacy = is_legacy(metadata);
+    let identity = Identity::read(metadata);
+    // The name a recording with identity layers and no `source` key is
+    // shown by, which keys its template whichever step finds it.
+    let layered_name = identity.layered.then(|| identity.name()).flatten();
     // Sources whose carried template had `source` matchers removed or kept.
     let mut adjusted: Vec<(String, combined::Dropped)> = Vec::new();
     let top_source = metadata
@@ -119,13 +124,23 @@ pub fn resolve_source_templates(
 
     // 1. Top-level `service_queries` (a single-source parquet, a `.rez`
     //    recording, a dendro source, or a combined parquet annotated after
-    //    combining). Keyed by `source`, or by the template's own
-    //    `service_name` when `source` names several sources.
+    //    combining). Keyed by `source`; without one, by a layered
+    //    recording's name ([`Identity::name`]); else by the template's own
+    //    `service_name`. The registry is looked up by the `source` key, else
+    //    by a layered recording's `source` label, else by the template's own
+    //    `service_name`.
     if let Some(json) = metadata.get(KEY_SERVICE_QUERIES) {
         match serde_json::from_str::<ServiceExtension>(json) {
             Ok(ext) => {
-                let source = top_source.unwrap_or(&ext.service_name).to_string();
-                let (mut ext, registry_won) = choose(&source, ext);
+                let lookup = top_source
+                    .or(identity.source.as_deref())
+                    .unwrap_or(&ext.service_name)
+                    .to_string();
+                let source = top_source
+                    .or(layered_name)
+                    .unwrap_or(&ext.service_name)
+                    .to_string();
+                let (mut ext, registry_won) = choose(&lookup, ext);
                 if registry_won {
                     from_registry.insert(source.clone());
                 } else if legacy {
@@ -198,13 +213,35 @@ pub fn resolve_source_templates(
         out.service_exts.push((source.to_string(), ext.clone()));
     }
 
-    // A template that declares no producer takes the producer and
-    // `service_kind` of the registry entry its source names, so a
-    // `vllm-prefill` recording's own template is a `vllm` template.
+    // 3c. A recording with identity layers that no earlier step found a
+    // template for: the registry by its kind ([`Identity::kind`]), under the
+    // name it is shown by.
+    if out.service_exts.is_empty()
+        && identity.layered
+        && let Some((producer, service_kind)) = identity.kind(registry)
+        && let Some(ext) = registry.find(producer, service_kind)
+    {
+        let name = layered_name.unwrap_or(&ext.service_name).to_string();
+        from_registry.insert(name.clone());
+        out.service_exts.push((name, ext.clone()));
+    }
+
+    // A template that declares no producer takes the producer the recording
+    // names, else the producer and `service_kind` of the registry entry its
+    // source names, so a `vllm-prefill` recording's own template is a `vllm`
+    // template.
     for (source, ext) in &mut out.service_exts {
-        if ext.producer.is_none()
-            && let Some(entry) = registry.get(source)
+        if ext.producer.is_some() {
+            continue;
+        }
+        if identity.producer.is_some()
+            && let Some((producer, service_kind)) = identity.kind(registry)
         {
+            ext.producer = Some(producer.to_string());
+            if ext.service_kind.is_none() {
+                ext.service_kind = service_kind.map(str::to_string);
+            }
+        } else if let Some(entry) = registry.get(source) {
             ext.producer = Some(entry.producer().to_string());
             if ext.service_kind.is_none() {
                 ext.service_kind = entry.service_kind.clone();
@@ -710,6 +747,89 @@ mod tests {
         );
         assert_eq!(queries(&resolved), ["up"]);
         assert_eq!(resolved.notices.len(), 1, "{:?}", resolved.notices);
+    }
+
+    /// A recording with identity layers and no `source` key finds the
+    /// registry template by its kind (producer `vllm`, kind `prefill` finds
+    /// `vllm-prefill`), under the name it is shown by; a template it carries
+    /// that declares no producer takes the recording's.
+    #[test]
+    fn a_layered_recording_finds_its_template_by_kind() {
+        use crate::identity::tests::layered;
+        use metriken_storage::layers::Layer;
+        let registry = crate::embedded_templates().unwrap();
+
+        let metadata = layered(&[
+            (Layer::Producer, &[], &[("producer_name", "vllm")]),
+            (
+                Layer::User,
+                &[("service_kind", "prefill"), ("alias", "p0")],
+                &[],
+            ),
+        ]);
+        let t = resolve_source_templates(&metadata, &registry, TemplatePreference::Archive);
+        assert_eq!(t.service_exts.len(), 1);
+        assert_eq!(t.service_exts[0].0, "p0");
+        assert_eq!(t.service_exts[0].1.service_name, "vllm-prefill");
+
+        let mut carried = layered(&[(Layer::Producer, &[], &[("producer_name", "cachecannon")])]);
+        carried.insert(
+            "service_queries".into(),
+            serde_json::to_string(&ext("cc", "carried")).unwrap(),
+        );
+        let t = resolve_source_templates(&carried, &registry, TemplatePreference::Archive);
+        assert_eq!(t.service_exts[0].1.producer(), "cachecannon");
+        // A carried template is shown under the recording's name too.
+        assert_eq!(t.service_exts[0].0, "cachecannon");
+        let mut aliased = layered(&[
+            (Layer::Producer, &[], &[("producer_name", "cachecannon")]),
+            (Layer::User, &[("alias", "cc-a")], &[]),
+        ]);
+        aliased.insert(
+            "service_queries".into(),
+            serde_json::to_string(&ext("cc", "carried")).unwrap(),
+        );
+        let t = resolve_source_templates(&aliased, &registry, TemplatePreference::Archive);
+        assert_eq!(t.service_exts[0].0, "cc-a");
+
+        // Under `--registry-templates` a carried template gives way to the
+        // registry's of its own name, whatever the recording is called.
+        for alias in [None, Some("p0")] {
+            let mut labels = vec![("service_kind", "prefill")];
+            labels.extend(alias.map(|a| ("alias", a)));
+            let mut prefill = layered(&[
+                (Layer::Producer, &[], &[("producer_name", "vllm")]),
+                (Layer::User, &labels, &[]),
+            ]);
+            prefill.insert(
+                "service_queries".into(),
+                serde_json::to_string(&ext("vllm-prefill", "carried")).unwrap(),
+            );
+            let t = resolve_source_templates(&prefill, &registry, TemplatePreference::Registry);
+            assert_eq!(t.service_exts.len(), 1);
+            assert_eq!(
+                t.service_exts[0].1.service_name, "vllm-prefill",
+                "{alias:?}"
+            );
+            assert_ne!(t.service_exts[0].1.kpis[0].title, "carried", "{alias:?}");
+        }
+
+        // A carried template without a producer takes the kind the
+        // recording's `source` refines its producer by.
+        let mut refined = layered(&[
+            (Layer::Producer, &[], &[("producer_name", "vllm")]),
+            (Layer::User, &[("source", "vllm-prefill")], &[]),
+        ]);
+        refined.insert(
+            "service_queries".into(),
+            serde_json::to_string(&ext("mine", "carried")).unwrap(),
+        );
+        let t = resolve_source_templates(&refined, &registry, TemplatePreference::Archive);
+        assert_eq!(t.service_exts[0].1.service_kind.as_deref(), Some("prefill"));
+        // Under `--registry-templates` the recording's `source` label picks
+        // the registry template, as its kind does without a carried one.
+        let t = resolve_source_templates(&refined, &registry, TemplatePreference::Registry);
+        assert_eq!(t.service_exts[0].1.service_name, "vllm-prefill");
     }
 
     #[test]

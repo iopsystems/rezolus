@@ -9,6 +9,7 @@
 //! `viewer-parity` skill).
 
 use crate::dashboard::SourceEntry;
+use crate::identity::Identity;
 use std::collections::HashSet;
 
 use crate::keys::{KEY_PER_SOURCE_METADATA, KEY_SOURCE};
@@ -139,6 +140,36 @@ pub fn classify_sources(
                 is_rezolus: kind == SourceKind::Rezolus,
             });
         }
+    } else if let identity @ Identity { layered: true, .. } = Identity::read_json(file_metadata) {
+        // A recording with identity layers: the agent by its producer, never
+        // by its metric names (a producer that declares none is not
+        // identified); a service when a template covers its name.
+        let name = identity.name().unwrap_or("");
+        // A template may be keyed by the recording's `source` (its label, or
+        // the metadata key an upgraded recording keeps) rather than the name
+        // it is shown by.
+        let covered = [
+            Some(name),
+            identity.source.as_deref(),
+            file_metadata.get(KEY_SOURCE).and_then(|v| v.as_str()),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|n| service_names.contains(n));
+        let kind = if identity.is_rezolus() {
+            SourceKind::Rezolus
+        } else if covered {
+            SourceKind::Service
+        } else {
+            SourceKind::Simple
+        };
+        if kind != SourceKind::Service {
+            let name = resolve_source_name(kind, name, None, filename_stem);
+            entries.push(SourceEntry {
+                name,
+                is_rezolus: kind == SourceKind::Rezolus,
+            });
+        }
     } else {
         // Single-source file: use the top-level `source` key. Sampler status
         // is not present at the top level in single-source files.
@@ -167,6 +198,81 @@ mod tests {
 
     fn names(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Metadata as both viewers pass it: each value parsed as JSON where it
+    /// is JSON (a layer document becomes an object), else kept as a string.
+    fn json(map: std::collections::HashMap<String, String>) -> serde_json::Value {
+        map.into_iter()
+            .map(|(k, v)| {
+                let value = serde_json::from_str(&v).unwrap_or(serde_json::Value::String(v));
+                (k, value)
+            })
+            .collect::<serde_json::Map<_, _>>()
+            .into()
+    }
+
+    /// A recording with identity layers is the agent's by its producer and
+    /// by nothing else: not by the agent's self-metric names, and not by a
+    /// user `source` of `rezolus`. Others are named by `alias`, `source`,
+    /// then producer, and a template covering that name makes it a service.
+    #[test]
+    fn a_layered_recording_is_classified_by_its_producer() {
+        use crate::identity::tests::layered;
+        use metriken_storage::layers::Layer;
+        let anchors = names(&["rezolus_cpu_usage"]);
+        let none = HashSet::new();
+
+        let agent = json(layered(&[(
+            Layer::Recorder,
+            &[],
+            &[("producer_name", "rezolus")],
+        )]));
+        let entries = classify_sources(&agent, &[], &none, None);
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].is_rezolus);
+        assert_eq!(entries[0].name, "rezolus");
+
+        let named = json(layered(&[(Layer::User, &[("source", "rezolus")], &[])]));
+        let entries = classify_sources(&named, &anchors, &none, None);
+        assert!(!entries[0].is_rezolus);
+
+        let svc = json(layered(&[(Layer::User, &[("alias", "web")], &[])]));
+        let entries = classify_sources(&svc, &anchors, &none, Some("file"));
+        assert_eq!(entries[0].name, "web");
+        assert!(!entries[0].is_rezolus);
+        assert!(classify_sources(&svc, &[], &HashSet::from(["web"]), None).is_empty());
+
+        // A template keyed by the recording's `source` covers it too, though
+        // it is shown by its `alias`.
+        let both = json(layered(&[(
+            Layer::User,
+            &[("source", "valkey"), ("alias", "cache-a")],
+            &[],
+        )]));
+        assert!(classify_sources(&both, &[], &HashSet::from(["valkey"]), None).is_empty());
+
+        // An upgraded recording keeps `source` as a metadata key in its
+        // recorder layer; the template `resolve_source_templates` finds is
+        // keyed by it, and the recording gets no second section under its
+        // `alias`.
+        let registry = crate::embedded_templates().unwrap();
+        let upgraded = layered(&[
+            (Layer::Recorder, &[], &[("source", "valkey")]),
+            (Layer::User, &[("alias", "cache-a")], &[]),
+        ]);
+        let resolved = crate::source_templates::resolve_source_templates(
+            &upgraded,
+            &registry,
+            crate::source_templates::TemplatePreference::Archive,
+        );
+        let service_names: HashSet<&str> = resolved
+            .service_exts
+            .iter()
+            .map(|(s, _)| s.as_str())
+            .collect();
+        assert_eq!(service_names, HashSet::from(["valkey"]));
+        assert!(classify_sources(&json(upgraded), &[], &service_names, None).is_empty());
     }
 
     #[test]
