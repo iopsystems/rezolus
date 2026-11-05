@@ -1142,6 +1142,7 @@ dependencies = [
  "metriken-exposition",
  "metriken-query",
  "metriken-storage",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
@@ -2574,9 +2575,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.43.0"
+version = "0.44.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11df4f4511ad59d26cccef0d8268680d81967e96a9c0994e8701800404e25b34"
+checksum = "c4fd53db1460b3f5206e375a38be9824d7f213ba1b54cb49cab460833fe1c90e"
 dependencies = [
  "arrow",
  "bytes",
@@ -2586,6 +2587,7 @@ dependencies = [
  "metriken-storage",
  "parquet",
  "promql-parser",
+ "regex",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -2595,9 +2597,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-recorder"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb7cbc3e1ef0653a8ed3d8979135c02868bcf740beceb592d7c6fd97eff7e6a7"
+checksum = "ccd0261e949bc368397a834581758c86791ac0d96a888776b0ed70e9c3603bd4"
 dependencies = [
  "async-trait",
  "dendro",
@@ -2617,9 +2619,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-storage"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5d4360e8b4665efcb95814df1f113220454f7b6a43d63f3453d726149792db0"
+checksum = "f68ebf03147512ba68e75b7e9220038c6b1dd47d7699f1192423adcad7797075"
 dependencies = [
  "arrow",
  "bytes",
@@ -2631,6 +2633,7 @@ dependencies = [
  "metriken-model",
  "metriken-types",
  "parquet",
+ "regex",
  "rmp",
  "rmp-serde",
  "rusqlite",
@@ -3604,7 +3607,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "6.0.0-alpha.121"
+version = "6.0.0-alpha.122"
 dependencies = [
  "allan",
  "anyhow",
