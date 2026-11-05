@@ -317,7 +317,7 @@ fn an_agent_and_a_service_of_one_run_open_as_one_view() {
         "kpis": [{
             "role": "throughput",
             "title": "Requests",
-            "query": "sum(irate(svc_requests_total{source=\"svc\"}[1s]))",
+            "query": "sum(irate(svc_requests_total{alias=\"svc\"}[1s]))",
             "type": "delta_counter",
             "denominator": true,
         }],
@@ -329,7 +329,7 @@ fn an_agent_and_a_service_of_one_run_open_as_one_view() {
         assert_eq!(sources.len(), 2, "{sources:?}");
         let svc = sources
             .iter()
-            .find(|s| s.meta.labels.get("source").map(String::as_str) == Some("svc"))
+            .find(|s| s.meta.labels.get("alias").map(String::as_str) == Some("svc"))
             .unwrap();
         let agent = sources.iter().find(|s| s.id != svc.id).unwrap();
         // The agent is named by the producer the probe hook reports.
@@ -376,14 +376,14 @@ fn an_agent_and_a_service_of_one_run_open_as_one_view() {
     assert_eq!(mode.to_string().matches("\"id\"").count(), 1, "{mode}");
 
     // Each section's queries are its template's, as written: the recording
-    // has identity layers and keeps the `source=svc` label its endpoint was
-    // given, so the template's `source` matcher selects it. Each plot names
-    // the sources of its recording as its scope.
+    // carries the `alias=svc` its endpoint was given (`source=svc`, read as
+    // `alias=`), so the template's `alias` matcher selects it. Each plot
+    // names the sources of its recording as its scope.
     let svc = get(&viewer, "/data/service/svc.json");
     let queries = plot_queries(&svc);
     assert_eq!(
         queries[0].1,
-        "sum(irate(svc_requests_total{source=\"svc\"}[1s]))"
+        "sum(irate(svc_requests_total{alias=\"svc\"}[1s]))"
     );
     for (id, scope) in plot_scopes(&svc) {
         assert_eq!(scope, serde_json::json!([svc_uuid]), "{id}");

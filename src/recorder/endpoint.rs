@@ -38,11 +38,26 @@ where
 pub struct EndpointConfig {
     #[serde(deserialize_with = "deserialize_url")]
     pub url: Url,
-    /// The user's `source`, a label on the endpoint's recording. When `None`
-    /// the recording has a `source` only when `--label source=` or its
-    /// producer's handshake gives one; the recorder infers none.
+    /// `source=`, the deprecated spelling of `alias=`: [`RecordingConfig`]
+    /// reads it as `alias` before anything is recorded, so it is `None` on
+    /// an endpoint `record` runs with.
+    ///
+    /// [`RecordingConfig`]: super::config::RecordingConfig
     #[serde(default)]
     pub source: Option<String>,
+    /// `alias=`: the user's name for the endpoint, a label on its recording.
+    /// A recording has no `source` of the user's; its `source` label, when it
+    /// has one, is the one its producer's handshake declares.
+    #[serde(default)]
+    pub alias: Option<String>,
+    /// `tier=`: the endpoint's role in a benchmark (`client`, `server`), a
+    /// label every endpoint in that role shares.
+    #[serde(default)]
+    pub tier: Option<String>,
+    /// `service_kind=`: the role its producer runs in (`prefill`), a label
+    /// that refines which KPI template the recording takes.
+    #[serde(default)]
+    pub service_kind: Option<String>,
     #[serde(default)]
     pub role: Option<String>,
     #[serde(default)]

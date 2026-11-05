@@ -186,7 +186,96 @@ fn resolve_output(
 }
 
 impl RecordingConfig {
+    /// The configuration `args` give, with every `source=` read as
+    /// `alias=` ([`RecordingConfig::read_source_as_alias`]); a note says so
+    /// for each.
     pub fn from_args(args: &ArgMatches) -> Result<Self, String> {
+        let mut config = Self::from_args_as_given(args)?;
+        for note in config.read_source_as_alias()? {
+            eprintln!("{note}");
+        }
+        Ok(config)
+    }
+
+    /// `source=` is the deprecated spelling of `alias=`, the user's name for
+    /// an endpoint: an endpoint's `source=` (from `--endpoint`, a config
+    /// file, or `--metadata source=` with `--url`) becomes its `alias`, and
+    /// every `--label source=` becomes `--label alias=`. A recording then
+    /// carries a `source` label only when its producer declares one. Each
+    /// endpoint's `source`, `alias`, `tier` and `service_kind` must be a value
+    /// with no whitespace around it, from any of them. Returns a note per
+    /// rewrite; refuses a `source=` and an `alias=` that disagree.
+    fn read_source_as_alias(&mut self) -> Result<Vec<String>, String> {
+        let mut notes = Vec::new();
+        for ep in &mut self.endpoints {
+            for (key, value) in [
+                ("source", &ep.source),
+                ("alias", &ep.alias),
+                ("tier", &ep.tier),
+                ("service_kind", &ep.service_kind),
+            ] {
+                if value
+                    .as_deref()
+                    .is_some_and(|v| v.is_empty() || v.trim() != v)
+                {
+                    let value = value.as_deref().unwrap_or_default();
+                    return Err(format!(
+                        "{}: {key}={value:?} needs a value with no whitespace around it",
+                        ep.url
+                    ));
+                }
+            }
+            let Some(source) = ep.source.take() else {
+                continue;
+            };
+            if let Some(alias) = ep.alias.as_ref().filter(|a| **a != source) {
+                return Err(format!(
+                    "{}: source={source} and alias={alias} name the endpoint differently; \
+                     source= is the old spelling of alias=, so give alias= alone",
+                    ep.url
+                ));
+            }
+            notes.push(format!(
+                "note: source={source} on {} is read as alias={source}; source= is \
+                 deprecated, use alias=",
+                ep.url
+            ));
+            ep.alias = Some(source);
+        }
+        let sources: Vec<String> = self
+            .labels
+            .iter()
+            .filter(|(k, _)| k == "source")
+            .map(|(_, v)| v.clone())
+            .collect();
+        if let Some(source) = sources.first().cloned() {
+            if let Some(other) = sources.iter().find(|s| **s != source) {
+                return Err(format!(
+                    "--label source={source} and --label source={other} disagree; give one \
+                     --label alias= in their place"
+                ));
+            }
+            self.labels.retain(|(k, _)| k != "source");
+            // The last `--label alias=` is the one a recording carries.
+            match self.labels.iter().rev().find(|(k, _)| k == "alias") {
+                Some((_, alias)) if *alias != source => {
+                    return Err(format!(
+                        "--label source={source} and --label alias={alias} disagree; \
+                         source= is the old spelling of alias=, so give alias= alone"
+                    ));
+                }
+                Some(_) => {}
+                None => self.labels.push(("alias".to_string(), source.clone())),
+            }
+            notes.push(format!(
+                "note: --label source={source} is read as --label alias={source}; source= \
+                 is deprecated, use alias="
+            ));
+        }
+        Ok(notes)
+    }
+
+    fn from_args_as_given(args: &ArgMatches) -> Result<Self, String> {
         let verbose = *args.get_one::<u8>("VERBOSE").unwrap_or(&0);
         let interval = *args
             .get_one::<humantime::Duration>("INTERVAL")
@@ -368,14 +457,34 @@ impl RecordingConfig {
             eprintln!("note: the positional OUTPUT is deprecated, use -o/--output");
         }
 
-        let source = metadata
+        // `--metadata source=` names the one endpoint: it is read as the
+        // endpoint's `source=` (and so as `alias=`), not kept as metadata.
+        let sources: Vec<&String> = metadata
             .iter()
-            .find(|(k, _)| k == "source")
-            .map(|(_, v)| v.clone());
+            .filter(|(k, _)| k == "source")
+            .map(|(_, v)| v)
+            .collect();
+        let source = sources.first().map(|s| (*s).clone());
+        let first = sources.first().copied();
+        if let Some((first, other)) =
+            first.and_then(|f| sources.iter().find(|v| **v != f).map(|o| (f, o)))
+        {
+            return Err(format!(
+                "--metadata source={first} and --metadata source={other} disagree; give one \
+                 --metadata source=NAME, or --label alias=NAME, in their place"
+            ));
+        }
+        let metadata: Vec<(String, String)> = metadata
+            .into_iter()
+            .filter(|(k, _)| k != "source")
+            .collect();
 
         let endpoint = EndpointConfig {
             url,
             source,
+            alias: None,
+            tier: None,
+            service_kind: None,
             role: None,
             protocol: None,
             template: None,
@@ -417,6 +526,9 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
     let mut template: Option<PathBuf> = None;
     let mut arm: Option<String> = None;
     let mut host: Option<String> = None;
+    let mut alias: Option<String> = None;
+    let mut tier: Option<String> = None;
+    let mut service_kind: Option<String> = None;
 
     if let Some(opts) = rest {
         for pair in opts.split(',') {
@@ -446,6 +558,15 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
                     return Err(format!("host={value:?} has whitespace around it"));
                 }
                 "host" => host = Some(value.to_string()),
+                "alias" | "tier" | "service_kind" if value.is_empty() => {
+                    return Err(format!("{key}= needs a value"));
+                }
+                "alias" | "tier" | "service_kind" if value.trim() != value => {
+                    return Err(format!("{key}={value:?} has whitespace around it"));
+                }
+                "alias" => alias = Some(value.to_string()),
+                "tier" => tier = Some(value.to_string()),
+                "service_kind" => service_kind = Some(value.to_string()),
                 "protocol" => {
                     protocol = Some(match value {
                         "stream" | "rezolus" | "msgpack" => Protocol::Stream,
@@ -461,6 +582,9 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
     Ok(EndpointConfig {
         url,
         source,
+        alias,
+        tier,
+        service_kind,
         role,
         protocol,
         template,
@@ -823,6 +947,135 @@ mod tests {
         let ep = parse_endpoint_str("http://localhost:4241,source=rezolus,role=agent").unwrap();
         assert_eq!(ep.source.as_deref(), Some("rezolus"));
         assert_eq!(ep.role.as_deref(), Some("agent"));
+    }
+
+    /// `alias=`, `tier=` and `service_kind=` are endpoint options, each a
+    /// value without surrounding whitespace.
+    #[test]
+    fn an_endpoint_takes_alias_tier_and_service_kind() {
+        let ep =
+            parse_endpoint_str("http://a:8000/metrics,alias=p0,tier=server,service_kind=prefill")
+                .unwrap();
+        assert_eq!(ep.alias.as_deref(), Some("p0"));
+        assert_eq!(ep.tier.as_deref(), Some("server"));
+        assert_eq!(ep.service_kind.as_deref(), Some("prefill"));
+        for bad in ["alias=", "tier= x", "service_kind= x"] {
+            let arg = format!("http://a:8000/metrics,{bad}");
+            assert!(parse_endpoint_str(&arg).is_err(), "{arg}");
+        }
+    }
+
+    /// `source=` is read as `alias=` on every way of giving an endpoint, and
+    /// a run-wide `--label source=` as `--label alias=`; a `source=` and an
+    /// `alias=` that disagree are refused.
+    #[test]
+    fn source_is_read_as_alias() {
+        let cfg = parse(&["--endpoint", "http://a:4241,source=web"]).unwrap();
+        assert_eq!(cfg.endpoints[0].alias.as_deref(), Some("web"));
+        assert_eq!(cfg.endpoints[0].source, None);
+        let cfg = parse(&["--endpoint", "http://a:4241,source=web,alias=web"]).unwrap();
+        assert_eq!(cfg.endpoints[0].alias.as_deref(), Some("web"));
+        let err = parse(&["--endpoint", "http://a:4241,source=web,alias=db"])
+            .err()
+            .expect("refused");
+        assert!(err.contains("source=web and alias=db"), "{err}");
+
+        let cfg = parse(&["--url", "http://a:4241", "--metadata", "source=web"]).unwrap();
+        assert_eq!(cfg.endpoints[0].alias.as_deref(), Some("web"));
+        assert!(
+            !cfg.metadata.iter().any(|(k, _)| k == "source"),
+            "{:?}",
+            cfg.metadata
+        );
+
+        let cfg = parse(&["--url", "http://a:4241", "--label", "source=run"]).unwrap();
+        assert_eq!(cfg.labels, [("alias".to_string(), "run".to_string())]);
+        let err = parse(&[
+            "--url",
+            "http://a:4241",
+            "--label",
+            "source=run",
+            "--label",
+            "alias=other",
+        ])
+        .err()
+        .expect("refused");
+        assert!(err.contains("disagree"), "{err}");
+
+        // Every `--label source=` is read as an alias, and two that differ
+        // are refused; the last `--label alias=` is the one compared.
+        let cfg = parse(&[
+            "--url",
+            "http://a:4241",
+            "--label",
+            "source=run",
+            "--label",
+            "source=run",
+        ])
+        .unwrap();
+        assert_eq!(cfg.labels, [("alias".to_string(), "run".to_string())]);
+        let err = parse(&[
+            "--url",
+            "http://a:4241",
+            "--label",
+            "source=a",
+            "--label",
+            "source=b",
+        ])
+        .err()
+        .expect("refused");
+        assert!(err.contains("source=a and --label source=b"), "{err}");
+        let cfg = parse(&[
+            "--url",
+            "http://a:4241",
+            "--label",
+            "alias=a",
+            "--label",
+            "alias=b",
+            "--label",
+            "source=b",
+        ])
+        .unwrap();
+        assert!(
+            !cfg.labels.iter().any(|(k, _)| k == "source"),
+            "{:?}",
+            cfg.labels
+        );
+
+        // A config file's endpoint is checked the same way.
+        let dir = tempfile::tempdir().unwrap();
+        let toml = dir.path().join("record.toml");
+        std::fs::write(
+            &toml,
+            "[recording]\noutput = \"out.dendro\"\n\n[[endpoints]]\nurl = \"http://a:4241\"\nalias = \" padded\"\n",
+        )
+        .unwrap();
+        let err = parse(&["--config", toml.to_str().unwrap()])
+            .err()
+            .expect("refused");
+        assert!(err.contains("alias=\" padded\""), "{err}");
+
+        // Two `--metadata source=` with `--url` that differ are refused.
+        let err = parse(&[
+            "--url",
+            "http://a:4241",
+            "--metadata",
+            "source=a",
+            "--metadata",
+            "source=b",
+        ])
+        .err()
+        .expect("refused");
+        assert!(
+            err.contains("--metadata source=a and --metadata source=b"),
+            "{err}"
+        );
+
+        // An empty or padded `source=` is refused, as `alias=` is.
+        for bad in ["source=", "source= web"] {
+            let arg = format!("http://a:4241,{bad}");
+            assert!(parse(&["--endpoint", &arg]).is_err(), "{arg}");
+        }
     }
 
     #[test]

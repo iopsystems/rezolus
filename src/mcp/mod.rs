@@ -1458,7 +1458,7 @@ fn recording_arg() -> clap::Arg {
         // here without `wrap_help`, so it prints this verbatim (one endless
         // line otherwise) and `-h` leads with that first line.
         .help(
-            "Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)\n\
+            "Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)\n\
              Repeatable: the pairs are ANDed and must together name exactly one\n\
              recording. Matching none or several is an error, never a guess.\n\
              Without it, the recordings of one run are read together, each series\n\

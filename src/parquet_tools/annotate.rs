@@ -34,12 +34,16 @@ fn run_inner(host: &super::Host, args: &super::cli::AnnotateArgs) -> Result<(), 
     let program = host.program;
     let how = host.how_labels_are_set();
     let relabel = |flag: &str| {
+        // A recording's name is its `alias` label; `--source` named it.
+        let what = match flag {
+            "--source" => "name (its `alias`)",
+            other => other.trim_start_matches("--"),
+        };
         format!(
-            "{flag} set a key in a parquet file's footer. A .dendro recording's {} is a \
-             label, set when it is recorded{how}; no 6.x command sets it afterwards. \
+            "{flag} set a key in a parquet file's footer. A .dendro recording's {what} is \
+             a label, set when it is recorded{how}; no 6.x command sets it afterwards. \
              `{program} recording combine --ab` writes a copy whose two named recordings \
-             carry an `arm` label that tells them apart in a comparison",
-            flag.trim_start_matches("--")
+             carry an `arm` label that tells them apart in a comparison"
         )
     };
     let table_flag = host.table_flag.flag();

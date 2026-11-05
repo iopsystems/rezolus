@@ -194,14 +194,19 @@ as a single capture.
 run it cannot tell two endpoints apart — see below. An endpoint's `role=`
 modifier is kept as the `role` key of that endpoint's recording metadata.
 
-A recording's labels are the user's (`--label`, and `source=`, `arm=` and
-`host=` on its `--endpoint`; with `--url`, `--metadata source=` too), over
-the labels in its producer's stream handshake, over what the recorder
-observed: `endpoint`, the URL it recorded from, and `host` from a Rezolus
-agent's `/systeminfo`. A recording has a `source` label only when the user or
-its producer gives one; the recorder infers none, and warns about an endpoint
-that ends up without one. A producer that declares its identity in its
-handshake (a Rezolus agent does) also gives the recording `host` and
+A recording's labels are the user's (`--label`, and `alias=`, `tier=`,
+`service_kind=`, `arm=` and `host=` on its `--endpoint`), over the labels in
+its producer's stream handshake, over what the recorder observed: `endpoint`,
+the URL it recorded from, and `host` from a Rezolus agent's `/systeminfo`.
+`alias=` names the recording; `source=` is its deprecated spelling and is
+read as `alias=` (as are `--metadata source=` with `--url` and `--label
+source=`), and a `source=` and an `alias=` that disagree are refused.
+`tier=` labels the endpoint's role in a benchmark (`client`, `server`), and
+`service_kind=` the role its producer runs in (`prefill`), which refines the
+KPI template it takes. A recording has a `source` label only when its
+producer declares one; the recorder infers none, and warns about an endpoint
+that has neither an alias nor a `source`. A producer that declares its
+identity in its handshake (a Rezolus agent does) also gives the recording `host` and
 `__producer__`, which the viewer reads to show the built-in sections or find
 a KPI template. Its metadata is its `--endpoint`'s `role=` and `template=` (as
 `role` and `service_queries`), over `--metadata`, over the handshake's
@@ -232,7 +237,7 @@ releases). A scraped Prometheus endpoint has no handshake, so name a
 template file on its `--endpoint`:
 
 ```bash
-rezolus record --endpoint http://gpu-01:8000/metrics,source=vllm,template=vllm.json -o run.dendro
+rezolus record --endpoint http://gpu-01:8000/metrics,alias=vllm,template=vllm.json -o run.dendro
 ```
 
 In a `--config` file the same key is `template = "vllm.json"` in the
@@ -301,14 +306,14 @@ can also differ in background load, not just the experimental change.
 Each recording is identified by its label set. Every recording carries the
 `endpoint` it was recorded from, and a Rezolus agent's carries its `host`, so
 two endpoints of one run are already distinguishable; `--label` applies to
-every recording alike and cannot name one. `source=` on each endpoint names
-it (see the CHANGELOG for an older cachecannon or llm-perf, whose KPIs need
-the `source` it declares):
+every recording alike and cannot name one. `alias=` on each endpoint names
+it, and leaves the `source` its producer declares, which an older
+cachecannon's or llm-perf's KPI template selects:
 
 ```bash
 rezolus record \
-  --endpoint http://localhost:4241,source=redis \
-  --endpoint http://localhost:4242,source=valkey \
+  --endpoint http://localhost:4241,alias=redis \
+  --endpoint http://localhost:4242,alias=valkey \
   -o ab.dendro
 ```
 
@@ -376,7 +381,7 @@ recording:
 
 ```bash
 rezolus record --url http://localhost:4241 -o run.dendro
-rezolus record --endpoint http://agent:4241 --endpoint http://svc:9090/metrics,source=svc -o run.dendro
+rezolus record --endpoint http://agent:4241 --endpoint http://svc:9090/metrics,alias=svc -o run.dendro
 ```
 
 There is no scrape path for a Rezolus agent. An agent that cannot serve the
@@ -977,10 +982,10 @@ what the archive holds and the flag that picks each one:
 ```
 $ rezolus mcp describe-recording ab.dendro
 ab.dendro holds 2 recordings with data (a multi-host or A/B archive):
-  - host=web-01, source=redis (position 0)
-    select with: --recording source=redis
-  - host=web-01, source=valkey (position 1)
-    select with: --recording source=valkey
+  - alias=redis, host=web-01 (position 0)
+    select with: --recording alias=redis
+  - alias=valkey, host=web-01 (position 1)
+    select with: --recording alias=valkey
 
 Run any tool with one of the selectors above to analyze that recording.
 ```
@@ -989,14 +994,14 @@ Then pass `--recording key=value` (repeatable, ANDed) to any of the six
 subcommands to analyze that one recording:
 
 ```bash
-rezolus mcp query ab.dendro "sum(irate(cpu_cycles[1m]))" --recording source=valkey
+rezolus mcp query ab.dendro "sum(irate(cpu_cycles[1m]))" --recording alias=valkey
 ```
 
 A selector must name exactly one recording: matching none or several is an
 error that lists the candidates, never a guess at which one you meant. The
 stdio server's tools, read and write alike, take the same selector as an
 optional `recording` object instead of repeated flags, e.g.
-`{"source": "valkey"}`.
+`{"alias": "valkey"}`.
 
 
 ## HTTP endpoint (optional)
@@ -1060,8 +1065,8 @@ into `capture.dendro` in the output directory (`--output-dir`, default `.`),
 and launches the viewer on it. Its default agent config is
 `config/agent.toml`; use `--agent-config` if you run it elsewhere. For service
 metrics, pass paired `--endpoint` and `--source` flags: each endpoint becomes
-its own recording in the archive, labelled `source=<NAME>`, beside the agent's
-`source=rezolus`. `--command` records for the lifetime of the command
+its own recording in the archive, labelled `alias=<NAME>`, beside the agent's
+`alias=rezolus`. `--command` records for the lifetime of the command
 (`rezolus record -- <command>`), and `--pid` until that process exits. Run
 `scripts/rezolus-capture --help` for its full options.
 

@@ -45,7 +45,7 @@ pub fn command() -> Command {
              merge — and the deprecated positional URL counts as --url for that rule, as\n\
              positional OUTPUT counts as -o. Prefer the flags.\n\n\
              --url is shorthand for a single endpoint with no modifiers; reach for a single\n\
-             --endpoint when you need source=, role= or protocol= on it. Several endpoints\n\
+             --endpoint when you need alias=, role= or protocol= on it. Several endpoints\n\
              become one archive holding a recording each (see WHAT IT WRITES). --config\n\
              conflicts only with --url/--endpoint: every other flag still applies alongside\n\
              it, and -o and --interval override the file\'s [recording] table. There is no\n\
@@ -95,16 +95,16 @@ pub fn command() -> Command {
              rezolus record -o redis.dendro --label arm=redis -- ./bench.sh\n\n    \
              # High-resolution capture: sample every 100ms for 30 seconds\n    \
              rezolus record -o out.dendro --interval 100ms --duration 30s\n\n    \
-             # Record a Prometheus endpoint, tagging the source in the metadata\n    \
-             rezolus record --url http://host:9090/metrics -o out.dendro --metadata source=llm-perf\n\n    \
+             # Record a Prometheus endpoint, named llm-perf by its alias\n    \
+             rezolus record --endpoint http://host:9090/metrics,alias=llm-perf -o out.dendro\n\n    \
              # Record two agents into ONE archive holding a recording each (multi-host / A/B)\n    \
              rezolus record --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.dendro\n\n    \
-             # Same host, two agents: give each a source= so the recordings are tellable apart\n    \
-             rezolus record --endpoint http://localhost:4241,source=redis --endpoint http://localhost:4242,source=valkey -o ab.dendro\n\n    \
+             # Same host, two agents, each named by its alias\n    \
+             rezolus record --endpoint http://localhost:4241,alias=redis --endpoint http://localhost:4242,alias=valkey -o ab.dendro\n\n    \
              # An agent and a Prometheus endpoint in one archive\n    \
-             rezolus record --endpoint http://localhost:4241 --endpoint http://svc:9090/metrics,source=svc -o run.dendro\n\n    \
+             rezolus record --endpoint http://localhost:4241 --endpoint http://svc:9090/metrics,alias=svc -o run.dendro\n\n    \
              # A scraped vLLM with its KPI template, so the viewer shows its KPI section\n    \
-             rezolus record --endpoint http://gpu-01:8000/metrics,source=vllm,template=vllm.json -o run.dendro\n\n    \
+             rezolus record --endpoint http://gpu-01:8000/metrics,alias=vllm,template=vllm.json -o run.dendro\n\n    \
              # Take the endpoints and the output from a file\n    \
              rezolus record --config rec.toml\n    \
              #   [recording]\n    \
@@ -114,19 +114,21 @@ pub fn command() -> Command {
              #   url = \"http://localhost:4241\"\n    \
              #   [[endpoints]]\n    \
              #   url = \"http://svc:9090/metrics\"\n    \
-             #   source = \"svc\"           # optional, as are role =, protocol = and template =\n\n\
+             #   alias = \"svc\"            # optional, as are tier =, service_kind =, role =,\n    \
+             #                            # arm =, host =, protocol = and template =\n\n\
              TAGGING: -m/--metadata k=v writes metadata on every recording in the archive.\n\
              -l/--label k=v tags the recordings inside the archive; host and endpoint are\n\
              added for you. Recordings that carry an `arm` label (--endpoint url,arm=NAME)\n\
              open in the viewer as an A/B comparison, aliased by those labels, with the\n\
              recordings without one shown beside it in their own sections; an archive without\n\
              arms opens as one combined view.\n\n\
-             A recording\'s labels are the user\'s (--label, and source=, arm= and host=\n\
-             on its --endpoint; with --url, --metadata source= too), over the labels in\n\
+             A recording\'s labels are the user\'s (--label, and alias=, tier=,\n\
+             service_kind=, arm= and host= on its --endpoint; source= is read as alias=,\n\
+             as is --metadata source= with --url and --label source=), over the labels in\n\
              its producer\'s stream handshake, over what the recorder observed: endpoint\n\
              (the URL it recorded from), and host from a Rezolus agent\'s /systeminfo. It\n\
-             has a source label only when the user or its producer gives one; the recorder\n\
-             infers none. A producer that declares its identity in its handshake (a Rezolus\n\
+             has a source label only when its producer declares one; the recorder infers\n\
+             none. A producer that declares its identity in its handshake (a Rezolus\n\
              agent does) also gives it host and __producer__, which the viewer reads to\n\
              show the built-in sections or find a KPI template. Its metadata is its\n\
              --endpoint\'s role= and template= (as role and service_queries), over the\n\
@@ -155,7 +157,7 @@ pub fn command() -> Command {
              one endpoint in it: --label arm=redis is how you tag a whole single-endpoint\n\
              capture as one arm, to be compared against another run. Within ONE invocation,\n\
              each recording carries the endpoint it was recorded from, so two endpoints are\n\
-             already distinct; source= on each --endpoint names them. Recordings that end\n\
+             already distinct; alias= on each --endpoint names them. Recordings that end\n\
              up with identical labels are warned about at startup: nothing downstream can\n\
              tell them apart.\n\n\
              To label a recording for a multi-node or multi-instance `rezolus recording\n\
@@ -229,7 +231,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("CONFIG_FILE")
                 .long("config")
-                .help("Record endpoints defined in a TOML file: a [recording] table (output, interval) plus [[endpoints]] entries mirroring the --endpoint fields (url, source, role, arm, protocol, template)")
+                .help("Record endpoints defined in a TOML file: a [recording] table (output, interval) plus [[endpoints]] entries mirroring the --endpoint fields (url, alias, tier, service_kind, role, arm, host, protocol, template; source is read as alias)")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(PathBuf))
                 .conflicts_with_all(["URL"]),
@@ -237,7 +239,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("ENDPOINT")
                 .long("endpoint")
-                .help("Add an endpoint as url[,source=name][,role=label][,arm=name][,host=name][,protocol=stream|prometheus][,template=FILE]; host labels the recording's host (a Rezolus agent's own hostname otherwise); role is a free-form tag (conventionally service or loadgen); arm labels the endpoint's recording as one arm of an A/B comparison (conventionally baseline or experiment): an archive whose recordings carry arm opens in `rezolus view` as a comparison (one recording per arm), with unarmed recordings' sections beside it; one without arms opens as one combined view; template is a KPI template file (a ServiceExtension JSON, as `recording annotate --queries` takes) written into this endpoint's recording as service_queries, so the viewer shows that service's KPI section: it is checked before recording starts, an unreadable file, one over 1 MiB, JSON that is not a ServiceExtension or an unknown unit_system refuses the run (exit 2), and it replaces any template a streamed producer sends in its handshake; protocol skips detection: stream records it from its replication stream only, never scraping it (rezolus and msgpack are accepted for it too), prometheus scrapes it as text exposition (at /metrics for a URL whose path is /); without protocol, a URL whose path is / or /metrics/stream is asked for its stream first and any other URL is scraped (see DETECTION); repeat for several (e.g. http://host:9090/metrics,source=svc,role=service,protocol=prometheus)")
+                .help("Add an endpoint as url[,alias=name][,tier=name][,service_kind=name][,role=label][,arm=name][,host=name][,protocol=stream|prometheus][,template=FILE]; alias names the endpoint's recording (source= is its deprecated spelling, read as alias=); tier labels its role in a benchmark (client, server); service_kind labels the role its producer runs in (prefill), which refines the KPI template it takes; host labels the recording's host (a Rezolus agent's own hostname otherwise); role is a free-form tag (conventionally service or loadgen); arm labels the endpoint's recording as one arm of an A/B comparison (conventionally baseline or experiment): an archive whose recordings carry arm opens in `rezolus view` as a comparison (one recording per arm), with unarmed recordings' sections beside it; one without arms opens as one combined view; template is a KPI template file (a ServiceExtension JSON, as `recording annotate --queries` takes) written into this endpoint's recording as service_queries, so the viewer shows that service's KPI section: it is checked before recording starts, an unreadable file, one over 1 MiB, JSON that is not a ServiceExtension or an unknown unit_system refuses the run (exit 2), and it replaces any template a streamed producer sends in its handshake; protocol skips detection: stream records it from its replication stream only, never scraping it (rezolus and msgpack are accepted for it too), prometheus scrapes it as text exposition (at /metrics for a URL whose path is /); without protocol, a URL whose path is / or /metrics/stream is asked for its stream first and any other URL is scraped (see DETECTION); repeat for several (e.g. http://host:9090/metrics,alias=svc,role=service,protocol=prometheus)")
                 .action(clap::ArgAction::Append)
                 .conflicts_with_all(["URL", "CONFIG_FILE"]),
         )
@@ -287,14 +289,14 @@ pub fn command() -> Command {
             clap::Arg::new("METADATA")
                 .long("metadata")
                 .short('m')
-                .help("Add a metadata tag as key=value (e.g. source=llm-perf) to every recording in the archive; it outranks the value the producer reports and is kept through a restart; producer_epoch, producer_epochs, keys under metriken., encoder and writer_sessions are refused; repeat for multiple tags")
+                .help("Add a metadata tag as key=value (e.g. run=boat-7) to every recording in the archive; it outranks the value the producer reports and is kept through a restart; producer_epoch, producer_epochs, keys under metriken., encoder and writer_sessions are refused; repeat for multiple tags")
                 .action(clap::ArgAction::Append),
         )
         .arg(
             clap::Arg::new("LABEL")
                 .long("label")
                 .short('l')
-                .help("Tag the recording with a label as key=value (e.g. run=42, role=server); repeat for multiple. A value without `=` is ignored. `host` and `endpoint` are added for you. Applies to EVERY recording in the run, so it cannot tell two endpoints apart — use --endpoint url,source=name for that, and --endpoint url,arm=name for the arms of an A/B")
+                .help("Tag the recording with a label as key=value (e.g. run=42, role=server); repeat for multiple. A value without `=` is ignored. `host` and `endpoint` are added for you. Applies to EVERY recording in the run, so it cannot tell two endpoints apart — use --endpoint url,alias=name for that, and --endpoint url,arm=name for the arms of an A/B")
                 .action(clap::ArgAction::Append),
         )
         .arg(
@@ -642,16 +644,20 @@ impl Watch {
                 inferred,
             } => {
                 let i = source.0 as usize;
-                if inferred {
+                // An endpoint the user named (`alias=`) keeps that name.
+                let named = self.names.get(i).is_some_and(Option::is_some);
+                if inferred && !named {
                     eprintln!(
-                        "warn: {} was given no source and its producer declares none, so its \
-                         recording has no `source` label (pass --endpoint URL,source=NAME to \
+                        "warn: {} was given no alias and its producer declares no source, so \
+                         its recording has neither label (pass --endpoint URL,alias=NAME to \
                          name it; this run's messages call it \"{name}\")",
                         self.urls.get(i).map(String::as_str).unwrap_or("?")
                     );
                 }
-                if let Some(slot) = self.names.get_mut(i) {
-                    *slot = Some(name);
+                if !named {
+                    if let Some(slot) = self.names.get_mut(i) {
+                        *slot = Some(name);
+                    }
                 }
                 if transport == mr::ActiveTransport::Stream {
                     self.streaming.insert(source);
@@ -694,8 +700,9 @@ impl Watch {
 /// The line for labels a late probe reply carried that could not be put on
 /// the recording (`Event::LabelsNotApplied`), naming how to set them on the
 /// next run: `arg`, the endpoint's `--endpoint` as typed, with each label
-/// `--endpoint` takes (`source=`, `arm=`, `host=`) appended in place of any
-/// value it gave for it, and any other label as a run-wide `--label`. With
+/// `--endpoint` takes (`alias=`, `tier=`, `service_kind=`, `arm=`, `host=`)
+/// appended in place of any value it gave for it, and any other label as
+/// a run-wide `--label`. With
 /// `several` endpoints the line says which `--endpoint` it replaces. When
 /// the rebuilt argument would not parse as an `--endpoint` (a value the
 /// parser refuses), the line names the labels and suggests no command.
@@ -707,7 +714,7 @@ pub(crate) fn labels_not_applied(
 ) -> String {
     let keys: Vec<&str> = labels.keys().map(String::as_str).collect();
     let (url, options) = arg.split_once(',').unwrap_or((arg, ""));
-    let endpoint_keys = ["source", "arm", "host"];
+    let endpoint_keys = ["alias", "tier", "service_kind", "arm", "host"];
     let set_here: Vec<(&String, &String)> = labels
         .iter()
         .filter(|(k, _)| endpoint_keys.contains(&k.as_str()))
@@ -863,7 +870,13 @@ pub fn run(config: RecordingConfig) {
             .collect(),
         names: detected
             .iter()
-            .map(|d| d.spec().labels.get("source").cloned())
+            .map(|d| {
+                let labels = &d.spec().labels;
+                labels
+                    .get("alias")
+                    .or_else(|| labels.get("source"))
+                    .cloned()
+            })
             .collect(),
         streaming: BTreeSet::new(),
         refused: BTreeSet::new(),
@@ -1109,10 +1122,19 @@ pub fn run(config: RecordingConfig) {
             }
             Ok(summary) => {
                 info!("wrote the archive to {}", config.output.display());
-                for line in unrecorded_summary(&summary.sources, &config.output) {
+                // The recorder names a source by its `source` label, else by a
+                // name inferred from its URL; the run's messages name one the
+                // user named with `alias=` by that.
+                let mut sources = summary.sources.clone();
+                for s in &mut sources {
+                    if let Some(name) = watch.names.get(s.id.0 as usize).cloned().flatten() {
+                        s.name = Some(name);
+                    }
+                }
+                for line in unrecorded_summary(&sources, &config.output) {
                     warn!("{line}");
                 }
-                if let Some(summary) = refusal_summary(&summary.sources, &config.output, true) {
+                if let Some(summary) = refusal_summary(&sources, &config.output, true) {
                     eprintln!("{summary}");
                     recording_failed = true;
                 }
@@ -1166,8 +1188,9 @@ fn template_override_line(
         })
 }
 
-/// The library's view of one `--endpoint`: its labels (`source=`, then
-/// every `--label`) and metadata (every `--metadata`, `role=`, and
+/// The library's view of one `--endpoint`: its labels (every `--label`,
+/// then the endpoint's `alias=`, `tier=`, `service_kind=`, `arm=` and
+/// `host=` over them) and metadata (every `--metadata`, `role=`, and
 /// `template=` as `service_queries`).
 ///
 /// The metadata is the caller's, which outranks what a producer's handshake
@@ -1176,16 +1199,19 @@ fn template_override_line(
 /// from `--metadata`, which applies to every recording rather than this one.
 fn endpoint_spec(config: &RecordingConfig, ep: &endpoint::EndpointConfig) -> mr::EndpointSpec {
     let mut labels = BTreeMap::new();
-    if let Some(source) = &ep.source {
-        labels.insert("source".to_string(), source.clone());
-    }
     labels.extend(config.labels.iter().cloned());
-    // The endpoint's own arm and host over a run-wide `--label`.
-    if let Some(arm) = &ep.arm {
-        labels.insert("arm".to_string(), arm.clone());
-    }
-    if let Some(host) = &ep.host {
-        labels.insert("host".to_string(), host.clone());
+    // The endpoint's own labels over a run-wide `--label`. `source=` was
+    // read as `alias=` when the configuration was built.
+    for (key, value) in [
+        ("alias", &ep.alias),
+        ("tier", &ep.tier),
+        ("service_kind", &ep.service_kind),
+        ("arm", &ep.arm),
+        ("host", &ep.host),
+    ] {
+        if let Some(value) = value {
+            labels.insert(key.to_string(), value.clone());
+        }
     }
     let mut metadata: BTreeMap<String, String> = config.metadata.iter().cloned().collect();
     if let Some(role) = &ep.role {
@@ -1336,7 +1362,10 @@ mod tests {
         config.metadata = vec![("note".to_string(), "x".to_string())];
         let ep = endpoint::EndpointConfig {
             url: Url::parse("http://localhost:4241").unwrap(),
-            source: Some("web".to_string()),
+            source: None,
+            alias: Some("web".to_string()),
+            tier: Some("server".to_string()),
+            service_kind: Some("prefill".to_string()),
             role: Some("service".to_string()),
             protocol: Some(Protocol::Prometheus),
             template: None,
@@ -1346,7 +1375,10 @@ mod tests {
             arg: None,
         };
         let spec = endpoint_spec(&config, &ep);
-        assert_eq!(spec.labels["source"], "web");
+        assert_eq!(spec.labels["alias"], "web");
+        assert_eq!(spec.labels["tier"], "server");
+        assert_eq!(spec.labels["service_kind"], "prefill");
+        assert!(!spec.labels.contains_key("source"), "{:?}", spec.labels);
         assert_eq!(spec.labels["arm"], "redis");
         assert_eq!(spec.metadata["note"], "x");
         assert_eq!(spec.metadata["role"], "service");
@@ -1365,7 +1397,10 @@ mod tests {
         config.metadata = vec![("service_queries".to_string(), "run-wide".to_string())];
         let ep = endpoint::EndpointConfig {
             url: Url::parse("http://localhost:9090/metrics").unwrap(),
-            source: Some("vllm".to_string()),
+            source: None,
+            alias: Some("vllm".to_string()),
+            tier: None,
+            service_kind: None,
             role: None,
             protocol: None,
             template: Some(PathBuf::from("vllm.json")),
@@ -1381,7 +1416,7 @@ mod tests {
     }
 
     /// The line for labels that arrived too late names them and the run
-    /// that sets them: `source`/`arm`/`host` on the endpoint, which
+    /// that sets them: `alias`/`tier`/`service_kind`/`arm`/`host` on the endpoint, which
     /// `--endpoint` parses back, any other as `--label`.
     #[test]
     fn late_labels_name_the_flags_that_set_them() {

@@ -253,7 +253,7 @@ Arguments:
 
 Options:
       --queries <PATH>         Service-extension JSON whose KPI checks to run, instead of the recording's own
-      --recording <KEY=VALUE>  Which recording of a multi-recording archive to check, as key=value (e.g. --recording source=redis)
+      --recording <KEY=VALUE>  Which recording of a multi-recording archive to check, as key=value (e.g. --recording alias=redis)
                                Repeatable: the pairs are ANDed and must together name exactly one
                                recording. Without it every recording is checked.
       --annotate               Write each FAIL/WARN window into the recording as a kind=check range event
@@ -387,7 +387,7 @@ Options:
           Service-extension JSON whose KPI checks to run, instead of the recording's own
 
       --recording <KEY=VALUE>
-          Which recording of a multi-recording archive to check, as key=value (e.g. --recording source=redis)
+          Which recording of a multi-recording archive to check, as key=value (e.g. --recording alias=redis)
           Repeatable: the pairs are ANDed and must together name exactly one
           recording. Without it every recording is checked.
 
@@ -949,7 +949,7 @@ Arguments:
   <QUERY2>  Second PromQL query (e.g., 'cgroup_memory_used')
 
 Options:
-      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
                                Repeatable: the pairs are ANDed and must together name exactly one
                                recording. Matching none or several is an error, never a guess.
                                Without it, the recordings of one run are read together, each series
@@ -988,7 +988,7 @@ Arguments:
 
 Options:
       --recording <KEY=VALUE>
-          Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+          Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
           Repeatable: the pairs are ANDed and must together name exactly one
           recording. Matching none or several is an error, never a guess.
           Without it, the recordings of one run are read together, each series
@@ -1012,7 +1012,7 @@ Arguments:
   <FILE>  Recording to describe: a .dendro archive
 
 Options:
-      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
                                Repeatable: the pairs are ANDed and must together name exactly one
                                recording. Matching none or several is an error, never a guess.
                                Without it, the recordings of one run are read together, each series
@@ -1041,7 +1041,7 @@ Arguments:
 
 Options:
       --recording <KEY=VALUE>
-          Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+          Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
           Repeatable: the pairs are ANDed and must together name exactly one
           recording. Matching none or several is an error, never a guess.
           Without it, the recordings of one run are read together, each series
@@ -1065,7 +1065,7 @@ Arguments:
   <FILE>  Recording to analyze: a .dendro archive
 
 Options:
-      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
                                Repeatable: the pairs are ANDed and must together name exactly one
                                recording. Matching none or several is an error, never a guess.
                                Without it, the recordings of one run are read together, each series
@@ -1095,7 +1095,7 @@ Arguments:
 
 Options:
       --recording <KEY=VALUE>
-          Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+          Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
           Repeatable: the pairs are ANDed and must together name exactly one
           recording. Matching none or several is an error, never a guess.
           Without it, the recordings of one run are read together, each series
@@ -1121,7 +1121,7 @@ Arguments:
            If omitted, analyzes all metrics in the recording
 
 Options:
-      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
                                Repeatable: the pairs are ANDed and must together name exactly one
                                recording. Matching none or several is an error, never a guess.
                                Without it, the recordings of one run are read together, each series
@@ -1159,7 +1159,7 @@ Arguments:
 
 Options:
       --recording <KEY=VALUE>
-          Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+          Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
           Repeatable: the pairs are ANDed and must together name exactly one
           recording. Matching none or several is an error, never a guess.
           Without it, the recordings of one run are read together, each series
@@ -1184,7 +1184,7 @@ Arguments:
   <QUERY>  PromQL query (e.g., 'sum(irate(cpu_cycles[1m]))')
 
 Options:
-      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
                                Repeatable: the pairs are ANDed and must together name exactly one
                                recording. Matching none or several is an error, never a guess.
                                Without it, the recordings of one run are read together, each series
@@ -1229,7 +1229,7 @@ Arguments:
 
 Options:
       --recording <KEY=VALUE>
-          Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+          Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
           Repeatable: the pairs are ANDed and must together name exactly one
           recording. Matching none or several is an error, never a guess.
           Without it, the recordings of one run are read together, each series
@@ -1253,7 +1253,7 @@ Arguments:
   <FILE>  Recording to analyze: a .dendro archive
 
 Options:
-      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+      --recording <KEY=VALUE>  Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
                                Repeatable: the pairs are ANDed and must together name exactly one
                                recording. Matching none or several is an error, never a guess.
                                Without it, the recordings of one run are read together, each series
@@ -1284,7 +1284,7 @@ Arguments:
 
 Options:
       --recording <KEY=VALUE>
-          Which recording of a multi-recording archive to read, as key=value (e.g. --recording source=redis)
+          Which recording of a multi-recording archive to read, as key=value (e.g. --recording alias=redis)
           Repeatable: the pairs are ANDed and must together name exactly one
           recording. Matching none or several is an error, never a guess.
           Without it, the recordings of one run are read together, each series

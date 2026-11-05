@@ -60,8 +60,8 @@ docker run --rm -it --privileged --network=host \
     --source redis
 ```
 
-The archive holds a recording per endpoint: `source=rezolus` for the system
-metrics and `source=redis` for Redis. The viewer at http://localhost:8080
+The archive holds a recording per endpoint: `alias=rezolus` for the system
+metrics and `alias=redis` for Redis. The viewer at http://localhost:8080
 opens it as an A/B comparison of the system recording against the Redis
 recording, with further services as extra overlays; no dashboard queries the
 service metrics. Service KPI dashboards (valkey, vllm, sglang and the other
@@ -146,8 +146,8 @@ CAPTURE MODE (exactly one required):
 OPTIONS:
   --endpoint <URL>            Service metrics endpoint (Prometheus-compatible).
                               Can be specified multiple times.
-  --source <NAME>             Source name for service metrics, the source label
-                              of that endpoint's recording (required with
+  --source <NAME>             Name for service metrics, the alias label of that
+                              endpoint's recording (required with
                               --endpoint, one per endpoint in order; not
                               `rezolus`, which names the agent's recording)
   --interval <INTERVAL>       Sampling interval (default: 1s)
@@ -175,8 +175,8 @@ Mount `/data` to persist capture output on the host:
 
 The capture script writes `capture.dendro` to this directory, replacing an
 earlier one once the new capture has finished. It holds a recording per
-endpoint; select one with `--recording source=<NAME>` in `rezolus mcp`, or
-`--baseline source=<NAME>` in `rezolus view`.
+endpoint; select one with `--recording alias=<NAME>` in `rezolus mcp`, or
+`--baseline alias=<NAME>` in `rezolus view`.
 
 ## Privileged Mode
 
