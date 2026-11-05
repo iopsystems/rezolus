@@ -31,8 +31,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
     // members — phantom, all-null, and indistinguishable to a reader from a
     // real GPU that simply had no reading. Those phantoms put a
     // `gpu_amd_smi` table into every archive on every host, whose metric
-    // names then collide with `gpu_nvidia`'s vendor-neutral ones and make
-    // `avg(gpu_utilization)` ambiguous where it should just work.
+    // names then collide with `gpu_nvidia`'s vendor-neutral ones
+    // (metriken-query before 0.44 refused `avg(gpu_utilization)` over them).
     //
     // Setting it here rather than on each failure path is deliberate: the
     // paths out of this function are "disabled", "no devices" and "init

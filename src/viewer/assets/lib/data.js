@@ -520,8 +520,8 @@ const injectLabelRegex = (query, labelName, regexValue) =>
 // the exclusion is removed, leaving the aggregate over every cgroup; other
 // matchers in the selector are kept. With no `leaf` pattern a `name=~`
 // placeholder is left in place. The patterns come from cgroup_selection.js's
-// `cgroupPattern`, which quotes each name for the PromQL string and leaves out
-// names the engine cannot match.
+// `cgroupPattern`, which escapes each name as a regex and quotes it for the
+// PromQL string, and leaves out names outside its allow-list.
 const substituteCgroupPattern = (query, selection) => {
     const { leaf = null, excluded = null } = typeof selection === 'string'
         ? { leaf: selection, excluded: selection }

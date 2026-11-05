@@ -2941,43 +2941,31 @@ mod tests {
         }
     }
 
-    /// Two samplers publishing the same metric name must not be reported as a
-    /// corrupt archive.
+    /// Two samplers publishing the same metric name are read together, each
+    /// sampler's series under its own `sampler` label.
     ///
     /// Shipped example: `gpu_amd_smi` and `gpu_nvidia` both publish
     /// `gpu_utilization`, `gpu_temperature` and six more vendor-neutral names,
-    /// because only one of them ever populates on a given host. The dashboard
-    /// queries `avg(gpu_utilization)` in 16 places.
-    ///
-    /// Unioning across samplers made those queries reach
-    /// `UnionMetricsSource`'s disjointness check, whose message said the names
-    /// were in two group tables "of the same sampler" and that this "should
-    /// never happen". Both halves were false, and it blamed the operator's
-    /// archive for a deliberate design property. The query is still ambiguous
-    /// and still refused — it just has to say so truthfully.
+    /// because only one of them ever populates on a given host. The
+    /// dashboard's GPU section queries `avg(gpu_utilization)`.
     #[test]
-    fn two_samplers_sharing_a_metric_name_is_not_reported_as_a_corrupt_archive() {
+    fn two_samplers_sharing_a_metric_name_are_read_together() {
         let (_d, path) = two_sampler_rez_sharing_a_metric_name();
         let pool = BufferPool::new(64 * 1024 * 1024);
         let reader = RezReader::open_with_pool(&path, pool).unwrap();
 
-        let err = reader
-            .query_range("shared_metric", 0.0, 10.0, 1.0)
-            .unwrap_err();
-        let msg = format!("{err:?}");
-        assert!(
-            msg.contains("more than one sampler"),
-            "the error must name the real cause — two samplers, one name: {msg}"
-        );
-        assert!(
-            !msg.contains("should never happen"),
-            "this DOES happen, by design, and saying otherwise sends the \
-             operator hunting a corrupt archive: {msg}"
-        );
-        assert!(
-            msg.contains("sampler_a") && msg.contains("sampler_b"),
-            "the error must name which samplers collide: {msg}"
-        );
+        let QueryResult::Matrix { result, .. } = reader
+            .query_range("rate(shared_metric[3s])", 0.0, 10.0, 1.0)
+            .unwrap()
+        else {
+            panic!("a range query answers a matrix");
+        };
+        let mut samplers: Vec<(&str, f64)> = result
+            .iter()
+            .map(|s| (s.metric["sampler"].as_str(), s.values[0].1))
+            .collect();
+        samplers.sort_by(|a, b| a.0.cmp(b.0));
+        assert_eq!(samplers, [("sampler_a", 10.0), ("sampler_b", 20.0)]);
     }
 
     /// A `.rez` whose two samplers run at genuinely different cadences, with

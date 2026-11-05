@@ -3,28 +3,33 @@
 // no mithril, so the node tests import it directly.
 
 // Why a cgroup cannot be selected, or null when it can. A selection reaches
-// the query engine as a regex matcher, `name=~"a|b"`: promql-parser unquotes
-// the string and requires it to compile as a regex, then metriken-storage
-// `match_pattern` compares each `|`-separated alternative with the name
-// literally, after turning `\.` into `.`. A name made of letters, digits,
-// `/ _ . : @ - = , ~ %` and `\xHH` escapes (systemd's escaped characters)
-// compiles and compares equal to itself; those characters cover systemd
-// units, container ids and pod names. Any other name, and the empty name, is
-// not offered, including a few the engine could match (`{`, `"`).
+// the query engine as a regex matcher, `name=~"a|b"`, which promql-parser
+// unquotes and the engine matches as a regular expression anchored at both
+// ends; each name is escaped as a regex (`regexEscape`), so it matches
+// itself only. Selectable names are made of letters, digits,
+// `/ _ . : @ - = , ~ %` and `\xHH` escapes (systemd's escaped characters),
+// which cover systemd units, container ids and pod names, and are the set
+// the tests cover. Any other name, and the empty name, is not offered.
 const SELECTABLE = /^(?:[A-Za-z0-9/_.:@=,~%-]|\\x[0-9A-Fa-f]{2})+$/;
 export const cgroupUnselectableReason = (name) => (SELECTABLE.test(name)
     ? null
-    : 'Cannot be selected: the name has characters outside those the selector can quote safely');
+    : 'Cannot be selected: the name has characters outside those the selector supports');
 
-// A name inside a PromQL double-quoted string: backslashes and quotes escaped,
-// so the string unquotes to the name itself (a systemd `\x2d` stays `\x2d`).
-const quoteForPromql = (name) => name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+// A name as a regular expression that matches it literally: `.` and `\`
+// (in a systemd `\x2d`) and the other regex metacharacters escaped.
+const regexEscape = (name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// A pattern inside a PromQL double-quoted string: backslashes and quotes
+// escaped, so the string unquotes to the pattern itself.
+const quoteForPromql = (pattern) => pattern.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
 // The pattern substituted for `__SELECTED_CGROUPS__`: the selectable names,
-// quoted, joined by `|` and parenthesised when there are several. null when
-// none can be selected.
+// each escaped as a regex and quoted, joined by `|` and parenthesised when
+// there are several. null when none can be selected.
 export const cgroupPattern = (names) => {
-    const usable = names.filter((n) => !cgroupUnselectableReason(n)).map(quoteForPromql);
+    const usable = names
+        .filter((n) => !cgroupUnselectableReason(n))
+        .map((n) => quoteForPromql(regexEscape(n)));
     return usable.length > 1 ? '(' + usable.join('|') + ')' : usable[0] || null;
 };
 
@@ -172,7 +177,7 @@ export const cgroupTree = (names, groups) => {
 /** Why a group cannot be selected, or null when it can. */
 export const cgroupGroupUnselectableReason = (members) => (
     members.some((n) => cgroupUnselectableReason(n))
-        ? 'Cannot be selected: a cgroup in this group has characters outside those the selector can quote safely'
+        ? 'Cannot be selected: a cgroup in this group has characters outside those the selector supports'
         : null
 );
 

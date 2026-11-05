@@ -372,8 +372,8 @@ pub enum MatchOp {
     /// `label!="value"`, which a series without the label also passes.
     #[serde(rename = "!=")]
     Ne,
-    /// `label!~"a|b"`: none of the alternatives, which a series without the
-    /// label also passes.
+    /// `label!~"a|b"`: the value does not match the regular expression,
+    /// anchored at both ends, which a series without the label also passes.
     #[serde(rename = "!~")]
     NotRegex,
 }
@@ -403,14 +403,22 @@ impl Matcher {
         }
     }
 
-    /// Whether a series labelled `labels` passes.
+    /// Whether a series labelled `labels` passes, compared as the query
+    /// engine compares (metriken-storage's `Labels::matches`).
     pub fn matches(&self, labels: &BTreeMap<String, String>) -> bool {
-        let own = labels.get(&self.label).map(String::as_str);
-        match self.op {
-            MatchOp::Eq => own == Some(self.value.as_str()),
-            MatchOp::Ne => own != Some(self.value.as_str()),
-            MatchOp::NotRegex => own.is_none_or(|v| !self.value.split('|').any(|a| a == v)),
-        }
+        use metriken_storage::{Labels, MatchOp as Op};
+        let op = match self.op {
+            MatchOp::Eq => Op::Equal,
+            MatchOp::Ne => Op::NotEqual,
+            MatchOp::NotRegex => Op::NotRegex,
+        };
+        let own: BTreeMap<String, String> = labels
+            .get(&self.label)
+            .map(|v| (self.label.clone(), v.clone()))
+            .into_iter()
+            .collect();
+        let filter = BTreeMap::from([(self.label.clone(), op.encode(&self.value))]);
+        Labels::from(own).matches(&Labels::from(filter))
     }
 
     fn push(&self, out: &mut String) {
@@ -438,7 +446,8 @@ impl Matcher {
 /// `__recording__` included where it applies), over the keys whose values
 /// are not the same for every recording: `k="v"` for a key the recording
 /// has, and for a key it lacks `k!="v"` for the one value the others carry,
-/// or `k!~"v1|v2"` for several (a selector may match a label once). One
+/// or `k!~"v1|v2"` for several, each value escaped as a regular expression
+/// (a selector may match a label once). One
 /// recording, or recordings whose series carry equal labels, get none.
 pub fn scope_matchers(series_labels: &[BTreeMap<String, String>]) -> Vec<Vec<Matcher>> {
     let keys = discriminating_keys(series_labels);
@@ -458,7 +467,11 @@ pub fn scope_matchers(series_labels: &[BTreeMap<String, String>]) -> Vec<Vec<Mat
                             Matcher {
                                 label: (*k).to_string(),
                                 op: MatchOp::NotRegex,
-                                value: values.join("|"),
+                                value: values
+                                    .iter()
+                                    .map(|v| regex::escape(v))
+                                    .collect::<Vec<_>>()
+                                    .join("|"),
                             }
                         }
                     }
@@ -2123,6 +2136,25 @@ mod tests {
         for (query, want) in cases {
             assert_eq!(restrict_query(query, &h1()), want, "{query}");
         }
+    }
+
+    /// A scope's `!~` alternatives are the other recordings' values escaped
+    /// as a regular expression, so a value holding `.` or `+` excludes
+    /// itself and nothing else, in the scope's own check and in the query.
+    #[test]
+    fn a_scopes_alternatives_are_escaped_values() {
+        let three = [
+            m(&[("host", "a"), ("role", "web.01")]),
+            m(&[("host", "b")]),
+            m(&[("host", "c"), ("role", "x+y")]),
+        ];
+        let scope = &scope_matchers(&three)[1][1];
+        assert_eq!(scope.value, r"web\.01|x\+y");
+        assert!(!scope.matches(&m(&[("role", "web.01")])));
+        assert!(!scope.matches(&m(&[("role", "x+y")])));
+        assert!(scope.matches(&m(&[("role", "webX01")])), "`.` is literal");
+        assert!(scope.matches(&m(&[("role", "xxy")])), "`+` is literal");
+        assert!(scope.matches(&m(&[])), "a series without the label passes");
     }
 
     #[test]

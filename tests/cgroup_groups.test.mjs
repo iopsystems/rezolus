@@ -24,6 +24,9 @@ import { pinnedCompares } from '../src/viewer/assets/lib/features/group_utils.js
 // and `\x2d` is written `-`. A libvirt guest's vCPU threads are four deep.
 
 const VM = '.../machine-qemu-2-vm1.scope';
+// A name as it appears in a selection's pattern: escaped as a regex, then
+// quoted for the PromQL string.
+const q = (name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\/g, '\\\\');
 const USER = '.../user@1000.service';
 const NAMES = [
     `${VM}/libvirt/emulator`,
@@ -186,11 +189,11 @@ test('a range that spans a group and its members selects the group', () => {
 test('a selection resolves to the individual, excluded and per-group patterns', () => {
     const groups = deriveCgroupGroups(new Set(NAMES));
     const r = resolveCgroupSelection(new Set([`${VM}/`, '/system.slice/ssh.service']), groups);
-    assert.equal(r.leaf, '/system.slice/ssh.service');
+    assert.equal(r.leaf, q('/system.slice/ssh.service'));
     assert.equal(r.groups.length, 1);
     assert.equal(r.groups[0].key, `${VM}/`);
-    assert.equal(r.groups[0].pattern, `(${NAMES.slice(0, 3).join('|')})`);
-    assert.equal(r.excluded, `(${[...NAMES.slice(0, 3), '/system.slice/ssh.service'].sort().join('|')})`);
+    assert.equal(r.groups[0].pattern, `(${NAMES.slice(0, 3).map(q).join('|')})`);
+    assert.equal(r.excluded, `(${[...NAMES.slice(0, 3), '/system.slice/ssh.service'].sort().map(q).join('|')})`);
 });
 
 test('a group the recording lacks, or with a member that cannot be quoted, is left out', () => {
@@ -221,7 +224,7 @@ test('every individual query gives one summed query per group', () => {
         const variants = cgroupQueryVariants(t, sel);
         assert.equal(variants.length, 2, t);
         const [leaf, group] = variants.map((v) => substituteCgroupPattern(v.query, v.selection));
-        assert.ok(leaf.includes('name=~"/system.slice/ssh.service"'), leaf);
+        assert.ok(leaf.includes(`name=~"${q('/system.slice/ssh.service')}"`), leaf);
         assert.match(leaf, /sum by \(name\)/);
         assert.equal(variants[1].label, `${VM}/`);
         assert.ok(group.includes(`name=~"${sel.groups[0].pattern}"`), group);
@@ -253,7 +256,7 @@ test('the aggregate excludes every selected name and group member', () => {
     const groups = deriveCgroupGroups(new Set(NAMES));
     const sel = resolveCgroupSelection([`${VM}/`, '/system.slice/ssh.service'], groups);
     for (const n of [...NAMES.slice(0, 3), '/system.slice/ssh.service']) {
-        assert.ok(sel.excluded.split(/[(|)]/).includes(n), n);
+        assert.ok(sel.excluded.split(/(?<!\\)[(|)]/).includes(q(n)), n);
     }
     assert.ok(!sel.excluded.includes('docker-abc'));
     for (const t of aggregate) {

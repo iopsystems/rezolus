@@ -463,6 +463,20 @@
 
 ### Changed
 
+- **`=~` and `!~` in a query are anchored regular expressions, as in
+  Prometheus** (metriken-query 0.44, metriken-storage 0.7). Each was a list
+  of literal alternatives separated by `|`, so `{name=~"/system.slice/.*"}`
+  matched nothing; it now selects every cgroup under `/system.slice`, and a
+  `.` in a pattern matches any character. A saved query or template whose
+  `=~` alternatives hold a regex metacharacter meant literally (`.`, `+`,
+  `(`, `[`, `\`) needs it escaped. The viewer's cgroup selection and the
+  combined view's per-recording scopes escape the names they put in a
+  pattern, so a systemd name holding `\x2d` is still selected. A metric
+  name two samplers publish (`gpu_utilization` from `gpu_nvidia` and
+  `gpu_amd_smi`) is read whole when the samplers' series differ, as they do
+  by their `sampler` label, where the query was refused. rezolus now takes
+  metriken-recorder 0.8.
+
 - **`--endpoint` takes `alias=`, `tier=` and `service_kind=`, and
   `source=` is read as `alias=`.** `alias=` names an endpoint's recording;
   `tier=` labels its role in a benchmark (`client`, `server`); and

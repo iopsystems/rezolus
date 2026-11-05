@@ -13,6 +13,7 @@ build = "build.rs"
 metriken-charts.workspace = true
 metriken-query.workspace = true
 metriken-storage = { workspace = true, features = ["archive"] }
+regex = "1"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 
