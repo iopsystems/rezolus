@@ -100,15 +100,18 @@ target/release/rezolus record -o bench.dendro -- ./bench.sh   # record for the c
 # /metrics answers 2xx (Pending until then). Late detection and enrich run on spawned tasks. Any
 # other path is scraped at its URL. protocol=stream (also rezolus, msgpack) streams only,
 # protocol=prometheus scrapes only. /metrics/binary is not read. Identity (metriken-recorder's):
-# labels user --label > hook (`enrich`: source=rezolus and host from /systeminfo for an agent) >
-# handshake labels; source = user source= > handshake source label > hook's > inferred from URL;
-# metadata endpoint role=/template= > user --metadata > recorder keys (sampling_interval_ms, producer_epoch) > hook
-# (version, systeminfo, descriptions) > handshake metadata; --metadata producer_epoch(s)= is
-# refused (config.rs), and a pinned key survives a restart and a scrape's HELP text. The startup enrich runs concurrently
+# layers (metriken-recorder 0.7): labels user (--label, source=, arm=, host=) > handshake labels >
+# recorder (endpoint = the URL; the hook's host from /systeminfo); no source is inferred; a handshake
+# producer identity or the hook's producer_name gives __producer__; metadata endpoint
+# role=/template= > user --metadata > handshake metadata > recorder (sampling_interval_ms, transport,
+# the hook's version, systeminfo, descriptions); epochs are recorder-layer entries; --metadata
+# producer_epoch(s)= and metriken.* keys are refused, and a pinned key survives a restart and a
+# scrape's HELP text. The startup enrich runs concurrently
 # per streamed endpoint, bounded by the scrape timeout (warning on fallback); a late activation's
 # enrich runs on its own task (EndpointStatus::Activating) and the recording is added on the
-# first tick after it returns. Restarts take the hook's enrich over the new handshake's metadata,
-# and the hook's merge (descriptions: union). The output must end in .dendro (default
+# first tick after it returns. Restarts add a recorder entry (the hook's reply) and a producer entry
+# (the new handshake); the handshake's keys outrank the hook's, and the fold unions descriptions.
+# The output must end in .dendro (default
 # rezolus.dendro); -o ending in .rez/.parquet/.raw or anything else, --format other than dendro
 # (a hidden flag kept so `--format dendro` still parses) and --separate (hidden) are refused in
 # src/recorder/config.rs (`check_output`, `check_format`, `refuse_separate`) with exit 2,
@@ -118,7 +121,7 @@ target/release/rezolus record -o bench.dendro -- ./bench.sh   # record for the c
 # recording in one archive. A Prometheus scrape becomes one acquisition group per target
 # (`prometheus/scrape`), windowed by the real HTTP round trip.
 # Also: --metadata key=value (repeatable, every recording), --label key=value (repeatable;
-# source/host auto-populated), --interval, --duration; an endpoint's role= is its recording's
+# host/endpoint added), --interval, --duration; an endpoint's role= is its recording's
 # `role` metadata key.
 # Every streamed endpoint is recorded from /metrics/stream and every Prometheus endpoint scraped
 # (src/recorder/mod.rs `run`, over metriken-recorder's `detect` and `Recorder`); both feed one
@@ -324,7 +327,7 @@ A segment carries no declared sampling interval and needs none: the rows carry t
 
 Because each sampler records at its own cadence, a query spanning *two samplers of materially different cadence* (measured row spacing differing by at least 2x, with the slower coarser than the step) is evaluated at the **slow sampler's own row timestamps** rather than on the uniform `start + k·step` grid — otherwise nearly every point lands where the slow sampler never read and its value is merely held forward. metriken-query (`src/archive.rs`, the private `cross_cadence_eval_timestamps`, reached through `eval_timestamps_for` and the query methods) picks those timestamps and passes them as `QueryOptions::eval_timestamps`; cadence is measured from the rows (never `interval()`, which reports one nominal value for the whole archive) and per *sampler*, since a group that skips ticks is sparse within its sampler's cadence rather than a second cadence. Single-sampler queries and `RateMode::Raw` are untouched.
 
-A `.dendro` (and a `.rez` from a 5.x recorder) holds any number of endpoints, rezolus or Prometheus. A Prometheus target is converted on the way in: one scrape is one request and one response, so it becomes a single V3 acquisition group named `prometheus/scrape`, windowed by the real HTTP round trip (metriken-recorder's `PrometheusConverter`). That is why it is a group rather than a flat V2 snapshot — a V2 table carries `<name>:window_begin`/`<name>:window_width` per value column, which would triple the schema width of every Prometheus table. The manifest carries per-recording label sets (`source`/`host` auto-populated, plus any `record --label k=v`, which applies to every recording in the run); a multi-recording archive of one run (`record --endpoint a --endpoint b`) opens as one combined view; one whose recordings carry `arm` (`record --endpoint url,arm=baseline`, `recording combine --ab`) drives the viewer's A/B comparison, aliasing baseline/experiment from each recording's `arm`/`host` labels. dendro staggers each stream's first seal by stream and the source's label key (`dendro::seal`), so two recordings of the same agent do not seal in lockstep; identical label sets, and label sets that differ only in case, warn when the recording is added (metriken-recorder).
+A `.dendro` (and a `.rez` from a 5.x recorder) holds any number of endpoints, rezolus or Prometheus. A Prometheus target is converted on the way in: one scrape is one request and one response, so it becomes a single V3 acquisition group named `prometheus/scrape`, windowed by the real HTTP round trip (metriken-recorder's `PrometheusConverter`). That is why it is a group rather than a flat V2 snapshot — a V2 table carries `<name>:window_begin`/`<name>:window_width` per value column, which would triple the schema width of every Prometheus table. The manifest carries per-recording label sets (`host`/`endpoint` added, plus any `record --label k=v`, which applies to every recording in the run); a multi-recording archive of one run (`record --endpoint a --endpoint b`) opens as one combined view; one whose recordings carry `arm` (`record --endpoint url,arm=baseline`, `recording combine --ab`) drives the viewer's A/B comparison, aliasing baseline/experiment from each recording's `arm`/`host` labels. dendro staggers each stream's first seal by stream and the source's label key (`dendro::seal`), so two recordings of the same agent do not seal in lockstep; identical label sets, and label sets that differ only in case, warn when the recording is added (metriken-recorder).
 
 ### `.rez` lives in its own crate
 

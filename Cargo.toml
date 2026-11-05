@@ -17,7 +17,7 @@ libloading = "0.8"
 log = "0.4.29"
 metriken = "0.11.4"
 metriken-charts = "0.1.0"
-metriken-exposition = "0.25.0"
+metriken-exposition = "0.25.2"
 metriken-query = { version = "0.43.0", default-features = false }
 metriken-storage = { version = "0.6.0", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
@@ -58,7 +58,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "6.0.0-alpha.118"
+version = "6.0.0-alpha.119"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true
@@ -113,10 +113,10 @@ metriken-query = { workspace = true, features = ["ingest"] }
 # Detection, the stream and scrape transports, restart metadata, and the
 # tick that commits every source into one `.dendro`: `record`, hindsight and
 # the live viewer over the library (metriken's
-# docs/journal/2026-10-12-metriken-recorder.md). Held at 0.5.1, over
-# metriken-storage 0.5.4: 0.6 writes no `source` of its own (none from the
-# URL or the probe hook), which the templates and the combined view read.
-metriken-recorder = "0.5.1"
+# docs/journal/2026-10-12-metriken-recorder.md). It writes each recording's
+# identity layers and no `source` of its own; the readers take a recording's
+# producer from its layers (`dashboard::identity`).
+metriken-recorder = "0.7.0"
 # The archive writer behind the `recording` copies (`write`), the
 # raw-msgpack-to-dendro conversion behind `recording convert` (`convert`), and
 # the `.rez` and parquet to dendro converters (`to_dendro`, `rez`). `record`,

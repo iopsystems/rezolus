@@ -1165,7 +1165,7 @@ impl Header {
     pub fn of(data: &dyn MetricsSource) -> Self {
         Self {
             interval: data.interval(),
-            source: data.source(),
+            source: crate::identity::display_source(data),
             version: data.version(),
             time_range_ns: data.time_range_ns(),
         }

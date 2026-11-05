@@ -505,7 +505,7 @@ impl AppState {
 
         let data = self.baseline_data();
         let interval = data.interval();
-        let source = data.source();
+        let source = ::dashboard::identity::display_source(data.as_ref());
         let version = data.version();
         let filename = data.filename_or_default();
         // time_range is now in seconds; convert to milliseconds for the UI.
